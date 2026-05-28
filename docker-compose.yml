@@ -1,0 +1,104 @@
+# XiaoTianQuant Docker Compose — One-Click Deployment
+# Usage:
+#   1. Copy .env.example to .env and edit your settings
+#   2. docker compose up -d --build
+#   3. Open http://localhost:8080
+
+services:
+  # ========================
+  # PostgreSQL Database
+  # ========================
+  postgres:
+    image: ${IMAGE_PREFIX:-}postgres:16-alpine
+    container_name: xtquant-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-xtquant}
+      POSTGRES_USER: ${POSTGRES_USER:-xtquant}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-xtquant123}
+      TZ: ${TZ:-Asia/Shanghai}
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=${PG_MAX_CONNECTIONS:-150}"
+      - "-c"
+      - "shared_buffers=${PG_SHARED_BUFFERS:-256MB}"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    ports:
+      - "${DB_PORT:-127.0.0.1:5432}:5432"
+    networks:
+      - xtquant-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-xtquant} -d ${POSTGRES_DB:-xtquant}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ========================
+  # Redis Cache
+  # ========================
+  redis:
+    image: ${IMAGE_PREFIX:-}redis:7-alpine
+    container_name: xtquant-redis
+    restart: unless-stopped
+    command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "${REDIS_PORT:-127.0.0.1:6379}:6379"
+    networks:
+      - xtquant-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ========================
+  # Backend API (Python/FastAPI)
+  # ========================
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: xtquant-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    volumes:
+      - backend_logs:/app/logs
+      - backend_data:/app/data
+      - ./config:/app/config
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-xtquant}:${POSTGRES_PASSWORD:-xtquant123}@postgres:5432/${POSTGRES_DB:-xtquant}
+      - DB_TYPE=postgresql
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - CACHE_ENABLED=true
+      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      - TZ=${TZ:-Asia/Shanghai}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    networks:
+      - xtquant-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  postgres_data:
+    driver: local
+  backend_logs:
+    driver: local
+  backend_data:
+    driver: local
+
+networks:
+  xtquant-network:
+    driver: bridge

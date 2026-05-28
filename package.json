@@ -1,0 +1,20 @@
+{
+  "name": "xiaotian_quant",
+  "version": "1.0.0",
+  "description": "> 融合Qbot架构的AI智能量化投研平台，支持币安/OKX，事件驱动，回测实盘一体。",
+  "main": "_check.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@klinecharts/pro": "^0.1.1",
+    "klinecharts": "^10.0.0-beta2"
+  }
+}

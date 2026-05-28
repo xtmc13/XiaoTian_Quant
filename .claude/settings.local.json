@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(py -3.12 -c \"import os; [os.system\\(f'taskkill /F /PID {l.split\\(\\)[-1]}'\\) for l in os.popen\\('netstat -ano'\\).readlines\\(\\) if ':8080' in l and 'LISTENING' in l]\")",
+      "Bash(curl -s http://localhost:8080/)",
+      "Bash(npx tsc *)"
+    ]
+  }
+}
