@@ -13,13 +13,13 @@ COPY web/ ./
 RUN npm run build
 
 # ── Stage 2: Go backend builder ────────────────────────────────────
-FROM golang:1.25-alpine AS go-builder
+FROM golang:1.23-alpine AS go-builder
 
 RUN apk add --no-cache git ca-certificates tzdata
 
 WORKDIR /src
 
-# Copy Go module files for dependency caching
+# Copy Go module files and download dependencies
 COPY gateway/go.mod gateway/go.sum ./
 RUN go mod download
 
@@ -29,7 +29,10 @@ COPY --from=web-builder /src/web/dist/ ./spa/
 # Copy Go source
 COPY gateway/ ./
 
-# Build static binary with optimizations
+# Ensure go.sum is complete with all dependencies
+RUN go mod tidy
+
+# Build static binary (CGo disabled — uses pure Go matching engine)
 ARG VERSION=dev
 ARG BUILD_TIME
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
@@ -49,7 +52,7 @@ WORKDIR /app
 # Copy binary
 COPY --from=go-builder /gateway ./gateway
 
-# Create data directory with correct permissions
+# Create data directory
 RUN mkdir -p /app/data && chown -R xiaotian:xiaotian /app
 
 USER xiaotian
@@ -60,7 +63,6 @@ ENV TZ=Asia/Shanghai
 
 EXPOSE 8080
 
-# Health check endpoint must be implemented by the Go app
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -fsS http://localhost:8080/api/health || exit 1
 
