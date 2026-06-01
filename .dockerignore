@@ -1,0 +1,62 @@
+# Dependencies
+node_modules
+*/node_modules
+
+# Build outputs
+dist
+*/dist
+engine/target
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Logs
+*.log
+logs
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Docker files (avoid recursive builds)
+docker-compose*.yml
+Dockerfile*
+.dockerignore
+
+# Documentation
+*.md
+IMPROVEMENT_PLAN.md
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go
+*/vendor
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+.venv
+
+# Test files
+*_test.go
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx
+
+# Local data
+gateway.db
+*.sqlite
+*.sqlite3

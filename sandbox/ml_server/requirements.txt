@@ -1,0 +1,24 @@
+# ML Server — XiaoTianQuant FreqAI-equivalent pipeline
+fastapi>=0.115.0
+uvicorn>=0.34.0
+pydantic>=2.2.0
+pandas>=2.2.0
+numpy>=1.26.0,<3.0
+scikit-learn>=1.5.0
+joblib>=1.4.0
+
+# Models
+lightgbm>=4.0
+xgboost>=2.0
+
+# PyTorch (optional, uncomment for deep learning)
+# torch>=2.0
+# torchvision>=0.15
+
+# RL (optional, uncomment for reinforcement learning)
+# gymnasium>=0.29
+# stable-baselines3>=2.0
+# sb3-contrib>=2.0
+
+# Monitoring
+# tensorboard>=2.14

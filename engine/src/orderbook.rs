@@ -1,0 +1,256 @@
+use std::collections::BTreeMap;
+
+/// Order side
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub enum Side {
+    Buy = 0,
+    Sell = 1,
+}
+
+/// Order type
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub enum OrderType {
+    Limit = 0,
+    Market = 1,
+}
+
+/// Order status
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub enum OrderStatus {
+    New = 0,
+    PartiallyFilled = 1,
+    Filled = 2,
+    Cancelled = 3,
+    Rejected = 4,
+}
+
+/// A single order in the book
+#[derive(Debug, Clone)]
+pub struct Order {
+    pub id: u64,
+    pub price: f64,
+    pub quantity: f64,
+    pub filled: f64,
+    pub side: Side,
+    pub order_type: OrderType,
+    pub status: OrderStatus,
+    pub timestamp: u64,
+    pub user_id: u64,
+}
+
+impl Order {
+    pub fn new(id: u64, price: f64, quantity: f64, side: Side, order_type: OrderType, user_id: u64) -> Self {
+        Order {
+            id,
+            price,
+            quantity,
+            filled: 0.0,
+            side,
+            order_type,
+            status: OrderStatus::New,
+            timestamp: 0,
+            user_id,
+        }
+    }
+
+    pub fn remaining(&self) -> f64 {
+        self.quantity - self.filled
+    }
+
+    pub fn is_done(&self) -> bool {
+        matches!(self.status, OrderStatus::Filled | OrderStatus::Cancelled | OrderStatus::Rejected)
+    }
+}
+
+/// Price level in the order book (bids: highest first, asks: lowest first)
+#[derive(Debug, Clone)]
+pub struct PriceLevel {
+    pub price: f64,
+    pub orders: Vec<Order>,
+}
+
+/// Trade result from matching
+#[derive(Debug, Clone)]
+pub struct Trade {
+    pub id: u64,
+    pub buy_order_id: u64,
+    pub sell_order_id: u64,
+    pub price: f64,
+    pub quantity: f64,
+    pub timestamp: u64,
+}
+
+/// The order book for a single symbol
+pub struct OrderBook {
+    pub symbol: String,
+    /// Bids: price -> orders at that price. BTreeMap reversed (highest first via custom iteration).
+    pub bids: BTreeMap<OrderedFloat, Vec<Order>>,
+    /// Asks: price -> orders at that price. Natural order (lowest first).
+    pub asks: BTreeMap<OrderedFloat, Vec<Order>>,
+    pub trade_count: u64,
+    pub order_count: u64,
+}
+
+/// Wrapper for ordered float keys in BTreeMap
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct OrderedFloat(u64);
+
+impl OrderedFloat {
+    pub fn from_price(price: f64, side: Side) -> Self {
+        let bits = price.to_bits();
+        // For bids we want descending order, so invert bits
+        match side {
+            Side::Buy => OrderedFloat(!bits),
+            Side::Sell => OrderedFloat(bits),
+        }
+    }
+
+    pub fn to_price(&self, side: Side) -> f64 {
+        let bits = match side {
+            Side::Buy => !self.0,
+            Side::Sell => self.0,
+        };
+        f64::from_bits(bits)
+    }
+}
+
+impl OrderBook {
+    pub fn new(symbol: String) -> Self {
+        OrderBook {
+            symbol,
+            bids: BTreeMap::new(),
+            asks: BTreeMap::new(),
+            trade_count: 0,
+            order_count: 0,
+        }
+    }
+
+    /// Add an order to the book
+    pub fn add_order(&mut self, mut order: Order) -> u64 {
+        self.order_count += 1;
+        order.id = self.order_count;
+        order.timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
+
+        let key = OrderedFloat::from_price(order.price, order.side);
+        match order.side {
+            Side::Buy => {
+                self.bids.entry(key).or_default().push(order);
+            }
+            Side::Sell => {
+                self.asks.entry(key).or_default().push(order);
+            }
+        }
+        self.order_count
+    }
+
+    /// Remove an order by ID
+    pub fn cancel_order(&mut self, order_id: u64) -> Option<Order> {
+        // Search bids
+        for (_, orders) in self.bids.iter_mut() {
+            if let Some(pos) = orders.iter().position(|o| o.id == order_id) {
+                let mut order = orders.remove(pos);
+                order.status = OrderStatus::Cancelled;
+                return Some(order);
+            }
+        }
+        // Search asks
+        for (_, orders) in self.asks.iter_mut() {
+            if let Some(pos) = orders.iter().position(|o| o.id == order_id) {
+                let mut order = orders.remove(pos);
+                order.status = OrderStatus::Cancelled;
+                return Some(order);
+            }
+        }
+        None
+    }
+
+    /// Get best bid price
+    pub fn best_bid(&self) -> Option<f64> {
+        self.bids.keys().next().map(|k| k.to_price(Side::Buy))
+    }
+
+    /// Get best ask price
+    pub fn best_ask(&self) -> Option<f64> {
+        self.asks.keys().next().map(|k| k.to_price(Side::Sell))
+    }
+
+    /// Get spread
+    pub fn spread(&self) -> Option<f64> {
+        match (self.best_bid(), self.best_ask()) {
+            (Some(bid), Some(ask)) => Some(ask - bid),
+            _ => None,
+        }
+    }
+
+    /// Get total quantity at bid/ask levels
+    pub fn depth(&self, levels: usize) -> (Vec<(f64, f64)>, Vec<(f64, f64)>) {
+        let bids: Vec<(f64, f64)> = self.bids
+            .iter()
+            .take(levels)
+            .map(|(k, orders)| {
+                let price = k.to_price(Side::Buy);
+                let qty: f64 = orders.iter().map(|o| o.remaining()).sum();
+                (price, qty)
+            })
+            .collect();
+
+        let asks: Vec<(f64, f64)> = self.asks
+            .iter()
+            .take(levels)
+            .map(|(k, orders)| {
+                let price = k.to_price(Side::Sell);
+                let qty: f64 = orders.iter().map(|o| o.remaining()).sum();
+                (price, qty)
+            })
+            .collect();
+
+        (bids, asks)
+    }
+
+    /// Clean up empty price levels
+    pub fn cleanup(&mut self) {
+        self.bids.retain(|_, orders| !orders.is_empty());
+        self.asks.retain(|_, orders| !orders.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_order_creation() {
+        let order = Order::new(1, 68000.0, 0.1, Side::Buy, OrderType::Limit, 100);
+        assert_eq!(order.price, 68000.0);
+        assert_eq!(order.remaining(), 0.1);
+        assert!(!order.is_done());
+    }
+
+    #[test]
+    fn test_order_book_add() {
+        let mut ob = OrderBook::new("BTCUSDT".into());
+        let buy = Order::new(0, 68000.0, 0.1, Side::Buy, OrderType::Limit, 1);
+        let sell = Order::new(0, 68100.0, 0.1, Side::Sell, OrderType::Limit, 2);
+        ob.add_order(buy);
+        ob.add_order(sell);
+        assert_eq!(ob.best_bid(), Some(68000.0));
+        assert_eq!(ob.best_ask(), Some(68100.0));
+        assert_eq!(ob.spread(), Some(100.0));
+    }
+
+    #[test]
+    fn test_order_book_cancel() {
+        let mut ob = OrderBook::new("ETHUSDT".into());
+        let buy = Order::new(0, 3500.0, 1.0, Side::Buy, OrderType::Limit, 1);
+        let id = ob.add_order(buy);
+        let cancelled = ob.cancel_order(id);
+        assert!(cancelled.is_some());
+        assert_eq!(cancelled.unwrap().status, OrderStatus::Cancelled);
+    }
+}

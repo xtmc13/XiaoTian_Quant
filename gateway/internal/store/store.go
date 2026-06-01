@@ -1,0 +1,627 @@
+package store
+
+import (
+	"crypto/rand"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"math"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
+	_ "modernc.org/sqlite"
+	"gopkg.in/yaml.v3"
+)
+
+var (
+	db          *sql.DB
+	mu          sync.RWMutex
+	configPath  string
+	configCache map[string]any
+	configMu    sync.RWMutex
+
+	strategyConfigsPath string
+	strategyConfigs     = make(map[string]map[string]any)
+	strategyMu          sync.RWMutex
+
+	logsStore     []map[string]any
+	templates     []map[string]any
+	agentTokens   []map[string]any
+	inmemMu       sync.RWMutex
+
+	jwtSecret string
+)
+
+func InitDB() error {
+	home, _ := os.Getwd()
+	dbPath := filepath.Join(home, "gateway.db")
+	var err error
+	db, err = sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
+	if err != nil {
+		return err
+	}
+	db.SetMaxOpenConns(1)
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS xt_users (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			username TEXT UNIQUE NOT NULL,
+			password_hash TEXT NOT NULL,
+			nickname TEXT DEFAULT '',
+			email TEXT DEFAULT '',
+			role TEXT DEFAULT 'user',
+			token_version INTEGER DEFAULT 1,
+			is_active INTEGER DEFAULT 1,
+			created_at TEXT DEFAULT (datetime('now'))
+		);
+		CREATE TABLE IF NOT EXISTS xt_orders (
+			id TEXT PRIMARY KEY,
+			symbol TEXT NOT NULL,
+			side TEXT NOT NULL,
+			order_type TEXT NOT NULL,
+			price REAL,
+			quantity REAL,
+			filled REAL DEFAULT 0,
+			status TEXT DEFAULT 'NEW',
+			exchange TEXT DEFAULT 'BINANCE',
+			created_at REAL
+		);
+	`)
+	if err != nil {
+		return err
+	}
+
+	// Ensure default admin user
+	var count int
+	db.QueryRow("SELECT COUNT(*) FROM xt_users WHERE username='admin'").Scan(&count)
+	if count == 0 {
+		salt := randomHex(16)
+		hash := "sha256$" + salt + "$" + sha256Hex("admin123"+salt)
+		db.Exec("INSERT INTO xt_users (username, password_hash, nickname, role) VALUES (?, ?, ?, ?)",
+			"admin", hash, "Admin", "admin")
+	}
+
+	if configPath == "" {
+		// Save to current working directory (gateway/ in dev, /app/data in Docker)
+		if wd, err := os.Getwd(); err == nil {
+			configPath = filepath.Join(wd, "config.yaml")
+		} else {
+			configPath = "config.yaml"
+		}
+	}
+	if strategyConfigsPath == "" {
+		strategyConfigsPath = filepath.Join(home, "strategy_configs.json")
+	}
+
+	jwtSecret = os.Getenv("SECRET_KEY")
+	if jwtSecret == "" {
+		jwtSecret = randomHex(32)
+		os.Setenv("SECRET_KEY", jwtSecret)
+	}
+
+	// Run schema migrations
+	if err := RunMigrations(); err != nil {
+		return fmt.Errorf("migration: %w", err)
+	}
+
+	return nil
+}
+
+func CloseDB() {
+	if db != nil {
+		db.Close()
+	}
+}
+
+// GetDB returns the global database connection.
+func GetDB() *sql.DB {
+	return db
+}
+
+// ── Config ──
+
+func LoadConfig() {
+	configMu.Lock()
+	defer configMu.Unlock()
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		configCache = make(map[string]any)
+		return
+	}
+	yaml.Unmarshal(data, &configCache)
+}
+
+// SaveUIConfig saves UI preferences into the config cache.
+func SaveUIConfig(ui map[string]any) {
+	configMu.Lock()
+	defer configMu.Unlock()
+	if configCache == nil {
+		configCache = make(map[string]any)
+	}
+	configCache["ui"] = ui
+}
+
+// SaveExchangeConfig saves an exchange configuration.
+func SaveExchangeConfig(id string, cfg map[string]any) {
+	configMu.Lock()
+	defer configMu.Unlock()
+	if configCache == nil {
+		configCache = make(map[string]any)
+	}
+	exchanges, _ := configCache["exchanges"].(map[string]any)
+	if exchanges == nil {
+		exchanges = make(map[string]any)
+	}
+	exchanges[id] = cfg
+	configCache["exchanges"] = exchanges
+}
+
+func GetConfig() map[string]any {
+	configMu.RLock()
+	defer configMu.RUnlock()
+	cp := make(map[string]any)
+	for k, v := range configCache {
+		cp[k] = v
+	}
+	return cp
+}
+
+func SaveConfig(cfg map[string]any) error {
+	configMu.Lock()
+	configCache = cfg
+	data, err := yaml.Marshal(cfg)
+	configMu.Unlock()
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(configPath, data, 0644)
+}
+
+// ── Strategy Configs ──
+
+func LoadStrategyConfigs() {
+	strategyMu.Lock()
+	defer strategyMu.Unlock()
+	data, err := os.ReadFile(strategyConfigsPath)
+	if err != nil {
+		return
+	}
+	var items []map[string]any
+	json.Unmarshal(data, &items)
+	for _, item := range items {
+		if id, ok := item["id"].(string); ok {
+			strategyConfigs[id] = item
+		}
+	}
+}
+
+func saveStrategyConfigs() {
+	items := make([]map[string]any, 0, len(strategyConfigs))
+	for _, v := range strategyConfigs {
+		items = append(items, v)
+	}
+	data, _ := json.MarshalIndent(items, "", "  ")
+	os.WriteFile(strategyConfigsPath, data, 0644)
+}
+
+func GetStrategyConfigs() map[string]map[string]any {
+	strategyMu.RLock()
+	defer strategyMu.RUnlock()
+	cp := make(map[string]map[string]any)
+	for k, v := range strategyConfigs {
+		cp[k] = v
+	}
+	return cp
+}
+
+func GetStrategyConfigMu() *sync.RWMutex {
+	return &strategyMu
+}
+
+func PersistStrategyConfigs() {
+	saveStrategyConfigs()
+}
+
+// ── In-Memory Stores ──
+
+func GetLogsStore() *[]map[string]any    { return &logsStore }
+func GetTemplatesStore() *[]map[string]any { return &templates }
+func GetAgentTokensStore() *[]map[string]any { return &agentTokens }
+
+// ── Auth ──
+
+func HashPassword(password string) string {
+	salt := randomHex(16)
+	return "sha256$" + salt + "$" + sha256Hex(password+salt)
+}
+
+func VerifyPassword(password, hash string) bool {
+	parts := splitN(hash, "$", 3)
+	if len(parts) != 3 || parts[0] != "sha256" {
+		return false
+	}
+	return parts[2] == sha256Hex(password+parts[1])
+}
+
+func GenerateJWT(userID int, username, role string, tokenVersion int) (string, error) {
+	claims := jwt.MapClaims{
+		"sub":           username,
+		"user_id":       userID,
+		"role":          role,
+		"token_version": tokenVersion,
+		"iat":           time.Now().Unix(),
+		"exp":           time.Now().Add(7 * 24 * time.Hour).Unix(),
+		"jti":           randomHex(8),
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString([]byte(jwtSecret))
+}
+
+func VerifyJWT(tokenStr string) (jwt.MapClaims, error) {
+	token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (any, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method")
+		}
+		return []byte(jwtSecret), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
+		return claims, nil
+	}
+	return nil, fmt.Errorf("invalid token")
+}
+
+func FindUserByUsername(username string) map[string]any {
+	row := db.QueryRow("SELECT id, username, password_hash, nickname, email, role, token_version, email_verified, is_active, created_at FROM xt_users WHERE username=? AND is_active=1", username)
+	var id, tokenVer, emailVerified, isActive int
+	var uname, pwHash, nickname, email, role, createdAt string
+	if err := row.Scan(&id, &uname, &pwHash, &nickname, &email, &role, &tokenVer, &emailVerified, &isActive, &createdAt); err != nil {
+		return nil
+	}
+	return map[string]any{
+		"id": id, "username": uname, "password_hash": pwHash,
+		"nickname": nickname, "email": email, "role": role, "token_version": tokenVer,
+		"email_verified": emailVerified, "is_active": isActive, "created_at": createdAt,
+	}
+}
+
+func CreateUser(username, password, nickname, email, role string) (int, error) {
+	pwHash := HashPassword(password)
+	res, err := db.Exec(
+		"INSERT INTO xt_users (username, password_hash, nickname, email, role) VALUES (?, ?, ?, ?, ?)",
+		username, pwHash, nickname, email, role,
+	)
+	if err != nil {
+		return 0, err
+	}
+	id, _ := res.LastInsertId()
+	return int(id), nil
+}
+
+func ListAllUsers() []map[string]any {
+	rows, err := db.Query("SELECT id, username, nickname, email, role, is_active, created_at FROM xt_users")
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var users []map[string]any
+	for rows.Next() {
+		var id, isActive int
+		var username, nickname, email, role, createdAt string
+		rows.Scan(&id, &username, &nickname, &email, &role, &isActive, &createdAt)
+		users = append(users, map[string]any{
+			"id": id, "username": username, "nickname": nickname,
+			"email": email, "role": role, "is_active": isActive, "created_at": createdAt,
+		})
+	}
+	return users
+}
+
+// ── Verification Codes ──
+
+// SaveVerificationCode stores a new verification code, invalidating any unused
+// codes of the same type for the same email first.
+func SaveVerificationCode(email, code, codeType, ip string, ttlSeconds int) error {
+	now := time.Now().Unix()
+	// Invalidate all unused codes of same type for this email
+	db.Exec(`UPDATE xt_verification_codes SET used_at=? WHERE email=? AND code_type=? AND used_at=0`,
+		now, email, codeType)
+	// Insert new code
+	expiresAt := now + int64(ttlSeconds)
+	_, err := db.Exec(
+		`INSERT INTO xt_verification_codes (email, code, code_type, expires_at, ip_address, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		email, code, codeType, expiresAt, ip, now,
+	)
+	return err
+}
+
+// VerifyCode checks if a verification code is valid. Returns (valid bool, message string).
+func VerifyCode(email, code, codeType string) (bool, string) {
+	var id int
+	var storedCode string
+	var expiresAt, usedAt int64
+	var attempts int
+
+	row := db.QueryRow(
+		`SELECT id, code, expires_at, used_at, attempts FROM xt_verification_codes WHERE email=? AND code_type=? AND used_at=0 ORDER BY created_at DESC LIMIT 1`,
+		email, codeType,
+	)
+	if err := row.Scan(&id, &storedCode, &expiresAt, &usedAt, &attempts); err != nil {
+		return false, "no verification code found, please send code first"
+	}
+
+	// Check expiry
+	if time.Now().Unix() > expiresAt {
+		db.Exec(`UPDATE xt_verification_codes SET used_at=? WHERE id=?`, time.Now().Unix(), id)
+		return false, "verification code has expired"
+	}
+
+	// Check attempts limit (max 5)
+	if attempts >= 5 {
+		db.Exec(`UPDATE xt_verification_codes SET used_at=? WHERE id=?`, time.Now().Unix(), id)
+		return false, "too many attempts, please send a new code"
+	}
+
+	// Increment attempts
+	db.Exec(`UPDATE xt_verification_codes SET attempts=attempts+1 WHERE id=?`, id)
+
+	// Check code match
+	if storedCode != code {
+		return false, "incorrect verification code"
+	}
+
+	// Mark as used
+	db.Exec(`UPDATE xt_verification_codes SET used_at=? WHERE id=?`, time.Now().Unix(), id)
+	return true, "ok"
+}
+
+// CanSendCode checks if a new code can be sent (rate limit: 60s between sends).
+func CanSendCode(email, codeType string) (bool, int) {
+	var created_at int64
+	row := db.QueryRow(
+		`SELECT created_at FROM xt_verification_codes WHERE email=? AND code_type=? ORDER BY created_at DESC LIMIT 1`,
+		email, codeType,
+	)
+	if err := row.Scan(&created_at); err != nil {
+		return true, 0 // No prior code, allow
+	}
+	elapsed := int(time.Now().Unix() - created_at)
+	if elapsed < 60 {
+		return false, 60 - elapsed
+	}
+	return true, 0
+}
+
+// SetEmailVerified marks a user's email as verified.
+func SetEmailVerified(userID int) error {
+	_, err := db.Exec(`UPDATE xt_users SET email_verified=1 WHERE id=?`, userID)
+	return err
+}
+
+// FindUserByEmail finds a user by email address.
+func FindUserByEmail(email string) map[string]any {
+	row := db.QueryRow("SELECT id, username, password_hash, nickname, role, token_version, email_verified FROM xt_users WHERE email=? AND is_active=1", email)
+	var id, tokenVer, emailVerified int
+	var uname, pwHash, nickname, role string
+	if err := row.Scan(&id, &uname, &pwHash, &nickname, &role, &tokenVer, &emailVerified); err != nil {
+		return nil
+	}
+	return map[string]any{
+		"id": id, "username": uname, "password_hash": pwHash,
+		"nickname": nickname, "role": role, "token_version": tokenVer,
+		"email_verified": emailVerified,
+	}
+}
+
+// UpdateUserPassword updates a user's password hash.
+func UpdateUserPassword(userID int, passwordHash string) error {
+	_, err := db.Exec(`UPDATE xt_users SET password_hash=?, token_version=token_version+1 WHERE id=?`, passwordHash, userID)
+	return err
+}
+
+// UpdateUserProfile updates a user profile field by username.
+func UpdateUserProfile(username, field, value string) error {
+	allowedFields := map[string]bool{"nickname": true, "email": true, "email_verified": true, "role": true, "is_active": true}
+	if !allowedFields[field] {
+		return nil
+	}
+	_, err := db.Exec(`UPDATE xt_users SET `+field+`=? WHERE username=?`, value, username)
+	return err
+}
+
+// AdminUpdateUser updates any user field by user ID.
+func AdminUpdateUser(userID int, updates map[string]any) error {
+	for field, value := range updates {
+		var err error
+		switch field {
+		case "nickname", "email", "role":
+			strVal, _ := value.(string)
+			if strVal != "" {
+				_, err = db.Exec(`UPDATE xt_users SET `+field+`=? WHERE id=?`, strVal, userID)
+			}
+		case "is_active":
+			if intVal, ok := value.(float64); ok {
+				_, err = db.Exec(`UPDATE xt_users SET is_active=? WHERE id=?`, int(intVal), userID)
+			}
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ── Orders ──
+
+var (
+	orders     = make(map[string]map[string]any)
+	orderMu    sync.RWMutex
+	orderCount int
+)
+
+func GetOrders(symbol string) []map[string]any {
+	orderMu.RLock()
+	defer orderMu.RUnlock()
+	var result []map[string]any
+	for _, o := range orders {
+		if symbol == "" || o["symbol"] == symbol {
+			result = append(result, o)
+		}
+	}
+	return result
+}
+
+func PlaceOrder(order map[string]any) string {
+	orderMu.Lock()
+	defer orderMu.Unlock()
+	orderCount++
+	id := fmt.Sprintf("ord-%d-%d", time.Now().UnixMilli(), orderCount)
+	order["order_id"] = id
+	order["created_at"] = float64(time.Now().Unix())
+	if _, ok := order["status"]; !ok {
+		order["status"] = "NEW"
+	}
+	if _, ok := order["filled"]; !ok {
+		order["filled"] = float64(0)
+	}
+	orders[id] = order
+	return id
+}
+
+func GetOrderByID(id string) map[string]any {
+	orderMu.RLock()
+	defer orderMu.RUnlock()
+	return orders[id]
+}
+
+func CancelOrder(id string) error {
+	orderMu.Lock()
+	defer orderMu.Unlock()
+	o, ok := orders[id]
+	if !ok {
+		return fmt.Errorf("not found")
+	}
+	status := o["status"].(string)
+	if status == "CANCELLED" || status == "FILLED" {
+		return fmt.Errorf("already %s", status)
+	}
+	o["status"] = "CANCELLED"
+	return nil
+}
+
+// ── Helpers ──
+
+func randomHex(n int) string {
+	b := make([]byte, n)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+func sha256Hex(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:])
+}
+
+func splitN(s, sep string, n int) []string {
+	parts := make([]string, 0, n)
+	for i := 0; i < n-1; i++ {
+		idx := indexOf(s, sep)
+		if idx < 0 {
+			break
+		}
+		parts = append(parts, s[:idx])
+		s = s[idx+len(sep):]
+	}
+	parts = append(parts, s)
+	return parts
+}
+
+func indexOf(s, sub string) int {
+	for i := 0; i < len(s); i++ {
+		if i+len(sub) <= len(s) && s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
+}
+
+// ── Math helpers ──
+
+func RoundFloat(v float64, places int) float64 {
+	p := math.Pow10(places)
+	return math.Round(v*p) / p
+}
+
+func SanitizeFloat(v float64) any {
+	if math.IsInf(v, 0) || math.IsNaN(v) {
+		return nil
+	}
+	return v
+}
+
+// ── JSON helpers ──
+
+func MustMarshal(v any) []byte {
+	data, _ := json.Marshal(v)
+	return data
+}
+
+func MustMarshalIndent(v any) []byte {
+	data, _ := json.MarshalIndent(v, "", "  ")
+	return data
+}
+
+func ParseJSON(data []byte) (map[string]any, error) {
+	var result map[string]any
+	err := json.Unmarshal(data, &result)
+	return result, err
+}
+
+// ── Agent Audit Log ──
+
+func GetAgentAuditLog(limit int) []map[string]any {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := db.Query(`SELECT id, token_id, name, endpoint, method, params_summary, status_code, ip, user_agent, timestamp FROM agent_audit_log ORDER BY timestamp DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var logs []map[string]any
+	for rows.Next() {
+		var id, tokenID, statusCode, timestamp int
+		var name, endpoint, method, paramsSummary, ip, userAgent string
+		rows.Scan(&id, &tokenID, &name, &endpoint, &method, &paramsSummary, &statusCode, &ip, &userAgent, &timestamp)
+		logs = append(logs, map[string]any{
+			"id": id, "token_id": tokenID, "name": name,
+			"endpoint": endpoint, "method": method, "params_summary": paramsSummary,
+			"status_code": statusCode, "ip": ip, "user_agent": userAgent, "timestamp": timestamp,
+		})
+	}
+	return logs
+}
+
+// Global symbols list (same as Python _SYMBOL_LIST)
+var SymbolList = []string{
+	"BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "AVAXUSDT",
+	"DOTUSDT", "LINKUSDT", "MATICUSDT", "UNIUSDT", "SHIBUSDT", "LTCUSDT", "ATOMUSDT", "ETCUSDT",
+	"FILUSDT", "APTUSDT", "ARBUSDT", "OPUSDT", "NEARUSDT", "VETUSDT", "GRTUSDT", "ALGOUSDT",
+	"ICPUSDT", "SANDUSDT", "AAVEUSDT", "FTMUSDT", "EGLDUSDT", "THETAUSDT", "AXSUSDT", "KSMUSDT",
+	"XTZUSDT", "EOSUSDT", "ZECUSDT", "DASHUSDT", "COMPUSDT", "MKRUSDT", "SNXUSDT", "CRVUSDT",
+	"1INCHUSDT", "ENJUSDT", "CHZUSDT", "MANAUSDT", "GALAUSDT", "APEUSDT", "FLOWUSDT", "MINAUSDT",
+	"ROSEUSDT", "RUNEUSDT", "KAVAUSDT", "WAVESUSDT", "OCEANUSDT", "FETUSDT", "AGIXUSDT", "LDOUSDT",
+	"GMXUSDT", "DYDXUSDT", "FXSUSDT", "SSVUSDT", "BLURUSDT", "SUIUSDT", "PEPEUSDT", "WLDUSDT",
+	"SEIUSDT", "TIAUSDT", "ORDIUSDT", "1000SATSUSDT", "BONKUSDT", "JTOUSDT", "ENAUSDT", "STRKUSDT",
+	"ETHBTC", "BNBBTC", "SOLBTC", "XRPBTC", "ADABTC",
+}
+
+// Order book matching service reference (will be set from service package)
+var MatchingService any
+

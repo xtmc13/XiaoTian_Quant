@@ -24,6 +24,11 @@ data/
 *.log
 logs/
 
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
 # Node
 node_modules/
 
@@ -37,6 +42,9 @@ python/
 *.dll
 *.so
 *.pyd
+
+# Rust build artifacts
+engine/target/
 
 # Docker
 docker-compose.override.yml
