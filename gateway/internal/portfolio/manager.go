@@ -1,11 +1,18 @@
 package portfolio
 
 import (
+	"encoding/json"
+	"io"
+	"log"
 	"math"
+	"net/http"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/xiaotian-quant/gateway/internal/adapter"
 	"github.com/xiaotian-quant/gateway/internal/model"
 )
 
@@ -18,6 +25,18 @@ type Manager struct {
 	snapshots []model.PortfolioSnapshot
 	peak      float64
 	mu        sync.RWMutex
+
+	// Binance-specific totals
+	spotTotalUSDT        float64
+	futuresTotalUSDT     float64 // totalMarginBalance
+	futuresUnrealizedPnL float64
+	futuresWalletBalance float64
+	fundingTotalUSDT     float64 // funding wallet
+	earnTotalUSDT         float64 // earn (flexible + locked)
+
+	// Other exchange totals (exchange name -> USDT value)
+	otherExcTotals map[string]float64
+	otherExcMu     sync.RWMutex
 
 	// Callbacks
 	OnPositionUpdate func(pos model.PositionData)
@@ -39,8 +58,9 @@ func GetManager() *Manager {
 // NewManager creates a new portfolio manager.
 func NewManager() *Manager {
 	m := &Manager{
-		accounts:  make(map[string]*model.AccountData),
-		positions: make(map[string]*model.PositionData),
+		accounts:        make(map[string]*model.AccountData),
+		positions:       make(map[string]*model.PositionData),
+		otherExcTotals:  make(map[string]float64),
 	}
 	m.accounts["default"] = &model.AccountData{
 		ID:       "default",
@@ -53,6 +73,502 @@ func NewManager() *Manager {
 	}
 	m.peak = 100000
 	return m
+}
+
+// SyncFromBinance fetches real balance from Binance API and updates the portfolio manager.
+func (m *Manager) SyncFromBinance() {
+	apiKey, secret, _ := adapter.GetCredential("binance")
+	if apiKey == "" || secret == "" {
+		log.Println("[Portfolio] No Binance API credentials configured, skipping sync")
+		return
+	}
+
+	binance := adapter.NewBinanceAdapter(apiKey, secret, false)
+
+	// ── Spot ──
+	rawBalances, err := binance.GetBalance()
+	if err != nil {
+		log.Printf("[Portfolio] Binance spot sync error: %v", err)
+	} else {
+		m.syncSpotBalances(binance, rawBalances)
+	}
+
+	// ── Futures ──
+	futuresAcct, err := binance.GetFuturesAccount()
+	if err != nil {
+		log.Printf("[Portfolio] Binance futures sync error: %v", err)
+	} else {
+		m.syncFuturesBalances(binance, futuresAcct)
+	}
+
+	// ── Funding ──
+	fundingBalances, err := binance.GetFundingWallet()
+	if err != nil {
+		log.Printf("[Portfolio] Binance funding wallet error: %v", err)
+	} else {
+		m.syncFundingBalances(binance, fundingBalances)
+	}
+
+	// ── Earn ──
+	flexibleEarn, err := binance.GetFlexibleEarn()
+	if err != nil {
+		log.Printf("[Portfolio] Binance flexible earn error: %v", err)
+	}
+	lockedEarn, err := binance.GetLockedEarn()
+	if err != nil {
+		log.Printf("[Portfolio] Binance locked earn error: %v", err)
+	}
+	if flexibleEarn != nil || lockedEarn != nil {
+		m.syncEarnBalances(binance, flexibleEarn, lockedEarn)
+	}
+
+	// Remove paper account when real exchange data is available
+	m.mu.Lock()
+	delete(m.accounts, "paper")
+	// Reset peak to actual current equity (paper account was 100k)
+	if m.peak > m.spotTotalUSDT+m.futuresTotalUSDT*10 {
+		m.peak = m.spotTotalUSDT + m.futuresTotalUSDT + m.fundingTotalUSDT + m.earnTotalUSDT
+	}
+	m.mu.Unlock()
+}
+
+func (m *Manager) syncSpotBalances(binance *adapter.BinanceAdapter, rawBalances []map[string]any) {
+	balances := make(map[string]*model.Balance)
+	totalUSDT := 0.0
+
+	for _, b := range rawBalances {
+		free := parseAnyFloat(b["free"])
+		locked := parseAnyFloat(b["locked"])
+		total := free + locked
+		if total <= 0 {
+			continue
+		}
+
+		asset := ""
+		if a, ok := b["asset"].(string); ok {
+			asset = a
+		}
+
+		balances[asset] = &model.Balance{
+			Currency: asset,
+			Total:    total,
+			Free:     free,
+			Used:     locked,
+		}
+
+		estimated := estimateUSDT(asset, total)
+		totalUSDT += estimated
+	}
+
+	m.mu.Lock()
+	m.accounts["binance_spot"] = &model.AccountData{
+		ID:         "binance_spot",
+		Exchange:   "binance",
+		Balances:   balances,
+		Positions:  make(map[string]*model.PositionData),
+		CreatedAt:  time.Now().UnixMilli(),
+	}
+	m.mu.Unlock()
+
+	// Store spot USDT total for summary
+	if totalUSDT > 0 {
+		m.spotTotalUSDT = totalUSDT
+		log.Printf("[Portfolio] Spot synced: ~%.2f USDT (%d assets)", totalUSDT, len(balances))
+	}
+
+	// Update peak
+	m.mu.Lock()
+	if m.spotTotalUSDT + m.futuresTotalUSDT > m.peak {
+		m.peak = m.spotTotalUSDT + m.futuresTotalUSDT
+	}
+	m.mu.Unlock()
+}
+
+func (m *Manager) syncFuturesBalances(binance *adapter.BinanceAdapter, acct map[string]any) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Total margin balance (USDT)
+	totalMarginBalance := parseAnyFloat(acct["totalMarginBalance"])
+	totalUnrealizedProfit := parseAnyFloat(acct["totalUnrealizedProfit"])
+	totalWalletBalance := parseAnyFloat(acct["totalWalletBalance"])
+
+	// Extract assets
+	balances := make(map[string]*model.Balance)
+	assets, _ := acct["assets"].([]any)
+	for _, v := range assets {
+		a, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		asset, _ := a["asset"].(string)
+		wallet := parseAnyFloat(a["walletBalance"])
+		upnl := parseAnyFloat(a["unrealizedProfit"])
+		if wallet == 0 && upnl == 0 {
+			continue
+		}
+		balances[asset] = &model.Balance{
+			Currency: asset,
+			Total:    wallet + upnl,
+			Free:     wallet,
+			Used:     0,
+		}
+	}
+
+	// Extract positions for exposure
+	positions := make(map[string]*model.PositionData)
+	posList, _ := acct["positions"].([]any)
+	posCount := 0
+	for _, v := range posList {
+		p, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		amt := parseAnyFloat(p["positionAmt"])
+		if amt == 0 {
+			continue
+		}
+		symbol, _ := p["symbol"].(string)
+		positions[symbol] = &model.PositionData{
+			Symbol:         symbol,
+			Quantity:       amt,
+			AvgEntryPrice:  parseAnyFloat(p["entryPrice"]),
+			CurrentPrice:   parseAnyFloat(p["markPrice"]),
+			UnrealizedPnL:  parseAnyFloat(p["unrealizedProfit"]),
+		}
+		posCount++
+	}
+
+	m.accounts["binance_futures"] = &model.AccountData{
+		ID:          "binance_futures",
+		Exchange:    "binance",
+		Balances:    balances,
+		Positions:   positions,
+		CreatedAt:   time.Now().UnixMilli(),
+	}
+
+	m.futuresTotalUSDT = totalMarginBalance
+	m.futuresUnrealizedPnL = totalUnrealizedProfit
+	m.futuresWalletBalance = totalWalletBalance
+
+	if m.spotTotalUSDT+m.futuresTotalUSDT > m.peak {
+		m.peak = m.spotTotalUSDT + m.futuresTotalUSDT
+	}
+
+	if totalMarginBalance > 0 || posCount > 0 {
+		log.Printf("[Portfolio] Futures synced: ~%.2f USDT wallet, %.4f unrealized PnL (%d positions)",
+			totalWalletBalance, totalUnrealizedProfit, posCount)
+	}
+}
+
+func (m *Manager) syncFundingBalances(binance *adapter.BinanceAdapter, funding []adapter.FundingBalance) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	balances := make(map[string]*model.Balance)
+	fundingUSDT := 0.0
+
+	for _, fb := range funding {
+		if fb.Free == 0 && fb.Locked == 0 {
+			continue
+		}
+		total := fb.Free + fb.Locked
+		balances[fb.Asset] = &model.Balance{
+			Currency: fb.Asset,
+			Total:    total,
+			Free:     fb.Free,
+			Used:     fb.Locked,
+		}
+		fundingUSDT += estimateUSDT(fb.Asset, total)
+	}
+
+	if len(balances) > 0 {
+		m.accounts["binance_funding"] = &model.AccountData{
+			ID:         "binance_funding",
+			Exchange:   "binance",
+			Balances:   balances,
+			Positions:  make(map[string]*model.PositionData),
+			CreatedAt:  time.Now().UnixMilli(),
+		}
+	}
+
+	m.fundingTotalUSDT = fundingUSDT
+
+	if fundingUSDT > 0 {
+		log.Printf("[Portfolio] Funding wallet synced: ~%.4f USDT (%d assets)", fundingUSDT, len(balances))
+	}
+}
+
+func (m *Manager) syncEarnBalances(binance *adapter.BinanceAdapter, flexible, locked []adapter.EarnPosition) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	balances := make(map[string]*model.Balance)
+	earnUSDT := 0.0
+
+	for _, ep := range flexible {
+		if ep.Amount <= 0 {
+			continue
+		}
+		usdt := estimateUSDT(ep.Asset, ep.Amount)
+		earnUSDT += usdt
+		key := ep.Asset + "_flex"
+		balances[key] = &model.Balance{
+			Currency: ep.Asset + " (活期)",
+			Total:    ep.Amount,
+			Free:     ep.Amount,
+			Used:     0,
+		}
+	}
+
+	for _, ep := range locked {
+		if ep.Amount <= 0 {
+			continue
+		}
+		usdt := estimateUSDT(ep.Asset, ep.Amount)
+		earnUSDT += usdt
+		key := ep.Asset + "_locked"
+		balances[key] = &model.Balance{
+			Currency: ep.Asset + " (定期)",
+			Total:    ep.Amount,
+			Free:     0,
+			Used:     ep.Amount,
+		}
+	}
+
+	if len(balances) > 0 {
+		m.accounts["binance_earn"] = &model.AccountData{
+			ID:         "binance_earn",
+			Exchange:   "binance",
+			Balances:   balances,
+			Positions:  make(map[string]*model.PositionData),
+			CreatedAt:  time.Now().UnixMilli(),
+		}
+	}
+
+	m.earnTotalUSDT = earnUSDT
+
+	if earnUSDT > 0 {
+		log.Printf("[Portfolio] Earn synced: ~%.4f USDT (flexible + locked)", earnUSDT)
+	}
+}
+
+// ── Multi-Exchange Sync ────────────────────────────────────────────────────
+
+// SyncAllExchanges syncs Binance + all other configured exchanges.
+func (m *Manager) SyncAllExchanges() {
+	m.SyncFromBinance()
+
+	// Sync each configured non-Binance exchange
+	exchanges := []string{"okx", "bybit", "gate", "mexc", "bitget", "coinbase"}
+	for _, name := range exchanges {
+		apiKey, secret, passphrase := adapter.GetCredential(name)
+		if apiKey == "" || secret == "" {
+			log.Printf("[Portfolio] %s: no credentials, skipping", name)
+			continue
+		}
+		log.Printf("[Portfolio] %s: syncing...", name)
+		m.syncGenericExchange(name, apiKey, secret, passphrase)
+	}
+}
+
+// syncGenericExchange creates the appropriate adapter and syncs spot balance.
+func (m *Manager) syncGenericExchange(name, apiKey, secret, passphrase string) {
+	var balances []map[string]any
+	var err error
+
+	switch name {
+	case "okx":
+		okx := adapter.NewOKXAdapter(apiKey, secret, passphrase, false)
+		balances, err = okx.GetBalance()
+	case "bybit":
+		bybit := adapter.NewBybitAdapter(apiKey, secret, false)
+		balances, err = bybit.GetBalance()
+	case "gate":
+		gateio := adapter.NewGateIOAdapter(apiKey, secret)
+		balances, err = gateio.GetBalance()
+	case "mexc":
+		mexc := adapter.NewMEXCAdapter(apiKey, secret)
+		balances, err = mexc.GetBalance()
+	case "bitget":
+		bitget := adapter.NewBitgetAdapter(apiKey, secret, passphrase)
+		balances, err = bitget.GetBalance()
+	case "coinbase":
+		coinbase := adapter.NewCoinbaseAdapter(apiKey, secret)
+		balances, err = coinbase.GetBalance()
+	default:
+		return
+	}
+
+	if err != nil {
+		errStr := err.Error()
+		if strings.Contains(errStr, "50102") || strings.Contains(errStr, "Timestamp") {
+			log.Printf("[Portfolio] %s: API key valid but rejected — likely IP whitelist. Add 43.165.169.27 to %s API allowlist.", name, name)
+		} else {
+			log.Printf("[Portfolio] %s sync error: %v", name, err)
+		}
+		return
+	}
+
+	m.syncSpotBalancesGeneric(name, balances)
+}
+
+// syncSpotBalancesGeneric processes spot balances from any exchange into the portfolio.
+// Each exchange returns different field names, so we normalize them here.
+func (m *Manager) syncSpotBalancesGeneric(exchange string, rawBalances []map[string]any) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	balances := make(map[string]*model.Balance)
+	totalUSDT := 0.0
+
+	for _, raw := range rawBalances {
+		asset, free, locked := normalizeBalanceFields(exchange, raw)
+		if asset == "" {
+			continue
+		}
+		total := free + locked
+		if total <= 0 {
+			continue
+		}
+		balances[asset] = &model.Balance{
+			Currency: asset,
+			Total:    total,
+			Free:     free,
+			Used:     locked,
+		}
+		totalUSDT += estimateUSDT(asset, total)
+	}
+
+	if len(balances) > 0 {
+		accountID := exchange + "_spot"
+		m.accounts[accountID] = &model.AccountData{
+			ID:         accountID,
+			Exchange:   exchange,
+			Balances:   balances,
+			Positions:  make(map[string]*model.PositionData),
+			CreatedAt:  time.Now().UnixMilli(),
+		}
+	}
+
+	m.otherExcMu.Lock()
+	m.otherExcTotals[exchange] = totalUSDT
+	m.otherExcMu.Unlock()
+
+	if totalUSDT > 0 {
+		log.Printf("[Portfolio] %s synced: ~%.4f USDT (%d assets)", exchange, totalUSDT, len(balances))
+	}
+}
+
+// normalizeBalanceFields extracts asset/free/locked from exchange-specific response format.
+func normalizeBalanceFields(exchange string, raw map[string]any) (asset string, free, locked float64) {
+	switch exchange {
+	case "okx":
+		// OKX: {"ccy":"USDT", "availBal":"100.0", "frozenBal":"0.0"}
+		asset = getMapString(raw, "ccy")
+		free = getMapFloat(raw, "availBal")
+		locked = getMapFloat(raw, "frozenBal")
+	case "bybit":
+		// Bybit: {"coin":[{"coin":"USDT","walletBalance":"100"}]}
+		// Note: Bybit's wallet-balance response wraps coins in "coin" array
+		asset = getMapString(raw, "coin")
+		free = getMapFloat(raw, "availableToWithdraw")
+		locked = getMapFloat(raw, "walletBalance") - free
+		if locked < 0 {
+			locked = 0
+		}
+	case "gate":
+		// Gate.io: {"currency":"USDT","available":"100","locked":"0"}
+		asset = strings.ToUpper(getMapString(raw, "currency"))
+		free = getMapFloat(raw, "available")
+		locked = getMapFloat(raw, "locked")
+	case "mexc":
+		// MEXC: {"asset":"USDT","free":"100","locked":"0"} (same as Binance)
+		asset = getMapString(raw, "asset")
+		free = getMapFloat(raw, "free")
+		locked = getMapFloat(raw, "locked")
+	case "bitget":
+		// Bitget (normalized by adapter): {"asset":"USDT","free":100.0,"locked":0.0}
+		asset = getMapString(raw, "asset")
+		free = getMapFloat(raw, "free")
+		locked = getMapFloat(raw, "locked")
+	case "coinbase":
+		// Coinbase: {"currency":"USDT", "available_balance":{"value":"100"}}
+		asset = getMapString(raw, "currency")
+		if ab, ok := raw["available_balance"].(map[string]any); ok {
+			free = getMapFloat(ab, "value")
+		}
+		// Coinbase doesn't have locked; total is available + hold
+		if hold, ok := raw["hold"].(map[string]any); ok {
+			locked = getMapFloat(hold, "value")
+		}
+	}
+	return
+}
+
+func parseAnyFloat(v any) float64 {
+	switch val := v.(type) {
+	case float64:
+		return val
+	case string:
+		f, _ := strconv.ParseFloat(val, 64)
+		return f
+	}
+	return 0
+}
+
+func getBinancePrice(symbol string) float64 {
+	resp, err := http.Get("https://api.binance.com/api/v3/ticker/price?symbol=" + symbol)
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	var result map[string]any
+	json.Unmarshal(body, &result)
+	if priceStr, ok := result["price"].(string); ok {
+		f, _ := strconv.ParseFloat(priceStr, 64)
+		return f
+	}
+	return 0
+}
+
+func estimateUSDT(asset string, amount float64) float64 {
+	switch asset {
+	case "USDT", "BUSD", "USDC", "FDUSD":
+		return amount
+	case "BTC":
+		return amount * getBinancePrice("BTCUSDT")
+	case "ETH":
+		return amount * getBinancePrice("ETHUSDT")
+	case "BNB":
+		return amount * getBinancePrice("BNBUSDT")
+	case "SOL":
+		return amount * getBinancePrice("SOLUSDT")
+	case "DOGE":
+		return amount * getBinancePrice("DOGEUSDT")
+	case "XRP":
+		return amount * getBinancePrice("XRPUSDT")
+	case "ADA":
+		return amount * getBinancePrice("ADAUSDT")
+	case "TRX":
+		return amount * getBinancePrice("TRXUSDT")
+	case "LINK":
+		return amount * getBinancePrice("LINKUSDT")
+	case "AVAX":
+		return amount * getBinancePrice("AVAXUSDT")
+	case "DOT":
+		return amount * getBinancePrice("DOTUSDT")
+	case "MATIC", "POL":
+		return amount * getBinancePrice("POLUSDT")
+	case "TON":
+		return amount * getBinancePrice("TONUSDT")
+	default:
+		if price := getBinancePrice(asset + "USDT"); price > 0 {
+			return amount * price
+		}
+		return 0
+	}
 }
 
 // GetAccount returns an account by ID.
@@ -120,29 +636,116 @@ func (m *Manager) GetPositions() []*model.PositionData {
 func (m *Manager) TotalEquity() float64 {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	equity := 0.0
-	for _, acct := range m.accounts {
-		for _, bal := range acct.Balances {
-			equity += bal.Total
-		}
+	other := 0.0
+	m.otherExcMu.RLock()
+	for _, v := range m.otherExcTotals {
+		other += v
 	}
-	for _, pos := range m.positions {
-		equity += pos.UnrealizedPnL
-	}
-	return equity
+	m.otherExcMu.RUnlock()
+	return m.spotTotalUSDT + m.futuresTotalUSDT + m.fundingTotalUSDT + m.earnTotalUSDT + other
 }
 
 // AvailableBalance returns the sum of free balances.
 func (m *Manager) AvailableBalance() float64 {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	total := 0.0
-	for _, acct := range m.accounts {
-		for _, bal := range acct.Balances {
-			total += bal.Free
+	other := 0.0
+	m.otherExcMu.RLock()
+	for _, v := range m.otherExcTotals {
+		other += v
+	}
+	m.otherExcMu.RUnlock()
+	return m.spotTotalUSDT + m.futuresWalletBalance + m.fundingTotalUSDT + m.earnTotalUSDT + other
+}
+
+// SpotBalance returns the spot total (USDT).
+func (m *Manager) SpotBalance() float64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.spotTotalUSDT
+}
+
+// FuturesBalance returns the futures total margin balance (USDT).
+func (m *Manager) FuturesBalance() float64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.futuresTotalUSDT
+}
+
+// FuturesPnL returns unrealized PnL from futures.
+func (m *Manager) FuturesPnL() float64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.futuresUnrealizedPnL
+}
+
+// FuturesWalletBalance returns the futures wallet balance.
+func (m *Manager) FuturesWalletBalance() float64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.futuresWalletBalance
+}
+
+// FundingBalance returns the funding wallet total (USDT).
+func (m *Manager) FundingBalance() float64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.fundingTotalUSDT
+}
+
+// EarnBalance returns the earn total (USDT).
+func (m *Manager) EarnBalance() float64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.earnTotalUSDT
+}
+
+// OtherExchangeBalance returns the total USDT for a specific non-Binance exchange.
+func (m *Manager) OtherExchangeBalance(exchange string) float64 {
+	m.otherExcMu.RLock()
+	defer m.otherExcMu.RUnlock()
+	return m.otherExcTotals[exchange]
+}
+
+// OtherExchangeTotals returns a copy of all non-Binance exchange totals (non-zero only).
+func (m *Manager) OtherExchangeTotals() map[string]float64 {
+	m.otherExcMu.RLock()
+	defer m.otherExcMu.RUnlock()
+	cp := make(map[string]float64)
+	for k, v := range m.otherExcTotals {
+		if v > 0 {
+			cp[k] = v
 		}
 	}
-	return total
+	return cp
+}
+
+// ExchangeBalance returns the total USDT-estimated balance for a specific exchange.
+func (m *Manager) ExchangeBalance(exchange string) float64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	switch exchange {
+	case "binance":
+		return m.spotTotalUSDT + m.futuresTotalUSDT + m.fundingTotalUSDT + m.earnTotalUSDT
+	default:
+		m.otherExcMu.RLock()
+		v := m.otherExcTotals[exchange]
+		m.otherExcMu.RUnlock()
+		if v > 0 {
+			return v
+		}
+		// Fallback: sum account balances for this exchange
+		total := 0.0
+		for _, acct := range m.accounts {
+			if acct.Exchange != exchange {
+				continue
+			}
+			for _, bal := range acct.Balances {
+				total += bal.Total
+			}
+		}
+		return total
+	}
 }
 
 // MarginUsed returns the sum of used balances.
@@ -510,4 +1113,24 @@ func ReturnsFromSnapshots(snapshots []model.PortfolioSnapshot) []float64 {
 		}
 	}
 	return returns
+}
+
+// ── Helpers for exchange balance normalization ──
+
+func getMapString(m map[string]any, key string) string {
+	if v, ok := m[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+func getMapFloat(m map[string]any, key string) float64 {
+	switch v := m[key].(type) {
+	case float64:
+		return v
+	case string:
+		f, _ := strconv.ParseFloat(v, 64)
+		return f
+	}
+	return 0
 }

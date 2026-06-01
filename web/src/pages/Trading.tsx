@@ -153,6 +153,7 @@ export function Trading() {
   const chartInited = useRef(false)
   const indicatorSeries = useRef<Map<string, any>>(new Map())
   const queryClient = useQueryClient()
+  const [chartKey, setChartKey] = useState(0)
 
   /* ─── Data Queries ─── */
   const { data: klines, isLoading: klinesLoading } = useQuery({
@@ -249,11 +250,57 @@ export function Trading() {
 
   const datafeed = useMemo(() => createBackendDatafeed(), [])
 
-  /* ─── Chart Init ─── */
+  /* ─── Capture-phase period button click interceptor ───
+   *
+   * KLineChartPro 0.1.1 has a SolidJS createEffect dependency tracking bug:
+   * when setPeriod() is called, its createEffect((prev)=>{...}) does NOT
+   * re-run for period signal changes, so getHistoryKLineData is never called.
+   *
+   * Workaround: intercept clicks on period bar buttons in capture phase,
+   * stop propagation to prevent KLineChartPro's SolidJS handler from
+   * updating its stale internal state, then update React state and
+   * destroy/recreate the chart with a fresh KLineChartPro instance.
+   *
+   * The key insight: period bar buttons are <span> elements inside
+   * .klinecharts-pro-period-bar with class "item period" and text matching
+   * INTERVALS entries (1m, 5m, 15m, 30m, 1h, 4h, 1d, 1w).
+   */
   useEffect(() => {
-    if (!chartRef.current || chartInited.current) return
-    chartInited.current = true
-    // clear any stale content
+    const el = chartRef.current
+    if (!el) return
+
+    const handler = (e: MouseEvent) => {
+      // Walk up from target looking for a period bar button
+      let target = e.target as HTMLElement | null
+      while (target && target !== el) {
+        if (
+          target.classList?.contains('period') &&
+          target.parentElement?.classList?.contains('klinecharts-pro-period-bar')
+        ) {
+          const text = target.textContent?.trim()
+          if (text && INTERVALS.includes(text)) {
+            e.stopPropagation()
+            e.preventDefault()
+            console.log('[Trading] Period interceptor: clicking', text)
+            setInterval(text)
+            setChartKey((k) => k + 1)
+          }
+          return
+        }
+        target = target.parentElement
+      }
+    }
+
+    // Capture phase runs BEFORE SolidJS delegated handler
+    el.addEventListener('click', handler, true)
+    return () => el.removeEventListener('click', handler, true)
+  }, [])
+
+  /* ─── Chart Init (recreates on chartKey or symbol change) ─── */
+  useEffect(() => {
+    if (!chartRef.current) return
+    console.log('[Trading] Initializing KLineChartPro chartKey=', chartKey, 'symbol=', symbol, 'interval=', interval)
+    // Destroy old chart: clear container completely
     chartRef.current.innerHTML = ''
     try {
       const chart = new KLineChartPro({
@@ -275,27 +322,23 @@ export function Trading() {
         locale: 'zh-CN',
       })
       chartInstance.current = chart
+      console.log('[Trading] KLineChartPro initialized successfully')
     } catch (e) {
-      console.error('[KLineChart] init failed:', e)
+      console.error('[Trading] KLineChart init failed:', e)
     }
     return () => {
+      console.log('[Trading] Cleaning up KLineChartPro')
       if (chartRef.current) chartRef.current.innerHTML = ''
       chartInstance.current = null
-      chartInited.current = false
     }
-  }, [])
+  }, [chartKey, symbol])
 
-  /* ─── Update symbol / period ─── */
+  /* ─── Resync chart period on interval change (from left-panel or other UI) ─── */
   useEffect(() => {
-    if (chartInstance.current) {
-      chartInstance.current.setSymbol({ ticker: symbol, name: symbol.replace('USDT', '/USDT'), shortName: symbol, market: 'crypto', exchange: 'BINANCE' })
-    }
-  }, [symbol])
-
-  useEffect(() => {
-    if (chartInstance.current) {
-      chartInstance.current.setPeriod({ ...parseInterval(interval), text: interval })
-    }
+    console.log('[Trading] interval changed to:', interval)
+    // The chart init effect above already handles the initial render.
+    // Additional interval changes (non-chartKey path) are handled by
+    // the capture-phase interceptor which calls both setInterval and setChartKey.
   }, [interval])
 
   /* ─── Resize chart when bottom panel toggles ─── */

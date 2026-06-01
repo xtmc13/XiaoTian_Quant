@@ -27,7 +27,8 @@ RUN curl -fsSL https://github.com/TA-Lib/ta-lib/releases/download/v0.4.0/ta-lib-
 
 # Install Python dependencies (before copying code, for layer caching)
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir "TA-Lib>=0.6.5" \
+    && pip install --no-cache-dir fastapi==0.115.0 "uvicorn[standard]==0.32.0" pandas==2.2.3 pydantic==2.9.2 python-multipart==0.0.17
 
 # Copy all sandbox code
 COPY . .

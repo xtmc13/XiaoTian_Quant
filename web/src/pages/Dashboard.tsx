@@ -518,6 +518,27 @@ function RankRow({ item, index }: { item: any; index: number }) {
   )
 }
 
+/* ── Currency Converter ── */
+let conversionRate = 7.25
+let preferredCurrency = 'CNY'
+const currencySymbols: Record<string, string> = {
+  CNY: '¥', USD: '$', EUR: '€', GBP: '£', JPY: '¥',
+  KRW: '₩', HKD: 'HK$', TWD: 'NT$', SGD: 'S$', AUD: 'A$',
+}
+export const getConversionRate = () => conversionRate
+export const getPreferredCurrency = () => preferredCurrency
+export const getCurrencySymbol = () => currencySymbols[preferredCurrency] || preferredCurrency
+export const formatConverted = (usd: number) => {
+  const converted = usd * conversionRate
+  const sym = currencySymbols[preferredCurrency] || (preferredCurrency + ' ')
+  if (preferredCurrency === 'USD') return `$${converted.toFixed(2)}`
+  return `${sym}${converted.toFixed(2)}`
+}
+export const setConversion = (rate: number, currency: string) => {
+  conversionRate = rate
+  preferredCurrency = currency
+}
+
 /* ── Main Dashboard ── */
 export function Dashboard() {
   const [showGuide, setShowGuide] = useState(() => {
@@ -535,6 +556,13 @@ export function Dashboard() {
     queryFn: () => portfolioApi.summary(),
     refetchInterval: 10000,
   })
+
+  // Keep currency conversion rate in sync with portfolio response
+  useEffect(() => {
+    const rate = portfolio?.conversion_rate || portfolio?.usd_cny_rate || 7.25
+    const currency = portfolio?.preferred_currency || 'CNY'
+    setConversion(rate, currency)
+  }, [portfolio?.conversion_rate, portfolio?.usd_cny_rate, portfolio?.preferred_currency])
 
   const { data: strategies, isLoading: stratLoading } = useQuery<StrategyConfig[]>({
     queryKey: ['strategies'],
@@ -680,28 +708,97 @@ export function Dashboard() {
                 <div className="space-y-3">
                   <Skeleton variant="text" lines={4} />
                 </div>
-              ) : (portfolio?.exchanges || []).length > 0 ? (
+              ) : (portfolio?.exchanges?.filter((ex: any) => ex.connected || ex.balance > 0 || ex.configured) || []).length > 0 ? (
                 <div className="space-y-3">
-                  {(portfolio?.exchanges || []).map((ex: any) => (
-                    <div key={ex.name} className="flex items-center justify-between text-sm">
-                      <span className="flex items-center gap-2">
-                        <span
-                          className={cn(
-                            'h-2 w-2 rounded-full',
-                            ex.connected ? 'bg-quant-green' : ex.configured ? 'bg-yellow-400' : 'bg-quant-red'
+                  {(portfolio?.exchanges?.filter((ex: any) => ex.connected || ex.balance > 0 || ex.configured) || []).map((ex: any) => {
+                    const isBinance = ex.name === 'binance'
+                    const hasSubItems = isBinance || ex.balance > 0
+                    return (
+                    <div key={ex.name}>
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="flex items-center gap-2">
+                          <span
+                            className={cn(
+                              'h-2 w-2 rounded-full',
+                              ex.connected ? 'bg-quant-green' : ex.configured ? 'bg-yellow-400' : 'bg-quant-red'
+                            )}
+                          />
+                          <span className="text-white font-medium capitalize">{ex.name}</span>
+                        </span>
+                        <span className="font-mono text-white text-xs">
+                          ${(ex.balance || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </span>
+                      </div>
+                      {/* Binance 4-layer breakdown */}
+                      {isBinance && (() => {
+                        const hasFunding = (portfolio?.funding_balance || 0) > 0
+                        const hasEarn = (portfolio?.earn_balance || 0) > 0
+                        const lastVisible = hasEarn ? 'earn' : hasFunding ? 'funding' : 'futures'
+                        return (
+                        <div className="ml-4 mt-1 space-y-1">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-[#666666]">├ 现货</span>
+                            <span className="font-mono text-[#aaaaaa]">
+                              ${(portfolio?.spot_balance || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              <span className="text-[#555555] ml-1">
+                                ≈ {formatConverted(portfolio?.spot_balance || 0)}
+                              </span>
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-[#666666]">{lastVisible === 'futures' ? '└' : '├'} 合约</span>
+                            <span className="font-mono text-[#aaaaaa]">
+                              ${(portfolio?.futures_balance || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
+                              {(portfolio?.futures_unrealized_pnl || 0) !== 0 && (
+                                <span className={cn('ml-1', (portfolio?.futures_unrealized_pnl || 0) >= 0 ? 'text-quant-green' : 'text-quant-red')}>
+                                  ({(portfolio?.futures_unrealized_pnl || 0) >= 0 ? '+' : ''}{portfolio?.futures_unrealized_pnl?.toFixed(4)})
+                                </span>
+                              )}
+                              <span className="text-[#555555] ml-1">≈ {formatConverted(portfolio?.futures_balance || 0)}</span>
+                            </span>
+                          </div>
+                          {hasFunding && (
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="text-[#666666]">{lastVisible === 'funding' ? '└' : '├'} 资金</span>
+                              <span className="font-mono text-[#aaaaaa]">
+                                ${(portfolio?.funding_balance || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
+                                <span className="text-[#555555] ml-1">≈ {formatConverted(portfolio?.funding_balance || 0)}</span>
+                              </span>
+                            </div>
                           )}
-                        />
-                        <span className="text-[#aaaaaa]">{ex.name}</span>
-                      </span>
-                      <span className="font-mono text-white">
-                        ${(ex.balance || 0).toLocaleString()}
-                      </span>
+                          {hasEarn && (
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="text-[#666666]">└ 理财</span>
+                              <span className="font-mono text-[#aaaaaa]">
+                                ${(portfolio?.earn_balance || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
+                                <span className="text-[#555555] ml-1">≈ {formatConverted(portfolio?.earn_balance || 0)}</span>
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                        )})()
+                      }
+                      {/* Other exchanges: simple spot row */}
+                      {!isBinance && ex.balance > 0 && (
+                        <div className="ml-4 mt-1 space-y-1">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-[#666666]">└ 现货</span>
+                            <span className="font-mono text-[#aaaaaa]">
+                              ${(ex.balance || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              <span className="text-[#555555] ml-1">
+                                ≈ {formatConverted(ex.balance || 0)}
+                              </span>
+                            </span>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  ))}
+                    )})}
                   <div className="mt-2 flex items-center justify-between border-t border-[#1c1c1c] pt-3 text-sm">
                     <span className="text-[#555555]">合计</span>
                     <span className="font-mono font-semibold text-white">
-                      ${totalEquity.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                      ${totalEquity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      <span className="text-[#555555] ml-1 text-xs">≈ {formatConverted(totalEquity)}</span>
                     </span>
                   </div>
                 </div>

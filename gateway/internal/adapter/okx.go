@@ -96,12 +96,14 @@ func (o *OKXAdapter) request(method, path string, body map[string]any) (map[stri
 		return nil, err
 	}
 
-	timestamp := fmt.Sprintf("%d", time.Now().UnixMilli())
+	timestamp := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 	req.Header.Set("OK-ACCESS-KEY", o.apiKey)
 	req.Header.Set("OK-ACCESS-SIGN", o.sign(timestamp, method, path, bodyStr))
 	req.Header.Set("OK-ACCESS-TIMESTAMP", timestamp)
 	req.Header.Set("OK-ACCESS-PASSPHRASE", o.passphrase)
-	req.Header.Set("Content-Type", "application/json")
+	if method != "GET" {
+		req.Header.Set("Content-Type", "application/json")
+	}
 
 	resp, err := o.httpClient.Do(req)
 	if err != nil {
@@ -112,6 +114,15 @@ func (o *OKXAdapter) request(method, path string, body map[string]any) (map[stri
 	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]any
 	json.Unmarshal(respBody, &result)
+
+	// Check OKX error code
+	if code, ok := result["code"].(string); ok && code != "0" {
+		return result, fmt.Errorf("okx %s: %s", code, result["msg"])
+	}
+	if code, ok := result["code"].(float64); ok && code != 0 {
+		return result, fmt.Errorf("okx %.0f: %v", code, result["msg"])
+	}
+
 	return result, nil
 }
 

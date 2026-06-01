@@ -17,6 +17,63 @@ import (
 
 var binanceClient = &http.Client{Timeout: 10 * time.Second}
 
+func parseFloatField(v any) float64 {
+	switch val := v.(type) {
+	case float64:
+		return val
+	case string:
+		f, _ := strconv.ParseFloat(val, 64)
+		return f
+	default:
+		f, _ := strconv.ParseFloat(fmt.Sprint(val), 64)
+		return f
+	}
+}
+
+func fetchJSON(url string) (map[string]any, error) {
+	resp, err := binanceClient.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	var result map[string]any
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func fetchBinanceOrderBook(symbol string, limit int) (map[string]any, error) {
+	url := fmt.Sprintf("https://api.binance.com/api/v3/depth?symbol=%s&limit=%d", symbol, limit)
+	resp, err := binanceClient.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	var result map[string]any
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func fetchBinanceTradesAPI(symbol string, limit int) ([]map[string]any, error) {
+	url := fmt.Sprintf("https://api.binance.com/api/v3/trades?symbol=%s&limit=%d", symbol, limit)
+	resp, err := binanceClient.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	var result []map[string]any
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 func fetchBinanceKlines(symbol, interval string, limit int, fromMs, toMs int64) ([]map[string]any, error) {
 	url := fmt.Sprintf("https://api.binance.com/api/v3/klines?symbol=%s&interval=%s&limit=%d",
 		symbol, interval, limit)
@@ -130,64 +187,90 @@ func MarketKlines(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"klines": klines, "symbol": symbol})
 }
 
-// OrderBook returns a mock order book for a symbol.
+// OrderBook returns real order book from Binance.
 func OrderBook(c *gin.Context) {
 	symbol := c.DefaultQuery("symbol", "BTCUSDT")
-	depth := 15
+	depth := 20
 	if d := c.Query("depth"); d != "" {
-		if v, err := strconv.Atoi(d); err == nil && v > 0 && v <= 50 {
+		if v, err := strconv.Atoi(d); err == nil && v > 0 && v <= 100 {
 			depth = v
 		}
 	}
-	basePrice := 68000.0
-	if strings.Contains(symbol, "ETH") {
-		basePrice = 3500.0
+
+	data, err := fetchBinanceOrderBook(symbol, depth)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"error": "orderbook fetch failed", "detail": err.Error()})
+		return
 	}
-	bids := make([][]float64, depth)
-	asks := make([][]float64, depth)
-	for i := 0; i < depth; i++ {
-		bidPrice := basePrice - float64(i+1)*basePrice*0.0001
-		askPrice := basePrice + float64(i+1)*basePrice*0.0001
-		bidQty := 0.5 + float64(depth-i)*0.3
-		askQty := 0.5 + float64(i+1)*0.3
-		bids[i] = []float64{store.RoundFloat(bidPrice, 2), store.RoundFloat(bidQty, 4)}
-		asks[i] = []float64{store.RoundFloat(askPrice, 2), store.RoundFloat(askQty, 4)}
+
+	// Parse bids/asks from Binance format [["price","qty"],...]
+	parseLevels := func(raw any) [][]float64 {
+		arr, _ := raw.([]any)
+		out := make([][]float64, 0, len(arr))
+		for _, v := range arr {
+			if pair, ok := v.([]any); ok && len(pair) >= 2 {
+				p, _ := strconv.ParseFloat(fmt.Sprint(pair[0]), 64)
+				q, _ := strconv.ParseFloat(fmt.Sprint(pair[1]), 64)
+				out = append(out, []float64{p, q})
+			}
+		}
+		return out
 	}
-	c.JSON(http.StatusOK, gin.H{"bids": bids, "asks": asks, "symbol": symbol})
+
+	c.JSON(http.StatusOK, gin.H{
+		"bids":    parseLevels(data["bids"]),
+		"asks":    parseLevels(data["asks"]),
+		"symbol":  symbol,
+	})
 }
 
-// MarketTrades returns recent public trades for a symbol.
+// MarketTrades returns real recent public trades from Binance.
 func MarketTrades(c *gin.Context) {
 	symbol := c.DefaultQuery("symbol", "BTCUSDT")
-	limit := 30
+	limit := 50
 	if l := c.Query("limit"); l != "" {
 		if v, err := strconv.Atoi(l); err == nil && v > 0 && v <= 100 {
 			limit = v
 		}
 	}
-	basePrice := 68000.0
-	if strings.Contains(symbol, "ETH") {
-		basePrice = 3500.0
+
+	data, err := fetchBinanceTradesAPI(symbol, limit)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"error": "trades fetch failed", "detail": err.Error()})
+		return
 	}
-	now := time.Now()
-	trades := make([]map[string]any, limit)
-	for i := 0; i < limit; i++ {
-		side := "BUY"
-		if i%2 == 0 {
-			side = "SELL"
+
+	// Transform to frontend-compatible format
+	trades := make([]map[string]any, 0, len(data))
+	for _, t := range data {
+		price := parseFloatField(t["price"])
+		qty := parseFloatField(t["qty"])
+		var timeMs int64
+		switch v := t["time"].(type) {
+		case float64:
+			timeMs = int64(v)
+		case int64:
+			timeMs = v
+		case string:
+			timeMs, _ = strconv.ParseInt(v, 10, 64)
 		}
-		price := basePrice + (float64(i%7)-3.0)*basePrice*0.00015
-		trades[i] = map[string]any{
-			"price":          store.RoundFloat(price, 2),
-			"qty":            store.RoundFloat(0.01+float64(i%5)*0.02, 4),
-			"quantity":       store.RoundFloat(0.01+float64(i%5)*0.02, 4),
+		isBuyerMaker, _ := t["isBuyerMaker"].(bool)
+		side := "SELL"
+		if isBuyerMaker {
+			side = "BUY"
+		}
+		trades = append(trades, map[string]any{
+			"price":          price,
+			"qty":            qty,
+			"quantity":       qty,
 			"side":           side,
-			"is_buyer_maker": side == "SELL",
-			"time":           now.Add(-time.Duration(i) * time.Second).UnixMilli(),
-			"timestamp":      now.Add(-time.Duration(i) * time.Second).UnixMilli(),
-		}
+			"is_buyer_maker": isBuyerMaker,
+			"time":           timeMs,
+			"timestamp":      timeMs,
+		})
 	}
-	c.JSON(http.StatusOK, gin.H{"trades": trades, "symbol": symbol})
+
+	c.JSON(http.StatusOK, trades)
 }
 
 func RunBacktest(c *gin.Context) {

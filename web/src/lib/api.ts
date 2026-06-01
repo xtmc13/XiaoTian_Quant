@@ -304,6 +304,8 @@ export const configApi = {
   save: (data: any) => api.put<any>('/config', data),
   exchangeTest: (data: any) => api.post<any>('/exchange/test', data),
   exchangeSave: (data: any) => api.post<any>('/exchange/save', data),
+  currencyGet: () => api.get<any>('/settings/currency'),
+  currencySet: (currency: string) => api.put<any>('/settings/currency', { currency }),
   aiTest: (data: any) => api.post<any>('/ai/test', data),
   aiSave: (data: any) => api.post<any>('/ai/save', data),
 }

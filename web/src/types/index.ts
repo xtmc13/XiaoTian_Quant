@@ -47,11 +47,23 @@ export interface PortfolioSummary {
   total_equity: number
   total_pnl: number
   total_pnl_pct: number
+  spot_balance: number
+  futures_balance: number
+  futures_unrealized_pnl: number
+  futures_wallet_balance: number
+  funding_balance: number
+  earn_balance: number
+  other_exchanges: Record<string, number>
+  usd_cny_rate: number
+  conversion_rate: number
+  preferred_currency: string
   exchanges: {
     name: string
     exchange: string
     balance: number
     connected: boolean
+    enabled: boolean
+    configured: boolean
   }[]
 }
 

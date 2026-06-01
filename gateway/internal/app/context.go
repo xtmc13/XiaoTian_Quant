@@ -5,6 +5,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/xiaotian-quant/gateway/internal/ai"
 	"github.com/xiaotian-quant/gateway/internal/backtest"
@@ -109,6 +110,12 @@ func (ctx *Context) Init(cfg *config.Config) error {
 	// 6. Portfolio Manager
 	ctx.PortfolioManager = portfolio.GetManager()
 	ctx.Logger.Info("Portfolio manager initialized")
+
+	// 6a. Sync portfolio from Binance (async, non-blocking)
+	go func() {
+		time.Sleep(2 * time.Second) // Wait for other components to settle
+		ctx.PortfolioManager.SyncAllExchanges()
+	}()
 
 	// 7. Strategy Engine
 	ctx.StrategyEngine = strategy.GetEngine(ctx.EventBus)

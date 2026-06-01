@@ -3,10 +3,15 @@ package handler
 import (
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/sha512"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"hash"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -109,28 +114,103 @@ func ExchangeTest(c *gin.Context) {
 		return
 	}
 	name := getString(data, "name", "")
+	passphrase := getString(data, "passphrase", "")
 
-	// Select the correct test endpoint per exchange
-	baseURL := "https://api.binance.com/api/v3"
-	if name == "okx" { baseURL = "https://www.okx.com/api/v5" }
-
+	// Build exchange-specific auth and request
 	client := &http.Client{Timeout: 10 * time.Second}
+	ts := fmt.Sprintf("%d", time.Now().UnixMilli())
 
-	// Use account info endpoint which requires valid auth
-	timestamp := fmt.Sprintf("%d", time.Now().UnixMilli())
-	req, _ := http.NewRequest("GET", baseURL+"/account", nil)
-	req.Header.Set("X-MBX-APIKEY", apiKey)
+	var req *http.Request
+	var path string
+	var mac hash.Hash
 
-	// Binance HMAC-SHA256 signing
-	q := req.URL.Query()
-	q.Set("timestamp", timestamp)
-	q.Set("recvWindow", "5000")
-	queryStr := q.Encode()
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(queryStr))
-	sign := hex.EncodeToString(mac.Sum(nil))
-	q.Set("signature", sign)
-	req.URL.RawQuery = q.Encode()
+	switch name {
+	case "binance":
+		params := url.Values{}
+		params.Set("timestamp", ts)
+		params.Set("recvWindow", "5000")
+		req, _ = http.NewRequest("GET", "https://api.binance.com/api/v3/account?"+params.Encode(), nil)
+		mac = hmac.New(sha256.New, []byte(secret))
+		mac.Write([]byte(params.Encode()))
+		req.URL.RawQuery = params.Encode() + "&signature=" + hex.EncodeToString(mac.Sum(nil))
+		req.Header.Set("X-MBX-APIKEY", apiKey)
+
+	case "okx":
+		// OKX requires ISO 8601 UTC format with milliseconds
+		tsOKX := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+		path = "/api/v5/account/balance"
+		req, _ = http.NewRequest("GET", "https://www.okx.com"+path, nil)
+		mac = hmac.New(sha256.New, []byte(secret))
+		mac.Write([]byte(tsOKX + "GET" + path + ""))
+		req.Header.Set("OK-ACCESS-KEY", apiKey)
+		req.Header.Set("OK-ACCESS-SIGN", base64.StdEncoding.EncodeToString(mac.Sum(nil)))
+		req.Header.Set("OK-ACCESS-TIMESTAMP", tsOKX)
+		req.Header.Set("OK-ACCESS-PASSPHRASE", passphrase)
+
+	case "bybit":
+		path = "/v5/account/wallet-balance"
+		params := url.Values{}
+		params.Set("accountType", "UNIFIED")
+		req, _ = http.NewRequest("GET", "https://api.bybit.com"+path+"?"+params.Encode(), nil)
+		signStr := ts + apiKey + "5000" + params.Encode()
+		mac = hmac.New(sha256.New, []byte(secret))
+		mac.Write([]byte(signStr))
+		req.Header.Set("X-BAPI-API-KEY", apiKey)
+		req.Header.Set("X-BAPI-TIMESTAMP", ts)
+		req.Header.Set("X-BAPI-SIGN", hex.EncodeToString(mac.Sum(nil)))
+		req.Header.Set("X-BAPI-RECV-WINDOW", "5000")
+
+	case "gate":
+		path = "/api/v4/spot/accounts"
+		req, _ = http.NewRequest("GET", "https://api.gateio.ws"+path, nil)
+		gateTS := fmt.Sprintf("%d", time.Now().Unix())
+		payload := "GET\n" + path + "\n\n\n" + gateTS
+		mac = hmac.New(sha512.New, []byte(secret))
+		mac.Write([]byte(payload))
+		req.Header.Set("KEY", apiKey)
+		req.Header.Set("SIGN", hex.EncodeToString(mac.Sum(nil)))
+		req.Header.Set("Timestamp", gateTS)
+
+	case "mexc":
+		params := url.Values{}
+		params.Set("timestamp", ts)
+		params.Set("recvWindow", "5000")
+		req, _ = http.NewRequest("GET", "https://api.mexc.com/api/v3/account?"+params.Encode(), nil)
+		mac = hmac.New(sha256.New, []byte(secret))
+		mac.Write([]byte(params.Encode()))
+		req.URL.RawQuery = params.Encode() + "&signature=" + hex.EncodeToString(mac.Sum(nil))
+		req.Header.Set("X-MEXC-APIKEY", apiKey)
+
+	case "bitget":
+		path = "/api/v2/spot/account/assets"
+		req, _ = http.NewRequest("GET", "https://api.bitget.com"+path, nil)
+		mac = hmac.New(sha256.New, []byte(secret))
+		mac.Write([]byte(ts + "GET" + path + ""))
+		req.Header.Set("ACCESS-KEY", apiKey)
+		req.Header.Set("ACCESS-SIGN", base64.StdEncoding.EncodeToString(mac.Sum(nil)))
+		req.Header.Set("ACCESS-TIMESTAMP", ts)
+		req.Header.Set("ACCESS-PASSPHRASE", passphrase)
+		req.Header.Set("Content-Type", "application/json")
+
+	case "coinbase":
+		path = "/api/v3/brokerage/accounts"
+		req, _ = http.NewRequest("GET", "https://api.coinbase.com"+path, nil)
+		coinbaseTS := fmt.Sprintf("%d", time.Now().Unix())
+		mac = hmac.New(sha256.New, []byte(secret))
+		mac.Write([]byte(coinbaseTS + "GET" + path + ""))
+		req.Header.Set("CB-ACCESS-KEY", apiKey)
+		req.Header.Set("CB-ACCESS-SIGN", hex.EncodeToString(mac.Sum(nil)))
+		req.Header.Set("CB-ACCESS-TIMESTAMP", coinbaseTS)
+		req.Header.Set("Content-Type", "application/json")
+
+	case "kucoin", "htx", "zb", "phemex", "deribit":
+		c.JSON(http.StatusOK, gin.H{"status": "error", "detail": fmt.Sprintf("ℹ️ %s 适配器尚未实现，连接测试暂不可用", name)})
+		return
+
+	default:
+		c.JSON(http.StatusOK, gin.H{"status": "error", "detail": fmt.Sprintf("交易所 %s 暂不支持直接测试", name)})
+		return
+	}
 
 	resp, err := client.Do(req)
 	code := 0
@@ -146,22 +226,91 @@ func ExchangeTest(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "error", "detail": "⚠️ 网络连接失败，请检查网络后重试"})
 		return
 	}
-	if code >= 200 && code < 300 {
-		cfg := store.GetConfig()
-		exchanges, _ := cfg["exchanges"].(map[string]any)
-		if exchanges == nil { exchanges = make(map[string]any) }
-		ex, _ := exchanges[name].(map[string]any)
-		if ex == nil { ex = make(map[string]any); exchanges[name] = ex }
-		ex["tested"] = true
-		store.SaveConfig(cfg)
-		c.JSON(http.StatusOK, gin.H{"status": "ok", "detail": "✅ " + name + " 连接测试通过"})
-	} else if code == 401 || code == 403 {
-		c.JSON(http.StatusOK, gin.H{"status": "error", "detail": "🔑 API Key 或 Secret 无效，请检查后重新填写"})
-	} else {
-		trunc := respBody
-if len(trunc) > 50 { trunc = trunc[:50] }
-c.JSON(http.StatusOK, gin.H{"status": "error", "detail": fmt.Sprintf("⚠️ 服务器返回 %d（%s），请稍后重试", code, trunc)})
+
+	// Parse exchange-specific success indicators
+	switch name {
+	case "okx", "bitget":
+		// JSON body: {"code":"0"} or {"code":0}
+		var jr map[string]any
+		json.Unmarshal([]byte(respBody), &jr)
+		if isCodeZero(jr) {
+			saveExchangeTest(name, c)
+			return
+		}
+		codeStr := fmt.Sprintf("%v", jr["code"])
+		msgStr := fmt.Sprintf("%v", jr["msg"])
+		// 50102 on OKX often means IP whitelist restriction
+		if name == "okx" && (codeStr == "50102" || strings.Contains(msgStr, "Timestamp")) {
+			c.JSON(http.StatusOK, gin.H{"status": "error", "detail": "🔒 OKX: API Key 签名正确，但被拒绝（可能是 IP 白名单限制，请将 43.165.169.27 加入 OKX API 白名单）"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "error", "detail": fmt.Sprintf("🔑 %s: %s", name, msgStr)})
+		return
+
+	case "bybit":
+		var jr map[string]any
+		json.Unmarshal([]byte(respBody), &jr)
+		if retCode, ok := jr["retCode"].(float64); ok && retCode == 0 {
+			saveExchangeTest(name, c)
+			return
+		}
+		// retCode missing or non-zero → failure
+		msg := fmt.Sprintf("%v", jr["retMsg"])
+		if msg == "<nil>" || msg == "" {
+			msg = fmt.Sprintf("HTTP %d (请确认 API 是否有效)", code)
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "error", "detail": "🔑 Bybit: " + msg})
+		return
+
+	case "gate":
+		// Gate returns array on success, {"label":"...","detail":"..."} on error
+		if strings.Contains(respBody, `"currency"`) || respBody == "[]" || strings.Contains(respBody, `[{}`) {
+			saveExchangeTest(name, c)
+			return
+		}
+		if strings.Contains(respBody, "invalid_key") || strings.Contains(respBody, "INVALID") {
+			c.JSON(http.StatusOK, gin.H{"status": "error", "detail": "🔑 Gate.io: API Key 无效"})
+		} else {
+			c.JSON(http.StatusOK, gin.H{"status": "error", "detail": fmt.Sprintf("⚠️ Gate.io 返回异常: %s", trunc(respBody, 50))})
+		}
+		return
+
+	case "coinbase":
+		if code >= 200 && code < 300 {
+			saveExchangeTest(name, c)
+		} else if code == 401 {
+			c.JSON(http.StatusOK, gin.H{"status": "error", "detail": "🔑 Coinbase: API Key 或 Secret 无效"})
+		} else {
+			c.JSON(http.StatusOK, gin.H{"status": "error", "detail": fmt.Sprintf("⚠️ Coinbase: HTTP %d", code)})
+		}
+		return
+
+	default:
+		// Binance, MEXC — HTTP status based
+		if code >= 200 && code < 300 {
+			saveExchangeTest(name, c)
+		} else if code == 401 || code == 403 {
+			c.JSON(http.StatusOK, gin.H{"status": "error", "detail": "🔑 API Key 或 Secret 无效，请检查后重新填写"})
+		} else {
+			c.JSON(http.StatusOK, gin.H{"status": "error", "detail": fmt.Sprintf("⚠️ 服务器返回 %d（%s），请稍后重试", code, trunc(respBody, 50))})
+		}
 	}
+}
+
+func saveExchangeTest(name string, c *gin.Context) {
+	cfg := store.GetConfig()
+	exchanges, _ := cfg["exchanges"].(map[string]any)
+	if exchanges == nil {
+		exchanges = make(map[string]any)
+	}
+	ex, _ := exchanges[name].(map[string]any)
+	if ex == nil {
+		ex = make(map[string]any)
+		exchanges[name] = ex
+	}
+	ex["tested"] = true
+	store.SaveConfig(cfg)
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "detail": "✅ " + name + " 连接测试通过"})
 }
 
 func ExchangeDefault(c *gin.Context) {
@@ -322,4 +471,21 @@ func stringsTrimSuffix(s, suffix string) string {
 		return s[:len(s)-len(suffix)]
 	}
 	return s
+}
+
+func isCodeZero(m map[string]any) bool {
+	if v, ok := m["code"].(string); ok && v == "0" {
+		return true
+	}
+	if v, ok := m["code"].(float64); ok && v == 0 {
+		return true
+	}
+	return false
+}
+
+func trunc(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }

@@ -519,6 +519,9 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
                     </SectionCard>
                   )
                 })}
+
+                {/* Currency Preference */}
+                <CurrencySelector />
               </>
             )}
 
@@ -790,5 +793,72 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
           </div>
         </div>
     </div>
+  )
+}
+
+/* ── Currency Selector Component ── */
+const CURRENCIES = [
+  { key: 'CNY', label: '🇨🇳 CNY ¥', symbol: '¥' },
+  { key: 'USD', label: '🇺🇸 USD $', symbol: '$' },
+  { key: 'EUR', label: '🇪🇺 EUR €', symbol: '€' },
+  { key: 'HKD', label: '🇭🇰 HKD HK$', symbol: 'HK$' },
+  { key: 'JPY', label: '🇯🇵 JPY ¥', symbol: '¥' },
+  { key: 'GBP', label: '🇬🇧 GBP £', symbol: '£' },
+]
+
+function CurrencySelector() {
+  const [currency, setCurrency] = useState('CNY')
+  const [rates, setRates] = useState<Record<string, number>>({})
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    configApi.currencyGet().then((data: any) => {
+      if (data?.currency) setCurrency(data.currency)
+      if (data?.rates) setRates(data.rates)
+    }).catch(() => {})
+  }, [])
+
+  const handleChange = async (cur: string) => {
+    setCurrency(cur)
+    setSaving(true)
+    try {
+      await configApi.currencySet(cur)
+    } catch {}
+    setSaving(false)
+  }
+
+  return (
+    <SectionCard title="显示币种" bodyClassName="space-y-4">
+      <p className="text-xs text-muted-foreground">
+        选择资产估值和换算的显示币种。当前汇率从 open.er-api.com 获取，每小时更新。
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {CURRENCIES.map((c) => (
+          <button
+            key={c.key}
+            onClick={() => handleChange(c.key)}
+            disabled={saving}
+            className={cn(
+              'rounded-lg border px-4 py-2 text-sm font-medium transition-all',
+              currency === c.key
+                ? 'border-quant-gold bg-quant-gold/10 text-quant-gold'
+                : 'border-quant-border bg-quant-card text-muted-foreground hover:border-quant-gold/30 hover:text-foreground'
+            )}
+          >
+            {c.label}
+            {rates[c.key] && (
+              <span className="ml-1.5 text-xs opacity-60">
+                {rates[c.key] < 10 ? rates[c.key].toFixed(4) : rates[c.key].toFixed(2)}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+      {saving && (
+        <p className="text-xs text-quant-gold flex items-center gap-1">
+          <Loader2 className="h-3 w-3 animate-spin" /> 保存中...
+        </p>
+      )}
+    </SectionCard>
   )
 }

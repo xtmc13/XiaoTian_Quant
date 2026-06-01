@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,10 +20,14 @@ import (
 )
 
 const (
-	BinanceRestURL  = "https://api.binance.com/api/v3"
-	BinanceWsURL    = "wss://stream.binance.com:9443/ws"
-	BinanceTestURL  = "https://testnet.binance.vision/api/v3"
+	BinanceRestURL   = "https://api.binance.com/api/v3"
+	BinanceWsURL     = "wss://stream.binance.com:9443/ws"
+	BinanceTestURL   = "https://testnet.binance.vision/api/v3"
 	BinanceTestWsURL = "wss://testnet.binance.vision/ws"
+
+	// Futures
+	BinanceFuturesRestURL  = "https://fapi.binance.com"
+	BinanceFuturesFapiPath = "/fapi/v2"
 )
 
 // BinanceAdapter provides full Binance exchange integration including WebSocket streams.
@@ -237,6 +242,145 @@ func (b *BinanceAdapter) GetBalance() ([]map[string]any, error) {
 
 func (b *BinanceAdapter) GetPositions() ([]map[string]any, error) {
 	return nil, nil
+}
+
+// ── Futures REST ──
+
+func (b *BinanceAdapter) futuresRequest(method, path string, params url.Values) (map[string]any, error) {
+	params.Set("timestamp", fmt.Sprintf("%d", time.Now().UnixMilli()))
+	params.Set("recvWindow", "5000")
+	params.Set("signature", b.sign(params))
+
+	var reqURL string
+	var body io.Reader
+
+	if method == "GET" || method == "DELETE" {
+		u, _ := url.Parse(BinanceFuturesRestURL + path)
+		u.RawQuery = params.Encode()
+		reqURL = u.String()
+	} else {
+		reqURL = BinanceFuturesRestURL + path
+		body = strings.NewReader(params.Encode())
+	}
+
+	req, err := http.NewRequest(method, reqURL, body)
+	if err != nil {
+		return nil, err
+	}
+
+	if method != "GET" && method != "DELETE" {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
+	req.Header.Set("X-MBX-APIKEY", b.apiKey)
+
+	resp, err := b.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	var result map[string]any
+	json.Unmarshal(respBody, &result)
+	return result, nil
+}
+
+// GetFuturesAccount returns full futures account info (balance + positions).
+func (b *BinanceAdapter) GetFuturesAccount() (map[string]any, error) {
+	params := url.Values{}
+	return b.futuresRequest("GET", "/fapi/v2/account", params)
+}
+
+// GetFuturesBalance extracts wallet balances from the futures account.
+func (b *BinanceAdapter) GetFuturesBalance() ([]map[string]any, error) {
+	acct, err := b.GetFuturesAccount()
+	if err != nil {
+		return nil, err
+	}
+	// Get assets array
+	rawAssets, ok := acct["assets"]
+	if !ok {
+		return nil, fmt.Errorf("no assets in futures account response")
+	}
+	arr, ok := rawAssets.([]any)
+	if !ok {
+		return nil, fmt.Errorf("unexpected assets type: %T", rawAssets)
+	}
+
+	result := make([]map[string]any, 0, len(arr))
+	for _, v := range arr {
+		m, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		walletBalance := parseFloatStr(m, "walletBalance")
+		unrealizedPnL := parseFloatStr(m, "unrealizedProfit")
+		if walletBalance == 0 && unrealizedPnL == 0 {
+			continue
+		}
+		result = append(result, map[string]any{
+			"asset":            m["asset"],
+			"walletBalance":    walletBalance,
+			"unrealizedProfit": unrealizedPnL,
+			"free":             walletBalance,
+			"locked":           0.0,
+		})
+	}
+	return result, nil
+}
+
+// GetFuturesPositions extracts open positions from the futures account.
+func (b *BinanceAdapter) GetFuturesPositions() ([]map[string]any, error) {
+	acct, err := b.GetFuturesAccount()
+	if err != nil {
+		return nil, err
+	}
+	rawPos, ok := acct["positions"]
+	if !ok {
+		return nil, nil
+	}
+	arr, ok := rawPos.([]any)
+	if !ok {
+		return nil, nil
+	}
+
+	result := make([]map[string]any, 0)
+	for _, v := range arr {
+		m, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		amt := parseFloatStr(m, "positionAmt")
+		if amt == 0 {
+			continue
+		}
+		result = append(result, map[string]any{
+			"symbol":           m["symbol"],
+			"positionAmt":      amt,
+			"entryPrice":       parseFloatStr(m, "entryPrice"),
+			"markPrice":        parseFloatStr(m, "markPrice"),
+			"unrealizedProfit": parseFloatStr(m, "unrealizedProfit"),
+			"positionSide":     m["positionSide"],
+			"leverage":         parseFloatStr(m, "leverage"),
+		})
+	}
+	return result, nil
+}
+
+func parseFloatStr(m map[string]any, key string) float64 {
+	v, ok := m[key]
+	if !ok {
+		return 0
+	}
+	switch val := v.(type) {
+	case float64:
+		return val
+	case string:
+		var f float64
+		fmt.Sscanf(val, "%f", &f)
+		return f
+	}
+	return 0
 }
 
 func (b *BinanceAdapter) GetOpenOrders(symbol string) ([]map[string]any, error) {
@@ -569,4 +713,195 @@ func (ob *OrderBook) Spread() float64 {
 		return 0
 	}
 	return ask - bid
+}
+
+// ── Funding Wallet ────────────────────────────────────────────────────────
+
+// FundingBalance holds a single funding wallet asset balance.
+type FundingBalance struct {
+	Asset         string  `json:"asset"`
+	Free          float64 `json:"free,string"`
+	Locked        float64 `json:"locked,string"`
+	Freeze        float64 `json:"freeze,string"`
+	Withdrawing   float64 `json:"withdrawing,string"`
+	BtcValuation  string  `json:"btcValuation"` // Scientific notation string like "9.990322679103085E-5"
+}
+
+// GetFundingWallet queries the Binance funding wallet (Earn / Staking / Liquid Swap).
+// POST /sapi/v1/asset/get-funding-asset
+func (b *BinanceAdapter) GetFundingWallet() ([]FundingBalance, error) {
+	ts := time.Now().UnixMilli()
+	params := url.Values{}
+	params.Set("timestamp", fmt.Sprintf("%d", ts))
+
+	sig := b.sign(params)
+	params.Set("signature", sig)
+
+	apiURL := "https://api.binance.com/sapi/v1/asset/get-funding-asset?" + params.Encode()
+
+	req, err := http.NewRequest("POST", apiURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("funding wallet: create request: %w", err)
+	}
+	req.Header.Set("X-MBX-APIKEY", b.apiKey)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := b.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("funding wallet: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("funding wallet: %d %s", resp.StatusCode, string(body))
+	}
+
+	var result []FundingBalance
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("funding wallet: parse: %w", err)
+	}
+
+	return result, nil
+}
+
+// ── Earn (理财) ────────────────────────────────────────────────────────────
+
+// EarnPosition holds a single earn position (flexible or locked).
+type EarnPosition struct {
+	Asset  string  `json:"asset"`
+	Amount float64 `json:"amount,string"`
+	Type   string  `json:"type"` // "flexible" or "locked"
+}
+
+// sapiSignedGET performs a signed GET request to Binance SAPI (https://api.binance.com/sapi/...).
+func (b *BinanceAdapter) sapiSignedGET(path string) ([]byte, error) {
+	ts := time.Now().UnixMilli()
+	params := url.Values{}
+	params.Set("timestamp", fmt.Sprintf("%d", ts))
+	params.Set("recvWindow", "5000")
+
+	sig := b.sign(params)
+	params.Set("signature", sig)
+
+	apiURL := "https://api.binance.com" + path + "?" + params.Encode()
+
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("sapi %s: create request: %w", path, err)
+	}
+	req.Header.Set("X-MBX-APIKEY", b.apiKey)
+
+	resp, err := b.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("sapi %s: %w", path, err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("sapi %s: %d %s", path, resp.StatusCode, string(body))
+	}
+	return body, nil
+}
+
+// GetFlexibleEarn queries Binance Flexible Earn positions.
+// GET /sapi/v1/simple-earn/flexible/position
+func (b *BinanceAdapter) GetFlexibleEarn() ([]EarnPosition, error) {
+	body, err := b.sapiSignedGET("/sapi/v1/simple-earn/flexible/position")
+	if err != nil {
+		return nil, err
+	}
+
+	// Binance may return {"code":...,"msg":"..."} on error or permission denial
+	type flexRow struct {
+		Asset       string `json:"asset"`
+		TotalAmount string `json:"totalAmount"`
+	}
+	type flexResponse struct {
+		Rows []flexRow `json:"rows"`
+		Code int       `json:"code"`
+		Msg  string    `json:"msg"`
+	}
+
+	// Try wrapped response first
+	var wrapped flexResponse
+	if err := json.Unmarshal(body, &wrapped); err == nil && len(wrapped.Rows) > 0 {
+		var result []EarnPosition
+		for _, r := range wrapped.Rows {
+			amt, _ := strconv.ParseFloat(r.TotalAmount, 64)
+			if amt > 0 {
+				result = append(result, EarnPosition{Asset: r.Asset, Amount: amt, Type: "flexible"})
+			}
+		}
+		return result, nil
+	}
+
+	// Try flat array response
+	var rows []flexRow
+	if err := json.Unmarshal(body, &rows); err != nil {
+		// Permission issue or empty — treat as no positions
+		log.Printf("[Adapter] Flexible earn: %s", string(body))
+		return nil, nil
+	}
+
+	var result []EarnPosition
+	for _, r := range rows {
+		amt, _ := strconv.ParseFloat(r.TotalAmount, 64)
+		if amt > 0 {
+			result = append(result, EarnPosition{Asset: r.Asset, Amount: amt, Type: "flexible"})
+		}
+	}
+	return result, nil
+}
+
+// GetLockedEarn queries Binance Locked Earn positions.
+// GET /sapi/v1/simple-earn/locked/position
+func (b *BinanceAdapter) GetLockedEarn() ([]EarnPosition, error) {
+	body, err := b.sapiSignedGET("/sapi/v1/simple-earn/locked/position")
+	if err != nil {
+		return nil, err
+	}
+
+	type lockedRow struct {
+		Asset  string `json:"asset"`
+		Amount string `json:"amount"`
+	}
+	type lockedResponse struct {
+		Rows []lockedRow `json:"rows"`
+		Code int         `json:"code"`
+		Msg  string      `json:"msg"`
+	}
+
+	// Try wrapped response first
+	var wrapped lockedResponse
+	if err := json.Unmarshal(body, &wrapped); err == nil && len(wrapped.Rows) > 0 {
+		var result []EarnPosition
+		for _, r := range wrapped.Rows {
+			amt, _ := strconv.ParseFloat(r.Amount, 64)
+			if amt > 0 {
+				result = append(result, EarnPosition{Asset: r.Asset, Amount: amt, Type: "locked"})
+			}
+		}
+		return result, nil
+	}
+
+	// Try flat array response
+	var rows []lockedRow
+	if err := json.Unmarshal(body, &rows); err != nil {
+		// Permission issue or empty — treat as no positions
+		log.Printf("[Adapter] Locked earn: %s", string(body))
+		return nil, nil
+	}
+
+	var result []EarnPosition
+	for _, r := range rows {
+		amt, _ := strconv.ParseFloat(r.Amount, 64)
+		if amt > 0 {
+			result = append(result, EarnPosition{Asset: r.Asset, Amount: amt, Type: "locked"})
+		}
+	}
+	return result, nil
 }

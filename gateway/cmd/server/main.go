@@ -266,6 +266,11 @@ api.GET("/ml/strategy-models", handler.MLStrategyModels)
 		api.GET("/portfolio/positions", handler.PortfolioPositions)
 		api.GET("/portfolio/snapshots", handler.PortfolioSnapshots)
 		api.GET("/portfolio/calendar", handler.PortfolioCalendar)
+		api.GET("/exchange/usdcny", handler.UsdCnyRate)
+
+		// ── Settings ──
+		api.GET("/settings/currency", handler.SettingsCurrencyGet)
+		api.PUT("/settings/currency", handler.SettingsCurrencySet)
 
 		// ── Watchdog (new) ──
 		api.GET("/health", handler.HealthCheck)

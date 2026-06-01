@@ -1,6 +1,9 @@
 package handler
 
 import (
+	"encoding/json"
+	"io"
+	"log"
 	"net/http"
 	"sort"
 	"strconv"
@@ -8,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xiaotian-quant/gateway/internal/adapter"
 	"github.com/xiaotian-quant/gateway/internal/model"
 	"github.com/xiaotian-quant/gateway/internal/portfolio"
 	"github.com/xiaotian-quant/gateway/internal/store"
@@ -245,17 +249,118 @@ func CancelAllOrders(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
-// GetAccountBalance returns mock account balances.
+// GetAccountBalance fetches real account balances from configured exchanges.
 func GetAccountBalance(c *gin.Context) {
-	symbol := c.DefaultQuery("symbol", "BTCUSDT")
-	base := strings.Replace(symbol, "USDT", "", 1)
-	balances := []map[string]any{
-		{"asset": "USDT", "currency": "USDT", "free": 50000.0, "available": 50000.0, "total": 52000.0},
-		{"asset": base, "currency": base, "free": 0.5, "available": 0.5, "total": 0.55},
-		{"asset": "ETH", "currency": "ETH", "free": 3.2, "available": 3.2, "total": 3.5},
-		{"asset": "SOL", "currency": "SOL", "free": 25.0, "available": 25.0, "total": 28.0},
+	// Try Binance first (main exchange)
+	apiKey, secret, _ := adapter.GetCredential("binance")
+	if apiKey == "" || secret == "" {
+		// Fall back to mock data if no credentials
+		symbol := c.DefaultQuery("symbol", "BTCUSDT")
+		base := strings.Replace(symbol, "USDT", "", 1)
+		balances := []map[string]any{
+			{"asset": "USDT", "currency": "USDT", "free": 50000.0, "available": 50000.0, "total": 52000.0},
+			{"asset": base, "currency": base, "free": 0.5, "available": 0.5, "total": 0.55},
+			{"asset": "ETH", "currency": "ETH", "free": 3.2, "available": 3.2, "total": 3.5},
+			{"asset": "SOL", "currency": "SOL", "free": 25.0, "available": 25.0, "total": 28.0},
+		}
+		c.JSON(http.StatusOK, gin.H{"balances": balances, "currencies": balances, "source": "mock"})
+		return
 	}
-	c.JSON(http.StatusOK, gin.H{"balances": balances, "currencies": balances})
+
+	// Use Binance adapter with real credentials
+	binance := adapter.NewBinanceAdapter(apiKey, secret, false)
+	rawBalances, err := binance.GetBalance()
+	if err != nil {
+		log.Printf("[Binance] GetBalance error: %v", err)
+		c.JSON(http.StatusOK, gin.H{"error": "Failed to fetch balance from Binance: " + err.Error()})
+		return
+	}
+
+	balances := make([]map[string]any, 0)
+	totalUSDT := 0.0
+	for _, b := range rawBalances {
+		free := parseFloatFromAny(b["free"])
+		locked := parseFloatFromAny(b["locked"])
+		total := free + locked
+		if total <= 0 {
+			continue
+		}
+		asset := ""
+		if a, ok := b["asset"].(string); ok {
+			asset = a
+		}
+		balances = append(balances, map[string]any{
+			"asset":     asset,
+			"currency":  asset,
+			"free":      free,
+			"available": free,
+			"total":     total,
+		})
+
+		// Estimate USDT value for major coins using latest prices
+		switch asset {
+		case "USDT", "BUSD", "USDC":
+			totalUSDT += total
+		case "BTC":
+			if price := getLastPrice("BTCUSDT"); price > 0 {
+				totalUSDT += total * price
+			}
+		case "ETH":
+			if price := getLastPrice("ETHUSDT"); price > 0 {
+				totalUSDT += total * price
+			}
+		case "BNB":
+			if price := getLastPrice("BNBUSDT"); price > 0 {
+				totalUSDT += total * price
+			}
+		case "SOL":
+			if price := getLastPrice("SOLUSDT"); price > 0 {
+				totalUSDT += total * price
+			}
+		}
+	}
+
+	// Update portfolio manager with real data
+	mgr := portfolio.GetManager()
+	if mgr != nil && totalUSDT > 0 {
+		mgr.UpdateBalance("binance", "USDT", totalUSDT, totalUSDT, 0)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"balances":        balances,
+		"currencies":      balances,
+		"estimated_usdt":  totalUSDT,
+		"source":          "binance",
+	})
+}
+
+// parseFloatFromAny safely converts various numeric types to float64.
+func parseFloatFromAny(v any) float64 {
+	switch val := v.(type) {
+	case float64:
+		return val
+	case string:
+		f, _ := strconv.ParseFloat(val, 64)
+		return f
+	}
+	return 0
+}
+
+// getLastPrice fetches the latest price for a symbol from Binance public API.
+func getLastPrice(symbol string) float64 {
+	var result map[string]any
+	resp, err := http.Get("https://api.binance.com/api/v3/ticker/price?symbol=" + symbol)
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	json.Unmarshal(raw, &result)
+	if priceStr, ok := result["price"].(string); ok {
+		f, _ := strconv.ParseFloat(priceStr, 64)
+		return f
+	}
+	return 0
 }
 
 // GetTradeHistory returns mock executed trade history.

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -38,8 +37,9 @@ var (
 )
 
 func InitDB() error {
-	home, _ := os.Getwd()
-	dbPath := filepath.Join(home, "gateway.db")
+	dbPath := "/app/data/gateway.db"
+	// Ensure data directory exists
+	os.MkdirAll("/app/data", 0755)
 	var err error
 	db, err = sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
@@ -86,15 +86,10 @@ func InitDB() error {
 	}
 
 	if configPath == "" {
-		// Save to current working directory (gateway/ in dev, /app/data in Docker)
-		if wd, err := os.Getwd(); err == nil {
-			configPath = filepath.Join(wd, "config.yaml")
-		} else {
-			configPath = "config.yaml"
-		}
+		configPath = "/app/data/config.yaml"
 	}
 	if strategyConfigsPath == "" {
-		strategyConfigsPath = filepath.Join(home, "strategy_configs.json")
+		strategyConfigsPath = "/app/data/strategy_configs.json"
 	}
 
 	jwtSecret = os.Getenv("SECRET_KEY")

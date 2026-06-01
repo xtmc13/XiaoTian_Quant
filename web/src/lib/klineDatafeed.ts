@@ -247,25 +247,46 @@ function ensureWS() {
         // Only handle price events (live ticks)
         if (data.type === 'price' && data.symbol) {
           const now = Date.now()
+          const lastPrice = Number(data.data?.last ?? data.data?.price ?? 0)
+
+          // ── Live bar state cache (per WS session) ──
+          const bars = new Map<string, KLineData>()
 
           // Notify all subscribers whose key starts with this symbol
           subscriptions.forEach((entry, key) => {
             if (!key.startsWith(data.symbol + ':')) return
 
-            const kline: KLineData = {
-              timestamp: now,
-              open: data.data?.last || data.data?.price || 0,
-              high: data.data?.high || 0,
-              low: data.data?.low || 0,
-              close: data.data?.last || data.data?.price || 0,
-              volume: data.data?.volume || 0,
-            }
+            const barMs = periodMs(entry.period)
+            const alignedTs = Math.floor(now / barMs) * barMs
 
-            // Update last known timestamp for gap detection
-            entry.lastBarTimestamp = Math.max(entry.lastBarTimestamp, kline.timestamp)
+            let bar = bars.get(key)
+            if (!bar || bar.timestamp !== alignedTs) {
+              // First tick of a new bar period → start fresh running bar
+              bar = {
+                timestamp: alignedTs,
+                open: lastPrice,
+                high: lastPrice,
+                low: lastPrice,
+                close: lastPrice,
+                volume: 0,
+              }
+            } else {
+              // Update running bar: preserve open, extend high/low, set close, accumulate volume
+              bar = {
+                timestamp: bar.timestamp,
+                open: bar.open,
+                high: Math.max(bar.high, lastPrice),
+                low: Math.min(bar.low, lastPrice),
+                close: lastPrice,
+                volume: (bar.volume ?? 0) + Number(data.data?.volume ?? 0),
+              }
+            }
+            bars.set(key, bar)
+
+            entry.lastBarTimestamp = Math.max(entry.lastBarTimestamp, bar.timestamp)
 
             entry.callbacks.forEach((cb) => {
-              try { cb(kline) } catch {}
+              try { cb(bar) } catch {}
             })
           })
         }
@@ -320,18 +341,37 @@ export function createBackendDatafeed(): Datafeed {
     ): Promise<KLineData[]> {
       try {
         const interval = toInterval(period)
-        // KLineChart passes timestamp in seconds, backend expects milliseconds
-        const fromMs = from * 1000
-        const toMs = to * 1000
+        // KLineChartPro passes timestamps in MILLISECONDS (from Date.now() via adjustFromTo)
+        // Backend expects milliseconds. Do NOT multiply by 1000.
+        const fromMs = from
+        const toMs = to
         const limit = Math.min(Math.ceil((toMs - fromMs) / 3600000) + 200, 1500)
+
+        console.log('[KLineDatafeed] getHistoryKLineData CALLED:', {
+          symbol: symbol.ticker,
+          periodText: period.text,
+          from: new Date(fromMs).toISOString(),
+          to: new Date(toMs).toISOString(),
+          interval,
+          limit,
+        })
 
         const data: any = await api.get('/market/klines', {
           params: { symbol: symbol.ticker, interval, limit, from: fromMs, to: toMs },
         })
 
         const klines = data?.klines || data || []
-        return (Array.isArray(klines) ? klines : []).map(toKLineData)
-      } catch {
+        const result = (Array.isArray(klines) ? klines : []).map(toKLineData)
+        console.log('[KLineDatafeed] getHistoryKLineData RESULT:', {
+          symbol: symbol.ticker,
+          periodText: period.text,
+          barsCount: result.length,
+          firstBar: result[0] ? { time: new Date(result[0].timestamp).toISOString(), o: result[0].open, c: result[0].close } : null,
+          lastBar: result[result.length - 1] ? { time: new Date(result[result.length - 1].timestamp).toISOString(), o: result[result.length - 1].open, c: result[result.length - 1].close } : null,
+        })
+        return result
+      } catch (e) {
+        console.warn('[KLineDatafeed] getHistoryKLineData ERROR:', e)
         return []
       }
     },
