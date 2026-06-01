@@ -3,9 +3,58 @@ name: CI
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
 
 jobs:
-  test:
+  # ── Go Backend ──
+  go:
+    name: Go Build & Test
     runs-on: ubuntu-latest
     steps:
-      - run: echo "Hello CI"
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'gateway/go.mod'
+
+      - name: Vet
+        run: go vet ./...
+        working-directory: gateway
+
+      - name: Build
+        run: go build -o /dev/null ./cmd/server
+        working-directory: gateway
+
+  # ── TypeScript Frontend ──
+  web:
+    name: TypeScript Check & Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install
+        run: npm ci
+        working-directory: web
+
+      - name: TypeScript Check
+        run: npx tsc --noEmit
+        working-directory: web
+
+      - name: Build
+        run: npm run build
+        working-directory: web
+
+  # ── All Clear ──
+  done:
+    name: CI Passed
+    needs: [go, web]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "✅ All checks passed"
