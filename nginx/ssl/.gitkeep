@@ -1,0 +1,3 @@
+# This directory contains SSL certificates for nginx.
+# Run ./generate-cert.sh to create self-signed certs for development.
+# For production, place your real cert.pem and key.pem here.
