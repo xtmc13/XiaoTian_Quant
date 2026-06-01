@@ -20,7 +20,7 @@ config.yaml
 .env
 
 # Data & logs
-data/
+/data/
 *.log
 logs/
 
