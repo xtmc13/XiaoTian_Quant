@@ -158,22 +158,24 @@ export function handlePriceTick(symbol: string, lastPrice: number, volume: numbe
   subscriptions.forEach((entry, key) => {
     if (!key.startsWith(symbol + ':')) return
 
+    // Wait for history data to load before building running bars,
+    // otherwise the bar uses tick-only data and flashes when history arrives.
+    if (!entry.historyLastBar) return
+
     const barMs = periodMs(entry.period)
     const alignedTs = Math.floor(now / barMs) * barMs
 
     let bar = entry.liveBar
     if (!bar || bar.timestamp !== alignedTs) {
-      // Preserve open/high/volume from history bar (if same period) so the
-      // running bar shows the real OHLC from period start, not just 'now'.
+      // Use history data as base so open/high/low reflect the full period
       const hist = entry.historyLastBar
-      const samePeriod = hist && hist.timestamp === alignedTs
       bar = {
         timestamp: alignedTs,
-        open: samePeriod ? hist.open : lastPrice,
-        high: samePeriod ? Math.max(hist.high, lastPrice) : lastPrice,
-        low: samePeriod ? Math.min(hist.low, lastPrice) : lastPrice,
+        open: hist.open,
+        high: Math.max(hist.high, lastPrice),
+        low: Math.min(hist.low, lastPrice),
         close: lastPrice,
-        volume: samePeriod ? hist.volume : 0,
+        volume: hist.volume,
       }
     } else {
       bar = {
