@@ -68,6 +68,8 @@ export function QuickTradePanel({
   onQuantityChange,
 }: QuickTradePanelProps) {
   const [showLeverageDropdown, setShowLeverageDropdown] = useState(false)
+  const isUp = side === "BUY"
+  const activeBg = isUp ? "bg-quant-green" : "bg-quant-red"
 
 
   const markPrice = lastPrice || 0
@@ -326,34 +328,79 @@ const handlePresetSize = (pct: number) => {
         </div>
       </div>
 
-            {/* Balance Display */}
-      <div className="px-4 pb-2 flex justify-between text-[11px]">
-        <span className="text-muted-foreground">可用 <span className="text-foreground font-mono">12,450.50</span> USDT</span>
-        <span className="text-muted-foreground">可用 <span className="text-foreground font-mono">0.8450</span> BTC</span>
-      </div>
-
-      {/* Total */}
-      <div className="px-4 pb-3">
-        <div className="bg-quant-bg rounded border border-quant-border px-3 py-2 flex justify-between text-xs">
-          <span className="text-muted-foreground">成交金额</span>
-          <span className="font-mono font-medium text-foreground">≈ {qtyNum * priceNum > 0 ? qtyNum * priceNum < 0.01 ? '< 0.01' : (qtyNum * priceNum).toFixed(2) : '0.00'} USDT</span>
+      {/* ── Position Preview (contract) ── */}
+      {tradeMode === 'contract' && (
+        <div className="px-4 pb-3 space-y-1.5">
+          <div className="bg-quant-bg rounded border border-quant-border px-3 py-2 space-y-1.5">
+            <div className="flex justify-between text-[11px]">
+              <span className="text-muted-foreground">保证金</span>
+              <span className="font-mono font-bold text-quant-gold">{margin > 0 ? '$' + formatCurrency(margin) : '--'}</span>
+            </div>
+            <div className="flex justify-between text-[11px]">
+              <span className="text-muted-foreground">可开</span>
+              <span className="font-mono text-foreground">≈ {margin > 0 ? (margin / priceNum).toFixed(3) : '0'} {symbol.replace('USDT','')}</span>
+            </div>
+            <div className="flex justify-between text-[11px]">
+              <span className="text-muted-foreground">可用保证金</span>
+              <span className="font-mono text-foreground">12,450.50 USDT</span>
+            </div>
+            <div className="flex justify-between text-[11px]">
+              <span className="text-muted-foreground">预估手续费</span>
+              <span className="font-mono text-muted-foreground">{fee > 0 ? '$' + fee.toFixed(4) : '--'}</span>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* Dual Buttons: Buy + Sell */}
-      <div className="px-4 pb-4 mt-auto flex gap-2">
-        <button
-          onClick={() => { onSideChange('BUY'); onPlaceOrder(); }}
-          className="flex-1 py-3 rounded-md font-bold text-sm bg-quant-green text-white hover:opacity-90 active:scale-[0.98] transition-all"
-        >
-          买入
-        </button>
-        <button
-          onClick={() => { onSideChange('SELL'); onPlaceOrder(); }}
-          className="flex-1 py-3 rounded-md font-bold text-sm bg-quant-red text-white hover:opacity-90 active:scale-[0.98] transition-all"
-        >
-          卖出
-        </button>
+      {/* ── Total (spot) ── */}
+      {tradeMode !== 'contract' && (
+        <div className="px-4 pb-3">
+          <div className="bg-quant-bg rounded border border-quant-border px-3 py-2 flex justify-between text-xs">
+            <span className="text-muted-foreground">成交金额</span>
+            <span className="font-mono font-medium text-foreground">≈ {qtyNum * priceNum > 0 ? (qtyNum * priceNum).toFixed(2) : '0.00'} USDT</span>
+          </div>
+        </div>
+      )}
+
+      {/* ── Balance (spot) ── */}
+      {tradeMode !== 'contract' && (
+        <div className="px-4 pb-2 flex justify-between text-[11px]">
+          <span className="text-muted-foreground">可用 <span className="text-foreground font-mono">12,450.50</span> USDT</span>
+          <span className="text-muted-foreground">可用 <span className="text-foreground font-mono">0.8450</span> BTC</span>
+        </div>
+      )}
+
+      {/* ── Submit Buttons ── */}
+      <div className="px-4 pb-4 mt-auto">
+        {tradeMode === 'contract' ? (
+          /* Contract: one main button + opposite secondary */
+          <>
+          <button onClick={onPlaceOrder} className={cn(
+            'w-full py-3 rounded-md font-bold text-sm transition-all flex items-center justify-center gap-1.5',
+            activeBg, 'hover:opacity-90 active:scale-[0.98]'
+          )}>
+            {side === 'BUY' ? '买入/做多' : '卖出/做空'}
+          </button>
+          <button onClick={() => { onSideChange(side === 'BUY' ? 'SELL' : 'BUY'); setTimeout(onPlaceOrder, 50); }}
+            className="w-full mt-2 py-2 rounded-md text-xs font-medium border text-muted-foreground hover:text-foreground transition-colors"
+            style={{borderColor: side === 'BUY' ? 'var(--sell)' : 'var(--buy)', color: side === 'BUY' ? 'var(--sell)' : 'var(--buy)'}}
+          >
+            {side === 'BUY' ? '卖出/做空' : '买入/做多'}
+          </button>
+          </>
+        ) : (
+          /* Spot: dual buy/sell buttons */
+          <div className="flex gap-2">
+            <button onClick={() => { onSideChange('BUY'); onPlaceOrder(); }}
+              className="flex-1 py-3 rounded-md font-bold text-sm bg-[#2EBD85] text-white hover:opacity-90 active:scale-[0.98] transition-all">
+              买入
+            </button>
+            <button onClick={() => { onSideChange('SELL'); onPlaceOrder(); }}
+              className="flex-1 py-3 rounded-md font-bold text-sm bg-[#F6465D] text-white hover:opacity-90 active:scale-[0.98] transition-all">
+              卖出
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )
