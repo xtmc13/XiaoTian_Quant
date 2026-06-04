@@ -64,6 +64,8 @@ interface SubEntry {
   callbacks: Set<DatafeedSubscribeCallback>
   lastBarTimestamp: number
   liveBar: KLineData | null
+  /** Last bar from history — used to preserve open/high/vol when building running bar */
+  historyLastBar: KLineData | null
   lastPushTs: number
   pendingBar: KLineData | null
   pushTimer: ReturnType<typeof setTimeout> | null
@@ -161,9 +163,17 @@ export function handlePriceTick(symbol: string, lastPrice: number, volume: numbe
 
     let bar = entry.liveBar
     if (!bar || bar.timestamp !== alignedTs) {
+      // Preserve open/high/volume from history bar (if same period) so the
+      // running bar shows the real OHLC from period start, not just 'now'.
+      const hist = entry.historyLastBar
+      const samePeriod = hist && hist.timestamp === alignedTs
       bar = {
         timestamp: alignedTs,
-        open: lastPrice, high: lastPrice, low: lastPrice, close: lastPrice, volume: 0,
+        open: samePeriod ? hist.open : lastPrice,
+        high: samePeriod ? Math.max(hist.high, lastPrice) : lastPrice,
+        low: samePeriod ? Math.min(hist.low, lastPrice) : lastPrice,
+        close: lastPrice,
+        volume: samePeriod ? hist.volume : 0,
       }
     } else {
       bar = {
@@ -251,10 +261,16 @@ export function createBackendDatafeed(): Datafeed {
         const klines = data?.klines || data || []
         const result = (Array.isArray(klines) ? klines : []).map(toKLineData)
 
-        // Keep the last bar (current period) in history so the chart shows
-        // the full period's open/high/low from the start. The running bar
-        // update is done via chartUpdater (direct chart API) to avoid
-        // duplicate-timestamp conflicts with the subscribe callback.
+        // Store the last (current period) bar in subscriptions so
+        // handlePriceTick can preserve open/high when building running bars.
+        const lastBar = result[result.length - 1] || null
+        if (lastBar) {
+          subscriptions.forEach((entry, key) => {
+            if (key.startsWith(symbol.ticker + ':')) {
+              entry.historyLastBar = lastBar
+            }
+          })
+        }
 
         console.log('[KLineDatafeed] getHistoryKLineData RESULT:', {
           symbol: symbol.ticker, periodText: period.text, barsCount: result.length,
@@ -274,7 +290,7 @@ export function createBackendDatafeed(): Datafeed {
       if (!entry) {
         entry = {
           symbol, period, callbacks: new Set(),
-          lastBarTimestamp: 0, liveBar: null,
+          lastBarTimestamp: 0, liveBar: null, historyLastBar: null,
           lastPushTs: 0, pendingBar: null, pushTimer: null,
         }
         subscriptions.set(key, entry)
@@ -287,6 +303,7 @@ export function createBackendDatafeed(): Datafeed {
       const entry = subscriptions.get(key)
       if (!entry) return
       if (entry.pushTimer) { clearTimeout(entry.pushTimer); entry.pushTimer = null }
+      entry.historyLastBar = null
       entry.callbacks.clear()
       subscriptions.delete(key)
     },
