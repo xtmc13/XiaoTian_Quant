@@ -419,10 +419,43 @@ export function Trading() {
         ════════════════════════════════════════ */}
         <div className={cn(
           'hidden md:flex shrink-0 border-r border-quant-border flex-col bg-quant-bg-secondary transition-all duration-200',
-          leftCollapsed ? 'w-10' : 'w-64'
+          leftCollapsed ? 'w-9' : 'w-64'
         )}>
-          {/* Tabs */}
-          <div className="flex border-b border-quant-border">
+          {/* ── Collapsed: vertical icon-only sidebar ── */}
+          {leftCollapsed ? (
+            <div className="flex flex-col items-center py-1 flex-1 min-h-0">
+              {([
+                { key: 'watchlist', label: '自选', icon: List },
+                { key: 'orderbook', label: '订单簿', icon: BarChart3 },
+                { key: 'trades', label: '成交', icon: Activity },
+              ] as const).map((t) => (
+                <button
+                  key={t.key}
+                  onClick={() => { setLeftTab(t.key); setLeftCollapsed(false) }}
+                  className={cn(
+                    'w-7 h-7 flex items-center justify-center rounded text-[11px] transition-colors',
+                    leftTab === t.key ? 'text-quant-gold bg-quant-gold/10' : 'text-muted-foreground hover:text-foreground hover:bg-white/5'
+                  )}
+                  title={t.label}
+                >
+                  <t.icon className="w-3.5 h-3.5" />
+                </button>
+              ))}
+              {/* Expand button at bottom */}
+              <div className="mt-auto flex flex-col items-center gap-1 pb-1">
+                <button
+                  onClick={() => setLeftCollapsed(false)}
+                  className="w-7 h-7 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-white/5 transition-colors"
+                  title="展开左侧面板"
+                >
+                  <ChevronDown className="w-3.5 h-3.5 -rotate-90" />
+                </button>
+              </div>
+            </div>
+          ) : (
+          /* ── Expanded: horizontal tabs + content ── */
+          <>
+          <div className="flex border-b border-quant-border items-stretch">
             {([
               { key: 'watchlist', label: '自选', icon: List },
               { key: 'orderbook', label: '订单簿', icon: BarChart3 },
@@ -430,23 +463,22 @@ export function Trading() {
             ] as const).map((t) => (
               <button
                 key={t.key}
-                onClick={() => { if (leftCollapsed) setLeftCollapsed(false); else setLeftTab(t.key) }}
+                onClick={() => setLeftTab(t.key)}
                 className={cn(
                   'flex-1 py-2 text-[11px] font-medium transition-colors flex items-center justify-center gap-1',
                   leftTab === t.key ? 'text-quant-gold border-b-2 border-quant-gold' : 'text-muted-foreground hover:text-foreground'
                 )}
               >
                 <t.icon className="w-3 h-3" />
-                {!leftCollapsed && t.label}
+                {t.label}
               </button>
             ))}
-            {/* Collapse button */}
             <button
-              onClick={() => setLeftCollapsed(v => !v)}
-              className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-white/5 transition-colors self-center"
-              title={leftCollapsed ? '展开左侧面板' : '折叠左侧面板'}
+              onClick={() => setLeftCollapsed(true)}
+              className="px-1.5 text-muted-foreground hover:text-foreground hover:bg-white/5 transition-colors"
+              title="折叠左侧面板"
             >
-              <ChevronDown className={cn('w-3 h-3 transition-transform', leftCollapsed ? '-rotate-90' : 'rotate-90')} />
+              <ChevronDown className="w-3 h-3 -rotate-90" />
             </button>
           </div>
 
@@ -592,7 +624,9 @@ export function Trading() {
               </div>
             </div>
           )}
-        </div>
+        </>
+      )}
+    </div>
 
         {/* ════════════════════════════════════════
             CENTER: Chart + Toolbar
