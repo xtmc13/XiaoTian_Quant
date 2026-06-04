@@ -140,10 +140,10 @@ export function Trading() {
   const [leverage, setLeverage] = useState(1)
   const [leftTab, setLeftTab] = useState<'watchlist' | 'orderbook' | 'trades'>('watchlist')
   const [activeBottomTab, setActiveBottomTab] = useState<'positions' | 'orders' | 'history'>('positions')
-  const [bottomHeight, setBottomHeight] = useState(180) // px, 0=collapsed
+  const [bottomHeight, setBottomHeight] = useState(0) // px, 0=collapsed
   const bottomCollapsed = bottomHeight < 20
   const dragRef = useRef<{ startY: number; startH: number } | null>(null)
-  const [leftCollapsed, setLeftCollapsed] = useState(false)
+  const [leftCollapsed, setLeftCollapsed] = useState(true)
   const [watchlistSearch, setWatchlistSearch] = useState('')
   const [tpPrice, setTpPrice] = useState('')
   const [slPrice, setSlPrice] = useState('')

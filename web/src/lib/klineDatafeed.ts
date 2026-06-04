@@ -297,7 +297,14 @@ export function createBackendDatafeed(): Datafeed {
         })
 
         const klines = data?.klines || data || []
-        const result = (Array.isArray(klines) ? klines : []).map(toKLineData)
+        let result = (Array.isArray(klines) ? klines : []).map(toKLineData)
+
+        // Exclude current period bar (handled by WS live ticks) to prevent
+        // duplicate-timestamp conflicts that make the forming bar disappear.
+        const currentAlignedTs = Math.floor(Date.now() / periodMs(period)) * periodMs(period)
+        if (result.length > 0 && result[result.length - 1].timestamp >= currentAlignedTs) {
+          result = result.slice(0, -1)
+        }
         console.log('[KLineDatafeed] getHistoryKLineData RESULT:', {
           symbol: symbol.ticker,
           periodText: period.text,

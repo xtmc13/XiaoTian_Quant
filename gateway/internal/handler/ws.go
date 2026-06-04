@@ -26,12 +26,18 @@ func init() {
 
 var (
 	basePrices = map[string]float64{
-		"BTCUSDT": 68000.0,
-		"ETHUSDT": 3500.0,
-		"BNBUSDT": 600.0,
+		"BTCUSDT": 68000.0, "ETHUSDT": 3500.0, "BNBUSDT": 600.0,
+		"SOLUSDT": 180.0, "ADAUSDT": 0.45, "DOGEUSDT": 0.12,
+		"XRPUSDT": 0.50, "DOTUSDT": 7.0, "LINKUSDT": 14.0,
+		"AVAXUSDT": 30.0, "MATICUSDT": 0.70,
 	}
 	pricesMu     sync.RWMutex
-	prices       = map[string]float64{"BTCUSDT": 68000.0, "ETHUSDT": 3500.0, "BNBUSDT": 600.0}
+	prices       = map[string]float64{
+			"BTCUSDT": 68000.0, "ETHUSDT": 3500.0, "BNBUSDT": 600.0,
+			"SOLUSDT": 180.0, "ADAUSDT": 0.45, "DOGEUSDT": 0.12,
+			"XRPUSDT": 0.50, "DOTUSDT": 7.0, "LINKUSDT": 14.0,
+			"AVAXUSDT": 30.0, "MATICUSDT": 0.70,
+		}
 	realPriceFed = map[string]bool{} // true = price set externally (real Binance)
 )
 
@@ -53,7 +59,7 @@ func WSHandler(c *gin.Context) {
 	defer conn.Close()
 
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	symbols := []string{"BTCUSDT", "ETHUSDT", "BNBUSDT"}
+	// symbols now read from prices map dynamically below
 	tick := 0
 
 	// Read messages in a goroutine (to detect disconnect)
@@ -82,8 +88,14 @@ func WSHandler(c *gin.Context) {
 				return
 			}
 
-			// Send prices for each symbol
-			for _, sym := range symbols {
+			// Send prices for all symbols (dynamically from prices map)
+			pricesMu.RLock()
+			allSymbols := make([]string, 0, len(prices))
+			for sym := range prices {
+				allSymbols = append(allSymbols, sym)
+			}
+			pricesMu.RUnlock()
+			for _, sym := range allSymbols {
 				priceMsg := buildPriceMsg(sym, rng)
 				if err := conn.WriteMessage(websocket.TextMessage, priceMsg); err != nil {
 					return
@@ -100,7 +112,13 @@ func WSHandler(c *gin.Context) {
 
 			// Trades every 3 ticks
 			if tick%3 == 0 {
-				tradesMsg := buildTradesMsg(symbols, rng)
+			pricesMu.RLock()
+			allTradesSymbols := make([]string, 0, len(prices))
+			for sym := range prices {
+				allTradesSymbols = append(allTradesSymbols, sym)
+			}
+			pricesMu.RUnlock()
+			tradesMsg := buildTradesMsg(allTradesSymbols, rng)
 				if err := conn.WriteMessage(websocket.TextMessage, tradesMsg); err != nil {
 					return
 				}
