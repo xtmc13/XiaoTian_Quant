@@ -296,7 +296,12 @@ export function Trading() {
 
       const checkApi = () => {
         if ((chart as any)._chartApi) {
-          chartApiRef.current = (chart as any)._chartApi
+          const api = (chart as any)._chartApi
+          chartApiRef.current = api
+          // Zoom to show enough bars after data loads
+          try { api.scrollToRealTime() } catch (_) {}
+          // Narrow bar space so ~200 bars fit in viewport
+          try { api.setBarSpace(4) } catch (_) {}
         } else {
           intervalId = window.setTimeout(checkApi, 100)
         }
