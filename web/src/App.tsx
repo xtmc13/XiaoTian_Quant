@@ -1,7 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate, useLocation, Outlet } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
-import { PlasmicRootProvider, PlasmicComponent } from '@plasmicapp/loader-react'
-import { PLASMIC } from './plasmic-init'
 import { Layout } from './components/layout/Layout'
 import { Dashboard } from './pages/Dashboard'
 import { Trading } from './pages/Trading'
@@ -45,7 +43,6 @@ function RequireAuth() {
 
 export default function App() {
   return (
-    <PlasmicRootProvider plasmic={PLASMIC}>
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<Login />} />
@@ -69,13 +66,9 @@ export default function App() {
             <Route path="/users" element={<UserManage />} />
             <Route path="/agent-tokens" element={<AgentTokens />} />
             <Route path="/billing" element={<Billing />} />
-
-            {/* Plasmic 设计的页面 — 放在 /p/ 路径下 */}
-            <Route path="/p/:plasmicPage/*" element={<PlasmicComponent component="PlasmicPage" />} />
           </Route>
         </Route>
       </Routes>
     </BrowserRouter>
-    </PlasmicRootProvider>
   )
 }

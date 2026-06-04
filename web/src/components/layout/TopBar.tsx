@@ -131,7 +131,14 @@ export function TopBar() {
     return d.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
   }
 
-  const title = routeTitles[location.pathname] || '小天量化'
+  const title = (() => {
+    if (location.pathname === '/trading') {
+      const mode = new URLSearchParams(location.search).get('mode')
+      if (mode === 'contract') return '合约交易'
+      return '现货交易'
+    }
+    return routeTitles[location.pathname] || '小天量化'
+  })()
   const displayName = user?.username || 'User'
   const initial = displayName.charAt(0).toUpperCase()
 

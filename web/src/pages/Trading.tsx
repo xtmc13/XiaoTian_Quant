@@ -27,6 +27,7 @@ import {
   Zap,
   ChevronUp,
   ChevronDown,
+  Star,
 } from 'lucide-react'
 
 const INTERVALS = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w']
@@ -82,6 +83,15 @@ function formatDateTime(ts: number | string) {
   return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
+function formatVolume(n: number | string | undefined) {
+  if (!n) return '--'
+  const val = typeof n === 'string' ? parseFloat(n) : n
+  if (val >= 1e9) return (val / 1e9).toFixed(2) + 'B'
+  if (val >= 1e6) return (val / 1e6).toFixed(2) + 'M'
+  if (val >= 1e3) return (val / 1e3).toFixed(2) + 'K'
+  return val.toFixed(2)
+}
+
 /* ─── Watchlist Item ─── */
 function WatchlistItem({
   sym,
@@ -101,31 +111,21 @@ function WatchlistItem({
     <button
       onClick={onClick}
       className={cn(
-        'w-full flex items-center justify-between px-3 py-2 rounded text-xs transition-colors',
+        'w-full flex items-center justify-between px-3 py-2 text-xs transition-colors',
         active ? 'bg-quant-gold/10 text-quant-gold' : 'hover:bg-white/5'
       )}
     >
       <div className="flex items-center gap-2">
-        <span className={cn('w-1 h-1 rounded-full', isUp ? 'bg-quant-green' : 'bg-quant-red')} />
+        <Star className={cn("w-3 h-3", active ? "fill-quant-gold text-quant-gold" : "text-muted-foreground")} />
         <span className="font-semibold tracking-tight">{sym.replace('USDT', '/USDT')}</span>
       </div>
       <div className="text-right">
-        <div className="font-mono font-medium">{price ? formatPrice(price) : '--'}</div>
+        <div className="font-mono font-medium text-foreground">{price ? formatPrice(price) : '--'}</div>
         <div className={cn('font-mono text-[10px]', isUp ? 'text-quant-green' : 'text-quant-red')}>
           {isUp ? '+' : ''}{changePct?.toFixed(2) ?? '--'}%
         </div>
       </div>
     </button>
-  )
-}
-
-/* ─── Orderbook Depth Bar ─── */
-function DepthBar({ value, max, type }: { value: number; max: number; type: 'bid' | 'ask' }) {
-  const pct = max > 0 ? (value / max) * 100 : 0
-  return (
-    <div className="absolute inset-y-0 right-0 overflow-hidden" style={{ width: `${pct}%`, opacity: 0.12 }}>
-      <div className={cn('h-full w-full', type === 'bid' ? 'bg-quant-green' : 'bg-quant-red')} />
-    </div>
   )
 }
 
@@ -140,7 +140,7 @@ export function Trading() {
   const [leverage, setLeverage] = useState(1)
   const [obTab, setObTab] = useState<'book' | 'trades'>('book')
   const [obPrecision, setObPrecision] = useState<string>('0.1')
-  const [activeBottomTab, setActiveBottomTab] = useState<'positions' | 'orders' | 'history'>('positions')
+  const [activeBottomTab, setActiveBottomTab] = useState<"positions" | "orders" | "plans" | "history" | "fills" | "assets">('positions')
   const [bottomHeight, setBottomHeight] = useState(0) // px, 0=collapsed
   const bottomCollapsed = bottomHeight < 20
   const dragRef = useRef<{ startY: number; startH: number } | null>(null)
@@ -204,12 +204,10 @@ export function Trading() {
   /* ─── WebSocket live trades ─── */
   const { on: wsOn } = useWebSocket('/ws', {
     onReconnect: () => {
-      // Refetch critical market data immediately after reconnect
       queryClient.invalidateQueries({ queryKey: ['klines', symbol, interval] })
       queryClient.invalidateQueries({ queryKey: ['orderbook', symbol] })
       queryClient.invalidateQueries({ queryKey: ['snapshot', symbol] })
       queryClient.invalidateQueries({ queryKey: ['trades'] })
-      // Backfill any K-line bars missed during disconnect
       runBackfill()
     },
   })
@@ -227,7 +225,7 @@ export function Trading() {
     return unsub
   }, [wsOn, symbol])
 
-  /* ─── Pipe WS price ticks to K-line datafeed (no duplicate WS connection) ─── */
+  /* ─── Pipe WS price ticks to K-line datafeed ─── */
   useEffect(() => {
     const unsub = wsOn('price', (msg: any) => {
       if (msg.symbol) {
@@ -266,15 +264,9 @@ export function Trading() {
     return WATCHLIST.filter((s) => s.includes(q))
   }, [watchlistSearch])
 
-  /* ─── KLineChartPro init (recreates when interval changes) ───
-   *
-   * KLineChartPro 0.1.1 has a SolidJS createEffect bug: setPeriod() does NOT
-   * trigger getHistoryKLineData, so we must re-create the chart on period change.
-   * Symbol changes use setSymbol() which works fine.
-   */
+  /* ─── KLineChartPro init ─── */
   const initChart = useCallback(() => {
     if (!chartRef.current) return
-    // Destroy previous instance
     if (klineProRef.current) {
       chartRef.current.innerHTML = ""
       klineProRef.current = null
@@ -298,11 +290,8 @@ export function Trading() {
         if ((chart as any)._chartApi) {
           const api = (chart as any)._chartApi
           chartApiRef.current = api
-          // Zoom to show enough bars after data loads
           try { api.scrollToRealTime() } catch (_) {}
           try { api.setBarSpace(4) } catch (_) {}
-          // Wire running bar updates directly to chart (avoids timestamp conflict
-          // with the last historical bar for the current period)
           if (typeof api.updateData === 'function') {
             setChartUpdater((bar) => { try { api.updateData(bar) } catch {} })
           }
@@ -315,7 +304,6 @@ export function Trading() {
     return () => { if (intervalId) window.clearTimeout(intervalId) }
   }, [datafeed, symbol, interval])
 
-  // Init on mount & when interval changes (SolidJS setPeriod workaround)
   useEffect(() => {
     const cancelTimer = initChart()
     return () => { cancelTimer?.(); cleanupChart() }
@@ -329,11 +317,7 @@ export function Trading() {
     chartApiRef.current = null
   }
 
-
-  /* ─── Period click observer ───
-     KLineChartPro's period bar doesn't expose onChange.
-     We observe clicks and sync to React state — chart recreation is
-     triggered by [interval] dependency in the init effect above.   */
+  /* ─── Period click observer ─── */
   useEffect(() => {
     const el = chartRef.current
     if (!el) return
@@ -343,7 +327,6 @@ export function Trading() {
         if (t.classList?.contains("period") && t.parentElement?.classList?.contains("klinecharts-pro-period-bar")) {
           const txt = t.textContent?.trim()
           if (txt && INTERVALS.includes(txt)) {
-            // Don't stopPropagation — let KLineChartPro handle its own UI highlight
             setInterval(txt)
           }
           return
@@ -361,7 +344,6 @@ export function Trading() {
     const t = setTimeout(() => window.dispatchEvent(new Event("resize")), 100)
     return () => clearTimeout(t)
   }, [bottomCollapsed])
-
 
   /* ─── Order Handlers ─── */
   const handlePlaceOrder = useCallback(async () => {
@@ -422,136 +404,341 @@ export function Trading() {
 
   /* ─── Render ─── */
   return (
-    <div className="h-full flex flex-col">
+    <div className="h-full flex flex-col bg-quant-bg text-foreground">
 
-      {/* MAIN GRID: Chart | Orderbook | Trade */}
-      <div className="flex-1 grid grid-cols-[1fr_270px_310px] gap-px bg-quant-border min-h-0">
-        {/* CHART */}
-        <div className="bg-quant-bg flex flex-col min-h-0 overflow-hidden">
-          <div ref={chartRef} className="flex-1 min-h-0" />
+      {/* ════════════════════════════════════════
+          TOP: Ticker Bar (币安风格行情栏)
+      ════════════════════════════════════════ */}
+      <div className="h-11 shrink-0 border-b border-quant-border bg-quant-bg-secondary flex items-center px-4 gap-4 select-none">
+        {/* Symbol */}
+        <div className="flex items-center gap-2">
+          <div className="w-6 h-6 rounded-full bg-quant-gold/20 flex items-center justify-center text-[10px] font-bold text-quant-gold">
+            {symbol.slice(0, 1)}
+          </div>
+          <div className="flex flex-col">
+            <span className="text-sm font-bold leading-none">{symbol.replace('USDT', '/USDT')}</span>
+            <span className="text-[10px] text-muted-foreground leading-none mt-0.5">Bitcoin</span>
+          </div>
         </div>
 
-        {/* ORDERBOOK + TRADES (270px) */}
-        <div className="bg-quant-bg-secondary flex flex-col overflow-hidden min-h-0">
-          <div className="h-9 shrink-0 border-b border-quant-border flex items-center px-3 gap-3">
-            <span className="text-xs font-semibold text-foreground">订单簿</span>
-            <span className="text-xs text-muted-foreground">最新成交</span>
-            <div className="ml-auto flex gap-1">
-              {["0.1","1","10"].map(function(p) { return (
-                <span key={p} className={cn("text-[10px] px-1 py-0.5 rounded cursor-pointer", obPrecision === p ? "bg-quant-hover text-foreground" : "text-muted-foreground hover:text-foreground")} onClick={() => setObPrecision(p)}>{p}</span>
-              );})}
+        <div className="h-6 w-px bg-quant-border mx-1" />
+
+        {/* Price */}
+        <div className="flex items-baseline gap-2">
+          <span className={cn("text-lg font-mono font-bold", isUp ? "text-quant-green" : "text-quant-red")}>
+            {lastPrice ? lastPrice.toFixed(2) : '--'}
+          </span>
+          <span className={cn("text-xs font-mono", isUp ? "text-quant-green" : "text-quant-red")}>
+            {isUp ? '+' : ''}{changePct.toFixed(2)}%
+          </span>
+          {isUp ? <ArrowUpRight className="w-3.5 h-3.5 text-quant-green" /> : <ArrowDownRight className="w-3.5 h-3.5 text-quant-red" />}
+        </div>
+
+        <div className="h-6 w-px bg-quant-border mx-1" />
+
+        {/* 24h Stats */}
+        <div className="flex items-center gap-4 text-[11px]">
+          <div className="flex flex-col leading-tight">
+            <span className="text-muted-foreground text-[10px]">24h高</span>
+            <span className="font-mono text-foreground">{snapshot?.high ? formatPrice(snapshot.high) : '--'}</span>
+          </div>
+          <div className="flex flex-col leading-tight">
+            <span className="text-muted-foreground text-[10px]">24h低</span>
+            <span className="font-mono text-foreground">{snapshot?.low ? formatPrice(snapshot.low) : '--'}</span>
+          </div>
+          <div className="flex flex-col leading-tight">
+            <span className="text-muted-foreground text-[10px]">24h量</span>
+            <span className="font-mono text-foreground">{snapshot?.volume ? formatVolume(snapshot.volume) : '--'}</span>
+          </div>
+          <div className="flex flex-col leading-tight">
+            <span className="text-muted-foreground text-[10px]">24h额</span>
+            <span className="font-mono text-foreground">{snapshot?.quoteVolume ? formatVolume(snapshot.quoteVolume) : '--'} USDT</span>
+          </div>
+          {tradeMode === 'contract' && (
+            <>
+              <div className="flex flex-col leading-tight">
+                <span className="text-muted-foreground text-[10px]">资金费率</span>
+                <span className="font-mono text-quant-gold">0.01%</span>
+              </div>
+              <div className="flex flex-col leading-tight">
+                <span className="text-muted-foreground text-[10px]">标记价格</span>
+                <span className="font-mono text-foreground">{lastPrice ? lastPrice.toFixed(2) : '--'}</span>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* ════════════════════════════════════════
+          MAIN: Orderbook | Chart | Trade Panel
+      ════════════════════════════════════════ */}
+      <div className="flex-1 flex min-h-0">
+
+        {/* ─── LEFT: Orderbook (280px) ─── */}
+        <div className="w-[280px] shrink-0 border-r border-quant-border bg-quant-bg-secondary flex flex-col">
+          {/* OB Header */}
+          <div className="h-8 shrink-0 border-b border-quant-border flex items-center justify-between px-3">
+            <div className="flex gap-3">
+              <button
+                onClick={() => setObTab('book')}
+                className={cn("text-xs font-medium transition-colors", obTab === 'book' ? "text-foreground" : "text-muted-foreground hover:text-foreground")}
+              >
+                订单簿
+              </button>
+              <button
+                onClick={() => setObTab('trades')}
+                className={cn("text-xs font-medium transition-colors", obTab === 'trades' ? "text-foreground" : "text-muted-foreground hover:text-foreground")}
+              >
+                最新成交
+              </button>
+            </div>
+            <div className="flex gap-1">
+              {["0.1","1","10"].map((p) => (
+                <span
+                  key={p}
+                  className={cn(
+                    "text-[10px] px-1 py-0.5 rounded cursor-pointer transition-colors",
+                    obPrecision === p ? "bg-quant-hover text-foreground" : "text-muted-foreground hover:text-foreground"
+                  )}
+                  onClick={() => setObPrecision(p)}
+                >
+                  {p}
+                </span>
+              ))}
             </div>
           </div>
-          <div className="flex text-[10px] text-muted-foreground px-3 py-1.5 border-b border-quant-border shrink-0">
-            <span className="flex-1">价格 (USDT)</span>
+
+          {/* OB Column Headers */}
+          <div className="flex text-[10px] text-muted-foreground px-3 py-1 border-b border-quant-border shrink-0">
+            <span className="flex-1">价格(USDT)</span>
             <span className="flex-1 text-right">数量</span>
             <span className="flex-1 text-right">累计</span>
           </div>
-          <div className="flex-1 flex flex-col min-h-0">
-            <div className="flex-1 overflow-y-auto">
-              {obLoading ? (
-                <div className="p-3 space-y-1">
-                  {Array.from({ length: 12 }).map(function(_, i) { return <Skeleton key={i} variant="text" height={16} />; })}
-                </div>
-              ) : orderbook ? (
-                <>
-                  <div className="flex flex-col-reverse">
-                    {(orderbook.asks || []).slice(0, 10).map(function(ask, i) {
-                      var p = parseFloat(ask[0]); var q = parseFloat(ask[1]);
-                      return (
-                        <div key={"ask-" + i} className="relative flex px-3 py-0.5 text-[11px] font-mono cursor-pointer hover:bg-white/[0.04]">
-                          <div className="absolute top-0 bottom-0 right-0 opacity-20 z-0" style={{background: "#F6465D", width: Math.min((q / obMax) * 100, 100) + "%"}} />
-                          <span className="flex-1 text-quant-red relative z-10">{p.toFixed(2)}</span>
-                          <span className="flex-1 text-right text-muted-foreground relative z-10">{q.toFixed(4)}</span>
-                          <span className="flex-1 text-right text-muted-foreground relative z-10">{(p * q).toFixed(2)}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <div className="flex items-center justify-center py-1.5 border-y border-quant-border bg-quant-bg-tertiary shrink-0">
-                    <span className={cn("text-sm font-bold font-mono", isUp ? "text-quant-green" : "text-quant-red")}>
-                      {lastPrice ? lastPrice.toFixed(2) : "--"}
-                    </span>
-                    <span className="text-[10px] text-muted-foreground ml-2">
-                      spread {bestAsk && bestBid ? (parseFloat(bestAsk) - parseFloat(bestBid)).toFixed(2) : "--"}
-                    </span>
-                  </div>
-                  <div>
-                    {(orderbook.bids || []).slice(0, 10).map(function(bid, i) {
-                      var p = parseFloat(bid[0]); var q = parseFloat(bid[1]);
-                      return (
-                        <div key={"bid-" + i} className="relative flex px-3 py-0.5 text-[11px] font-mono cursor-pointer hover:bg-white/[0.04]">
-                          <div className="absolute top-0 bottom-0 left-0 opacity-20 z-0" style={{background: "#2EBD85", width: Math.min((q / obMax) * 100, 100) + "%"}} />
-                          <span className="flex-1 text-quant-green relative z-10">{p.toFixed(2)}</span>
-                          <span className="flex-1 text-right text-muted-foreground relative z-10">{q.toFixed(4)}</span>
-                          <span className="flex-1 text-right text-muted-foreground relative z-10">{(p * q).toFixed(2)}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </>
-              ) : (
-                <div className="py-8"><EmptyState title="暂无订单簿数据" description="等待市场数据连接..." /></div>
-              )}
-            </div>
 
-            {/* Trades list below orderbook */}
-            <div className="h-[150px] shrink-0 border-t border-quant-border overflow-y-auto">
+          {obTab === 'book' ? (
+            <>
+              {/* Asks (red, top, reversed) */}
+              <div className="flex-1 overflow-hidden flex flex-col-reverse min-h-0">
+                {obLoading ? (
+                  <div className="p-2 space-y-1">
+                    {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} variant="text" height={16} />)}
+                  </div>
+                ) : (
+                  (orderbook?.asks || []).slice(0, 10).map((ask: any[], i: number) => {
+                    const p = parseFloat(ask[0])
+                    const q = parseFloat(ask[1])
+                    const total = p * q
+                    return (
+                      <div key={"ask-" + i} className="relative flex px-3 py-[3px] text-[11px] font-mono cursor-pointer hover:bg-white/[0.04]">
+                        <div className="absolute top-0 bottom-0 right-0 opacity-15 z-0" style={{ background: "#F6465D", width: Math.min((q / obMax) * 100, 100) + "%" }} />
+                        <span className="flex-1 text-quant-red relative z-10">{p.toFixed(2)}</span>
+                        <span className="flex-1 text-right text-foreground relative z-10">{q.toFixed(4)}</span>
+                        <span className="flex-1 text-right text-muted-foreground relative z-10">{total.toFixed(2)}</span>
+                      </div>
+                    )
+                  })
+                )}
+              </div>
+
+              {/* Middle Price */}
+              <div className="h-9 shrink-0 flex items-center justify-center border-y border-quant-border bg-quant-bg">
+                <span className={cn("text-base font-bold font-mono", isUp ? "text-quant-green" : "text-quant-red")}>
+                  {lastPrice ? lastPrice.toFixed(2) : "--"}
+                </span>
+                <span className="text-[10px] text-muted-foreground ml-2">
+                  ≈ ${lastPrice ? lastPrice.toFixed(2) : "--"}
+                </span>
+                {bestAsk && bestBid && (
+                  <span className="text-[10px] text-muted-foreground ml-3">
+                    Spread {(parseFloat(bestAsk) - parseFloat(bestBid)).toFixed(2)}
+                  </span>
+                )}
+              </div>
+
+              {/* Bids (green, bottom) */}
+              <div className="flex-1 overflow-hidden min-h-0">
+                {obLoading ? (
+                  <div className="p-2 space-y-1">
+                    {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} variant="text" height={16} />)}
+                  </div>
+                ) : (
+                  (orderbook?.bids || []).slice(0, 10).map((bid: any[], i: number) => {
+                    const p = parseFloat(bid[0])
+                    const q = parseFloat(bid[1])
+                    const total = p * q
+                    return (
+                      <div key={"bid-" + i} className="relative flex px-3 py-[3px] text-[11px] font-mono cursor-pointer hover:bg-white/[0.04]">
+                        <div className="absolute top-0 bottom-0 left-0 opacity-15 z-0" style={{ background: "#0ECB81", width: Math.min((q / obMax) * 100, 100) + "%" }} />
+                        <span className="flex-1 text-quant-green relative z-10">{p.toFixed(2)}</span>
+                        <span className="flex-1 text-right text-foreground relative z-10">{q.toFixed(4)}</span>
+                        <span className="flex-1 text-right text-muted-foreground relative z-10">{total.toFixed(2)}</span>
+                      </div>
+                    )
+                  })
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="flex-1 overflow-y-auto">
               <div className="flex text-[10px] text-muted-foreground px-3 py-1 border-b border-quant-border sticky top-0 bg-quant-bg-secondary">
                 <span className="flex-1">时间</span>
                 <span className="flex-1 text-right">价格</span>
                 <span className="flex-1 text-right">数量</span>
               </div>
-              {displayTrades.slice(0, 20).map(function(t, i) {
-                return (
-                  <div key={t.id || i} className="flex px-3 py-0.5 text-[11px] font-mono">
-                    <span className="flex-1 text-muted-foreground">{formatTime(t.time)}</span>
-                    <span className={cn("flex-1 text-right", t.side === "buy" ? "text-quant-green" : "text-quant-red")}>
-                      {formatPrice(t.price)}
-                    </span>
-                    <span className="flex-1 text-right text-muted-foreground">{t.quantity.toFixed(4)}</span>
-                  </div>
-                );
-              })}
+              {displayTrades.slice(0, 50).map((t, i) => (
+                <div key={t.id || i} className="flex px-3 py-[3px] text-[11px] font-mono">
+                  <span className="flex-1 text-muted-foreground">{formatTime(t.time)}</span>
+                  <span className={cn("flex-1 text-right", t.side === "buy" ? "text-quant-green" : "text-quant-red")}>
+                    {formatPrice(t.price)}
+                  </span>
+                  <span className="flex-1 text-right text-foreground">{t.quantity.toFixed(4)}</span>
+                </div>
+              ))}
               {!displayTrades.length && (
-                <div className="py-4"><EmptyState title="暂无成交记录" description="等待实时成交数据..." /></div>
+                <div className="py-4"><EmptyState title="暂无成交" description="等待数据..." /></div>
               )}
             </div>
+          )}
 
+          {/* Mini Recent Trades (always visible below orderbook) */}
+          <div className="h-[130px] shrink-0 border-t border-quant-border overflow-y-auto">
+            <div className="flex text-[10px] text-muted-foreground px-3 py-1 border-b border-quant-border sticky top-0 bg-quant-bg-secondary">
+              <span className="flex-1">时间</span>
+              <span className="flex-1 text-right">价格</span>
+              <span className="flex-1 text-right">数量</span>
+            </div>
+            {displayTrades.slice(0, 20).map((t, i) => (
+              <div key={t.id || i} className="flex px-3 py-[3px] text-[11px] font-mono">
+                <span className="flex-1 text-muted-foreground">{formatTime(t.time)}</span>
+                <span className={cn("flex-1 text-right", t.side === "buy" ? "text-quant-green" : "text-quant-red")}>
+                  {formatPrice(t.price)}
+                </span>
+                <span className="flex-1 text-right text-foreground">{t.quantity.toFixed(4)}</span>
+              </div>
+            ))}
+            {!displayTrades.length && (
+              <div className="py-4 text-center text-muted-foreground text-[10px]">等待实时成交数据...</div>
+            )}
           </div>
         </div>
 
-        {/* TRADE PANEL (310px) */}
-        <div className="bg-quant-bg-secondary overflow-y-auto h-full">
-          <QuickTradePanel
-            symbol={symbol}
-            side={side}
-            orderType={orderType}
-            bestBid={bestBid}
-            bestAsk={bestAsk}
-            lastPrice={lastPrice}
-            leverage={leverage}
-            tradeMode={tradeMode}
-            tpPrice={tpPrice}
-            slPrice={slPrice}
-            onSideChange={setSide}
-            onOrderTypeChange={setOrderType}
-            onPlaceOrder={handlePlaceOrder}
-            onLeverageChange={setLeverage}
-            onTradeModeChange={function(m) { navigate("/trading?mode=" + m, {replace: true}); }}
-            onTpChange={setTpPrice}
-            onSlChange={setSlPrice}
-            price={price}
-            quantity={quantity}
-            onPriceChange={setPrice}
-            onQuantityChange={setQuantity}
-            preview={positionPreview}
-          />
+        {/* ─── CENTER: Chart (flex-1) ─── */}
+        <div className="flex-1 flex flex-col min-w-0 border-r border-quant-border bg-quant-bg">
+          {/* Chart Toolbar */}
+          <div className="h-9 shrink-0 border-b border-quant-border bg-quant-bg-secondary flex items-center px-3 gap-1">
+            {INTERVALS.map((i) => (
+              <button
+                key={i}
+                onClick={() => setInterval(i)}
+                className={cn(
+                  "px-2 py-1 text-[11px] rounded transition-colors",
+                  interval === i ? "bg-quant-hover text-foreground font-medium" : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                {i}
+              </button>
+            ))}
+            <div className="w-px h-4 bg-quant-border mx-1" />
+            {INDICATORS.map((ind) => (
+              <button key={ind} className="px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors">
+                {ind}
+              </button>
+            ))}
+            <div className="ml-auto flex items-center gap-2 text-[11px] text-muted-foreground">
+              <span className="hover:text-foreground cursor-pointer">TradingView</span>
+              <span className="hover:text-foreground cursor-pointer text-foreground font-medium">基本版</span>
+              <span className="hover:text-foreground cursor-pointer">深度图</span>
+            </div>
+          </div>
+          <div ref={chartRef} className="flex-1 min-h-0" />
+        </div>
+
+        {/* ─── RIGHT: Trade Panel (320px) ─── */}
+        <div className="w-[320px] shrink-0 flex flex-col bg-quant-bg-secondary overflow-y-auto">
+          {/* Spot / Contract Toggle */}
+          <div className="flex border-b border-quant-border shrink-0">
+            <button
+              onClick={() => navigate("/trading?mode=spot", { replace: true })}
+              className={cn(
+                "flex-1 py-2.5 text-xs font-medium border-b-2 transition-colors",
+                tradeMode === 'spot' ? "border-quant-gold text-quant-gold" : "border-transparent text-muted-foreground hover:text-foreground"
+              )}
+            >
+              现货
+            </button>
+            <button
+              onClick={() => navigate("/trading?mode=contract", { replace: true })}
+              className={cn(
+                "flex-1 py-2.5 text-xs font-medium border-b-2 transition-colors",
+                tradeMode === 'contract' ? "border-quant-gold text-quant-gold" : "border-transparent text-muted-foreground hover:text-foreground"
+              )}
+            >
+              合约
+            </button>
+          </div>
+
+          {/* Watchlist (Spot only) */}
+          {tradeMode === 'spot' && (
+            <div className="h-[220px] shrink-0 border-b border-quant-border flex flex-col">
+              <div className="h-8 flex items-center px-3 border-b border-quant-border justify-between">
+                <span className="text-xs font-medium text-muted-foreground">自选</span>
+                <div className="relative">
+                  <Search className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                  <input
+                    value={watchlistSearch}
+                    onChange={(e) => setWatchlistSearch(e.target.value)}
+                    placeholder="搜索"
+                    className="w-24 h-5 pl-6 pr-2 text-[10px] bg-quant-bg border border-quant-border rounded focus:outline-none focus:border-quant-gold text-foreground placeholder:text-muted-foreground"
+                  />
+                </div>
+              </div>
+              <div className="flex-1 overflow-y-auto">
+                {filteredWatchlist.map((sym) => (
+                  <WatchlistItem
+                    key={sym}
+                    sym={sym}
+                    active={sym === symbol}
+                    onClick={() => setSymbol(sym)}
+                    price={snapshot?.price ? parseFloat(String(snapshot.price)) : undefined}
+                    changePct={changePct}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Trade Form */}
+          <div className="flex-1 p-3">
+            <QuickTradePanel
+              symbol={symbol}
+              side={side}
+              orderType={orderType}
+              bestBid={bestBid}
+              bestAsk={bestAsk}
+              lastPrice={lastPrice}
+              leverage={leverage}
+              tradeMode={tradeMode}
+              tpPrice={tpPrice}
+              slPrice={slPrice}
+              onSideChange={setSide}
+              onOrderTypeChange={setOrderType}
+              onPlaceOrder={handlePlaceOrder}
+              onLeverageChange={setLeverage}
+              onTradeModeChange={function (m) { navigate("/trading?mode=" + m, { replace: true }); }}
+              onTpChange={setTpPrice}
+              onSlChange={setSlPrice}
+              price={price}
+              quantity={quantity}
+              onPriceChange={setPrice}
+              onQuantityChange={setQuantity}
+              preview={positionPreview}
+            />
+          </div>
         </div>
       </div>
 
       {/* ════════════════════════════════════════
-          BOTTOM: Positions / Orders / History (draggable)
+          BOTTOM: Positions / Orders / History
       ════════════════════════════════════════ */}
       <div
         className="shrink-0 border-t border-quant-border bg-quant-bg-secondary flex flex-col"
@@ -592,7 +779,7 @@ export function Trading() {
             ] as const).map((t) => (
               <button
                 key={t.key}
-                onClick={() => { setActiveBottomTab(t.key); setBottomHeight(h => Math.max(h, 180)) }}
+                onClick={() => { setActiveBottomTab(t.key); setBottomHeight((h) => Math.max(h, 180)) }}
                 className={cn(
                   'px-4 py-2 text-xs font-medium transition-colors relative flex items-center gap-1.5',
                   activeBottomTab === t.key ? 'text-quant-gold' : 'text-muted-foreground hover:text-foreground'
@@ -613,7 +800,7 @@ export function Trading() {
             ))}
           </div>
           <button
-            onClick={() => setBottomHeight(h => h < 20 ? 180 : 0)}
+            onClick={() => setBottomHeight((h) => h < 20 ? 180 : 0)}
             className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/5 transition-colors"
             title={bottomCollapsed ? '展开' : '收起'}
           >
@@ -646,7 +833,7 @@ export function Trading() {
                       </tr>
                     </thead>
                     <tbody>
-                      {positions.map(function(pos, i) {
+                      {positions.map(function (pos, i) {
                         var isLong = (pos.side || '').toUpperCase() === 'LONG' || (pos.side || '').toUpperCase() === 'BUY';
                         var entryPx = parseFloat(pos.entryPrice || pos.openPrice || pos.avgPrice || 0);
                         var markPx = lastPrice || 0;
@@ -691,48 +878,48 @@ export function Trading() {
                   </div>
                 ) : orders?.length ? (
                   <div className="overflow-x-auto">
-                  <table className="w-full text-[10px] whitespace-nowrap">
-                    <thead className="sticky top-0 bg-quant-bg-secondary z-10">
-                      <tr className="text-muted-foreground text-left">
-                        <th className="px-1.5 py-1 font-medium">时间</th>
-                        <th className="px-1.5 py-1 font-medium">币种</th>
-                        <th className="px-1.5 py-1 font-medium">方向</th>
-                        <th className="px-1.5 py-1 font-medium">类型</th>
-                        <th className="px-1.5 py-1 font-medium">价格</th>
-                        <th className="px-1.5 py-1 font-medium">数量</th>
-                        <th className="px-1.5 py-1 font-medium">状态</th>
-                        <th className="px-1.5 py-1 font-medium">操作</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(orders || []).map((o: any) => (
-                        <tr key={o.id} className="border-t border-quant-border/40 hover:bg-white/[0.02] transition-colors">
-                          <td className="px-1.5 py-1 text-muted-foreground">{formatDateTime(o.created_at)}</td>
-                          <td className="px-1.5 py-1 font-semibold">{o.symbol}</td>
-                          <td className="px-1.5 py-1">
-                            <span className={cn('text-[9px] font-bold', o.side === 'BUY' ? 'text-quant-green' : 'text-quant-red')}>
-                              {o.side === 'BUY' ? '买入' : '卖出'}
-                            </span>
-                          </td>
-                          <td className="px-1.5 py-1 text-muted-foreground">{o.type}</td>
-                          <td className="px-1.5 py-1 font-mono">${formatPrice(o.price, 2)}</td>
-                          <td className="px-1.5 py-1 font-mono">{formatPrice(o.quantity, 4)}</td>
-                          <td className="px-1.5 py-1">
-                            <StatusTag status={o.status} />
-                          </td>
-                          <td className="px-1.5 py-1">
-                            <button
-                              onClick={() => handleCancelOrder(o.id)}
-                              className="px-1.5 py-0.5 bg-quant-red/10 text-quant-red rounded text-[9px] font-medium hover:bg-quant-red/20 transition-colors flex items-center gap-1"
-                            >
-                              <XCircle className="w-3 h-3" />
-                              取消
-                            </button>
-                          </td>
+                    <table className="w-full text-[11px] whitespace-nowrap">
+                      <thead className="sticky top-0 bg-quant-bg-secondary z-10">
+                        <tr className="text-muted-foreground text-left">
+                          <th className="px-1.5 py-1 font-medium">时间</th>
+                          <th className="px-1.5 py-1 font-medium">币种</th>
+                          <th className="px-1.5 py-1 font-medium">方向</th>
+                          <th className="px-1.5 py-1 font-medium">类型</th>
+                          <th className="px-1.5 py-1 font-medium">价格</th>
+                          <th className="px-1.5 py-1 font-medium">数量</th>
+                          <th className="px-1.5 py-1 font-medium">状态</th>
+                          <th className="px-1.5 py-1 font-medium">操作</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {(orders || []).map((o: any) => (
+                          <tr key={o.id} className="border-t border-quant-border/40 hover:bg-white/[0.02] transition-colors">
+                            <td className="px-1.5 py-1 text-muted-foreground">{formatDateTime(o.created_at)}</td>
+                            <td className="px-1.5 py-1 font-semibold">{o.symbol}</td>
+                            <td className="px-1.5 py-1">
+                              <span className={cn('text-[9px] font-bold', o.side === 'BUY' ? 'text-quant-green' : 'text-quant-red')}>
+                                {o.side === 'BUY' ? '买入' : '卖出'}
+                              </span>
+                            </td>
+                            <td className="px-1.5 py-1 text-muted-foreground">{o.type}</td>
+                            <td className="px-1.5 py-1 font-mono">${formatPrice(o.price, 2)}</td>
+                            <td className="px-1.5 py-1 font-mono">{formatPrice(o.quantity, 4)}</td>
+                            <td className="px-1.5 py-1">
+                              <StatusTag status={o.status} />
+                            </td>
+                            <td className="px-1.5 py-1">
+                              <button
+                                onClick={() => handleCancelOrder(o.id)}
+                                className="px-1.5 py-0.5 bg-quant-red/10 text-quant-red rounded text-[9px] font-medium hover:bg-quant-red/20 transition-colors flex items-center gap-1"
+                              >
+                                <XCircle className="w-3 h-3" />
+                                取消
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 ) : (
                   <div className="py-6 flex items-center justify-center">
@@ -757,43 +944,43 @@ export function Trading() {
                   </div>
                 ) : historyOrders?.length ? (
                   <div className="overflow-x-auto">
-                  <table className="w-full text-[10px] whitespace-nowrap">
-                    <thead className="sticky top-0 bg-quant-bg-secondary z-10">
-                      <tr className="text-muted-foreground text-left">
-                        <th className="px-1.5 py-1 font-medium">时间</th>
-                        <th className="px-1.5 py-1 font-medium">币种</th>
-                        <th className="px-1.5 py-1 font-medium">方向</th>
-                        <th className="px-1.5 py-1 font-medium">价格</th>
-                        <th className="px-1.5 py-1 font-medium">数量</th>
-                        <th className="px-1.5 py-1 font-medium">盈亏</th>
-                        <th className="px-1.5 py-1 font-medium">状态</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(historyOrders || []).map((o: any) => {
-                        const realizedPnl = o.realized_pnl || 0
-                        return (
-                          <tr key={o.id} className="border-t border-quant-border/40 hover:bg-white/[0.02] transition-colors">
-                            <td className="px-1.5 py-1 text-muted-foreground">{formatDateTime(o.updated_at || o.created_at)}</td>
-                            <td className="px-1.5 py-1 font-semibold">{o.symbol}</td>
-                            <td className="px-1.5 py-1">
-                              <span className={cn('text-[9px] font-bold', o.side === 'BUY' ? 'text-quant-green' : 'text-quant-red')}>
-                                {o.side === 'BUY' ? '买入' : '卖出'}
-                              </span>
-                            </td>
-                            <td className="px-1.5 py-1 font-mono">${formatPrice(o.avg_price || o.price, 2)}</td>
-                            <td className="px-1.5 py-1 font-mono">{formatPrice(o.filled_quantity, 4)}</td>
-                            <td className={cn('px-1.5 py-1 font-mono font-bold', realizedPnl >= 0 ? 'text-quant-green' : 'text-quant-red')}>
-                              {realizedPnl >= 0 ? '+' : ''}{realizedPnl.toFixed(2)}
-                            </td>
-                            <td className="px-1.5 py-1">
-                              <StatusTag status={o.status} />
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
+                    <table className="w-full text-[11px] whitespace-nowrap">
+                      <thead className="sticky top-0 bg-quant-bg-secondary z-10">
+                        <tr className="text-muted-foreground text-left">
+                          <th className="px-1.5 py-1 font-medium">时间</th>
+                          <th className="px-1.5 py-1 font-medium">币种</th>
+                          <th className="px-1.5 py-1 font-medium">方向</th>
+                          <th className="px-1.5 py-1 font-medium">价格</th>
+                          <th className="px-1.5 py-1 font-medium">数量</th>
+                          <th className="px-1.5 py-1 font-medium">盈亏</th>
+                          <th className="px-1.5 py-1 font-medium">状态</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(historyOrders || []).map((o: any) => {
+                          const realizedPnl = o.realized_pnl || 0
+                          return (
+                            <tr key={o.id} className="border-t border-quant-border/40 hover:bg-white/[0.02] transition-colors">
+                              <td className="px-1.5 py-1 text-muted-foreground">{formatDateTime(o.updated_at || o.created_at)}</td>
+                              <td className="px-1.5 py-1 font-semibold">{o.symbol}</td>
+                              <td className="px-1.5 py-1">
+                                <span className={cn('text-[9px] font-bold', o.side === 'BUY' ? 'text-quant-green' : 'text-quant-red')}>
+                                  {o.side === 'BUY' ? '买入' : '卖出'}
+                                </span>
+                              </td>
+                              <td className="px-1.5 py-1 font-mono">${formatPrice(o.avg_price || o.price, 2)}</td>
+                              <td className="px-1.5 py-1 font-mono">{formatPrice(o.filled_quantity, 4)}</td>
+                              <td className={cn('px-1.5 py-1 font-mono font-bold', realizedPnl >= 0 ? 'text-quant-green' : 'text-quant-red')}>
+                                {realizedPnl >= 0 ? '+' : ''}{realizedPnl.toFixed(2)}
+                              </td>
+                              <td className="px-1.5 py-1">
+                                <StatusTag status={o.status} />
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
                   </div>
                 ) : (
                   <div className="py-6 flex items-center justify-center">
@@ -814,7 +1001,6 @@ export function Trading() {
 }
 
 /* ─── Status Tag Component ─── */
-
 function StatusTag({ status }: { status: string }) {
   const config: Record<string, { cls: string; icon: React.ReactNode; label: string }> = {
     PENDING: { cls: 'bg-yellow-500/10 text-yellow-500', icon: <Clock className="w-3 h-3" />, label: '待成交' },
