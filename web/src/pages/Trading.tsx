@@ -27,6 +27,7 @@ import {
   Zap,
   ChevronUp,
   ChevronDown,
+  PenLine,
 } from 'lucide-react'
 
 const INTERVALS = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w']
@@ -143,6 +144,7 @@ export function Trading() {
   const [bottomHeight, setBottomHeight] = useState(180) // px, 0=collapsed
   const bottomCollapsed = bottomHeight < 20
   const dragRef = useRef<{ startY: number; startH: number } | null>(null)
+  const [showDrawingBar, setShowDrawingBar] = useState(true)
   const [watchlistSearch, setWatchlistSearch] = useState('')
   const [tpPrice, setTpPrice] = useState('')
   const [slPrice, setSlPrice] = useState('')
@@ -287,7 +289,7 @@ export function Trading() {
         symbol: { ticker: symbol, name: symbol.replace("USDT", "/USDT"), shortName: symbol, market: "crypto", exchange: "BINANCE" },
         period: { ...parseInterval(interval), text: interval },
         periods: INTERVALS.map((i) => ({ ...parseInterval(i), text: i })),
-        datafeed, drawingBarVisible: true,
+        datafeed, drawingBarVisible: showDrawingBar,
         mainIndicators: ["MA", "EMA"], subIndicators: ["VOL", "MACD"],
         theme: "dark", locale: "zh-CN",
       })
@@ -303,7 +305,7 @@ export function Trading() {
       checkApi()
     } catch (e) { console.error("[Trading] KLineChartPro init failed:", e) }
     return () => { if (intervalId) window.clearTimeout(intervalId) }
-  }, [datafeed, symbol, interval])
+  }, [datafeed, symbol, interval, showDrawingBar])
 
   // Init on mount & when interval changes (SolidJS setPeriod workaround)
   useEffect(() => {
@@ -685,6 +687,13 @@ export function Trading() {
             title={bottomCollapsed ? '展开' : '收起'}
           >
             {bottomCollapsed ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+          </button>
+          <button
+            onClick={() => setShowDrawingBar(v => !v)}
+            className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/5 transition-colors ml-1"
+            title={showDrawingBar ? '隐藏画线工具栏' : '显示画线工具栏'}
+          >
+            <PenLine className="w-3.5 h-3.5" />
           </button>
         </div>
 
