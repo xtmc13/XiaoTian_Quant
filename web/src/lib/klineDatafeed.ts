@@ -3,9 +3,9 @@
  *
  * Features:
  *  - Real Binance historical data via REST API
- *  - Live simulated price ticks via WebSocket (/ws)
- *  - WebSocket auto-reconnect with exponential backoff
- *  - Gap detection & backfill on reconnect (REST API fetches missing bars)
+ *  - Live price ticks fed from the app's primary WebSocket (no duplicate WS)
+ *  - Running bar aggregation with throttle
+ *  - Gap detection & backfill via REST API (call on reconnect)
  *  - Deduplication: won't push bars already sent to subscribers
  */
 import type { SymbolInfo, Period, Datafeed, DatafeedSubscribeCallback } from '@klinecharts/pro'
@@ -19,7 +19,7 @@ const PERIOD_MAP: Record<string, string> = {
   '1day': '1d', '1week': '1w', '1month': '1M',
 }
 
-/* ── Period → duration in milliseconds (for gap detection) ── */
+/* ── Period → duration in milliseconds ── */
 const PERIOD_MS: Record<string, number> = {
   '1minute': 60_000,
   '3minute': 180_000,
@@ -33,7 +33,6 @@ const PERIOD_MS: Record<string, number> = {
   '1month': 2_592_000_000,
 }
 
-/** Max bars to backfill after a disconnect (avoid overwhelming the chart) */
 const MAX_BACKFILL_BARS = 200
 
 function periodKey(p: Period): string {
@@ -48,7 +47,6 @@ function periodMs(p: Period): number {
   return PERIOD_MS[periodKey(p)] || 3_600_000
 }
 
-/* ── KLine transform: backend {time} → KLineData {timestamp} ── */
 function toKLineData(raw: any): KLineData {
   return {
     timestamp: raw.time || raw.timestamp || 0,
@@ -99,49 +97,20 @@ function wsSubKey(symbol: SymbolInfo, period: Period): string {
   return `${symbol.ticker}:${periodKey(period)}`
 }
 
-/* ── WebSocket connection state ── */
-let ws: WebSocket | null = null
-let wsReconnectTimer: ReturnType<typeof setTimeout> | null = null
-let wsReconnectAttempts = 0
-let wsEverConnected = false
-let wsIntentionallyClosed = false
-
-/** Resolve full WS URL */
-function wsUrl(): string {
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${protocol}//${window.location.host}/ws`
-}
-
-/** Exponential backoff delay: 1s, 2s, 4s, 8s, ... capped at 30s */
-function backoffDelay(attempt: number): number {
-  return Math.min(1000 * Math.pow(2, attempt), 30_000)
-}
-
 /* ── Gap detection & backfill ── */
 
-/**
- * Check if a subscription has a data gap (disconnected long enough to miss bars).
- * Returns the timestamp range to fetch, or null if no gap.
- */
 function detectGap(entry: SubEntry): { from: number; to: number } | null {
   const now = Date.now()
   const barMs = periodMs(entry.period)
 
-  // No data ever pushed — can't backfill, let KLineChart handle initial load
   if (entry.lastBarTimestamp <= 0) return null
 
-  // How many bars should have elapsed since the last one we pushed?
   const elapsedMs = now - entry.lastBarTimestamp
   const missedBars = Math.floor(elapsedMs / barMs)
 
-  // Allow 1 bar of tolerance (the current forming bar)
   if (missedBars <= 1) return null
 
-  // Cap backfill to avoid fetching too many bars
   const cappedBars = Math.min(missedBars, MAX_BACKFILL_BARS)
-
-  // from = last known bar timestamp + 1 bar (the first missing bar)
-  // to = now
   const from = entry.lastBarTimestamp + barMs
   const to = now
 
@@ -153,10 +122,6 @@ function detectGap(entry: SubEntry): { from: number; to: number } | null {
   return { from, to }
 }
 
-/**
- * Fetch missing bars from REST API and push them to subscribers.
- * Called after WebSocket reconnection.
- */
 async function backfillGap(entry: SubEntry): Promise<void> {
   const gap = detectGap(entry)
   if (!gap) return
@@ -184,7 +149,6 @@ async function backfillGap(entry: SubEntry): Promise<void> {
       return
     }
 
-    // Convert and filter: only push bars with timestamp > last known
     const newBars = klines
       .map(toKLineData)
       .filter((bar) => bar.timestamp > entry.lastBarTimestamp)
@@ -200,187 +164,90 @@ async function backfillGap(entry: SubEntry): Promise<void> {
       `(${new Date(newBars[0].timestamp).toISOString()} → ${new Date(newBars[newBars.length - 1].timestamp).toISOString()})`
     )
 
-    // Push bars in chronological order
     for (const bar of newBars) {
       entry.lastBarTimestamp = Math.max(entry.lastBarTimestamp, bar.timestamp)
-      entry.callbacks.forEach((cb) => {
-        try { cb(bar) } catch {}
-      })
+      entry.callbacks.forEach((cb) => { try { cb(bar) } catch {} })
     }
   } catch (err) {
     console.error('[KLineDatafeed] Backfill failed:', err)
   }
 }
 
-/** Run backfill for all active subscriptions (called after WS reconnect) */
-async function backfillAll(): Promise<void> {
+/** Run backfill for all active subscriptions — call from Trading.tsx on WS reconnect */
+export async function runBackfill(): Promise<void> {
   const entries = Array.from(subscriptions.values())
   if (entries.length === 0) return
 
   console.log(`[KLineDatafeed] Running backfill for ${entries.length} subscription(s)...`)
-  // Sequential to avoid flooding the backend
-  for (const entry of entries) {
-    await backfillGap(entry)
-  }
+  for (const entry of entries) { await backfillGap(entry) }
   console.log('[KLineDatafeed] Backfill complete')
 }
 
-/* ── WebSocket lifecycle ── */
-
-function ensureWS() {
-  if (ws?.readyState === WebSocket.OPEN) return
-  if (ws?.readyState === WebSocket.CONNECTING) return
-  if (wsIntentionallyClosed) return
-
-  try {
-    ws = new WebSocket(wsUrl())
-
-    ws.onopen = () => {
-      console.log('[KLineDatafeed] WS connected')
-      wsReconnectAttempts = 0
-
-      if (wsEverConnected) {
-        // This is a reconnection — backfill missing data
-        backfillAll()
-      }
-      wsEverConnected = true
-    }
-
-    ws.onclose = (event) => {
-      console.log(`[KLineDatafeed] WS closed (code=${event.code}, reason=${event.reason})`)
-      ws = null
-
-      if (wsIntentionallyClosed) return
-
-      wsReconnectAttempts++
-      const delay = backoffDelay(wsReconnectAttempts)
-      console.log(
-        `[KLineDatafeed] Reconnecting in ${delay}ms (attempt ${wsReconnectAttempts})`
-      )
-      wsReconnectTimer = setTimeout(ensureWS, delay)
-    }
-
-    ws.onerror = () => {
-      // onclose will be called after onerror, handle there
-    }
-
-    ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data)
-
-        // Only handle price events (live ticks)
-        if (msg.type === 'price' && msg.symbol) {
-          const now = Date.now()
-          const lastPrice = Number(msg.data?.last ?? msg.data?.price ?? 0)
-
-          // Update each subscription that matches this symbol
-          subscriptions.forEach((entry, key) => {
-            if (!key.startsWith(msg.symbol + ':')) return
-
-            const barMs = periodMs(entry.period)
-            const alignedTs = Math.floor(now / barMs) * barMs
-
-            let bar = entry.liveBar
-            if (!bar || bar.timestamp !== alignedTs) {
-              // First tick of a new bar period → start fresh running bar
-              bar = {
-                timestamp: alignedTs,
-                open: lastPrice,
-                high: lastPrice,
-                low: lastPrice,
-                close: lastPrice,
-                volume: 0,
-              }
-            } else {
-              // Update running bar: preserve open, extend high/low, set close, accumulate volume
-              bar = {
-                timestamp: bar.timestamp,
-                open: bar.open,
-                high: Math.max(bar.high, lastPrice),
-                low: Math.min(bar.low, lastPrice),
-                close: lastPrice,
-                volume: (bar.volume ?? 0) + Number(msg.data?.volume ?? 0),
-              }
-            }
-            entry.liveBar = bar
-
-            // ── Throttle push to chart ──
-            // Determine if this is a new bar BEFORE updating lastBarTimestamp
-            const prevBarTs = entry.lastBarTimestamp
-            const isNewBar = bar.timestamp !== prevBarTs
-            entry.lastBarTimestamp = Math.max(entry.lastBarTimestamp, bar.timestamp)
-
-            if (isNewBar) {
-              // New bar period → push immediately, cancel any pending throttle
-              entry.lastPushTs = now
-              if (entry.pushTimer) {
-                clearTimeout(entry.pushTimer)
-                entry.pushTimer = null
-              }
-              entry.pendingBar = null
-              entry.callbacks.forEach((cb) => {
-                try { cb(bar) } catch {}
-              })
-              return
-            }
-
-            // Same bar → throttle to avoid flickering
-            entry.pendingBar = bar
-            const elapsed = now - entry.lastPushTs
-
-            if (elapsed >= PUSH_THROTTLE_MS) {
-              // Enough time has passed → push immediately
-              entry.lastPushTs = now
-              entry.pendingBar = null
-              entry.callbacks.forEach((cb) => {
-                try { cb(bar) } catch {}
-              })
-            } else if (!entry.pushTimer) {
-              // Too soon → schedule a deferred push
-              entry.pushTimer = setTimeout(() => {
-                entry.pushTimer = null
-                if (entry.pendingBar) {
-                  entry.lastPushTs = Date.now()
-                  const pending = entry.pendingBar
-                  entry.pendingBar = null
-                  entry.callbacks.forEach((cb) => {
-                    try { cb(pending) } catch {}
-                  })
-                }
-              }, PUSH_THROTTLE_MS - elapsed)
-            }
-          })
-        }
-      } catch { /* ignore malformed messages */ }
-    }
-  } catch (err) {
-    console.error('[KLineDatafeed] WS creation failed:', err)
-    wsReconnectAttempts++
-    wsReconnectTimer = setTimeout(ensureWS, backoffDelay(wsReconnectAttempts))
-  }
-}
-
-/** Graceful shutdown — call on page unmount if needed */
-export function disconnectDatafeed(): void {
-  wsIntentionallyClosed = true
-  if (wsReconnectTimer) {
-    clearTimeout(wsReconnectTimer)
-    wsReconnectTimer = null
-  }
-  if (ws) {
-    try { ws.close(1000, 'client disconnect') } catch {}
-    ws = null
-  }
-  // Clear all pending throttle timers
+/** Clear all subscriptions — call from Trading.tsx when chart unmounts */
+export function clearDatafeedSubscriptions(): void {
   subscriptions.forEach((entry) => {
-    if (entry.pushTimer) {
-      clearTimeout(entry.pushTimer)
-      entry.pushTimer = null
-    }
+    if (entry.pushTimer) { clearTimeout(entry.pushTimer); entry.pushTimer = null }
   })
   subscriptions.clear()
-  wsEverConnected = false
-  wsReconnectAttempts = 0
+}
+
+/* ── Price tick → running bar (called from the main WS hook) ── */
+
+export function handlePriceTick(symbol: string, lastPrice: number, volume: number): void {
+  const now = Date.now()
+
+  subscriptions.forEach((entry, key) => {
+    if (!key.startsWith(symbol + ':')) return
+
+    const barMs = periodMs(entry.period)
+    const alignedTs = Math.floor(now / barMs) * barMs
+
+    let bar = entry.liveBar
+    if (!bar || bar.timestamp !== alignedTs) {
+      bar = {
+        timestamp: alignedTs,
+        open: lastPrice, high: lastPrice, low: lastPrice, close: lastPrice, volume: 0,
+      }
+    } else {
+      bar = {
+        timestamp: bar.timestamp, open: bar.open,
+        high: Math.max(bar.high, lastPrice), low: Math.min(bar.low, lastPrice),
+        close: lastPrice, volume: (bar.volume ?? 0) + volume,
+      }
+    }
+    entry.liveBar = bar
+
+    const prevBarTs = entry.lastBarTimestamp
+    const isNewBar = bar.timestamp !== prevBarTs
+    entry.lastBarTimestamp = Math.max(entry.lastBarTimestamp, bar.timestamp)
+
+    if (isNewBar) {
+      entry.lastPushTs = now
+      if (entry.pushTimer) { clearTimeout(entry.pushTimer); entry.pushTimer = null }
+      entry.pendingBar = null
+      entry.callbacks.forEach((cb) => { try { cb(bar) } catch {} })
+      return
+    }
+
+    entry.pendingBar = bar
+    const elapsed = now - entry.lastPushTs
+
+    if (elapsed >= PUSH_THROTTLE_MS) {
+      entry.lastPushTs = now
+      entry.pendingBar = null
+      entry.callbacks.forEach((cb) => { try { cb(bar) } catch {} })
+    } else if (!entry.pushTimer) {
+      entry.pushTimer = setTimeout(() => {
+        entry.pushTimer = null
+        if (entry.pendingBar) {
+          entry.lastPushTs = Date.now()
+          const pending = entry.pendingBar
+          entry.pendingBar = null
+          entry.callbacks.forEach((cb) => { try { cb(pending) } catch {} })
+        }
+      }, PUSH_THROTTLE_MS - elapsed)
+    }
+  })
 }
 
 /* ── Exported Datafeed ── */
@@ -466,9 +333,6 @@ export function createBackendDatafeed(): Datafeed {
       }
 
       entry.callbacks.add(callback)
-
-      // Ensure WS is connected (starts connection if first subscription)
-      ensureWS()
     },
 
     unsubscribe(symbol: SymbolInfo, period: Period): void {
@@ -476,7 +340,6 @@ export function createBackendDatafeed(): Datafeed {
       const entry = subscriptions.get(key)
       if (!entry) return
 
-      // Clear throttle timer to prevent pushing to a dead chart
       if (entry.pushTimer) {
         clearTimeout(entry.pushTimer)
         entry.pushTimer = null
@@ -484,13 +347,6 @@ export function createBackendDatafeed(): Datafeed {
 
       entry.callbacks.clear()
       subscriptions.delete(key)
-
-      // If no more subscriptions, close the WebSocket to save resources
-      if (subscriptions.size === 0) {
-        disconnectDatafeed()
-        // Reset flag so it can reconnect if subscribe is called again
-        wsIntentionallyClosed = false
-      }
     },
   }
 }

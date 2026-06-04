@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { marketApi, orderApi, portfolioApi, tradesApi } from '@/lib/api'
 import { KLineChartPro } from '@klinecharts/pro'
 import '@klinecharts/pro/dist/klinecharts-pro.css'
-import { createBackendDatafeed } from '@/lib/klineDatafeed'
+import { createBackendDatafeed, handlePriceTick, runBackfill } from '@/lib/klineDatafeed'
 import type { Chart } from 'klinecharts'
 import { cn } from '@/lib/utils'
 import { useWebSocket } from '@/hooks/useWebSocket'
@@ -140,12 +140,14 @@ export function Trading() {
   const [leverage, setLeverage] = useState(1)
   const [leftTab, setLeftTab] = useState<'watchlist' | 'orderbook' | 'trades'>('watchlist')
   const [activeBottomTab, setActiveBottomTab] = useState<'positions' | 'orders' | 'history'>('positions')
+  const [bottomHeight, setBottomHeight] = useState(180) // px, 0=collapsed
+  const bottomCollapsed = bottomHeight < 20
+  const dragRef = useRef<{ startY: number; startH: number } | null>(null)
   const [watchlistSearch, setWatchlistSearch] = useState('')
   const [tpPrice, setTpPrice] = useState('')
   const [slPrice, setSlPrice] = useState('')
   const [searchParams] = useSearchParams()
   const tradeMode = (searchParams.get('mode') as 'contract' | 'spot') || 'spot'
-  const [bottomCollapsed, setBottomCollapsed] = useState(true)
   const navigate = useNavigate()
 
   const chartRef = useRef<HTMLDivElement>(null)
@@ -206,6 +208,8 @@ export function Trading() {
       queryClient.invalidateQueries({ queryKey: ['orderbook', symbol] })
       queryClient.invalidateQueries({ queryKey: ['snapshot', symbol] })
       queryClient.invalidateQueries({ queryKey: ['trades'] })
+      // Backfill any K-line bars missed during disconnect
+      runBackfill()
     },
   })
   const [liveTrades, setLiveTrades] = useState<Trade[]>([])
@@ -221,6 +225,20 @@ export function Trading() {
     })
     return unsub
   }, [wsOn, symbol])
+
+  /* ─── Pipe WS price ticks to K-line datafeed (no duplicate WS connection) ─── */
+  useEffect(() => {
+    const unsub = wsOn('price', (msg: any) => {
+      if (msg.symbol) {
+        handlePriceTick(
+          msg.symbol,
+          Number(msg.data?.last ?? msg.data?.price ?? 0),
+          Number(msg.data?.volume ?? 0),
+        )
+      }
+    })
+    return unsub
+  }, [wsOn])
 
   /* ─── Computed ─── */
   const lastPrice = useMemo(() => {
@@ -603,11 +621,36 @@ export function Trading() {
       </div>
 
       {/* ════════════════════════════════════════
-          BOTTOM: Positions / Orders / History
+          BOTTOM: Positions / Orders / History (draggable)
       ════════════════════════════════════════ */}
-      <div className="shrink-0 border-t border-quant-border bg-quant-bg-secondary flex flex-col">
+      <div
+        className="shrink-0 border-t border-quant-border bg-quant-bg-secondary flex flex-col"
+        style={{ height: bottomCollapsed ? 'auto' : bottomHeight }}
+      >
+        {/* Drag Handle */}
+        <div
+          className="h-1.5 cursor-row-resize hover:bg-quant-gold/20 active:bg-quant-gold/30 shrink-0 relative"
+          onMouseDown={(e) => {
+            dragRef.current = { startY: e.clientY, startH: bottomHeight }
+            const onMove = (ev: MouseEvent) => {
+              if (!dragRef.current) return
+              const h = Math.max(60, Math.min(600, dragRef.current.startH - (ev.clientY - dragRef.current.startY)))
+              setBottomHeight(h)
+            }
+            const onUp = () => {
+              dragRef.current = null
+              document.removeEventListener('mousemove', onMove)
+              document.removeEventListener('mouseup', onUp)
+            }
+            document.addEventListener('mousemove', onMove)
+            document.addEventListener('mouseup', onUp)
+          }}
+        >
+          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-0.5 rounded bg-quant-border/60" />
+        </div>
+
         {/* Bottom Tabs */}
-        <div className="flex border-b border-quant-border px-2 items-center justify-between">
+        <div className="flex border-b border-quant-border px-2 items-center justify-between shrink-0">
           <div className="flex">
             {([
               { key: 'positions', label: '持仓', count: positions?.length || 0, icon: TrendingUp },
@@ -616,7 +659,7 @@ export function Trading() {
             ] as const).map((t) => (
               <button
                 key={t.key}
-                onClick={() => { setActiveBottomTab(t.key); setBottomCollapsed(false) }}
+                onClick={() => { setActiveBottomTab(t.key); setBottomHeight(h => Math.max(h, 180)) }}
                 className={cn(
                   'px-4 py-2 text-xs font-medium transition-colors relative flex items-center gap-1.5',
                   activeBottomTab === t.key ? 'text-quant-gold' : 'text-muted-foreground hover:text-foreground'
@@ -637,7 +680,7 @@ export function Trading() {
             ))}
           </div>
           <button
-            onClick={() => setBottomCollapsed(!bottomCollapsed)}
+            onClick={() => setBottomHeight(h => h < 20 ? 180 : 0)}
             className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/5 transition-colors"
             title={bottomCollapsed ? '展开' : '收起'}
           >
@@ -647,7 +690,7 @@ export function Trading() {
 
         {/* Bottom Content */}
         {!bottomCollapsed && (
-          <div className="max-h-24 overflow-y-auto">
+          <div className="overflow-y-auto flex-1" style={{ maxHeight: bottomHeight - 40 }}>
             {/* ── Positions Table ── */}
             {activeBottomTab === 'positions' && (
               <div>

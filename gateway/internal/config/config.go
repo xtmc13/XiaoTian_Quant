@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"unicode"
 
 	"gopkg.in/yaml.v3"
 )
@@ -182,9 +183,59 @@ func Default() *Config {
 	}
 }
 
+// loadDotEnv reads .env file and sets environment variables (no external dependency).
+// Supports KEY=VALUE lines, # comments, quoted values, and export prefix.
+func loadDotEnv(path string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return // silently skip if no .env file
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || line[0] == '#' {
+			continue
+		}
+		// Strip optional "export " prefix
+		line = strings.TrimPrefix(line, "export ")
+		eq := strings.IndexByte(line, '=')
+		if eq < 1 {
+			continue
+		}
+		key := strings.TrimSpace(line[:eq])
+		val := strings.TrimSpace(line[eq+1:])
+		// Strip surrounding quotes
+		if len(val) >= 2 {
+			q := val[0]
+			if q == '"' || q == '\'' || q == '`' {
+				if val[len(val)-1] == q {
+					val = val[1 : len(val)-1]
+				}
+			}
+		}
+		// Check key is a valid identifier
+		if key == "" {
+			continue
+		}
+		for _, r := range key {
+			if !(unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_') {
+				continue
+			}
+		}
+		os.Setenv(key, val)
+	}
+}
+
 // Load reads config from YAML file, falling back to defaults and env overrides.
 func Load(path string) (*Config, error) {
 	cfg := Default()
+
+	// Load .env file if it exists (search up to 2 levels up for flexibility)
+	for _, p := range []string{".env", "../.env", "../../.env"} {
+		if _, err := os.Stat(p); err == nil {
+			loadDotEnv(p)
+			break
+		}
+	}
 
 	if path != "" {
 		data, err := os.ReadFile(path)
