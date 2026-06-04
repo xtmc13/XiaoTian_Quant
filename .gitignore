@@ -48,4 +48,6 @@ engine/target/
 
 # Docker
 docker-compose.override.yml
-.plasmic/
+
+# Vite cache
+.vite/

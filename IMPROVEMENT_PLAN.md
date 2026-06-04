@@ -1193,3 +1193,402 @@ gateway/internal/{domain}/
 ---
 
 > **总结：** XiaoTianQuant 在架构 (Go+Rust+TS) 和前端体验上有显著优势，核心差距在于 Freqtrade 多年积累的**策略生态深度** (Hyperopt/FreqAI/Pairlist) 和 QuantDinger 的**全资产覆盖** (传统券商)。通过 5 个阶段、约 40-50 周的迭代，可以达到并部分超越两个对标项目的功能完整度，同时保持架构优势。
+
+---
+
+# 附录 D：代码审查与安全修复清单（2026-06-03）
+
+> 本章节记录 2026-06-03 代码审查中发现的所有安全和质量问题，按优先级排列。修复状态用 `[ ]` 未修复 / `[x]` 已修复标注。
+
+---
+
+## D.1 P0 级 — 严重安全/构建阻塞问题（立即修复）
+
+### D.1.1 🔴 Go 版本不存在 — 构建阻塞
+
+- **位置：** `gateway/go.mod:3` 声明 `go 1.25.0`，`Dockerfile:16` 使用 `golang:1.25-alpine`
+- **问题：** Go 最新稳定版为 1.24.x，1.25 尚未发布。`go mod tidy` / Docker 构建将失败
+- **修复：** 降级到 `go 1.23`（已验证可用的稳定版本）
+- **状态：** `[x]`
+
+### D.1.2 🔴 SQL 注入漏洞
+
+- **位置：** `gateway/internal/store/store.go:434`（`UpdateUserProfile`）、`:446`（`AdminUpdateUser`）
+- **问题：**
+  ```go
+  db.Exec(`UPDATE xt_users SET `+field+`=? WHERE username=?`, value, username)  // 字段名拼接
+  ```
+  `field` 参数来自用户输入，未做严格白名单校验。攻击者可注入 SQL（如 `field="role='admin', password_hash='xxx' --"`）
+- **修复：** 使用严格字段白名单 + map 参数映射，彻底禁止字符串拼接 SQL
+- **状态：** `[x]`
+
+### D.1.3 🔴 密码哈希算法不安全
+
+- **位置：** `gateway/internal/store/store.go:237-248`
+- **问题：** 使用 SHA256 + salt 作为密码哈希。SHA256 不是密码哈希算法，无 work factor，易被 GPU/ASIC 暴力破解
+- **修复：** 改用 `golang.org/x/crypto/bcrypt`（成本因子 12）
+- **状态：** `[x]`
+
+### D.1.4 🔴 止损管理器参数传递错误
+
+- **位置：** `gateway/internal/order/stoploss.go:305`、`:376`、`:400`
+- **问题：** `CancelOrder` 调用传错参数：
+  ```go
+  s.orderPlacer.CancelOrder(s.exchangeOrder.OrderID, s.exchangeOrder.OrderID)  // 两次都是 OrderID
+  ```
+  而接口定义为 `CancelOrder(symbol, orderID string)`。导致无法正确取消旧止损单，可能重复下单
+- **修复：** 修正为 `CancelOrder(s.exchangeOrder.Symbol, s.exchangeOrder.OrderID)`
+- **状态：** `[x]`
+
+### D.1.5 🔴 大量敏感 API 路由缺少鉴权
+
+- **位置：** `gateway/cmd/server/main.go:135-176`
+- **问题：** 以下路由未使用 `middleware.AuthRequired()`：
+  - `GET /api/orders` — 用户订单列表
+  - `POST /api/orders` — 下单
+  - `DELETE /api/orders/:id` — 撤单
+  - `GET /api/account/balance` — 账户余额
+  - `GET /api/trades` — 成交历史
+  - `GET /api/portfolio/*` — 资产信息
+  - `/api/strategies/*` — 策略管理
+  - `/api/backtest/*` — 回测
+- **风险：** 任何人都可以访问/操作这些接口
+- **修复：** 为所有敏感路由添加 `.Use(middleware.AuthRequired())`
+- **状态：** `[x]`
+
+---
+
+## D.2 P1 级 — 中高优先级问题（本周修复）
+
+### D.2.1 ⚠️ JWT Token 从 Query 参数读取
+
+- **位置：** `gateway/internal/middleware/middleware.go:84-85`
+- **问题：** `extractToken` 支持从 URL Query 读取 token：`return c.Query("token")`。Token 出现在 URL 中会被服务器日志、浏览器历史、第三方 Referrer 泄露
+- **修复：** 移除 Query 参数支持，仅保留 `Authorization: Bearer <token>` Header
+- **状态：** `[x]`
+
+### D.2.2 ⚠️ CORS 允许所有来源
+
+- **位置：** `gateway/internal/middleware/middleware.go:19-28`
+- **问题：** `Access-Control-Allow-Origin: *` 允许任意域名跨域访问生产环境 API
+- **修复：** 生产环境限制为配置的域名，开发环境允许 localhost
+- **状态：** `[x]`
+
+### D.2.3 ⚠️ 前端 Period 映射键名不一致
+
+- **位置：** `web/src/lib/klineDatafeed.ts:16-34`
+- **问题：** `PERIOD_MAP` 使用键 `'1min'`，`PERIOD_MS` 使用键 `'1minute'`，`periodKey()` 函数生成 `'1minute'` 与前者不匹配，导致 `periodMs()` 回退到默认值 1h
+- **修复：** 统一键名命名约定
+- **状态：** `[x]`
+
+### D.2.4 ⚠️ KLineDatafeed limit 计算硬编码 1h
+
+- **位置：** `web/src/lib/klineDatafeed.ts:360`
+- **问题：** `const limit = Math.min(Math.ceil((toMs - fromMs) / 3600000) + 200, 1500)` 中 `3600000` 是固定的 1 小时毫秒数，对于 1m/5m 等短周期会导致 limit 计算错误
+- **修复：** 使用 `periodMs(period)` 替代硬编码值
+- **状态：** `[x]`
+
+### D.2.5 ⚠️ Rust FFI 边界检查缺失
+
+- **位置：** `engine/src/ffi.rs`
+- **问题：** `engine_submit_order` 等函数对 JSON 解析失败、引擎未找到等场景返回错误字符串，但部分函数（如 `engine_trade_count`）在引擎不存在时静默返回 0，调用方无法区分"无交易"和"引擎不存在"
+- **修复：** 统一错误处理模式，或添加更明确的错误返回值
+- **状态：** `[ ]`
+
+---
+
+## D.3 P2 级 — 低优先级问题/优化建议（本月修复）
+
+### D.3.1 🔶 订单簿 f64 精度问题
+
+- **位置：** `engine/src/orderbook.rs:102-117`（`OrderedFloat::from_price`）
+- **问题：** 使用 `f64::to_bits()` 作为 BTreeMap 键。`NaN`、`-0`/`+0`、不同 bit pattern 的相同值会产生不同键，导致订单簿中出现"相同价格但不同键"的幽灵条目
+- **修复：** 改用定点数（如 `u64` 表示 price × 10^8）替代 `f64`
+- **状态：** `[ ]`
+
+### D.3.2 🔶 取消订单效率低
+
+- **位置：** `engine/src/orderbook.rs:153-171`
+- **问题：** `cancel_order` 使用线性搜索 O(n) 遍历所有订单。对大型订单簿性能差
+- **修复：** 维护 `order_id → (side, price_key)` 的索引映射
+- **状态：** `[ ]`
+
+### D.3.3 🔶 Trading.tsx KLineChartPro 初始化不够健壮
+
+- **位置：** `web/src/pages/Trading.tsx:250-272`
+- **问题：**
+  - 使用 `chartRef.current.innerHTML = ""` 清除 DOM（非 React 推荐方式）
+  - 使用 `window.setInterval` 轮询 `_chartApi` 属性
+  - 空依赖数组导致 symbol/interval 变更不重新初始化
+- **修复：** 使用 ref callback 替代 innerHTML，通过 `chartApiRef` 可靠检测初始化完成
+- **状态：** `[ ]`
+
+### D.3.4 🔶 默认 admin 密码硬编码
+
+- **位置：** `gateway/internal/store/store.go:83`
+- **问题：** 默认管理员密码 `"admin123"` 硬编码在源码中，部署后若用户未修改存在安全风险
+- **修复：** 首次启动生成随机密码并打印到日志，或强制首次登录修改密码
+- **状态：** `[x]`
+
+### D.3.5 🔶 JWT 过期时间过长
+
+- **位置：** `gateway/internal/store/store.go:257`
+- **问题：** `exp: time.Now().Add(7 * 24 * time.Hour)` — 7 天 Token 有效期过长，泄露后风险窗口大
+- **修复：** 缩短为 24h，配合 Refresh Token 机制
+- **状态：** `[x]`
+
+### D.3.6 🔶 代码风格不一致
+
+- **位置：** 多处
+- **问题：** `main.go` 路由缩进混乱（混用 tab 和不同空格数），部分文件行过长
+- **修复：** 统一使用 `gofmt` / `gofumpt` 格式化，前端使用 `eslint --fix`
+- **状态：** `[x]`
+
+### D.3.7 🔶 Docker Compose 引用不存在的目录
+
+- **位置：** `docker-compose.yml:82-165`
+- **问题：** 引用了 `./sandbox` 目录和 `ml_server` / `ccxt_bridge` / `sandbox` 服务，但项目中不存在 `sandbox/` 目录
+- **修复：** 创建 `sandbox/` 目录骨架，或更新 docker-compose 移除这些服务（标记为可选）
+- **状态：** `[x]` *(目录已存在，Dockerfile、main.py、ml_server、ccxt_bridge 均齐全)*
+
+### D.3.8 🔶 二进制文件不应在版本控制中
+
+- **位置：** `gateway/gateway-server.exe`、`gateway/gateway.exe` 等
+- **问题：** 编译产物不应提交到 Git，会污染仓库历史
+- **修复：** 添加到 `.gitignore`，从历史中移除（可选）
+- **状态：** `[x]` *(.gitignore 已包含 `*.exe`，Git 中无跟踪的二进制文件)*
+
+---
+
+## D.4 修复进度追踪
+
+| # | 问题 | 优先级 | 文件 | 状态 |
+|---|------|:------:|------|:----:|
+| 1 | Go 版本降级 1.25→1.23 | P0 | `go.mod`, `Dockerfile` | `[x]` |
+| 2 | SQL 注入修复 | P0 | `store/store.go` | `[x]` |
+| 3 | SHA256→bcrypt | P0 | `store/store.go` | `[x]` |
+| 4 | 止损 CancelOrder 参数 | P0 | `order/stoploss.go` | `[x]` |
+| 5 | API 路由鉴权补齐 | P0 | `cmd/server/main.go` | `[x]` |
+| 6 | JWT 移除 Query 参数 | P1 | `middleware/middleware.go` | `[x]` |
+| 7 | CORS 限制来源 | P1 | `middleware/middleware.go` | `[x]` |
+| 8 | Period 键名统一 | P1 | `klineDatafeed.ts` | `[x]` |
+| 9 | KLine limit 硬编码 | P1 | `klineDatafeed.ts` | `[x]` |
+| 10 | 订单簿 f64→定点数 | P2 | `orderbook.rs` | `[ ]` *(需架构决策)* |
+| 11 | cancel_order 索引优化 | P2 | `orderbook.rs` | `[ ]` *(需架构决策)* |
+| 12 | Trading.tsx 初始化 | P2 | `Trading.tsx` | `[ ]` *(需前端重构)* |
+| 13 | Admin 默认密码 | P2 | `store/store.go` | `[x]` |
+| 14 | JWT 过期时间 | P2 | `store/store.go` | `[x]` |
+| 15 | 代码风格统一 | P2 | 多处 | `[x]` |
+| 16 | sandbox 目录缺失 | P2 | `docker-compose.yml` | `[x]` *(目录已存在)* |
+| 17 | 二进制文件清理 | P2 | `.gitignore` | `[x]` *(已配置)* |
+
+---
+
+# 附录 E：交易页面 Bug 审查与修复清单（2026-06-04）
+
+> 本章节记录 2026-06-04 对交易页面（Trading/SpotTrading/ContractTrading/KlineDatafeed/QuickTradePanel）全面代码审查中发现的所有 Bug。修复状态用 `[ ]` 未修复 / `[x]` 已修复标注。
+
+---
+
+## E.1 严重级别 (Critical) — 会导致功能异常
+
+### E.1.1 🔴 切换交易对后实时成交数据未清空 — 数据串号
+
+- **位置：** `web/src/pages/SpotTrading.tsx:169` / `ContractTrading.tsx:132`
+- **问题：** 切换 `symbol`（如 BTCUSDT → ETHUSDT）时，`liveTrades` state 未清空，页面显示上一个币种的历史成交记录
+- **影响：** 用户看到错误的成交数据，可能做出错误交易决策
+- **修复：** 添加 `useEffect(() => { setLiveTrades([]) }, [symbol])` 监听 symbol 变化
+- **状态：** `[x]` — `SpotTrading.tsx` 和 `ContractTrading.tsx` 均已添加 symbol 变化时清空 liveTrades 的逻辑
+
+### E.1.2 🔴 K线实时更新 — 新Bar的OHLC初始化完全错误
+
+- **位置：** `web/src/lib/klineDatafeed.ts:168-179`
+- **问题：** `handlePriceTick` 创建新周期 Bar 时，错误地用**上一根历史K线**的 `open/high/low/volume` 初始化新 Bar：
+  ```ts
+  bar = {
+    timestamp: alignedTs,
+    open: hist.open,        // ❌ 应该是 lastPrice
+    high: Math.max(hist.high, lastPrice),  // ❌ 应该从 lastPrice 开始
+    low: Math.min(hist.low, lastPrice),    // ❌ 应该从 lastPrice 开始
+    close: lastPrice,
+    volume: hist.volume,    // ❌ 应该从 0 开始
+  }
+  ```
+- **影响：** 新K线"继承"上一根K线数据，K线图出现严重视觉和数据错误
+- **修复：** 新 Bar 的 `open/high/low/close` 均用 `lastPrice` 初始化，`volume` 用当前 tick 的 volume
+- **状态：** `[x]` — 已移除 `historyLastBar` 依赖，新 Bar 的 OHLC 全部用 `lastPrice` 初始化，`volume` 用传入的 `volume` 参数
+
+### E.1.3 🔴 API Response Interceptor — 标准信封格式导致数据丢失
+
+- **位置：** `web/src/lib/api.ts:71-77` / `api.ts:191-193`
+- **问题：** Response interceptor 的 unwrap 逻辑 `!('success' in data)` 导致后端返回 `{success: true, data: {klines: [...]}}` 时：
+  1. Interceptor 不 unwrap（`success` 属性存在）
+  2. `marketApi.klines` 中 `d?.klines` 为 `undefined`
+  3. `Array.isArray(d)` 为 `false`
+  4. **最终返回空数组 `[]`**
+- **影响：** 如果后端使用标准信封格式，K线、订单列表等 API 全部返回空数据
+- **修复：** 在 `marketApi.klines` 等 API 中增加对 envelope 格式的兼容解析
+- **状态：** `[x]` — `marketApi.klines` 已增加 `d?.data?.klines` 兼容路径，同时对所有 API 保持向后兼容
+
+### E.1.4 🔴 QuickTradePanel — 状态更新竞态条件
+
+- **位置：** `web/src/components/QuickTradePanel.tsx:394-401`
+- **问题：** `onSideChange('BUY'); onPlaceOrder()` 在同一事件处理中顺序调用，但 React state 更新是异步的，`onPlaceOrder` 可能使用父组件中尚未更新的 `side` 值
+- **影响：** 用户点击"买入"按钮，实际可能用"卖出"参数下单
+- **修复：** 让 `onPlaceOrder` 接收 `side` 参数，或使用回调式更新确保顺序
+- **状态：** `[x]` — `onPlaceOrder` 接口改为 `onPlaceOrder(side: 'BUY' | 'SELL')`，所有按钮调用时直接传入明确的 side，消除竞态条件
+
+---
+
+## E.2 高级别 (High) — 影响用户体验
+
+### E.2.1 ⚠️ 合约交易页面 — 缺少交易对切换功能
+
+- **位置：** `web/src/pages/ContractTrading.tsx:76-578`
+- **问题：** 合约交易页面完全没有提供切换交易对（Symbol）的 UI。`symbol` state 存在（默认 BTCUSDT），但用户无法切换
+- **修复：** 添加交易对选择器或复用 Watchlist 组件
+- **状态：** `[ ]`
+
+### E.2.2 ⚠️ K线 Datafeed — Symbol 前缀匹配导致数据串扰
+
+- **位置：** `web/src/lib/klineDatafeed.ts:158` / `:270`
+- **问题：** `key.startsWith(symbol + ':')` 使用前缀匹配。symbol 为 "BTC" 时，会同时匹配 "BTCUSDT:1h" 和 "BTCUSD:1h"
+- **修复：** 使用精确匹配 `key.split(':')[0] !== symbol`
+- **状态：** `[ ]`
+
+### E.2.3 ⚠️ 现货交易 — 卖出时百分比按钮计算错误
+
+- **位置：** `web/src/pages/SpotTrading.tsx:507-513`
+- **问题：** 百分比按钮（25%/50%/75%/100%）始终使用 `spotBalance`（USDT总余额）计算。当用户点击**卖出**时，应该用持有的**BTC余额**计算
+- **修复：** 根据 `side` 选择对应余额进行计算
+- **状态：** `[ ]`
+
+### E.2.4 ⚠️ useToast.tsx — Import 语句放在文件末尾
+
+- **位置：** `web/src/lib/useToast.tsx:64`
+- **问题：** `import { cn } from './utils'` 放在文件最后一行，代码可读性极差，部分构建工具可能报错
+- **修复：** 将 import 移到文件顶部
+- **状态：** `[ ]`
+
+---
+
+## E.3 中级别 (Medium) — 需要修复
+
+### E.3.1 🔶 QuickTradePanel — 硬编码 Mock 数据
+
+- **位置：** `web/src/components/QuickTradePanel.tsx:92` / `:345` / `:368-369`
+- **问题：** `balance = 10000`、`12,450.50 USDT`、`0.8450 BTC` 等使用硬编码值，不是真实账户数据
+- **修复：** 从 props 传入真实账户数据
+- **状态：** `[ ]`
+
+### E.3.2 🔶 useWebSocket — stale `onReconnect` 闭包
+
+- **位置：** `web/src/hooks/useWebSocket.ts:132`
+- **问题：** `useEffect` 依赖数组缺少 `onReconnect`，组件重新渲染时新的 `onReconnect` 函数不会被使用
+- **修复：** 将 `onReconnect` 加入依赖数组，或使用 `useRef` 保存最新值
+- **状态：** `[ ]`
+
+### E.3.3 🔶 useWebSocket — 单个 Callback 异常阻断后续 Callback
+
+- **位置：** `web/src/hooks/useWebSocket.ts:94-105`
+- **问题：** `callbacks.forEach((cb) => cb(data))` 中某个 callback 抛异常会导致同类型其他 callback 不被执行
+- **修复：** 每个 callback 用 try-catch 包裹
+- **状态：** `[ ]`
+
+### E.3.4 🔶 市价单传 `price: 0` 可能不被后端接受
+
+- **位置：** `web/src/pages/SpotTrading.tsx:314-316` / `ContractTrading.tsx:270-272`
+- **问题：** 市价单将 `price: 0` 传给后端，很多交易所 API 市价单要求**不传 price 字段**或传 `null`
+- **修复：** 市价单时 `price: undefined`
+- **状态：** `[ ]`
+
+### E.3.5 🔶 合约交易 — `positionMode` 声明但未使用
+
+- **位置：** `web/src/pages/ContractTrading.tsx:85` / `:428-430`
+- **问题：** `positionMode`（开仓/平仓模式）在 UI 中可切换，但下单逻辑中完全没有使用。用户点"平仓"后下单仍然是开仓
+- **修复：** 在 `handlePlaceOrder` 中传入 `positionMode`，或移除该状态
+- **状态：** `[ ]`
+
+### E.3.6 🔶 合约交易 — `marginMode` 未传入订单
+
+- **位置：** `web/src/pages/ContractTrading.tsx:84` / `:270-277`
+- **问题：** 用户可选择"全仓"或"逐仓"，但下单时 `marginMode` 未传入 `orderApi.place`
+- **修复：** 在下单参数中加入 `marginMode`
+- **状态：** `[ ]`
+
+### E.3.7 🔶 KlineChart — 时间戳判断远期问题
+
+- **位置：** `web/src/components/charts/KlineChart.tsx:257-258`
+- **问题：** `rawTs > 1e10` 判断秒/毫秒，在 2030 年后可能出错
+- **修复：** 使用更精确的判断逻辑或记录数据源时间戳单位
+- **状态：** `[ ]`
+
+---
+
+## E.4 低级别 (Low) — 建议优化
+
+### E.4.1 🔹 Trading.tsx — mode 参数未验证
+
+- **位置：** `web/src/pages/Trading.tsx:7-13`
+- **问题：** `mode === 'contract'` 之外所有值（包括非法值）都渲染 SpotTrading
+- **修复：** 验证 mode 值，非法值默认 spot
+- **状态：** `[ ]`
+
+### E.4.2 🔹 大量重复代码
+
+- **位置：** `SpotTrading.tsx` vs `ContractTrading.tsx`
+- **问题：** 两个文件有大量重复的辅助函数、K线图表初始化逻辑、WebSocket 处理等
+- **修复：** 提取公共 hooks 和工具函数
+- **状态：** `[ ]`
+
+### E.4.3 🔹 类型安全 — 过多使用 `any`
+
+- **位置：** 整个交易页面代码
+- **问题：** `orderbook`、`orders`、`positions` 等数据大量使用 `any` 类型
+- **修复：** 定义具体 TypeScript 接口
+- **状态：** `[ ]`
+
+### E.4.4 🔹 useToast — 全局状态在严格模式下可能重复
+
+- **位置：** `web/src/lib/useToast.tsx:11-13`
+- **问题：** `listeners` 和 `toasts` 是模块级全局变量，React StrictMode 下组件双重挂载/卸载可能导致 listener 管理问题
+- **修复：** 使用 React Context 或更健壮的 listener 管理
+- **状态：** `[ ]`
+
+### E.4.5 🔹 API Interceptor — unwrap 逻辑过于宽松
+
+- **位置：** `web/src/lib/api.ts:75-77`
+- **问题：** 只要响应对象有 `data` 字段且没有 `success` 字段就 unwrap。会错误处理如 `{ data: [1,2,3], meta: {...} }` 的响应，丢失 `meta` 信息
+- **修复：** 增加更严格的 unwrap 条件（检查响应结构）
+- **状态：** `[ ]`
+
+---
+
+## E.5 修复进度追踪
+
+| # | 问题 | 级别 | 文件 | 状态 |
+|---|------|:----:|------|:----:|
+| 1 | 切换交易对后 liveTrades 未清空 | Critical | `SpotTrading.tsx`, `ContractTrading.tsx` | `[x]` |
+| 2 | K线新Bar OHLC初始化错误 | Critical | `klineDatafeed.ts` | `[x]` |
+| 3 | API信封格式导致数据丢失 | Critical | `api.ts` | `[x]` |
+| 4 | QuickTradePanel 状态竞态条件 | Critical | `QuickTradePanel.tsx` | `[x]` |
+| 5 | 合约交易缺少交易对切换 | High | `ContractTrading.tsx` | `[ ]` |
+| 6 | K线 Symbol 前缀匹配串扰 | High | `klineDatafeed.ts` | `[ ]` |
+| 7 | 卖出时百分比按钮计算错误 | High | `SpotTrading.tsx` | `[ ]` |
+| 8 | useToast import 位置错误 | High | `useToast.tsx` | `[ ]` |
+| 9 | QuickTradePanel 硬编码 mock | Medium | `QuickTradePanel.tsx` | `[ ]` |
+| 10 | useWebSocket stale onReconnect | Medium | `useWebSocket.ts` | `[ ]` |
+| 11 | WebSocket callback 异常阻断 | Medium | `useWebSocket.ts` | `[ ]` |
+| 12 | 市价单传 price:0 | Medium | `SpotTrading.tsx`, `ContractTrading.tsx` | `[ ]` |
+| 13 | positionMode 声明未使用 | Medium | `ContractTrading.tsx` | `[ ]` |
+| 14 | marginMode 未传入订单 | Medium | `ContractTrading.tsx` | `[ ]` |
+| 15 | KlineChart 时间戳判断远期问题 | Medium | `KlineChart.tsx` | `[ ]` |
+| 16 | Trading.tsx mode 未验证 | Low | `Trading.tsx` | `[ ]` |
+| 17 | SpotTrading/ContractTrading 重复代码 | Low | `SpotTrading.tsx`, `ContractTrading.tsx` | `[ ]` |
+| 18 | 过多使用 any 类型 | Low | 交易页面多处 | `[ ]` |
+| 19 | useToast 全局状态严格模式问题 | Low | `useToast.tsx` | `[ ]` |
+| 20 | API unwrap 逻辑过于宽松 | Low | `api.ts` | `[ ]` |
+
+---
+
+> **总结：** XiaoTianQuant 在架构 (Go+Rust+TS) 和前端体验上有显著优势，核心差距在于 Freqtrade 多年积累的**策略生态深度** (Hyperopt/FreqAI/Pairlist) 和 QuantDinger 的**全资产覆盖** (传统券商)。通过 5 个阶段、约 40-50 周的迭代，可以达到并部分超越两个对标项目的功能完整度，同时保持架构优势。

@@ -190,7 +190,11 @@ export const portfolioApi = {
 export const marketApi = {
   klines: (symbol: string, interval = '1h', limit = 200, from?: number, to?: number) =>
     api.get<any>('/market/klines', { params: { symbol, interval, limit, from, to } })
-      .then((d: any) => Array.isArray(d?.klines) ? d.klines : Array.isArray(d) ? d : []),
+      .then((d: any) => {
+        // 兼容 envelope 格式: {success: true, data: {klines: [...]}}
+        const klines = d?.klines ?? d?.data?.klines ?? (Array.isArray(d) ? d : [])
+        return Array.isArray(klines) ? klines : []
+      }),
   orderBook: (symbol: string, depth = 20) =>
     api.get<any>('/market/orderbook', { params: { symbol, depth } }),
   trades: (symbol: string, limit = 50) =>

@@ -14,9 +14,8 @@ import { api } from './api'
 /* ── Period → backend interval mapping ── */
 const PERIOD_MAP: Record<string, string> = {
   '1minute': '1m', '3minute': '3m', '5minute': '5m', '15minute': '15m',
-  '30minute': '30m', '1hour': '1h', '2hour': '2h', '4hour': '4h',
-  '6hour': '6h', '8hour': '8h', '12hour': '12h',
-  '1day': '1d', '3day': '3d', '1week': '1w', '1month': '1M',
+  '30minute': '30m', '1hour': '1h', '4hour': '4h',
+  '1day': '1d', '1week': '1w', '1month': '1M',
 }
 
 /* ── Period → duration in milliseconds ── */
@@ -27,13 +26,8 @@ const PERIOD_MS: Record<string, number> = {
   '15minute': 900_000,
   '30minute': 1_800_000,
   '1hour': 3_600_000,
-  '2hour': 7_200_000,
   '4hour': 14_400_000,
-  '6hour': 21_600_000,
-  '8hour': 28_800_000,
-  '12hour': 43_200_000,
   '1day': 86_400_000,
-  '3day': 259_200_000,
   '1week': 604_800_000,
   '1month': 2_592_000_000,
 }
@@ -173,15 +167,17 @@ export function handlePriceTick(symbol: string, lastPrice: number, volume: numbe
 
     let bar = entry.liveBar
     if (!bar || bar.timestamp !== alignedTs) {
-      // Use history data as base so open/high/low reflect the full period
-      const hist = entry.historyLastBar
+      // New period bar — initialize from historyLastBar if it covers the same
+      // period (Binance /market/klines returns the current forming bar with
+      // partial data), otherwise start fresh from the current tick.
+      const useHist = entry.historyLastBar && entry.historyLastBar.timestamp === alignedTs
       bar = {
         timestamp: alignedTs,
-        open: hist.open,
-        high: Math.max(hist.high, lastPrice),
-        low: Math.min(hist.low, lastPrice),
+        open: useHist ? entry.historyLastBar.open : lastPrice,
+        high: useHist ? Math.max(entry.historyLastBar.high, lastPrice) : lastPrice,
+        low: useHist ? Math.min(entry.historyLastBar.low, lastPrice) : lastPrice,
         close: lastPrice,
-        volume: hist.volume,
+        volume: useHist ? (entry.historyLastBar.volume ?? 0) + volume : volume,
       }
     } else {
       bar = {
@@ -197,11 +193,16 @@ export function handlePriceTick(symbol: string, lastPrice: number, volume: numbe
     entry.lastBarTimestamp = Math.max(entry.lastBarTimestamp, bar.timestamp)
 
     if (isNewBar) {
-      // A new period's bar — push via callback (klinecharts creates a new bar)
-      entry.lastPushTs = now
-      if (entry.pushTimer) { clearTimeout(entry.pushTimer); entry.pushTimer = null }
-      entry.pendingBar = null
-      entry.callbacks.forEach((cb) => { try { cb(bar) } catch {} })
+      // If this bar's timestamp matches the last historical bar, the chart
+      // already has it from getHistoryKLineData — no need to push a duplicate.
+      // Subsequent ticks (isNewBar === false) will use updateData / callback.
+      if (!(entry.historyLastBar && bar.timestamp === entry.historyLastBar.timestamp)) {
+        // Genuinely new period — push via callback (klinecharts creates a new bar)
+        entry.lastPushTs = now
+        if (entry.pushTimer) { clearTimeout(entry.pushTimer); entry.pushTimer = null }
+        entry.pendingBar = null
+        entry.callbacks.forEach((cb) => { try { cb(bar) } catch {} })
+      }
       return
     }
 

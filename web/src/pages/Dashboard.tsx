@@ -437,8 +437,13 @@ function PnLBarChart({ data, isLoading }: { data?: { time: number; value: number
 
 /* ── Strategy Row ── */
 function StrategyRow({ s }: { s: StrategyConfig }) {
-  const pnl = 0
+  const pnl = (s as any).total_pnl || 0
   const isRunning = s.status === 'running'
+  // CRA 参数展示
+  const craParams = (s as any)
+  const direction = craParams.trade_direction === 'long' ? '多' : craParams.trade_direction === 'short' ? '空' : '双向'
+  const tpMethod = craParams.take_profit_method === 'full' ? '全仓止盈' : craParams.take_profit_method === 'tail' ? '尾单' : craParams.take_profit_method === 'head_tail' ? '首尾' : craParams.take_profit_method === 'moving' ? '移动' : ''
+  const stratDesc = craParams.order_count ? `${craParams.order_count}单·首${craParams.first_order_amount || '-'}U` : ''
   return (
     <div className="flex items-center gap-3 rounded-lg border border-transparent px-3 py-2.5 transition-colors hover:border-[#1c1c1c] hover:bg-white/[0.03]">
       <div
@@ -451,7 +456,18 @@ function StrategyRow({ s }: { s: StrategyConfig }) {
         <div className="truncate text-sm font-medium text-white">{s.name}</div>
         <div className="text-[10px] text-[#555555]">
           {s.coin} · {s.leverage}x · {s.strategy_type}
+          {craParams.trade_direction && (
+            <span className={cn('ml-1.5 px-1 rounded text-[9px]',
+              craParams.trade_direction === 'long' ? 'bg-quant-green/10 text-quant-green' :
+              craParams.trade_direction === 'short' ? 'bg-quant-red/10 text-quant-red' :
+              'bg-quant-gold/10 text-quant-gold'
+            )}>{direction}</span>
+          )}
+          {tpMethod && <span className="ml-1 text-[#444444]">· {tpMethod}</span>}
         </div>
+        {stratDesc && (
+          <div className="text-[9px] text-[#444444] mt-0.5">{stratDesc} · 补差{craParams.add_position_spread || '-'}% · 止盈{craParams.take_profit_ratio || '-'}%</div>
+        )}
       </div>
       <div className="text-right">
         <div
@@ -472,6 +488,13 @@ function StrategyRow({ s }: { s: StrategyConfig }) {
         >
           {isRunning ? '运行中' : s.status}
         </span>
+        {craParams.open_indicator && (
+          <div className="text-[9px] text-[#444444] mt-0.5">
+            {craParams.open_indicator === 'macd_golden' ? 'MACD金叉' :
+             craParams.open_indicator === 'macd_death' ? 'MACD死叉' :
+             craParams.open_indicator === 'ema' ? 'EMA拐点' : '市价'}
+          </div>
+        )}
       </div>
     </div>
   )
