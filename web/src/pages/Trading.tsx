@@ -434,8 +434,8 @@ export function Trading() {
         {/* ORDERBOOK + TRADES (270px) */}
         <div className="bg-quant-bg-secondary flex flex-col overflow-hidden min-h-0">
           <div className="h-9 shrink-0 border-b border-quant-border flex items-center px-3 gap-3">
-            <span className={cn("text-xs font-semibold", obTab === "book" ? "text-foreground" : "text-muted-foreground cursor-pointer hover:text-foreground")} onClick={() => setObTab("book")}>订单簿</span>
-            <span className={cn("text-xs", obTab === "trades" ? "text-foreground font-semibold" : "text-muted-foreground cursor-pointer hover:text-foreground")} onClick={() => setObTab("trades")}>最新成交</span>
+            <span className="text-xs font-semibold text-foreground">订单簿</span>
+            <span className="text-xs text-muted-foreground">最新成交</span>
             <div className="ml-auto flex gap-1">
               {["0.1","1","10"].map(function(p) { return (
                 <span key={p} className={cn("text-[10px] px-1 py-0.5 rounded cursor-pointer", obPrecision === p ? "bg-quant-hover text-foreground" : "text-muted-foreground hover:text-foreground")} onClick={() => setObPrecision(p)}>{p}</span>
@@ -492,6 +492,29 @@ export function Trading() {
                 </>
               ) : (
                 <div className="py-8"><EmptyState title="暂无订单簿数据" description="等待市场数据连接..." /></div>
+              )}
+            </div>
+
+            {/* Trades list below orderbook */}
+            <div className="h-[150px] shrink-0 border-t border-quant-border overflow-y-auto">
+              <div className="flex text-[10px] text-muted-foreground px-3 py-1 border-b border-quant-border sticky top-0 bg-quant-bg-secondary">
+                <span className="flex-1">时间</span>
+                <span className="flex-1 text-right">价格</span>
+                <span className="flex-1 text-right">数量</span>
+              </div>
+              {displayTrades.slice(0, 20).map(function(t, i) {
+                return (
+                  <div key={t.id || i} className="flex px-3 py-0.5 text-[11px] font-mono">
+                    <span className="flex-1 text-muted-foreground">{formatTime(t.time)}</span>
+                    <span className={cn("flex-1 text-right", t.side === "buy" ? "text-quant-green" : "text-quant-red")}>
+                      {formatPrice(t.price)}
+                    </span>
+                    <span className="flex-1 text-right text-muted-foreground">{t.quantity.toFixed(4)}</span>
+                  </div>
+                );
+              })}
+              {!displayTrades.length && (
+                <div className="py-4"><EmptyState title="暂无成交记录" description="等待实时成交数据..." /></div>
               )}
             </div>
 
