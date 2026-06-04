@@ -706,11 +706,7 @@ export function Trading() {
           <CollapsiblePeriodBar
             intervals={INTERVALS}
             current={interval}
-            onSelect={(i) => {
-              setInterval(i)
-              // Recreate chart on period change (SolidJS setPeriod bug)
-              initChart()
-            }}
+            onSelect={setInterval}
           />
           <div ref={chartRef} className="flex-1 min-h-0" />
         </div>
