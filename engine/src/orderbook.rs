@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// Order side
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,30 +90,47 @@ pub struct OrderBook {
     pub bids: BTreeMap<OrderedFloat, Vec<Order>>,
     /// Asks: price -> orders at that price. Natural order (lowest first).
     pub asks: BTreeMap<OrderedFloat, Vec<Order>>,
+    /// Index for O(1) order lookup by ID: order_id -> (side, price_key, position_hint)
+    order_index: HashMap<u64, (Side, OrderedFloat)>,
     pub trade_count: u64,
     pub order_count: u64,
 }
 
-/// Wrapper for ordered float keys in BTreeMap
+/// Fixed-point price precision: 8 decimal places.
+/// e.g. $68000.12345678 → 6800012345678
+const PRICE_PRECISION: u64 = 100_000_000;
+
+/// Wrapper for ordered fixed-point price keys in BTreeMap.
+/// Replaces the previous f64::to_bits() approach which is unsafe for
+/// ordering because NaN / -0 / +0 have non-unique bit patterns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct OrderedFloat(u64);
 
 impl OrderedFloat {
+    /// Convert an f64 price to a fixed-point OrderedFloat key.
+    /// Panics if the price is NaN, infinite, or negative (for Sell side checks
+    /// are done by the caller via can_match in the matching engine).
     pub fn from_price(price: f64, side: Side) -> Self {
-        let bits = price.to_bits();
-        // For bids we want descending order, so invert bits
+        assert!(
+            price.is_finite(),
+            "price must be finite, got {}",
+            price
+        );
+        let fixed = (price.abs() * PRICE_PRECISION as f64).round() as u64;
+        // For bids we want descending order, so invert the key
         match side {
-            Side::Buy => OrderedFloat(!bits),
-            Side::Sell => OrderedFloat(bits),
+            Side::Buy => OrderedFloat(!fixed),
+            Side::Sell => OrderedFloat(fixed),
         }
     }
 
+    /// Recover the original f64 price from the fixed-point key.
     pub fn to_price(&self, side: Side) -> f64 {
-        let bits = match side {
+        let fixed = match side {
             Side::Buy => !self.0,
             Side::Sell => self.0,
         };
-        f64::from_bits(bits)
+        fixed as f64 / PRICE_PRECISION as f64
     }
 }
 
@@ -123,6 +140,7 @@ impl OrderBook {
             symbol,
             bids: BTreeMap::new(),
             asks: BTreeMap::new(),
+            order_index: HashMap::new(),
             trade_count: 0,
             order_count: 0,
         }
@@ -138,6 +156,8 @@ impl OrderBook {
             .as_nanos() as u64;
 
         let key = OrderedFloat::from_price(order.price, order.side);
+        self.order_index.insert(order.id, (order.side, key));
+
         match order.side {
             Side::Buy => {
                 self.bids.entry(key).or_default().push(order);
@@ -149,25 +169,18 @@ impl OrderBook {
         self.order_count
     }
 
-    /// Remove an order by ID
+    /// Remove an order by ID (O(log n) via index).
     pub fn cancel_order(&mut self, order_id: u64) -> Option<Order> {
-        // Search bids
-        for (_, orders) in self.bids.iter_mut() {
-            if let Some(pos) = orders.iter().position(|o| o.id == order_id) {
-                let mut order = orders.remove(pos);
-                order.status = OrderStatus::Cancelled;
-                return Some(order);
-            }
-        }
-        // Search asks
-        for (_, orders) in self.asks.iter_mut() {
-            if let Some(pos) = orders.iter().position(|o| o.id == order_id) {
-                let mut order = orders.remove(pos);
-                order.status = OrderStatus::Cancelled;
-                return Some(order);
-            }
-        }
-        None
+        let &(side, key) = self.order_index.get(&order_id)?;
+        let orders = match side {
+            Side::Buy => self.bids.get_mut(&key)?,
+            Side::Sell => self.asks.get_mut(&key)?,
+        };
+        let pos = orders.iter().position(|o| o.id == order_id)?;
+        let mut order = orders.remove(pos);
+        order.status = OrderStatus::Cancelled;
+        self.order_index.remove(&order_id);
+        Some(order)
     }
 
     /// Get best bid price

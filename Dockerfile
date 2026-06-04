@@ -13,7 +13,7 @@ COPY web/ ./
 RUN npm run build
 
 # ── Stage 2: Go backend builder ────────────────────────────────────
-FROM golang:1.25-alpine AS go-builder
+FROM golang:1.23-alpine AS go-builder
 
 RUN apk add --no-cache git ca-certificates tzdata
 

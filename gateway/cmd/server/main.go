@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/app"
@@ -19,7 +21,7 @@ import (
 
 func main() {
 	// ── Load configuration ──
-	cfg, err := config.Load("gateway.yaml")
+	cfg, err := config.Load("config.yaml")
 	if err != nil {
 		log.Printf("WARNING: Config load failed, using defaults: %v", err)
 		cfg = config.Default()
@@ -107,146 +109,150 @@ func main() {
 			adminG.GET("/users/:id", handler.AdminGetUser)
 			adminG.PUT("/users/:id", handler.AdminUpdateUser)
 			adminG.GET("/stats", handler.EnhancedAdminStats)
-		adminG.GET("/summary", handler.AdminDashboardSummary)
-		adminG.GET("/audit-log", handler.AdminAuditLog)
-		adminG.GET("/activity", handler.AdminRecentActivity)
-		adminG.POST("/users/:id/disable", handler.AdminUserDisable)
-		adminG.POST("/users/:id/enable", handler.AdminUserEnable)
+			adminG.GET("/summary", handler.AdminDashboardSummary)
+			adminG.GET("/audit-log", handler.AdminAuditLog)
+			adminG.GET("/activity", handler.AdminRecentActivity)
+			adminG.POST("/users/:id/disable", handler.AdminUserDisable)
+			adminG.POST("/users/:id/enable", handler.AdminUserEnable)
 		}
 
+		// ── Authenticated routes ──
+		private := api.Group("")
+		private.Use(middleware.AuthRequired())
+
 		// ── Config ──
-		api.GET("/config", handler.GetConfig)
-		api.PUT("/config", handler.SaveConfig)
-		api.POST("/config", handler.SaveConfig)
-		api.GET("/strategies/global", handler.GetGlobalStrategy)
-		api.PUT("/strategies/global", handler.SaveGlobalStrategy)
-		api.POST("/exchange/save", handler.ExchangeSave)
-		api.POST("/exchange/test", handler.ExchangeTest)
-		api.POST("/exchange/default", handler.ExchangeDefault)
-		api.GET("/exchange/status", handler.ExchangeStatus)
-		api.GET("/exchanges/configured", handler.ExchangesConfigured)
-		api.POST("/ai/save", handler.AISave)
-		api.POST("/ai/test", handler.AITest)
-		api.POST("/ai/default", handler.AIDefault)
-		api.POST("/restart", handler.Restart)
+		private.GET("/config", handler.GetConfig)
+		private.PUT("/config", handler.SaveConfig)
+		private.POST("/config", handler.SaveConfig)
+		private.GET("/strategies/global", handler.GetGlobalStrategy)
+		private.PUT("/strategies/global", handler.SaveGlobalStrategy)
+		private.POST("/exchange/save", handler.ExchangeSave)
+		private.POST("/exchange/test", handler.ExchangeTest)
+		private.POST("/exchange/default", handler.ExchangeDefault)
+		private.GET("/exchange/status", handler.ExchangeStatus)
+		private.GET("/exchanges/configured", handler.ExchangesConfigured)
+		private.POST("/ai/save", handler.AISave)
+		private.POST("/ai/test", handler.AITest)
+		private.POST("/ai/default", handler.AIDefault)
+		private.POST("/restart", handler.Restart)
 
 		// ── Orders ──
-		api.GET("/orders", handler.GetOrders)
-		api.POST("/orders", handler.PlaceOrder)
-		api.POST("/orders/cancel-all", handler.CancelAllOrders)
-		api.DELETE("/orders/:order_id", handler.CancelOrder)
-		api.POST("/orders/:order_id/cancel", handler.CancelOrder)
-		api.GET("/orders/history", handler.OrderHistory)
+		private.GET("/orders", handler.GetOrders)
+		private.POST("/orders", handler.PlaceOrder)
+		private.POST("/orders/cancel-all", handler.CancelAllOrders)
+		private.DELETE("/orders/:order_id", handler.CancelOrder)
+		private.POST("/orders/:order_id/cancel", handler.CancelOrder)
+		private.GET("/orders/history", handler.OrderHistory)
 
 		// ── Account ──
-		api.GET("/account/balance", handler.GetAccountBalance)
+		private.GET("/account/balance", handler.GetAccountBalance)
 
 		// ── Trades ──
-		api.GET("/trades", handler.GetTradeHistory)
+		private.GET("/trades", handler.GetTradeHistory)
 
 		// ── Market ──
 		api.GET("/klines/:symbol", handler.GetKlines)
-			api.GET("/market/klines", handler.MarketKlines)
+		api.GET("/market/klines", handler.MarketKlines)
 		api.GET("/market/orderbook", handler.OrderBook)
 		api.GET("/market/trades", handler.MarketTrades)
-		api.POST("/backtest/run", handler.RunBacktest)
-		api.POST("/native/backtest", handler.NativeBacktest)
+		private.POST("/backtest/run", handler.RunBacktest)
+		private.POST("/native/backtest", handler.NativeBacktest)
 		api.GET("/symbols/search", handler.SymbolSearch)
 		api.GET("/market/snapshot", handler.MarketSnapshot)
 		api.GET("/status", handler.Status)
 
 		// ── Notifications ──
-		api.GET("/notifications", handler.GetNotifications)
-		api.GET("/notifications/unread-count", handler.GetUnreadCount)
-		api.POST("/notifications/:id/read", handler.MarkNotificationRead)
-		api.POST("/notifications/read-all", handler.MarkAllNotificationsRead)
-		api.DELETE("/notifications", handler.ClearNotifications)
-		api.GET("/chart", handler.Chart)
+		private.GET("/notifications", handler.GetNotifications)
+		private.GET("/notifications/unread-count", handler.GetUnreadCount)
+		private.POST("/notifications/:id/read", handler.MarkNotificationRead)
+		private.POST("/notifications/read-all", handler.MarkAllNotificationsRead)
+		private.DELETE("/notifications", handler.ClearNotifications)
+		private.GET("/chart", handler.Chart)
 
 		// ── Data Management ──
-		api.POST("/data/download", handler.DataDownload)
-		api.GET("/data/download/:jobId", handler.DataDownloadStatus)
-		api.GET("/data/coverage", handler.DataCoverage)
-		api.GET("/data/load", handler.DataLoad)
-		api.GET("/data/validate", handler.DataValidate)
-		api.DELETE("/data/prune", handler.DataPrune)
-		api.GET("/data/symbols", handler.DataSymbols)
-		api.GET("/data/intervals", handler.DataIntervals)
+		private.POST("/data/download", handler.DataDownload)
+		private.GET("/data/download/:jobId", handler.DataDownloadStatus)
+		private.GET("/data/coverage", handler.DataCoverage)
+		private.GET("/data/load", handler.DataLoad)
+		private.GET("/data/validate", handler.DataValidate)
+		private.DELETE("/data/prune", handler.DataPrune)
+		private.GET("/data/symbols", handler.DataSymbols)
+		private.GET("/data/intervals", handler.DataIntervals)
 
 		// ── Strategy ──
-		api.GET("/strategies/configs", handler.GetStrategyConfigs)
-		api.GET("/strategies/configs/:id", handler.GetStrategyConfig)
-		api.POST("/strategies/configs", handler.CreateStrategyConfig)
-		api.PUT("/strategies/configs/:id", handler.UpdateStrategyConfig)
-		api.DELETE("/strategies/configs/:id", handler.DeleteStrategyConfig)
-		api.POST("/strategies/configs/batch-start", handler.BatchStartConfigs)
-		api.POST("/strategies/configs/batch-stop", handler.BatchStopConfigs)
-		api.POST("/strategies/configs/:id/start", handler.StartStrategyConfig)
-		api.POST("/strategies/configs/:id/stop", handler.StopStrategyConfig)
-		api.GET("/strategies/logs", handler.GetStrategyLogs)
-		api.DELETE("/strategies/logs", handler.ClearStrategyLogs)
-		api.GET("/strategies/templates", handler.GetTemplates)
-		api.POST("/strategies/templates", handler.CreateTemplate)
-		api.DELETE("/strategies/templates/:id", handler.DeleteTemplate)
-			api.GET("/strategies/spot", handler.GetStrategiesSpot)
-			api.GET("/strategies/contract", handler.GetStrategiesContract)
-			api.GET("/strategies/ranking", handler.GetStrategiesRanking)
+		private.GET("/strategies/configs", handler.GetStrategyConfigs)
+		private.GET("/strategies/configs/:id", handler.GetStrategyConfig)
+		private.POST("/strategies/configs", handler.CreateStrategyConfig)
+		private.PUT("/strategies/configs/:id", handler.UpdateStrategyConfig)
+		private.DELETE("/strategies/configs/:id", handler.DeleteStrategyConfig)
+		private.POST("/strategies/configs/batch-start", handler.BatchStartConfigs)
+		private.POST("/strategies/configs/batch-stop", handler.BatchStopConfigs)
+		private.POST("/strategies/configs/:id/start", handler.StartStrategyConfig)
+		private.POST("/strategies/configs/:id/stop", handler.StopStrategyConfig)
+		private.GET("/strategies/logs", handler.GetStrategyLogs)
+		private.DELETE("/strategies/logs", handler.ClearStrategyLogs)
+		private.GET("/strategies/templates", handler.GetTemplates)
+		private.POST("/strategies/templates", handler.CreateTemplate)
+		private.DELETE("/strategies/templates/:id", handler.DeleteTemplate)
+		private.GET("/strategies/spot", handler.GetStrategiesSpot)
+		private.GET("/strategies/contract", handler.GetStrategiesContract)
+		private.GET("/strategies/ranking", handler.GetStrategiesRanking)
 
-			// ── Settings ──
-			settingsG := api.Group("/settings")
-			{
-				settingsG.GET("/agent/models", handler.SettingsAgentModels)
-				settingsG.GET("/defaults", handler.SettingsDefaultsGet)
-				settingsG.POST("/defaults", handler.SettingsDefaultsSave)
-				settingsG.POST("/ui", handler.SettingsUISave)
-				settingsG.POST("/exchange/:id/test", handler.SettingsExchangeTest)
-				settingsG.PUT("/exchange/:id", handler.SettingsExchangeSave)
-				settingsG.POST("/ai/:id/test", handler.SettingsAITest)
-				settingsG.PUT("/ai/:id", handler.SettingsAISave)
-			}
+		// ── Settings ──
+		settingsG := private.Group("/settings")
+		{
+			settingsG.GET("/agent/models", handler.SettingsAgentModels)
+			settingsG.GET("/defaults", handler.SettingsDefaultsGet)
+			settingsG.POST("/defaults", handler.SettingsDefaultsSave)
+			settingsG.POST("/ui", handler.SettingsUISave)
+			settingsG.POST("/exchange/:id/test", handler.SettingsExchangeTest)
+			settingsG.PUT("/exchange/:id", handler.SettingsExchangeSave)
+			settingsG.POST("/ai/:id/test", handler.SettingsAITest)
+			settingsG.PUT("/ai/:id", handler.SettingsAISave)
+		}
 
-			// ── AI ──
-		api.GET("/ai/snapshot", handler.AISnapshot)
-		api.GET("/ai/klines", handler.AIKlines)
-		api.POST("/ai/generate", handler.AIGenerate)
-		api.POST("/strategies/ai-generate", handler.StrategyAIGenerate)
-		api.POST("/ai/multi-agent", handler.AIMultiAgent)
-		api.POST("/ai/backtest", handler.AIBacktest)
-		api.POST("/ai/optimize", handler.AIOptimize)
-		api.POST("/ai/deploy", handler.AIDeploy)
-		api.POST("/ai/validate", handler.AIValidate)
-		api.POST("/ai/fix", handler.AIFix)
-		api.POST("/ai/analyze", handler.AIAnalyze)
-		api.GET("/ai/quickscan", handler.AIQuickScan)
-		api.POST("/ai/chat", handler.AIChat)
+		// ── AI ──
+		private.GET("/ai/snapshot", handler.AISnapshot)
+		private.GET("/ai/klines", handler.AIKlines)
+		private.POST("/ai/generate", handler.AIGenerate)
+		private.POST("/strategies/ai-generate", handler.StrategyAIGenerate)
+		private.POST("/ai/multi-agent", handler.AIMultiAgent)
+		private.POST("/ai/backtest", handler.AIBacktest)
+		private.POST("/ai/optimize", handler.AIOptimize)
+		private.POST("/ai/deploy", handler.AIDeploy)
+		private.POST("/ai/validate", handler.AIValidate)
+		private.POST("/ai/fix", handler.AIFix)
+		private.POST("/ai/analyze", handler.AIAnalyze)
+		private.GET("/ai/quickscan", handler.AIQuickScan)
+		private.POST("/ai/chat", handler.AIChat)
 
-	// ── ML ──
-	api.GET("/ml/health", handler.MLHealth)
-	api.POST("/ml/train", handler.MLTrain)
-	api.POST("/ml/predict", handler.MLPredict)
-	api.GET("/ml/models", handler.MLModels)
-	api.GET("/ml/models/:id", handler.MLModelDetail)
-	api.DELETE("/ml/models/:id", handler.MLDeleteModel)
-	api.GET("/ml/models/:id/importance", handler.MLFeatureImportance)
-	api.POST("/ml/features", handler.MLGenerateFeatures)
-api.POST("/ml/deploy", handler.MLDeployStrategy)
-api.GET("/ml/strategy-models", handler.MLStrategyModels)
-		api.POST("/ai/models/config", handler.AIModelConfigSave)
-		api.GET("/models/list", handler.AIModelsList)
-		api.GET("/ai/models", handler.AIModels)
-		api.GET("/auto-trade/config", handler.AIAutoTradeGet)
-		api.PUT("/auto-trade/config", handler.AIAutoTradeSave)
-		api.POST("/analysis/start", handler.AIAnalysisStart)
-		api.GET("/analysis/result", handler.AIAnalysisResult)
-		api.POST("/chat/send", handler.ChatSend)
+		// ── ML ──
+		private.GET("/ml/health", handler.MLHealth)
+		private.POST("/ml/train", handler.MLTrain)
+		private.POST("/ml/predict", handler.MLPredict)
+		private.GET("/ml/models", handler.MLModels)
+		private.GET("/ml/models/:id", handler.MLModelDetail)
+		private.DELETE("/ml/models/:id", handler.MLDeleteModel)
+		private.GET("/ml/models/:id/importance", handler.MLFeatureImportance)
+		private.POST("/ml/features", handler.MLGenerateFeatures)
+		private.POST("/ml/deploy", handler.MLDeployStrategy)
+		private.GET("/ml/strategy-models", handler.MLStrategyModels)
+		private.POST("/ai/models/config", handler.AIModelConfigSave)
+		private.GET("/models/list", handler.AIModelsList)
+		private.GET("/ai/models", handler.AIModels)
+		private.GET("/auto-trade/config", handler.AIAutoTradeGet)
+		private.PUT("/auto-trade/config", handler.AIAutoTradeSave)
+		private.POST("/analysis/start", handler.AIAnalysisStart)
+		private.GET("/analysis/result", handler.AIAnalysisResult)
+		private.POST("/chat/send", handler.ChatSend)
 
 		// ── Agent ──
-		agent := api.Group("/agent")
+		agent := private.Group("/agent")
 		{
 			agent.GET("/tokens", handler.GetAgentTokens)
 			agent.POST("/tokens", handler.CreateAgentToken)
 			agent.DELETE("/tokens/:id", handler.DeleteAgentToken)
-				agent.GET("/audit-log", handler.GetAgentAuditLog)
+			agent.GET("/audit-log", handler.GetAgentAuditLog)
 			agent.GET("/cc-switch", handler.CCSwitchStatus)
 			agent.POST("/cc-switch/configure", handler.CCSwitchConfigure)
 			agent.POST("/cc-switch/start", handler.CCSwitchStart)
@@ -259,18 +265,18 @@ api.GET("/ml/strategy-models", handler.MLStrategyModels)
 		}
 
 		// ── Dashboard ──
-		api.GET("/dashboard/summary", handler.DashboardSummary)
+		private.GET("/dashboard/summary", handler.DashboardSummary)
 
 		// ── Portfolio (new) ──
-		api.GET("/portfolio/summary", handler.PortfolioSummary)
-		api.GET("/portfolio/positions", handler.PortfolioPositions)
-		api.GET("/portfolio/snapshots", handler.PortfolioSnapshots)
-		api.GET("/portfolio/calendar", handler.PortfolioCalendar)
-		api.GET("/exchange/usdcny", handler.UsdCnyRate)
+		private.GET("/portfolio/summary", handler.PortfolioSummary)
+		private.GET("/portfolio/positions", handler.PortfolioPositions)
+		private.GET("/portfolio/snapshots", handler.PortfolioSnapshots)
+		private.GET("/portfolio/calendar", handler.PortfolioCalendar)
+		private.GET("/exchange/usdcny", handler.UsdCnyRate)
 
 		// ── Settings ──
-		api.GET("/settings/currency", handler.SettingsCurrencyGet)
-		api.PUT("/settings/currency", handler.SettingsCurrencySet)
+		private.GET("/settings/currency", handler.SettingsCurrencyGet)
+		private.PUT("/settings/currency", handler.SettingsCurrencySet)
 
 		// ── Watchdog (new) ──
 		api.GET("/health", handler.HealthCheck)
@@ -316,13 +322,13 @@ api.GET("/ml/strategy-models", handler.MLStrategyModels)
 			comm.GET("/comments/:id", community.GetComments)
 			comm.POST("/comments/:id", community.AddComment)
 
-		// ── Strategy Marketplace ──
-		comm.GET("/strategies", community.MarketStrategies)
-		comm.GET("/strategies/leaderboard", community.StrategyLeaderboard)
-		comm.GET("/strategies/:id", community.StrategyDetail)
-		comm.POST("/strategies/publish", community.PublishStrategy)
-		comm.POST("/strategies/:id/comment", community.AddStrategyComment)
-		comm.POST("/strategies/:id/rate", community.RateStrategy)
+			// ── Strategy Marketplace ──
+			comm.GET("/strategies", community.MarketStrategies)
+			comm.GET("/strategies/leaderboard", community.StrategyLeaderboard)
+			comm.GET("/strategies/:id", community.StrategyDetail)
+			comm.POST("/strategies/publish", community.PublishStrategy)
+			comm.POST("/strategies/:id/comment", community.AddStrategyComment)
+			comm.POST("/strategies/:id/rate", community.RateStrategy)
 		}
 
 	}
@@ -348,11 +354,22 @@ api.GET("/ml/strategy-models", handler.MLStrategyModels)
 	appCtx.Logger.Info("XiaoTianQuant Gateway starting", "port", port)
 
 	// ── Start server with graceful shutdown ──
+	srv := &http.Server{
+		Addr:    "0.0.0.0:" + port,
+		Handler: r,
+	}
+
+	// Wait for shutdown signal in a goroutine
 	go func() {
 		appCtx.WaitForShutdown()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Printf("Server forced to shutdown: %v", err)
+		}
 	}()
 
-	if err := r.Run("0.0.0.0:" + port); err != nil {
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("Server failed: %v", err)
 	}
 }

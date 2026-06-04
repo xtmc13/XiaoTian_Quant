@@ -14,9 +14,9 @@ import (
 type StoplossMode int
 
 const (
-	StoplossStatic   StoplossMode = iota // fixed price or percentage from entry
-	StoplossTrailing                     // trails best price
-	StoplossTrailingPositive             // trailing only when in profit
+	StoplossStatic           StoplossMode = iota // fixed price or percentage from entry
+	StoplossTrailing                             // trails best price
+	StoplossTrailingPositive                     // trailing only when in profit
 )
 
 func (m StoplossMode) String() string {
@@ -37,15 +37,15 @@ func (m StoplossMode) String() string {
 // StoplossConfig configures the stoploss behavior.
 type StoplossConfig struct {
 	Mode           StoplossMode `json:"mode"`
-	StopDistance   float64      `json:"stop_distance"`   // decimal (0.02 = 2%)
-	ATRMultiplier  float64      `json:"atr_multiplier"`  // for ATR-based distance
+	StopDistance   float64      `json:"stop_distance"`  // decimal (0.02 = 2%)
+	ATRMultiplier  float64      `json:"atr_multiplier"` // for ATR-based distance
 	ATRPeriod      int          `json:"atr_period"`
 	PositiveOffset float64      `json:"positive_offset"` // for trailing positive: activate when profit > offset%
 
 	// Exchange integration
-	PlaceOnExchange  bool          `json:"place_on_exchange"`   // actually create stop-loss orders on exchange
-	UpdateInterval   time.Duration `json:"update_interval"`     // minimum time between stoploss updates
-	EmergencyTimeout time.Duration `json:"emergency_timeout"`   // timeout before emergency market exit
+	PlaceOnExchange  bool          `json:"place_on_exchange"` // actually create stop-loss orders on exchange
+	UpdateInterval   time.Duration `json:"update_interval"`   // minimum time between stoploss updates
+	EmergencyTimeout time.Duration `json:"emergency_timeout"` // timeout before emergency market exit
 }
 
 func DefaultStoplossConfig() StoplossConfig {
@@ -105,8 +105,8 @@ type StoplossManager struct {
 	lastUpdate time.Time
 
 	// ATR
-	prices     []float64
-	atrValue   float64
+	prices   []float64
+	atrValue float64
 }
 
 // NewStoplossManager creates a stoploss manager.
@@ -206,6 +206,8 @@ func (s *StoplossManager) Update(currentPrice float64) (float64, bool) {
 		s.maybeUpdateExchangeOrder()
 	}
 
+	s.lastUpdate = time.Now()
+
 	return s.stopPrice, triggered
 }
 
@@ -298,9 +300,9 @@ func (s *StoplossManager) maybeUpdateExchangeOrder() {
 
 	// Cancel existing stoploss order if price changed significantly
 	if s.exchangeOrder != nil {
-		priceDiff := math.Abs(s.exchangeOrder.StopPrice - s.stopPrice) / s.exchangeOrder.StopPrice
+		priceDiff := math.Abs(s.exchangeOrder.StopPrice-s.stopPrice) / s.exchangeOrder.StopPrice
 		if priceDiff > 0.001 { // >0.1% change
-			if _, err := s.orderPlacer.CancelOrder(s.exchangeOrder.OrderID, s.exchangeOrder.OrderID); err != nil {
+			if _, err := s.orderPlacer.CancelOrder(s.exchangeOrder.Symbol, s.exchangeOrder.OrderID); err != nil {
 				log.Printf("[stoploss] cancel order failed: %v", err)
 			} else {
 				log.Printf("[stoploss] cancelled old stop order %s", s.exchangeOrder.OrderID)
@@ -371,7 +373,7 @@ func (s *StoplossManager) CancelExchangeOrder() {
 	defer s.mu.Unlock()
 
 	if s.exchangeOrder != nil && s.orderPlacer != nil {
-		s.orderPlacer.CancelOrder(s.exchangeOrder.OrderID, s.exchangeOrder.OrderID)
+		s.orderPlacer.CancelOrder(s.exchangeOrder.Symbol, s.exchangeOrder.OrderID)
 		s.exchangeOrder = nil
 	}
 }
@@ -396,7 +398,7 @@ func (s *StoplossManager) Reset() {
 	defer s.mu.Unlock()
 	// Cancel exchange order without double-locking
 	if s.exchangeOrder != nil && s.orderPlacer != nil {
-		s.orderPlacer.CancelOrder(s.exchangeOrder.OrderID, s.exchangeOrder.OrderID)
+		s.orderPlacer.CancelOrder(s.exchangeOrder.Symbol, s.exchangeOrder.OrderID)
 	}
 	s.initialized = false
 	s.exchangeOrder = nil

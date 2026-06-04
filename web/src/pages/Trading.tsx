@@ -1,11 +1,12 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useEffect, useRef, useCallback, useMemo, useState } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { marketApi, orderApi, portfolioApi, tradesApi } from '@/lib/api'
 import { KLineChartPro } from '@klinecharts/pro'
 import '@klinecharts/pro/dist/klinecharts-pro.css'
 import { createBackendDatafeed } from '@/lib/klineDatafeed'
-import { cn, formatCurrency, formatPercent } from '@/lib/utils'
+import type { Chart } from 'klinecharts'
+import { cn } from '@/lib/utils'
 import { useWebSocket } from '@/hooks/useWebSocket'
 import { QuickTradePanel } from '@/components/QuickTradePanel'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -137,7 +138,6 @@ export function Trading() {
   const [price, setPrice] = useState('')
   const [quantity, setQuantity] = useState('')
   const [leverage, setLeverage] = useState(1)
-  const [activeIndicators, setActiveIndicators] = useState<Set<string>>(new Set())
   const [leftTab, setLeftTab] = useState<'watchlist' | 'orderbook' | 'trades'>('watchlist')
   const [activeBottomTab, setActiveBottomTab] = useState<'positions' | 'orders' | 'history'>('positions')
   const [watchlistSearch, setWatchlistSearch] = useState('')
@@ -149,16 +149,15 @@ export function Trading() {
   const navigate = useNavigate()
 
   const chartRef = useRef<HTMLDivElement>(null)
-  const chartInstance = useRef<any>(null)
-  const chartInited = useRef(false)
-  const indicatorSeries = useRef<Map<string, any>>(new Map())
+  const chartApiRef = useRef<Chart | null>(null)
+  const klineProRef = useRef<any>(null)
+  const datafeed = useMemo(() => createBackendDatafeed(), [])
   const queryClient = useQueryClient()
-  const [chartKey, setChartKey] = useState(0)
 
   /* ─── Data Queries ─── */
   const { data: klines, isLoading: klinesLoading } = useQuery({
     queryKey: ['klines', symbol, interval],
-    queryFn: () => marketApi.klines(symbol, interval, 300),
+    queryFn: () => marketApi.klines(symbol, interval, 1000),
     refetchInterval: 5000,
   })
 
@@ -248,116 +247,92 @@ export function Trading() {
     return WATCHLIST.filter((s) => s.includes(q))
   }, [watchlistSearch])
 
-  const datafeed = useMemo(() => createBackendDatafeed(), [])
-
-  /* ─── Capture-phase period button click interceptor ───
+  /* ─── KLineChartPro init (recreates when interval changes) ───
    *
-   * KLineChartPro 0.1.1 has a SolidJS createEffect dependency tracking bug:
-   * when setPeriod() is called, its createEffect((prev)=>{...}) does NOT
-   * re-run for period signal changes, so getHistoryKLineData is never called.
-   *
-   * Workaround: intercept clicks on period bar buttons in capture phase,
-   * stop propagation to prevent KLineChartPro's SolidJS handler from
-   * updating its stale internal state, then update React state and
-   * destroy/recreate the chart with a fresh KLineChartPro instance.
-   *
-   * The key insight: period bar buttons are <span> elements inside
-   * .klinecharts-pro-period-bar with class "item period" and text matching
-   * INTERVALS entries (1m, 5m, 15m, 30m, 1h, 4h, 1d, 1w).
+   * KLineChartPro 0.1.1 has a SolidJS createEffect bug: setPeriod() does NOT
+   * trigger getHistoryKLineData, so we must re-create the chart on period change.
+   * Symbol changes use setSymbol() which works fine.
    */
-  useEffect(() => {
-    const el = chartRef.current
-    if (!el) return
-
-    const handler = (e: MouseEvent) => {
-      // Walk up from target looking for a period bar button
-      let target = e.target as HTMLElement | null
-      while (target && target !== el) {
-        if (
-          target.classList?.contains('period') &&
-          target.parentElement?.classList?.contains('klinecharts-pro-period-bar')
-        ) {
-          const text = target.textContent?.trim()
-          if (text && INTERVALS.includes(text)) {
-            e.stopPropagation()
-            e.preventDefault()
-            console.log('[Trading] Period interceptor: clicking', text)
-            setInterval(text)
-            setChartKey((k) => k + 1)
-          }
-          return
-        }
-        target = target.parentElement
-      }
+  const initChart = useCallback(() => {
+    if (!chartRef.current) return
+    // Destroy previous instance
+    if (klineProRef.current) {
+      chartRef.current.innerHTML = ""
+      klineProRef.current = null
+      chartApiRef.current = null
     }
 
-    // Capture phase runs BEFORE SolidJS delegated handler
-    el.addEventListener('click', handler, true)
-    return () => el.removeEventListener('click', handler, true)
-  }, [])
-
-  /* ─── Chart Init (recreates on chartKey or symbol change) ─── */
-  useEffect(() => {
-    if (!chartRef.current) return
-    console.log('[Trading] Initializing KLineChartPro chartKey=', chartKey, 'symbol=', symbol, 'interval=', interval)
-    // Destroy old chart: clear container completely
-    chartRef.current.innerHTML = ''
+    let intervalId: number | null = null
     try {
       const chart = new KLineChartPro({
         container: chartRef.current,
-        symbol: {
-          ticker: symbol,
-          name: symbol.replace('USDT', '/USDT'),
-          shortName: symbol,
-          market: 'crypto',
-          exchange: 'BINANCE',
-        },
+        symbol: { ticker: symbol, name: symbol.replace("USDT", "/USDT"), shortName: symbol, market: "crypto", exchange: "BINANCE" },
         period: { ...parseInterval(interval), text: interval },
         periods: INTERVALS.map((i) => ({ ...parseInterval(i), text: i })),
-        datafeed,
-        drawingBarVisible: true,
-        mainIndicators: ['MA', 'EMA'],
-        subIndicators: ['VOL', 'MACD'],
-        theme: 'dark',
-        locale: 'zh-CN',
+        datafeed, drawingBarVisible: true,
+        mainIndicators: ["MA", "EMA"], subIndicators: ["VOL", "MACD"],
+        theme: "dark", locale: "zh-CN",
       })
-      chartInstance.current = chart
-      console.log('[Trading] KLineChartPro initialized successfully')
-    } catch (e) {
-      console.error('[Trading] KLineChart init failed:', e)
-    }
-    return () => {
-      console.log('[Trading] Cleaning up KLineChartPro')
-      if (chartRef.current) chartRef.current.innerHTML = ''
-      chartInstance.current = null
-    }
-  }, [chartKey, symbol])
+      klineProRef.current = chart
 
-  /* ─── Resync chart period on interval change (from left-panel or other UI) ─── */
+      const checkApi = () => {
+        if ((chart as any)._chartApi) {
+          chartApiRef.current = (chart as any)._chartApi
+        } else {
+          intervalId = window.setTimeout(checkApi, 100)
+        }
+      }
+      checkApi()
+    } catch (e) { console.error("[Trading] KLineChartPro init failed:", e) }
+    return () => { if (intervalId) window.clearTimeout(intervalId) }
+  }, [datafeed, symbol, interval])
+
+  // Init on mount & when interval changes (SolidJS setPeriod workaround)
   useEffect(() => {
-    console.log('[Trading] interval changed to:', interval)
-    // The chart init effect above already handles the initial render.
-    // Additional interval changes (non-chartKey path) are handled by
-    // the capture-phase interceptor which calls both setInterval and setChartKey.
-  }, [interval])
+    const cancelTimer = initChart()
+    return () => { cancelTimer?.(); cleanupChart() }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initChart])
+
+  function cleanupChart() {
+    if (chartRef.current) chartRef.current.innerHTML = ""
+    klineProRef.current = null
+    chartApiRef.current = null
+  }
+
+
+  /* ─── Period click observer ───
+     KLineChartPro's period bar doesn't expose onChange.
+     We observe clicks and sync to React state — chart recreation is
+     triggered by [interval] dependency in the init effect above.   */
+  useEffect(() => {
+    const el = chartRef.current
+    if (!el) return
+    const handleClick = (e: MouseEvent) => {
+      let t = e.target as HTMLElement | null
+      while (t && t !== el) {
+        if (t.classList?.contains("period") && t.parentElement?.classList?.contains("klinecharts-pro-period-bar")) {
+          const txt = t.textContent?.trim()
+          if (txt && INTERVALS.includes(txt)) {
+            // Don't stopPropagation — let KLineChartPro handle its own UI highlight
+            setInterval(txt)
+          }
+          return
+        }
+        t = t.parentElement
+      }
+    }
+    el.addEventListener("click", handleClick, true)
+    return () => el.removeEventListener("click", handleClick, true)
+  }, [])
 
   /* ─── Resize chart when bottom panel toggles ─── */
   useEffect(() => {
-    if (chartInstance.current && chartRef.current) {
-      // Dispatch resize to trigger KLineChart internal observer
-      setTimeout(() => window.dispatchEvent(new Event('resize')), 100)
-    }
+    if (!klineProRef.current) return
+    const t = setTimeout(() => window.dispatchEvent(new Event("resize")), 100)
+    return () => clearTimeout(t)
   }, [bottomCollapsed])
 
-  /* ─── Indicators Toggle ─── */
-  const toggleIndicator = useCallback((name: string) => {
-    setActiveIndicators((prev) => {
-      const next = new Set(prev)
-      if (next.has(name)) next.delete(name)
-      else next.add(name)
-      return next
-    })
-  }, [])
 
   /* ─── Order Handlers ─── */
   const handlePlaceOrder = useCallback(async () => {
@@ -593,8 +568,7 @@ export function Trading() {
             CENTER: Chart + Toolbar
         ════════════════════════════════════════ */}
         <div className="flex-1 flex flex-col min-w-0">
-          {/* Chart Area — KLineChart Pro handles its own toolbar */}
-          <div ref={chartRef} className="flex-1 min-h-0 bg-quant-bg" />
+          <div ref={chartRef} className="flex-1 min-h-0" />
         </div>
 
         {/* ════════════════════════════════════════

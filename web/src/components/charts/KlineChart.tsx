@@ -2,7 +2,7 @@
  * Enhanced KLineChart — wraps klinecharts with drawing tools, built-in indicators,
  * signal overlays, and theme support.  Ported from QuantDinger KlineChart.vue.
  */
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { init, dispose, registerOverlay } from 'klinecharts'
 import type { Chart } from 'klinecharts'
 import { cn } from '@/lib/utils'
@@ -191,6 +191,7 @@ export function KlineChart({
 }: KlineChartEnhancedProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<Chart | null>(null)
+  const pendingDataRef = useRef<KLineBar[] | undefined>(undefined)
   const [activeDrawingTool, setActiveDrawingTool] = useState<string | null>(null)
   const [editorTarget, setEditorTarget] = useState<IndicatorConfig | null>(null)
   const [editorForm, setEditorForm] = useState<Record<string, number>>({})
@@ -203,30 +204,38 @@ export function KlineChart({
   // Ensure overlays and indicators are registered
   useEffect(() => { ensureSignalOverlay() }, [])
 
-  /* ─── Chart Init ─── */
-  useEffect(() => {
+  /* ─── Chart Init (re-runs when loading ends and container is available) ─── */
+  useLayoutEffect(() => {
+    if (loading) return
     const el = containerRef.current
-    if (!el || el.clientWidth === 0 || el.clientHeight === 0) return
+    if (!el) return
 
     try {
       const chart = init(el, {
         styles: {
           candle: {
             bar: {
-              upColor: '#03A66D', downColor: '#CF304A',
-              upBorderColor: '#03A66D', downBorderColor: '#CF304A',
-              upWickColor: '#03A66D', downWickColor: '#CF304A',
+              upColor: '#089981', downColor: '#F23645',
+              upBorderColor: '#089981', downBorderColor: '#F23645',
+              upWickColor: '#089981', downWickColor: '#F23645',
             },
           },
           grid: {
-            horizontal: { color: 'rgba(43,49,57,0.3)', size: 1 },
-            vertical: { color: 'rgba(43,49,57,0.3)', size: 1 },
+            horizontal: { color: 'rgba(43,49,57,0.2)', size: 1 },
+            vertical: { color: 'rgba(43,49,57,0.2)', size: 1 },
+          },
+          separator: {
+            size: 1, color: 'rgba(43,49,57,0.4)',
           },
         },
       })
-
       if (!chart) return
       chartRef.current = chart
+
+      // Apply data that arrived before chart init
+      if (pendingDataRef.current?.length) {
+        chart.applyNewData(toChartData(pendingDataRef.current))
+      }
 
       const ro = new ResizeObserver(() => { try { chart.resize() } catch (_) {} })
       ro.observe(el)
@@ -239,18 +248,26 @@ export function KlineChart({
     } catch (e) {
       console.error('[KlineChart] init error:', e)
     }
-  }, [])
+  }, [loading])
+
+  /* ─── Helper: convert KLineBar[] to klinecharts format ─── */
+  function toChartData(src: KLineBar[]) {
+    return src.map(d => {
+      const rawTs = d.timestamp ?? d.time ?? 0
+      return {
+        timestamp: rawTs > 1e10 ? rawTs : rawTs * 1000,
+        open: d.open, high: d.high, low: d.low, close: d.close,
+        volume: d.volume || 0,
+      }
+    })
+  }
 
   /* ─── Apply data ─── */
   useEffect(() => {
+    pendingDataRef.current = data
     if (!chartRef.current || !data?.length) return
-    chartRef.current.applyNewData(
-      data.map(d => ({
-        timestamp: (d.timestamp || d.time || 0) * (d.timestamp && d.timestamp > 1e10 ? 1 : 1000),
-        open: d.open, high: d.high, low: d.low, close: d.close,
-        volume: d.volume || 0,
-      }))
-    )
+    chartRef.current.applyNewData(toChartData(data))
+    try { chartRef.current.scrollToRealTime() } catch (_) {}
   }, [data])
 
   /* ─── Apply signals ─── */
@@ -369,28 +386,28 @@ export function KlineChart({
   }
 
   return (
-    <div className="flex rounded-lg overflow-hidden border border-quant-border" style={{ height }}>
+    <div className="flex rounded-lg overflow-hidden border border-quant-border bg-quant-bg" style={{ height }}>
       {/* Drawing toolbar */}
       {drawingBarVisible && (
-        <div className="w-10 shrink-0 bg-quant-bg-secondary border-r border-quant-border flex flex-col items-center py-2 gap-1 overflow-y-auto">
+        <div className="w-10 shrink-0 bg-quant-bg-secondary border-r border-quant-border flex flex-col items-center py-1.5 gap-0.5 overflow-y-auto">
           {DRAWING_TOOLS.map(tool => (
             <button
               key={tool.name}
               onClick={() => selectDrawingTool(tool.name)}
               className={cn(
-                'w-8 h-8 flex items-center justify-center rounded transition-colors',
+                'w-7 h-7 flex items-center justify-center rounded transition-colors text-[11px]',
                 activeDrawingTool === tool.name
-                  ? 'bg-quant-gold/20 text-quant-gold'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-white/5',
+                  ? 'bg-quant-gold/20 text-quant-gold shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-white/[0.08]',
               )}
               title={tool.title}
             >
-              <tool.icon className="w-4 h-4" />
+              <tool.icon className="w-3.5 h-3.5" />
             </button>
           ))}
-          <div className="w-5 h-px bg-quant-border my-1" />
-          <button onClick={clearDrawings} className="w-8 h-8 flex items-center justify-center rounded text-muted-foreground hover:text-quant-red hover:bg-quant-red/10 transition-colors" title="清除所有画线">
-            <Eraser className="w-4 h-4" />
+          <div className="w-4 h-px bg-quant-border/50 my-0.5" />
+          <button onClick={clearDrawings} className="w-7 h-7 flex items-center justify-center rounded text-muted-foreground hover:text-quant-red hover:bg-quant-red/10 transition-colors" title="清除画线">
+            <Eraser className="w-3.5 h-3.5" />
           </button>
         </div>
       )}
@@ -398,7 +415,7 @@ export function KlineChart({
       {/* Chart content area */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Indicator toolbar */}
-        <div className="flex items-center gap-1 px-2 py-1.5 border-b border-quant-border bg-quant-bg-secondary overflow-x-auto shrink-0">
+        <div className="flex items-center gap-0.5 px-2 py-1 border-b border-quant-border bg-quant-bg-secondary overflow-x-auto shrink-0">
           {INDICATOR_TEMPLATES.map(tpl => {
             const active = activeIndicators.some(i => i.id === tpl.id)
             return (
@@ -406,10 +423,10 @@ export function KlineChart({
                 key={tpl.id}
                 onClick={() => toggleIndicator(tpl)}
                 className={cn(
-                  'px-2 py-0.5 rounded text-[10px] font-medium whitespace-nowrap transition-colors',
+                  'px-1.5 py-0.5 rounded text-[10px] font-medium whitespace-nowrap transition-colors',
                   active
-                    ? 'bg-quant-gold/20 text-quant-gold'
-                    : 'bg-quant-bg-tertiary text-muted-foreground hover:text-foreground',
+                    ? 'bg-quant-gold/15 text-quant-gold'
+                    : 'text-muted-foreground/70 hover:text-foreground hover:bg-white/[0.06]',
                 )}
               >
                 {tpl.shortName}

@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useLocation, Outlet } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
 import { Layout } from './components/layout/Layout'
 import { Dashboard } from './pages/Dashboard'
@@ -20,15 +20,25 @@ import { IndicatorDetail } from './pages/IndicatorDetail'
 import { AuthorDashboard } from './pages/AuthorDashboard'
 import { Billing } from './pages/Billing'
 
-function RequireAuth({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated } = useAuthStore()
+function RequireAuth() {
+  const { isAuthenticated, hydrated } = useAuthStore()
   const location = useLocation()
+
+  // Wait for zustand persist to finish rehydration before deciding auth state.
+  // This prevents a flash of <Navigate> during the initial false -> true transition.
+  if (!hydrated) {
+    return (
+      <div className="h-screen bg-quant-bg flex items-center justify-center">
+        <div className="animate-spin h-6 w-6 border-2 border-quant-gold/30 border-t-quant-gold rounded-full" />
+      </div>
+    )
+  }
 
   if (!isAuthenticated) {
     return <Navigate to="/login" state={{ from: location }} replace />
   }
 
-  return <>{children}</>
+  return <Outlet />
 }
 
 export default function App() {
@@ -36,35 +46,28 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<Login />} />
-        <Route
-          path="/*"
-          element={
-            <RequireAuth>
-              <Layout>
-                <Routes>
-                  <Route path="/" element={<Navigate to="/dashboard" replace />} />
-                  <Route path="/dashboard" element={<Dashboard />} />
-                  <Route path="/trading" element={<Trading />} />
-                  <Route path="/strategy" element={<Strategy />} />
-                  <Route path="/ai" element={<AI />} />
-                  <Route path="/backtest" element={<Backtest />} />
-                  <Route path="/bots" element={<Bots />} />
-                  <Route path="/settings" element={<Settings />} />
-                  <Route path="/exchange-account" element={<ExchangeAccount />} />
-                  <Route path="/indicator-community" element={<IndicatorCommunity />} />
-                  <Route path="/indicator-community/:id" element={<IndicatorDetail />} />
-                  <Route path="/author-dashboard" element={<AuthorDashboard />} />
-                  <Route path="/portfolio" element={<Portfolio />} />
-                  <Route path="/indicator-ide" element={<IndicatorIDE />} />
-                  <Route path="/profile" element={<UserProfile />} />
-                  <Route path="/users" element={<UserManage />} />
-                  <Route path="/agent-tokens" element={<AgentTokens />} />
-                <Route path="/billing" element={<Billing />} />
-                </Routes>
-              </Layout>
-            </RequireAuth>
-          }
-        />
+        <Route element={<RequireAuth />}>
+          <Route element={<Layout />}>
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/trading" element={<Trading />} />
+            <Route path="/strategy" element={<Strategy />} />
+            <Route path="/ai" element={<AI />} />
+            <Route path="/backtest" element={<Backtest />} />
+            <Route path="/bots" element={<Bots />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="/exchange-account" element={<ExchangeAccount />} />
+            <Route path="/indicator-community" element={<IndicatorCommunity />} />
+            <Route path="/indicator-community/:id" element={<IndicatorDetail />} />
+            <Route path="/author-dashboard" element={<AuthorDashboard />} />
+            <Route path="/portfolio" element={<Portfolio />} />
+            <Route path="/indicator-ide" element={<IndicatorIDE />} />
+            <Route path="/profile" element={<UserProfile />} />
+            <Route path="/users" element={<UserManage />} />
+            <Route path="/agent-tokens" element={<AgentTokens />} />
+            <Route path="/billing" element={<Billing />} />
+          </Route>
+        </Route>
       </Routes>
     </BrowserRouter>
   )

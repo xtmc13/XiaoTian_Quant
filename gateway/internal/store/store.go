@@ -13,8 +13,9 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	_ "modernc.org/sqlite"
+	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v3"
+	_ "modernc.org/sqlite"
 )
 
 var (
@@ -28,10 +29,10 @@ var (
 	strategyConfigs     = make(map[string]map[string]any)
 	strategyMu          sync.RWMutex
 
-	logsStore     []map[string]any
-	templates     []map[string]any
-	agentTokens   []map[string]any
-	inmemMu       sync.RWMutex
+	logsStore   []map[string]any
+	templates   []map[string]any
+	agentTokens []map[string]any
+	inmemMu     sync.RWMutex
 
 	jwtSecret string
 )
@@ -75,14 +76,19 @@ func InitDB() error {
 		return err
 	}
 
-	// Ensure default admin user
+	// Ensure default admin user with a random password (printed to logs on first boot)
 	var count int
 	db.QueryRow("SELECT COUNT(*) FROM xt_users WHERE username='admin'").Scan(&count)
 	if count == 0 {
-		salt := randomHex(16)
-		hash := "sha256$" + salt + "$" + sha256Hex("admin123"+salt)
+		adminPass := randomHex(8)
+		hash := HashPassword(adminPass)
 		db.Exec("INSERT INTO xt_users (username, password_hash, nickname, role) VALUES (?, ?, ?, ?)",
 			"admin", hash, "Admin", "admin")
+		fmt.Fprintf(os.Stderr, "\n╔══════════════════════════════════════════════════════════╗\n")
+		fmt.Fprintf(os.Stderr, "║  Default admin created:  username=admin                  ║\n")
+		fmt.Fprintf(os.Stderr, "║  Temporary password:     %s               ║\n", adminPass)
+		fmt.Fprintf(os.Stderr, "║  Change this immediately after first login.              ║\n")
+		fmt.Fprintf(os.Stderr, "╚══════════════════════════════════════════════════════════╝\n\n")
 	}
 
 	if configPath == "" {
@@ -96,6 +102,11 @@ func InitDB() error {
 	if jwtSecret == "" {
 		jwtSecret = randomHex(32)
 		os.Setenv("SECRET_KEY", jwtSecret)
+		fmt.Fprintf(os.Stderr, "\n⚠  WARNING: SECRET_KEY not set in environment.\n")
+		fmt.Fprintf(os.Stderr, "   A random key was generated for this session.\n")
+		fmt.Fprintf(os.Stderr, "   All JWT tokens will be invalidated on next restart.\n")
+		fmt.Fprintf(os.Stderr, "   Set SECRET_KEY in .env to persist:\n")
+		fmt.Fprintf(os.Stderr, "     SECRET_KEY=%s\n\n", jwtSecret)
 	}
 
 	// Run schema migrations
@@ -223,18 +234,29 @@ func PersistStrategyConfigs() {
 
 // ── In-Memory Stores ──
 
-func GetLogsStore() *[]map[string]any    { return &logsStore }
-func GetTemplatesStore() *[]map[string]any { return &templates }
+func GetLogsStore() *[]map[string]any        { return &logsStore }
+func GetTemplatesStore() *[]map[string]any   { return &templates }
 func GetAgentTokensStore() *[]map[string]any { return &agentTokens }
 
 // ── Auth ──
 
+// HashPassword hashes a password with bcrypt (cost = bcrypt.DefaultCost).
 func HashPassword(password string) string {
-	salt := randomHex(16)
-	return "sha256$" + salt + "$" + sha256Hex(password+salt)
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return ""
+	}
+	return string(hash)
 }
 
+// VerifyPassword verifies a password against a bcrypt hash.
+// Supports legacy sha256$ format for backward compatibility during migration.
 func VerifyPassword(password, hash string) bool {
+	// Modern bcrypt
+	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)); err == nil {
+		return true
+	}
+	// Legacy sha256$ format — will be upgraded on next password change
 	parts := splitN(hash, "$", 3)
 	if len(parts) != 3 || parts[0] != "sha256" {
 		return false
@@ -249,7 +271,7 @@ func GenerateJWT(userID int, username, role string, tokenVersion int) (string, e
 		"role":          role,
 		"token_version": tokenVersion,
 		"iat":           time.Now().Unix(),
-		"exp":           time.Now().Add(7 * 24 * time.Hour).Unix(),
+		"exp":           time.Now().Add(24 * time.Hour).Unix(),
 		"jti":           randomHex(8),
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -421,29 +443,50 @@ func UpdateUserPassword(userID int, passwordHash string) error {
 }
 
 // UpdateUserProfile updates a user profile field by username.
+// Uses a strict switch statement — no SQL string concatenation.
 func UpdateUserProfile(username, field, value string) error {
-	allowedFields := map[string]bool{"nickname": true, "email": true, "email_verified": true, "role": true, "is_active": true}
-	if !allowedFields[field] {
-		return nil
+	var err error
+	switch field {
+	case "nickname":
+		_, err = db.Exec(`UPDATE xt_users SET nickname=? WHERE username=?`, value, username)
+	case "email":
+		_, err = db.Exec(`UPDATE xt_users SET email=? WHERE username=?`, value, username)
+	case "email_verified":
+		_, err = db.Exec(`UPDATE xt_users SET email_verified=? WHERE username=?`, value, username)
+	case "role":
+		_, err = db.Exec(`UPDATE xt_users SET role=? WHERE username=?`, value, username)
+	case "is_active":
+		_, err = db.Exec(`UPDATE xt_users SET is_active=? WHERE username=?`, value, username)
+	default:
+		return fmt.Errorf("invalid profile field: %s", field)
 	}
-	_, err := db.Exec(`UPDATE xt_users SET `+field+`=? WHERE username=?`, value, username)
 	return err
 }
 
 // AdminUpdateUser updates any user field by user ID.
+// Uses a strict switch statement — no SQL string concatenation.
 func AdminUpdateUser(userID int, updates map[string]any) error {
 	for field, value := range updates {
 		var err error
 		switch field {
-		case "nickname", "email", "role":
-			strVal, _ := value.(string)
-			if strVal != "" {
-				_, err = db.Exec(`UPDATE xt_users SET `+field+`=? WHERE id=?`, strVal, userID)
+		case "nickname":
+			if strVal, ok := value.(string); ok && strVal != "" {
+				_, err = db.Exec(`UPDATE xt_users SET nickname=? WHERE id=?`, strVal, userID)
+			}
+		case "email":
+			if strVal, ok := value.(string); ok && strVal != "" {
+				_, err = db.Exec(`UPDATE xt_users SET email=? WHERE id=?`, strVal, userID)
+			}
+		case "role":
+			if strVal, ok := value.(string); ok && strVal != "" {
+				_, err = db.Exec(`UPDATE xt_users SET role=? WHERE id=?`, strVal, userID)
 			}
 		case "is_active":
 			if intVal, ok := value.(float64); ok {
 				_, err = db.Exec(`UPDATE xt_users SET is_active=? WHERE id=?`, int(intVal), userID)
 			}
+		default:
+			err = fmt.Errorf("invalid admin update field: %s", field)
 		}
 		if err != nil {
 			return err
@@ -619,4 +662,3 @@ var SymbolList = []string{
 
 // Order book matching service reference (will be set from service package)
 var MatchingService any
-

@@ -8,7 +8,8 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/http"
+	"os"
+		"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -99,6 +100,9 @@ func (b *BinanceAdapter) OnKline(fn func(bar model.Bar))              { b.onKlin
 // ── URL Helpers ──
 
 func (b *BinanceAdapter) baseURL() string {
+		if env := os.Getenv("BINANCE_REST_URL"); env != "" {
+			return env
+		}
 	if b.testnet {
 		return BinanceTestURL
 	}
@@ -106,6 +110,9 @@ func (b *BinanceAdapter) baseURL() string {
 }
 
 func (b *BinanceAdapter) wsURL() string {
+		if env := os.Getenv("BINANCE_WS_URL"); env != "" {
+			return env
+		}
 	if b.testnet {
 		return BinanceTestWsURL
 	}

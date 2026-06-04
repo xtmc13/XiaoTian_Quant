@@ -11,14 +11,10 @@ func TestNewBinanceWSStream(t *testing.T) {
 	if s == nil {
 		t.Fatal("nil stream")
 	}
-	if !s.IsRunning() {
-		t.Fatal("should be running after Start()")
-	}
-	// Verify symbols
+	// Verify symbols (stream is not running until Start() is called)
 	if len(s.symbols) != 2 {
 		t.Fatalf("expected 2 symbols, got %d", len(s.symbols))
 	}
-	s.Stop()
 }
 
 func TestBinanceWSDefaultSymbols(t *testing.T) {

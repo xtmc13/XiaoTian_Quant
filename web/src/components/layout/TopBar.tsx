@@ -49,7 +49,7 @@ const levelBg: Record<string, string> = {
 
 export function TopBar() {
   const location = useLocation()
-  const { user, logout } = useAuthStore()
+  const { user, logout, isAuthenticated } = useAuthStore()
   const { lang, setLang } = useI18n()
   const [time, setTime] = useState(new Date())
   const [equity, setEquity] = useState<number | null>(null)
@@ -67,27 +67,30 @@ export function TopBar() {
   }, [])
 
   useEffect(() => {
+    if (!isAuthenticated) return
     portfolioApi.summary()
       .then((data) => {
         setEquity(data.total_equity ?? null)
         setPnl(data.total_pnl ?? null)
       })
       .catch(() => {})
-  }, [])
+  }, [isAuthenticated])
 
   const fetchNotifications = useCallback(async () => {
+    if (!isAuthenticated) return
     try {
       const data = await notificationApi.list({ limit: 20 })
       setNotifications(data.notifications || [])
       setUnreadCount(data.unread_count || 0)
     } catch { /* ignore */ }
-  }, [])
+  }, [isAuthenticated])
 
   useEffect(() => {
+    if (!isAuthenticated) return
     fetchNotifications()
     pollRef.current = setInterval(fetchNotifications, 15000)
     return () => { if (pollRef.current !== null) clearInterval(pollRef.current) }
-  }, [fetchNotifications])
+  }, [fetchNotifications, isAuthenticated])
 
   // Close on outside click
   useEffect(() => {

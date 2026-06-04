@@ -14,8 +14,8 @@ import { api } from './api'
 
 /* ── Period → backend interval mapping ── */
 const PERIOD_MAP: Record<string, string> = {
-  '1min': '1m', '3min': '3m', '5min': '5m', '15min': '15m',
-  '30min': '30m', '1hour': '1h', '4hour': '4h',
+  '1minute': '1m', '3minute': '3m', '5minute': '5m', '15minute': '15m',
+  '30minute': '30m', '1hour': '1h', '4hour': '4h',
   '1day': '1d', '1week': '1w', '1month': '1M',
 }
 
@@ -60,14 +60,38 @@ function toKLineData(raw: any): KLineData {
   }
 }
 
+/**
+ * Return the period-aligned timestamp (ms) for a given time and period.
+ * E.g. for 1h period at 14:35:27 → 14:00:00.000
+ */
+function periodFloor(timeMs: number, period: Period): number {
+  const ms = periodMs(period)
+  return ms > 0 ? Math.floor(timeMs / ms) * ms : timeMs
+}
+
 /* ── WebSocket subscriptions ── */
 interface SubEntry {
   symbol: SymbolInfo
   period: Period
   callbacks: Set<DatafeedSubscribeCallback>
-  /** Timestamp (ms) of the most recent bar pushed to subscribers */
+  /** Timestamp (ms) of the most recent complete bar pushed to subscribers */
   lastBarTimestamp: number
+  /** Current forming bar (aggregated from ticks) — null until first tick */
+  formingBar: KLineData | null
+  /** The open price of the current forming bar (first tick price of the period) */
+  periodOpen: number
+  /** Live bar state cache (per subscription key) - persists across WS messages */
+  liveBar: KLineData | null
+  /** Throttle: timestamp of the last push to chart (ms) */
+  lastPushTs: number
+  /** Throttle: pending bar waiting to be pushed */
+  pendingBar: KLineData | null
+  /** Throttle: setTimeout id for deferred push */
+  pushTimer: ReturnType<typeof setTimeout> | null
 }
+
+/** Minimum interval between pushes for the same bar (ms) */
+const PUSH_THROTTLE_MS = 200
 
 const subscriptions = new Map<string, SubEntry>()
 
@@ -242,24 +266,21 @@ function ensureWS() {
 
     ws.onmessage = (event) => {
       try {
-        const data = JSON.parse(event.data)
+        const msg = JSON.parse(event.data)
 
         // Only handle price events (live ticks)
-        if (data.type === 'price' && data.symbol) {
+        if (msg.type === 'price' && msg.symbol) {
           const now = Date.now()
-          const lastPrice = Number(data.data?.last ?? data.data?.price ?? 0)
+          const lastPrice = Number(msg.data?.last ?? msg.data?.price ?? 0)
 
-          // ── Live bar state cache (per WS session) ──
-          const bars = new Map<string, KLineData>()
-
-          // Notify all subscribers whose key starts with this symbol
+          // Update each subscription that matches this symbol
           subscriptions.forEach((entry, key) => {
-            if (!key.startsWith(data.symbol + ':')) return
+            if (!key.startsWith(msg.symbol + ':')) return
 
             const barMs = periodMs(entry.period)
             const alignedTs = Math.floor(now / barMs) * barMs
 
-            let bar = bars.get(key)
+            let bar = entry.liveBar
             if (!bar || bar.timestamp !== alignedTs) {
               // First tick of a new bar period → start fresh running bar
               bar = {
@@ -278,16 +299,56 @@ function ensureWS() {
                 high: Math.max(bar.high, lastPrice),
                 low: Math.min(bar.low, lastPrice),
                 close: lastPrice,
-                volume: (bar.volume ?? 0) + Number(data.data?.volume ?? 0),
+                volume: (bar.volume ?? 0) + Number(msg.data?.volume ?? 0),
               }
             }
-            bars.set(key, bar)
+            entry.liveBar = bar
 
+            // ── Throttle push to chart ──
+            // Determine if this is a new bar BEFORE updating lastBarTimestamp
+            const prevBarTs = entry.lastBarTimestamp
+            const isNewBar = bar.timestamp !== prevBarTs
             entry.lastBarTimestamp = Math.max(entry.lastBarTimestamp, bar.timestamp)
 
-            entry.callbacks.forEach((cb) => {
-              try { cb(bar) } catch {}
-            })
+            if (isNewBar) {
+              // New bar period → push immediately, cancel any pending throttle
+              entry.lastPushTs = now
+              if (entry.pushTimer) {
+                clearTimeout(entry.pushTimer)
+                entry.pushTimer = null
+              }
+              entry.pendingBar = null
+              entry.callbacks.forEach((cb) => {
+                try { cb(bar) } catch {}
+              })
+              return
+            }
+
+            // Same bar → throttle to avoid flickering
+            entry.pendingBar = bar
+            const elapsed = now - entry.lastPushTs
+
+            if (elapsed >= PUSH_THROTTLE_MS) {
+              // Enough time has passed → push immediately
+              entry.lastPushTs = now
+              entry.pendingBar = null
+              entry.callbacks.forEach((cb) => {
+                try { cb(bar) } catch {}
+              })
+            } else if (!entry.pushTimer) {
+              // Too soon → schedule a deferred push
+              entry.pushTimer = setTimeout(() => {
+                entry.pushTimer = null
+                if (entry.pendingBar) {
+                  entry.lastPushTs = Date.now()
+                  const pending = entry.pendingBar
+                  entry.pendingBar = null
+                  entry.callbacks.forEach((cb) => {
+                    try { cb(pending) } catch {}
+                  })
+                }
+              }, PUSH_THROTTLE_MS - elapsed)
+            }
           })
         }
       } catch { /* ignore malformed messages */ }
@@ -310,6 +371,13 @@ export function disconnectDatafeed(): void {
     try { ws.close(1000, 'client disconnect') } catch {}
     ws = null
   }
+  // Clear all pending throttle timers
+  subscriptions.forEach((entry) => {
+    if (entry.pushTimer) {
+      clearTimeout(entry.pushTimer)
+      entry.pushTimer = null
+    }
+  })
   subscriptions.clear()
   wsEverConnected = false
   wsReconnectAttempts = 0
@@ -345,7 +413,8 @@ export function createBackendDatafeed(): Datafeed {
         // Backend expects milliseconds. Do NOT multiply by 1000.
         const fromMs = from
         const toMs = to
-        const limit = Math.min(Math.ceil((toMs - fromMs) / 3600000) + 200, 1500)
+        const barDuration = periodMs(period)
+        const limit = Math.min(Math.ceil((toMs - fromMs) / barDuration) + 200, 1500)
 
         console.log('[KLineDatafeed] getHistoryKLineData CALLED:', {
           symbol: symbol.ticker,
@@ -386,6 +455,12 @@ export function createBackendDatafeed(): Datafeed {
           period,
           callbacks: new Set(),
           lastBarTimestamp: 0,
+          formingBar: null,
+          periodOpen: 0,
+          liveBar: null,
+          lastPushTs: 0,
+          pendingBar: null,
+          pushTimer: null,
         }
         subscriptions.set(key, entry)
       }
@@ -400,6 +475,12 @@ export function createBackendDatafeed(): Datafeed {
       const key = wsSubKey(symbol, period)
       const entry = subscriptions.get(key)
       if (!entry) return
+
+      // Clear throttle timer to prevent pushing to a dead chart
+      if (entry.pushTimer) {
+        clearTimeout(entry.pushTimer)
+        entry.pushTimer = null
+      }
 
       entry.callbacks.clear()
       subscriptions.delete(key)

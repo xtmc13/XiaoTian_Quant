@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
 func init() {
@@ -79,15 +80,16 @@ func TestAdminRequiredMiddleware(t *testing.T) {
 
 func TestAdminRequiredAdminPass(t *testing.T) {
 	r := gin.New()
-	// Skip AuthRequired by directly injecting user context
-	r.Use(func(c *gin.Context) {
-		c.Set(UserIDKey, 1)
-		c.Set("role", "admin")
-	})
+	// Generate a valid admin JWT token
+	token, err := store.GenerateJWT(1, "admin", "admin", 1)
+	if err != nil {
+		t.Fatalf("failed to generate token: %v", err)
+	}
 	r.Use(AdminRequired())
 	r.GET("/admin", func(c *gin.Context) { c.String(200, "ok") })
 
 	req := httptest.NewRequest("GET", "/admin", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 

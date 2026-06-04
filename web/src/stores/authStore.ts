@@ -16,6 +16,7 @@ interface AuthState {
   isAuthenticated: boolean
   isLoading: boolean
   error: string | null
+  hydrated: boolean
   // actions
   login: (username: string, password: string) => Promise<void>
   loginByCode: (email: string, code: string) => Promise<void>
@@ -35,6 +36,7 @@ export const useAuthStore = create<AuthState>()(
       isAuthenticated: false,
       isLoading: false,
       error: null,
+      hydrated: false,
 
       login: async (username, password) => {
         set({ isLoading: true, error: null })
@@ -124,6 +126,11 @@ export const useAuthStore = create<AuthState>()(
     {
       name: 'xt-auth',
       partialize: (state) => ({ token: state.token, user: state.user, isAuthenticated: state.isAuthenticated }),
+      onRehydrateStorage: () => (state) => {
+        if (state) {
+          state.hydrated = true
+        }
+      },
     }
   )
 )

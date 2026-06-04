@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -15,11 +16,29 @@ const (
 	RoleKey     = "role"
 )
 
+var corsAllowedOrigins = func() map[string]bool {
+	m := map[string]bool{
+		"http://localhost:5173": true,
+		"http://localhost:3000": true,
+	}
+	if env := os.Getenv("CORS_ALLOWED_ORIGINS"); env != "" {
+		for _, o := range strings.Split(env, ",") {
+			m[strings.TrimSpace(o)] = true
+		}
+	}
+	return m
+}()
+
 func CORS() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		c.Header("Access-Control-Allow-Origin", "*")
+		origin := c.GetHeader("Origin")
+		// Allow if origin is in whitelist or if no whitelist restriction (development)
+		if corsAllowedOrigins["*"] || corsAllowedOrigins[origin] {
+			c.Header("Access-Control-Allow-Origin", origin)
+		}
 		c.Header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
 		c.Header("Access-Control-Allow-Headers", "Content-Type,Authorization")
+		c.Header("Access-Control-Allow-Credentials", "true")
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(http.StatusNoContent)
 			return
@@ -76,10 +95,13 @@ func AdminRequired() gin.HandlerFunc {
 	}
 }
 
+// extractToken extracts the JWT from the Authorization header.
+// Query parameter token support has been removed for security —
+// tokens in URLs are logged by servers, browsers, and proxies.
 func extractToken(c *gin.Context) string {
 	auth := c.GetHeader("Authorization")
 	if strings.HasPrefix(auth, "Bearer ") {
 		return auth[7:]
 	}
-	return c.Query("token")
+	return ""
 }

@@ -87,7 +87,8 @@ axiosInstance.interceptors.response.use(
         if (!isRedirectingToLogin) {
           isRedirectingToLogin = true
           localStorage.removeItem('xt-token')
-          window.location.href = '/#/login'
+          localStorage.removeItem('xt-auth')
+          window.location.href = '/login'
           setTimeout(() => { isRedirectingToLogin = false }, 3000)
         }
         return Promise.reject(new ApiError('登录已过期，请重新登录', 401, 'UNAUTHORIZED'))
@@ -187,14 +188,14 @@ export const portfolioApi = {
 
 // ── Market ──
 export const marketApi = {
-  klines: (symbol: string, interval = '1h', limit = 200) =>
-    api.get<any>('/market/klines', { params: { symbol, interval, limit } })
-      .then((d: any) => d?.klines || d || []),
+  klines: (symbol: string, interval = '1h', limit = 200, from?: number, to?: number) =>
+    api.get<any>('/market/klines', { params: { symbol, interval, limit, from, to } })
+      .then((d: any) => Array.isArray(d?.klines) ? d.klines : Array.isArray(d) ? d : []),
   orderBook: (symbol: string, depth = 20) =>
     api.get<any>('/market/orderbook', { params: { symbol, depth } }),
   trades: (symbol: string, limit = 50) =>
     api.get<any>('/market/trades', { params: { symbol, limit } })
-      .then((d: any) => d?.trades || d || []),
+      .then((d: any) => Array.isArray(d?.trades) ? d.trades : Array.isArray(d) ? d : []),
   snapshot: (symbol?: string) =>
     api.get<any>(`/market/snapshot${symbol ? '?symbol=' + symbol : ''}`),
   symbolSearch: (q: string) => api.get<any[]>(`/symbols/search?q=${q}`),
