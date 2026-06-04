@@ -29,7 +29,9 @@ import {
   ChevronDown,
 } from 'lucide-react'
 
-const INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '12h', '1d', '3d', '1w', '1M']
+const QUICK_INTERVALS = ['1m', '5m', '15m', '1h', '4h', '1d']
+const MORE_INTERVALS = ['3m', '30m', '2h', '6h', '8h', '12h', '3d', '1w', '1M']
+const INTERVALS = [...QUICK_INTERVALS, ...MORE_INTERVALS]
 const INDICATORS = ['MA', 'EMA', 'BOLL', 'MACD', 'RSI', 'VOL']
 
 function parseInterval(i: string): { multiplier: number; timespan: string } {
@@ -129,66 +131,6 @@ function DepthBar({ value, max, type }: { value: number; max: number; type: 'bid
   )
 }
 
-/* ── Collapsible period bar ── */
-
-/** Hide KLineChartPro's built-in period bar; we replace it with our own dropdown. */
-const periodBarStyle = `
-  .klinecharts-pro-period-bar { display: none !important; }
-`
-
-function CollapsiblePeriodBar({ intervals, current, onSelect }: {
-  intervals: string[]; current: string; onSelect: (i: string) => void
-}) {
-  const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
-
-  // Close on click outside
-  useEffect(() => {
-    if (!open) return
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [open])
-
-  return (
-    <>
-      <style>{periodBarStyle}</style>
-      <div ref={ref} className="relative shrink-0 border-b border-quant-border bg-quant-bg-secondary">
-        {/* Current period button */}
-        <button
-          onClick={() => setOpen(v => !v)}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors w-full"
-        >
-          <span className="text-quant-gold font-bold">{current}</span>
-          <ChevronDown className={cn('w-3 h-3 transition-transform', open && 'rotate-180')} />
-        </button>
-
-        {/* Dropdown */}
-        {open && (
-          <div className="absolute left-0 top-full z-50 mt-0.5 w-28 rounded-lg border border-quant-border bg-quant-card shadow-xl py-1 max-h-60 overflow-y-auto">
-            {intervals.map(i => (
-              <button
-                key={i}
-                onClick={() => { onSelect(i); setOpen(false) }}
-                className={cn(
-                  'w-full px-3 py-1.5 text-xs text-left transition-colors',
-                  i === current
-                    ? 'text-quant-gold bg-quant-gold/10 font-bold'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-white/[0.06]'
-                )}
-              >
-                {i}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-    </>
-  )
-}
-
 /* ─── Main Page ─── */
 export function Trading() {
   const [symbol, setSymbol] = useState('BTCUSDT')
@@ -204,6 +146,7 @@ export function Trading() {
   const bottomCollapsed = bottomHeight < 20
   const dragRef = useRef<{ startY: number; startH: number } | null>(null)
   const [leftCollapsed, setLeftCollapsed] = useState(true)
+  const [periodDropdownOpen, setPeriodDropdownOpen] = useState(false)
   const [watchlistSearch, setWatchlistSearch] = useState('')
   const [tpPrice, setTpPrice] = useState('')
   const [slPrice, setSlPrice] = useState('')
@@ -347,7 +290,6 @@ export function Trading() {
         container: chartRef.current,
         symbol: { ticker: symbol, name: symbol.replace("USDT", "/USDT"), shortName: symbol, market: "crypto", exchange: "BINANCE" },
         period: { ...parseInterval(interval), text: interval },
-        periods: INTERVALS.map((i) => ({ ...parseInterval(i), text: i })),
         datafeed, drawingBarVisible: true,
         mainIndicators: ["MA", "EMA"], subIndicators: ["VOL", "MACD"],
         theme: "dark", locale: "zh-CN",
@@ -390,30 +332,7 @@ export function Trading() {
   }
 
 
-  /* ─── Period click observer ───
-     KLineChartPro's period bar doesn't expose onChange.
-     We observe clicks and sync to React state — chart recreation is
-     triggered by [interval] dependency in the init effect above.   */
-  useEffect(() => {
-    const el = chartRef.current
-    if (!el) return
-    const handleClick = (e: MouseEvent) => {
-      let t = e.target as HTMLElement | null
-      while (t && t !== el) {
-        if (t.classList?.contains("period") && t.parentElement?.classList?.contains("klinecharts-pro-period-bar")) {
-          const txt = t.textContent?.trim()
-          if (txt && INTERVALS.includes(txt)) {
-            // Don't stopPropagation — let KLineChartPro handle its own UI highlight
-            setInterval(txt)
-          }
-          return
-        }
-        t = t.parentElement
-      }
-    }
-    el.addEventListener("click", handleClick, true)
-    return () => el.removeEventListener("click", handleClick, true)
-  }, [])
+  /* ─── Period click observer (removed: replaced by custom period bar JSX) ─── */
 
   /* ─── Resize chart when bottom panel toggles ─── */
   useEffect(() => {
@@ -699,15 +618,62 @@ export function Trading() {
     </div>
 
         {/* ════════════════════════════════════════
-            CENTER: Chart + Period bar + Toolbar
+            CENTER: Chart + Toolbar
         ════════════════════════════════════════ */}
         <div className="flex-1 flex flex-col min-w-0">
-          {/* Collapsible period selector */}
-          <CollapsiblePeriodBar
-            intervals={INTERVALS}
-            current={interval}
-            onSelect={setInterval}
-          />
+          {/* Custom period bar (collapsible) */}
+          <div className="flex items-center gap-0.5 px-2 py-1 border-b border-quant-border bg-quant-bg-secondary shrink-0 overflow-x-auto">
+            {QUICK_INTERVALS.map((p) => (
+              <button
+                key={p}
+                onClick={() => setInterval(p)}
+                className={cn(
+                  'px-2 py-0.5 rounded text-[11px] font-medium whitespace-nowrap transition-colors',
+                  interval === p
+                    ? 'bg-quant-gold/20 text-quant-gold'
+                    : 'text-muted-foreground/70 hover:text-foreground hover:bg-white/[0.06]'
+                )}
+              >
+                {p}
+              </button>
+            ))}
+            {/* More periods dropdown */}
+            <div className="relative">
+              <button
+                onClick={() => setPeriodDropdownOpen(v => !v)}
+                className={cn(
+                  'px-1.5 py-0.5 rounded text-[11px] font-medium transition-colors flex items-center gap-0.5',
+                  MORE_INTERVALS.includes(interval)
+                    ? 'bg-quant-gold/20 text-quant-gold'
+                    : 'text-muted-foreground/70 hover:text-foreground hover:bg-white/[0.06]'
+                )}
+              >
+                {MORE_INTERVALS.includes(interval) ? interval : '更多'}
+                <Clock className="w-2.5 h-2.5" />
+              </button>
+              {periodDropdownOpen && (
+                <>
+                  <div className="fixed inset-0 z-30" onClick={() => setPeriodDropdownOpen(false)} />
+                  <div className="absolute top-full right-0 mt-1 z-40 w-28 rounded-lg border border-quant-border bg-quant-card shadow-lg p-1 grid grid-cols-3 gap-0.5">
+                    {MORE_INTERVALS.map((p) => (
+                      <button
+                        key={p}
+                        onClick={() => { setInterval(p); setPeriodDropdownOpen(false) }}
+                        className={cn(
+                          'px-1.5 py-1 rounded text-[11px] font-medium transition-colors',
+                          interval === p
+                            ? 'bg-quant-gold/20 text-quant-gold'
+                            : 'text-muted-foreground hover:text-foreground hover:bg-white/[0.06]'
+                        )}
+                      >
+                        {p}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
           <div ref={chartRef} className="flex-1 min-h-0" />
         </div>
 
