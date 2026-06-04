@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { marketApi, orderApi, portfolioApi, tradesApi } from '@/lib/api'
 import { KLineChartPro } from '@klinecharts/pro'
 import '@klinecharts/pro/dist/klinecharts-pro.css'
-import { createBackendDatafeed, handlePriceTick, runBackfill } from '@/lib/klineDatafeed'
+import { createBackendDatafeed, handlePriceTick, runBackfill, setChartUpdater, clearChartUpdater } from '@/lib/klineDatafeed'
 import type { Chart } from 'klinecharts'
 import { cn } from '@/lib/utils'
 import { useWebSocket } from '@/hooks/useWebSocket'
@@ -300,8 +300,12 @@ export function Trading() {
           chartApiRef.current = api
           // Zoom to show enough bars after data loads
           try { api.scrollToRealTime() } catch (_) {}
-          // Narrow bar space so ~200 bars fit in viewport
           try { api.setBarSpace(4) } catch (_) {}
+          // Wire running bar updates directly to chart (avoids timestamp conflict
+          // with the last historical bar for the current period)
+          if (typeof api.updateData === 'function') {
+            setChartUpdater((bar) => { try { api.updateData(bar) } catch {} })
+          }
         } else {
           intervalId = window.setTimeout(checkApi, 100)
         }
@@ -319,6 +323,7 @@ export function Trading() {
   }, [initChart])
 
   function cleanupChart() {
+    clearChartUpdater()
     if (chartRef.current) chartRef.current.innerHTML = ""
     klineProRef.current = null
     chartApiRef.current = null

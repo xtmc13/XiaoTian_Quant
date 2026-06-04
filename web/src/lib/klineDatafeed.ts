@@ -4,9 +4,8 @@
  * Features:
  *  - Real Binance historical data via REST API
  *  - Live price ticks fed from the app's primary WebSocket (no duplicate WS)
- *  - Running bar aggregation with throttle
+ *  - Running bar aggregation with throttle, updates chart via _chartApi.updateData
  *  - Gap detection & backfill via REST API (call on reconnect)
- *  - Deduplication: won't push bars already sent to subscribers
  */
 import type { SymbolInfo, Period, Datafeed, DatafeedSubscribeCallback } from '@klinecharts/pro'
 import type { KLineData } from 'klinecharts'
@@ -58,37 +57,18 @@ function toKLineData(raw: any): KLineData {
   }
 }
 
-/**
- * Return the period-aligned timestamp (ms) for a given time and period.
- * E.g. for 1h period at 14:35:27 → 14:00:00.000
- */
-function periodFloor(timeMs: number, period: Period): number {
-  const ms = periodMs(period)
-  return ms > 0 ? Math.floor(timeMs / ms) * ms : timeMs
-}
-
 /* ── WebSocket subscriptions ── */
 interface SubEntry {
   symbol: SymbolInfo
   period: Period
   callbacks: Set<DatafeedSubscribeCallback>
-  /** Timestamp (ms) of the most recent complete bar pushed to subscribers */
   lastBarTimestamp: number
-  /** Current forming bar (aggregated from ticks) — null until first tick */
-  formingBar: KLineData | null
-  /** The open price of the current forming bar (first tick price of the period) */
-  periodOpen: number
-  /** Live bar state cache (per subscription key) - persists across WS messages */
   liveBar: KLineData | null
-  /** Throttle: timestamp of the last push to chart (ms) */
   lastPushTs: number
-  /** Throttle: pending bar waiting to be pushed */
   pendingBar: KLineData | null
-  /** Throttle: setTimeout id for deferred push */
   pushTimer: ReturnType<typeof setTimeout> | null
 }
 
-/** Minimum interval between pushes for the same bar (ms) */
 const PUSH_THROTTLE_MS = 200
 
 const subscriptions = new Map<string, SubEntry>()
@@ -102,68 +82,33 @@ function wsSubKey(symbol: SymbolInfo, period: Period): string {
 function detectGap(entry: SubEntry): { from: number; to: number } | null {
   const now = Date.now()
   const barMs = periodMs(entry.period)
-
   if (entry.lastBarTimestamp <= 0) return null
-
   const elapsedMs = now - entry.lastBarTimestamp
   const missedBars = Math.floor(elapsedMs / barMs)
-
   if (missedBars <= 1) return null
-
   const cappedBars = Math.min(missedBars, MAX_BACKFILL_BARS)
   const from = entry.lastBarTimestamp + barMs
   const to = now
-
   console.log(
     `[KLineDatafeed] Gap detected for ${entry.symbol.ticker} ${periodKey(entry.period)}: ` +
     `${missedBars} bars missed (capped to ${cappedBars}), fetching ${new Date(from).toISOString()} → ${new Date(to).toISOString()}`
   )
-
   return { from, to }
 }
 
 async function backfillGap(entry: SubEntry): Promise<void> {
   const gap = detectGap(entry)
   if (!gap) return
-
   try {
     const interval = toInterval(entry.period)
-    const limit = Math.min(
-      Math.ceil((gap.to - gap.from) / periodMs(entry.period)) + 10,
-      MAX_BACKFILL_BARS
-    )
-
+    const limit = Math.min(Math.ceil((gap.to - gap.from) / periodMs(entry.period)) + 10, MAX_BACKFILL_BARS)
     const data: any = await api.get('/market/klines', {
-      params: {
-        symbol: entry.symbol.ticker,
-        interval,
-        limit,
-        from: gap.from,
-        to: gap.to,
-      },
+      params: { symbol: entry.symbol.ticker, interval, limit, from: gap.from, to: gap.to },
     })
-
     const klines: any[] = data?.klines || data || []
-    if (!Array.isArray(klines) || klines.length === 0) {
-      console.log('[KLineDatafeed] Backfill: no bars returned from REST API')
-      return
-    }
-
-    const newBars = klines
-      .map(toKLineData)
-      .filter((bar) => bar.timestamp > entry.lastBarTimestamp)
-      .sort((a, b) => a.timestamp - b.timestamp)
-
-    if (newBars.length === 0) {
-      console.log('[KLineDatafeed] Backfill: all returned bars already known')
-      return
-    }
-
-    console.log(
-      `[KLineDatafeed] Backfill: pushing ${newBars.length} bars for ${entry.symbol.ticker} ` +
-      `(${new Date(newBars[0].timestamp).toISOString()} → ${new Date(newBars[newBars.length - 1].timestamp).toISOString()})`
-    )
-
+    if (!Array.isArray(klines) || klines.length === 0) return
+    const newBars = klines.map(toKLineData).filter((bar) => bar.timestamp > entry.lastBarTimestamp).sort((a, b) => a.timestamp - b.timestamp)
+    if (newBars.length === 0) return
     for (const bar of newBars) {
       entry.lastBarTimestamp = Math.max(entry.lastBarTimestamp, bar.timestamp)
       entry.callbacks.forEach((cb) => { try { cb(bar) } catch {} })
@@ -173,17 +118,12 @@ async function backfillGap(entry: SubEntry): Promise<void> {
   }
 }
 
-/** Run backfill for all active subscriptions — call from Trading.tsx on WS reconnect */
 export async function runBackfill(): Promise<void> {
   const entries = Array.from(subscriptions.values())
   if (entries.length === 0) return
-
-  console.log(`[KLineDatafeed] Running backfill for ${entries.length} subscription(s)...`)
   for (const entry of entries) { await backfillGap(entry) }
-  console.log('[KLineDatafeed] Backfill complete')
 }
 
-/** Clear all subscriptions — call from Trading.tsx when chart unmounts */
 export function clearDatafeedSubscriptions(): void {
   subscriptions.forEach((entry) => {
     if (entry.pushTimer) { clearTimeout(entry.pushTimer); entry.pushTimer = null }
@@ -191,7 +131,24 @@ export function clearDatafeedSubscriptions(): void {
   subscriptions.clear()
 }
 
-/* ── Price tick → running bar (called from the main WS hook) ── */
+/* ── Running bar update — called from Trading.tsx (main WS hook) ── */
+
+/**
+ * Ref to the klinecharts chart API (set by Trading.tsx once _chartApi is available).
+ * Used to update the current forming bar in-place without going through
+ * the subscribe callback, which avoids timestamp conflicts.
+ */
+let chartUpdater: ((bar: KLineData) => void) | null = null
+
+/** Set the chart updater — called from Trading.tsx when _chartApi is ready */
+export function setChartUpdater(fn: (bar: KLineData) => void): void {
+  chartUpdater = fn
+}
+
+/** Clear the chart updater */
+export function clearChartUpdater(): void {
+  chartUpdater = null
+}
 
 export function handlePriceTick(symbol: string, lastPrice: number, volume: number): void {
   const now = Date.now()
@@ -222,6 +179,7 @@ export function handlePriceTick(symbol: string, lastPrice: number, volume: numbe
     entry.lastBarTimestamp = Math.max(entry.lastBarTimestamp, bar.timestamp)
 
     if (isNewBar) {
+      // A new period's bar — push via callback (klinecharts creates a new bar)
       entry.lastPushTs = now
       if (entry.pushTimer) { clearTimeout(entry.pushTimer); entry.pushTimer = null }
       entry.pendingBar = null
@@ -229,9 +187,16 @@ export function handlePriceTick(symbol: string, lastPrice: number, volume: numbe
       return
     }
 
+    // Same bar as last known — update in-place via chart API if available,
+    // falling back to subscribe callback (with throttle).
+    if (chartUpdater) {
+      chartUpdater(bar)
+      return
+    }
+
+    // Fallback: throttle push via subscribe callback
     entry.pendingBar = bar
     const elapsed = now - entry.lastPushTs
-
     if (elapsed >= PUSH_THROTTLE_MS) {
       entry.lastPushTs = now
       entry.pendingBar = null
@@ -263,33 +228,20 @@ export function createBackendDatafeed(): Datafeed {
           market: 'crypto',
           exchange: s.includes('USDT') ? 'BINANCE' : 'UNKNOWN',
         }))
-      } catch {
-        return []
-      }
+      } catch { return [] }
     },
 
-    async getHistoryKLineData(
-      symbol: SymbolInfo,
-      period: Period,
-      from: number,
-      to: number,
-    ): Promise<KLineData[]> {
+    async getHistoryKLineData(symbol: SymbolInfo, period: Period, from: number, to: number): Promise<KLineData[]> {
       try {
         const interval = toInterval(period)
-        // KLineChartPro passes timestamps in MILLISECONDS (from Date.now() via adjustFromTo)
-        // Backend expects milliseconds. Do NOT multiply by 1000.
         const fromMs = from
         const toMs = to
         const barDuration = periodMs(period)
         const limit = Math.min(Math.ceil((toMs - fromMs) / barDuration) + 200, 1500)
 
         console.log('[KLineDatafeed] getHistoryKLineData CALLED:', {
-          symbol: symbol.ticker,
-          periodText: period.text,
-          from: new Date(fromMs).toISOString(),
-          to: new Date(toMs).toISOString(),
-          interval,
-          limit,
+          symbol: symbol.ticker, periodText: period.text, interval, limit,
+          from: new Date(fromMs).toISOString(), to: new Date(toMs).toISOString(),
         })
 
         const data: any = await api.get('/market/klines', {
@@ -297,18 +249,15 @@ export function createBackendDatafeed(): Datafeed {
         })
 
         const klines = data?.klines || data || []
-        let result = (Array.isArray(klines) ? klines : []).map(toKLineData)
+        const result = (Array.isArray(klines) ? klines : []).map(toKLineData)
 
-        // Exclude current period bar (handled by WS live ticks) to prevent
-        // duplicate-timestamp conflicts that make the forming bar disappear.
-        const currentAlignedTs = Math.floor(Date.now() / periodMs(period)) * periodMs(period)
-        if (result.length > 0 && result[result.length - 1].timestamp >= currentAlignedTs) {
-          result = result.slice(0, -1)
-        }
+        // Keep the last bar (current period) in history so the chart shows
+        // the full period's open/high/low from the start. The running bar
+        // update is done via chartUpdater (direct chart API) to avoid
+        // duplicate-timestamp conflicts with the subscribe callback.
+
         console.log('[KLineDatafeed] getHistoryKLineData RESULT:', {
-          symbol: symbol.ticker,
-          periodText: period.text,
-          barsCount: result.length,
+          symbol: symbol.ticker, periodText: period.text, barsCount: result.length,
           firstBar: result[0] ? { time: new Date(result[0].timestamp).toISOString(), o: result[0].open, c: result[0].close } : null,
           lastBar: result[result.length - 1] ? { time: new Date(result[result.length - 1].timestamp).toISOString(), o: result[result.length - 1].open, c: result[result.length - 1].close } : null,
         })
@@ -321,24 +270,15 @@ export function createBackendDatafeed(): Datafeed {
 
     subscribe(symbol: SymbolInfo, period: Period, callback: DatafeedSubscribeCallback): void {
       const key = wsSubKey(symbol, period)
-
       let entry = subscriptions.get(key)
       if (!entry) {
         entry = {
-          symbol,
-          period,
-          callbacks: new Set(),
-          lastBarTimestamp: 0,
-          formingBar: null,
-          periodOpen: 0,
-          liveBar: null,
-          lastPushTs: 0,
-          pendingBar: null,
-          pushTimer: null,
+          symbol, period, callbacks: new Set(),
+          lastBarTimestamp: 0, liveBar: null,
+          lastPushTs: 0, pendingBar: null, pushTimer: null,
         }
         subscriptions.set(key, entry)
       }
-
       entry.callbacks.add(callback)
     },
 
@@ -346,12 +286,7 @@ export function createBackendDatafeed(): Datafeed {
       const key = wsSubKey(symbol, period)
       const entry = subscriptions.get(key)
       if (!entry) return
-
-      if (entry.pushTimer) {
-        clearTimeout(entry.pushTimer)
-        entry.pushTimer = null
-      }
-
+      if (entry.pushTimer) { clearTimeout(entry.pushTimer); entry.pushTimer = null }
       entry.callbacks.clear()
       subscriptions.delete(key)
     },
