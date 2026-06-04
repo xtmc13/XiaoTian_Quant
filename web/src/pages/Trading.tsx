@@ -29,9 +29,7 @@ import {
   ChevronDown,
 } from 'lucide-react'
 
-const QUICK_INTERVALS = ['1m', '5m', '15m', '1h', '4h', '1d']
-const MORE_INTERVALS = ['3m', '30m', '2h', '6h', '8h', '12h', '3d', '1w', '1M']
-const INTERVALS = [...QUICK_INTERVALS, ...MORE_INTERVALS]
+const INTERVALS = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w']
 const INDICATORS = ['MA', 'EMA', 'BOLL', 'MACD', 'RSI', 'VOL']
 
 function parseInterval(i: string): { multiplier: number; timespan: string } {
@@ -146,7 +144,6 @@ export function Trading() {
   const bottomCollapsed = bottomHeight < 20
   const dragRef = useRef<{ startY: number; startH: number } | null>(null)
   const [leftCollapsed, setLeftCollapsed] = useState(true)
-  const [periodDropdownOpen, setPeriodDropdownOpen] = useState(false)
   const [watchlistSearch, setWatchlistSearch] = useState('')
   const [tpPrice, setTpPrice] = useState('')
   const [slPrice, setSlPrice] = useState('')
@@ -290,6 +287,7 @@ export function Trading() {
         container: chartRef.current,
         symbol: { ticker: symbol, name: symbol.replace("USDT", "/USDT"), shortName: symbol, market: "crypto", exchange: "BINANCE" },
         period: { ...parseInterval(interval), text: interval },
+        periods: INTERVALS.map((i) => ({ ...parseInterval(i), text: i })),
         datafeed, drawingBarVisible: true,
         mainIndicators: ["MA", "EMA"], subIndicators: ["VOL", "MACD"],
         theme: "dark", locale: "zh-CN",
@@ -332,7 +330,30 @@ export function Trading() {
   }
 
 
-  /* ─── Period click observer (removed: replaced by custom period bar JSX) ─── */
+  /* ─── Period click observer ───
+     KLineChartPro's period bar doesn't expose onChange.
+     We observe clicks and sync to React state — chart recreation is
+     triggered by [interval] dependency in the init effect above.   */
+  useEffect(() => {
+    const el = chartRef.current
+    if (!el) return
+    const handleClick = (e: MouseEvent) => {
+      let t = e.target as HTMLElement | null
+      while (t && t !== el) {
+        if (t.classList?.contains("period") && t.parentElement?.classList?.contains("klinecharts-pro-period-bar")) {
+          const txt = t.textContent?.trim()
+          if (txt && INTERVALS.includes(txt)) {
+            // Don't stopPropagation — let KLineChartPro handle its own UI highlight
+            setInterval(txt)
+          }
+          return
+        }
+        t = t.parentElement
+      }
+    }
+    el.addEventListener("click", handleClick, true)
+    return () => el.removeEventListener("click", handleClick, true)
+  }, [])
 
   /* ─── Resize chart when bottom panel toggles ─── */
   useEffect(() => {
@@ -621,66 +642,13 @@ export function Trading() {
             CENTER: Chart + Toolbar
         ════════════════════════════════════════ */}
         <div className="flex-1 flex flex-col min-w-0">
-          {/* Custom period bar (collapsible) */}
-          <div className="flex items-center gap-0.5 px-2 py-1 border-b border-quant-border bg-quant-bg-secondary shrink-0 overflow-x-auto">
-            {QUICK_INTERVALS.map((p) => (
-              <button
-                key={p}
-                onClick={() => setInterval(p)}
-                className={cn(
-                  'px-2 py-0.5 rounded text-[11px] font-medium whitespace-nowrap transition-colors',
-                  interval === p
-                    ? 'bg-quant-gold/20 text-quant-gold'
-                    : 'text-muted-foreground/70 hover:text-foreground hover:bg-white/[0.06]'
-                )}
-              >
-                {p}
-              </button>
-            ))}
-            {/* More periods dropdown */}
-            <div className="relative">
-              <button
-                onClick={() => setPeriodDropdownOpen(v => !v)}
-                className={cn(
-                  'px-1.5 py-0.5 rounded text-[11px] font-medium transition-colors flex items-center gap-0.5',
-                  MORE_INTERVALS.includes(interval)
-                    ? 'bg-quant-gold/20 text-quant-gold'
-                    : 'text-muted-foreground/70 hover:text-foreground hover:bg-white/[0.06]'
-                )}
-              >
-                {MORE_INTERVALS.includes(interval) ? interval : '更多'}
-                <Clock className="w-2.5 h-2.5" />
-              </button>
-              {periodDropdownOpen && (
-                <>
-                  <div className="fixed inset-0 z-30" onClick={() => setPeriodDropdownOpen(false)} />
-                  <div className="absolute top-full right-0 mt-1 z-40 w-28 rounded-lg border border-quant-border bg-quant-card shadow-lg p-1 grid grid-cols-3 gap-0.5">
-                    {MORE_INTERVALS.map((p) => (
-                      <button
-                        key={p}
-                        onClick={() => { setInterval(p); setPeriodDropdownOpen(false) }}
-                        className={cn(
-                          'px-1.5 py-1 rounded text-[11px] font-medium transition-colors',
-                          interval === p
-                            ? 'bg-quant-gold/20 text-quant-gold'
-                            : 'text-muted-foreground hover:text-foreground hover:bg-white/[0.06]'
-                        )}
-                      >
-                        {p}
-                      </button>
-                    ))}
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
           <div ref={chartRef} className="flex-1 min-h-0" />
         </div>
 
         {/* ════════════════════════════════════════
             RIGHT: Quick Trade Panel (hidden on mobile)
         ════════════════════════════════════════ */}
-        <div className="hidden md:block">
+        <div className="hidden md:block h-full overflow-y-auto">
         <QuickTradePanel
           symbol={symbol}
           side={side}
