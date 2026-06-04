@@ -38,6 +38,48 @@ interface StrategyItem {
   updated_at?: string
   strategy_code?: string
   ai_generated?: boolean
+  // ── CRA 策略参数 ──
+  order_count?: number              // 做单数量 (5-7单)
+  first_order_amount?: number       // 首单仓位 (10-10000U)
+  add_position_spread?: number      // 补仓价差 (0.5-50%)
+  add_position_callback?: number    // 补仓回调 (0.01-0.5%)
+  take_profit_ratio?: number        // 止盈比例 (默认1.3%)
+  profit_callback?: number          // 盈利回调 (0.01-0.5%)
+  trade_count_mode?: 'single' | 'cycle'  // 交易次数: 单次循环/策略循环
+  open_indicator?: 'macd_golden' | 'macd_death' | 'ema' | 'close'  // 开仓指标
+  add_position_indicator?: 'macd' | 'ema' | 'close'  // 补仓指标
+  add_position_multiple?: number    // 补仓倍数
+  waterfall_protection?: number     // 防瀑布 (默认2%)
+  open_double?: boolean             // 开仓加倍
+  trend_indicator?: boolean        // 是否开启趋势指标(EMA4)
+  trend_timeframe?: '5m' | '15m' | '30m' | '60m'  // EMA4时间周期
+  take_profit_method?: 'full' | 'tail' | 'head_tail' | 'moving'  // 止盈方式
+  moving_take_profit?: {            // 移动止盈
+    enabled: boolean
+    tier1_ratio: number             // 第一档比例 (默认1.5%)
+    tier1_drawback: number          // 第一档回撤 (默认30%)
+    tier2_drawback: number          // 第二档回撤 (默认20%)
+  }
+  reverse_take_profit?: boolean     // 反向止盈
+  reverse_stop_loss?: boolean       // 反向止损
+  amplitude?: {                     // 振幅
+    '5m': number; '15m': number; '30m': number; '1h': number
+  }
+  burn_cut?: {                      // 斩仓和燃烧
+    enabled: boolean
+    dual_burn_start: number         // 双向燃烧起始仓 (默认3)
+    global_burn_start: number       // 全局燃烧起始仓 (默认5)
+  }
+  custom_reduce?: boolean           // 自定义减仓
+  online_order_limit?: number       // 限制在线单量
+  profit_protection?: boolean       // 盈利保护
+  follow_trend?: boolean            // 顺势而为
+  follow_trend_max?: number         // 顺势最大倍数 (最高5倍)
+  stop_loss_ratio?: number          // 止损比例
+  stop_loss_amount?: number         // 止损金额
+  stop_loss_price?: number          // 止损价格
+  first_order_price?: number        // 首单挂单价格 (0=市价)
+  close_add_position?: boolean      // 关闭补仓
 }
 
 interface StrategyGroup {
@@ -65,19 +107,27 @@ const TABS = [
 
 const STRAT_TYPES = {
   contract: [
-    { value: 'trend_long', label: '顺势（多）' },
-    { value: 'trend_short', label: '顺势（空）' },
-    { value: 'counter_stable', label: '逆势稳健' },
+    { value: 'trend_long', label: '顺势做多（EMA金叉）' },
+    { value: 'trend_short', label: '顺势做空（EMA死叉）' },
+    { value: 'counter_stable', label: '逆势稳健（EMA60振幅）' },
     { value: 'counter_safe', label: '逆势保守' },
     { value: 'high_flat', label: '高平策略' },
     { value: 'head_tail_arb', label: '首尾套利' },
+    { value: 'macd_golden_long', label: 'MACD金叉开多' },
+    { value: 'macd_death_short', label: 'MACD死叉开空' },
+    { value: 'ema_follow_trend', label: 'EMA顺势（拐点开仓）' },
+    { value: 'ema_counter_trend', label: 'EMA逆势（振幅开仓）' },
+    { value: 'dual_burn', label: '双向燃烧斩仓' },
+    { value: 'global_burn', label: '超级全局燃烧斩仓' },
   ],
   spot: [
-    { value: 'martin_trend', label: '马丁趋势策略' },
-    { value: 'wallstreet', label: '华尔街策略' },
+    { value: 'martin_trend', label: '马丁趋势策略（倍投2,4,8,16,32,64）' },
+    { value: 'wallstreet', label: '华尔街策略（等比1,2,3,5,8,13,21,34,55）' },
     { value: 'aggressive', label: '激进策略' },
     { value: 'conservative', label: '保守策略' },
     { value: 'high_flat', label: '高平策略' },
+    { value: 'macd_spot_long', label: 'MACD金叉开多' },
+    { value: 'ema_spot', label: 'EMA拐点策略' },
   ],
 }
 
@@ -89,7 +139,7 @@ const MODELS = [
   { id: 'grok', name: 'Grok', color: 'text-red-400' },
 ]
 
-const TIMEFRAMES = ['1m', '5m', '15m', '30m', '1h', '4h', '1D']
+const TIMEFRAMES = ['1m', '5m', '15m', '30m', '1h', '4h', '8h', '1D']
 
 const DEFAULT_CODE = `from freqtrade.strategy import IStrategy
 import talib.abstract as ta
@@ -608,6 +658,34 @@ function StrategyDetailPanel({ strategy, onStart, onStop, onEdit, onDelete }: {
           <DetailRow label="创建时间" value={strategy.created_at ? new Date(strategy.created_at).toLocaleString() : '-'} />
         </div>
       </SectionCard>
+
+      {/* ── CRA 参数详情 ── */}
+      <SectionCard title="CRA 量化参数">
+        <div className="grid grid-cols-2 gap-4 text-xs">
+          <DetailRow label="做单数量" value={`${strategy.order_count || '-'} 单`} />
+          <DetailRow label="首单仓位" value={strategy.first_order_amount ? `${strategy.first_order_amount} USDT` : '-'} />
+          <DetailRow label="补仓价差" value={strategy.add_position_spread ? `${strategy.add_position_spread}%` : '-'} />
+          <DetailRow label="补仓回调" value={strategy.add_position_callback ? `${strategy.add_position_callback}%` : '-'} />
+          <DetailRow label="止盈比例" value={strategy.take_profit_ratio ? `${strategy.take_profit_ratio}%` : '-'} />
+          <DetailRow label="盈利回调" value={strategy.profit_callback ? `${strategy.profit_callback}%` : '-'} />
+          <DetailRow label="止盈方式" value={strategy.take_profit_method === 'full' ? '全仓止盈' : strategy.take_profit_method === 'tail' ? '尾单止盈' : strategy.take_profit_method === 'head_tail' ? '首尾止盈' : strategy.take_profit_method === 'moving' ? '移动止盈' : '-'} />
+          <DetailRow label="开仓指标" value={strategy.open_indicator === 'macd_golden' ? 'MACD金叉开多' : strategy.open_indicator === 'macd_death' ? 'MACD死叉开空' : strategy.open_indicator === 'ema' ? 'EMA拐点' : strategy.open_indicator === 'close' ? '无脑买入' : '-'} />
+          <DetailRow label="补仓指标" value={strategy.add_position_indicator === 'macd' ? 'MACD' : strategy.add_position_indicator === 'ema' ? 'EMA4' : '仅跌幅'} />
+          <DetailRow label="防瀑布" value={strategy.waterfall_protection ? `${strategy.waterfall_protection}%` : '-'} />
+          <DetailRow label="开仓加倍" value={strategy.open_double ? '已开启' : '未开启'} />
+          <DetailRow label="趋势指标" value={strategy.trend_indicator ? `EMA4 (${strategy.trend_timeframe || '-'})` : '未开启'} />
+          <DetailRow label="交易次数" value={strategy.trade_count_mode === 'single' ? '单次循环' : strategy.trade_count_mode === 'cycle' ? '策略循环' : '-'} />
+          <DetailRow label="顺势而为" value={strategy.follow_trend ? `已开启 (最高${strategy.follow_trend_max || 5}倍)` : '未开启'} />
+          <DetailRow label="斩仓燃烧" value={strategy.burn_cut?.enabled ? `双向${strategy.burn_cut.dual_burn_start}仓/全局${strategy.burn_cut.global_burn_start}仓` : '未开启'} />
+          <DetailRow label="在线单量限制" value={strategy.online_order_limit ? `${strategy.online_order_limit} 单` : '-'} />
+          <DetailRow label="盈利保护" value={strategy.profit_protection ? '已开启' : '未开启'} />
+          <DetailRow label="自定义减仓" value={strategy.custom_reduce ? '已开启' : '未开启'} />
+          <DetailRow label="反向止盈" value={strategy.reverse_take_profit ? '已开启' : '未开启'} />
+          <DetailRow label="反向止损" value={strategy.reverse_stop_loss ? '已开启' : '未开启'} />
+          <DetailRow label="关闭补仓" value={strategy.close_add_position ? '是（仅止盈）' : '否'} />
+          <DetailRow label="首单挂单" value={strategy.first_order_price ? `${strategy.first_order_price} USDT` : '市价'} />
+        </div>
+      </SectionCard>
     </div>
   )
 }
@@ -660,6 +738,37 @@ function StrategyFormModal({ editing, onClose, onSaved }: { editing: StrategyIte
   const [initialCapital, setInitialCapital] = useState(editing?.initial_capital || 1000)
   const [executionMode, setExecutionMode] = useState<'live' | 'signal'>('signal')
   const [notifyChannels, setNotifyChannels] = useState<string[]>(['browser'])
+  // ── CRA 核心参数 ──
+  const [orderCount, setOrderCount] = useState(editing?.order_count || 7)
+  const [firstOrderAmount, setFirstOrderAmount] = useState(editing?.first_order_amount || 100)
+  const [addPosSpread, setAddPosSpread] = useState(editing?.add_position_spread || 3)
+  const [addPosCallback, setAddPosCallback] = useState(editing?.add_position_callback || 0.1)
+  const [takeProfitRatio, setTakeProfitRatio] = useState(editing?.take_profit_ratio || 1.3)
+  const [profitCallback, setProfitCallback] = useState(editing?.profit_callback || 0.1)
+  const [tradeCountMode, setTradeCountMode] = useState<'single' | 'cycle'>(editing?.trade_count_mode || 'cycle')
+  const [openIndicator, setOpenIndicator] = useState(editing?.open_indicator || 'macd_golden')
+  const [addPosIndicator, setAddPosIndicator] = useState(editing?.add_position_indicator || 'macd')
+  const [addPosMultiple, setAddPosMultiple] = useState(editing?.add_position_multiple || 1)
+  const [waterfallProtection, setWaterfallProtection] = useState(editing?.waterfall_protection ?? 2)
+  const [openDouble, setOpenDouble] = useState(editing?.open_double || false)
+  const [trendIndicator, setTrendIndicator] = useState(editing?.trend_indicator ?? false)
+  const [trendTimeframe, setTrendTimeframe] = useState(editing?.trend_timeframe || '15m')
+  const [takeProfitMethod, setTakeProfitMethod] = useState(editing?.take_profit_method || 'full')
+  const [movingTP, setMovingTP] = useState(editing?.moving_take_profit || { enabled: false, tier1_ratio: 1.5, tier1_drawback: 30, tier2_drawback: 20 })
+  const [reverseTP, setReverseTP] = useState(editing?.reverse_take_profit ?? false)
+  const [reverseSL, setReverseSL] = useState(editing?.reverse_stop_loss ?? false)
+  const [amplitude, setAmplitude] = useState(editing?.amplitude || { '5m': 2, '15m': 4, '30m': 7, '1h': 10 })
+  const [burnCut, setBurnCut] = useState(editing?.burn_cut || { enabled: false, dual_burn_start: 3, global_burn_start: 5 })
+  const [customReduce, setCustomReduce] = useState(editing?.custom_reduce ?? false)
+  const [onlineOrderLimit, setOnlineOrderLimit] = useState(editing?.online_order_limit || 10)
+  const [profitProtection, setProfitProtection] = useState(editing?.profit_protection ?? false)
+  const [followTrend, setFollowTrend] = useState(editing?.follow_trend ?? false)
+  const [followTrendMax, setFollowTrendMax] = useState(editing?.follow_trend_max || 5)
+  const [stopLossRatio, setStopLossRatio] = useState(editing?.stop_loss_ratio || 0)
+  const [stopLossAmount, setStopLossAmount] = useState(editing?.stop_loss_amount || 0)
+  const [stopLossPrice, setStopLossPrice] = useState(editing?.stop_loss_price || 0)
+  const [firstOrderPrice, setFirstOrderPrice] = useState(editing?.first_order_price || 0)
+  const [closeAddPosition, setCloseAddPosition] = useState(editing?.close_add_position ?? false)
 
   const createMut = useMutation({ mutationFn: strategyApi.create, onSuccess: onSaved })
   const updateMut = useMutation({ mutationFn: ({ id, data }: { id: string; data: any }) => strategyApi.update(id, data), onSuccess: onSaved })
@@ -677,6 +786,37 @@ function StrategyFormModal({ editing, onClose, onSaved }: { editing: StrategyIte
       notification_config: { channels: notifyChannels },
       strategy_type: strategyType,
       status: 'stopped',
+      // ── CRA 核心参数 ──
+      order_count: orderCount,
+      first_order_amount: firstOrderAmount,
+      add_position_spread: addPosSpread,
+      add_position_callback: addPosCallback,
+      take_profit_ratio: takeProfitRatio,
+      profit_callback: profitCallback,
+      trade_count_mode: tradeCountMode,
+      open_indicator: openIndicator,
+      add_position_indicator: addPosIndicator,
+      add_position_multiple: addPosMultiple,
+      waterfall_protection: waterfallProtection,
+      open_double: openDouble,
+      trend_indicator: trendIndicator,
+      trend_timeframe: trendTimeframe,
+      take_profit_method: takeProfitMethod,
+      moving_take_profit: movingTP,
+      reverse_take_profit: reverseTP,
+      reverse_stop_loss: reverseSL,
+      amplitude,
+      burn_cut: burnCut,
+      custom_reduce: customReduce,
+      online_order_limit: onlineOrderLimit,
+      profit_protection: profitProtection,
+      follow_trend: followTrend,
+      follow_trend_max: followTrendMax,
+      stop_loss_ratio: stopLossRatio,
+      stop_loss_amount: stopLossAmount,
+      stop_loss_price: stopLossPrice,
+      first_order_price: firstOrderPrice,
+      close_add_position: closeAddPosition,
     }
     if (editing) {
       updateMut.mutate({ id: editing.id, data: payload })
@@ -776,6 +916,267 @@ function StrategyFormModal({ editing, onClose, onSaved }: { editing: StrategyIte
                   </div>
                 </FormField>
               )}
+
+              {/* ── CRA 核心参数面板 ── */}
+              <div className="rounded-xl border border-quant-border bg-quant-bg-tertiary p-4 space-y-4">
+                <div className="flex items-center gap-2 text-xs font-semibold text-quant-gold">
+                  <SlidersHorizontal className="w-3.5 h-3.5" />
+                  CRA 量化参数配置
+                </div>
+
+                {/* 做单数量 + 首单仓位 */}
+                <div className="grid grid-cols-2 gap-4">
+                  <FormField label="做单数量 (5-7单)">
+                    <input type="number" min={1} max={20} value={orderCount} onChange={(e) => setOrderCount(Number(e.target.value))} className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold" />
+                  </FormField>
+                  <FormField label="首单仓位 (10-10000 USDT)">
+                    <input type="number" min={10} max={10000} step={10} value={firstOrderAmount} onChange={(e) => setFirstOrderAmount(Number(e.target.value))} className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold" />
+                  </FormField>
+                </div>
+
+                {/* 开仓加倍 + 关闭补仓 */}
+                <div className="grid grid-cols-2 gap-4">
+                  <label className="flex items-center justify-between rounded-lg border border-quant-border bg-quant-bg p-3">
+                    <span className="text-xs text-muted-foreground">开仓加倍（首单x2）</span>
+                    <Toggle value={openDouble} onChange={setOpenDouble} />
+                  </label>
+                  <label className="flex items-center justify-between rounded-lg border border-quant-border bg-quant-bg p-3">
+                    <span className="text-xs text-muted-foreground">关闭补仓（仅止盈）</span>
+                    <Toggle value={closeAddPosition} onChange={setCloseAddPosition} />
+                  </label>
+                </div>
+
+                {/* 补仓价差 + 补仓回调 */}
+                <div className="grid grid-cols-2 gap-4">
+                  <FormField label="补仓价差 (0.5-50%)">
+                    <input type="number" min={0.5} max={50} step={0.5} value={addPosSpread} onChange={(e) => setAddPosSpread(Number(e.target.value))} className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold" />
+                  </FormField>
+                  <FormField label="补仓回调 (0.01-0.5%)">
+                    <input type="number" min={0.01} max={0.5} step={0.01} value={addPosCallback} onChange={(e) => setAddPosCallback(Number(e.target.value))} className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold" />
+                  </FormField>
+                </div>
+
+                {/* 止盈比例 + 盈利回调 */}
+                <div className="grid grid-cols-2 gap-4">
+                  <FormField label="止盈比例 (%)">
+                    <input type="number" min={0.1} max={50} step={0.1} value={takeProfitRatio} onChange={(e) => setTakeProfitRatio(Number(e.target.value))} className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold" />
+                  </FormField>
+                  <FormField label="盈利回调 (0.01-0.5%)">
+                    <input type="number" min={0.01} max={0.5} step={0.01} value={profitCallback} onChange={(e) => setProfitCallback(Number(e.target.value))} className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold" />
+                  </FormField>
+                </div>
+
+                {/* 止盈方式 */}
+                <FormField label="止盈方式">
+                  <div className="grid grid-cols-2 gap-2">
+                    {[
+                      { key: 'full', label: '全仓止盈', desc: '全仓盈利后卖出' },
+                      { key: 'tail', label: '尾单止盈', desc: '最后一单盈利后卖出' },
+                      { key: 'head_tail', label: '首尾止盈', desc: '首单+尾单盈利后卖出' },
+                      { key: 'moving', label: '移动止盈', desc: '动态分档止盈' },
+                    ].map((m) => (
+                      <button key={m.key} onClick={() => setTakeProfitMethod(m.key as any)} className={cn('p-3 rounded-lg border text-left transition-colors', takeProfitMethod === m.key ? 'bg-quant-gold/10 border-quant-gold/30' : 'border-quant-border bg-quant-bg hover:border-quant-gold/20')}>
+                        <div className="text-xs font-medium">{m.label}</div>
+                        <div className="text-[10px] text-muted-foreground mt-0.5">{m.desc}</div>
+                      </button>
+                    ))}
+                  </div>
+                </FormField>
+
+                {/* 移动止盈配置 */}
+                {takeProfitMethod === 'moving' && (
+                  <div className="grid grid-cols-3 gap-3">
+                    <FormField label="止盈比例 (%)">
+                      <input type="number" min={0.1} max={10} step={0.1} value={movingTP.tier1_ratio} onChange={(e) => setMovingTP({ ...movingTP, tier1_ratio: Number(e.target.value) })} className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold" />
+                    </FormField>
+                    <FormField label="第一档回撤 (%)">
+                      <input type="number" min={5} max={100} value={movingTP.tier1_drawback} onChange={(e) => setMovingTP({ ...movingTP, tier1_drawback: Number(e.target.value) })} className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold" />
+                    </FormField>
+                    <FormField label="第二档回撤 (%)">
+                      <input type="number" min={5} max={100} value={movingTP.tier2_drawback} onChange={(e) => setMovingTP({ ...movingTP, tier2_drawback: Number(e.target.value) })} className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold" />
+                    </FormField>
+                    <div className="col-span-3 text-[10px] text-muted-foreground">
+                      计算公式: {movingTP.tier1_ratio}% ± ({movingTP.tier1_ratio}% × {movingTP.tier1_drawback}%)，移动止盈开启后分仓/首尾止盈失效
+                    </div>
+                  </div>
+                )}
+
+                {/* 开仓指标 */}
+                <FormField label="开仓指标策略">
+                  <select value={openIndicator} onChange={(e) => setOpenIndicator(e.target.value as any)} className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold">
+                    <option value="macd_golden">MACD金叉开多</option>
+                    <option value="macd_death">MACD死叉开空</option>
+                    <option value="ema">EMA拐点开仓</option>
+                    <option value="close">关闭（无脑买入）</option>
+                  </select>
+                </FormField>
+
+                {/* 补仓指标 */}
+                <FormField label="补仓指标（EMA和MACD补仓）">
+                  <select value={addPosIndicator} onChange={(e) => setAddPosIndicator(e.target.value as any)} className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold">
+                    <option value="macd">MACD金叉/死叉补仓</option>
+                    <option value="ema">EMA4上下拐点补仓</option>
+                    <option value="close">关闭（仅按跌幅补仓）</option>
+                  </select>
+                  <p className="text-[10px] text-muted-foreground mt-1">开启后需同时满足跌幅条件和指标条件才补仓，大行情时非常抗跌</p>
+                </FormField>
+
+                {/* 趋势指标 EMA4 */}
+                <div className="space-y-3">
+                  <label className="flex items-center justify-between rounded-lg border border-quant-border bg-quant-bg p-3">
+                    <div>
+                      <div className="text-xs font-medium">趋势指标 (EMA4)</div>
+                      <div className="text-[10px] text-muted-foreground">监控EMA指数平滑移动平均线</div>
+                    </div>
+                    <Toggle value={trendIndicator} onChange={setTrendIndicator} />
+                  </label>
+                  {trendIndicator && (
+                    <FormField label="EMA4 时间周期">
+                      <div className="flex gap-2">
+                        {(['5m', '15m', '30m', '60m'] as const).map((tf) => (
+                          <button key={tf} onClick={() => setTrendTimeframe(tf)} className={cn('flex-1 py-2 rounded-lg text-xs border transition-colors', trendTimeframe === tf ? 'bg-quant-gold/10 border-quant-gold/20 text-quant-gold' : 'border-quant-border text-muted-foreground hover:text-foreground')}>
+                            {tf}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="text-[10px] text-muted-foreground mt-1">时间越长准确性越高，但也越容易错过行情</p>
+                    </FormField>
+                  )}
+                </div>
+
+                {/* 防瀑布 */}
+                <FormField label="防瀑布保护 (分钟内最大涨跌%)">
+                  <input type="number" min={0.5} max={20} step={0.5} value={waterfallProtection} onChange={(e) => setWaterfallProtection(Number(e.target.value))} className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold" />
+                  <p className="text-[10px] text-muted-foreground mt-1">1分钟内单一币种涨跌超过设定值自动暂停补仓，默认2%</p>
+                </FormField>
+
+                {/* 反向止盈/止损 */}
+                <div className="grid grid-cols-2 gap-4">
+                  <label className="flex items-center justify-between rounded-lg border border-quant-border bg-quant-bg p-3">
+                    <div>
+                      <div className="text-xs font-medium">反向止盈</div>
+                      <div className="text-[10px] text-muted-foreground">MACD反向信号清仓</div>
+                    </div>
+                    <Toggle value={reverseTP} onChange={setReverseTP} />
+                  </label>
+                  <label className="flex items-center justify-between rounded-lg border border-quant-border bg-quant-bg p-3">
+                    <div>
+                      <div className="text-xs font-medium">反向止损</div>
+                      <div className="text-[10px] text-muted-foreground">MACD判断错误直接止损</div>
+                    </div>
+                    <Toggle value={reverseSL} onChange={setReverseSL} />
+                  </label>
+                </div>
+
+                {/* 顺势而为 */}
+                <div className="space-y-3">
+                  <label className="flex items-center justify-between rounded-lg border border-quant-border bg-quant-bg p-3">
+                    <div>
+                      <div className="text-xs font-medium">顺势而为</div>
+                      <div className="text-[10px] text-muted-foreground">逆势补仓后顺势单倍投，最高5倍</div>
+                    </div>
+                    <Toggle value={followTrend} onChange={setFollowTrend} />
+                  </label>
+                  {followTrend && (
+                    <FormField label="顺势最大倍数 (逆势单补仓次数+首单，最高5倍)">
+                      <input type="number" min={1} max={5} value={followTrendMax} onChange={(e) => setFollowTrendMax(Number(e.target.value))} className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold" />
+                    </FormField>
+                  )}
+                </div>
+
+                {/* 斩仓和燃烧 */}
+                <div className="space-y-3">
+                  <label className="flex items-center justify-between rounded-lg border border-quant-border bg-quant-bg p-3">
+                    <div>
+                      <div className="text-xs font-medium">斩仓和燃烧</div>
+                      <div className="text-[10px] text-muted-foreground">用顺势单盈利消耗逆势单浮亏</div>
+                    </div>
+                    <Toggle value={burnCut.enabled} onChange={(v) => setBurnCut({ ...burnCut, enabled: v })} />
+                  </label>
+                  {burnCut.enabled && (
+                    <div className="grid grid-cols-2 gap-4">
+                      <FormField label="双向燃烧起始仓">
+                        <input type="number" min={1} max={10} value={burnCut.dual_burn_start} onChange={(e) => setBurnCut({ ...burnCut, dual_burn_start: Number(e.target.value) })} className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold" />
+                        <p className="text-[10px] text-muted-foreground">默认第3仓启动</p>
+                      </FormField>
+                      <FormField label="全局燃烧起始仓">
+                        <input type="number" min={1} max={10} value={burnCut.global_burn_start} onChange={(e) => setBurnCut({ ...burnCut, global_burn_start: Number(e.target.value) })} className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus-quant-gold" />
+                        <p className="text-[10px] text-muted-foreground">默认第5仓启动跨币种燃烧</p>
+                      </FormField>
+                    </div>
+                  )}
+                </div>
+
+                {/* 止损设置 */}
+                <div className="space-y-3">
+                  <div className="text-xs font-medium text-muted-foreground">止损设置（三选一）</div>
+                  <div className="grid grid-cols-3 gap-3">
+                    <FormField label="止损比例 (%)">
+                      <input type="number" min={0} max={100} step={0.1} value={stopLossRatio} onChange={(e) => setStopLossRatio(Number(e.target.value))} className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold" />
+                    </FormField>
+                    <FormField label="止损金额 (USDT)">
+                      <input type="number" min={0} value={stopLossAmount} onChange={(e) => setStopLossAmount(Number(e.target.value))} className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold" />
+                    </FormField>
+                    <FormField label="止损价格">
+                      <input type="number" min={0} value={stopLossPrice} onChange={(e) => setStopLossPrice(Number(e.target.value))} className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold" />
+                    </FormField>
+                  </div>
+                </div>
+
+                {/* 首单挂单价格 */}
+                <FormField label="首单挂单价格 (0=实时市价)">
+                  <input type="number" min={0} value={firstOrderPrice} onChange={(e) => setFirstOrderPrice(Number(e.target.value))} className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold" />
+                  <p className="text-[10px] text-muted-foreground mt-1">输入固定价格后，只有价格低于设定值系统才会买入</p>
+                </FormField>
+
+                {/* 限制在线单量 + 盈利保护 + 自定义减仓 */}
+                <div className="grid grid-cols-3 gap-3">
+                  <FormField label="限制在线单量">
+                    <input type="number" min={1} max={50} value={onlineOrderLimit} onChange={(e) => setOnlineOrderLimit(Number(e.target.value))} className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold" />
+                  </FormField>
+                  <label className="flex flex-col justify-center rounded-lg border border-quant-border bg-quant-bg p-3">
+                    <span className="text-xs text-muted-foreground mb-1">盈利保护</span>
+                    <Toggle value={profitProtection} onChange={setProfitProtection} />
+                  </label>
+                  <label className="flex flex-col justify-center rounded-lg border border-quant-border bg-quant-bg p-3">
+                    <span className="text-xs text-muted-foreground mb-1">自定义减仓</span>
+                    <Toggle value={customReduce} onChange={setCustomReduce} />
+                  </label>
+                </div>
+
+                {/* 振幅设置 */}
+                <div className="space-y-2">
+                  <div className="text-xs font-medium text-muted-foreground">振幅设置（各周期建议值）</div>
+                  <div className="grid grid-cols-4 gap-3">
+                    {([
+                      { key: '5m', label: '5分钟', suggest: 2 },
+                      { key: '15m', label: '15分钟', suggest: 4 },
+                      { key: '30m', label: '30分钟', suggest: 7 },
+                      { key: '1h', label: '1小时', suggest: 10 },
+                    ] as const).map((a) => (
+                      <FormField key={a.key} label={a.label}>
+                        <input type="number" min={0.1} max={50} step={0.1} value={amplitude[a.key]} onChange={(e) => setAmplitude({ ...amplitude, [a.key]: Number(e.target.value) })} className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold" />
+                        <p className="text-[10px] text-muted-foreground">建议{a.suggest}%</p>
+                      </FormField>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 交易次数 */}
+                <FormField label="交易次数">
+                  <div className="flex gap-2">
+                    {([
+                      { key: 'single', label: '单次循环', desc: '止盈后不再买入，补仓继续' },
+                      { key: 'cycle', label: '策略循环', desc: '卖出后持续买入直到次数用尽' },
+                    ] as const).map((m) => (
+                      <button key={m.key} onClick={() => setTradeCountMode(m.key)} className={cn('flex-1 p-3 rounded-lg border text-left transition-colors', tradeCountMode === m.key ? 'bg-quant-gold/10 border-quant-gold/30' : 'border-quant-border bg-quant-bg hover:border-quant-gold/20')}>
+                        <div className="text-xs font-medium">{m.label}</div>
+                        <div className="text-[10px] text-muted-foreground mt-0.5">{m.desc}</div>
+                      </button>
+                    ))}
+                  </div>
+                </FormField>
+              </div>
             </>
           )}
 

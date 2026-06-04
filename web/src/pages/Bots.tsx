@@ -35,6 +35,8 @@ import {
   Search,
   SlidersHorizontal,
   RefreshCw,
+  BarChart3,
+  Zap,
 } from 'lucide-react'
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -44,7 +46,7 @@ interface BotItem {
   name: string
   strategy_name?: string
   status: 'running' | 'stopped' | 'paused' | 'error'
-  bot_type: 'grid' | 'dca' | 'arbitrage' | 'market_making' | 'trend' | 'custom'
+  bot_type: 'grid' | 'dca' | 'arbitrage' | 'market_making' | 'trend' | 'custom' | 'martin_trend' | 'wallstreet' | 'dual_burn' | 'macd_golden' | 'macd_death' | 'ema_follow' | 'ema_counter'
   coin?: string
   symbol?: string
   leverage?: number
@@ -57,6 +59,30 @@ interface BotItem {
     bot_params?: Record<string, unknown>
     symbol?: string
     timeframe?: string
+    // ── CRA 参数 ──
+    order_count?: number
+    first_order_amount?: number
+    add_position_spread?: number
+    add_position_callback?: number
+    take_profit_ratio?: number
+    profit_callback?: number
+    trade_count_mode?: 'single' | 'cycle'
+    open_indicator?: string
+    add_position_indicator?: string
+    waterfall_protection?: number
+    open_double?: boolean
+    trend_indicator?: boolean
+    trend_timeframe?: string
+    take_profit_method?: string
+    reverse_take_profit?: boolean
+    reverse_stop_loss?: boolean
+    follow_trend?: boolean
+    follow_trend_max?: number
+    burn_cut?: { enabled: boolean; dual_burn_start: number; global_burn_start: number }
+    custom_reduce?: boolean
+    online_order_limit?: number
+    profit_protection?: boolean
+    close_add_position?: boolean
   }
   created_at?: string
   updated_at?: string
@@ -119,12 +145,68 @@ const BOT_TYPES: BotTypeDef[] = [
     bg: 'rgba(235,47,150,0.10)',
   },
   {
+    key: 'martin_trend',
+    label: '马丁趋势',
+    desc: '倍投补仓原理(2,4,8,16,32,64) + 趋势指标，浮亏减半',
+    icon: <TrendingUp className="w-6 h-6" />,
+    color: '#f5222d',
+    bg: 'rgba(245,34,45,0.10)',
+  },
+  {
+    key: 'wallstreet',
+    label: '华尔街策略',
+    desc: '等比数量补仓(1,2,3,5,8,13,21,34,55) + 趋势指标',
+    icon: <BarChart3 className="w-6 h-6" />,
+    color: '#faad14',
+    bg: 'rgba(250,173,20,0.10)',
+  },
+  {
+    key: 'macd_golden',
+    label: 'MACD金叉策略',
+    desc: 'MACD金叉开多/补多，死叉反向信号清仓，适合合约和现货',
+    icon: <Activity className="w-6 h-6" />,
+    color: '#52c41a',
+    bg: 'rgba(82,196,26,0.10)',
+  },
+  {
+    key: 'macd_death',
+    label: 'MACD死叉策略',
+    desc: 'MACD死叉开空/补空，金叉反向信号清仓，适合合约做空',
+    icon: <TrendingDown className="w-6 h-6" />,
+    color: '#ff4d4f',
+    bg: 'rgba(255,77,79,0.10)',
+  },
+  {
+    key: 'dual_burn',
+    label: '双向燃烧斩仓',
+    desc: '逆势单补仓到第3仓自动开启顺势单，用盈利消耗浮亏',
+    icon: <Zap className="w-6 h-6" />,
+    color: '#722ed1',
+    bg: 'rgba(114,46,209,0.10)',
+  },
+  {
+    key: 'ema_follow',
+    label: 'EMA顺势策略',
+    desc: 'EMA60均线以上做多，EMA10拐点决定开仓时机',
+    icon: <LineChart className="w-6 h-6" />,
+    color: '#13c2c2',
+    bg: 'rgba(19,194,194,0.10)',
+  },
+  {
+    key: 'ema_counter',
+    label: 'EMA逆势策略',
+    desc: '以EMA60为标准线，均线以上做空，振幅决定开仓节点',
+    icon: <BarChart3 className="w-6 h-6" />,
+    color: '#eb2f96',
+    bg: 'rgba(235,47,150,0.10)',
+  },
+  {
     key: 'custom',
     label: '自定义',
     desc: '使用 Python 脚本编写完全自定义的策略逻辑',
     icon: <Terminal className="w-6 h-6" />,
-    color: '#13c2c2',
-    bg: 'rgba(19,194,194,0.10)',
+    color: '#8c8c8c',
+    bg: 'rgba(140,140,140,0.10)',
   },
 ]
 
@@ -602,6 +684,30 @@ function CreateWizard({
           timeframe: form.timeframe || '1h',
           bot_type: effectiveType,
           bot_params: { ...aiPreset?.params, ...form },
+          // ── CRA 参数 ──
+          order_count: Number(form.order_count) || 7,
+          first_order_amount: Number(form.first_order_amount) || 100,
+          add_position_spread: Number(form.add_position_spread) || 3,
+          add_position_callback: Number(form.add_position_callback) || 0.1,
+          take_profit_ratio: Number(form.take_profit_ratio) || 1.3,
+          profit_callback: Number(form.profit_callback) || 0.1,
+          trade_count_mode: (form.trade_count_mode as string) || 'cycle',
+          open_indicator: (form.open_indicator as string) || 'macd_golden',
+          add_position_indicator: (form.add_position_indicator as string) || 'macd',
+          waterfall_protection: Number(form.waterfall_protection) || 2,
+          open_double: !!form.open_double,
+          trend_indicator: !!form.trend_indicator,
+          trend_timeframe: (form.trend_timeframe as string) || '15m',
+          take_profit_method: (form.take_profit_method as string) || 'full',
+          reverse_take_profit: !!form.reverse_take_profit,
+          reverse_stop_loss: !!form.reverse_stop_loss,
+          follow_trend: !!form.follow_trend,
+          follow_trend_max: Number(form.follow_trend_max) || 5,
+          burn_cut: (form.burn_cut as any) || { enabled: false, dual_burn_start: 3, global_burn_start: 5 },
+          custom_reduce: !!form.custom_reduce,
+          online_order_limit: Number(form.online_order_limit) || 10,
+          profit_protection: !!form.profit_protection,
+          close_add_position: !!form.close_add_position,
         },
       }
       if (isEdit && editBot) {
@@ -770,10 +876,180 @@ function CreateWizard({
                 <input
                   value={(form.name as string) || ''}
                   onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                  placeholder="我的网格策略 #1"
+                  placeholder="我的策略 #1"
                   className="w-full rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] px-3 py-2 text-sm text-white placeholder-[#444444] outline-none focus:border-[#667eea]/40"
                 />
               </WizardField>
+
+              {/* ── CRA 参数配置 ── */}
+              <div className="rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-4 space-y-4">
+                <div className="text-xs font-semibold text-[#667eea]">CRA 量化参数</div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <WizardField label="做单数量 (1-20单)">
+                    <input type="number" min={1} max={20} value={(form.order_count as number) || 7}
+                      onChange={(e) => setForm((f) => ({ ...f, order_count: Number(e.target.value) }))}
+                      className="w-full rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] px-3 py-2 text-sm text-white outline-none focus:border-[#667eea]/40" />
+                  </WizardField>
+                  <WizardField label="首单仓位 (USDT)">
+                    <input type="number" min={10} max={10000} step={10} value={(form.first_order_amount as number) || 100}
+                      onChange={(e) => setForm((f) => ({ ...f, first_order_amount: Number(e.target.value) }))}
+                      className="w-full rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] px-3 py-2 text-sm text-white outline-none focus:border-[#667eea]/40" />
+                  </WizardField>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <WizardField label="补仓价差 (%)">
+                    <input type="number" min={0.5} max={50} step={0.5} value={(form.add_position_spread as number) || 3}
+                      onChange={(e) => setForm((f) => ({ ...f, add_position_spread: Number(e.target.value) }))}
+                      className="w-full rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] px-3 py-2 text-sm text-white outline-none focus:border-[#667eea]/40" />
+                  </WizardField>
+                  <WizardField label="补仓回调 (%)">
+                    <input type="number" min={0.01} max={0.5} step={0.01} value={(form.add_position_callback as number) || 0.1}
+                      onChange={(e) => setForm((f) => ({ ...f, add_position_callback: Number(e.target.value) }))}
+                      className="w-full rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] px-3 py-2 text-sm text-white outline-none focus:border-[#667eea]/40" />
+                  </WizardField>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <WizardField label="止盈比例 (%)">
+                    <input type="number" min={0.1} max={50} step={0.1} value={(form.take_profit_ratio as number) || 1.3}
+                      onChange={(e) => setForm((f) => ({ ...f, take_profit_ratio: Number(e.target.value) }))}
+                      className="w-full rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] px-3 py-2 text-sm text-white outline-none focus:border-[#667eea]/40" />
+                  </WizardField>
+                  <WizardField label="盈利回调 (%)">
+                    <input type="number" min={0.01} max={0.5} step={0.01} value={(form.profit_callback as number) || 0.1}
+                      onChange={(e) => setForm((f) => ({ ...f, profit_callback: Number(e.target.value) }))}
+                      className="w-full rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] px-3 py-2 text-sm text-white outline-none focus:border-[#667eea]/40" />
+                  </WizardField>
+                </div>
+
+                <WizardField label="止盈方式">
+                  <div className="flex gap-2">
+                    {[
+                      { key: 'full', label: '全仓' },
+                      { key: 'tail', label: '尾单' },
+                      { key: 'head_tail', label: '首尾' },
+                      { key: 'moving', label: '移动' },
+                    ].map((m) => (
+                      <button key={m.key} onClick={() => setForm((f) => ({ ...f, take_profit_method: m.key }))}
+                        className={cn('rounded-lg border px-3 py-2 text-xs font-medium transition-colors',
+                          (form.take_profit_method as string) === m.key
+                            ? 'border-white/20 bg-white/10 text-white'
+                            : 'border-[#1c1c1c] bg-[#141414] text-[#666666] hover:text-[#888888]'
+                        )}>
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
+                </WizardField>
+
+                <WizardField label="开仓指标">
+                  <select value={(form.open_indicator as string) || 'macd_golden'}
+                    onChange={(e) => setForm((f) => ({ ...f, open_indicator: e.target.value }))}
+                    className="w-full rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] px-3 py-2 text-sm text-white outline-none focus:border-[#667eea]/40">
+                    <option value="macd_golden">MACD金叉开多</option>
+                    <option value="macd_death">MACD死叉开空</option>
+                    <option value="ema">EMA拐点开仓</option>
+                    <option value="close">关闭（无脑买入）</option>
+                  </select>
+                </WizardField>
+
+                <WizardField label="补仓指标">
+                  <select value={(form.add_position_indicator as string) || 'macd'}
+                    onChange={(e) => setForm((f) => ({ ...f, add_position_indicator: e.target.value }))}
+                    className="w-full rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] px-3 py-2 text-sm text-white outline-none focus:border-[#667eea]/40">
+                    <option value="macd">MACD金叉/死叉补仓</option>
+                    <option value="ema">EMA4上下拐点补仓</option>
+                    <option value="close">关闭（仅按跌幅补仓）</option>
+                  </select>
+                </WizardField>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <WizardField label="防瀑布 (%)">
+                    <input type="number" min={0.5} max={20} step={0.5} value={(form.waterfall_protection as number) || 2}
+                      onChange={(e) => setForm((f) => ({ ...f, waterfall_protection: Number(e.target.value) }))}
+                      className="w-full rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] px-3 py-2 text-sm text-white outline-none focus:border-[#667eea]/40" />
+                  </WizardField>
+                  <WizardField label="在线单量限制">
+                    <input type="number" min={1} max={50} value={(form.online_order_limit as number) || 10}
+                      onChange={(e) => setForm((f) => ({ ...f, online_order_limit: Number(e.target.value) }))}
+                      className="w-full rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] px-3 py-2 text-sm text-white outline-none focus:border-[#667eea]/40" />
+                  </WizardField>
+                </div>
+
+                <div className="flex gap-3">
+                  <label className="flex items-center gap-2 text-xs text-[#666666]">
+                    <input type="checkbox" checked={!!form.open_double}
+                      onChange={(e) => setForm((f) => ({ ...f, open_double: e.target.checked }))}
+                      className="rounded border-[#1c1c1c]" />
+                    开仓加倍
+                  </label>
+                  <label className="flex items-center gap-2 text-xs text-[#666666]">
+                    <input type="checkbox" checked={!!form.trend_indicator}
+                      onChange={(e) => setForm((f) => ({ ...f, trend_indicator: e.target.checked }))}
+                      className="rounded border-[#1c1c1c]" />
+                    趋势指标(EMA4)
+                  </label>
+                  <label className="flex items-center gap-2 text-xs text-[#666666]">
+                    <input type="checkbox" checked={!!form.follow_trend}
+                      onChange={(e) => setForm((f) => ({ ...f, follow_trend: e.target.checked }))}
+                      className="rounded border-[#1c1c1c]" />
+                    顺势而为
+                  </label>
+                  <label className="flex items-center gap-2 text-xs text-[#666666]">
+                    <input type="checkbox" checked={!!form.profit_protection}
+                      onChange={(e) => setForm((f) => ({ ...f, profit_protection: e.target.checked }))}
+                      className="rounded border-[#1c1c1c]" />
+                    盈利保护
+                  </label>
+                </div>
+
+                <div className="flex gap-3">
+                  <label className="flex items-center gap-2 text-xs text-[#666666]">
+                    <input type="checkbox" checked={!!form.reverse_take_profit}
+                      onChange={(e) => setForm((f) => ({ ...f, reverse_take_profit: e.target.checked }))}
+                      className="rounded border-[#1c1c1c]" />
+                    反向止盈
+                  </label>
+                  <label className="flex items-center gap-2 text-xs text-[#666666]">
+                    <input type="checkbox" checked={!!form.reverse_stop_loss}
+                      onChange={(e) => setForm((f) => ({ ...f, reverse_stop_loss: e.target.checked }))}
+                      className="rounded border-[#1c1c1c]" />
+                    反向止损
+                  </label>
+                  <label className="flex items-center gap-2 text-xs text-[#666666]">
+                    <input type="checkbox" checked={!!form.custom_reduce}
+                      onChange={(e) => setForm((f) => ({ ...f, custom_reduce: e.target.checked }))}
+                      className="rounded border-[#1c1c1c]" />
+                    自定义减仓
+                  </label>
+                  <label className="flex items-center gap-2 text-xs text-[#666666]">
+                    <input type="checkbox" checked={!!form.close_add_position}
+                      onChange={(e) => setForm((f) => ({ ...f, close_add_position: e.target.checked }))}
+                      className="rounded border-[#1c1c1c]" />
+                    关闭补仓
+                  </label>
+                </div>
+
+                <WizardField label="交易次数">
+                  <div className="flex gap-2">
+                    {[
+                      { key: 'single', label: '单次循环' },
+                      { key: 'cycle', label: '策略循环' },
+                    ].map((m) => (
+                      <button key={m.key} onClick={() => setForm((f) => ({ ...f, trade_count_mode: m.key }))}
+                        className={cn('rounded-lg border px-3 py-2 text-xs font-medium transition-colors',
+                          (form.trade_count_mode as string) === m.key
+                            ? 'border-white/20 bg-white/10 text-white'
+                            : 'border-[#1c1c1c] bg-[#141414] text-[#666666] hover:text-[#888888]'
+                        )}>
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
+                </WizardField>
+              </div>
             </div>
           )}
 

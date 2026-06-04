@@ -31,7 +31,7 @@ interface QuickTradePanelProps {
   preview: PositionPreview
   onSideChange: (side: 'BUY' | 'SELL') => void
   onOrderTypeChange: (type: 'LIMIT' | 'MARKET') => void
-  onPlaceOrder: () => void
+  onPlaceOrder: (side: 'BUY' | 'SELL') => void
   onLeverageChange: (v: number) => void
   onTradeModeChange: (m: 'contract' | 'spot') => void
   onTpChange: (v: string) => void
@@ -375,13 +375,13 @@ const handlePresetSize = (pct: number) => {
         {tradeMode === 'contract' ? (
           /* Contract: one main button + opposite secondary */
           <>
-          <button onClick={onPlaceOrder} className={cn(
+          <button onClick={() => onPlaceOrder(side)} className={cn(
             'w-full py-3 rounded-md font-bold text-sm transition-all flex items-center justify-center gap-1.5',
             activeBg, 'hover:opacity-90 active:scale-[0.98]'
           )}>
             {side === 'BUY' ? '买入/做多' : '卖出/做空'}
           </button>
-          <button onClick={() => { onSideChange(side === 'BUY' ? 'SELL' : 'BUY'); setTimeout(onPlaceOrder, 50); }}
+          <button onClick={() => { const opposite = side === 'BUY' ? 'SELL' : 'BUY'; onSideChange(opposite); onPlaceOrder(opposite); }}
             className="w-full mt-2 py-2 rounded-md text-xs font-medium border text-muted-foreground hover:text-foreground transition-colors"
             style={{borderColor: side === 'BUY' ? 'var(--sell)' : 'var(--buy)', color: side === 'BUY' ? 'var(--sell)' : 'var(--buy)'}}
           >
@@ -391,11 +391,11 @@ const handlePresetSize = (pct: number) => {
         ) : (
           /* Spot: dual buy/sell buttons */
           <div className="flex gap-2">
-            <button onClick={() => { onSideChange('BUY'); onPlaceOrder(); }}
+            <button onClick={() => { onSideChange('BUY'); onPlaceOrder('BUY'); }}
               className="flex-1 py-3 rounded-md font-bold text-sm bg-[#2EBD85] text-white hover:opacity-90 active:scale-[0.98] transition-all">
               买入
             </button>
-            <button onClick={() => { onSideChange('SELL'); onPlaceOrder(); }}
+            <button onClick={() => { onSideChange('SELL'); onPlaceOrder('SELL'); }}
               className="flex-1 py-3 rounded-md font-bold text-sm bg-[#F6465D] text-white hover:opacity-90 active:scale-[0.98] transition-all">
               卖出
             </button>

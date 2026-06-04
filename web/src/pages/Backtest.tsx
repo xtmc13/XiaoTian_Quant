@@ -19,6 +19,7 @@ import {
   Calendar,
   Database,
   Info,
+  SlidersHorizontal,
 } from 'lucide-react'
 import { cn, formatCurrency } from '@/lib/utils'
 import { backtestApi } from '@/lib/api'
@@ -64,6 +65,35 @@ interface BacktestParams {
   bars_used: number
   from: string
   to: string
+  // ── CRA 参数 ──
+  order_count?: number
+  first_order_amount?: number
+  add_position_spread?: number
+  add_position_callback?: number
+  take_profit_ratio?: number
+  profit_callback?: number
+  trade_count_mode?: 'single' | 'cycle'
+  open_indicator?: string
+  add_position_indicator?: string
+  waterfall_protection?: number
+  open_double?: boolean
+  trend_indicator?: boolean
+  trend_timeframe?: string
+  take_profit_method?: string
+  moving_take_profit?: { enabled: boolean; tier1_ratio: number; tier1_drawback: number; tier2_drawback: number }
+  reverse_take_profit?: boolean
+  reverse_stop_loss?: boolean
+  follow_trend?: boolean
+  follow_trend_max?: number
+  burn_cut?: { enabled: boolean; dual_burn_start: number; global_burn_start: number }
+  custom_reduce?: boolean
+  online_order_limit?: number
+  profit_protection?: boolean
+  close_add_position?: boolean
+  leverage?: number
+  direction?: 'long' | 'short' | 'dual'
+  first_order_price?: number
+  amplitude?: { '5m': number; '15m': number; '30m': number; '1h': number }
 }
 
 /* ── Constants ───────────────────────────────────────────────────── */
@@ -82,6 +112,19 @@ const INTERVALS = [
 const STRATEGIES = [
   { value: 'sma_cross', label: '均线交叉 (SMA Cross)', desc: '快慢均线金叉做多，死叉平仓' },
   { value: 'breakout', label: '突破策略 (Breakout)', desc: '突破N日最高/最低价入场，止损止盈出场' },
+  // ── CRA 策略 ──
+  { value: 'martin_trend', label: '马丁趋势策略', desc: '倍投补仓(2,4,8,16,32,64) + 趋势指标，浮亏减半' },
+  { value: 'wallstreet', label: '华尔街策略', desc: '等比补仓(1,2,3,5,8,13,21,34,55) + 趋势指标' },
+  { value: 'macd_golden_long', label: 'MACD金叉开多', desc: 'MACD金叉开多/补多，死叉反向清仓' },
+  { value: 'macd_death_short', label: 'MACD死叉开空', desc: 'MACD死叉开空/补空，金叉反向清仓' },
+  { value: 'ema_follow_trend', label: 'EMA顺势策略', desc: 'EMA60均线以上做多，EMA10拐点开仓' },
+  { value: 'ema_counter_trend', label: 'EMA逆势策略', desc: 'EMA60标准线以上做空，振幅决定开仓' },
+  { value: 'dual_burn', label: '双向燃烧斩仓', desc: '逆势单第3仓起开启顺势单，盈利消耗浮亏' },
+  { value: 'global_burn', label: '超级全局燃烧', desc: '逆势单第5仓起跨币种燃烧，所有盈利消耗浮亏' },
+  { value: 'trend_long', label: '顺势做多', desc: 'EMA金叉做多，适合上涨行情' },
+  { value: 'trend_short', label: '顺势做空', desc: 'EMA死叉做空，适合下跌行情' },
+  { value: 'counter_stable', label: '逆势稳健', desc: 'EMA60振幅稳健开仓，低风险' },
+  { value: 'head_tail_arb', label: '首尾套利', desc: '首单尾单组合套利，降低持仓风险' },
 ]
 
 const PRESET_DATES = [
@@ -295,6 +338,25 @@ export function Backtest() {
   const [fromDate, setFromDate] = useState(daysAgo(180))
   const [toDate, setToDate] = useState(dateToISO(new Date()))
   const [activePreset, setActivePreset] = useState<string | null>('最近6个月')
+  // ── CRA 回测参数 ──
+  const [craOrderCount, setCraOrderCount] = useState(7)
+  const [craFirstAmount, setCraFirstAmount] = useState(100)
+  const [craAddSpread, setCraAddSpread] = useState(3)
+  const [craAddCallback, setCraAddCallback] = useState(0.1)
+  const [craTpRatio, setCraTpRatio] = useState(1.3)
+  const [craProfitCallback, setCraProfitCallback] = useState(0.1)
+  const [craTpMethod, setCraTpMethod] = useState<'full' | 'tail' | 'head_tail' | 'moving'>('full')
+  const [craOpenInd, setCraOpenInd] = useState('macd_golden')
+  const [craAddInd, setCraAddInd] = useState('macd')
+  const [craWaterfall, setCraWaterfall] = useState(2)
+  const [craOpenDouble, setCraOpenDouble] = useState(false)
+  const [craTrendInd, setCraTrendInd] = useState(false)
+  const [craTrendTf, setCraTrendTf] = useState('15m')
+  const [craFollowTrend, setCraFollowTrend] = useState(false)
+  const [craBurnCut, setCraBurnCut] = useState(false)
+  const [craCloseAdd, setCraCloseAdd] = useState(false)
+  const [craLeverage, setCraLeverage] = useState(5)
+  const [craDirection, setCraDirection] = useState<'long' | 'short' | 'dual'>('long')
 
   const [report, setReport] = useState<BacktestReport | null>(null)
   const [params, setParams] = useState<BacktestParams | null>(null)
@@ -310,6 +372,25 @@ export function Backtest() {
         initial_balance: { USDT: initialBalance },
         from: fromDate,
         to: toDate,
+        // ── CRA 参数 ──
+        order_count: craOrderCount,
+        first_order_amount: craFirstAmount,
+        add_position_spread: craAddSpread,
+        add_position_callback: craAddCallback,
+        take_profit_ratio: craTpRatio,
+        profit_callback: craProfitCallback,
+        take_profit_method: craTpMethod,
+        open_indicator: craOpenInd,
+        add_position_indicator: craAddInd,
+        waterfall_protection: craWaterfall,
+        open_double: craOpenDouble,
+        trend_indicator: craTrendInd,
+        trend_timeframe: craTrendTf,
+        follow_trend: craFollowTrend,
+        burn_cut: craBurnCut,
+        close_add_position: craCloseAdd,
+        leverage: craLeverage,
+        direction: craDirection,
       }),
     onSuccess: (data: any) => {
       setReport(data?.report || null)
@@ -443,6 +524,135 @@ export function Backtest() {
                 {STRATEGIES.find((s) => s.value === strategyType)?.desc || ''}
               </p>
             </div>
+          </div>
+
+          {/* ── CRA 回测参数面板 ── */}
+          <div className="rounded-xl border border-quant-border bg-quant-bg-tertiary p-4 space-y-4">
+            <div className="flex items-center gap-2 text-xs font-semibold text-quant-gold">
+              <SlidersHorizontal className="w-3.5 h-3.5" />
+              CRA 量化回测参数
+            </div>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <div>
+                <label className="mb-1.5 block text-xs text-muted-foreground">做单数量</label>
+                <input type="number" min={1} max={20} value={craOrderCount} onChange={(e) => setCraOrderCount(Number(e.target.value))}
+                  className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold" />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs text-muted-foreground">首单仓位 (USDT)</label>
+                <input type="number" min={10} max={10000} step={10} value={craFirstAmount} onChange={(e) => setCraFirstAmount(Number(e.target.value))}
+                  className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold" />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs text-muted-foreground">杠杆倍数</label>
+                <input type="number" min={1} max={125} value={craLeverage} onChange={(e) => setCraLeverage(Number(e.target.value))}
+                  className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold" />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <div>
+                <label className="mb-1.5 block text-xs text-muted-foreground">补仓价差 (%)</label>
+                <input type="number" min={0.5} max={50} step={0.5} value={craAddSpread} onChange={(e) => setCraAddSpread(Number(e.target.value))}
+                  className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold" />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs text-muted-foreground">补仓回调 (%)</label>
+                <input type="number" min={0.01} max={0.5} step={0.01} value={craAddCallback} onChange={(e) => setCraAddCallback(Number(e.target.value))}
+                  className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold" />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs text-muted-foreground">防瀑布 (%)</label>
+                <input type="number" min={0.5} max={20} step={0.5} value={craWaterfall} onChange={(e) => setCraWaterfall(Number(e.target.value))}
+                  className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold" />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <div>
+                <label className="mb-1.5 block text-xs text-muted-foreground">止盈比例 (%)</label>
+                <input type="number" min={0.1} max={50} step={0.1} value={craTpRatio} onChange={(e) => setCraTpRatio(Number(e.target.value))}
+                  className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold" />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs text-muted-foreground">盈利回调 (%)</label>
+                <input type="number" min={0.01} max={0.5} step={0.01} value={craProfitCallback} onChange={(e) => setCraProfitCallback(Number(e.target.value))}
+                  className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold" />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs text-muted-foreground">止盈方式</label>
+                <select value={craTpMethod} onChange={(e) => setCraTpMethod(e.target.value as any)}
+                  className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold">
+                  <option value="full">全仓止盈</option>
+                  <option value="tail">尾单止盈</option>
+                  <option value="head_tail">首尾止盈</option>
+                  <option value="moving">移动止盈</option>
+                </select>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <div>
+                <label className="mb-1.5 block text-xs text-muted-foreground">开仓指标</label>
+                <select value={craOpenInd} onChange={(e) => setCraOpenInd(e.target.value)}
+                  className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold">
+                  <option value="macd_golden">MACD金叉开多</option>
+                  <option value="macd_death">MACD死叉开空</option>
+                  <option value="ema">EMA拐点开仓</option>
+                  <option value="close">关闭（无脑买入）</option>
+                </select>
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs text-muted-foreground">补仓指标</label>
+                <select value={craAddInd} onChange={(e) => setCraAddInd(e.target.value)}
+                  className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold">
+                  <option value="macd">MACD补仓</option>
+                  <option value="ema">EMA4补仓</option>
+                  <option value="close">仅按跌幅</option>
+                </select>
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs text-muted-foreground">交易方向</label>
+                <select value={craDirection} onChange={(e) => setCraDirection(e.target.value as any)}
+                  className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold">
+                  <option value="long">做多</option>
+                  <option value="short">做空</option>
+                  <option value="dual">双向</option>
+                </select>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-4">
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                <input type="checkbox" checked={craOpenDouble} onChange={(e) => setCraOpenDouble(e.target.checked)} className="rounded border-quant-border" />
+                开仓加倍
+              </label>
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                <input type="checkbox" checked={craTrendInd} onChange={(e) => setCraTrendInd(e.target.checked)} className="rounded border-quant-border" />
+                趋势指标(EMA4)
+              </label>
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                <input type="checkbox" checked={craFollowTrend} onChange={(e) => setCraFollowTrend(e.target.checked)} className="rounded border-quant-border" />
+                顺势而为
+              </label>
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                <input type="checkbox" checked={craBurnCut} onChange={(e) => setCraBurnCut(e.target.checked)} className="rounded border-quant-border" />
+                斩仓燃烧
+              </label>
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                <input type="checkbox" checked={craCloseAdd} onChange={(e) => setCraCloseAdd(e.target.checked)} className="rounded border-quant-border" />
+                关闭补仓
+              </label>
+            </div>
+            {craTrendInd && (
+              <div>
+                <label className="mb-1.5 block text-xs text-muted-foreground">EMA4 时间周期</label>
+                <div className="flex gap-2">
+                  {(['5m', '15m', '30m', '60m'] as const).map((tf) => (
+                    <button key={tf} onClick={() => setCraTrendTf(tf)}
+                      className={cn('flex-1 py-2 rounded-lg text-xs border transition-colors', craTrendTf === tf ? 'bg-quant-gold/10 border-quant-gold/20 text-quant-gold' : 'border-quant-border text-muted-foreground hover:text-foreground')}>
+                      {tf}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Row 2: Date range + Initial balance */}
