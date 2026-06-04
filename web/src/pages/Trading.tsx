@@ -143,6 +143,7 @@ export function Trading() {
   const [bottomHeight, setBottomHeight] = useState(180) // px, 0=collapsed
   const bottomCollapsed = bottomHeight < 20
   const dragRef = useRef<{ startY: number; startH: number } | null>(null)
+  const [leftCollapsed, setLeftCollapsed] = useState(false)
   const [watchlistSearch, setWatchlistSearch] = useState('')
   const [tpPrice, setTpPrice] = useState('')
   const [slPrice, setSlPrice] = useState('')
@@ -416,7 +417,10 @@ export function Trading() {
         {/* ════════════════════════════════════════
             LEFT: Watchlist / Orderbook / Trades
         ════════════════════════════════════════ */}
-        <div className="hidden md:flex w-64 shrink-0 border-r border-quant-border flex-col bg-quant-bg-secondary">
+        <div className={cn(
+          'hidden md:flex shrink-0 border-r border-quant-border flex-col bg-quant-bg-secondary transition-all duration-200',
+          leftCollapsed ? 'w-10' : 'w-64'
+        )}>
           {/* Tabs */}
           <div className="flex border-b border-quant-border">
             {([
@@ -426,16 +430,24 @@ export function Trading() {
             ] as const).map((t) => (
               <button
                 key={t.key}
-                onClick={() => setLeftTab(t.key)}
+                onClick={() => { if (leftCollapsed) setLeftCollapsed(false); else setLeftTab(t.key) }}
                 className={cn(
                   'flex-1 py-2 text-[11px] font-medium transition-colors flex items-center justify-center gap-1',
                   leftTab === t.key ? 'text-quant-gold border-b-2 border-quant-gold' : 'text-muted-foreground hover:text-foreground'
                 )}
               >
                 <t.icon className="w-3 h-3" />
-                {t.label}
+                {!leftCollapsed && t.label}
               </button>
             ))}
+            {/* Collapse button */}
+            <button
+              onClick={() => setLeftCollapsed(v => !v)}
+              className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-white/5 transition-colors self-center"
+              title={leftCollapsed ? '展开左侧面板' : '折叠左侧面板'}
+            >
+              <ChevronDown className={cn('w-3 h-3 transition-transform', leftCollapsed ? '-rotate-90' : 'rotate-90')} />
+            </button>
           </div>
 
           {/* Watchlist Panel */}
