@@ -14,11 +14,11 @@ import { api } from './api'
 /* ── Period → backend interval mapping ── */
 const PERIOD_MAP: Record<string, string> = {
   '1minute': '1m', '3minute': '3m', '5minute': '5m', '15minute': '15m',
-  '30minute': '30m', '1hour': '1h', '4hour': '4h',
-  '1day': '1d', '1week': '1w', '1month': '1M',
+  '30minute': '30m', '1hour': '1h', '2hour': '2h', '4hour': '4h',
+  '8hour': '8h', '12hour': '12h',
+  '1day': '1d', '3day': '3d', '1week': '1w', '1month': '1M',
 }
 
-/* ── Period → duration in milliseconds ── */
 const PERIOD_MS: Record<string, number> = {
   '1minute': 60_000,
   '3minute': 180_000,
@@ -26,8 +26,12 @@ const PERIOD_MS: Record<string, number> = {
   '15minute': 900_000,
   '30minute': 1_800_000,
   '1hour': 3_600_000,
+  '2hour': 7_200_000,
   '4hour': 14_400_000,
+  '8hour': 28_800_000,
+  '12hour': 43_200_000,
   '1day': 86_400_000,
+  '3day': 259_200_000,
   '1week': 604_800_000,
   '1month': 2_592_000_000,
 }

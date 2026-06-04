@@ -29,7 +29,7 @@ import {
   ChevronDown,
 } from 'lucide-react'
 
-const INTERVALS = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w']
+const INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '12h', '1d', '3d', '1w', '1M']
 const INDICATORS = ['MA', 'EMA', 'BOLL', 'MACD', 'RSI', 'VOL']
 
 function parseInterval(i: string): { multiplier: number; timespan: string } {
@@ -126,6 +126,66 @@ function DepthBar({ value, max, type }: { value: number; max: number; type: 'bid
     <div className="absolute inset-y-0 right-0 overflow-hidden" style={{ width: `${pct}%`, opacity: 0.12 }}>
       <div className={cn('h-full w-full', type === 'bid' ? 'bg-quant-green' : 'bg-quant-red')} />
     </div>
+  )
+}
+
+/* ── Collapsible period bar ── */
+
+/** Hide KLineChartPro's built-in period bar; we replace it with our own dropdown. */
+const periodBarStyle = `
+  .klinecharts-pro-period-bar { display: none !important; }
+`
+
+function CollapsiblePeriodBar({ intervals, current, onSelect }: {
+  intervals: string[]; current: string; onSelect: (i: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  // Close on click outside
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  return (
+    <>
+      <style>{periodBarStyle}</style>
+      <div ref={ref} className="relative shrink-0 border-b border-quant-border bg-quant-bg-secondary">
+        {/* Current period button */}
+        <button
+          onClick={() => setOpen(v => !v)}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors w-full"
+        >
+          <span className="text-quant-gold font-bold">{current}</span>
+          <ChevronDown className={cn('w-3 h-3 transition-transform', open && 'rotate-180')} />
+        </button>
+
+        {/* Dropdown */}
+        {open && (
+          <div className="absolute left-0 top-full z-50 mt-0.5 w-28 rounded-lg border border-quant-border bg-quant-card shadow-xl py-1 max-h-60 overflow-y-auto">
+            {intervals.map(i => (
+              <button
+                key={i}
+                onClick={() => { onSelect(i); setOpen(false) }}
+                className={cn(
+                  'w-full px-3 py-1.5 text-xs text-left transition-colors',
+                  i === current
+                    ? 'text-quant-gold bg-quant-gold/10 font-bold'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-white/[0.06]'
+                )}
+              >
+                {i}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </>
   )
 }
 
@@ -639,9 +699,19 @@ export function Trading() {
     </div>
 
         {/* ════════════════════════════════════════
-            CENTER: Chart + Toolbar
+            CENTER: Chart + Period bar + Toolbar
         ════════════════════════════════════════ */}
         <div className="flex-1 flex flex-col min-w-0">
+          {/* Collapsible period selector */}
+          <CollapsiblePeriodBar
+            intervals={INTERVALS}
+            current={interval}
+            onSelect={(i) => {
+              setInterval(i)
+              // Recreate chart on period change (SolidJS setPeriod bug)
+              initChart()
+            }}
+          />
           <div ref={chartRef} className="flex-1 min-h-0" />
         </div>
 
