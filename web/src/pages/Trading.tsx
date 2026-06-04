@@ -423,27 +423,6 @@ export function Trading() {
   /* ─── Render ─── */
   return (
     <div className="h-full flex flex-col">
-      {/* MARKET BAR (contract mode) */}
-      <div className="h-14 shrink-0 bg-quant-bg-secondary border-b border-quant-border flex items-center px-4 gap-5 overflow-x-auto">
-        <div className="flex items-center gap-2 shrink-0">
-          <span className="text-base font-bold text-foreground">{symbol}</span>
-          <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-quant-gold/10 text-quant-gold">永续</span>
-        </div>
-        <span className={cn("text-xl font-bold font-mono", isUp ? "text-quant-green" : "text-quant-red")}>
-          {lastPrice ? lastPrice.toFixed(2) : "--"}
-        </span>
-        <span className={cn("text-xs font-medium", isUp ? "text-quant-green" : "text-quant-red")}>
-          {changePct ? (isUp ? "+" : "") + changePct.toFixed(2) + "%" : "--"}
-        </span>
-        <div className="flex gap-4 text-[11px]">
-          <MarketStat label="标记价格" value={lastPrice ? lastPrice.toFixed(2) : "--"} />
-          <MarketStat label="指数价格" value={lastPrice ? lastPrice.toFixed(2) : "--"} />
-          <MarketStat label="资金费率" value={"0.0100%"} />
-          <MarketStat label="24h最高" value={snapshot?.high24 ? Number(snapshot.high24).toFixed(2) : "--"} />
-          <MarketStat label="24h最低" value={snapshot?.low24 ? Number(snapshot.low24).toFixed(2) : "--"} />
-          <MarketStat label="24h成交量" value={snapshot?.volume ? Number(snapshot.volume).toFixed(1) + " " + symbol.replace("USDT","") : "--"} />
-        </div>
-      </div>
 
       {/* MAIN GRID: Chart | Orderbook | Trade */}
       <div className="flex-1 grid grid-cols-[1fr_270px_310px] gap-px bg-quant-border min-h-0">
@@ -812,14 +791,6 @@ export function Trading() {
 }
 
 /* ─── Status Tag Component ─── */
-function MarketStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex flex-col gap-0.5 whitespace-nowrap">
-      <span className="text-[10px] text-muted-foreground">{label}</span>
-      <span className="text-xs font-medium text-foreground">{value}</span>
-    </div>
-  )
-}
 
 function StatusTag({ status }: { status: string }) {
   const config: Record<string, { cls: string; icon: React.ReactNode; label: string }> = {
