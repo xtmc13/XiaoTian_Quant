@@ -423,6 +423,28 @@ export function Trading() {
   /* ─── Render ─── */
   return (
     <div className="h-full flex flex-col">
+      {/* MARKET BAR (contract mode) */}
+      <div className="h-14 shrink-0 bg-quant-bg-secondary border-b border-quant-border flex items-center px-4 gap-5 overflow-x-auto">
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="text-base font-bold text-foreground">{symbol}</span>
+          <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-quant-gold/10 text-quant-gold">永续</span>
+        </div>
+        <span className={cn("text-xl font-bold font-mono", isUp ? "text-quant-green" : "text-quant-red")}>
+          {lastPrice ? lastPrice.toFixed(2) : "--"}
+        </span>
+        <span className={cn("text-xs font-medium", isUp ? "text-quant-green" : "text-quant-red")}>
+          {changePct ? (isUp ? "+" : "") + changePct.toFixed(2) + "%" : "--"}
+        </span>
+        <div className="flex gap-4 text-[11px]">
+          <MarketStat label="标记价格" value={lastPrice ? lastPrice.toFixed(2) : "--"} />
+          <MarketStat label="指数价格" value={lastPrice ? lastPrice.toFixed(2) : "--"} />
+          <MarketStat label="资金费率" value={"0.0100%"} />
+          <MarketStat label="24h最高" value={snapshot?.high24 ? Number(snapshot.high24).toFixed(2) : "--"} />
+          <MarketStat label="24h最低" value={snapshot?.low24 ? Number(snapshot.low24).toFixed(2) : "--"} />
+          <MarketStat label="24h成交量" value={snapshot?.volume ? Number(snapshot.volume).toFixed(1) + " " + symbol.replace("USDT","") : "--"} />
+        </div>
+      </div>
+
       {/* MAIN GRID: Chart | Orderbook | Trade */}
       <div className="flex-1 grid grid-cols-[1fr_270px_310px] gap-px bg-quant-border min-h-0">
         {/* CHART */}
@@ -561,7 +583,10 @@ export function Trading() {
             {([
               { key: 'positions', label: '持仓', count: positions?.length || 0, icon: TrendingUp },
               { key: 'orders', label: '当前委托', count: orders?.length || 0, icon: Clock },
-              { key: 'history', label: '历史成交', count: historyOrders?.length || 0, icon: CheckCircle2 },
+              { key: 'plans', label: '计划委托', count: 0, icon: AlertCircle },
+              { key: 'history', label: '历史委托', count: historyOrders?.length || 0, icon: XCircle },
+              { key: 'fills', label: '成交记录', count: 0, icon: CheckCircle2 },
+              { key: 'assets', label: '资产', count: 0, icon: Activity },
             ] as const).map((t) => (
               <button
                 key={t.key}
@@ -599,103 +624,61 @@ export function Trading() {
           <div className="overflow-y-auto flex-1" style={{ maxHeight: bottomHeight - 40 }}>
             {/* ── Positions Table ── */}
             {activeBottomTab === 'positions' && (
-              <div>
+              <div className="overflow-x-auto">
                 {posLoading ? (
                   <div className="p-4 space-y-2">
-                    {Array.from({ length: 4 }).map((_, i) => (
-                      <Skeleton key={i} variant="text" height={32} />
-                    ))}
+                    {Array.from({ length: 3 }).map((_, i) => (<Skeleton key={i} variant="text" height={32} />))}
                   </div>
                 ) : positions?.length ? (
-                  <div className="overflow-x-auto">
-                  <table className="w-full text-[10px] whitespace-nowrap">
+                  <table className="w-full text-[11px] whitespace-nowrap">
                     <thead className="sticky top-0 bg-quant-bg-secondary z-10">
-                      {tradeMode === 'contract' ? (
-                        <tr className="text-muted-foreground text-left">
-                          <th className="px-1.5 py-1 font-medium">币种</th>
-                          <th className="px-1.5 py-1 font-medium">方向</th>
-                          <th className="px-1.5 py-1 font-medium">杠杆</th>
-                          <th className="px-1.5 py-1 font-medium">开仓价</th>
-                          <th className="px-1.5 py-1 font-medium">标记价</th>
-                          <th className="px-1.5 py-1 font-medium">盈亏</th>
-                          <th className="px-1.5 py-1 font-medium">保证金</th>
-                          <th className="px-1.5 py-1 font-medium">操作</th>
-                        </tr>
-                      ) : (
-                        <tr className="text-muted-foreground text-left">
-                          <th className="px-1.5 py-1 font-medium">币种</th>
-                          <th className="px-1.5 py-1 font-medium">持仓量</th>
-                          <th className="px-1.5 py-1 font-medium">均价</th>
-                          <th className="px-1.5 py-1 font-medium">当前价</th>
-                          <th className="px-1.5 py-1 font-medium">盈亏</th>
-                          <th className="px-1.5 py-1 font-medium">操作</th>
-                        </tr>
-                      )}
+                      <tr className="text-muted-foreground border-b border-quant-border">
+                        <th className="text-left font-medium px-3 py-2">合约</th>
+                        <th className="text-left font-medium px-3 py-2">数量</th>
+                        <th className="text-right font-medium px-3 py-2">开仓价</th>
+                        <th className="text-right font-medium px-3 py-2">标记价</th>
+                        <th className="text-right font-medium px-3 py-2">强平价</th>
+                        <th className="text-right font-medium px-3 py-2">保证金</th>
+                        <th className="text-right font-medium px-3 py-2">未实现盈亏</th>
+                        <th className="text-right font-medium px-3 py-2">收益率</th>
+                      </tr>
                     </thead>
                     <tbody>
-                      {(positions || []).map((pos: any) => {
-                        const pnl = pos.unrealized_pnl || 0
-                        const pnlPct = pos.margin && pos.margin > 0 ? (pnl / pos.margin) * 100 : 0
-                        const liqPrice = pos.liquidation_price || 0
-                        const qty = pos.quantity || 0
-                        const cost = (pos.entry_price || 0) * qty
-                        return tradeMode === 'contract' ? (
-                          <tr key={pos.id || pos.symbol + pos.side} className="border-t border-quant-border/40 hover:bg-white/[0.02] transition-colors">
-                            <td className="px-1.5 py-1 font-semibold">{pos.symbol}</td>
-                            <td className="px-1.5 py-1">
-                              <span className={cn(
-                                'px-1 py-0.5 rounded text-[9px] font-bold',
-                                pos.side === 'LONG' ? 'bg-quant-green/10 text-quant-green' : 'bg-quant-red/10 text-quant-red'
-                              )}>
-                                {pos.side === 'LONG' ? '多' : '空'}
+                      {positions.map(function(pos, i) {
+                        var isLong = (pos.side || '').toUpperCase() === 'LONG' || (pos.side || '').toUpperCase() === 'BUY';
+                        var entryPx = parseFloat(pos.entryPrice || pos.openPrice || pos.avgPrice || 0);
+                        var markPx = lastPrice || 0;
+                        var qty = parseFloat(pos.quantity || pos.amount || 0);
+                        var margin = parseFloat(pos.margin || pos.positionMargin || 0);
+                        var upnl = isLong ? (markPx - entryPx) * qty : (entryPx - markPx) * qty;
+                        var upnlPct = margin > 0 ? (upnl / margin) * 100 : 0;
+                        var liqPx = parseFloat(pos.liquidationPrice || pos.liquidation || 0);
+                        return (
+                          <tr key={pos.id || i} className="border-b border-quant-border/40 hover:bg-white/[0.03] transition-colors">
+                            <td className="px-3 py-2.5 font-medium">{pos.symbol || symbol} 永续</td>
+                            <td className="px-3 py-2.5">
+                              <span className={cn("inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold", isLong ? "bg-quant-green/10 text-quant-green" : "bg-quant-red/10 text-quant-red")}>
+                                <span className={cn("w-1.5 h-1.5 rounded-full", isLong ? "bg-quant-green" : "bg-quant-red")} />
+                                {isLong ? '多' : '空'} {qty.toFixed(3)}
                               </span>
                             </td>
-                            <td className="px-1.5 py-1 font-mono">{pos.leverage}x</td>
-                            <td className="px-1.5 py-1 font-mono">${formatPrice(pos.entry_price, 2)}</td>
-                            <td className="px-1.5 py-1 font-mono">${formatPrice(pos.mark_price, 2)}</td>
-                            <td className={cn('px-1.5 py-1 font-mono font-bold', pnl >= 0 ? 'text-quant-green' : 'text-quant-red')}>
-                              {pnl >= 0 ? '+' : ''}${formatPrice(pnl)}
-                            </td>
-                            <td className="px-1.5 py-1 font-mono">${formatPrice(pos.margin, 0)}</td>
-                            <td className="px-1.5 py-1">
-                              <button className="px-1.5 py-0.5 bg-quant-red/10 text-quant-red rounded text-[9px] font-medium hover:bg-quant-red/20 transition-colors">
-                                平仓
-                              </button>
-                            </td>
+                            <td className="px-3 py-2.5 text-right font-mono">{entryPx > 0 ? entryPx.toFixed(2) : '--'}</td>
+                            <td className="px-3 py-2.5 text-right font-mono">{markPx > 0 ? markPx.toFixed(2) : '--'}</td>
+                            <td className="px-3 py-2.5 text-right font-mono text-quant-red">{liqPx > 0 ? liqPx.toFixed(2) : '--'}</td>
+                            <td className="px-3 py-2.5 text-right font-mono">{margin > 0 ? margin.toFixed(2) : '--'} USDT</td>
+                            <td className={cn("px-3 py-2.5 text-right font-mono", upnl >= 0 ? "text-quant-green" : "text-quant-red")}>{upnl >= 0 ? '+' : ''}{upnl.toFixed(2)} USDT</td>
+                            <td className={cn("px-3 py-2.5 text-right font-mono", upnlPct >= 0 ? "text-quant-green" : "text-quant-red")}>{upnlPct >= 0 ? '+' : ''}{upnlPct.toFixed(2)}%</td>
                           </tr>
-                        ) : (
-                          <tr key={pos.id || pos.symbol} className="border-t border-quant-border/40 hover:bg-white/[0.02] transition-colors">
-                            <td className="px-1.5 py-1 font-semibold">{pos.symbol}</td>
-                            <td className="px-1.5 py-1 font-mono">{qty.toFixed(4)}</td>
-                            <td className="px-1.5 py-1 font-mono">${formatPrice(pos.entry_price, 2)}</td>
-                            <td className="px-1.5 py-1 font-mono">${formatPrice(pos.mark_price, 2)}</td>
-                            <td className={cn('px-1.5 py-1 font-mono font-bold', pnl >= 0 ? 'text-quant-green' : 'text-quant-red')}>
-                              {pnl >= 0 ? '+' : ''}${formatPrice(pnl)}
-                            </td>
-                            <td className="px-1.5 py-1">
-                              <button className="px-1.5 py-0.5 bg-quant-red/10 text-quant-red rounded text-[9px] font-medium hover:bg-quant-red/20 transition-colors">
-                                卖出
-                              </button>
-                            </td>
-                          </tr>
-                        )
+                        );
                       })}
                     </tbody>
                   </table>
-                  </div>
                 ) : (
-                  <div className="py-6 flex items-center justify-center">
-                    <EmptyState
-                      title="暂无持仓"
-                      description="当前没有持仓，请在右侧面板下单"
-                      className="py-1 border-0 text-[10px] [&>div:first-child]:hidden"
-                    />
-                  </div>
+                  <div className="py-8 text-center text-muted-foreground text-xs">暂无持仓</div>
                 )}
               </div>
             )}
 
-            {/* ── Orders Table ── */}
             {activeBottomTab === 'orders' && (
               <div>
                 {ordersLoading ? (
