@@ -138,7 +138,8 @@ export function Trading() {
   const [price, setPrice] = useState('')
   const [quantity, setQuantity] = useState('')
   const [leverage, setLeverage] = useState(1)
-  const [showWatchlist, setShowWatchlist] = useState(false)
+  const [obTab, setObTab] = useState<'book' | 'trades'>('book')
+  const [obPrecision, setObPrecision] = useState<string>('0.1')
   const [activeBottomTab, setActiveBottomTab] = useState<'positions' | 'orders' | 'history'>('positions')
   const [bottomHeight, setBottomHeight] = useState(0) // px, 0=collapsed
   const bottomCollapsed = bottomHeight < 20
@@ -422,41 +423,6 @@ export function Trading() {
   /* ─── Render ─── */
   return (
     <div className="h-full flex flex-col">
-      {/* MARKET BAR: Price, Stats */}
-      <div className="h-14 shrink-0 bg-quant-bg-secondary border-b border-quant-border flex items-center px-4 gap-6 overflow-x-auto">
-        <div className="flex items-center gap-2 shrink-0">
-          <span className="text-base font-bold text-foreground">{symbol}</span>
-          <span className={cn(
-            'text-xs px-1.5 py-0.5 rounded font-medium',
-            tradeMode === 'contract' ? 'bg-quant-gold/10 text-quant-gold' : ''
-          )}>
-            {tradeMode === 'contract' ? '永续' : '现货'}
-          </span>
-        </div>
-        <span className={cn('text-xl font-bold font-mono', isUp ? 'text-quant-green' : 'text-quant-red')}>
-          {lastPrice ? lastPrice.toFixed(2) : '--'}
-        </span>
-        <span className={cn('text-xs font-medium', isUp ? 'text-quant-green' : 'text-quant-red')}>
-          {changePct ? (isUp ? '+' : '') + changePct.toFixed(2) + '%' : '--'}
-        </span>
-        <div className="flex gap-5 text-[11px]">
-          <MarketStat label="标记价格" value={lastPrice ? lastPrice.toFixed(2) : '--'} />
-          <MarketStat label="指数价格" value={lastPrice ? lastPrice.toFixed(2) : '--'} />
-          <MarketStat label="24h最高" value={snapshot?.high24 ? Number(snapshot.high24).toFixed(2) : '--'} />
-          <MarketStat label="24h最低" value={snapshot?.low24 ? Number(snapshot.low24).toFixed(2) : '--'} />
-          <MarketStat label="24h成交量" value={snapshot?.volume ? Number(snapshot.volume).toFixed(2) + " " + symbol.replace("USDT","") : '--'} />
-        </div>
-        <div className="ml-auto flex items-center gap-2">
-          <button
-            onClick={() => setShowWatchlist(function(v) { return !v; })}
-            className="flex items-center gap-1 px-2 py-1 rounded text-[11px] text-muted-foreground hover:text-foreground hover:bg-quant-hover transition-colors"
-          >
-            <Search className="w-3 h-3" />
-            <span className="hidden lg:inline">{symbol}</span>
-          </button>
-        </div>
-      </div>
-
       {/* MAIN GRID: Chart | Orderbook | Trade */}
       <div className="flex-1 grid grid-cols-[1fr_270px_310px] gap-px bg-quant-border min-h-0">
         {/* CHART */}
@@ -466,9 +432,14 @@ export function Trading() {
 
         {/* ORDERBOOK + TRADES (270px) */}
         <div className="bg-quant-bg-secondary flex flex-col overflow-hidden min-h-0">
-          <div className="h-9 shrink-0 border-b border-quant-border flex items-center px-3 gap-4">
-            <span className="text-xs font-semibold text-foreground">订单簿</span>
-            <span className="text-xs text-muted-foreground">最新成交</span>
+          <div className="h-9 shrink-0 border-b border-quant-border flex items-center px-3 gap-3">
+            <span className={cn("text-xs font-semibold", obTab === "book" ? "text-foreground" : "text-muted-foreground cursor-pointer hover:text-foreground")} onClick={() => setObTab("book")}>订单簿</span>
+            <span className={cn("text-xs", obTab === "trades" ? "text-foreground font-semibold" : "text-muted-foreground cursor-pointer hover:text-foreground")} onClick={() => setObTab("trades")}>最新成交</span>
+            <div className="ml-auto flex gap-1">
+              {["0.1","1","10"].map(function(p) { return (
+                <span key={p} className={cn("text-[10px] px-1 py-0.5 rounded cursor-pointer", obPrecision === p ? "bg-quant-hover text-foreground" : "text-muted-foreground hover:text-foreground")} onClick={() => setObPrecision(p)}>{p}</span>
+              );})}
+            </div>
           </div>
           <div className="flex text-[10px] text-muted-foreground px-3 py-1.5 border-b border-quant-border shrink-0">
             <span className="flex-1">价格 (USDT)</span>
@@ -522,28 +493,7 @@ export function Trading() {
                 <div className="py-8"><EmptyState title="暂无订单簿数据" description="等待市场数据连接..." /></div>
               )}
             </div>
-            {/* Trades list */}
-            <div className="h-[150px] shrink-0 border-t border-quant-border overflow-y-auto">
-              <div className="flex text-[10px] text-muted-foreground px-3 py-1 border-b border-quant-border sticky top-0 bg-quant-bg-secondary">
-                <span className="flex-1">时间</span>
-                <span className="flex-1 text-right">价格</span>
-                <span className="flex-1 text-right">数量</span>
-              </div>
-              {displayTrades.slice(0, 20).map(function(t, i) {
-                return (
-                  <div key={t.id || i} className="flex px-3 py-0.5 text-[11px] font-mono">
-                    <span className="flex-1 text-muted-foreground">{formatTime(t.time)}</span>
-                    <span className={cn("flex-1 text-right", t.side === "buy" ? "text-quant-green" : "text-quant-red")}>
-                      {formatPrice(t.price)}
-                    </span>
-                    <span className="flex-1 text-right text-muted-foreground">{t.quantity.toFixed(4)}</span>
-                  </div>
-                );
-              })}
-              {!displayTrades.length && (
-                <div className="py-4"><EmptyState title="暂无成交记录" description="等待实时成交数据..." /></div>
-              )}
-            </div>
+
           </div>
         </div>
 

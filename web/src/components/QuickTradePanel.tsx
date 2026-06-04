@@ -5,7 +5,6 @@ import {
   ArrowDownRight,
   Info,
   Shield,
-  AlertTriangle,
   ChevronDown,
 } from 'lucide-react'
 
@@ -68,14 +67,8 @@ export function QuickTradePanel({
   onPriceChange,
   onQuantityChange,
 }: QuickTradePanelProps) {
-  const [showConfirm, setShowConfirm] = useState(false)
   const [showLeverageDropdown, setShowLeverageDropdown] = useState(false)
 
-  const isUp = side === 'BUY'
-  const activeColor = isUp ? 'quant-green' : 'quant-red'
-  const activeBg = isUp ? 'bg-quant-green' : 'bg-quant-red'
-  const activeText = isUp ? 'text-quant-green' : 'text-quant-red'
-  const activeBgLight = isUp ? 'bg-quant-green/10' : 'bg-quant-red/10'
 
   const markPrice = lastPrice || 0
   const qtyNum = parseFloat(quantity) || 0
@@ -92,16 +85,7 @@ export function QuickTradePanel({
     return Math.abs(qtyNum * (priceNum - sl))
   }, [slPrice, qtyNum, priceNum])
 
-  const handlePlace = () => {
-    if (!showConfirm) {
-      setShowConfirm(true)
-      return
-    }
-    onPlaceOrder()
-    setShowConfirm(false)
-  }
-
-  const handlePresetSize = (pct: number) => {
+const handlePresetSize = (pct: number) => {
     // Mock: assume balance = 10000 USDT for demo
     const balance = 10000
     const targetNotional = balance * (pct / 100)
@@ -342,45 +326,34 @@ export function QuickTradePanel({
         </div>
       </div>
 
-      {/* Confirm Banner */}
-      {showConfirm && (
-        <div className="px-4 pb-3">
-          <div className={cn('rounded-lg border p-2.5 flex items-start gap-2', activeBgLight, `border-${activeColor}/20`)}>
-            <AlertTriangle className={cn('w-4 h-4 shrink-0 mt-0.5', activeText)} />
-            <div className="text-[11px] space-y-0.5">
-              <p className="font-bold">请确认订单</p>
-              <p className="text-muted-foreground">
-                {side === 'BUY' ? '买入' : '卖出'} {quantity || '--'} {symbol.replace('USDT', '')} @ {orderType === 'MARKET' ? '市价' : (price || '--')} USDT
-              </p>
-              {tradeMode === 'contract' && (
-                <p className="text-muted-foreground">杠杆: {leverage}x | 保证金: {margin > 0 ? `$${formatCurrency(margin)}` : '--'}</p>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+            {/* Balance Display */}
+      <div className="px-4 pb-2 flex justify-between text-[11px]">
+        <span className="text-muted-foreground">可用 <span className="text-foreground font-mono">12,450.50</span> USDT</span>
+        <span className="text-muted-foreground">可用 <span className="text-foreground font-mono">0.8450</span> BTC</span>
+      </div>
 
-      {/* Submit Button */}
-      <div className="px-4 pb-4 mt-auto">
+      {/* Total */}
+      <div className="px-4 pb-3">
+        <div className="bg-quant-bg rounded border border-quant-border px-3 py-2 flex justify-between text-xs">
+          <span className="text-muted-foreground">成交金额</span>
+          <span className="font-mono font-medium text-foreground">≈ {qtyNum * priceNum > 0 ? qtyNum * priceNum < 0.01 ? '< 0.01' : (qtyNum * priceNum).toFixed(2) : '0.00'} USDT</span>
+        </div>
+      </div>
+
+      {/* Dual Buttons: Buy + Sell */}
+      <div className="px-4 pb-4 mt-auto flex gap-2">
         <button
-          onClick={handlePlace}
-          className={cn(
-            'w-full py-3 rounded-md font-bold text-sm transition-all flex items-center justify-center gap-1.5',
-            activeBg,
-            'hover:opacity-90 active:scale-[0.98]',
-            showConfirm ? 'shadow-lg' : ''
-          )}
+          onClick={() => { onSideChange('BUY'); onPlaceOrder(); }}
+          className="flex-1 py-3 rounded-md font-bold text-sm bg-quant-green text-white hover:opacity-90 active:scale-[0.98] transition-all"
         >
-          {showConfirm ? '确认下单' : (side === 'BUY' ? '买入做多' : '卖出做空')}
+          买入
         </button>
-        {showConfirm && (
-          <button
-            onClick={() => setShowConfirm(false)}
-            className="w-full mt-2 py-2 rounded-md text-xs text-muted-foreground hover:text-foreground transition-colors border border-quant-border hover:border-quant-border-light"
-          >
-            取消
-          </button>
-        )}
+        <button
+          onClick={() => { onSideChange('SELL'); onPlaceOrder(); }}
+          className="flex-1 py-3 rounded-md font-bold text-sm bg-quant-red text-white hover:opacity-90 active:scale-[0.98] transition-all"
+        >
+          卖出
+        </button>
       </div>
     </div>
   )
