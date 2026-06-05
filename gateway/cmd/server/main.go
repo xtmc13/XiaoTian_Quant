@@ -210,6 +210,14 @@ func main() {
 		private.GET("/data/download/:id", handler.GetDownloadJob)
 		private.GET("/data/bars", handler.GetHistoricalBars)
 
+		// ── Tick Data Management ──
+		private.POST("/data/ticks/download", handler.StartTickDownload)
+		private.GET("/data/ticks", handler.GetTicks)
+		private.GET("/data/ticks/info", handler.GetTickInfo)
+		private.POST("/backtest/tick", handler.RunTickBacktest)
+		private.GET("/backtest/tick/jobs", handler.ListTickBacktestJobs)
+		private.GET("/backtest/tick/jobs/:id", handler.GetTickBacktestJob)
+
 		// ── Strategy ──
 		private.GET("/strategies/configs", handler.GetStrategyConfigs)
 		private.GET("/strategies/configs/:id", handler.GetStrategyConfig)
