@@ -2,10 +2,15 @@ package strategy
 
 import (
 	"fmt"
+	"log"
 	"sync"
+	"time"
 
 	"github.com/xiaotian-quant/gateway/internal/event"
 	"github.com/xiaotian-quant/gateway/internal/model"
+	"github.com/xiaotian-quant/gateway/internal/notify"
+	"github.com/xiaotian-quant/gateway/internal/protection"
+	"github.com/xiaotian-quant/gateway/internal/ws"
 )
 
 // Strategy defines the interface all trading strategies must implement.
@@ -46,8 +51,20 @@ type Strategy interface {
 
 	// ── Parameters (optional) ──
 
-	// Parameters returns the strategy's hyperparameter registry (may be nil).
+	// GetParameters returns the strategy's hyperparameter registry (may be nil).
 	GetParameters() *ParamRegistry
+
+	// ValidateParams validates all parameter values are within constraints.
+	// Returns nil if the strategy has no parameters.
+	ValidateParams() error
+
+	// ApplyParams applies parameter values from a map, updating the strategy state.
+	// Called automatically by Start() if the strategy has a ParamRegistry.
+	ApplyParams(m map[string]any) error
+
+	// ParamDefs returns parameter definitions for frontend rendering.
+	// Returns nil if the strategy has no parameters.
+	ParamDefs() []map[string]any
 
 	// ── Informative pairs (optional) ──
 
@@ -85,6 +102,15 @@ func (b *BaseStrategy) AdjustEntryPrice(_ *model.Signal, _ *model.OrderBookData)
 func (b *BaseStrategy) GetParameters() *ParamRegistry                                 { return nil }
 func (b *BaseStrategy) InformativePairs() []InformativePair                           { return nil }
 
+// ValidateParams default: no parameters to validate.
+func (b *BaseStrategy) ValidateParams() error { return nil }
+
+// ApplyParams default: no parameters to apply.
+func (b *BaseStrategy) ApplyParams(_ map[string]any) error { return nil }
+
+// ParamDefs default: no parameters.
+func (b *BaseStrategy) ParamDefs() []map[string]any { return nil }
+
 // Engine manages strategy registration, lifecycle, and event dispatch.
 type Engine struct {
 	strategies map[string]Strategy // name -> strategy
@@ -93,6 +119,15 @@ type Engine struct {
 	mu         sync.RWMutex
 
 	OnSignal func(signal model.Signal)
+
+	// Protection manager — checks before emitting signals
+	protectionMgr *protection.ProtectionManager
+
+	// Broadcaster sends notifications for trading events
+	broadcaster *notify.Broadcaster
+
+	// WSHub broadcasts events to WebSocket clients
+	wsHub *ws.Hub
 }
 
 var (
@@ -110,6 +145,13 @@ func GetEngine(bus *event.EventBus) *Engine {
 		}
 	})
 	return engineInstance
+}
+
+// SetProtectionManager sets the protection manager for the engine.
+func (e *Engine) SetProtectionManager(mgr *protection.ProtectionManager) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.protectionMgr = mgr
 }
 
 // Register adds a strategy to the engine and subscribes it to events.
@@ -214,6 +256,18 @@ func (e *Engine) StrategiesForSymbol(symbol string) []Strategy {
 	return result
 }
 
+func (e *Engine) SetBroadcaster(b *notify.Broadcaster) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.broadcaster = b
+}
+
+func (e *Engine) SetWSHub(h *ws.Hub) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.wsHub = h
+}
+
 func (e *Engine) dispatch(s Strategy, evt event.Event) {
 	if !s.IsRunning() {
 		return
@@ -245,7 +299,41 @@ func (e *Engine) dispatch(s Strategy, evt event.Event) {
 		return
 	}
 	if signal != nil && e.OnSignal != nil {
+		// Check protection before emitting signal
+		if e.protectionMgr != nil {
+			ctx := protection.ProtectionContext{
+				Symbol:      signal.Symbol,
+				CurrentTime: time.Now(),
+			}
+			result := e.protectionMgr.CheckAll(ctx)
+			if result.Blocked {
+				log.Printf("[protection] signal blocked for %s: %s (resume: %v)",
+					signal.Symbol, result.Reason, result.ResumeTime)
+				// Notify protection trigger
+				if e.broadcaster != nil {
+					e.broadcaster.Protection("protection", signal.Symbol, "block", result.Reason, 0)
+					// WS broadcast protection
+					if e.wsHub != nil {
+						e.wsHub.BroadcastProtection("protection", signal.Symbol, "block", result.Reason)
+					}
+				}
+				return
+			}
+		}
 		e.OnSignal(*signal)
+		// Notify signal
+		if e.broadcaster != nil {
+			params := s.GetParameters()
+			var paramMap map[string]any
+			if params != nil {
+				paramMap = params.ToMap()
+			}
+			e.broadcaster.Signal(signal.Symbol, signal.Direction, s.Name(), 0, paramMap)
+			// WS broadcast signal
+			if e.wsHub != nil {
+				e.wsHub.BroadcastSignal(*signal)
+			}
+		}
 	}
 }
 

@@ -314,6 +314,123 @@ func (r *ParamRegistry) Count() int {
 	return len(r.params)
 }
 
+// ── NEW: Serialization & Validation ────────────────────────────
+
+// ToMap exports all current parameter values as a map.
+func (r *ParamRegistry) ToMap() map[string]any {
+	m := make(map[string]any, len(r.params))
+	for _, name := range r.order {
+		p := r.params[name]
+		m[name] = p.CurrentValue()
+	}
+	return m
+}
+
+// FromMap imports parameter values from a map, validating each.
+func (r *ParamRegistry) FromMap(m map[string]any) error {
+	for name, val := range m {
+		if err := r.Set(name, val); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Validate checks all parameters are within their constraints.
+func (r *ParamRegistry) Validate() error {
+	for _, name := range r.order {
+		p := r.params[name]
+		if err := p.Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ToJSONDefs exports parameter definitions for frontend forms.
+func (r *ParamRegistry) ToJSONDefs() []map[string]any {
+	result := make([]map[string]any, 0, len(r.order))
+	for _, name := range r.order {
+		p := r.params[name]
+		def := map[string]any{
+			"name":        p.Name,
+			"type":        p.Type.String(),
+			"default":     p.Default,
+			"current":     p.CurrentValue(),
+			"min":         p.Min,
+			"max":         p.Max,
+			"step":        p.Step,
+			"options":     p.Options,
+			"description": p.Description,
+			"space":       p.Space,
+			"optimize":    p.Optimize,
+		}
+		result = append(result, def)
+	}
+	return result
+}
+
+// Clone creates a deep copy of the registry.
+func (r *ParamRegistry) Clone() *ParamRegistry {
+	clone := NewParamRegistry()
+	for _, name := range r.order {
+		p := r.params[name]
+		clone.Register(p.clone())
+	}
+	return clone
+}
+
+// ── Parameter validation ─────────────────────────────────────
+
+// Validate checks if the current value is within constraints.
+func (p *Parameter) Validate() error {
+	if p.value == nil {
+		return nil // use default
+	}
+	switch p.Type {
+	case ParamInt:
+		val := p.GetInt()
+		if p.Min != 0 || p.Max != 0 {
+			if float64(val) < p.Min || float64(val) > p.Max {
+				return fmt.Errorf("parameter %s: value %d out of range [%.0f, %.0f]", p.Name, val, p.Min, p.Max)
+			}
+		}
+	case ParamFloat:
+		val := p.GetFloat()
+		if p.Min != 0 || p.Max != 0 {
+			if val < p.Min || val > p.Max {
+				return fmt.Errorf("parameter %s: value %f out of range [%f, %f]", p.Name, val, p.Min, p.Max)
+			}
+		}
+	case ParamCategorical:
+		val := p.GetString()
+		if len(p.Options) > 0 {
+			found := false
+			for _, opt := range p.Options {
+				if opt == val {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("parameter %s: value %q not in options %v", p.Name, val, p.Options)
+			}
+		}
+	}
+	return nil
+}
+
+// clone creates a deep copy of a parameter.
+func (p *Parameter) clone() *Parameter {
+	cp := *p
+	cp.value = p.value // value is immutable once set
+	if len(p.Options) > 0 {
+		cp.Options = make([]string, len(p.Options))
+		copy(cp.Options, p.Options)
+	}
+	return &cp
+}
+
 // ── Type conversion helpers ────────────────────────────────────
 
 func toInt(v any) (int, bool) {

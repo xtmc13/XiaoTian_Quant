@@ -20,6 +20,13 @@ import { IndicatorDetail } from './pages/IndicatorDetail'
 import { AuthorDashboard } from './pages/AuthorDashboard'
 import { Billing } from './pages/Billing'
 
+import { ModelManagement } from './pages/ModelManagement'
+import { RiskControl } from './pages/RiskControl'
+import { PairlistManagement } from './pages/PairlistManagement'
+import { AdvancedOrderManagement } from './pages/AdvancedOrderManagement'
+import { ArbitrageMonitor } from './pages/ArbitrageMonitor'
+import { HyperoptManagement } from './pages/HyperoptManagement'
+
 function RequireAuth() {
   const { isAuthenticated, hydrated } = useAuthStore()
   const location = useLocation()
@@ -62,6 +69,12 @@ export default function App() {
             <Route path="/author-dashboard" element={<AuthorDashboard />} />
             <Route path="/portfolio" element={<Portfolio />} />
             <Route path="/indicator-ide" element={<IndicatorIDE />} />
+            <Route path="/model-management" element={<ModelManagement />} />
+            <Route path="/risk-control" element={<RiskControl />} />
+            <Route path="/pairlist" element={<PairlistManagement />} />
+            <Route path="/advanced-orders" element={<AdvancedOrderManagement />} />
+            <Route path="/arbitrage" element={<ArbitrageMonitor />} />
+            <Route path="/hyperopt" element={<HyperoptManagement />} />
             <Route path="/profile" element={<UserProfile />} />
             <Route path="/users" element={<UserManage />} />
             <Route path="/agent-tokens" element={<AgentTokens />} />

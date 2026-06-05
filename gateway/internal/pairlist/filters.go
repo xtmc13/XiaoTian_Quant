@@ -3,6 +3,7 @@ package pairlist
 import (
 	"fmt"
 	"math/rand"
+	"sort"
 )
 
 // ── SpreadFilter ───────────────────────────────────────────────
@@ -234,4 +235,83 @@ func (f *CorrelationFilter) Filter(pairs []string, infoMap map[string]*PairInfo)
 		return nil, fmt.Errorf("correlation filter removed all pairs")
 	}
 	return result, nil
+}
+
+// ── AgeFilter ──────────────────────────────────────────────────
+
+// AgeFilter removes pairs that are too new (minimum listing age).
+type AgeFilter struct {
+	MinAgeDays int
+}
+
+func NewAgeFilter(minAgeDays int) *AgeFilter {
+	if minAgeDays < 0 {
+		minAgeDays = 0
+	}
+	return &AgeFilter{MinAgeDays: minAgeDays}
+}
+
+func (f *AgeFilter) Name() string { return "AgeFilter" }
+
+func (f *AgeFilter) Filter(pairs []string, infoMap map[string]*PairInfo) ([]string, error) {
+	if f.MinAgeDays <= 0 {
+		return pairs, nil
+	}
+	result := make([]string, 0, len(pairs))
+	for _, sym := range pairs {
+		info, ok := infoMap[sym]
+		if !ok {
+			result = append(result, sym) // keep if no data
+			continue
+		}
+		// Use a simple heuristic: if price is very low and volume is low, treat as new
+		// In production, this would use actual listing date from exchange info
+		if info.MinNotional > 0 && info.Volume24h > 0 {
+			result = append(result, sym)
+		} else {
+			// Skip pairs with no trading history (effectively age=0)
+			continue
+		}
+	}
+	return result, nil
+}
+
+// ── PerformanceFilter ──────────────────────────────────────────
+
+// PerformanceFilter sorts pairs by 24h volatility (descending) as a proxy
+// for recent performance potential, and optionally limits the result.
+type PerformanceFilter struct {
+	TopN int
+}
+
+func NewPerformanceFilter(topN int) *PerformanceFilter {
+	if topN <= 0 {
+		topN = 0 // 0 = no limit, just sort
+	}
+	return &PerformanceFilter{TopN: topN}
+}
+
+func (f *PerformanceFilter) Name() string { return "PerformanceFilter" }
+
+func (f *PerformanceFilter) Filter(pairs []string, infoMap map[string]*PairInfo) ([]string, error) {
+	// Sort by volatility descending (proxy for performance)
+	sorted := make([]string, len(pairs))
+	copy(sorted, pairs)
+
+	sort.SliceStable(sorted, func(i, j int) bool {
+		vi := 0.0
+		vj := 0.0
+		if info, ok := infoMap[sorted[i]]; ok {
+			vi = info.Volatility
+		}
+		if info, ok := infoMap[sorted[j]]; ok {
+			vj = info.Volatility
+		}
+		return vi > vj
+	})
+
+	if f.TopN > 0 && len(sorted) > f.TopN {
+		sorted = sorted[:f.TopN]
+	}
+	return sorted, nil
 }

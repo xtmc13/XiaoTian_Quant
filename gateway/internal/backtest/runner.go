@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xiaotian-quant/gateway/internal/data"
 	"github.com/xiaotian-quant/gateway/internal/model"
 )
 
@@ -96,6 +97,19 @@ func (r *Runner) LoadBars(symbol string, bars []model.Bar) {
 	// Sort by time
 	sort.Slice(bars, func(i, j int) bool { return bars[i].Time < bars[j].Time })
 	r.bars[symbol] = bars
+}
+
+// LoadBarsFromDownloader loads historical bars from the data downloader for backtesting.
+func (r *Runner) LoadBarsFromDownloader(symbol, interval string, downloader *data.Downloader) error {
+	if downloader == nil {
+		return fmt.Errorf("downloader is nil")
+	}
+	bars := downloader.LoadBarsForBacktest(symbol, interval, r.startTime, r.endTime)
+	if len(bars) == 0 {
+		return fmt.Errorf("no historical data found for %s %s", symbol, interval)
+	}
+	r.LoadBars(symbol, bars)
+	return nil
 }
 
 // LoadTicks loads tick data for a symbol.

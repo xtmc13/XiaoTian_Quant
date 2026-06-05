@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/xiaotian-quant/gateway/internal/model"
 )
 
 // ── Types ──────────────────────────────────────────────────────
@@ -151,6 +153,16 @@ func (d *Downloader) runDownload(jobID string, cfg DownloadConfig) {
 	log.Printf("[data] download %s complete: %d bars, status=%s", jobID, totalBars, job.Status)
 }
 
+// FetchOHLCV downloads OHLCV bars directly from the exchange (bypassing local storage).
+func (d *Downloader) FetchOHLCV(symbol, interval string, fromMs, toMs int64) ([]OHLCV, error) {
+	return d.fetchFromBinance(symbol, interval, fromMs, toMs)
+}
+
+// GetStorage returns the underlying storage for direct access.
+func (d *Downloader) GetStorage() *Storage {
+	return d.store
+}
+
 func (d *Downloader) downloadSymbol(symbol, interval, startDate, endDate string) ([]OHLCV, error) {
 	var startMs, endMs int64
 
@@ -278,6 +290,82 @@ func (d *Downloader) GetJob(id string) *DownloadJob {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.jobs[id]
+}
+
+// ToBar converts OHLCV to model.Bar for backtesting.
+func (o OHLCV) ToBar() model.Bar {
+	return model.Bar{
+		Symbol: o.Symbol,
+		Open:   o.Open,
+		High:   o.High,
+		Low:    o.Low,
+		Close:  o.Close,
+		Volume: o.Volume,
+		Time:   o.Time,
+	}
+}
+
+// LoadBarsForBacktest loads historical bars from storage for backtesting.
+func (d *Downloader) LoadBarsForBacktest(symbol, interval string, fromMs, toMs int64) []model.Bar {
+	ohlcv := d.store.LoadOHLCV(symbol, interval, fromMs, toMs)
+	bars := make([]model.Bar, len(ohlcv))
+	for i, o := range ohlcv {
+		bars[i] = o.ToBar()
+	}
+	return bars
+}
+
+// GetDataInfo returns metadata about stored data for a symbol/interval.
+func (d *Downloader) GetDataInfo(symbol, interval string) DataInfo {
+	count := d.store.CountOHLCV(symbol, interval)
+	coverage := d.store.GetCoverage()
+	for _, c := range coverage {
+		if c.Symbol == symbol && c.Interval == interval {
+			return DataInfo{
+				Symbol:       symbol,
+				Interval:     interval,
+				Count:        count,
+				Earliest:     c.StartTime,
+				Latest:       c.EndTime,
+				EarliestTime: time.UnixMilli(c.StartTime),
+				LatestTime:   time.UnixMilli(c.EndTime),
+			}
+		}
+	}
+	return DataInfo{Symbol: symbol, Interval: interval, Count: count}
+}
+
+// SaveBars saves bars to local storage.
+func (d *Downloader) SaveBars(bars []model.Bar) error {
+	if len(bars) == 0 {
+		return nil
+	}
+	ohlcv := make([]OHLCV, len(bars))
+	for i, b := range bars {
+		ohlcv[i] = OHLCV{
+			Symbol:   b.Symbol,
+			Interval: b.Interval,
+			Time:     b.Time,
+			Open:     b.Open,
+			High:     b.High,
+			Low:      b.Low,
+			Close:    b.Close,
+			Volume:   b.Volume,
+		}
+	}
+	_, err := d.store.SaveOHLCV(ohlcv)
+	return err
+}
+
+// DataInfo holds metadata about stored historical data.
+type DataInfo struct {
+	Symbol       string    `json:"symbol"`
+	Interval     string    `json:"interval"`
+	Count        int       `json:"count"`
+	Earliest     int64     `json:"earliest"`
+	Latest       int64     `json:"latest"`
+	EarliestTime time.Time `json:"earliest_time"`
+	LatestTime   time.Time `json:"latest_time"`
 }
 
 // Parse helpers

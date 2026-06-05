@@ -11,6 +11,7 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/event"
 	"github.com/xiaotian-quant/gateway/internal/ml"
 	"github.com/xiaotian-quant/gateway/internal/model"
+	"github.com/xiaotian-quant/gateway/internal/strategy"
 )
 
 func minInt(a, b int) int {
@@ -23,6 +24,7 @@ func minInt(a, b int) int {
 // Automatically retrains the model at intervals for online learning.
 
 type MLStrategy struct {
+	strategy.BaseStrategy
 	name    string
 	symbol  string
 	running bool
@@ -46,10 +48,13 @@ type MLStrategy struct {
 	retrainInterval time.Duration
 	lastRetrain     time.Time
 	retrainBars     int
+
+	// Parameter registry
+	params *strategy.ParamRegistry
 }
 
 func NewMLStrategy(modelID string, mlClient *ml.Client) *MLStrategy {
-	return &MLStrategy{
+	s := &MLStrategy{
 		name:            "ml_" + modelID[:minInt(12, len(modelID))],
 		symbol:          "BTCUSDT",
 		modelID:         modelID,
@@ -60,6 +65,12 @@ func NewMLStrategy(modelID string, mlClient *ml.Client) *MLStrategy {
 		retrainInterval: 24 * time.Hour,
 		retrainBars:     500,
 	}
+	// Register parameters for hyperopt and frontend configuration
+	s.params = strategy.NewParamRegistry()
+	s.params.Register(strategy.IntParameter("predict_bars", 200, 50, 1000, "buy"))
+	s.params.Register(strategy.FloatParameter("min_confidence", 0.3, 0.05, 0.9, 0.05, "buy"))
+	s.params.Register(strategy.IntParameter("retrain_bars", 500, 100, 5000, "buy"))
+	return s
 }
 
 func (s *MLStrategy) Name() string   { return s.name }
@@ -91,12 +102,11 @@ func (s *MLStrategy) Start(params map[string]any) error {
 	if v, ok := params["model_id"].(string); ok && v != "" {
 		s.modelID = v
 	}
-	if v, ok := params["predict_bars"].(float64); ok {
-		s.predictBars = int(v)
+
+	if err := s.ApplyParams(params); err != nil {
+		return fmt.Errorf("ml strategy apply params: %w", err)
 	}
-	if v, ok := params["min_confidence"].(float64); ok {
-		s.minConfidence = v
-	}
+
 	if s.predictBars <= 0 {
 		s.predictBars = 200
 	}
@@ -125,6 +135,45 @@ func (s *MLStrategy) Start(params map[string]any) error {
 	log.Printf("[ml_strategy] %s started: model=%s symbol=%s mode=%s",
 		s.name, s.modelID, s.symbol, map[bool]string{true: "local", false: "http"}[s.useLocal])
 	return nil
+}
+
+// ── Parameter system implementation ────────────────────────────
+
+func (s *MLStrategy) GetParameters() *strategy.ParamRegistry {
+	return s.params
+}
+
+func (s *MLStrategy) ValidateParams() error {
+	if s.params == nil {
+		return nil
+	}
+	return s.params.Validate()
+}
+
+func (s *MLStrategy) ApplyParams(m map[string]any) error {
+	if s.params == nil {
+		return nil
+	}
+	if err := s.params.FromMap(m); err != nil {
+		return err
+	}
+	if p := s.params.Get("predict_bars"); p != nil {
+		s.predictBars = p.GetInt()
+	}
+	if p := s.params.Get("min_confidence"); p != nil {
+		s.minConfidence = p.GetFloat()
+	}
+	if p := s.params.Get("retrain_bars"); p != nil {
+		s.retrainBars = p.GetInt()
+	}
+	return nil
+}
+
+func (s *MLStrategy) ParamDefs() []map[string]any {
+	if s.params == nil {
+		return nil
+	}
+	return s.params.ToJSONDefs()
 }
 
 func (s *MLStrategy) Stop() error {
