@@ -22,9 +22,17 @@ import {
   BarChart3,
   Target,
   ChevronRight as ChevronRightIcon,
+  Brain,
+  AlertTriangle,
+  CheckCircle2,
+  XCircle,
+  Clock,
+  ShieldAlert,
+  ShieldCheck,
+  Lock,
 } from 'lucide-react'
 import { cn, formatCurrency, formatPercent } from '@/lib/utils'
-import { dashboardApi, portfolioApi, strategyApi } from '@/lib/api'
+import { dashboardApi, portfolioApi, strategyApi, protectionApi, mlApi } from '@/lib/api'
 import { KPICard } from '@/components/ui/KPICard'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -43,6 +51,212 @@ interface CalendarDay {
   date: string
   day: number
   value: number
+}
+
+interface ProtectionStatus {
+  global_blocked: boolean
+  global_reason?: string
+  global_resume_in?: string
+  pair_blocks: Record<string, {
+    reason: string
+    resume_in: string
+    permanent: boolean
+  }>
+}
+
+interface ModelInfo {
+  model_id: string
+  model_type: string
+  task_type: string
+  trained_at: string
+  metrics: Record<string, number>
+  feature_count: number
+}
+
+/* ── Risk Control Card ── */
+function RiskControlCard({ status, isLoading }: { status?: ProtectionStatus; isLoading: boolean }) {
+  if (isLoading) {
+    return (
+      <SectionCard title="风控状态">
+        <div className="space-y-3">
+          <Skeleton variant="text" lines={3} />
+          <Skeleton variant="rect" height={48} />
+        </div>
+      </SectionCard>
+    )
+  }
+
+  const isGloballyBlocked = status?.global_blocked ?? false
+  const pairBlocks = status?.pair_blocks ? Object.entries(status.pair_blocks) : []
+  const blockedCount = pairBlocks.length + (isGloballyBlocked ? 1 : 0)
+  const lastReason = status?.global_reason || (pairBlocks[0]?.[1]?.reason) || '-'
+
+  const ruleItems = [
+    {
+      name: '全局交易保护',
+      status: isGloballyBlocked ? ('blocked' as const) : ('normal' as const),
+      detail: isGloballyBlocked ? (status?.global_reason || '交易暂停') : '正常运行',
+    },
+    ...pairBlocks.map(([pair, info]) => ({
+      name: pair,
+      status: 'blocked' as const,
+      detail: info.reason,
+    })),
+  ]
+
+  return (
+    <SectionCard
+      title="风控状态"
+      headerAction={
+        <button
+          onClick={() => { window.location.hash = '#/risk-control' }}
+          className="flex items-center gap-0.5 text-[10px] text-[#555555] transition-colors hover:text-white"
+        >
+          查看风控中心 <ChevronRightIcon className="h-3 w-3" />
+        </button>
+      }
+    >
+      <div className="mb-3 grid grid-cols-3 gap-2">
+        <div className="rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-2.5 text-center">
+          <div className="text-[10px] text-[#555555]">活跃规则</div>
+          <div className={cn('mt-1 text-sm font-semibold', blockedCount > 0 ? 'text-quant-red' : 'text-quant-green')}>
+            {ruleItems.length}
+          </div>
+        </div>
+        <div className="rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-2.5 text-center">
+          <div className="text-[10px] text-[#555555]">阻断交易对</div>
+          <div className={cn('mt-1 text-sm font-semibold', pairBlocks.length > 0 ? 'text-quant-red' : 'text-quant-green')}>
+            {pairBlocks.length}
+          </div>
+        </div>
+        <div className="rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-2.5 text-center">
+          <div className="text-[10px] text-[#555555]">最近触发</div>
+          <div className="mt-1 truncate text-sm font-semibold text-[#aaaaaa]" title={lastReason}>
+            {lastReason}
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-1.5">
+        {ruleItems.slice(0, 5).map((rule) => (
+          <div
+            key={rule.name}
+            className="flex items-center justify-between rounded-md border border-[#1c1c1c] bg-[#0a0a0a] px-2.5 py-1.5"
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <span
+                className={cn(
+                  'h-2 w-2 shrink-0 rounded-full',
+                  rule.status === 'normal' ? 'bg-quant-green' : 'bg-quant-red'
+                )}
+              />
+              <span className="truncate text-xs text-white">{rule.name}</span>
+            </div>
+            <span className={cn('shrink-0 text-[10px]', rule.status === 'normal' ? 'text-quant-green' : 'text-quant-red')}>
+              {rule.detail}
+            </span>
+          </div>
+        ))}
+        {ruleItems.length === 0 && (
+          <div className="py-4 text-center text-[11px] text-[#444444]">
+            暂无风控数据
+          </div>
+        )}
+      </div>
+    </SectionCard>
+  )
+}
+
+/* ── ML Status Card ── */
+function MLStatusCard({ health, models, isLoading }: { health?: { status: string }; models?: ModelInfo[]; isLoading: boolean }) {
+  if (isLoading) {
+    return (
+      <SectionCard title="ML 模型状态">
+        <div className="space-y-3">
+          <Skeleton variant="text" lines={3} />
+          <Skeleton variant="rect" height={48} />
+        </div>
+      </SectionCard>
+    )
+  }
+
+  const isHealthy = health?.status === 'healthy'
+  const modelCount = models?.length ?? 0
+  const latestModel = models && models.length > 0
+    ? models.sort((a, b) => new Date(b.trained_at).getTime() - new Date(a.trained_at).getTime())[0]
+    : undefined
+
+  const pipelineHealth = isHealthy ? 'normal' : 'error'
+  const modelStatus = !isHealthy ? 'error' : latestModel ? 'deployed' : 'idle'
+
+  const statusColor = (s: string) => {
+    if (s === 'normal' || s === 'deployed' || s === 'healthy') return 'text-quant-green bg-quant-green/10 border-quant-green/20'
+    if (s === 'warning' || s === 'idle') return 'text-quant-gold bg-quant-gold/10 border-quant-gold/20'
+    return 'text-quant-red bg-quant-red/10 border-quant-red/20'
+  }
+
+  return (
+    <SectionCard
+      title="ML 模型状态"
+      headerAction={
+        <button
+          onClick={() => { window.location.hash = '#/model-management' }}
+          className="flex items-center gap-0.5 text-[10px] text-[#555555] transition-colors hover:text-white"
+        >
+          查看模型管理 <ChevronRightIcon className="h-3 w-3" />
+        </button>
+      }
+    >
+      <div className="mb-3 grid grid-cols-3 gap-2">
+        <div className="rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-2.5 text-center">
+          <div className="text-[10px] text-[#555555]">模型数量</div>
+          <div className="mt-1 text-sm font-semibold text-white">{modelCount}</div>
+        </div>
+        <div className="rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-2.5 text-center">
+          <div className="text-[10px] text-[#555555]">最新状态</div>
+          <div className={cn('mt-1 text-sm font-semibold', modelStatus === 'deployed' ? 'text-quant-green' : modelStatus === 'idle' ? 'text-quant-gold' : 'text-quant-red')}>
+            {modelStatus === 'deployed' ? '已部署' : modelStatus === 'idle' ? '空闲' : '异常'}
+          </div>
+        </div>
+        <div className="rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-2.5 text-center">
+          <div className="text-[10px] text-[#555555]">特征管道</div>
+          <div className={cn('mt-1 text-sm font-semibold', pipelineHealth === 'normal' ? 'text-quant-green' : 'text-quant-red')}>
+            {pipelineHealth === 'normal' ? '正常' : '异常'}
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between rounded-md border border-[#1c1c1c] bg-[#0a0a0a] px-2.5 py-1.5">
+          <div className="flex items-center gap-2">
+            <Brain className="h-3.5 w-3.5 text-[#888888]" />
+            <span className="text-xs text-white">ML 服务</span>
+          </div>
+          <span className={cn('rounded px-1.5 py-0.5 text-[10px] font-medium border', statusColor(pipelineHealth))}>
+            {isHealthy ? '在线' : '离线'}
+          </span>
+        </div>
+
+        {latestModel && (
+          <div className="flex items-center justify-between rounded-md border border-[#1c1c1c] bg-[#0a0a0a] px-2.5 py-1.5">
+            <div className="flex items-center gap-2 min-w-0">
+              <Activity className="h-3.5 w-3.5 text-[#888888]" />
+              <span className="truncate text-xs text-white">{latestModel.model_id}</span>
+            </div>
+            <span className="shrink-0 text-[10px] text-[#555555]">
+              {latestModel.feature_count} 特征
+            </span>
+          </div>
+        )}
+
+        {modelCount === 0 && (
+          <div className="py-4 text-center text-[11px] text-[#444444]">
+            暂无训练好的模型
+          </div>
+        )}
+      </div>
+    </SectionCard>
+  )
 }
 
 /* ── Setup Guide Card ── */
@@ -599,6 +813,36 @@ export function Dashboard() {
   })
   const ranking = Array.isArray(rankingData) ? rankingData : rankingData?.ranking || []
 
+  const { data: protectionStatus, isLoading: protectionLoading } = useQuery<ProtectionStatus>({
+    queryKey: ['protection-status'],
+    queryFn: async () => {
+      const res = await protectionApi.status()
+      return res as ProtectionStatus
+    },
+    refetchInterval: 10000,
+  })
+
+  const { data: mlHealth, isLoading: mlHealthLoading } = useQuery<{ status: string }>({
+    queryKey: ['ml-health'],
+    queryFn: async () => {
+      try {
+        return await mlApi.health()
+      } catch {
+        return { status: 'unhealthy' }
+      }
+    },
+    refetchInterval: 30000,
+  })
+
+  const { data: mlModelsData, isLoading: mlModelsLoading } = useQuery<ModelInfo[]>({
+    queryKey: ['ml-models'],
+    queryFn: async () => {
+      const res = await mlApi.list()
+      return (res as any).models as ModelInfo[] || []
+    },
+    refetchInterval: 30000,
+  })
+
   const totalEquity = dash?.total_equity ?? portfolio?.total_equity ?? 0
   const totalPnl = dash?.total_pnl ?? portfolio?.total_pnl ?? 0
   const totalPnlPct = portfolio?.total_pnl_pct ?? 0
@@ -722,8 +966,8 @@ export function Dashboard() {
           </SectionCard>
         </div>
 
-        {/* ── Bottom Row: Calendar | AI Agents | Strategies + Ranking ── */}
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+        {/* ── Bottom Row: Calendar | AI Agents | Strategies + Ranking | Risk + ML ── */}
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-4">
           {/* Left: Exchange + Calendar */}
           <div className="space-y-4">
             <SectionCard title="资产分布">
@@ -977,6 +1221,12 @@ export function Dashboard() {
                 />
               )}
             </SectionCard>
+          </div>
+
+          {/* Far Right: Risk Control + ML Status */}
+          <div className="space-y-4">
+            <RiskControlCard status={protectionStatus} isLoading={protectionLoading} />
+            <MLStatusCard health={mlHealth} models={mlModelsData} isLoading={mlHealthLoading || mlModelsLoading} />
           </div>
         </div>
       </div>
