@@ -1,4 +1,4 @@
-package strategy
+package strategies
 
 import (
 	"testing"
@@ -6,7 +6,6 @@ import (
 
 	"github.com/xiaotian-quant/gateway/internal/event"
 	"github.com/xiaotian-quant/gateway/internal/model"
-	"github.com/xiaotian-quant/gateway/internal/strategy/strategies"
 )
 
 /* ── Helpers ─────────────────────────────────────────────────── */
@@ -39,7 +38,7 @@ func newTestBus() *event.EventBus {
 /* ── Breakout Strategy Tests ─────────────────────────────────── */
 
 func TestBreakoutNoSignalInsufficientBars(t *testing.T) {
-	s := strategies.NewBreakoutStrategy()
+	s := NewBreakoutStrategy()
 	bus := newTestBus()
 
 	s.Start(map[string]any{"lookback": float64(20)})
@@ -56,7 +55,7 @@ func TestBreakoutNoSignalInsufficientBars(t *testing.T) {
 }
 
 // feedRangeBars feeds N bars in a tight range to fill the breakout strategy's buffer.
-func feedRangeBars(s *strategies.BreakoutStrategy, bus *event.EventBus, n int, basePrice float64) {
+func feedRangeBars(s *BreakoutStrategy, bus *event.EventBus, n int, basePrice float64) {
 	for i := 0; i < n; i++ {
 		offset := float64(i) * 10.0
 		s.OnBar(model.Bar{
@@ -72,7 +71,7 @@ func feedRangeBars(s *strategies.BreakoutStrategy, bus *event.EventBus, n int, b
 }
 
 func TestBreakoutLongSignal(t *testing.T) {
-	s := strategies.NewBreakoutStrategy()
+	s := NewBreakoutStrategy()
 	bus := newTestBus()
 
 	s.Start(map[string]any{
@@ -97,7 +96,7 @@ func TestBreakoutLongSignal(t *testing.T) {
 }
 
 func TestBreakoutShortSignal(t *testing.T) {
-	s := strategies.NewBreakoutStrategy()
+	s := NewBreakoutStrategy()
 	bus := newTestBus()
 
 	s.Start(map[string]any{
@@ -120,7 +119,7 @@ func TestBreakoutShortSignal(t *testing.T) {
 }
 
 func TestBreakoutNoSignalInRange(t *testing.T) {
-	s := strategies.NewBreakoutStrategy()
+	s := NewBreakoutStrategy()
 	bus := newTestBus()
 
 	s.Start(map[string]any{
@@ -147,7 +146,7 @@ func TestBreakoutNoSignalInRange(t *testing.T) {
 }
 
 func TestBreakoutLongTakeProfit(t *testing.T) {
-	s := strategies.NewBreakoutStrategy()
+	s := NewBreakoutStrategy()
 	bus := newTestBus()
 
 	s.Start(map[string]any{
@@ -183,7 +182,7 @@ func TestBreakoutLongTakeProfit(t *testing.T) {
 }
 
 func TestBreakoutLongStopLoss(t *testing.T) {
-	s := strategies.NewBreakoutStrategy()
+	s := NewBreakoutStrategy()
 	bus := newTestBus()
 
 	s.Start(map[string]any{
@@ -215,15 +214,18 @@ func TestBreakoutLongStopLoss(t *testing.T) {
 }
 
 func TestBreakoutShortTakeProfit(t *testing.T) {
-	s := strategies.NewBreakoutStrategy()
+	s := NewBreakoutStrategy()
 	bus := newTestBus()
 
-	s.Start(map[string]any{
+	err := s.Start(map[string]any{
 		"lookback":        float64(5),
 		"buffer_pct":      float64(0.001),
 		"stop_loss_pct":   float64(0.20),   // far away
 		"take_profit_pct": float64(0.03),   // 3% profit
 	})
+	if err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
 
 	// Trigger SHORT entry (breakdown)
 	feedRangeBars(s, bus, 7, 50000)
@@ -231,9 +233,13 @@ func TestBreakoutShortTakeProfit(t *testing.T) {
 		Symbol: "BTCUSDT", Open: 49800, High: 49900, Low: 47500, Close: 47800,
 		Volume: 1000, Time: 7 * 3600000,
 	}
-	entrySig, _ := s.OnBar(entryBar, bus)
+	entrySig, err := s.OnBar(entryBar, bus)
+	if err != nil {
+		t.Fatalf("OnBar error: %v", err)
+	}
 	if entrySig == nil {
-		t.Fatal("entry signal should fire for short")
+		t.Fatalf("entry signal should fire for short. running=%v lookback=%d bufferPct=%f bars=%d",
+			s.IsRunning(), s.lookback, s.bufferPct, len(s.bars))
 	}
 
 	// Take profit: price drops 3% below entry (entry close=47800, 3% below = 46366)
@@ -250,7 +256,7 @@ func TestBreakoutShortTakeProfit(t *testing.T) {
 }
 
 func TestBreakoutShortStopLoss(t *testing.T) {
-	s := strategies.NewBreakoutStrategy()
+	s := NewBreakoutStrategy()
 	bus := newTestBus()
 
 	s.Start(map[string]any{
@@ -281,7 +287,7 @@ func TestBreakoutShortStopLoss(t *testing.T) {
 }
 
 func TestBreakoutStartStopLifecycle(t *testing.T) {
-	s := strategies.NewBreakoutStrategy()
+	s := NewBreakoutStrategy()
 
 	assert(t, !s.IsRunning(), "should not be running initially")
 
@@ -295,7 +301,7 @@ func TestBreakoutStartStopLifecycle(t *testing.T) {
 }
 
 func TestBreakoutParams(t *testing.T) {
-	s := strategies.NewBreakoutStrategy()
+	s := NewBreakoutStrategy()
 
 	params := s.Params()
 	assertEq(t, params["symbol"].(string), "BTCUSDT", "default symbol")
@@ -317,7 +323,7 @@ func TestBreakoutParams(t *testing.T) {
 /* ── Arbitrage Strategy Tests ────────────────────────────────── */
 
 func TestArbitrageNoSignalNormalSpread(t *testing.T) {
-	s := strategies.NewArbitrageStrategy()
+	s := NewArbitrageStrategy()
 	bus := newTestBus()
 
 	s.Start(map[string]any{"min_spread_pct": float64(0.5)})
@@ -331,7 +337,7 @@ func TestArbitrageNoSignalNormalSpread(t *testing.T) {
 }
 
 func TestArbitrageSignalOnLargeSpread(t *testing.T) {
-	s := strategies.NewArbitrageStrategy()
+	s := NewArbitrageStrategy()
 	bus := newTestBus()
 
 	s.Start(map[string]any{"min_spread_pct": float64(0.5)})
@@ -347,7 +353,7 @@ func TestArbitrageSignalOnLargeSpread(t *testing.T) {
 }
 
 func TestArbitrageNoSignalWhenStopped(t *testing.T) {
-	s := strategies.NewArbitrageStrategy()
+	s := NewArbitrageStrategy()
 	bus := newTestBus()
 
 	s.Start(map[string]any{"min_spread_pct": float64(0.1)})
@@ -364,7 +370,7 @@ func TestArbitrageNoSignalWhenStopped(t *testing.T) {
 }
 
 func TestArbitrageZeroPrices(t *testing.T) {
-	s := strategies.NewArbitrageStrategy()
+	s := NewArbitrageStrategy()
 	bus := newTestBus()
 
 	s.Start(map[string]any{"min_spread_pct": float64(0.1)})
@@ -466,7 +472,3 @@ func TestEventBusSubscriberCount(t *testing.T) {
 	bus.Unsubscribe(id)
 	assertEq(t, bus.SubscriberCount(), 0, "should have 0 after unsubscribe")
 }
-
-/* ── Fixed strategies import for compilation ─────────────────── */
-
-var _ = strategies.NewArbitrageStrategy

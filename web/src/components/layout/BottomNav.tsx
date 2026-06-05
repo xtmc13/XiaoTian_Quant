@@ -1,12 +1,12 @@
 import { useNavigate, useLocation } from 'react-router-dom'
 import { cn } from '@/lib/utils'
-import { LayoutDashboard, TrendingUp, BrainCircuit, BarChart3, Settings } from 'lucide-react'
+import { LayoutDashboard, TrendingUp, BrainCircuit, BarChart3, Settings, Shield } from 'lucide-react'
 
 const NAV_ITEMS = [
   { path: '/dashboard', label: '仪表盘', icon: LayoutDashboard },
   { path: '/trading', label: '交易', icon: TrendingUp },
   { path: '/ai', label: 'AI', icon: BrainCircuit },
-  { path: '/strategy', label: '策略', icon: BarChart3 },
+  { path: '/risk-control', label: '风控', icon: Shield },
   { path: '/settings', label: '设置', icon: Settings },
 ]
 

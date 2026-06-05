@@ -359,6 +359,86 @@ export const mlApi = {
   strategyModels: () => api.get<any>('/ml/strategy-models'),
 }
 
+// ── Protection / Risk Control ──
+export const protectionApi = {
+  status: () => api.get<any>('/protection/status'),
+  config: (data: { protections: { name: string; params: Record<string, any> }[] }) =>
+    api.post<any>('/protection/config', data),
+  reset: (scope?: 'global' | 'pair' | 'all', symbol?: string) =>
+    api.post<any>('/protection/reset', undefined, { params: { scope, symbol } }),
+  recordTrade: (data: {
+    symbol: string
+    side: string
+    entry_price: number
+    exit_price: number
+    quantity: number
+    pnl: number
+    pnl_pct: number
+    is_stoploss: boolean
+    exit_time?: number
+  }) => api.post<any>('/protection/trade', data),
+}
+
+// ── Pairlist ──
+export const pairlistApi = {
+  whitelist: (exchange?: string, quoteAsset?: string) =>
+    api.get<any>('/pairlist/whitelist', { params: { exchange, quote_asset: quoteAsset } }),
+  refresh: (exchange?: string, quoteAsset?: string) =>
+    api.get<any>('/pairlist/refresh', { params: { exchange, quote_asset: quoteAsset } }),
+  config: () => api.get<any>('/pairlist/config'),
+  configure: (data: { producers: { name: string; params: Record<string, any> }[]; filters: { name: string; params: Record<string, any> }[] }) =>
+    api.post<any>('/pairlist/config', data),
+}
+
+// ── Advanced Orders ──
+export const advancedOrderApi = {
+  oco: {
+    place: (data: any) => api.post<any>('/orders/oco', data),
+    list: () => api.get<any>('/orders/oco'),
+    cancel: (id: string) => api.del<any>(`/orders/oco/${id}`),
+  },
+  bracket: {
+    place: (data: any) => api.post<any>('/orders/bracket', data),
+    list: () => api.get<any>('/orders/bracket'),
+    cancel: (id: string) => api.del<any>(`/orders/bracket/${id}`),
+  },
+  iceberg: {
+    place: (data: any) => api.post<any>('/orders/iceberg', data),
+    list: () => api.get<any>('/orders/iceberg'),
+    cancel: (id: string) => api.del<any>(`/orders/iceberg/${id}`),
+  },
+  trailing: {
+    place: (data: any) => api.post<any>('/orders/trailing', data),
+    list: () => api.get<any>('/orders/trailing'),
+    cancel: (id: string) => api.del<any>(`/orders/trailing/${id}`),
+  },
+}
+
+// ── Arbitrage ──
+export const arbitrageApi = {
+  config: () => api.get<any>('/arbitrage/config'),
+  updateConfig: (data: any) => api.post<any>('/arbitrage/config', data),
+  start: () => api.post<any>('/arbitrage/start'),
+  stop: () => api.post<any>('/arbitrage/stop'),
+  status: () => api.get<any>('/arbitrage/status'),
+  opportunity: () => api.get<any>('/arbitrage/opportunity'),
+  positions: () => api.get<any>('/arbitrage/positions'),
+  history: (limit?: number) => api.get<any>('/arbitrage/history', { params: { limit } }),
+  exchanges: () => api.get<any>('/arbitrage/exchanges'),
+  registerExchange: (data: any) => api.post<any>('/arbitrage/exchanges', data),
+  execute: (data: any) => api.post<any>('/arbitrage/execute', data),
+}
+
+// ── Hyperopt ──
+export const hyperoptApi = {
+  start: (data: any) => api.post<any>('/hyperopt/start', data, { timeout: 600000 }),
+  jobs: () => api.get<any>('/hyperopt/jobs'),
+  job: (id: string) => api.get<any>(`/hyperopt/jobs/${id}`),
+  cancel: (id: string) => api.post<any>(`/hyperopt/jobs/${id}/cancel`),
+  delete: (id: string) => api.del<any>(`/hyperopt/jobs/${id}`),
+  spaces: (strategy?: string) => api.get<any>('/hyperopt/spaces', { params: { strategy } }),
+}
+
 // ── Notifications ──
 export const notificationApi = {
   list: (params?: { limit?: number; offset?: number; unread?: boolean }) =>

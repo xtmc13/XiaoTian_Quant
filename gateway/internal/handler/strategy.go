@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/store"
+	"github.com/xiaotian-quant/gateway/internal/strategy/strategies"
 )
 
 func GetStrategyConfigs(c *gin.Context) {
@@ -380,4 +381,63 @@ func shortUUID() string {
 	b := make([]byte, 4)
 	rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// GetStrategyParamDefs returns parameter definitions for a strategy type.
+// Used by the frontend to render dynamic configuration forms.
+func GetStrategyParamDefs(c *gin.Context) {
+	strategyType := c.Query("type")
+	if strategyType == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "type query param required"})
+		return
+	}
+
+	var defs []map[string]any
+
+	switch strategyType {
+	case "breakout":
+		s := strategies.NewBreakoutStrategy()
+		defs = s.ParamDefs()
+	case "ema_cross":
+		s := strategies.NewEMACrossStrategy()
+		defs = s.ParamDefs()
+	case "macd":
+		s := strategies.NewMACDStrategy()
+		defs = s.ParamDefs()
+	case "rsi":
+		s := strategies.NewRSIStrategy()
+		defs = s.ParamDefs()
+	case "bollinger_bands":
+		s := strategies.NewBollingerBandsStrategy()
+		defs = s.ParamDefs()
+	case "atr_trailing_stop":
+		s := strategies.NewATRTrailingStopStrategy()
+		defs = s.ParamDefs()
+	case "dual_thrust":
+		s := strategies.NewDualThrustStrategy()
+		defs = s.ParamDefs()
+	case "renko":
+		s := strategies.NewRenkoStrategy()
+		defs = s.ParamDefs()
+	case "grid_trading":
+		s := strategies.NewGridTradingStrategy()
+		defs = s.ParamDefs()
+	case "arbitrage":
+		s := strategies.NewArbitrageStrategy()
+		defs = s.ParamDefs()
+	case "market_making":
+		s := strategies.NewMarketMakingStrategy()
+		defs = s.ParamDefs()
+	case "ml":
+		// ML strategy requires modelID, return empty for now
+		defs = []map[string]any{}
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "unknown strategy type: " + strategyType})
+		return
+	}
+
+	if defs == nil {
+		defs = []map[string]any{}
+	}
+	c.JSON(http.StatusOK, gin.H{"type": strategyType, "parameters": defs})
 }

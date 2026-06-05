@@ -1,16 +1,19 @@
 package strategies
 
 import (
+	"fmt"
 	"math"
 	"sync"
 
 	"github.com/xiaotian-quant/gateway/internal/event"
 	"github.com/xiaotian-quant/gateway/internal/model"
+	"github.com/xiaotian-quant/gateway/internal/strategy"
 )
 
 // GridTradingStrategy places buy/sell orders at regular price intervals.
 // It maintains a grid of price levels and rebalances when price crosses a level.
 type GridTradingStrategy struct {
+	strategy.BaseStrategy
 	name    string
 	symbol  string
 	running bool
@@ -28,10 +31,13 @@ type GridTradingStrategy struct {
 	filledLevels map[int]bool // level index -> has buy order filled
 	lastPrice    float64
 	bars         []model.Bar
+
+	// Parameter registry
+	params *strategy.ParamRegistry
 }
 
 func NewGridTradingStrategy() *GridTradingStrategy {
-	return &GridTradingStrategy{
+	s := &GridTradingStrategy{
 		name:         "grid_trading",
 		symbol:       "BTCUSDT",
 		upperPrice:   0,
@@ -40,6 +46,13 @@ func NewGridTradingStrategy() *GridTradingStrategy {
 		orderAmount:  100,
 		filledLevels: make(map[int]bool),
 	}
+	// Register parameters for hyperopt and frontend configuration
+	s.params = strategy.NewParamRegistry()
+	s.params.Register(strategy.FloatParameter("upper_price", 0, 1000, 100000, 1000, "buy"))
+	s.params.Register(strategy.FloatParameter("lower_price", 0, 1000, 100000, 1000, "buy"))
+	s.params.Register(strategy.IntParameter("grid_count", 10, 5, 100, "buy"))
+	s.params.Register(strategy.FloatParameter("order_amount", 100, 10, 10000, 10, "buy"))
+	return s
 }
 
 func (s *GridTradingStrategy) Name() string   { return s.name }
@@ -65,18 +78,10 @@ func (s *GridTradingStrategy) Start(params map[string]any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if v, ok := params["upper_price"].(float64); ok {
-		s.upperPrice = v
+	if err := s.ApplyParams(params); err != nil {
+		return fmt.Errorf("grid strategy apply params: %w", err)
 	}
-	if v, ok := params["lower_price"].(float64); ok {
-		s.lowerPrice = v
-	}
-	if v, ok := params["grid_count"].(float64); ok {
-		s.gridCount = int(v)
-	}
-	if v, ok := params["order_amount"].(float64); ok {
-		s.orderAmount = v
-	}
+
 	if s.gridCount <= 0 {
 		s.gridCount = 10
 	}
@@ -87,6 +92,48 @@ func (s *GridTradingStrategy) Start(params map[string]any) error {
 	s.buildGrid()
 	s.running = true
 	return nil
+}
+
+// ── Parameter system implementation ────────────────────────────
+
+func (s *GridTradingStrategy) GetParameters() *strategy.ParamRegistry {
+	return s.params
+}
+
+func (s *GridTradingStrategy) ValidateParams() error {
+	if s.params == nil {
+		return nil
+	}
+	return s.params.Validate()
+}
+
+func (s *GridTradingStrategy) ApplyParams(m map[string]any) error {
+	if s.params == nil {
+		return nil
+	}
+	if err := s.params.FromMap(m); err != nil {
+		return err
+	}
+	if p := s.params.Get("upper_price"); p != nil {
+		s.upperPrice = p.GetFloat()
+	}
+	if p := s.params.Get("lower_price"); p != nil {
+		s.lowerPrice = p.GetFloat()
+	}
+	if p := s.params.Get("grid_count"); p != nil {
+		s.gridCount = p.GetInt()
+	}
+	if p := s.params.Get("order_amount"); p != nil {
+		s.orderAmount = p.GetFloat()
+	}
+	return nil
+}
+
+func (s *GridTradingStrategy) ParamDefs() []map[string]any {
+	if s.params == nil {
+		return nil
+	}
+	return s.params.ToJSONDefs()
 }
 
 func (s *GridTradingStrategy) Stop() error {
@@ -204,6 +251,7 @@ func (s *GridTradingStrategy) averagePrice(period int) float64 {
 
 // MarketMakingStrategy places two-sided limit orders around the mid price.
 type MarketMakingStrategy struct {
+	strategy.BaseStrategy
 	name    string
 	symbol  string
 	running bool
@@ -217,10 +265,13 @@ type MarketMakingStrategy struct {
 	position  float64
 	lastQuote int64
 	bars      []model.Bar
+
+	// Parameter registry
+	params *strategy.ParamRegistry
 }
 
 func NewMarketMakingStrategy() *MarketMakingStrategy {
-	return &MarketMakingStrategy{
+	s := &MarketMakingStrategy{
 		name:           "market_making",
 		symbol:         "BTCUSDT",
 		spreadBps:      5.0,
@@ -228,6 +279,13 @@ func NewMarketMakingStrategy() *MarketMakingStrategy {
 		maxPosition:    0.1,
 		cancelInterval: 5,
 	}
+	// Register parameters for hyperopt and frontend configuration
+	s.params = strategy.NewParamRegistry()
+	s.params.Register(strategy.FloatParameter("spread_bps", 5.0, 1.0, 50.0, 1.0, "buy"))
+	s.params.Register(strategy.FloatParameter("order_size", 0.01, 0.001, 1.0, 0.001, "buy"))
+	s.params.Register(strategy.FloatParameter("max_position", 0.1, 0.01, 1.0, 0.01, "buy"))
+	s.params.Register(strategy.IntParameter("cancel_interval", 5, 1, 60, "buy"))
+	return s
 }
 
 func (s *MarketMakingStrategy) Name() string   { return s.name }
@@ -252,17 +310,54 @@ func (s *MarketMakingStrategy) Start(params map[string]any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if v, ok := params["spread_bps"].(float64); ok {
-		s.spreadBps = v
+	if err := s.ApplyParams(params); err != nil {
+		return fmt.Errorf("market making strategy apply params: %w", err)
 	}
-	if v, ok := params["order_size"].(float64); ok {
-		s.orderSize = v
-	}
-	if v, ok := params["max_position"].(float64); ok {
-		s.maxPosition = v
-	}
+
 	s.running = true
 	return nil
+}
+
+// ── Parameter system implementation ────────────────────────────
+
+func (s *MarketMakingStrategy) GetParameters() *strategy.ParamRegistry {
+	return s.params
+}
+
+func (s *MarketMakingStrategy) ValidateParams() error {
+	if s.params == nil {
+		return nil
+	}
+	return s.params.Validate()
+}
+
+func (s *MarketMakingStrategy) ApplyParams(m map[string]any) error {
+	if s.params == nil {
+		return nil
+	}
+	if err := s.params.FromMap(m); err != nil {
+		return err
+	}
+	if p := s.params.Get("spread_bps"); p != nil {
+		s.spreadBps = p.GetFloat()
+	}
+	if p := s.params.Get("order_size"); p != nil {
+		s.orderSize = p.GetFloat()
+	}
+	if p := s.params.Get("max_position"); p != nil {
+		s.maxPosition = p.GetFloat()
+	}
+	if p := s.params.Get("cancel_interval"); p != nil {
+		s.cancelInterval = int64(p.GetInt())
+	}
+	return nil
+}
+
+func (s *MarketMakingStrategy) ParamDefs() []map[string]any {
+	if s.params == nil {
+		return nil
+	}
+	return s.params.ToJSONDefs()
 }
 
 func (s *MarketMakingStrategy) Stop() error {

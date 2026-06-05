@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/backtest"
 	"github.com/xiaotian-quant/gateway/internal/model"
+	"github.com/xiaotian-quant/gateway/internal/notify"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
@@ -311,51 +312,72 @@ func RunBacktest(c *gin.Context) {
 		numBars = min(max(numBars, 50), 1500)
 	}
 
-	// Fetch real historical klines from Binance
-	klines, err := fetchBinanceKlines(symbol, interval, numBars, fromMs, toMs)
-	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{
-			"error":  "无法获取历史数据",
-			"detail": fmt.Sprintf("从 Binance 获取 %s %s K线失败: %v", symbol, interval, err),
-			"source": "Binance",
-		})
-		return
-	}
-	if len(klines) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":  "数据为空",
-			"detail": fmt.Sprintf("Binance 未返回 %s %s 的K线数据，请检查交易对和时间范围是否正确", symbol, interval),
-			"source": "Binance",
-		})
-		return
-	}
-	if len(klines) < 50 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":  "数据不足",
-			"detail": fmt.Sprintf("仅获取到 %d 根K线，至少需要 50 根才能回测。请扩大日期范围", len(klines)),
-			"source": "Binance",
-		})
-		return
+	// Try to load from local storage first
+	var bars []model.Bar
+	useLocalData := false
+	if DataDownloader != nil {
+		bars = DataDownloader.LoadBarsForBacktest(symbol, interval, fromMs, toMs)
+		if len(bars) >= 50 {
+			useLocalData = true
+		}
 	}
 
-	// Convert to model.Bar
-	bars := make([]model.Bar, 0, len(klines))
-	for _, k := range klines {
-		bars = append(bars, model.Bar{
-			Symbol:   symbol,
-			Open:     getFloat(k, "open", 0),
-			High:     getFloat(k, "high", 0),
-			Low:      getFloat(k, "low", 0),
-			Close:    getFloat(k, "close", 0),
-			Volume:   getFloat(k, "volume", 0),
-			Interval: interval,
-			Time:     int64(getFloat(k, "time", 0)),
-		})
+	if !useLocalData {
+		// Fetch real historical klines from Binance
+		klines, err := fetchBinanceKlines(symbol, interval, numBars, fromMs, toMs)
+		if err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{
+				"error":  "无法获取历史数据",
+				"detail": fmt.Sprintf("从 Binance 获取 %s %s K线失败: %v", symbol, interval, err),
+				"source": "Binance",
+			})
+			return
+		}
+		if len(klines) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":  "数据为空",
+				"detail": fmt.Sprintf("Binance 未返回 %s %s 的K线数据，请检查交易对和时间范围是否正确", symbol, interval),
+				"source": "Binance",
+			})
+			return
+		}
+		if len(klines) < 50 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":  "数据不足",
+				"detail": fmt.Sprintf("仅获取到 %d 根K线，至少需要 50 根才能回测。请扩大日期范围", len(klines)),
+				"source": "Binance",
+			})
+			return
+		}
+
+		// Convert to model.Bar
+		bars = make([]model.Bar, 0, len(klines))
+		for _, k := range klines {
+			bars = append(bars, model.Bar{
+				Symbol:   symbol,
+				Open:     getFloat(k, "open", 0),
+				High:     getFloat(k, "high", 0),
+				Low:      getFloat(k, "low", 0),
+				Close:    getFloat(k, "close", 0),
+				Volume:   getFloat(k, "volume", 0),
+				Interval: interval,
+				Time:     int64(getFloat(k, "time", 0)),
+			})
+		}
+
+		// Save to local storage for future use
+		if DataDownloader != nil {
+			go func() {
+				_ = DataDownloader.SaveBars(bars)
+			}()
+		}
 	}
 
 	// Setup runner
 	cfg := backtest.DefaultRunnerConfig()
 	cfg.InitialBalance = initialBalance
+	cfg.StartTime = fromMs
+	cfg.EndTime = toMs
 	runner := backtest.NewRunner(cfg)
 	runner.LoadBars(symbol, bars)
 
@@ -403,17 +425,35 @@ func RunBacktest(c *gin.Context) {
 		finalEquity = result.EquityCurve[len(result.EquityCurve)-1].Equity
 	}
 
+	// Send backtest completion notification
+	if broadcaster := notify.NewBroadcaster(); broadcaster != nil {
+		report := map[string]any{
+			"total_return_pct": result.TotalReturnPct,
+			"sharpe_ratio":     result.SharpeRatio,
+			"max_drawdown_pct": result.MaxDrawdownPct,
+			"win_rate_pct":     result.WinRate,
+			"total_trades":     result.TotalTrades,
+			"profit_factor":    result.ProfitFactor,
+		}
+		go broadcaster.Backtest(symbol, strategyType, report, 0)
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"status": "ok",
-		"source": "Binance",
+		"source": func() string {
+			if useLocalData {
+				return "local_storage"
+			}
+			return "Binance"
+		}(),
 		"params": gin.H{
 			"symbol":          symbol,
 			"interval":        interval,
 			"strategy_type":   strategyType,
 			"initial_balance": initialBalance,
-			"bars_used":       len(klines),
-			"from":            time.UnixMilli(klines[0]["time"].(int64)).Format("2006-01-02"),
-			"to":              time.UnixMilli(klines[len(klines)-1]["time"].(int64)).Format("2006-01-02"),
+			"bars_used":       len(bars),
+			"from":            time.UnixMilli(bars[0].Time).Format("2006-01-02"),
+			"to":              time.UnixMilli(bars[len(bars)-1].Time).Format("2006-01-02"),
 		},
 		"report": gin.H{
 			"initial_balance":  initialBalance,

@@ -140,14 +140,17 @@ var strategyTemplate = template.Must(template.New("strategy").Funcs(template.Fun
 }).Parse(`package strategies
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/xiaotian-quant/gateway/internal/event"
 	"github.com/xiaotian-quant/gateway/internal/model"
+	"github.com/xiaotian-quant/gateway/internal/strategy"
 )
 
 // {{.Name}} implements the {{.Name}} strategy.
 type {{.Name}} struct {
+	strategy.BaseStrategy
 	name    string
 	symbol  string
 	running bool
@@ -171,10 +174,13 @@ type {{.Name}} struct {
 
 	// Indicators state (computed by the engine at runtime)
 	indicators map[string]float64
+
+	// Parameter registry
+	params *strategy.ParamRegistry
 }
 
 func New{{.Name}}() *{{.Name}} {
-	return &{{.Name}}{
+	s := &{{.Name}}{
 		name:    "{{.Name}}",
 		symbol:  "{{.Symbol}}",
 		indicators: make(map[string]float64),
@@ -186,6 +192,16 @@ func New{{.Name}}() *{{.Name}} {
 		{{if .RiskMgmt.Pyramiding}}pyramiding: true,{{end}}
 		{{if .RiskMgmt.PyramidingN}}pyramidingN: {{.RiskMgmt.PyramidingN}},{{end}}
 	}
+	// Register parameters for hyperopt and frontend configuration
+	s.params = strategy.NewParamRegistry()
+	s.params.Register(strategy.FloatParameter("stop_loss_pct", {{.RiskMgmt.StopLossPct}}, 0.005, 0.20, 0.005, "stoploss"))
+	s.params.Register(strategy.FloatParameter("take_profit_pct", {{.RiskMgmt.TakeProfitPct}}, 0.01, 0.50, 0.01, "roi"))
+	s.params.Register(strategy.BoolParameter("trailing_stop", {{.RiskMgmt.TrailingStop}}, "trailing"))
+	s.params.Register(strategy.FloatParameter("max_drawdown", {{.RiskMgmt.MaxDrawdown}}, 0.05, 0.50, 0.05, "protection"))
+	s.params.Register(strategy.FloatParameter("position_size", {{.RiskMgmt.PositionSize}}, 100, 10000, 100, "buy"))
+	s.params.Register(strategy.BoolParameter("pyramiding", {{.RiskMgmt.Pyramiding}}, "buy"))
+	s.params.Register(strategy.IntParameter("pyramiding_n", {{.RiskMgmt.PyramidingN}}, 1, 10, "buy"))
+	return s
 }
 
 func (s *{{.Name}}) Name() string       { return s.name }
@@ -210,6 +226,12 @@ func (s *{{.Name}}) IsRunning() bool {
 func (s *{{.Name}}) Start(params map[string]any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Apply parameter values from the incoming map
+	if err := s.ApplyParams(params); err != nil {
+		return fmt.Errorf("{{.Name}} strategy apply params: %w", err)
+	}
+
 	s.running = true
 	s.bars = nil
 	s.barCount = 0
@@ -222,6 +244,58 @@ func (s *{{.Name}}) Stop() error {
 	defer s.mu.Unlock()
 	s.running = false
 	return nil
+}
+
+// ── Parameter system implementation ────────────────────────────
+
+func (s *{{.Name}}) GetParameters() *strategy.ParamRegistry {
+	return s.params
+}
+
+func (s *{{.Name}}) ValidateParams() error {
+	if s.params == nil {
+		return nil
+	}
+	return s.params.Validate()
+}
+
+func (s *{{.Name}}) ApplyParams(m map[string]any) error {
+	if s.params == nil {
+		return nil
+	}
+	if err := s.params.FromMap(m); err != nil {
+		return err
+	}
+	// Sync local fields from registry
+	if p := s.params.Get("stop_loss_pct"); p != nil {
+		s.stopLossPct = p.GetFloat()
+	}
+	if p := s.params.Get("take_profit_pct"); p != nil {
+		s.takeProfitPct = p.GetFloat()
+	}
+	if p := s.params.Get("trailing_stop"); p != nil {
+		s.trailingStop = p.GetBool()
+	}
+	if p := s.params.Get("max_drawdown"); p != nil {
+		s.maxDrawdown = p.GetFloat()
+	}
+	if p := s.params.Get("position_size"); p != nil {
+		s.positionSize = p.GetFloat()
+	}
+	if p := s.params.Get("pyramiding"); p != nil {
+		s.pyramiding = p.GetBool()
+	}
+	if p := s.params.Get("pyramiding_n"); p != nil {
+		s.pyramidingN = p.GetInt()
+	}
+	return nil
+}
+
+func (s *{{.Name}}) ParamDefs() []map[string]any {
+	if s.params == nil {
+		return nil
+	}
+	return s.params.ToJSONDefs()
 }
 
 func (s *{{.Name}}) OnTick(tick model.Tick, bus *event.EventBus) (*model.Signal, error) {

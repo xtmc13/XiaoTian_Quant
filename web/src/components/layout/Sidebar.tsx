@@ -18,6 +18,12 @@ import {
   Users,
   Key, Globe,
   ChevronDown,
+  BrainCircuit,
+  Shield,
+  ListFilter,
+  ArrowUpDown,
+  ArrowLeftRight,
+  Search,
 } from 'lucide-react'
 
 interface NavItem {
@@ -42,6 +48,12 @@ const navItems: NavItem[] = [
   { path: '/ai', label: 'AI研究', icon: Cpu },
   { path: '/backtest', label: '回测', icon: FlaskConical },
   { path: '/bots', label: '机器人', icon: Bot },
+  { path: '/model-management', label: 'ML模型', icon: BrainCircuit },
+  { path: '/risk-control', label: '风控中心', icon: Shield },
+  { path: '/pairlist', label: '交易对筛选', icon: ListFilter },
+  { path: '/advanced-orders', label: '高级订单', icon: ArrowUpDown },
+  { path: '/arbitrage', label: '套利监控', icon: ArrowLeftRight },
+  { path: '/hyperopt', label: '参数优化', icon: Search },
   { path: '/exchange-account', label: '账户', icon: Wallet },
   { path: '/indicator-community', label: '指标市场', icon: ShoppingBag },
   { path: '/author-dashboard', label: '作者后台', icon: BarChart3 },

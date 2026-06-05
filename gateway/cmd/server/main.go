@@ -16,6 +16,7 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/indicator"
 	"github.com/xiaotian-quant/gateway/internal/middleware"
 	"github.com/xiaotian-quant/gateway/internal/store"
+	"github.com/xiaotian-quant/gateway/internal/ws"
 	"github.com/xiaotian-quant/gateway/spa"
 )
 
@@ -125,6 +126,7 @@ func main() {
 		private.PUT("/config", handler.SaveConfig)
 		private.POST("/config", handler.SaveConfig)
 		private.GET("/strategies/global", handler.GetGlobalStrategy)
+		private.GET("/strategies/param-defs", handler.GetStrategyParamDefs)
 		private.PUT("/strategies/global", handler.SaveGlobalStrategy)
 		private.POST("/exchange/save", handler.ExchangeSave)
 		private.POST("/exchange/test", handler.ExchangeTest)
@@ -143,6 +145,20 @@ func main() {
 		private.DELETE("/orders/:order_id", handler.CancelOrder)
 		private.POST("/orders/:order_id/cancel", handler.CancelOrder)
 		private.GET("/orders/history", handler.OrderHistory)
+		// ── Advanced Orders ──
+		private.POST("/orders/oco", handler.PlaceOCO)
+		private.GET("/orders/oco", handler.ListOCO)
+		private.GET("/orders/oco/:id", handler.GetOCO)
+		private.DELETE("/orders/oco/:id", handler.CancelOCO)
+		private.POST("/orders/bracket", handler.PlaceBracket)
+		private.GET("/orders/bracket", handler.ListBracket)
+		private.GET("/orders/bracket/:id", handler.GetBracket)
+		private.DELETE("/orders/bracket/:id", handler.CancelBracket)
+		private.POST("/orders/iceberg", handler.PlaceIceberg)
+		private.GET("/orders/iceberg", handler.ListIceberg)
+		private.GET("/orders/iceberg/:id", handler.GetIceberg)
+		private.DELETE("/orders/iceberg/:id", handler.CancelIceberg)
+		private.POST("/orders/bracket/calculate", handler.CalculateBracket)
 
 		// ── Account ──
 		private.GET("/account/balance", handler.GetAccountBalance)
@@ -167,17 +183,32 @@ func main() {
 		private.POST("/notifications/:id/read", handler.MarkNotificationRead)
 		private.POST("/notifications/read-all", handler.MarkAllNotificationsRead)
 		private.DELETE("/notifications", handler.ClearNotifications)
+		private.GET("/notify/channels", handler.GetNotifyChannels)
+		private.GET("/notify/routes", handler.GetNotifyRoutes)
+		private.POST("/notify/routes", handler.UpdateNotifyRoute)
+		private.DELETE("/notify/routes/:id", handler.DeleteNotifyRoute)
+		private.POST("/notify/test", handler.TestNotifyChannel)
+		private.POST("/notify/send", handler.SendCustomNotification)
 		private.GET("/chart", handler.Chart)
+		// ── Arbitrage ──
+		private.GET("/arbitrage/config", handler.GetArbitrageConfig)
+		private.POST("/arbitrage/config", handler.UpdateArbitrageConfig)
+		private.POST("/arbitrage/start", handler.StartArbitrage)
+		private.POST("/arbitrage/stop", handler.StopArbitrage)
+		private.GET("/arbitrage/status", handler.GetArbitrageStatus)
+		private.GET("/arbitrage/opportunity", handler.GetArbitrageOpportunity)
+		private.GET("/arbitrage/positions", handler.GetArbitragePositions)
+		private.GET("/arbitrage/history", handler.GetArbitrageHistory)
+		private.POST("/arbitrage/exchanges", handler.RegisterArbitrageExchange)
+		private.GET("/arbitrage/exchanges", handler.ListArbitrageExchanges)
+		private.POST("/arbitrage/execute", handler.ExecuteArbitrage)
 
 		// ── Data Management ──
-		private.POST("/data/download", handler.DataDownload)
-		private.GET("/data/download/:jobId", handler.DataDownloadStatus)
-		private.GET("/data/coverage", handler.DataCoverage)
-		private.GET("/data/load", handler.DataLoad)
-		private.GET("/data/validate", handler.DataValidate)
-		private.DELETE("/data/prune", handler.DataPrune)
-		private.GET("/data/symbols", handler.DataSymbols)
-		private.GET("/data/intervals", handler.DataIntervals)
+		private.GET("/data/coverage", handler.GetDataCoverage)
+		private.GET("/data/info", handler.GetDataInfo)
+		private.POST("/data/download", handler.StartDataDownload)
+		private.GET("/data/download/:id", handler.GetDownloadJob)
+		private.GET("/data/bars", handler.GetHistoricalBars)
 
 		// ── Strategy ──
 		private.GET("/strategies/configs", handler.GetStrategyConfigs)
@@ -197,6 +228,27 @@ func main() {
 		private.GET("/strategies/spot", handler.GetStrategiesSpot)
 		private.GET("/strategies/contract", handler.GetStrategiesContract)
 		private.GET("/strategies/ranking", handler.GetStrategiesRanking)
+
+
+			// ── Pairlist ──
+			private.GET("/pairlist/whitelist", handler.GetPairlistWhitelist)
+			private.POST("/pairlist/refresh", handler.RefreshPairlist)
+			private.GET("/pairlist/config", handler.GetPairlistConfig)
+			private.POST("/pairlist/config", handler.ConfigurePairlist)
+
+			// ── Protection ──
+			private.GET("/protection/status", handler.GetProtectionStatus)
+			private.POST("/protection/config", handler.ConfigureProtection)
+			private.POST("/protection/reset", handler.ResetProtection)
+			private.POST("/protection/trade", handler.RecordTrade)
+
+			// ── Hyperopt ──
+			private.POST("/hyperopt/start", handler.StartHyperopt)
+			private.GET("/hyperopt/jobs", handler.ListHyperoptJobs)
+			private.GET("/hyperopt/jobs/:id", handler.GetHyperoptJob)
+			private.POST("/hyperopt/jobs/:id/cancel", handler.CancelHyperoptJob)
+			private.DELETE("/hyperopt/jobs/:id", handler.DeleteHyperoptJob)
+			private.GET("/hyperopt/spaces", handler.GetHyperoptSpaces)
 
 		// ── Settings ──
 		settingsG := private.Group("/settings")
@@ -337,8 +389,9 @@ func main() {
 	api.POST("/webhook/tv", handler.TradingViewWebhook)
 	api.POST("/webhook/generic", handler.GenericWebhook)
 
-	// ── WebSocket ──
-	r.GET("/ws", handler.WSHandler)
+		r.GET("/ws", handler.WSHandler)
+		r.GET("/ws/v2", ws.HubHandler)
+		api.GET("/ws/stats", ws.Stats)
 
 	// ── Start background tasks ──
 	go handler.StartBackgroundTasks()
