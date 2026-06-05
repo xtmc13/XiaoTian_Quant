@@ -449,6 +449,14 @@ export const notificationApi = {
   clear: () => api.del<any>('/notifications'),
 }
 
+// ── Notify Routes ──
+export const notifyRouteApi = {
+  list: () => api.get<{ rules: any[] }>('/notify/routes'),
+  save: (rule: any) => api.post<any>('/notify/routes', rule),
+  delete: (id: string) => api.del<any>(`/notify/routes/${id}`),
+  test: (channel: string, message?: string) => api.post<any>('/notify/test', { channel, message: message || '测试消息' }),
+}
+
 // ── Indicators ──
 export const indicatorApi = {
   // --- New contract-based API ---

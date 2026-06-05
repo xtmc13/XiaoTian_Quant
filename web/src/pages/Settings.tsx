@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { configApi } from '@/lib/api'
+import { configApi, notifyRouteApi } from '@/lib/api'
 import { useAppStore } from '@/stores/appStore'
 import { cn } from '@/lib/utils'
 import { PageHeader } from '@/components/ui/PageHeader'
@@ -26,6 +26,7 @@ import {
   Loader2,
   SlidersHorizontal,
   Zap,
+  Route,
 } from 'lucide-react'
 
 /* ------------------------------------------------------------------ */
@@ -68,9 +69,48 @@ interface SecurityConfig {
   ipWhitelist: string
 }
 
+interface RouteRule {
+  id: string
+  name: string
+  events: string[]
+  levels: string[]
+  channels: string[]
+  enabled: boolean
+  minReturnPct?: number
+}
+
 /* ------------------------------------------------------------------ */
 /*  Constants                                                          */
 /* ------------------------------------------------------------------ */
+
+const EVENTS = ['signal', 'trade', 'risk', 'protection', 'system', 'backtest', 'hyperopt']
+const LEVELS = ['INFO', 'WARN', 'CRITICAL']
+const CHANNELS = ['log', 'email', 'lark', 'dingtalk', 'telegram', 'discord']
+
+const CHANNEL_LABELS: Record<string, string> = {
+  log: '日志',
+  email: '邮件',
+  lark: '飞书',
+  dingtalk: '钉钉',
+  telegram: 'Telegram',
+  discord: 'Discord',
+}
+
+const EVENT_LABELS: Record<string, string> = {
+  signal: '信号',
+  trade: '交易',
+  risk: '风控',
+  protection: '保护',
+  system: '系统',
+  backtest: '回测',
+  hyperopt: '超参优化',
+}
+
+const LEVEL_LABELS: Record<string, string> = {
+  INFO: '信息',
+  WARN: '警告',
+  CRITICAL: '严重',
+}
 
 const EXCHANGES = [
   { key: 'binance', label: 'Binance', needsPassphrase: false },
@@ -241,6 +281,37 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
   const [dataSettings, setDataSettings] = useState<DataConfig>(() => loadLocal('xt-data', { klineLimit: 5000, autoCleanup: true, realtime: true }))
   const [securitySettings, setSecuritySettings] = useState<SecurityConfig>(() => loadLocal('xt-security', { twoFactor: false, sessionTimeout: 60, ipWhitelist: '' }))
 
+  /* ── Notify routing ── */
+  const { data: notifyRoutesData, isLoading: notifyRoutesLoading } = useQuery({
+    queryKey: ['notify-routes'],
+    queryFn: () => notifyRouteApi.list(),
+  })
+
+  const [editingRule, setEditingRule] = useState<RouteRule | null>(null)
+  const [isRuleFormOpen, setIsRuleFormOpen] = useState(false)
+
+  const saveRuleMut = useMutation({
+    mutationFn: (rule: RouteRule) => notifyRouteApi.save(rule),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['notify-routes'] })
+      setIsRuleFormOpen(false)
+      setEditingRule(null)
+    },
+  })
+
+  const deleteRuleMut = useMutation({
+    mutationFn: (id: string) => notifyRouteApi.delete(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['notify-routes'] })
+    },
+  })
+
+  const testChannelMut = useMutation({
+    mutationFn: ({ channel, message }: { channel: string; message?: string }) => notifyRouteApi.test(channel, message),
+  })
+
+  const notifyRoutes = notifyRoutesData?.rules || []
+
   /* ── Sync backend config into form state ── */
   useEffect(() => {
     if (!backendConfig) return
@@ -342,6 +413,7 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
     { key: 'ai', label: 'AI 模型', icon: BrainCircuit },
     { key: 'strategy', label: '全局策略', icon: SlidersHorizontal },
     { key: 'notify', label: '通知', icon: Bell, local: true },
+    { key: 'notify-routing', label: '通知路由', icon: Route },
     { key: 'appearance', label: '外观', icon: Palette, local: true },
     { key: 'data', label: '数据', icon: Database, local: true },
     { key: 'security', label: '安全', icon: Shield, local: true },
@@ -967,6 +1039,245 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
                     <div className="text-[10px] text-muted-foreground">
                       <span className="font-medium">action 取值:</span> buy(做多) / sell(做空) / exit(平仓)
                     </div>
+                  </div>
+                </SectionCard>
+              </>
+            )}
+
+            {/* ── NOTIFY ROUTING ── */}
+            {activeTab === 'notify-routing' && (
+              <>
+                <SectionCard title="通知路由规则" bodyClassName="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs text-muted-foreground">配置不同事件和级别通过哪些通道发送通知</p>
+                    <button
+                      onClick={() => {
+                        setEditingRule({
+                          id: '',
+                          name: '',
+                          events: [],
+                          levels: ['INFO'],
+                          channels: ['log'],
+                          enabled: true,
+                        })
+                        setIsRuleFormOpen(true)
+                      }}
+                      className="flex items-center gap-1.5 rounded-md bg-quant-gold px-3 py-1.5 text-xs font-medium text-black transition-opacity hover:opacity-90"
+                    >
+                      <Zap className="h-3.5 w-3.5" />
+                      新增规则
+                    </button>
+                  </div>
+
+                  {isRuleFormOpen && editingRule && (
+                    <div className="rounded-lg border border-quant-border bg-quant-bg p-4 space-y-4">
+                      <div>
+                        <label className="mb-1.5 block text-xs text-muted-foreground">规则名称</label>
+                        <TextInput
+                          value={editingRule.name}
+                          onChange={(v) => setEditingRule((p) => (p ? { ...p, name: v } : p))}
+                          placeholder="例如：关键告警"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1.5 block text-xs text-muted-foreground">事件类型（空表示全部）</label>
+                        <div className="flex flex-wrap gap-2">
+                          {EVENTS.map((ev) => (
+                            <label key={ev} className="flex items-center gap-1.5 rounded-md border border-quant-border bg-quant-card px-2.5 py-1.5 text-xs text-muted-foreground cursor-pointer hover:border-quant-gold/30">
+                              <input
+                                type="checkbox"
+                                className="accent-quant-gold"
+                                checked={editingRule.events.includes(ev)}
+                                onChange={(e) => {
+                                  setEditingRule((p) => {
+                                    if (!p) return p
+                                    const next = e.target.checked ? [...p.events, ev] : p.events.filter((x) => x !== ev)
+                                    return { ...p, events: next }
+                                  })
+                                }}
+                              />
+                              {EVENT_LABELS[ev] || ev}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="mb-1.5 block text-xs text-muted-foreground">通知级别</label>
+                        <div className="flex flex-wrap gap-2">
+                          {LEVELS.map((lv) => (
+                            <label key={lv} className="flex items-center gap-1.5 rounded-md border border-quant-border bg-quant-card px-2.5 py-1.5 text-xs text-muted-foreground cursor-pointer hover:border-quant-gold/30">
+                              <input
+                                type="checkbox"
+                                className="accent-quant-gold"
+                                checked={editingRule.levels.includes(lv)}
+                                onChange={(e) => {
+                                  setEditingRule((p) => {
+                                    if (!p) return p
+                                    const next = e.target.checked ? [...p.levels, lv] : p.levels.filter((x) => x !== lv)
+                                    return { ...p, levels: next }
+                                  })
+                                }}
+                              />
+                              {LEVEL_LABELS[lv] || lv}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="mb-1.5 block text-xs text-muted-foreground">通知通道</label>
+                        <div className="flex flex-wrap gap-2">
+                          {CHANNELS.map((ch) => (
+                            <label key={ch} className="flex items-center gap-1.5 rounded-md border border-quant-border bg-quant-card px-2.5 py-1.5 text-xs text-muted-foreground cursor-pointer hover:border-quant-gold/30">
+                              <input
+                                type="checkbox"
+                                className="accent-quant-gold"
+                                checked={editingRule.channels.includes(ch)}
+                                onChange={(e) => {
+                                  setEditingRule((p) => {
+                                    if (!p) return p
+                                    const next = e.target.checked ? [...p.channels, ch] : p.channels.filter((x) => x !== ch)
+                                    return { ...p, channels: next }
+                                  })
+                                }}
+                              />
+                              {CHANNEL_LABELS[ch] || ch}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <Toggle
+                            value={editingRule.enabled}
+                            onChange={(v) => setEditingRule((p) => (p ? { ...p, enabled: v } : p))}
+                          />
+                          启用规则
+                        </label>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => saveRuleMut.mutate(editingRule)}
+                          disabled={saveRuleMut.isPending || !editingRule.name.trim()}
+                          className="flex items-center gap-1.5 rounded-md bg-quant-gold px-3 py-1.5 text-xs font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-50"
+                        >
+                          {saveRuleMut.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                          {saveRuleMut.isPending ? '保存中...' : '保存'}
+                        </button>
+                        <button
+                          onClick={() => {
+                            setIsRuleFormOpen(false)
+                            setEditingRule(null)
+                          }}
+                          className="flex items-center gap-1.5 rounded-md border border-quant-border bg-quant-card px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-quant-gold/30 hover:text-foreground"
+                        >
+                          取消
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {notifyRoutesLoading ? (
+                    <div className="flex items-center gap-2 py-4">
+                      <Loader2 className="h-4 w-4 animate-spin text-quant-gold" />
+                      <span className="text-xs text-muted-foreground">加载中...</span>
+                    </div>
+                  ) : notifyRoutes.length === 0 ? (
+                    <div className="py-6 text-center text-xs text-muted-foreground">暂无路由规则，点击上方按钮添加</div>
+                  ) : (
+                    <div className="space-y-3">
+                      {notifyRoutes.map((rule: RouteRule) => (
+                        <div key={rule.id} className="rounded-lg border border-quant-border bg-quant-bg p-4 space-y-3">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                              <span className="text-sm font-medium text-foreground">{rule.name}</span>
+                              <span className={cn('rounded px-1.5 py-0.5 text-[10px]', rule.enabled ? 'bg-emerald-500/10 text-emerald-400' : 'bg-quant-border text-muted-foreground')}>
+                                {rule.enabled ? '已启用' : '已禁用'}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => {
+                                  setEditingRule({ ...rule })
+                                  setIsRuleFormOpen(true)
+                                }}
+                                className="rounded-md border border-quant-border bg-quant-card px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:border-quant-gold/30 hover:text-foreground"
+                              >
+                                编辑
+                              </button>
+                              <button
+                                onClick={() => {
+                                  if (confirm('确定删除此规则？')) {
+                                    deleteRuleMut.mutate(rule.id)
+                                  }
+                                }}
+                                disabled={deleteRuleMut.isPending && deleteRuleMut.variables === rule.id}
+                                className="rounded-md border border-quant-border bg-quant-card px-2.5 py-1 text-xs text-red-400 transition-colors hover:border-red-400/30 hover:bg-red-400/10 disabled:opacity-50"
+                              >
+                                删除
+                              </button>
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {(rule.events.length === 0 ? ['全部事件'] : rule.events).map((ev) => (
+                              <span key={ev} className="rounded bg-quant-border px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                                {EVENT_LABELS[ev] || ev}
+                              </span>
+                            ))}
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {rule.levels.map((lv) => (
+                              <span key={lv} className={cn('rounded px-1.5 py-0.5 text-[10px]', lv === 'CRITICAL' ? 'bg-red-500/10 text-red-400' : lv === 'WARN' ? 'bg-amber-500/10 text-amber-400' : 'bg-blue-500/10 text-blue-400')}>
+                                {LEVEL_LABELS[lv] || lv}
+                              </span>
+                            ))}
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {rule.channels.map((ch) => (
+                              <span key={ch} className="rounded bg-quant-gold/10 px-1.5 py-0.5 text-[10px] text-quant-gold">
+                                {CHANNEL_LABELS[ch] || ch}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </SectionCard>
+
+                <SectionCard title="通道测试" bodyClassName="space-y-4">
+                  <p className="text-xs text-muted-foreground">向指定通道发送一条测试消息，验证配置是否正确</p>
+                  <div className="flex flex-wrap gap-2">
+                    {CHANNELS.map((ch) => {
+                      const testStatus = testChannelMut.variables?.channel === ch
+                        ? testChannelMut.isPending
+                          ? 'testing'
+                          : testChannelMut.isSuccess
+                            ? 'ok'
+                            : testChannelMut.isError
+                              ? 'error'
+                              : null
+                        : null
+                      return (
+                        <button
+                          key={ch}
+                          onClick={() => testChannelMut.mutate({ channel: ch })}
+                          disabled={testChannelMut.isPending && testChannelMut.variables?.channel === ch}
+                          className={cn(
+                            'flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors',
+                            testStatus === 'ok'
+                              ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400'
+                              : testStatus === 'error'
+                                ? 'border-red-500/30 bg-red-500/10 text-red-400'
+                                : 'border-quant-border bg-quant-card text-muted-foreground hover:border-quant-gold/30 hover:text-foreground',
+                            'disabled:opacity-50'
+                          )}
+                        >
+                          {testStatus === 'testing' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : testStatus === 'ok' ? <Check className="h-3.5 w-3.5" /> : testStatus === 'error' ? <WifiOff className="h-3.5 w-3.5" /> : <Wifi className="h-3.5 w-3.5" />}
+                          {CHANNEL_LABELS[ch] || ch}
+                          {testStatus === 'testing' ? '测试中...' : testStatus === 'ok' ? '成功' : testStatus === 'error' ? '失败' : ''}
+                        </button>
+                      )
+                    })}
                   </div>
                 </SectionCard>
               </>
