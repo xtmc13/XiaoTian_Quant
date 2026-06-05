@@ -16,6 +16,8 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/indicator"
 	"github.com/xiaotian-quant/gateway/internal/middleware"
 	"github.com/xiaotian-quant/gateway/internal/store"
+	"github.com/xiaotian-quant/gateway/internal/strategy"
+	"github.com/xiaotian-quant/gateway/internal/strategy/strategies"
 	"github.com/xiaotian-quant/gateway/internal/ws"
 	"github.com/xiaotian-quant/gateway/spa"
 )
@@ -41,6 +43,19 @@ func main() {
 	}
 	store.LoadConfig()
 	store.LoadStrategyConfigs()
+
+	// Register strategy factories for combo engine
+	strategy.RegisterStrategyFactory("breakout", func() strategy.Strategy { return strategies.NewBreakoutStrategy() })
+	strategy.RegisterStrategyFactory("ema_cross", func() strategy.Strategy { return strategies.NewEMACrossStrategy() })
+	strategy.RegisterStrategyFactory("macd", func() strategy.Strategy { return strategies.NewMACDStrategy() })
+	strategy.RegisterStrategyFactory("rsi", func() strategy.Strategy { return strategies.NewRSIStrategy() })
+	strategy.RegisterStrategyFactory("bollinger_bands", func() strategy.Strategy { return strategies.NewBollingerBandsStrategy() })
+	strategy.RegisterStrategyFactory("atr_trailing_stop", func() strategy.Strategy { return strategies.NewATRTrailingStopStrategy() })
+	strategy.RegisterStrategyFactory("dual_thrust", func() strategy.Strategy { return strategies.NewDualThrustStrategy() })
+	strategy.RegisterStrategyFactory("renko", func() strategy.Strategy { return strategies.NewRenkoStrategy() })
+	strategy.RegisterStrategyFactory("grid_trading", func() strategy.Strategy { return strategies.NewGridTradingStrategy() })
+	strategy.RegisterStrategyFactory("arbitrage", func() strategy.Strategy { return strategies.NewArbitrageStrategy() })
+	strategy.RegisterStrategyFactory("market_making", func() strategy.Strategy { return strategies.NewMarketMakingStrategy() })
 
 	// ── Setup Gin ──
 	if cfg.Server.Mode == "debug" {
@@ -229,6 +244,15 @@ func main() {
 		private.GET("/strategies/contract", handler.GetStrategiesContract)
 		private.GET("/strategies/ranking", handler.GetStrategiesRanking)
 
+		// ── Combo ──
+		private.GET("/combos", handler.GetCombos)
+		private.POST("/combos", handler.CreateCombo)
+		private.GET("/combos/:id", handler.GetCombo)
+		private.PUT("/combos/:id", handler.UpdateCombo)
+		private.DELETE("/combos/:id", handler.DeleteCombo)
+		private.POST("/combos/:id/start", handler.StartCombo)
+		private.POST("/combos/:id/stop", handler.StopCombo)
+		private.GET("/combos/:id/signals", handler.GetComboSignals)
 
 			// ── Pairlist ──
 			private.GET("/pairlist/whitelist", handler.GetPairlistWhitelist)
