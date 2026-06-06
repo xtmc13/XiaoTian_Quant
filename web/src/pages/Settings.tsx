@@ -5,6 +5,7 @@ import { useAppStore } from '@/stores/appStore'
 import { cn } from '@/lib/utils'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { SectionCard } from '@/components/ui/SectionCard'
+import { CRAParamForm, useCRAConfig } from '@/components/strategy/CRAParamForm'
 import {
   Globe,
   KeyRound,
@@ -161,7 +162,7 @@ function loadLocal<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key)
     if (raw) return JSON.parse(raw) as T
-  } catch {}
+  } catch { /* ignore parse error */ }
   return fallback
 }
 
@@ -198,7 +199,7 @@ function PasswordInput({ value, onChange, placeholder }: { value: string; onChan
         placeholder={placeholder}
         className="w-full rounded-md border border-quant-border bg-quant-bg px-3 py-2 pr-10 text-sm text-white placeholder-muted-foreground outline-none transition-colors focus:border-quant-gold"
       />
-      <button type="button" onClick={() => setVisible(!visible)} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+      <button type="button" onClick={() => setVisible(!visible)} aria-label={visible ? '隐藏密码' : '显示密码'} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
         {visible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
       </button>
     </div>
@@ -217,12 +218,13 @@ function TextInput({ value, onChange, placeholder, type = 'text' }: { value: str
   )
 }
 
-function SelectField({ value, onChange, options }: { value: string; onChange: (v: string) => void; options: string[] }) {
+function SelectField({ value, onChange, options, label }: { value: string; onChange: (v: string) => void; options: string[]; label?: string }) {
   return (
     <div className="relative">
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        aria-label={label}
         className="w-full appearance-none rounded-md border border-quant-border bg-quant-bg px-3 py-2 pr-8 text-sm text-white outline-none transition-colors focus:border-quant-gold"
       >
         {options.map((opt) => (
@@ -272,6 +274,7 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
   const [aiProviders, setAiProviders] = useState<Record<string, AIProviderConfig>>({})
   const [profitProtection, setProfitProtection] = useState(false)
   const [maxOrders, setMaxOrders] = useState(5)
+  const { config: craConfig, update: craUpdate } = useCRAConfig()
   const [dirty, setDirty] = useState(false)
 
   /* ── Local settings (frontend-only) ── */
@@ -291,7 +294,7 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
   const [isRuleFormOpen, setIsRuleFormOpen] = useState(false)
 
   const saveRuleMut = useMutation({
-    mutationFn: (rule: RouteRule) => notifyRouteApi.save(rule),
+    mutationFn: (rule: RouteRule) => notifyRouteApi.save(rule as any),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['notify-routes'] })
       setIsRuleFormOpen(false)
@@ -310,23 +313,23 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
     mutationFn: ({ channel, message }: { channel: string; message?: string }) => notifyRouteApi.test(channel, message),
   })
 
-  const notifyRoutes = notifyRoutesData?.rules || []
+  const notifyRoutes = (notifyRoutesData as any as RouteRule[]) || []
 
   /* ── Sync backend config into form state ── */
   useEffect(() => {
     if (!backendConfig) return
-    setDefaultExchange(backendConfig.default_exchange || 'binance')
-    setExchanges((backendConfig.exchanges || {}) as Record<string, ExchangeConfig>)
-    setDefaultAIProvider(backendConfig.default_ai_provider || 'openai')
-    setAiProviders((backendConfig.ai || {}) as Record<string, AIProviderConfig>)
-    const risk = backendConfig.risk || {}
+    setDefaultExchange((backendConfig as Record<string, unknown>).default_exchange as string || 'binance')
+    setExchanges(((backendConfig as Record<string, unknown>).exchanges || {}) as Record<string, ExchangeConfig>)
+    setDefaultAIProvider((backendConfig as Record<string, unknown>).default_ai_provider as string || 'openai')
+    setAiProviders(((backendConfig as Record<string, unknown>).ai || {}) as Record<string, AIProviderConfig>)
+    const risk = (backendConfig as Record<string, unknown>).risk as Record<string, unknown> || {}
     setProfitProtection(!!risk.profit_protection_enabled)
     setMaxOrders(typeof risk.max_concurrent_orders === 'number' ? risk.max_concurrent_orders : 5)
     setDirty(false)
   }, [backendConfig])
 
   /* ── Helpers to mutate nested state ── */
-  const setExchangeField = useCallback((name: string, field: keyof ExchangeConfig, val: any) => {
+  const setExchangeField = useCallback((name: string, field: keyof ExchangeConfig, val: string | number | boolean) => {
     setExchanges((prev) => {
       const next = { ...prev, [name]: { ...(prev[name] || {}), [field]: val } }
       return next
@@ -334,7 +337,7 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
     setDirty(true)
   }, [])
 
-  const setAIField = useCallback((provider: string, field: keyof AIProviderConfig, val: any) => {
+  const setAIField = useCallback((provider: string, field: keyof AIProviderConfig, val: string | number | boolean) => {
     setAiProviders((prev) => {
       const next = { ...prev, [provider]: { ...(prev[provider] || {}), [field]: val } }
       return next
@@ -368,7 +371,7 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
   /* ── Test mutations ── */
   const testExchangeMut = useMutation({
     mutationFn: async ({ name, cfg }: { name: string; cfg: ExchangeConfig }) => {
-      const result = await configApi.exchangeTest({ name, api_key: cfg.api_key || '', secret: cfg.secret || '', passphrase: cfg.passphrase || '' })
+      const result = await configApi.exchangeTest({ id: name, name, api_key: cfg.api_key || '', secret: cfg.secret || '', passphrase: cfg.passphrase || '', enabled: true } as any)
       if (result?.status === 'error') throw new Error(result?.detail || '连接失败')
       return result
     },
@@ -461,11 +464,11 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
                 <button
                   onClick={() => {
                     if (backendConfig) {
-                      setDefaultExchange(backendConfig.default_exchange || 'binance')
-                      setExchanges((backendConfig.exchanges || {}) as Record<string, ExchangeConfig>)
-                      setDefaultAIProvider(backendConfig.default_ai_provider || 'openai')
-                      setAiProviders((backendConfig.ai || {}) as Record<string, AIProviderConfig>)
-                      const risk = backendConfig.risk || {}
+                      setDefaultExchange((backendConfig as Record<string, unknown>).default_exchange as string || 'binance')
+                      setExchanges(((backendConfig as Record<string, unknown>).exchanges || {}) as Record<string, ExchangeConfig>)
+                      setDefaultAIProvider((backendConfig as Record<string, unknown>).default_ai_provider as string || 'openai')
+                      setAiProviders(((backendConfig as Record<string, unknown>).ai || {}) as Record<string, AIProviderConfig>)
+                      const risk = (backendConfig as Record<string, unknown>).risk as Record<string, unknown> || {}
                       setProfitProtection(!!risk.profit_protection_enabled)
                       setMaxOrders(typeof risk.max_concurrent_orders === 'number' ? risk.max_concurrent_orders : 5)
                     }
@@ -508,7 +511,7 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
                 <t.icon className="h-4 w-4 shrink-0" />
                 <span className="flex-1">{t.label}</span>
                 {'local' in t && t.local && (
-                  <span className="rounded bg-quant-border px-1.5 py-0.5 text-[10px] text-muted-foreground">本地</span>
+                  <span className="rounded bg-quant-border px-1.5 py-0.5 text-[10px] text-white">本地</span>
                 )}
               </button>
             ))}
@@ -530,6 +533,7 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
                           setDirty(true)
                         }}
                         options={EXCHANGES.map((e) => e.label)}
+                        label="默认交易所"
                       />
                     </div>
                   </div>
@@ -537,7 +541,7 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
 
                 {EXCHANGES.map((ex) => {
                   const cfg = exchanges[ex.key] || {}
-                  const testStatus = testExchangeMut.variables?.name === ex.key ? (testExchangeMut.isPending ? 'testing' : testExchangeMut.isSuccess ? 'ok' : testExchangeMut.isError ? 'error' : null) : null
+                  const testStatus = (testExchangeMut.variables as any)?.name === ex.key ? (testExchangeMut.isPending ? 'testing' : testExchangeMut.isSuccess ? 'ok' : testExchangeMut.isError ? 'error' : null) : null
                   return (
                     <SectionCard key={ex.key} title={ex.label} bodyClassName="space-y-4">
                       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -611,6 +615,7 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
                           setDirty(true)
                         }}
                         options={AI_PROVIDERS.map((p) => p.label)}
+                        label="默认提供商"
                       />
                     </div>
                   </div>
@@ -618,7 +623,7 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
 
                 {AI_PROVIDERS.map((prov) => {
                   const cfg = aiProviders[prov.key] || {}
-                  const testStatus = testAIMut.variables?.provider === prov.key ? (testAIMut.isPending ? 'testing' : testAIMut.isSuccess ? 'ok' : testAIMut.isError ? 'error' : null) : null
+                  const testStatus = (testAIMut.variables as any)?.provider === prov.key ? (testAIMut.isPending ? 'testing' : testAIMut.isSuccess ? 'ok' : testAIMut.isError ? 'error' : null) : null
                   return (
                     <SectionCard key={prov.key} title={prov.label} bodyClassName="space-y-4">
                       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -632,6 +637,7 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
                             value={cfg.model || prov.models[0]}
                             onChange={(v) => setAIField(prov.key, 'model', v)}
                             options={[...prov.models]}
+                            label="默认模型"
                           />
                         </div>
                       </div>
@@ -677,285 +683,14 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
                   </div>
                 </SectionCard>
 
-                {/* CRA 首单与补仓参数 */}
-                <SectionCard title="首单与补仓参数" bodyClassName="space-y-5">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="mb-1.5 block text-xs text-muted-foreground">做单数量（一般5-7单）</label>
-                      <NumberInput value={loadLocal('cra-order-count', 7)} onChange={(v) => { saveLocal('cra-order-count', v); setDirty(true) }} min={1} max={20} />
-                    </div>
-                    <div>
-                      <label className="mb-1.5 block text-xs text-muted-foreground">首单仓位 (10-10000 USDT)</label>
-                      <NumberInput value={loadLocal('cra-first-amount', 100)} onChange={(v) => { saveLocal('cra-first-amount', v); setDirty(true) }} min={10} max={10000} />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="mb-1.5 block text-xs text-muted-foreground">补仓价差 (0.5-50%)</label>
-                      <NumberInput value={loadLocal('cra-spread', 3)} onChange={(v) => { saveLocal('cra-spread', v); setDirty(true) }} min={0.5} max={50} />
-                      <p className="text-[10px] text-muted-foreground mt-1">每下跌达到设定百分比自动买入下一单</p>
-                    </div>
-                    <div>
-                      <label className="mb-1.5 block text-xs text-muted-foreground">补仓回调 (0.01-0.5%)</label>
-                      <NumberInput value={loadLocal('cra-callback', 0.1)} onChange={(v) => { saveLocal('cra-callback', v); setDirty(true) }} min={0.01} max={0.5} />
-                      <p className="text-[10px] text-muted-foreground mt-1">下跌到低点又上涨达到设定值才买入</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between rounded-lg border border-quant-border bg-quant-bg p-4">
-                    <div>
-                      <div className="text-sm font-medium text-foreground">开仓加倍</div>
-                      <div className="mt-0.5 text-xs text-muted-foreground">首单金额x2，补仓倍数仍按首单金额倍投或等比</div>
-                    </div>
-                    <Toggle value={loadLocal('cra-open-double', false)} onChange={(v) => { saveLocal('cra-open-double', v); setDirty(true) }} />
-                  </div>
-                  <div className="flex items-center justify-between rounded-lg border border-quant-border bg-quant-bg p-4">
-                    <div>
-                      <div className="text-sm font-medium text-foreground">关闭补仓</div>
-                      <div className="mt-0.5 text-xs text-muted-foreground">不执行补仓策略，但会正常止盈</div>
-                    </div>
-                    <Toggle value={loadLocal('cra-close-add', false)} onChange={(v) => { saveLocal('cra-close-add', v); setDirty(true) }} />
-                  </div>
-                </SectionCard>
-
-                {/* CRA 止盈参数 */}
-                <SectionCard title="止盈与止损参数" bodyClassName="space-y-5">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="mb-1.5 block text-xs text-muted-foreground">止盈比例 (%)</label>
-                      <NumberInput value={loadLocal('cra-tp-ratio', 1.3)} onChange={(v) => { saveLocal('cra-tp-ratio', v); setDirty(true) }} min={0.1} max={50} />
-                    </div>
-                    <div>
-                      <label className="mb-1.5 block text-xs text-muted-foreground">盈利回调 (0.01-0.5%)</label>
-                      <NumberInput value={loadLocal('cra-profit-cb', 0.1)} onChange={(v) => { saveLocal('cra-profit-cb', v); setDirty(true) }} min={0.01} max={0.5} />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="mb-1.5 block text-xs text-muted-foreground">止盈方式</label>
-                    <div className="grid grid-cols-2 gap-3">
-                      {[
-                        { key: 'full', label: '全仓止盈', desc: '全仓盈利后卖出' },
-                        { key: 'tail', label: '尾单止盈', desc: '最后一单盈利后卖出减仓' },
-                        { key: 'head_tail', label: '首尾止盈', desc: '首单+尾单盈利后先行出仓' },
-                        { key: 'moving', label: '移动止盈', desc: '动态分档止盈' },
-                      ].map((m) => (
-                        <button key={m.key} onClick={() => { saveLocal('cra-tp-method', m.key); setDirty(true) }}
-                          className={cn('p-3 rounded-lg border text-left transition-colors',
-                            loadLocal('cra-tp-method', 'full') === m.key ? 'bg-quant-gold/10 border-quant-gold/30' : 'border-quant-border bg-quant-bg hover:border-quant-gold/20')}>
-                          <div className="text-xs font-medium">{m.label}</div>
-                          <div className="text-[10px] text-muted-foreground mt-0.5">{m.desc}</div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  {/* 移动止盈配置 */}
-                  <div className="rounded-lg border border-quant-border bg-quant-bg p-4 space-y-3">
-                    <div className="text-xs font-semibold">移动止盈档位配置</div>
-                    <div className="grid grid-cols-3 gap-3">
-                      <div>
-                        <label className="mb-1.5 block text-xs text-muted-foreground">第一档止盈比例 (%)</label>
-                        <NumberInput value={loadLocal('cra-mv-tp1', 1.5)} onChange={(v) => { saveLocal('cra-mv-tp1', v); setDirty(true) }} min={0.1} max={10} />
-                      </div>
-                      <div>
-                        <label className="mb-1.5 block text-xs text-muted-foreground">第一档回撤 (%)</label>
-                        <NumberInput value={loadLocal('cra-mv-dbk1', 30)} onChange={(v) => { saveLocal('cra-mv-dbk1', v); setDirty(true) }} min={5} max={100} />
-                      </div>
-                      <div>
-                        <label className="mb-1.5 block text-xs text-muted-foreground">第二档回撤 (%)</label>
-                        <NumberInput value={loadLocal('cra-mv-dbk2', 20)} onChange={(v) => { saveLocal('cra-mv-dbk2', v); setDirty(true) }} min={5} max={100} />
-                      </div>
-                    </div>
-                    <p className="text-[10px] text-muted-foreground">计算公式: 止盈比例 ± (止盈比例 × 回撤比例)。移动止盈开启后分仓/首尾止盈失效</p>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="flex items-center justify-between rounded-lg border border-quant-border bg-quant-bg p-4">
-                      <div>
-                        <div className="text-sm font-medium text-foreground">反向止盈</div>
-                        <div className="mt-0.5 text-xs text-muted-foreground">MACD反向信号时清仓（适合大周期订单）</div>
-                      </div>
-                      <Toggle value={loadLocal('cra-reverse-tp', false)} onChange={(v) => { saveLocal('cra-reverse-tp', v); setDirty(true) }} />
-                    </div>
-                    <div className="flex items-center justify-between rounded-lg border border-quant-border bg-quant-bg p-4">
-                      <div>
-                        <div className="text-sm font-medium text-foreground">反向止损</div>
-                        <div className="mt-0.5 text-xs text-muted-foreground">MACD判断错误直接止损</div>
-                      </div>
-                      <Toggle value={loadLocal('cra-reverse-sl', false)} onChange={(v) => { saveLocal('cra-reverse-sl', v); setDirty(true) }} />
-                    </div>
-                  </div>
-                </SectionCard>
-
-                {/* CRA 开仓与补仓指标 */}
-                <SectionCard title="开仓与补仓指标" bodyClassName="space-y-5">
-                  <div>
-                    <label className="mb-1.5 block text-xs text-muted-foreground">开仓指标策略</label>
-                    <select value={loadLocal('cra-open-ind', 'macd_golden')}
-                      onChange={(e) => { saveLocal('cra-open-ind', e.target.value); setDirty(true) }}
-                      className="w-full appearance-none rounded-md border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none transition-colors focus:border-quant-gold">
-                      <option value="macd_golden">MACD金叉开多</option>
-                      <option value="macd_death">MACD死叉开空</option>
-                      <option value="ema">EMA拐点开仓</option>
-                      <option value="close">关闭（执行无脑买入）</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="mb-1.5 block text-xs text-muted-foreground">补仓指标（EMA和MACD补仓）</label>
-                    <select value={loadLocal('cra-add-ind', 'macd')}
-                      onChange={(e) => { saveLocal('cra-add-ind', e.target.value); setDirty(true) }}
-                      className="w-full appearance-none rounded-md border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none transition-colors focus:border-quant-gold">
-                      <option value="macd">MACD金叉/死叉补仓</option>
-                      <option value="ema">EMA4上下拐点补仓</option>
-                      <option value="close">关闭（仅按跌幅补仓）</option>
-                    </select>
-                    <p className="text-[10px] text-muted-foreground mt-1">开启后需同时满足跌幅条件和指标条件才补仓，大行情时非常抗跌</p>
-                  </div>
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between rounded-lg border border-quant-border bg-quant-bg p-4">
-                      <div>
-                        <div className="text-sm font-medium text-foreground">趋势指标 (EMA4)</div>
-                        <div className="mt-0.5 text-xs text-muted-foreground">监控EMA指数平滑移动平均线，可选5/15/30/60分钟</div>
-                      </div>
-                      <Toggle value={loadLocal('cra-trend-ind', false)} onChange={(v) => { saveLocal('cra-trend-ind', v); setDirty(true) }} />
-                    </div>
-                    {loadLocal('cra-trend-ind', false) && (
-                      <div>
-                        <label className="mb-1.5 block text-xs text-muted-foreground">EMA4 时间周期</label>
-                        <select value={loadLocal('cra-trend-tf', '15m')}
-                          onChange={(e) => { saveLocal('cra-trend-tf', e.target.value); setDirty(true) }}
-                          className="w-full appearance-none rounded-md border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none transition-colors focus:border-quant-gold">
-                          <option value="5m">5分钟</option>
-                          <option value="15m">15分钟</option>
-                          <option value="30m">30分钟</option>
-                          <option value="60m">60分钟</option>
-                        </select>
-                        <p className="text-[10px] text-muted-foreground mt-1">时间越长准确性越高，但也越容易错过行情</p>
-                      </div>
-                    )}
-                  </div>
-                </SectionCard>
-
-                {/* CRA 防瀑布与振幅 */}
-                <SectionCard title="防瀑布与振幅" bodyClassName="space-y-5">
-                  <div>
-                    <label className="mb-1.5 block text-xs text-muted-foreground">防瀑布设定 (%)</label>
-                    <NumberInput value={loadLocal('cra-waterfall', 2)} onChange={(v) => { saveLocal('cra-waterfall', v); setDirty(true) }} min={0.5} max={20} />
-                    <p className="text-[10px] text-muted-foreground mt-1">1分钟内单一币种涨跌超过设定值自动暂停补仓，默认2%</p>
-                  </div>
-                  <div className="text-xs font-semibold">振幅建议设置</div>
-                  <div className="grid grid-cols-4 gap-3">
-                    {[
-                      { key: 'cra-amp-5m', label: '5分钟', suggest: 2 },
-                      { key: 'cra-amp-15m', label: '15分钟', suggest: 4 },
-                      { key: 'cra-amp-30m', label: '30分钟', suggest: 7 },
-                      { key: 'cra-amp-1h', label: '1小时', suggest: 10 },
-                    ].map((a) => (
-                      <div key={a.key}>
-                        <label className="mb-1.5 block text-xs text-muted-foreground">{a.label} (建议{a.suggest}%)</label>
-                        <NumberInput value={loadLocal(a.key, a.suggest)} onChange={(v) => { saveLocal(a.key, v); setDirty(true) }} min={0.1} max={50} />
-                      </div>
-                    ))}
-                  </div>
-                  <p className="text-[10px] text-muted-foreground">连续几根或一根K线连续上涨/下跌产生的价差幅度</p>
-                </SectionCard>
-
-                {/* CRA 斩仓燃烧与顺势而为 */}
-                <SectionCard title="斩仓燃烧与顺势而为" bodyClassName="space-y-5">
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between rounded-lg border border-quant-border bg-quant-bg p-4">
-                      <div>
-                        <div className="text-sm font-medium text-foreground">斩仓和燃烧</div>
-                        <div className="mt-0.5 text-xs text-muted-foreground">用顺势单盈利消耗逆势单浮亏，顺势单不占用在线单数</div>
-                      </div>
-                      <Toggle value={loadLocal('cra-burn', false)} onChange={(v) => { saveLocal('cra-burn', v); setDirty(true) }} />
-                    </div>
-                    {loadLocal('cra-burn', false) && (
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <label className="mb-1.5 block text-xs text-muted-foreground">双向燃烧起始仓（默认第3仓）</label>
-                          <NumberInput value={loadLocal('cra-burn-dual', 3)} onChange={(v) => { saveLocal('cra-burn-dual', v); setDirty(true) }} min={1} max={10} />
-                        </div>
-                        <div>
-                          <label className="mb-1.5 block text-xs text-muted-foreground">全局燃烧起始仓（默认第5仓）</label>
-                          <NumberInput value={loadLocal('cra-burn-global', 5)} onChange={(v) => { saveLocal('cra-burn-global', v); setDirty(true) }} min={1} max={10} />
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between rounded-lg border border-quant-border bg-quant-bg p-4">
-                      <div>
-                        <div className="text-sm font-medium text-foreground">顺势而为</div>
-                        <div className="mt-0.5 text-xs text-muted-foreground">逆势单补仓后顺势单倍投开仓，最高放大5倍</div>
-                      </div>
-                      <Toggle value={loadLocal('cra-follow', false)} onChange={(v) => { saveLocal('cra-follow', v); setDirty(true) }} />
-                    </div>
-                    {loadLocal('cra-follow', false) && (
-                      <div>
-                        <label className="mb-1.5 block text-xs text-muted-foreground">顺势最大倍数（逆势补仓次数+首单，最高5倍）</label>
-                        <NumberInput value={loadLocal('cra-follow-max', 5)} onChange={(v) => { saveLocal('cra-follow-max', v); setDirty(true) }} min={1} max={5} />
-                        <p className="text-[10px] text-muted-foreground mt-1">顺势首单金额 = 逆势单补仓次数 + 首单倍率 × 首单金额</p>
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex items-center justify-between rounded-lg border border-quant-border bg-quant-bg p-4">
-                    <div>
-                      <div className="text-sm font-medium text-foreground">自定义减仓</div>
-                      <div className="mt-0.5 text-xs text-muted-foreground">极端行情下手动止损部分仓位，最后一仓占比50%，倒数第二25%，依次类推</div>
-                    </div>
-                    <Toggle value={loadLocal('cra-reduce', false)} onChange={(v) => { saveLocal('cra-reduce', v); setDirty(true) }} />
-                  </div>
-                </SectionCard>
-
-                {/* CRA 交易次数与限制 */}
-                <SectionCard title="交易次数与在线限制" bodyClassName="space-y-5">
-                  <div>
-                    <label className="mb-1.5 block text-xs text-muted-foreground">交易次数模式</label>
-                    <div className="flex gap-3">
-                      {[
-                        { key: 'single', label: '单次循环', desc: '止盈后不再买入，但补仓还会正常进行' },
-                        { key: 'cycle', label: '策略循环', desc: '卖出后持续买入，直到循环次数用尽' },
-                      ].map((m) => (
-                        <button key={m.key} onClick={() => { saveLocal('cra-trade-count', m.key); setDirty(true) }}
-                          className={cn('flex-1 p-3 rounded-lg border text-left transition-colors',
-                            loadLocal('cra-trade-count', 'cycle') === m.key ? 'bg-quant-gold/10 border-quant-gold/30' : 'border-quant-border bg-quant-bg hover:border-quant-gold/20')}>
-                          <div className="text-xs font-medium">{m.label}</div>
-                          <div className="text-[10px] text-muted-foreground mt-0.5">{m.desc}</div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <div>
-                    <label className="mb-1.5 block text-xs text-muted-foreground">限制在线单量</label>
-                    <NumberInput value={loadLocal('cra-online-limit', 10)} onChange={(v) => { saveLocal('cra-online-limit', v); setDirty(true) }} min={1} max={50} />
-                    <p className="text-[10px] text-muted-foreground mt-1">控制趋势开仓后进场的交易对过多，包括多单和空单数量</p>
-                  </div>
-                  <div>
-                    <label className="mb-1.5 block text-xs text-muted-foreground">首单挂单价格 (0=实时市价)</label>
-                    <NumberInput value={loadLocal('cra-first-price', 0)} onChange={(v) => { saveLocal('cra-first-price', v); setDirty(true) }} min={0} max={1000000} />
-                    <p className="text-[10px] text-muted-foreground mt-1">输入固定价格后，只有最新价格达到设定值系统才会市价买入</p>
-                  </div>
-                </SectionCard>
-
-                {/* CRA 监控K线 */}
-                <SectionCard title="监控K线配置" bodyClassName="space-y-5">
-                  <div className="grid grid-cols-3 gap-3">
-                    {[
-                      { key: 'cra-kline-5m', label: '5分钟', desc: '短线' },
-                      { key: 'cra-kline-15m', label: '15分钟', desc: '中短线' },
-                      { key: 'cra-kline-30m', label: '30分钟', desc: '中线' },
-                      { key: 'cra-kline-1h', label: '1小时', desc: '中长线' },
-                      { key: 'cra-kline-4h', label: '4小时', desc: '长线' },
-                      { key: 'cra-kline-8h', label: '8小时', desc: '超长线' },
-                    ].map((k) => (
-                      <button key={k.key} onClick={() => { saveLocal(k.key, !loadLocal(k.key, false)); setDirty(true) }}
-                        className={cn('p-3 rounded-lg border text-center transition-colors',
-                          loadLocal(k.key, false) ? 'bg-quant-gold/10 border-quant-gold/30' : 'border-quant-border bg-quant-bg hover:border-quant-gold/20')}>
-                        <div className="text-xs font-medium">{k.label}</div>
-                        <div className="text-[10px] text-muted-foreground">{k.desc}</div>
-                      </button>
-                    ))}
-                  </div>
-                  <p className="text-[10px] text-muted-foreground">监控币安交易所MACD和EMA指标，建议开启适合交易周期的K线</p>
-                </SectionCard>
+                {/* CRA 参数表单 */}
+                <CRAParamForm
+                  config={craConfig}
+                  onChange={(k, v) => {
+                    craUpdate(k, v)
+                    setDirty(true)
+                  }}
+                />
               </>
             )}
 
@@ -1219,7 +954,7 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
                           </div>
                           <div className="flex flex-wrap gap-1.5">
                             {(rule.events.length === 0 ? ['全部事件'] : rule.events).map((ev) => (
-                              <span key={ev} className="rounded bg-quant-border px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                              <span key={ev} className="rounded bg-quant-border px-1.5 py-0.5 text-[10px] text-white">
                                 {EVENT_LABELS[ev] || ev}
                               </span>
                             ))}
@@ -1248,7 +983,7 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
                   <p className="text-xs text-muted-foreground">向指定通道发送一条测试消息，验证配置是否正确</p>
                   <div className="flex flex-wrap gap-2">
                     {CHANNELS.map((ch) => {
-                      const testStatus = testChannelMut.variables?.channel === ch
+                      const testStatus = (testChannelMut.variables as any)?.channel === ch
                         ? testChannelMut.isPending
                           ? 'testing'
                           : testChannelMut.isSuccess
@@ -1323,11 +1058,11 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
                 </label>
                 <div>
                   <label className="mb-1.5 block text-xs text-muted-foreground">界面语言</label>
-                  <SelectField value={app.language} onChange={app.setLanguage} options={['zh-CN', 'en', 'ja']} />
+                  <SelectField value={app.language} onChange={app.setLanguage} options={['zh-CN', 'en', 'ja']} label="界面语言" />
                 </div>
                 <div>
                   <label className="mb-1.5 block text-xs text-muted-foreground">时区</label>
-                  <SelectField value={dataSettings.timezone || 'Asia/Shanghai'} onChange={(v) => setDataSettings((p) => ({ ...p, timezone: v }))} options={TIMEZONES} />
+                  <SelectField value={dataSettings.timezone || 'Asia/Shanghai'} onChange={(v) => setDataSettings((p) => ({ ...p, timezone: v }))} options={TIMEZONES} label="时区" />
                 </div>
               </SectionCard>
             )}
@@ -1400,7 +1135,7 @@ function CurrencySelector() {
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
-    configApi.currencyGet().then((data: any) => {
+    configApi.currencyGet().then((data: { currency?: string; rates?: Record<string, number> }) => {
       if (data?.currency) setCurrency(data.currency)
       if (data?.rates) setRates(data.rates)
     }).catch(() => {})
@@ -1411,7 +1146,7 @@ function CurrencySelector() {
     setSaving(true)
     try {
       await configApi.currencySet(cur)
-    } catch {}
+    } catch { /* ignore save error */ }
     setSaving(false)
   }
 

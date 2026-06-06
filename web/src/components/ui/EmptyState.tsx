@@ -26,14 +26,14 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
         className
       )}
     >
-      <div className="flex h-14 w-14 items-center justify-center rounded-full bg-[#141414] text-[#666666]">
+      <div className="flex h-14 w-14 items-center justify-center rounded-full bg-[#141414] text-[#999999]">
         {icon ?? <PackageOpen className="h-6 w-6" />}
       </div>
 
       <h3 className="mt-5 text-base font-semibold text-white">{title}</h3>
 
       {description && (
-        <p className="mt-2 max-w-xs text-sm leading-relaxed text-[#666666]">
+        <p className="mt-2 max-w-xs text-sm leading-relaxed text-[#999999]">
           {description}
         </p>
       )}

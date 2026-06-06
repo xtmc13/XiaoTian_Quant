@@ -243,6 +243,28 @@ func StartHyperopt(c *gin.Context) {
 			loss = -result.SharpeRatio // maximize sharpe
 		case "profit_factor":
 			loss = -result.ProfitFactor // maximize profit factor
+		case "risk_reward":
+			// Approximate R:R from win rate and profit factor
+			if result.WinRate > 0 && result.WinRate < 100 && result.ProfitFactor > 0 {
+				W := result.WinRate / 100.0
+				rr := result.ProfitFactor * (1.0 - W) / W
+				loss = -rr
+			} else {
+				loss = math.Inf(1)
+			}
+		case "sqn":
+			// System Quality Number
+			if result.TotalTrades > 1 && result.SharpeRatio != 0 {
+				stdDev := math.Abs(result.TotalReturnPct / result.SharpeRatio)
+				if stdDev > 0 {
+					sqn := math.Sqrt(float64(result.TotalTrades)) * (result.TotalReturnPct / float64(result.TotalTrades)) / stdDev
+					loss = -sqn
+				} else {
+					loss = math.Inf(1)
+				}
+			} else {
+				loss = math.Inf(1)
+			}
 		case "custom":
 			// Combined: negative return with drawdown penalty
 			loss = -result.TotalReturnPct + result.MaxDrawdownPct*2
@@ -522,6 +544,67 @@ func (a *strategyBacktestAdapter) OnBar(bar model.Bar, state *backtest.StrategyS
 
 func (a *strategyBacktestAdapter) OnTick(tick model.Tick, state *backtest.StrategyState) (*model.Signal, error) {
 	return a.Strategy.OnTick(tick, nil)
+}
+
+// ExportHyperoptParams exports the best parameters from a completed job to strategy config.
+func ExportHyperoptParams(c *gin.Context) {
+	jobID := c.Param("id")
+	if jobID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "job id required"})
+		return
+	}
+
+	hyperoptJobsMu.RLock()
+	job, ok := hyperoptJobs[jobID]
+	hyperoptJobsMu.RUnlock()
+
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
+		return
+	}
+
+	if job.Status != "completed" || job.Result == nil || job.Result.BestTrial == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "job has no completed result to export"})
+		return
+	}
+
+	var body struct {
+		StrategyID   string            `json:"strategy_id"`   // optional: update existing
+		StrategyName string            `json:"strategy_name"` // optional: name for new config
+		ParamMap     map[string]string `json:"param_map"`     // required: hyperopt name → config field
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
+		return
+	}
+	if len(body.ParamMap) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "param_map is required"})
+		return
+	}
+
+	cfg := hyperopt.ExportConfig{
+		StrategyID:   body.StrategyID,
+		StrategyType: job.Config.StrategyType,
+		StrategyName: body.StrategyName,
+		ParamMap:     body.ParamMap,
+	}
+
+	configPath := "strategy_configs.json" // relative to working directory
+	if err := hyperopt.ExportBestParams(job.Result, cfg, configPath); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "export failed: " + err.Error()})
+		return
+	}
+
+	// Also return the mapped params in response
+	mapped, _ := hyperopt.ExportBestParamsToMap(job.Result, body.ParamMap)
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":        "exported",
+		"job_id":        jobID,
+		"strategy_type": job.Config.StrategyType,
+		"mapped_params": mapped,
+		"config_path":   configPath,
+	})
 }
 
 // roundFloat rounds a float to n decimal places.

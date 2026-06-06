@@ -4,7 +4,9 @@ import (
 	"context"
 	"log"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -14,7 +16,10 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/experiment"
 	"github.com/xiaotian-quant/gateway/internal/handler"
 	"github.com/xiaotian-quant/gateway/internal/indicator"
+	"github.com/xiaotian-quant/gateway/internal/metrics"
 	"github.com/xiaotian-quant/gateway/internal/middleware"
+	"github.com/xiaotian-quant/gateway/internal/onchain"
+	"github.com/xiaotian-quant/gateway/internal/social"
 	"github.com/xiaotian-quant/gateway/internal/store"
 	"github.com/xiaotian-quant/gateway/internal/strategy"
 	"github.com/xiaotian-quant/gateway/internal/strategy/strategies"
@@ -39,6 +44,9 @@ func main() {
 
 	// Ensure legacy store is initialized (handlers depend on it directly)
 	if err := store.InitDB(); err != nil {
+		if isFatalInitErr(err) {
+			log.Fatalf("FATAL: %v", err)
+		}
 		log.Printf("WARNING: SQLite init skipped: %v", err)
 	}
 	store.LoadConfig()
@@ -64,7 +72,7 @@ func main() {
 		gin.SetMode(gin.ReleaseMode)
 	}
 	r := gin.New()
-	r.Use(gin.Logger(), gin.Recovery())
+	r.Use(middleware.RequestLogger(appCtx.Logger), gin.Recovery())
 	r.Use(middleware.CORS())
 
 	// ── Public Routes ──
@@ -81,8 +89,9 @@ func main() {
 
 	api := r.Group("/api")
 	{
-		// ── Auth ──
+		// ── Auth (with rate limiting) ──
 		auth := api.Group("/auth")
+		auth.Use(middleware.StrictRateLimiter())
 		{
 			auth.POST("/login", handler.Login)
 			auth.POST("/login-code", handler.LoginByCode)
@@ -156,11 +165,11 @@ func main() {
 		// ── Orders ──
 		private.GET("/orders", handler.GetOrders)
 		private.POST("/orders", handler.PlaceOrder)
+		// Static sub-routes (must be BEFORE :order_id param routes to avoid
+		// httprouter conflict between param and static segments)
 		private.POST("/orders/cancel-all", handler.CancelAllOrders)
-		private.DELETE("/orders/:order_id", handler.CancelOrder)
-		private.POST("/orders/:order_id/cancel", handler.CancelOrder)
 		private.GET("/orders/history", handler.OrderHistory)
-		// ── Advanced Orders ──
+		// ── Advanced Orders (static paths) ──
 		private.POST("/orders/oco", handler.PlaceOCO)
 		private.GET("/orders/oco", handler.ListOCO)
 		private.GET("/orders/oco/:id", handler.GetOCO)
@@ -174,6 +183,9 @@ func main() {
 		private.GET("/orders/iceberg/:id", handler.GetIceberg)
 		private.DELETE("/orders/iceberg/:id", handler.CancelIceberg)
 		private.POST("/orders/bracket/calculate", handler.CalculateBracket)
+		// Param routes (must be after static routes to avoid httprouter conflict)
+		private.DELETE("/orders/:order_id", handler.CancelOrder)
+		private.POST("/orders/:order_id/cancel", handler.CancelOrder)
 
 		// ── Account ──
 		private.GET("/account/balance", handler.GetAccountBalance)
@@ -281,6 +293,7 @@ func main() {
 			private.POST("/hyperopt/jobs/:id/cancel", handler.CancelHyperoptJob)
 			private.DELETE("/hyperopt/jobs/:id", handler.DeleteHyperoptJob)
 			private.GET("/hyperopt/spaces", handler.GetHyperoptSpaces)
+			private.POST("/hyperopt/jobs/:id/export", handler.ExportHyperoptParams)
 
 		// ── Settings ──
 		settingsG := private.Group("/settings")
@@ -365,6 +378,7 @@ func main() {
 		// ── Watchdog (new) ──
 		api.GET("/health", handler.HealthCheck)
 		api.GET("/health/components", handler.ComponentHealth)
+		api.POST("/admin/config/reload", middleware.AdminRequired(), handler.ReloadConfig)
 
 		// ── Indicator IDE ──
 		indicatorG := api.Group("/indicator")
@@ -406,6 +420,13 @@ func main() {
 			comm.GET("/comments/:id", community.GetComments)
 			comm.POST("/comments/:id", community.AddComment)
 
+			// ── Review & Moderation ──
+			comm.POST("/review/:id", community.ReviewIndicator)
+			comm.GET("/reviews/pending", community.PendingReviews)
+
+			// ── Author Revenue ──
+			comm.GET("/author/revenue", community.AuthorRevenue)
+
 			// ── Strategy Marketplace ──
 			comm.GET("/strategies", community.MarketStrategies)
 			comm.GET("/strategies/leaderboard", community.StrategyLeaderboard)
@@ -413,6 +434,23 @@ func main() {
 			comm.POST("/strategies/publish", community.PublishStrategy)
 			comm.POST("/strategies/:id/comment", community.AddStrategyComment)
 			comm.POST("/strategies/:id/rate", community.RateStrategy)
+		}
+
+		// ── Social Trading ──
+		socialG := api.Group("/social")
+		socialG.Use(middleware.AuthRequired())
+		{
+			// Initialize social trading engine
+			socialEngine := social.NewEngine()
+			social.RegisterRoutes(socialG, socialEngine)
+		}
+
+		// ── On-Chain Data ──
+		onchainG := api.Group("/onchain")
+		onchainG.Use(middleware.AuthRequired())
+		{
+			onchainClient := onchain.NewClient("")
+			onchain.RegisterRoutes(onchainG, onchainClient)
 		}
 
 	}
@@ -424,6 +462,26 @@ func main() {
 		r.GET("/ws", handler.WSHandler)
 		r.GET("/ws/v2", ws.HubHandler)
 		api.GET("/ws/stats", ws.Stats)
+
+	// ── Metrics ──
+	r.GET("/metrics", func(c *gin.Context) {
+		metrics.Handler(c.Writer, c.Request)
+	})
+
+	// ── pprof (debug) ──
+	// Restricted to local/loopback in production; open in debug mode.
+	pprofGroup := r.Group("/debug/pprof")
+	pprofGroup.Use(func(c *gin.Context) {
+		if cfg.Server.Mode != "debug" {
+			clientIP := c.ClientIP()
+			if !isLocalhost(clientIP) {
+				c.AbortWithStatus(http.StatusForbidden)
+				return
+			}
+		}
+		c.Next()
+	})
+	pprofGroup.GET("/*any", gin.WrapF(http.DefaultServeMux.ServeHTTP))
 
 	// ── Start background tasks ──
 	go handler.StartBackgroundTasks()
@@ -441,7 +499,7 @@ func main() {
 	// ── Start server with graceful shutdown ──
 	srv := &http.Server{
 		Addr:    "0.0.0.0:" + port,
-		Handler: r,
+		Handler: metrics.HTTPMiddleware(r),
 	}
 
 	// Wait for shutdown signal in a goroutine
@@ -457,4 +515,18 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("Server failed: %v", err)
 	}
+}
+
+// isFatalInitErr determines whether a store initialization error should stop the server.
+func isFatalInitErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "SECRET_KEY") && strings.Contains(msg, "required in production")
+}
+
+// isLocalhost checks if an IP address is loopback.
+func isLocalhost(ip string) bool {
+	return ip == "127.0.0.1" || ip == "::1" || ip == "localhost"
 }

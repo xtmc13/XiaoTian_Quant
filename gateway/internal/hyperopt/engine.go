@@ -59,6 +59,8 @@ func NewEngine(cfg EngineConfig, space *SearchSpace, objective ObjectiveFunc) *E
 		sampler = NewGridSampler(space, cfg.GridPoints)
 	case "random":
 		sampler = &RandomSampler{}
+	case "cmaes":
+		sampler = NewCMAESSampler()
 	case "tpe":
 		fallthrough
 	default:
@@ -302,41 +304,58 @@ func (pe *ParallelEngine) RunParallel(ctx context.Context) (*Result, error) {
 	pe.mu.Unlock()
 
 	startTime := time.Now()
+
+	// Inner context for coordinated cancellation
+	innerCtx, innerCancel := context.WithCancel(ctx)
+	defer innerCancel()
+
+	paramsCh := make(chan map[string]any, pe.workers*2)
 	trialCh := make(chan Trial, pe.maxEvals)
-	paramsCh := make(chan map[string]any, pe.workers)
 	var wg sync.WaitGroup
 
-	// Parameter generator
+	// ── Parameter generator (serial, snapshot-safe) ────────────
 	go func() {
+		defer close(paramsCh)
 		for i := 0; i < pe.maxEvals; i++ {
+			select {
+			case <-innerCtx.Done():
+				return
+			default:
+			}
+
+			// Snapshot trials to avoid racing with workers
 			pe.mu.RLock()
 			cancelled := pe.cancelled
+			trialSnapshot := make([]Trial, len(pe.trials))
+			copy(trialSnapshot, pe.trials)
 			pe.mu.RUnlock()
+
 			if cancelled {
-				break
+				return
 			}
-			params := pe.sampler.Next(pe.space, pe.trials, pe.rng)
+
+			params := pe.sampler.Next(pe.space, trialSnapshot, pe.rng)
 			if params == nil {
-				break
+				return // grid exhausted
 			}
 			params = pe.space.Quantize(params)
+
 			select {
 			case paramsCh <- params:
-			case <-ctx.Done():
+			case <-innerCtx.Done():
 				return
 			}
 		}
-		close(paramsCh)
 	}()
 
-	// Workers
+	// ── Worker pool ──────────────────────────────────────────────
 	for w := 0; w < pe.workers; w++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for params := range paramsCh {
 				select {
-				case <-ctx.Done():
+				case <-innerCtx.Done():
 					return
 				default:
 				}
@@ -369,29 +388,47 @@ func (pe *ParallelEngine) RunParallel(ctx context.Context) (*Result, error) {
 						pe.bestTrial.IsBest = false
 					}
 					pe.bestTrial = &trial
+					if pe.OnBestUpdate != nil {
+						pe.mu.Unlock()
+						pe.OnBestUpdate(trial)
+						pe.mu.Lock()
+					}
 				}
 
 				pe.trials = append(pe.trials, trial)
 				pe.mu.Unlock()
 
+				if pe.OnTrialComplete != nil {
+					pe.OnTrialComplete(trial)
+				}
+
 				select {
 				case trialCh <- trial:
-				case <-ctx.Done():
+				case <-innerCtx.Done():
 					return
 				}
 			}
 		}()
 	}
 
-	// Wait for completion
+	// ── Collector + progress ─────────────────────────────────────
 	go func() {
 		wg.Wait()
 		close(trialCh)
 	}()
 
-	// Collect results
+	done := 0
 	for range trialCh {
-		// trials are already stored in pe.trials
+		done++
+		if pe.OnProgress != nil {
+			pe.mu.RLock()
+			bestLoss := math.Inf(1)
+			if pe.bestTrial != nil {
+				bestLoss = pe.bestTrial.Loss
+			}
+			pe.mu.RUnlock()
+			pe.OnProgress(done, pe.maxEvals, bestLoss)
+		}
 	}
 
 	pe.mu.Lock()

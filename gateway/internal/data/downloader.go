@@ -158,6 +158,68 @@ func (d *Downloader) FetchOHLCV(symbol, interval string, fromMs, toMs int64) ([]
 	return d.fetchFromBinance(symbol, interval, fromMs, toMs)
 }
 
+// IncrementalUpdate downloads only the missing data gaps for a symbol/interval.
+// It uses FindGaps to identify what needs to be downloaded, then fetches only those ranges.
+func (d *Downloader) IncrementalUpdate(symbol, interval string, fromMs, toMs int64) (*DownloadJob, error) {
+	gaps := d.store.FindGaps(symbol, interval, fromMs, toMs)
+	if len(gaps) == 0 {
+		return nil, fmt.Errorf("no gaps found — data is up to date")
+	}
+
+	jobID := fmt.Sprintf("inc_%d", time.Now().UnixMilli())
+	job := &DownloadJob{
+		ID:        jobID,
+		Symbol:    symbol,
+		Interval:  interval,
+		Status:    "running",
+		StartedAt: time.Now().UnixMilli(),
+	}
+
+	d.mu.Lock()
+	d.jobs[jobID] = job
+	d.mu.Unlock()
+
+	go func() {
+		totalBars := 0
+		var errs []string
+
+		for _, gap := range gaps {
+			gapFrom, gapTo := gap[0], gap[1]
+			log.Printf("[data] incremental gap: %s %s [%d → %d]", symbol, interval, gapFrom, gapTo)
+
+			bars, err := d.fetchFromBinance(symbol, interval, gapFrom, gapTo)
+			if err != nil {
+				errs = append(errs, fmt.Sprintf("gap %d-%d: %v", gapFrom, gapTo, err))
+				continue
+			}
+
+			if len(bars) > 0 {
+				d.store.SaveOHLCV(bars)
+				d.store.LogDownload(symbol, interval, len(bars), gapFrom, gapTo)
+				totalBars += len(bars)
+			}
+
+			// Rate limit between gaps
+			time.Sleep(200 * time.Millisecond)
+		}
+
+		d.mu.Lock()
+		job.Progress = totalBars
+		job.EndedAt = time.Now().UnixMilli()
+		if len(errs) > 0 {
+			job.Status = "failed"
+			job.Error = strings.Join(errs, "; ")
+		} else {
+			job.Status = "done"
+		}
+		d.mu.Unlock()
+
+		log.Printf("[data] incremental update %s complete: %d bars, status=%s", jobID, totalBars, job.Status)
+	}()
+
+	return job, nil
+}
+
 // GetStorage returns the underlying storage for direct access.
 func (d *Downloader) GetStorage() *Storage {
 	return d.store

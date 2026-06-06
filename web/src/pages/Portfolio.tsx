@@ -2,6 +2,8 @@ import React, { useState, useEffect, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { portfolioApi, accountApi } from '@/lib/api'
 import { cn, formatCurrency } from '@/lib/utils'
+import { getEcharts } from '@/lib/echarts'
+import { DataTable } from '@/components/DataTable'
 import { KPICard } from '@/components/ui/KPICard'
 import { SectionCard } from '@/components/ui/SectionCard'
 import { Skeleton } from '@/components/ui/Skeleton'
@@ -16,13 +18,6 @@ import {
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react'
-
-/* ── ECharts lazy load ───────────────────────────────────────────── */
-let echartsLib: any = null
-async function getEcharts() {
-  if (!echartsLib) echartsLib = await import('echarts')
-  return echartsLib
-}
 
 /* ── Types ───────────────────────────────────────────────────────── */
 
@@ -231,8 +226,9 @@ function ProfitCalendar({ months, isLoading }: { months?: CalendarMonth[]; isLoa
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setMonthIdx((i) => Math.min((months?.length || 1) - 1, i + 1))}
-            disabled={monthIdx >= (months?.length || 1) - 1}
+            onClick={() => setMonthIdx((i) => Math.max(0, i - 1))}
+            disabled={monthIdx === 0}
+            aria-label="上个月"
             className="rounded p-1 text-muted-foreground transition-colors hover:bg-white/5 disabled:opacity-30"
           >
             <ChevronLeft className="h-3.5 w-3.5" />
@@ -241,8 +237,9 @@ function ProfitCalendar({ months, isLoading }: { months?: CalendarMonth[]; isLoa
             {current.year}年{current.month}月
           </span>
           <button
-            onClick={() => setMonthIdx((i) => Math.max(0, i - 1))}
-            disabled={monthIdx === 0}
+            onClick={() => setMonthIdx((i) => Math.min((months?.length || 1) - 1, i + 1))}
+            disabled={monthIdx >= (months?.length || 1) - 1}
+            aria-label="下个月"
             className="rounded p-1 text-muted-foreground transition-colors hover:bg-white/5 disabled:opacity-30"
           >
             <ChevronRight className="h-3.5 w-3.5" />
@@ -266,7 +263,7 @@ function ProfitCalendar({ months, isLoading }: { months?: CalendarMonth[]; isLoa
       {/* Weekday headers */}
       <div className="mb-1 grid grid-cols-7 gap-0.5">
         {weeks.map((w) => (
-          <div key={w} className="py-1 text-center text-[10px] font-medium text-[#444444]">
+          <div key={w} className="py-1 text-center text-[10px] font-medium text-[#757575]">
             {w}
           </div>
         ))}
@@ -462,38 +459,30 @@ export function Portfolio() {
               </div>
             ) : positions.length > 0 ? (
               <div className="overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="text-left text-muted-foreground border-b border-quant-border">
-                      <th className="pb-2 font-medium px-2">币种</th>
-                      <th className="pb-2 font-medium px-2">持仓量</th>
-                      <th className="pb-2 font-medium px-2">开仓价</th>
-                      <th className="pb-2 font-medium px-2">当前价</th>
-                      <th className="pb-2 font-medium px-2">未实现盈亏</th>
-                      <th className="pb-2 font-medium px-2">已实现盈亏</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {positions.map((p) => {
+                <DataTable<PositionItem>
+                  data={positions}
+                  columns={[
+                    { key: 'symbol', title: '币种', render: (p) => <span className="font-semibold text-white">{p.symbol}</span> },
+                    { key: 'quantity', title: '持仓量', render: (p) => <span className="font-mono">{p.quantity.toFixed(4)}</span> },
+                    { key: 'entry', title: '开仓价', render: (p) => <span className="font-mono text-muted-foreground">${formatCurrency(p.avg_entry_price)}</span> },
+                    { key: 'current', title: '当前价', render: (p) => <span className="font-mono text-white">${formatCurrency(p.current_price || 0)}</span> },
+                    { key: 'unrealized', title: '未实现盈亏', render: (p) => {
                       const pnl = p.unrealized_pnl || 0
                       const pnlPct = p.avg_entry_price && p.avg_entry_price > 0 ? (pnl / (p.avg_entry_price * p.quantity)) * 100 : 0
                       return (
-                        <tr key={p.symbol} className="border-b border-quant-border/50 hover:bg-white/[0.02] transition-colors">
-                          <td className="py-3 px-2 font-semibold text-white">{p.symbol}</td>
-                          <td className="py-3 px-2 font-mono">{p.quantity.toFixed(4)}</td>
-                          <td className="py-3 px-2 font-mono text-muted-foreground">${formatCurrency(p.avg_entry_price)}</td>
-                          <td className="py-3 px-2 font-mono text-white">${formatCurrency(p.current_price || 0)}</td>
-                          <td className={cn('py-3 px-2 font-mono font-bold', pnl >= 0 ? 'text-quant-green' : 'text-quant-red')}>
-                            {pnl >= 0 ? '+' : ''}${formatCurrency(pnl)} ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)
-                          </td>
-                          <td className={cn('py-3 px-2 font-mono', (p.realized_pnl || 0) >= 0 ? 'text-quant-green' : 'text-quant-red')}>
-                            {(p.realized_pnl || 0) >= 0 ? '+' : ''}${formatCurrency(p.realized_pnl || 0)}
-                          </td>
-                        </tr>
+                        <span className={cn('font-mono font-bold', pnl >= 0 ? 'text-quant-green' : 'text-quant-red')}>
+                          {pnl >= 0 ? '+' : ''}${formatCurrency(pnl)} ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)
+                        </span>
                       )
-                    })}
-                  </tbody>
-                </table>
+                    }},
+                    { key: 'realized', title: '已实现盈亏', render: (p) => (
+                      <span className={cn('font-mono', (p.realized_pnl || 0) >= 0 ? 'text-quant-green' : 'text-quant-red')}>
+                        {(p.realized_pnl || 0) >= 0 ? '+' : ''}${formatCurrency(p.realized_pnl || 0)}
+                      </span>
+                    )},
+                  ]}
+                  keyExtractor={(p) => p.symbol}
+                />
               </div>
             ) : (
               <EmptyState title="暂无持仓" description="当前没有持仓数据" />

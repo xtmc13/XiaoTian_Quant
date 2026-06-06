@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
+import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
 import { Zap, Eye, EyeOff, Loader2, AlertCircle, CheckCircle, Mail, ArrowRight } from 'lucide-react'
 
@@ -14,6 +15,7 @@ interface CodeState {
 export function Login() {
   const navigate = useNavigate()
   const location = useLocation()
+  const { t } = useI18n()
   const { login, loginByCode, register, sendCode, resetPassword: doResetPassword, isAuthenticated, isLoading, error, clearError } = useAuthStore()
 
   // ── Tab state ──
@@ -43,7 +45,7 @@ export function Login() {
   // ── Redirect if authenticated ──
   useEffect(() => {
     if (isAuthenticated) {
-      const from = (location.state as any)?.from?.pathname || '/dashboard'
+      const from = (location.state as { from?: { pathname: string } } | null)?.from?.pathname || '/dashboard'
       navigate(from, { replace: true })
     }
   }, [isAuthenticated, navigate, location.state])
@@ -101,7 +103,7 @@ export function Login() {
     if (!resetEmail.trim() || !resetCode.trim() || !newPassword.trim()) return
     try {
       await doResetPassword(resetEmail, resetCode, newPassword)
-      setSuccessMsg('密码重置成功，请使用新密码登录')
+      setSuccessMsg(t('auth.loginSuccess'))
       setTab('login')
       setPassword('')
     } catch { /* store sets error */ }
@@ -132,16 +134,16 @@ export function Login() {
 
         {/* Tab switcher */}
         <div className="flex rounded-lg bg-quant-bg-secondary p-1">
-          {(['login', 'register', 'reset'] as const).map(t => (
+          {(['login', 'register', 'reset'] as const).map((tabKey) => (
             <button
-              key={t}
-              onClick={() => switchTab(t)}
+              key={tabKey}
+              onClick={() => switchTab(tabKey)}
               className={cn(
                 'flex-1 rounded-md py-1.5 text-xs font-medium transition-colors',
-                tab === t ? 'bg-quant-gold text-black' : 'text-muted-foreground hover:text-white'
+                tab === tabKey ? 'bg-quant-gold text-black' : 'text-muted-foreground hover:text-white'
               )}
             >
-              {t === 'login' ? '登录' : t === 'register' ? '注册' : '重置密码'}
+              {tabKey === 'login' ? t('auth.login') : tabKey === 'register' ? t('auth.register') : t('auth.resetPassword')}
             </button>
           ))}
         </div>
@@ -166,19 +168,20 @@ export function Login() {
         {tab === 'login' && (
           <form onSubmit={handleLogin} className="space-y-4">
             <div className="space-y-1.5">
-              <label className={labelCls}>用户名</label>
+              <label className={labelCls}>{t('auth.username')}</label>
               <input type="text" value={username} onChange={e => setUsername(e.target.value)}
-                placeholder="输入用户名" autoComplete="username" className={inputCls} />
+                placeholder={t('auth.inputUsername')} autoComplete="username" className={inputCls} />
             </div>
 
             <div className="space-y-1.5">
-              <label className={labelCls}>密码</label>
+              <label className={labelCls}>{t('auth.password')}</label>
               <div className="relative">
                 <input type={showPassword ? 'text' : 'password'} value={password}
                   onChange={e => setPassword(e.target.value)}
                   placeholder="输入密码" autoComplete="current-password"
                   className={cn(inputCls, 'pr-10')} />
                 <button type="button" onClick={() => setShowPassword(!showPassword)}
+                  aria-label={showPassword ? '隐藏密码' : '显示密码'}
                   className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
                   {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
@@ -187,16 +190,16 @@ export function Login() {
 
             <button type="submit" disabled={isLoading || !username.trim() || !password.trim()} className={btnCls}>
               {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
-              {isLoading ? '登录中...' : '登录'}
+              {isLoading ? t('common.loading') : t('auth.loginBtn')}
             </button>
 
             <p className="text-center text-[11px] text-muted-foreground">
-              没有账号？<button type="button" onClick={() => switchTab('register')} className="text-quant-gold hover:underline">立即注册</button>
+              {t('auth.noAccount')}<button type="button" onClick={() => switchTab('register')} className="text-quant-gold hover:underline">{t('auth.register')}</button>
             </p>
 
             {/* OAuth buttons */}
             <div className="pt-2 border-t border-quant-border">
-              <p className="text-[10px] text-muted-foreground text-center mb-2">第三方登录</p>
+              <p className="text-[10px] text-muted-foreground text-center mb-2">{t('auth.thirdPartyLogin')}</p>
               <div className="flex gap-2">
                 <a href="/api/auth/oauth/google/login"
                   className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg border border-quant-border text-xs hover:bg-white/5 transition-colors">
@@ -217,41 +220,42 @@ export function Login() {
         {tab === 'register' && (
           <form onSubmit={handleRegister} className="space-y-3">
             <div className="space-y-1.5">
-              <label className={labelCls}>邮箱</label>
+              <label className={labelCls}>{t('auth.email')}</label>
               <div className="flex gap-2">
                 <div className="relative flex-1">
                   <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                   <input type="email" value={regEmail} onChange={e => setRegEmail(e.target.value)}
-                    placeholder="your@email.com" autoComplete="email" className={cn(inputCls, 'pl-9')} />
+                    placeholder={t('auth.inputEmail')} autoComplete="email" className={cn(inputCls, 'pl-9')} />
                 </div>
                 <button type="button" onClick={handleSendRegCode}
                   disabled={regCodeState.countdown > 0 || !regEmail.includes('@') || isLoading}
                   className="shrink-0 rounded-lg bg-quant-bg-secondary px-3 py-2.5 text-xs font-medium text-quant-gold border border-quant-gold/30 hover:bg-quant-gold/10 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap">
-                  {regCodeState.countdown > 0 ? `${regCodeState.countdown}s` : '发送验证码'}
+                  {regCodeState.countdown > 0 ? `${regCodeState.countdown}s` : t('auth.sendCode')}
                 </button>
               </div>
             </div>
 
             <div className="space-y-1.5">
-              <label className={labelCls}>验证码</label>
+              <label className={labelCls}>{t('auth.verificationCode')}</label>
               <input type="text" value={regCode} onChange={e => setRegCode(e.target.value)}
-                placeholder="输入6位验证码" maxLength={6} className={inputCls} />
+                placeholder={t('auth.inputCode')} maxLength={6} className={inputCls} />
             </div>
 
             <div className="space-y-1.5">
-              <label className={labelCls}>用户名</label>
+              <label className={labelCls}>{t('auth.username')}</label>
               <input type="text" value={regUsername} onChange={e => setRegUsername(e.target.value)}
-                placeholder="至少3个字符" autoComplete="username" className={inputCls} />
+                placeholder={t('auth.minChars', '至少3个字符').replace('{count}', '3')} autoComplete="username" className={inputCls} />
             </div>
 
             <div className="space-y-1.5">
-              <label className={labelCls}>密码</label>
+              <label className={labelCls}>{t('auth.password')}</label>
               <div className="relative">
                 <input type={regShowPw ? 'text' : 'password'} value={regPassword}
                   onChange={e => setRegPassword(e.target.value)}
                   placeholder="至少6个字符" autoComplete="new-password"
                   className={cn(inputCls, 'pr-10')} />
                 <button type="button" onClick={() => setRegShowPw(!regShowPw)}
+                  aria-label={regShowPw ? '隐藏密码' : '显示密码'}
                   className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
                   {regShowPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
@@ -262,11 +266,11 @@ export function Login() {
               disabled={isLoading || !regUsername.trim() || !regPassword.trim() || !regEmail.trim() || !regCode.trim()}
               className={btnCls}>
               {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
-              {isLoading ? '注册中...' : '注册'}
+              {isLoading ? t('common.loading') : t('auth.registerBtn')}
             </button>
 
             <p className="text-center text-[11px] text-muted-foreground">
-              已有账号？<button type="button" onClick={() => switchTab('login')} className="text-quant-gold hover:underline">返回登录</button>
+              {t('auth.hasAccount')}<button type="button" onClick={() => switchTab('login')} className="text-quant-gold hover:underline">{t('auth.login')}</button>
             </p>
           </form>
         )}
@@ -275,35 +279,36 @@ export function Login() {
         {tab === 'reset' && (
           <form onSubmit={handleResetPassword} className="space-y-3">
             <div className="space-y-1.5">
-              <label className={labelCls}>邮箱</label>
+              <label className={labelCls}>{t('auth.email')}</label>
               <div className="flex gap-2">
                 <div className="relative flex-1">
                   <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                   <input type="email" value={resetEmail} onChange={e => setResetEmail(e.target.value)}
-                    placeholder="your@email.com" autoComplete="email" className={cn(inputCls, 'pl-9')} />
+                    placeholder={t('auth.inputEmail')} autoComplete="email" className={cn(inputCls, 'pl-9')} />
                 </div>
                 <button type="button" onClick={handleSendResetCode}
                   disabled={resetCodeState.countdown > 0 || !resetEmail.includes('@') || isLoading}
                   className="shrink-0 rounded-lg bg-quant-bg-secondary px-3 py-2.5 text-xs font-medium text-quant-gold border border-quant-gold/30 hover:bg-quant-gold/10 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap">
-                  {resetCodeState.countdown > 0 ? `${resetCodeState.countdown}s` : '发送验证码'}
+                  {resetCodeState.countdown > 0 ? `${resetCodeState.countdown}s` : t('auth.sendCode')}
                 </button>
               </div>
             </div>
 
             <div className="space-y-1.5">
-              <label className={labelCls}>验证码</label>
+              <label className={labelCls}>{t('auth.verificationCode')}</label>
               <input type="text" value={resetCode} onChange={e => setResetCode(e.target.value)}
-                placeholder="输入6位验证码" maxLength={6} className={inputCls} />
+                placeholder={t('auth.inputCode')} maxLength={6} className={inputCls} />
             </div>
 
             <div className="space-y-1.5">
-              <label className={labelCls}>新密码</label>
+              <label className={labelCls}>{t('auth.newPassword')}</label>
               <div className="relative">
                 <input type={resetShowPw ? 'text' : 'password'} value={newPassword}
                   onChange={e => setNewPassword(e.target.value)}
                   placeholder="至少6个字符" autoComplete="new-password"
                   className={cn(inputCls, 'pr-10')} />
                 <button type="button" onClick={() => setResetShowPw(!resetShowPw)}
+                  aria-label={resetShowPw ? '隐藏密码' : '显示密码'}
                   className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
                   {resetShowPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
@@ -314,11 +319,11 @@ export function Login() {
               disabled={isLoading || !resetEmail.trim() || !resetCode.trim() || !newPassword.trim()}
               className={btnCls}>
               {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
-              {isLoading ? '重置中...' : '重置密码'}
+              {isLoading ? t('common.loading') : t('auth.resetBtn')}
             </button>
 
             <p className="text-center text-[11px] text-muted-foreground">
-              想起密码了？<button type="button" onClick={() => switchTab('login')} className="text-quant-gold hover:underline">返回登录</button>
+              {t('auth.rememberPassword')}<button type="button" onClick={() => switchTab('login')} className="text-quant-gold hover:underline">{t('auth.login')}</button>
             </p>
           </form>
         )}

@@ -66,13 +66,13 @@ function hintToText(hint: ValidationHint): string {
     case 'MISSING_DF_COPY':
       return '建议添加 df = df.copy() 以避免修改原始数据'
     case 'DECLARED_PARAMS_NOT_READ_VIA_PARAMS_GET':
-      return `已声明的参数未通过 params.get(...) 读取：${(p.names || []).join('、')}`
+      return `已声明的参数未通过 params.get(...) 读取：${(p.names as string[] || []).join('、')}`
     case 'FUTURE_DATA_LEAK':
       return `检测到未来数据泄露：${p.snippet || '?'}。回测会用到尚未发生的K线，请改用 .shift(N) 正数或 iloc[i-N] 引用过去。`
     case 'NDARRAY_PANDAS_METHOD_MISUSE':
       return `在 ndarray 上调用了 pandas 方法：${p.symbol}.${p.method}(...)。请用 pd.Series(arr, index=df.index) 包装回 Series。`
     case 'UNSAFE_IMPORT':
-      return `检测到不安全的模块导入：${(p.modules || []).join('、')}`
+      return `检测到不安全的模块导入：${(p.modules as string[] || []).join('、')}`
     case 'NO_STOP_AND_TAKE_PROFIT':
       return '有交易信号但未声明止损和止盈默认配置（# @strategy stopLossPct / takeProfitPct）'
     case 'NO_STOP_LOSS':

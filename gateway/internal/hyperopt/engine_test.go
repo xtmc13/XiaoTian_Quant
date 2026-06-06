@@ -252,6 +252,107 @@ func TestParallelEngine(t *testing.T) {
 	}
 }
 
+func TestCMAESSampler(t *testing.T) {
+	reg := strategy.NewParamRegistry()
+	reg.Register(strategy.FloatParameter("x", 0.5, 0.0, 1.0, 0.1, "buy"))
+	reg.Register(strategy.FloatParameter("y", 0.5, 0.0, 1.0, 0.1, "buy"))
+	space := NewSearchSpaceFromRegistry(reg)
+
+	sampler := NewCMAESSampler()
+	if sampler.Name() != "cmaes" {
+		t.Errorf("expected name 'cmaes', got %s", sampler.Name())
+	}
+
+	rng := rand.New(rand.NewSource(42))
+
+	// First call should initialise and return a candidate
+	point := sampler.Next(space, nil, rng)
+	if len(point) != 2 {
+		t.Errorf("expected 2 values, got %d", len(point))
+	}
+
+	// Simulate a generation of evaluations
+	var history []Trial
+	for i := 0; i < 10; i++ {
+		p := sampler.Next(space, history, rng)
+		if p == nil {
+			t.Fatal("unexpected nil from CMA-ES sampler")
+		}
+		x := p["x"].(float64)
+		y := p["y"].(float64)
+		// Simple objective: minimum at (0.3, 0.7)
+		loss := (x-0.3)*(x-0.3) + (y-0.7)*(y-0.7)
+		history = append(history, Trial{
+			ID:     i + 1,
+			Params: p,
+			Loss:   loss,
+		})
+	}
+
+	// After one generation, sampler should update and continue
+	p := sampler.Next(space, history, rng)
+	if p == nil {
+		t.Fatal("unexpected nil after generation update")
+	}
+}
+
+func TestCMAESWithMixedTypes(t *testing.T) {
+	reg := strategy.NewParamRegistry()
+	reg.Register(strategy.FloatParameter("x", 0.5, 0.0, 1.0, 0.1, "buy"))
+	reg.Register(strategy.IntParameter("n", 10, 1, 20, "buy"))
+	space := NewSearchSpaceFromRegistry(reg)
+
+	sampler := NewCMAESSampler()
+	rng := rand.New(rand.NewSource(42))
+
+	point := sampler.Next(space, nil, rng)
+	if len(point) != 2 {
+		t.Errorf("expected 2 values (1 float + 1 int), got %d", len(point))
+	}
+	// Int parameter should have a fixed random value
+	if _, ok := point["n"].(int); !ok {
+		t.Errorf("expected int for 'n', got %T", point["n"])
+	}
+}
+
+func TestEngineCMAES(t *testing.T) {
+	reg := strategy.NewParamRegistry()
+	reg.Register(strategy.FloatParameter("x", 0.5, 0.0, 1.0, 0.1, "buy"))
+	space := NewSearchSpaceFromRegistry(reg)
+
+	objective := func(params map[string]any) (float64, map[string]float64, error) {
+		x := params["x"].(float64)
+		loss := (x - 0.3) * (x - 0.3)
+		return loss, map[string]float64{"x": x}, nil
+	}
+
+	cfg := EngineConfig{
+		MaxEvals: 40,
+		Sampler:  "cmaes",
+		Seed:     42,
+	}
+	engine := NewEngine(cfg, space, objective)
+
+	ctx := context.Background()
+	result, err := engine.Run(ctx)
+	if err != nil {
+		t.Fatalf("engine run failed: %v", err)
+	}
+
+	if result.TotalEvals != 40 {
+		t.Errorf("expected 40 evals, got %d", result.TotalEvals)
+	}
+
+	if result.BestTrial == nil {
+		t.Fatal("best trial is nil")
+	}
+
+	bestX := result.BestParams()["x"].(float64)
+	if math.Abs(bestX-0.3) > 0.15 {
+		t.Logf("best x = %f (expected near 0.3)", bestX)
+	}
+}
+
 func TestResultBestParams(t *testing.T) {
 	result := &Result{
 		BestTrial: &Trial{

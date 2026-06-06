@@ -7,6 +7,7 @@ import { init, dispose, registerOverlay } from 'klinecharts'
 import type { Chart } from 'klinecharts'
 import { cn } from '@/lib/utils'
 import type { KLineBar } from '@/lib/technicalIndicators'
+import { useDebounce } from '@/hooks/useAsyncData'
 import {
   PenLine, Minus, Columns2, Columns3, ArrowRight, GripHorizontal,
   DollarSign, Frame, TrendingUp, Eraser, Settings, Eye, EyeOff, X,
@@ -169,7 +170,7 @@ function ensureSignalOverlay() {
         ]
       },
     })
-  } catch (_) {}
+  } catch { /* ignore */ }
 }
 
 /* ═════════════════════════════════════════════════════════════════ */
@@ -197,6 +198,10 @@ export function KlineChart({
   const [editorForm, setEditorForm] = useState<Record<string, number>>({})
   const signalIdsRef = useRef<string[]>([])
   const drawingIdsRef = useRef<string[]>([])
+
+  // Throttle data updates to avoid render storms from high-frequency WS pushes
+  const debouncedData = useDebounce(data, 300)
+  const debouncedSignals = useDebounce(signals, 200)
 
   const isDark = theme === 'dark'
   const colors = isDark ? INDICATOR_COLORS_DARK : INDICATOR_COLORS_LIGHT
@@ -237,16 +242,16 @@ export function KlineChart({
         chart.applyNewData(toChartData(pendingDataRef.current))
       }
 
-      const ro = new ResizeObserver(() => { try { chart.resize() } catch (_) {} })
+      const ro = new ResizeObserver(() => { try { chart.resize() } catch { /* ignore */ } })
       ro.observe(el)
 
       return () => {
         ro.disconnect()
-        try { dispose(chart) } catch (_) {}
+        try { dispose(chart) } catch { /* ignore */ }
         chartRef.current = null
       }
     } catch (e) {
-      console.error('[KlineChart] init error:', e)
+      // 图表初始化错误，已在 UI 中处理
     }
   }, [loading])
 
@@ -264,24 +269,24 @@ export function KlineChart({
 
   /* ─── Apply data ─── */
   useEffect(() => {
-    pendingDataRef.current = data
-    if (!chartRef.current || !data?.length) return
-    chartRef.current.applyNewData(toChartData(data))
-    try { chartRef.current.scrollToRealTime() } catch (_) {}
-  }, [data])
+    pendingDataRef.current = debouncedData
+    if (!chartRef.current || !debouncedData?.length) return
+    chartRef.current.applyNewData(toChartData(debouncedData))
+    try { chartRef.current.scrollToRealTime() } catch { /* ignore */ }
+  }, [debouncedData])
 
   /* ─── Apply signals ─── */
   useEffect(() => {
-    if (!chartRef.current || !signals?.length) return
+    if (!chartRef.current || !debouncedSignals?.length) return
     // Clear previous
     signalIdsRef.current.forEach(id => {
-      try { chartRef.current?.removeOverlay?.(id) } catch (_) {}
+      try { chartRef.current?.removeOverlay?.(id) } catch { /* ignore */ }
     })
     signalIdsRef.current = []
 
-    signals.forEach(s => {
+    debouncedSignals.forEach(s => {
       try {
-        const overlayId = (chartRef.current as any)?.createOverlay?.({
+        const overlayId = (chartRef.current as unknown as { createOverlay?: (...args: unknown[]) => unknown })?.createOverlay?.({
           name: 'signalTag',
           points: [{ timestamp: s.timestamp, value: s.price, dataIndex: 0 }],
           extendData: {
@@ -293,9 +298,9 @@ export function KlineChart({
           },
         })
         if (overlayId) signalIdsRef.current.push(String(overlayId))
-      } catch (_) {}
+      } catch { /* ignore */ }
     })
-  }, [signals])
+  }, [debouncedSignals])
 
   /* ─── Drawing tool selection ─── */
   const selectDrawingTool = useCallback((toolName: string) => {
@@ -308,7 +313,7 @@ export function KlineChart({
     const tool = DRAWING_TOOLS.find(t => t.name === toolName)
     if (!tool) return
     try {
-      const id = (chartRef.current as any).createOverlay({ name: tool.overlay, lock: false })
+      const id = (chartRef.current as unknown as { createOverlay: (...args: unknown[]) => unknown }).createOverlay({ name: tool.overlay, lock: false })
       if (id) drawingIdsRef.current.push(String(id))
     } catch (_) { setActiveDrawingTool(null) }
   }, [activeDrawingTool])
@@ -316,7 +321,7 @@ export function KlineChart({
   const clearDrawings = useCallback(() => {
     if (!chartRef.current) return
     drawingIdsRef.current.forEach(id => {
-      try { chartRef.current?.removeOverlay?.(id) } catch (_) {}
+      try { chartRef.current?.removeOverlay?.(id) } catch { /* ignore */ }
     })
     drawingIdsRef.current = []
     setActiveDrawingTool(null)
@@ -461,8 +466,8 @@ export function KlineChart({
 
       {/* Indicator editor modal */}
       {editorTarget && template && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setEditorTarget(null)}>
-          <div className="w-80 rounded-xl border border-quant-border bg-quant-card p-5 space-y-4" onClick={e => e.stopPropagation()}>
+        <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setEditorTarget(null)} onKeyDown={(e) => { if (e.key === 'Escape') setEditorTarget(null) }} tabIndex={-1}>
+          <div role="document" className="w-80 rounded-xl border border-quant-border bg-quant-card p-5 space-y-4" onClick={e => e.stopPropagation()}>
             <h3 className="text-sm font-bold text-white">编辑 {editorTarget.shortName}</h3>
             {template.paramSchema.map(field => (
               <div key={field.key}>

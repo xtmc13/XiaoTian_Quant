@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from 'react'
+import React, { useState, useMemo, useCallback, useEffect } from 'react'
 import { cn } from '@/lib/utils'
 import { SectionCard } from '@/components/ui/SectionCard'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -133,7 +133,7 @@ function addPurchase(_id: number) {}
 
 /* ── Indicator Card ──────────────────────────────────────────────── */
 
-function IndicatorCard({
+const IndicatorCard = React.memo(function IndicatorCard({
   indicator,
   isPurchased,
   isOwn,
@@ -285,7 +285,10 @@ function IndicatorCard({
           </div>
 
           {indicator.pricing_type === 'free' || isPurchased || isOwn ? (
-            <button className="px-2.5 py-1 rounded-md bg-quant-gold/10 text-quant-gold text-[10px] font-medium hover:bg-quant-gold/20 transition-colors flex items-center gap-1">
+            <button
+              onClick={() => { window.location.hash = `#/indicator-ide?id=${indicator.id}` }}
+              className="px-2.5 py-1 rounded-md bg-quant-gold/10 text-quant-gold text-[10px] font-medium hover:bg-quant-gold/20 transition-colors flex items-center gap-1"
+            >
               <Zap className="h-3 w-3" /> 使用
             </button>
           ) : (
@@ -300,7 +303,7 @@ function IndicatorCard({
       </div>
     </div>
   )
-}
+})
 
 /* ── Main Page ───────────────────────────────────────────────────── */
 
@@ -334,8 +337,9 @@ export function IndicatorCommunity() {
       setPage(1)
       // Force refresh by mutating dependency slightly
       setKeyword((k) => k)
-    } catch (e: any) {
-      alert(e.message || '购买失败')
+    } catch (e: unknown) {
+      const err = e instanceof Error ? e : new Error(String(e))
+      alert(err.message || '购买失败')
     } finally {
       setPurchasingId(null)
     }
@@ -358,7 +362,9 @@ export function IndicatorCommunity() {
               >
                 {viewMode === 'grid' ? <List className="h-4 w-4" /> : <Grid3X3 className="h-4 w-4" />}
               </button>
-              <button className="flex items-center gap-1.5 rounded-lg bg-quant-gold px-3 py-2 text-xs font-medium text-black hover:opacity-90 transition-opacity"
+              <button
+                onClick={() => { window.location.hash = '#/indicator-ide' }}
+                className="flex items-center gap-1.5 rounded-lg bg-quant-gold px-3 py-2 text-xs font-medium text-black hover:opacity-90 transition-opacity"
               >
                 <Plus className="h-3.5 w-3.5" /> 发布指标
               </button>
@@ -424,7 +430,7 @@ export function IndicatorCommunity() {
               <div className="relative">
                 <select
                   value={sortBy}
-                  onChange={(e) => setSortBy(e.target.value as any)}
+                  onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
                   className="appearance-none rounded-lg border border-quant-border bg-quant-bg-secondary px-3 py-1.5 pr-7 text-[11px] text-white outline-none focus:border-quant-gold"
                 >
                   <option value="score">综合评分</option>
@@ -511,7 +517,7 @@ export function IndicatorCommunity() {
                   title="暂无发布的指标"
                   description="点击右上角「发布指标」创建您的第一个策略指标"
                   actionLabel="发布指标"
-                  onAction={() => {}}
+                  onAction={() => { window.location.hash = '#/indicator-ide' }}
                 />
               )}
             </SectionCard>
@@ -560,7 +566,7 @@ export function IndicatorCommunity() {
 
         {/* Purchase Modal */}
         {showPurchaseModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+          <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
           >
             <div className="w-full max-w-sm rounded-2xl border border-quant-border bg-quant-card p-6 shadow-2xl"
             >

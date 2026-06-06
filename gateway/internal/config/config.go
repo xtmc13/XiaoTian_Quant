@@ -310,6 +310,18 @@ func setOrAppendProvider(cfg *Config, name, baseURL, apiKey, model string) {
 	})
 }
 
+// Reload re-reads the config file and updates the global config atomically.
+func Reload(path string) (*Config, error) {
+	cfg, err := Load(path)
+	if err != nil {
+		return nil, err
+	}
+	mu.Lock()
+	global = cfg
+	mu.Unlock()
+	return cfg, nil
+}
+
 // Get returns the global config, or Default if not loaded.
 func Get() *Config {
 	mu.RLock()

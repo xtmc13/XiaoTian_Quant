@@ -4,6 +4,7 @@ import { marketApi, orderApi, portfolioApi, accountApi, tradesApi } from '@/lib/
 import { KLineChartPro } from '@klinecharts/pro'
 import '@klinecharts/pro/dist/klinecharts-pro.css'
 import { createBackendDatafeed, handlePriceTick, runBackfill, setChartUpdater, clearChartUpdater } from '@/lib/klineDatafeed'
+import { TRADING_INTERVALS } from '@/lib/constants'
 import type { Chart } from 'klinecharts'
 import { cn } from '@/lib/utils'
 import { useWebSocket } from '@/hooks/useWebSocket'
@@ -11,58 +12,45 @@ import { toast, ToastContainer } from '@/lib/useToast'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { Skeleton } from '@/components/ui/Skeleton'
 import {
+  parseInterval, formatPrice, formatTime, formatDateTime, formatVolume,
+  StatusTag, getChartApi, CONTRACT_LEVERAGES,
+} from '@/lib/tradingHelpers'
+import type { Position, Trade, Order, PortfolioPosition } from '@/types'
+import type { ChartApi } from '@/lib/tradingHelpers'
+import {
   TrendingUp, Clock, XCircle,
   CheckCircle2, AlertCircle, Activity, ChevronUp, ChevronDown,
   Settings
 } from 'lucide-react'
 
-const INTERVALS = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w']
-const LEVERAGES = [1, 2, 3, 5, 10, 20, 50, 75, 100, 125]
-
-function parseInterval(i: string) {
-  const num = parseInt(i) || 1
-  const unit = i.replace(/[0-9]/g, '')
-  const map: Record<string, string> = { m: 'minute', h: 'hour', d: 'day', w: 'week' }
-  return { multiplier: num, timespan: map[unit] || 'hour' }
+/* Extended types for fields not yet in base definitions */
+interface HistoryOrder extends Order {
+  updated_at?: string
+  avg_price?: number
+  filled_quantity?: number
+  realized_pnl?: number
 }
 
-/* helpers */
-function formatPrice(n?: number|string, digits=2) {
-  if (n==null||n==='') return '--'
-  const val = typeof n==='string' ? parseFloat(n) : n
-  if (Number.isNaN(val)) return '--'
-  return val.toFixed(digits)
-}
-function formatTime(ts: number|string) {
-  const d = new Date(ts)
-  return d.toLocaleTimeString('zh-CN',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'})
-}
-function formatDateTime(ts: number|string) {
-  const d = new Date(ts)
-  return d.toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})
-}
-function formatVolume(n?: number|string) {
-  if (!n) return '--'
-  const val = typeof n==='string' ? parseFloat(n) : n
-  if (val>=1e9) return (val/1e9).toFixed(2)+'B'
-  if (val>=1e6) return (val/1e6).toFixed(2)+'M'
-  if (val>=1e3) return (val/1e3).toFixed(2)+'K'
-  return val.toFixed(2)
+interface FillTrade extends Trade {
+  created_at?: string
+  timestamp?: number
+  avg_price?: number
+  filled_quantity?: number
+  fee?: number
 }
 
-/* StatusTag */
-function StatusTag({ status }: { status: string }) {
-  const cfg: Record<string,{cls:string;label:string}> = {
-    PENDING: { cls:'bg-yellow-500/10 text-yellow-500', label:'待成交' },
-    OPEN: { cls:'bg-quant-gold/10 text-quant-gold', label:'委托中' },
-    PARTIALLY_FILLED: { cls:'bg-quant-orange/10 text-quant-orange', label:'部分成交' },
-    FILLED: { cls:'bg-[#0ECB81]/10 text-[#0ECB81]', label:'已成交' },
-    CANCELLED: { cls:'bg-quant-border/40 text-muted-foreground', label:'已取消' },
-    REJECTED: { cls:'bg-[#F6465D]/10 text-[#F6465D]', label:'已拒绝' },
-  }
-  const c = cfg[status] || { cls:'bg-quant-border/40 text-muted-foreground', label:status }
-  return <span className={cn('inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium',c.cls)}>{c.label}</span>
+interface PositionItem extends PortfolioPosition {
+  id?: string
+  entryPrice?: number
+  openPrice?: number
+  avgPrice?: number
+  amount?: number
+  positionMargin?: number
+  liquidationPrice?: number
+  liquidation?: number
 }
+
+const LEVERAGES = CONTRACT_LEVERAGES
 
 function obFormatPrice(p: number, precision: string): string {
   const tick = parseFloat(precision) || 0.1
@@ -94,8 +82,8 @@ export function ContractTrading() {
   const [submitting, setSubmitting] = useState(false)
 
   const chartRef = useRef<HTMLDivElement>(null)
-  const chartApiRef = useRef<Chart|null>(null)
-  const klineProRef = useRef<any>(null)
+  const chartApiRef = useRef<ChartApi | null>(null)
+  const klineProRef = useRef<unknown>(null)
   const datafeed = useMemo(()=>createBackendDatafeed(),[])
   const queryClient = useQueryClient()
 
@@ -103,7 +91,7 @@ export function ContractTrading() {
   const {data:klines} = useQuery({queryKey:['klines',symbol,interval], queryFn:()=>marketApi.klines(symbol,interval,1000), refetchInterval:5000})
   const {data:orderbook, isLoading:obLoading} = useQuery({queryKey:['orderbook',symbol], queryFn:()=>marketApi.orderBook(symbol,20), refetchInterval:2000})
   const {data:recentTrades} = useQuery({queryKey:['trades',symbol], queryFn:()=>marketApi.trades(symbol,50), refetchInterval:3000})
-  const {data:positionsRaw, isLoading:posLoading} = useQuery<any>({queryKey:['positions'], queryFn:()=>portfolioApi.positions(), refetchInterval:5000})
+  const {data:positionsRaw, isLoading:posLoading} = useQuery({queryKey:['positions'], queryFn:()=>portfolioApi.positions(), refetchInterval:5000})
   const positions = Array.isArray(positionsRaw)?positionsRaw:positionsRaw?.positions||[]
   const {data:orders, isLoading:ordersLoading} = useQuery({queryKey:['orders'], queryFn:()=>orderApi.list(), refetchInterval:5000})
   const {data:historyOrders, isLoading:historyLoading} = useQuery({queryKey:['orders-history'], queryFn:()=>orderApi.history({status:'filled'}), refetchInterval:10000})
@@ -131,16 +119,21 @@ export function ContractTrading() {
   })
   const [liveTrades,setLiveTrades] = useState<{id:string;price:number;quantity:number;side:'buy'|'sell';time:number}[]>([])
   useEffect(()=>{
-    const unsub=wsOn('trade',(data:any)=>{
-      if(data.symbol===symbol){
-        setLiveTrades(prev=>[{id:String(data.id||Date.now()),price:data.price,quantity:data.quantity,side:data.side,time:data.time||Date.now()},...prev.slice(0,99)])
+    const unsub=wsOn('trade',(data: unknown)=>{
+      const d = data as Record<string, unknown>
+      if(d.symbol===symbol){
+        setLiveTrades(prev=>[{id:String(d.id||Date.now()),price:Number(d.price),quantity:Number(d.quantity),side:String(d.side) as 'buy'|'sell',time:Number(d.time)||Date.now()},...prev.slice(0,99)])
       }
     })
     return unsub
   },[wsOn,symbol])
   useEffect(()=>{
-    const unsub=wsOn('price',(msg:any)=>{
-      if(msg.symbol) handlePriceTick(msg.symbol, Number(msg.data?.last??msg.data?.price??0), Number(msg.data?.volume??0))
+    const unsub=wsOn('price',(msg: unknown)=>{
+      const m = msg as Record<string, unknown>
+      if(m.symbol) {
+        const data = m.data as Record<string, unknown> | undefined
+        handlePriceTick(String(m.symbol), Number(data?.last??data?.price??0), Number(data?.volume??0))
+      }
     })
     return unsub
   },[wsOn])
@@ -153,18 +146,18 @@ export function ContractTrading() {
   /* computed */
   const lastPrice = useMemo(()=>{
     if(snapshot?.price) return parseFloat(String(snapshot.price))
-    if(klines?.length) return parseFloat(klines[klines.length-1].close)
+    if(klines?.length) return parseFloat(String(klines[klines.length-1].close))
     return 0
   },[snapshot,klines])
   const prevClose = useMemo(()=>{
-    if(klines&&klines.length>1) return parseFloat(klines[klines.length-2].close)
+    if(klines&&klines.length>1) return parseFloat(String(klines[klines.length-2].close))
     return lastPrice
   },[klines,lastPrice])
   const change = lastPrice-prevClose
   const changePct = prevClose?(change/prevClose)*100:0
   const isUp = change>=0
-  const bestBid = orderbook?.bids?.[0]?.[0]??''
-  const bestAsk = orderbook?.asks?.[0]?.[0]??''
+  const bestBid = orderbook?.bids?.[0]?.[0] != null ? String(orderbook.bids[0][0]) : ''
+  const bestAsk = orderbook?.asks?.[0]?.[0] != null ? String(orderbook.asks[0][0]) : ''
 
   /* ─── KLineChartPro init (recreates when interval changes) ───
    *
@@ -187,7 +180,7 @@ export function ContractTrading() {
         container: chartRef.current,
         symbol: { ticker: symbol, name: symbol.replace("USDT", "/USDT"), shortName: symbol, market: "crypto", exchange: "BINANCE" },
         period: { ...parseInterval(interval), text: interval },
-        periods: INTERVALS.map((i) => ({ ...parseInterval(i), text: i })),
+        periods: TRADING_INTERVALS.map((i) => ({ ...parseInterval(i), text: i })),
         datafeed, drawingBarVisible: true,
         mainIndicators: ["MA", "EMA"], subIndicators: ["VOL", "MACD"],
         theme: "dark", locale: "zh-CN",
@@ -195,39 +188,37 @@ export function ContractTrading() {
       klineProRef.current = chart
 
       const checkApi = () => {
-        if ((chart as any)._chartApi) {
-          const api = (chart as any)._chartApi
-          chartApiRef.current = api
+        const chartApi = (chart as unknown as { _chartApi?: unknown })._chartApi as ChartApi | undefined
+        if (chartApi) {
+          chartApiRef.current = chartApi
           // Zoom to show enough bars after data loads
-          try { api.scrollToRealTime() } catch (_) {}
-          try { api.setBarSpace(4) } catch (_) {}
+          try { chartApi.scrollToRealTime() } catch { /* ignore */ }
+          try { chartApi.setBarSpace(4) } catch { /* ignore */ }
           // Wire running bar updates directly to chart (avoids timestamp conflict
           // with the last historical bar for the current period)
-          if (typeof api.updateData === 'function') {
-            setChartUpdater((bar) => { try { api.updateData(bar) } catch {} })
+          if (typeof chartApi.updateData === 'function') {
+            setChartUpdater((bar) => { try { chartApi.updateData(bar) } catch { /* ignore */ } })
           }
         } else {
           intervalId = window.setTimeout(checkApi, 100)
         }
       }
       checkApi()
-    } catch (e) { console.error("[Trading] KLineChartPro init failed:", e) }
+    } catch (e) { /* KLineChartPro 初始化失败，已在 UI 中处理 */ }
     return () => { if (intervalId) window.clearTimeout(intervalId) }
   }, [datafeed, symbol, interval])
 
   // Init on mount & when interval changes (SolidJS setPeriod workaround)
   useEffect(() => {
     const cancelTimer = initChart()
-    return () => { cancelTimer?.(); cleanupChart() }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => {
+      cancelTimer?.()
+      clearChartUpdater()
+      if (chartRef.current) chartRef.current.innerHTML = ""
+      klineProRef.current = null
+      chartApiRef.current = null
+    }
   }, [initChart])
-
-  function cleanupChart() {
-    clearChartUpdater()
-    if (chartRef.current) chartRef.current.innerHTML = ""
-    klineProRef.current = null
-    chartApiRef.current = null
-  }
 
 
   /* ─── Period click observer ───
@@ -242,7 +233,7 @@ export function ContractTrading() {
       while (t && t !== el) {
         if (t.classList?.contains("period") && t.parentElement?.classList?.contains("klinecharts-pro-period-bar")) {
           const txt = t.textContent?.trim()
-          if (txt && INTERVALS.includes(txt)) {
+          if (txt && TRADING_INTERVALS.includes(txt as typeof TRADING_INTERVALS[number])) {
             // Don't stopPropagation — let KLineChartPro handle its own UI highlight
             setInterval(txt)
           }
@@ -286,8 +277,9 @@ export function ContractTrading() {
       queryClient.invalidateQueries({queryKey:['orders']})
       queryClient.invalidateQueries({queryKey:['positions']})
       queryClient.invalidateQueries({queryKey:['portfolio']})
-    }catch(e:any){
-      toast('error', e?.response?.data?.message || e?.message || '下单失败')
+    }catch(e: unknown){
+      const err = e instanceof Error ? e : new Error(String(e))
+      toast('error', err.message || '下单失败')
     }finally{ setSubmitting(false) }
   },[symbol,orderType,price,quantity,leverage,tpPrice,slPrice,queryClient])
 
@@ -296,16 +288,48 @@ export function ContractTrading() {
       await orderApi.cancel(id)
       toast('success', '订单已取消')
       queryClient.invalidateQueries({queryKey:['orders']})
-    }catch(e:any){
-      toast('error', e?.response?.data?.message || e?.message || '取消失败')
+    }catch(e: unknown){
+      const err = e instanceof Error ? e : new Error(String(e))
+      toast('error', err.message || '取消失败')
     }
   },[queryClient])
+
+  const handleClosePosition = useCallback(async (pos: PositionItem) => {
+    const isLong = (pos.side || '').toUpperCase() === 'LONG' || (pos.side || '').toUpperCase() === 'BUY'
+    const closeSide = isLong ? 'SELL' : 'BUY'
+    const qty = Number(pos.quantity || pos.amount || 0)
+    if (!qty || qty <= 0) {
+      toast('error', '持仓数量无效')
+      return
+    }
+    setSubmitting(true)
+    try {
+      await orderApi.place({
+        symbol: pos.symbol || symbol,
+        side: closeSide,
+        type: 'MARKET',
+        price: 0,
+        quantity: qty,
+        leverage,
+        close_position: true,
+      })
+      toast('success', `平仓订单已提交: ${isLong ? '平多' : '平空'} ${qty} ${pos.symbol || symbol}`)
+      queryClient.invalidateQueries({ queryKey: ['orders'] })
+      queryClient.invalidateQueries({ queryKey: ['positions'] })
+      queryClient.invalidateQueries({ queryKey: ['portfolio'] })
+    } catch (e: unknown) {
+      const err = e instanceof Error ? e : new Error(String(e))
+      toast('error', err.message || '平仓失败')
+    } finally {
+      setSubmitting(false)
+    }
+  }, [symbol, leverage, queryClient])
 
   /* orderbook helpers */
   const obMax = useMemo(()=>{
     if(!orderbook) return 1
-    const bidMax=Math.max(...(orderbook.bids||[]).map((b:any[])=>parseFloat(b[1])||0),0)
-    const askMax=Math.max(...(orderbook.asks||[]).map((a:any[])=>parseFloat(a[1])||0),0)
+    const bidMax=Math.max(...(orderbook.bids||[]).map((b: [number, number])=>Number(b[1])||0),0)
+    const askMax=Math.max(...(orderbook.asks||[]).map((a: [number, number])=>Number(a[1])||0),0)
     return Math.max(bidMax,askMax,1)
   },[orderbook])
 
@@ -363,8 +387,8 @@ export function ContractTrading() {
             ) : orderbook ? (
               <>
                 <div className="flex flex-col-reverse">
-                  {(orderbook.asks||[]).slice(0,10).map((ask:any[],i:number)=>{
-                    const p=parseFloat(ask[0]), q=parseFloat(ask[1])
+                  {(orderbook.asks||[]).slice(0,10).map((ask: [number, number],i:number)=>{
+                    const p=Number(ask[0]), q=Number(ask[1])
                     return (
                       <div key={"ask-"+i} className="relative flex px-3 py-0.5 text-[11px] font-mono cursor-pointer hover:bg-white/[0.04]">
                         <div className="absolute top-0 bottom-0 right-0 opacity-20 z-0" style={{background:'#F6465D',width:Math.min((q/obMax)*100,100)+'%'}}/>
@@ -384,8 +408,8 @@ export function ContractTrading() {
                   </span>
                 </div>
                 <div>
-                  {(orderbook.bids||[]).slice(0,10).map((bid:any[],i:number)=>{
-                    const p=parseFloat(bid[0]), q=parseFloat(bid[1])
+                  {(orderbook.bids||[]).slice(0,10).map((bid: [number, number],i:number)=>{
+                    const p=Number(bid[0]), q=Number(bid[1])
                     return (
                       <div key={"bid-"+i} className="relative flex px-3 py-0.5 text-[11px] font-mono cursor-pointer hover:bg-white/[0.04]">
                         <div className="absolute top-0 bottom-0 left-0 opacity-20 z-0" style={{background:'#2EBD85',width:Math.min((q/obMax)*100,100)+'%'}}/>
@@ -401,7 +425,7 @@ export function ContractTrading() {
               <div className="py-8"><EmptyState title="暂无订单簿数据" description="等待市场数据连接..."/></div>
             )}
           </div>
-          <div className="h-[150px] shrink-0 border-t border-quant-border overflow-y-auto">
+          <div className="h-[150px] shrink-0 border-t border-quant-border overflow-y-auto" tabIndex={0} role="region" aria-label="最新成交">
             <div className="flex items-center h-7 px-3 border-b border-quant-border bg-quant-bg-secondary gap-3">
               <span className="text-[11px] font-medium text-foreground">最新成交</span>
               <span className="text-[11px] text-muted-foreground cursor-pointer hover:text-foreground">市场异动</span>
@@ -411,7 +435,7 @@ export function ContractTrading() {
               <span className="flex-1 text-right">价格</span>
               <span className="flex-1 text-right">数量</span>
             </div>
-            {displayTrades.slice(0,20).map((t: any,i: number)=>{
+            {displayTrades.slice(0,20).map((t: Trade, i: number)=>{
               return (
                 <div key={t.id||i} className="flex px-3 py-0.5 text-[11px] font-mono">
                   <span className="flex-1 text-muted-foreground">{formatTime(t.time)}</span>
@@ -432,12 +456,12 @@ export function ContractTrading() {
           <div className="h-8 shrink-0 border-b border-quant-border flex items-center justify-between px-3">
             <div className="flex gap-2">
               <button className={cn("text-xs px-2 py-1 rounded font-medium", positionMode==='open'?"bg-quant-gold/10 text-quant-gold":"text-muted-foreground hover:text-foreground")} onClick={()=>setPositionMode('open')}>开仓</button>
-              <button className={cn("text-xs px-2 py-1 rounded font-medium", positionMode==='close'?"bg-quant-gold/10 text-quant-gold":"text-muted-foreground hover:text-foreground")} onClick={()=>setPositionMode('close')}>平仓</button>
+              <button className={cn("text-xs px-2 py-1 rounded font-medium", positionMode==='close'?"bg-quant-gold/10 text-quant-gold":"text-muted-foreground hover:text-foreground")} onClick={()=>{ setPositionMode('close'); if (positions.length===0){ alert('当前无持仓，无需平仓') } else { setActiveBottomTab('positions'); setBottomHeight(h=>Math.max(h,180)) } }}>平仓</button>
             </div>
             <div className="flex items-center gap-2">
               <span className="text-[11px] text-muted-foreground">{marginMode==='cross'?'全仓':'逐仓'}</span>
               <span className="text-[11px] text-quant-gold font-bold">{leverage}x</span>
-              <Settings className="w-3.5 h-3.5 text-muted-foreground cursor-pointer hover:text-foreground"/>
+              <Settings className="w-3.5 h-3.5 text-muted-foreground cursor-pointer hover:text-foreground" onClick={() => alert('合约设置功能开发中')}/>
             </div>
           </div>
 
@@ -470,7 +494,7 @@ export function ContractTrading() {
               <div className="flex flex-col gap-1">
                 <div className="flex justify-between text-[10px] text-muted-foreground"><span>委托价格</span><span>USDT</span></div>
                 <div className="flex items-center bg-quant-bg border border-quant-border rounded px-2 h-8 focus-within:border-quant-gold transition-colors">
-                  <input value={price} onChange={e=>setPrice(e.target.value)} placeholder={lastPrice?lastPrice.toFixed(2):'0.00'} className="flex-1 bg-transparent text-sm font-mono border-0 ring-0 focus:ring-0 focus:ring-offset-0 focus:outline-0 focus-visible:outline-0 text-foreground placeholder:text-muted-foreground"/>
+                  <input value={price} onChange={e=>setPrice(e.target.value)} placeholder={lastPrice?lastPrice.toFixed(2):'0.00'} aria-label="价格" className="flex-1 bg-transparent text-sm font-mono border-0 ring-0 focus:ring-0 focus:ring-offset-0 focus:outline-0 focus-visible:outline-0 text-foreground placeholder:text-muted-foreground"/>
                   <span className="text-[10px] text-muted-foreground">USDT</span>
                 </div>
               </div>
@@ -478,7 +502,7 @@ export function ContractTrading() {
             <div className="flex flex-col gap-1">
               <div className="flex justify-between text-[10px] text-muted-foreground"><span>数量</span><span>{symbol.replace('USDT','')}</span></div>
               <div className="flex items-center bg-quant-bg border border-quant-border rounded px-2 h-8 focus-within:border-quant-gold transition-colors">
-                <input value={quantity} onChange={e=>setQuantity(e.target.value)} placeholder="0.00" className="flex-1 bg-transparent text-sm font-mono border-0 ring-0 focus:ring-0 focus:ring-offset-0 focus:outline-0 focus-visible:outline-0 text-foreground placeholder:text-muted-foreground"/>
+                <input value={quantity} onChange={e=>setQuantity(e.target.value)} placeholder="0.00" aria-label="数量" className="flex-1 bg-transparent text-sm font-mono border-0 ring-0 focus:ring-0 focus:ring-offset-0 focus:outline-0 focus-visible:outline-0 text-foreground placeholder:text-muted-foreground"/>
                 <span className="text-[10px] text-muted-foreground">{symbol.replace('USDT','')}</span>
               </div>
             </div>
@@ -498,19 +522,22 @@ export function ContractTrading() {
               })}
             </div>
             <div className="flex items-center gap-2">
-              <input type="checkbox" checked={showTpSl} onChange={e=>setShowTpSl(e.target.checked)} className="w-3 h-3 accent-quant-gold"/>
+              <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
+                <input type="checkbox" checked={showTpSl} onChange={e=>setShowTpSl(e.target.checked)} className="w-3 h-3 accent-quant-gold" aria-label="显示止盈止损"/>
+                止盈止损
+              </label>
               <span className="text-[11px] text-muted-foreground">止盈/止损</span>
             </div>
             {showTpSl&&(
               <div className="flex flex-col gap-2">
                 <div className="flex items-center bg-quant-bg border border-quant-border rounded px-2 h-8 focus-within:border-quant-gold transition-colors">
                   <span className="text-[10px] text-muted-foreground w-8">止盈</span>
-                  <input value={tpPrice} onChange={e=>setTpPrice(e.target.value)} placeholder="最新价" className="flex-1 bg-transparent text-sm font-mono border-0 ring-0 focus:ring-0 focus:ring-offset-0 focus:outline-0 focus-visible:outline-0 text-foreground placeholder:text-muted-foreground"/>
+                  <input value={tpPrice} onChange={e=>setTpPrice(e.target.value)} placeholder="最新价" aria-label="止盈价格" className="flex-1 bg-transparent text-sm font-mono border-0 ring-0 focus:ring-0 focus:ring-offset-0 focus:outline-0 focus-visible:outline-0 text-foreground placeholder:text-muted-foreground"/>
                   <span className="text-[10px] text-muted-foreground">USDT</span>
                 </div>
                 <div className="flex items-center bg-quant-bg border border-quant-border rounded px-2 h-8 focus-within:border-quant-gold transition-colors">
                   <span className="text-[10px] text-muted-foreground w-8">止损</span>
-                  <input value={slPrice} onChange={e=>setSlPrice(e.target.value)} placeholder="最新价" className="flex-1 bg-transparent text-sm font-mono border-0 ring-0 focus:ring-0 focus:ring-offset-0 focus:outline-0 focus-visible:outline-0 text-foreground placeholder:text-muted-foreground"/>
+                  <input value={slPrice} onChange={e=>setSlPrice(e.target.value)} placeholder="最新价" aria-label="止损价格" className="flex-1 bg-transparent text-sm font-mono border-0 ring-0 focus:ring-0 focus:ring-offset-0 focus:outline-0 focus-visible:outline-0 text-foreground placeholder:text-muted-foreground"/>
                   <span className="text-[10px] text-muted-foreground">USDT</span>
                 </div>
               </div>
@@ -545,7 +572,7 @@ export function ContractTrading() {
           <div className="border-t border-quant-border p-3">
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs font-medium text-foreground">账户</span>
-              <span className="text-[10px] text-quant-gold cursor-pointer hover:underline">划转</span>
+              <span className="text-[10px] text-quant-gold cursor-pointer hover:underline" onClick={() => alert('资金划转功能开发中')}>划转</span>
             </div>
             <div className="space-y-1.5">
               <div className="flex justify-between text-[10px]">
@@ -574,9 +601,9 @@ export function ContractTrading() {
               </div>
             </div>
             <div className="flex gap-1 mt-3">
-              <button className="flex-1 py-1.5 text-[10px] bg-quant-bg border border-quant-border rounded text-muted-foreground hover:text-foreground transition-colors">划转</button>
-              <button className="flex-1 py-1.5 text-[10px] bg-quant-bg border border-quant-border rounded text-muted-foreground hover:text-foreground transition-colors">买币</button>
-              <button className="flex-1 py-1.5 text-[10px] bg-quant-bg border border-quant-border rounded text-muted-foreground hover:text-foreground transition-colors">兑换</button>
+              <button onClick={() => alert('资金划转功能开发中')} className="flex-1 py-1.5 text-[10px] bg-quant-bg border border-quant-border rounded text-muted-foreground hover:text-foreground transition-colors">划转</button>
+              <button onClick={() => alert('买币功能开发中')} className="flex-1 py-1.5 text-[10px] bg-quant-bg border border-quant-border rounded text-muted-foreground hover:text-foreground transition-colors">买币</button>
+              <button onClick={() => alert('兑换功能开发中')} className="flex-1 py-1.5 text-[10px] bg-quant-bg border border-quant-border rounded text-muted-foreground hover:text-foreground transition-colors">兑换</button>
             </div>
           </div>
         </div>
@@ -627,26 +654,27 @@ export function ContractTrading() {
                   <table className="w-full text-[11px] whitespace-nowrap">
                     <thead className="sticky top-0 bg-quant-bg-secondary z-10">
                       <tr className="text-muted-foreground border-b border-quant-border">
-                        <th className="text-left font-medium px-3 py-2">合约</th>
-                        <th className="text-left font-medium px-3 py-2">数量</th>
-                        <th className="text-right font-medium px-3 py-2">开仓价</th>
-                        <th className="text-right font-medium px-3 py-2">标记价</th>
-                        <th className="text-right font-medium px-3 py-2">强平价</th>
-                        <th className="text-right font-medium px-3 py-2">保证金</th>
-                        <th className="text-right font-medium px-3 py-2">未实现盈亏</th>
-                        <th className="text-right font-medium px-3 py-2">收益率</th>
+                        <th scope="col" className="text-left font-medium px-3 py-2">合约</th>
+                        <th scope="col" className="text-left font-medium px-3 py-2">数量</th>
+                        <th scope="col" className="text-right font-medium px-3 py-2">开仓价</th>
+                        <th scope="col" className="text-right font-medium px-3 py-2">标记价</th>
+                        <th scope="col" className="text-right font-medium px-3 py-2">强平价</th>
+                        <th scope="col" className="text-right font-medium px-3 py-2">保证金</th>
+                        <th scope="col" className="text-right font-medium px-3 py-2">未实现盈亏</th>
+                        <th scope="col" className="text-right font-medium px-3 py-2">收益率</th>
+                        <th scope="col" className="text-right font-medium px-3 py-2">操作</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {positions.map((pos:any,i:number)=>{
+                      {positions.map((pos: PositionItem, i: number)=>{
                         const isLong=(pos.side||'').toUpperCase()==='LONG'||(pos.side||'').toUpperCase()==='BUY'
-                        const entryPx=parseFloat(pos.entryPrice||pos.openPrice||pos.avgPrice||0)
+                        const entryPx=Number(pos.entryPrice||pos.openPrice||pos.avgPrice||0)
                         const markPx=lastPrice||0
-                        const qty=parseFloat(pos.quantity||pos.amount||0)
-                        const margin=parseFloat(pos.margin||pos.positionMargin||0)
+                        const qty=Number(pos.quantity||pos.amount||0)
+                        const margin=Number(pos.margin||pos.positionMargin||0)
                         const upnl=isLong?(markPx-entryPx)*qty:(entryPx-markPx)*qty
                         const upnlPct=margin>0?(upnl/margin)*100:0
-                        const liqPx=parseFloat(pos.liquidationPrice||pos.liquidation||0)
+                        const liqPx=Number(pos.liquidationPrice||pos.liquidation||0)
                         return (
                           <tr key={pos.id||i} className="border-b border-quant-border/40 hover:bg-white/[0.03]">
                             <td className="px-3 py-2.5 font-medium">{pos.symbol||symbol} 永续</td>
@@ -662,6 +690,22 @@ export function ContractTrading() {
                             <td className="px-3 py-2.5 text-right font-mono">{margin>0?margin.toFixed(2):'--'} USDT</td>
                             <td className={cn("px-3 py-2.5 text-right font-mono", upnl>=0?"text-[#0ECB81]":"text-[#F6465D]")}>{upnl>=0?'+':''}{upnl.toFixed(2)} USDT</td>
                             <td className={cn("px-3 py-2.5 text-right font-mono", upnlPct>=0?"text-[#0ECB81]":"text-[#F6465D]")}>{upnlPct>=0?'+':''}{upnlPct.toFixed(2)}%</td>
+                            <td className="px-3 py-2.5 text-right">
+                              <button
+                                onClick={() => handleClosePosition(pos)}
+                                disabled={submitting}
+                                className={cn(
+                                  "px-2 py-1 rounded text-[10px] font-medium transition-colors",
+                                  submitting
+                                    ? "bg-muted text-muted-foreground cursor-not-allowed"
+                                    : isLong
+                                      ? "bg-[#F6465D]/10 text-[#F6465D] hover:bg-[#F6465D]/20"
+                                      : "bg-[#0ECB81]/10 text-[#0ECB81] hover:bg-[#0ECB81]/20"
+                                )}
+                              >
+                                {submitting ? '平仓中...' : `平${isLong ? '多' : '空'}`}
+                              </button>
+                            </td>
                           </tr>
                         )
                       })}
@@ -677,9 +721,9 @@ export function ContractTrading() {
                 ):orders?.length?(
                   <div className="overflow-x-auto">
                     <table className="w-full text-[11px] whitespace-nowrap">
-                      <thead className="sticky top-0 bg-quant-bg-secondary z-10"><tr className="text-muted-foreground text-left"><th className="px-1.5 py-1 font-medium">时间</th><th className="px-1.5 py-1 font-medium">币种</th><th className="px-1.5 py-1 font-medium">方向</th><th className="px-1.5 py-1 font-medium">类型</th><th className="px-1.5 py-1 font-medium">价格</th><th className="px-1.5 py-1 font-medium">数量</th><th className="px-1.5 py-1 font-medium">状态</th><th className="px-1.5 py-1 font-medium">操作</th></tr></thead>
+                      <thead className="sticky top-0 bg-quant-bg-secondary z-10"><tr className="text-muted-foreground text-left"><th scope="col" className="px-1.5 py-1 font-medium">时间</th><th scope="col" className="px-1.5 py-1 font-medium">币种</th><th scope="col" className="px-1.5 py-1 font-medium">方向</th><th scope="col" className="px-1.5 py-1 font-medium">类型</th><th scope="col" className="px-1.5 py-1 font-medium">价格</th><th scope="col" className="px-1.5 py-1 font-medium">数量</th><th scope="col" className="px-1.5 py-1 font-medium">状态</th><th scope="col" className="px-1.5 py-1 font-medium">操作</th></tr></thead>
                       <tbody>
-                        {(orders||[]).map((o:any)=>{
+                        {(orders||[]).map((o: Order)=>{
                           return <tr key={o.id} className="border-t border-quant-border/40 hover:bg-white/[0.02]">
                             <td className="px-1.5 py-1 text-muted-foreground">{formatDateTime(o.created_at)}</td>
                             <td className="px-1.5 py-1 font-semibold">{o.symbol}</td>
@@ -709,9 +753,9 @@ export function ContractTrading() {
                 ):historyOrders?.length?(
                   <div className="overflow-x-auto">
                     <table className="w-full text-[11px] whitespace-nowrap">
-                      <thead className="sticky top-0 bg-quant-bg-secondary z-10"><tr className="text-muted-foreground text-left"><th className="px-1.5 py-1 font-medium">时间</th><th className="px-1.5 py-1 font-medium">币种</th><th className="px-1.5 py-1 font-medium">方向</th><th className="px-1.5 py-1 font-medium">价格</th><th className="px-1.5 py-1 font-medium">数量</th><th className="px-1.5 py-1 font-medium">盈亏</th><th className="px-1.5 py-1 font-medium">状态</th></tr></thead>
+                      <thead className="sticky top-0 bg-quant-bg-secondary z-10"><tr className="text-muted-foreground text-left"><th scope="col" className="px-1.5 py-1 font-medium">时间</th><th scope="col" className="px-1.5 py-1 font-medium">币种</th><th scope="col" className="px-1.5 py-1 font-medium">方向</th><th scope="col" className="px-1.5 py-1 font-medium">价格</th><th scope="col" className="px-1.5 py-1 font-medium">数量</th><th scope="col" className="px-1.5 py-1 font-medium">盈亏</th><th scope="col" className="px-1.5 py-1 font-medium">状态</th></tr></thead>
                       <tbody>
-                        {(historyOrders||[]).map((o:any)=>{
+                        {(historyOrders||[]).map((o: HistoryOrder)=>{
                           const pnl=o.realized_pnl||0
                           return <tr key={o.id} className="border-t border-quant-border/40 hover:bg-white/[0.02]">
                             <td className="px-1.5 py-1 text-muted-foreground">{formatDateTime(o.updated_at||o.created_at)}</td>
@@ -736,13 +780,13 @@ export function ContractTrading() {
                 ):fillTrades?.length?(
                   <div className="overflow-x-auto">
                     <table className="w-full text-[11px] whitespace-nowrap">
-                      <thead className="sticky top-0 bg-quant-bg-secondary z-10"><tr className="text-muted-foreground text-left"><th className="px-1.5 py-1 font-medium">时间</th><th className="px-1.5 py-1 font-medium">币种</th><th className="px-1.5 py-1 font-medium">方向</th><th className="px-1.5 py-1 font-medium">价格</th><th className="px-1.5 py-1 font-medium">数量</th><th className="px-1.5 py-1 font-medium">手续费</th></tr></thead>
+                      <thead className="sticky top-0 bg-quant-bg-secondary z-10"><tr className="text-muted-foreground text-left"><th scope="col" className="px-1.5 py-1 font-medium">时间</th><th scope="col" className="px-1.5 py-1 font-medium">币种</th><th scope="col" className="px-1.5 py-1 font-medium">方向</th><th scope="col" className="px-1.5 py-1 font-medium">价格</th><th scope="col" className="px-1.5 py-1 font-medium">数量</th><th scope="col" className="px-1.5 py-1 font-medium">手续费</th></tr></thead>
                       <tbody>
-                        {(fillTrades||[]).map((t:any,i:number)=>{
+                        {(fillTrades||[]).map((t: FillTrade,i:number)=>{
                           return <tr key={t.id||i} className="border-t border-quant-border/40 hover:bg-white/[0.02]">
-                            <td className="px-1.5 py-1 text-muted-foreground">{formatDateTime(t.time||t.created_at||t.timestamp)}</td>
+                            <td className="px-1.5 py-1 text-muted-foreground">{formatDateTime(t.time || t.created_at || t.timestamp || 0)}</td>
                             <td className="px-1.5 py-1 font-semibold">{t.symbol||symbol}</td>
-                            <td className="px-1.5 py-1"><span className={cn('text-[9px] font-bold', (t.side==='BUY'||t.side==='buy')?'text-[#0ECB81]':'text-[#F6465D]')}>{(t.side==='BUY'||t.side==='buy')?'买入':'卖出'}</span></td>
+                            <td className="px-1.5 py-1"><span className={cn('text-[9px] font-bold', t.side==='buy'?'text-[#0ECB81]':'text-[#F6465D]')}>{t.side==='buy'?'买入':'卖出'}</span></td>
                             <td className="px-1.5 py-1 font-mono">${formatPrice(t.price||t.avg_price,2)}</td>
                             <td className="px-1.5 py-1 font-mono">{formatPrice(t.quantity||t.filled_quantity,4)}</td>
                             <td className="px-1.5 py-1 font-mono text-muted-foreground">{t.fee?formatPrice(t.fee,4):'--'}</td>
@@ -759,22 +803,22 @@ export function ContractTrading() {
                 {balLoading?(
                   <div className="p-4 space-y-2">{Array.from({length:3}).map((_,i)=><Skeleton key={i} variant="text" height={32}/>)}</div>
                 ):(()=>{
-                  const raw = allBalances?.data || allBalances?.result || allBalances
-                  const list:any[] = raw?.balances || raw?.currencies || raw?.list || (Array.isArray(raw) ? raw : [])
+                  const raw = allBalances as Record<string, unknown>
+                  const list = ((raw?.balances as unknown[]) || (raw?.currencies as unknown[]) || (raw?.list as unknown[]) || (Array.isArray(raw) ? raw : [])) as Record<string, unknown>[]
                   if(!Array.isArray(list) || !list.length) return <div className="py-6 flex items-center justify-center"><EmptyState title="暂无资产数据" description="等待资产数据加载..." className="py-1 border-0 text-[10px] [&>div:first-child]:hidden"/></div>
                   return (
                   <div className="overflow-x-auto">
                     <table className="w-full text-[11px] whitespace-nowrap">
-                      <thead className="sticky top-0 bg-quant-bg-secondary z-10"><tr className="text-muted-foreground text-left"><th className="px-3 py-2 font-medium">币种</th><th className="text-right px-3 py-2 font-medium">可用</th><th className="text-right px-3 py-2 font-medium">冻结</th><th className="text-right px-3 py-2 font-medium">总计</th><th className="text-right px-3 py-2 font-medium">估值(USDT)</th></tr></thead>
+                      <thead className="sticky top-0 bg-quant-bg-secondary z-10"><tr className="text-muted-foreground text-left"><th scope="col" className="px-3 py-2 font-medium">币种</th><th scope="col" className="text-right px-3 py-2 font-medium">可用</th><th scope="col" className="text-right px-3 py-2 font-medium">冻结</th><th scope="col" className="text-right px-3 py-2 font-medium">总计</th><th scope="col" className="text-right px-3 py-2 font-medium">估值(USDT)</th></tr></thead>
                       <tbody>
-                        {list.map((b:any,i:number)=>{
-                          const free = parseFloat(String(b.free??b.available??b.balance??0))
-                          const locked = parseFloat(String(b.locked??b.frozen??0))
-                          const total = free+locked
-                          return <tr key={b.asset||b.symbol||i} className="border-t border-quant-border/40 hover:bg-white/[0.02]">
-                            <td className="px-3 py-2 font-semibold">{b.asset||b.symbol||'--'}</td>
+                        {list.map((b, i: number)=>{
+                          const free = parseFloat(String(b.free ?? b.available ?? b.balance ?? 0))
+                          const locked = parseFloat(String(b.locked ?? b.frozen ?? 0))
+                          const total = free + locked
+                          return <tr key={String(b.asset || b.symbol || i)} className="border-t border-quant-border/40 hover:bg-white/[0.02]">
+                            <td className="px-3 py-2 font-semibold">{String(b.asset || b.symbol || '--')}</td>
                             <td className="px-3 py-2 text-right font-mono">{free.toFixed(4)}</td>
-                            <td className="px-3 py-2 text-right font-mono">{locked>0?locked.toFixed(4):'--'}</td>
+                            <td className="px-3 py-2 text-right font-mono">{locked > 0 ? locked.toFixed(4) : '--'}</td>
                             <td className="px-3 py-2 text-right font-mono">{total.toFixed(4)}</td>
                             <td className="px-3 py-2 text-right font-mono text-muted-foreground">--</td>
                           </tr>

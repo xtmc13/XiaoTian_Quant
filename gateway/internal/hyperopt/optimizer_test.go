@@ -228,9 +228,58 @@ func TestLossProfitDrawdownZeroDrawdown(t *testing.T) {
 	htAssert(t, math.IsInf(LossProfitDrawdown(m), 1), "zero drawdown = infinite loss")
 }
 
+func TestLossProfitFactor(t *testing.T) {
+	m := &BacktestMetrics{GrossProfit: 2000, GrossLoss: -1000, TotalTrades: 50}
+	// PF = 2000/1000 = 2.0, loss = -2.0
+	htAssertFloat(t, LossProfitFactor(m), -2.0, "profit factor")
+}
+
+func TestLossProfitFactorFallback(t *testing.T) {
+	// Without GrossProfit/GrossLoss, use ProfitFactor field directly
+	m := &BacktestMetrics{ProfitFactor: 1.8, TotalTrades: 30, AvgTradePct: 0.5, WinRate: 55}
+	htAssertFloat(t, LossProfitFactor(m), -1.8, "profit factor fallback")
+}
+
+func TestLossProfitFactorNoTrades(t *testing.T) {
+	m := &BacktestMetrics{GrossProfit: 100, TotalTrades: 0}
+	htAssert(t, math.IsInf(LossProfitFactor(m), 1), "no trades = inf")
+}
+
+func TestLossRiskReward(t *testing.T) {
+	m := &BacktestMetrics{AvgWinPct: 2.5, AvgLossPct: -1.0, TotalTrades: 40}
+	// R:R = 2.5/1.0 = 2.5, loss = -2.5
+	htAssertFloat(t, LossRiskReward(m), -2.5, "risk reward")
+}
+
+func TestLossRiskRewardFallback(t *testing.T) {
+	// Without AvgWin/AvgLoss, derive from ProfitFactor and WinRate
+	// PF = 2.0, W = 0.5 => r = PF*(1-W)/W = 2.0*0.5/0.5 = 2.0
+	m := &BacktestMetrics{ProfitFactor: 2.0, WinRate: 50, AvgTradePct: 0.5, TotalTrades: 30}
+	htAssertFloat(t, LossRiskReward(m), -2.0, "risk reward fallback")
+}
+
+func TestLossSQN(t *testing.T) {
+	m := &BacktestMetrics{TotalTrades: 100, AvgTradePct: 0.5, TradeStdDev: 1.0}
+	// SQN = sqrt(100) * (0.5/1.0) = 10 * 0.5 = 5.0, loss = -5.0
+	htAssertFloat(t, LossSQN(m), -5.0, "sqn")
+}
+
+func TestLossSQNFallback(t *testing.T) {
+	// Without TradeStdDev, approximate from Sharpe
+	m := &BacktestMetrics{TotalTrades: 64, AvgTradePct: 0.8, SharpeRatio: 2.0}
+	// stdDev ≈ avgTrade / sharpe = 0.8/2.0 = 0.4
+	// SQN = sqrt(64) * (0.8/0.4) = 8 * 2.0 = 16.0
+	htAssertFloat(t, LossSQN(m), -16.0, "sqn fallback")
+}
+
+func TestLossSQNZeroStdDev(t *testing.T) {
+	m := &BacktestMetrics{TotalTrades: 10, AvgTradePct: 0.5, TradeStdDev: 0, SharpeRatio: 0}
+	htAssert(t, math.IsInf(LossSQN(m), 1), "zero stddev = inf")
+}
+
 func TestGetLossFunc(t *testing.T) {
 	names := LossFuncNames()
-	htAssert(t, len(names) == 9, "9 loss functions")
+	htAssert(t, len(names) == 12, "12 loss functions")
 
 	for _, name := range names {
 		fn := GetLossFunc(name)

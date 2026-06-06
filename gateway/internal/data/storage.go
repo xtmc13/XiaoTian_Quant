@@ -202,7 +202,99 @@ func (s *Storage) LogDownload(symbol, interval string, count int, startMs, endMs
 	)
 }
 
-// GetAvailableSymbols returns all symbols that have data stored.
+// GetDownloadLog returns the download history for a symbol/interval.
+func (s *Storage) GetDownloadLog(symbol, interval string) []DownloadLogEntry {
+	db := s.db()
+	if db == nil {
+		return nil
+	}
+
+	rows, err := db.Query(
+		`SELECT symbol, interval, bars_count, start_time, end_time, downloaded_at
+		 FROM ohlcv_download_log WHERE symbol = ? AND interval = ? ORDER BY downloaded_at DESC`,
+		symbol, interval,
+	)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var result []DownloadLogEntry
+	for rows.Next() {
+		var e DownloadLogEntry
+		rows.Scan(&e.Symbol, &e.Interval, &e.BarsCount, &e.StartTime, &e.EndTime, &e.DownloadedAt)
+		result = append(result, e)
+	}
+	return result
+}
+
+// DownloadLogEntry is a single download log record.
+type DownloadLogEntry struct {
+	Symbol       string `json:"symbol"`
+	Interval     string `json:"interval"`
+	BarsCount    int    `json:"bars_count"`
+	StartTime    int64  `json:"start_time"`
+	EndTime      int64  `json:"end_time"`
+	DownloadedAt int64  `json:"downloaded_at"`
+}
+
+// FindGaps identifies missing time ranges between the desired [fromMs, toMs]
+// and what is actually stored locally. Returns a list of gaps to download.
+func (s *Storage) FindGaps(symbol, interval string, fromMs, toMs int64) [][2]int64 {
+	if fromMs >= toMs || fromMs <= 0 || toMs <= 0 {
+		return nil
+	}
+
+	// Load all stored bars in the range
+	bars := s.LoadOHLCV(symbol, interval, fromMs, toMs)
+	if len(bars) == 0 {
+		// Nothing stored — need to download entire range
+		return [][2]int64{{fromMs, toMs}}
+	}
+
+	var gaps [][2]int64
+	intervalMs := intervalToMs(interval)
+	if intervalMs <= 0 {
+		intervalMs = 3600000 // default 1h
+	}
+
+	// Check gap at the beginning
+	firstBar := bars[0]
+	if firstBar.Time > fromMs+intervalMs {
+		gaps = append(gaps, [2]int64{fromMs, firstBar.Time - intervalMs})
+	}
+
+	// Check gaps between consecutive bars
+	for i := 1; i < len(bars); i++ {
+		expectedNext := bars[i-1].Time + intervalMs
+		if bars[i].Time >= expectedNext+intervalMs {
+			gaps = append(gaps, [2]int64{expectedNext, bars[i].Time - intervalMs})
+		}
+	}
+
+	// Check gap at the end
+	lastBar := bars[len(bars)-1]
+	if lastBar.Time < toMs-intervalMs {
+		gaps = append(gaps, [2]int64{lastBar.Time + intervalMs, toMs})
+	}
+
+	return gaps
+}
+
+// GetDataRange returns the earliest and latest timestamps for a symbol/interval.
+func (s *Storage) GetDataRange(symbol, interval string) (minTime, maxTime int64, count int) {
+	db := s.db()
+	if db == nil {
+		return 0, 0, 0
+	}
+
+	row := db.QueryRow(
+		`SELECT MIN(time), MAX(time), COUNT(*) FROM ohlcv_data WHERE symbol = ? AND interval = ?`,
+		symbol, interval,
+	)
+	row.Scan(&minTime, &maxTime, &count)
+	return minTime, maxTime, count
+}
 func (s *Storage) GetAvailableSymbols() []string {
 	db := s.db()
 	if db == nil {

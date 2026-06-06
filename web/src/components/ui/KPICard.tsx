@@ -16,7 +16,7 @@ export interface KPICardProps {
   className?: string;
 }
 
-export const KPICard: React.FC<KPICardProps> = ({
+export const KPICard: React.FC<KPICardProps> = React.memo(function KPICard({
   icon,
   label,
   value,
@@ -28,7 +28,7 @@ export const KPICard: React.FC<KPICardProps> = ({
   onClick,
   onNavigate,
   className,
-}) => {
+}) {
   const size = 56;
   const stroke = 4;
   const radius = (size - stroke) / 2;
@@ -90,12 +90,12 @@ export const KPICard: React.FC<KPICardProps> = ({
                   </span>
                 )}
                 {trend === "neutral" && subValue && (
-                  <span className="text-xs font-medium text-[#666666]">
+                  <span className="text-xs font-medium text-[#999999]">
                     {subValue}
                   </span>
                 )}
                 {subLabel && (
-                  <span className="text-xs text-[#555555]">{subLabel}</span>
+                  <span className="text-xs text-[#8a8a8a]">{subLabel}</span>
                 )}
               </div>
             )}
@@ -154,6 +154,7 @@ export const KPICard: React.FC<KPICardProps> = ({
                 e.stopPropagation();
                 onNavigate();
               }}
+              aria-label="查看详情"
               className="flex h-7 w-7 items-center justify-center rounded-full bg-[#141414] text-[#888888] transition-colors hover:bg-[#1c1c1c] hover:text-white"
             >
               <ChevronRight className="h-4 w-4" />
@@ -163,4 +164,4 @@ export const KPICard: React.FC<KPICardProps> = ({
       </div>
     </div>
   );
-};
+});

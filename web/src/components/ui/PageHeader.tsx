@@ -28,7 +28,7 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
           </h1>
         )}
         {subtitle && (
-          <p className="mt-1 text-sm text-[#666666]">{subtitle}</p>
+          <p className="mt-1 text-sm text-[#999999]">{subtitle}</p>
         )}
       </div>
 

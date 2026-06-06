@@ -7,8 +7,8 @@ import { cn } from '@/lib/utils'
 
 interface ParamPanelProps {
   params: ParamDecl[]
-  values: Record<string, any>
-  onChange: (name: string, value: any) => void
+  values: Record<string, unknown>
+  onChange: (name: string, value: unknown) => void
   className?: string
 }
 
@@ -28,8 +28,8 @@ export function ParamPanel({ params, values, onChange, className }: ParamPanelPr
   )
 }
 
-function ParamField({ param, value, onChange }: { param: ParamDecl; value: any; onChange: (v: any) => void }) {
-  const controlledValue = value !== undefined ? value : param.default
+function ParamField({ param, value, onChange }: { param: ParamDecl; value: unknown; onChange: (v: unknown) => void }) {
+  const controlledValue = value !== undefined ? String(value) : String(param.default ?? '')
 
   return (
     <div className="space-y-1">
@@ -115,7 +115,7 @@ function ParamField({ param, value, onChange }: { param: ParamDecl; value: any; 
   )
 }
 
-function parseTypedValue(type_: string, value: string): any {
+function parseTypedValue(type_: string, value: string): unknown {
   switch (type_) {
     case 'int':
       return parseInt(value, 10) || 0
@@ -128,7 +128,7 @@ function parseTypedValue(type_: string, value: string): any {
   }
 }
 
-function formatValue(v: any): string {
+function formatValue(v: unknown): string {
   if (typeof v === 'boolean') return v ? 'ON' : 'OFF'
   if (typeof v === 'number') {
     if (Number.isInteger(v)) return String(v)

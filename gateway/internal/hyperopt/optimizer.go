@@ -64,6 +64,12 @@ type BacktestMetrics struct {
 	ProfitFactor   float64 `json:"profit_factor"`
 	TotalTrades    int     `json:"total_trades"`
 	AvgTradePct    float64 `json:"avg_trade_pct"`
+	// Extended metrics for advanced loss functions
+	AvgWinPct   float64 `json:"avg_win_pct,omitempty"`   // average winning trade return
+	AvgLossPct  float64 `json:"avg_loss_pct,omitempty"`  // average losing trade return (negative)
+	TradeStdDev float64 `json:"trade_stddev,omitempty"`  // std dev of individual trade returns
+	GrossProfit float64 `json:"gross_profit,omitempty"`  // sum of all winning trades
+	GrossLoss   float64 `json:"gross_loss,omitempty"`    // sum of all losing trades (negative)
 }
 
 // LossFunc computes a loss score from backtest metrics.
@@ -148,6 +154,105 @@ func LossProfitDrawdown(m *BacktestMetrics) float64 {
 	return -m.TotalReturnPct / m.MaxDrawdownPct
 }
 
+// ── New Loss Functions (Step 1) ──────────────────────────────
+
+// LossProfitFactor maximizes the profit factor (gross profit / |gross loss|).
+// PF > 1.0 means profitable; PF > 2.0 is considered good.
+func LossProfitFactor(m *BacktestMetrics) float64 {
+	if m == nil || m.TotalTrades == 0 {
+		return math.Inf(1)
+	}
+	// Use exact gross profit/loss if available
+	grossProfit := m.GrossProfit
+	grossLoss := m.GrossLoss
+	if grossProfit == 0 && grossLoss == 0 {
+		// Fallback: derive from avg win/loss and win rate
+		if m.AvgWinPct > 0 && m.AvgLossPct < 0 && m.WinRate > 0 && m.WinRate < 100 {
+			winCount := float64(m.TotalTrades) * m.WinRate / 100.0
+			lossCount := float64(m.TotalTrades) * (100.0 - m.WinRate) / 100.0
+			grossProfit = winCount * m.AvgWinPct
+			grossLoss = lossCount * m.AvgLossPct // already negative
+		} else if m.ProfitFactor > 0 {
+			// Last resort: use the profit_factor field directly
+			return -m.ProfitFactor
+		} else {
+			return math.Inf(1)
+		}
+	}
+	absGrossLoss := grossLoss
+	if absGrossLoss < 0 {
+		absGrossLoss = -absGrossLoss
+	}
+	if absGrossLoss == 0 {
+		return math.Inf(1) // avoid division by zero
+	}
+	return -(grossProfit / absGrossLoss)
+}
+
+// LossRiskReward maximizes the risk-reward ratio (avg win / |avg loss|).
+// R:R > 1.0 means wins are larger than losses.
+func LossRiskReward(m *BacktestMetrics) float64 {
+	if m == nil || m.TotalTrades == 0 {
+		return math.Inf(1)
+	}
+	avgWin := m.AvgWinPct
+	avgLoss := m.AvgLossPct
+	// Fallback derivation if exact values not provided
+	if avgWin == 0 && avgLoss == 0 && m.WinRate > 0 && m.WinRate < 100 {
+		// From expectancy: E = W*avgWin + (1-W)*avgLoss, where W = winRate
+		// Also: avgTrade = W*avgWin + (1-W)*avgLoss
+		// We need another equation. Assume R:R = r, so avgWin = r*|avgLoss|
+		// Then: avgTrade = W*r*|avgLoss| - (1-W)*|avgLoss| = |avgLoss|(W*r - (1-W))
+		// => |avgLoss| = avgTrade / (W*r - (1-W))
+		// This has two unknowns. Use profit factor as additional constraint.
+		if m.ProfitFactor > 0 && m.AvgTradePct != 0 {
+			W := m.WinRate / 100.0
+			PF := m.ProfitFactor
+			// PF = (W*avgWin) / ((1-W)*|avgLoss|)
+			// Let r = avgWin/|avgLoss|
+			// PF = W*r / (1-W)  =>  r = PF*(1-W)/W
+			r := PF * (1.0 - W) / W
+			return -r
+		}
+	}
+	if avgWin <= 0 {
+		return math.Inf(1) // no winning trades or invalid
+	}
+	absAvgLoss := avgLoss
+	if absAvgLoss < 0 {
+		absAvgLoss = -absAvgLoss
+	}
+	if absAvgLoss == 0 {
+		return math.Inf(1)
+	}
+	return -(avgWin / absAvgLoss)
+}
+
+// LossSQN maximizes the System Quality Number (Van Tharp).
+// SQN = sqrt(N) * (expectancy / stdDev)  where expectancy = avg trade return.
+// SQN > 2.0 is tradable; > 5.0 is excellent.
+func LossSQN(m *BacktestMetrics) float64 {
+	if m == nil || m.TotalTrades == 0 {
+		return math.Inf(1)
+	}
+	stdDev := m.TradeStdDev
+	if stdDev == 0 {
+		// Fallback: approximate from Sharpe ratio
+		// Sharpe ≈ avgReturn / returnStdDev; SQN uses trade-level stdDev
+		// Rough approximation: if we assume trade returns ≈ bar returns
+		if m.SharpeRatio != 0 && m.TotalTrades > 1 {
+			stdDev = math.Abs(m.AvgTradePct / m.SharpeRatio)
+		} else {
+			return math.Inf(1)
+		}
+	}
+	if stdDev == 0 {
+		return math.Inf(1)
+	}
+	sqn := math.Sqrt(float64(m.TotalTrades)) * (m.AvgTradePct / stdDev)
+	return -sqn
+}
+
 // GetLossFunc returns a loss function by name.
 func GetLossFunc(name string) LossFunc {
 	switch name {
@@ -169,6 +274,12 @@ func GetLossFunc(name string) LossFunc {
 		return LossMultiMetric
 	case "profit_drawdown":
 		return LossProfitDrawdown
+	case "profit_factor":
+		return LossProfitFactor
+	case "risk_reward":
+		return LossRiskReward
+	case "sqn":
+		return LossSQN
 	default:
 		return LossSharpe
 	}
@@ -179,7 +290,7 @@ func LossFuncNames() []string {
 	return []string{
 		"sharpe", "sortino", "calmar", "max_drawdown",
 		"profit", "win_rate", "expectancy", "multi_metric",
-		"profit_drawdown",
+		"profit_drawdown", "profit_factor", "risk_reward", "sqn",
 	}
 }
 

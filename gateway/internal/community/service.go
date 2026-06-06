@@ -83,7 +83,262 @@ func ComputeOverfitRisk(totalReturn, sharpe, maxDrawdown float64, totalTrades in
 	}
 }
 
-// MarketIndicator is the public view of an indicator in the marketplace.
+// ReviewStatus constants for indicator moderation.
+const (
+	ReviewPending  = "pending"
+	ReviewApproved = "approved"
+	ReviewRejected = "rejected"
+)
+
+// ReviewResult holds moderation outcome.
+type ReviewResult struct {
+	Status    string `json:"status"`
+	Reason    string `json:"reason,omitempty"`
+	ReviewedAt int64 `json:"reviewed_at"`
+	ReviewerID int   `json:"reviewer_id"`
+}
+
+// ReviewIndicator approves or rejects a pending indicator.
+func (s *Service) ReviewIndicator(indicatorID int, reviewerID int, approve bool, reason string) (*ReviewResult, error) {
+	db := store.GetDB()
+	if db == nil {
+		return nil, fmt.Errorf("database not available")
+	}
+
+	// Verify indicator exists and is pending
+	var currentStatus string
+	err := db.QueryRow(`SELECT review_status FROM indicator_codes WHERE id = ?`, indicatorID).Scan(&currentStatus)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("indicator not found")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if currentStatus != ReviewPending && currentStatus != "" {
+		return nil, fmt.Errorf("indicator is not pending review (current: %s)", currentStatus)
+	}
+
+	now := time.Now().Unix()
+	status := ReviewRejected
+	if approve {
+		status = ReviewApproved
+		reason = ""
+	}
+
+	_, err = db.Exec(
+		`UPDATE indicator_codes SET review_status = ?, review_reason = ?, reviewed_at = ?, reviewer_id = ? WHERE id = ?`,
+		status, reason, now, reviewerID, indicatorID,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ReviewResult{
+		Status:     status,
+		Reason:     reason,
+		ReviewedAt: now,
+		ReviewerID: reviewerID,
+	}, nil
+}
+
+// GetPendingReviews returns indicators awaiting moderation.
+func (s *Service) GetPendingReviews(page, pageSize int) ([]MarketIndicator, int, error) {
+	db := store.GetDB()
+	if db == nil {
+		return nil, 0, fmt.Errorf("database not available")
+	}
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 50 {
+		pageSize = 20
+	}
+	offset := (page - 1) * pageSize
+
+	var total int
+	db.QueryRow(`SELECT COUNT(*) FROM indicator_codes WHERE publish_to_community = 1 AND review_status = 'pending'`).Scan(&total)
+
+	rows, err := db.Query(
+		`SELECT id, name, description, pricing_type, price, purchase_count, avg_rating, rating_count, view_count, user_id, created_at
+		 FROM indicator_codes WHERE publish_to_community = 1 AND review_status = 'pending'
+		 ORDER BY created_at ASC LIMIT ? OFFSET ?`,
+		pageSize, offset,
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var indicators []MarketIndicator
+	var ids []int
+	for rows.Next() {
+		var mi MarketIndicator
+		var desc sql.NullString
+		if err := rows.Scan(&mi.ID, &mi.Name, &desc, &mi.PricingType, &mi.Price, &mi.PurchaseCount, &mi.AvgRating, &mi.RatingCount, &mi.ViewCount, &mi.AuthorID, &mi.CreatedAt); err != nil {
+			continue
+		}
+		mi.Description = desc.String
+		indicators = append(indicators, mi)
+		ids = append(ids, mi.ID)
+	}
+
+	authorNames := s.resolveAuthorNames(db, extractUniqueAuthorIDs(indicators))
+	for i := range indicators {
+		indicators[i].AuthorName = authorNames[indicators[i].AuthorID]
+	}
+
+	return indicators, total, nil
+}
+
+// ── Revenue Sharing ────────────────────────────────────────────
+
+// RevenueShareConfig configures how purchase revenue is split.
+type RevenueShareConfig struct {
+	AuthorPct    float64 // author percentage (e.g. 0.70 = 70%)
+	PlatformPct  float64 // platform percentage (e.g. 0.30 = 30%)
+}
+
+func DefaultRevenueShareConfig() RevenueShareConfig {
+	return RevenueShareConfig{AuthorPct: 0.70, PlatformPct: 0.30}
+}
+
+// RevenueRecord tracks a single purchase's revenue distribution.
+type RevenueRecord struct {
+	ID          int     `json:"id"`
+	IndicatorID int     `json:"indicator_id"`
+	BuyerID     int     `json:"buyer_id"`
+	SellerID    int     `json:"seller_id"`
+	Price       float64 `json:"price"`
+	AuthorShare float64 `json:"author_share"`
+	PlatformShare float64 `json:"platform_share"`
+	CreatedAt   int64   `json:"created_at"`
+}
+
+// RecordRevenue records the revenue split for a purchase.
+func (s *Service) RecordRevenue(indicatorID, buyerID, sellerID int, price float64, cfg RevenueShareConfig) error {
+	db := store.GetDB()
+	if db == nil {
+		return fmt.Errorf("database not available")
+	}
+
+	authorShare := price * cfg.AuthorPct
+	platformShare := price * cfg.PlatformPct
+
+	_, err := db.Exec(
+		`INSERT INTO indicator_revenue (indicator_id, buyer_id, seller_id, price, author_share, platform_share, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		indicatorID, buyerID, sellerID, price, authorShare, platformShare, time.Now().Unix(),
+	)
+	return err
+}
+
+// GetAuthorRevenue returns total revenue for an author.
+func (s *Service) GetAuthorRevenue(authorID int) (totalSales int, totalRevenue float64, err error) {
+	db := store.GetDB()
+	if db == nil {
+		return 0, 0, fmt.Errorf("database not available")
+	}
+
+	var sales int
+	var revenue float64
+	err = db.QueryRow(
+		`SELECT COUNT(*), COALESCE(SUM(author_share), 0) FROM indicator_revenue WHERE seller_id = ?`,
+		authorID,
+	).Scan(&sales, &revenue)
+	return sales, revenue, err
+}
+
+// GetAuthorRevenueDetails returns per-indicator revenue breakdown.
+func (s *Service) GetAuthorRevenueDetails(authorID int) ([]IndicatorRevenue, error) {
+	db := store.GetDB()
+	if db == nil {
+		return nil, fmt.Errorf("database not available")
+	}
+
+	rows, err := db.Query(
+		`SELECT indicator_id, COUNT(*) as sales, COALESCE(SUM(author_share), 0) as revenue
+		 FROM indicator_revenue WHERE seller_id = ? GROUP BY indicator_id ORDER BY revenue DESC`,
+		authorID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []IndicatorRevenue
+	for rows.Next() {
+		var r IndicatorRevenue
+		rows.Scan(&r.IndicatorID, &r.Sales, &r.Revenue)
+		result = append(result, r)
+	}
+	return result, nil
+}
+
+// IndicatorRevenue is revenue summary for a single indicator.
+type IndicatorRevenue struct {
+	IndicatorID int     `json:"indicator_id"`
+	Sales       int     `json:"sales"`
+	Revenue     float64 `json:"revenue"`
+}
+
+// ── Wilson Score Rating ───────────────────────────────────────
+
+// ComputeWilsonScore calculates the lower bound of Wilson score confidence interval.
+// This gives a more reliable ranking than raw average rating, especially with few reviews.
+// Formula: (p + z²/2n - z*sqrt((p(1-p)+z²/4n)/n)) / (1+z²/n)
+// where p = positive proportion, z = 1.96 (95% CI), n = total ratings.
+func ComputeWilsonScore(avgRating float64, ratingCount int) float64 {
+	if ratingCount == 0 {
+		return 0
+	}
+	// Normalize avgRating from [1,5] to [0,1] proportion
+	p := (avgRating - 1.0) / 4.0
+	if p < 0 {
+		p = 0
+	}
+	if p > 1 {
+		p = 1
+	}
+
+	n := float64(ratingCount)
+	z := 1.96 // 95% confidence
+
+	// Wilson score lower bound
+	dividend := p + z*z/(2*n) - z*math.Sqrt((p*(1-p)+z*z/(4*n))/n)
+	divisor := 1 + z*z/n
+
+	score := dividend / divisor
+	if score < 0 {
+		score = 0
+	}
+
+	// Scale back to [1,5] range
+	return 1.0 + score*4.0
+}
+
+// GetMarketIndicatorsWithWilsonScore returns indicators with Wilson score ranking.
+func (s *Service) GetMarketIndicatorsWithWilsonScore(userID int, page, pageSize int, keyword, pricingType string) ([]MarketIndicator, int, error) {
+	indicators, total, err := s.GetMarketIndicators(userID, page, pageSize, keyword, pricingType, "")
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// Compute Wilson score for each indicator
+	for i := range indicators {
+		indicators[i].Score = ComputeWilsonScore(indicators[i].AvgRating, indicators[i].RatingCount)
+	}
+
+	// Sort by Wilson score descending
+	for i := 0; i < len(indicators)-1; i++ {
+		for j := i + 1; j < len(indicators); j++ {
+			if indicators[j].Score > indicators[i].Score {
+				indicators[i], indicators[j] = indicators[j], indicators[i]
+			}
+		}
+	}
+
+	return indicators, total, nil
+}
 type MarketIndicator struct {
 	ID                   int                `json:"id"`
 	Name                 string             `json:"name"`

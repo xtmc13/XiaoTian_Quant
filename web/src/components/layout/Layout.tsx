@@ -2,6 +2,7 @@ import { Outlet } from 'react-router-dom'
 import { Sidebar } from './Sidebar'
 import { TopBar } from './TopBar'
 import { BottomNav } from './BottomNav'
+import { ToastContainer } from '@/components/ToastContainer'
 
 export function Layout() {
   return (
@@ -19,6 +20,7 @@ export function Layout() {
       </div>
       {/* Bottom navigation — visible only on mobile (< md) */}
       <BottomNav />
+      <ToastContainer />
     </div>
   )
 }

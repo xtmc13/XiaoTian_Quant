@@ -267,6 +267,175 @@ func TestManagerFilterRemovesAll(t *testing.T) {
 	}
 }
 
+/* ── New Filter Tests (Step 2) ──────────────────────────────── */
+
+func TestOffsetFilter(t *testing.T) {
+	f := NewOffsetFilter(2)
+	pairs := []string{"BTCUSDT", "ETHUSDT", "SOLUSDT", "DOGEUSDT"}
+	infoMap, _ := mockInfoProvider(pairs)
+
+	result, err := f.Filter(pairs, infoMap)
+	if err != nil {
+		t.Fatalf("filter failed: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("expected 2 pairs, got %d: %v", len(result), result)
+	}
+	assertEq(t, result[0], "SOLUSDT")
+	assertEq(t, result[1], "DOGEUSDT")
+}
+
+func TestOffsetFilterZero(t *testing.T) {
+	f := NewOffsetFilter(0)
+	pairs := []string{"BTCUSDT", "ETHUSDT"}
+	infoMap, _ := mockInfoProvider(pairs)
+
+	result, err := f.Filter(pairs, infoMap)
+	if err != nil {
+		t.Fatalf("filter failed: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("expected 2 pairs, got %d", len(result))
+	}
+}
+
+func TestOffsetFilterTooLarge(t *testing.T) {
+	f := NewOffsetFilter(10)
+	pairs := []string{"BTCUSDT", "ETHUSDT"}
+	infoMap, _ := mockInfoProvider(pairs)
+
+	_, err := f.Filter(pairs, infoMap)
+	if err == nil {
+		t.Fatal("expected error when offset exceeds list length")
+	}
+}
+
+func TestRangeFilter(t *testing.T) {
+	f := NewRangeFilter(1000, 0.1, 10.0) // ref=1000, allow 100-10000
+	pairs := []string{"BTCUSDT", "ETHUSDT", "SOLUSDT", "DOGEUSDT", "SHIBUSDT"}
+	infoMap, _ := mockInfoProvider(pairs)
+
+	result, err := f.Filter(pairs, infoMap)
+	if err != nil {
+		t.Fatalf("filter failed: %v", err)
+	}
+
+	// BTC 50000 (> 10000) excluded, ETH 3000 (in range), SOL 150 (in range)
+	// DOGE 0.15 (< 100) excluded, SHIB 0.00001 (< 100) excluded
+	if len(result) != 2 {
+		t.Fatalf("expected 2 pairs, got %d: %v", len(result), result)
+	}
+}
+
+func TestRangeFilterNoReference(t *testing.T) {
+	f := NewRangeFilter(0, 0.5, 2.0) // ref=0, no filtering
+	pairs := []string{"BTCUSDT", "ETHUSDT"}
+	infoMap, _ := mockInfoProvider(pairs)
+
+	result, err := f.Filter(pairs, infoMap)
+	if err != nil {
+		t.Fatalf("filter failed: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("expected 2 pairs, got %d", len(result))
+	}
+}
+
+func TestLowProfitPairsFilter(t *testing.T) {
+	f := NewLowProfitPairsFilter(2.0) // min volatility 2%
+	pairs := []string{"BTCUSDT", "ETHUSDT", "SOLUSDT", "DOGEUSDT", "SHIBUSDT"}
+	infoMap, _ := mockInfoProvider(pairs)
+
+	result, err := f.Filter(pairs, infoMap)
+	if err != nil {
+		t.Fatalf("filter failed: %v", err)
+	}
+
+	// ETH 1.8 excluded (< 2.0); BTC 2.5, SOL 5.0, DOGE 3.0, SHIB 4.0 pass
+	if len(result) != 4 {
+		t.Fatalf("expected 4 pairs, got %d: %v", len(result), result)
+	}
+}
+
+func TestVolumeFilter(t *testing.T) {
+	f := NewVolumeFilter(100_000_001) // min 100M+1 volume (strictly above 100M)
+	pairs := []string{"BTCUSDT", "ETHUSDT", "SOLUSDT", "DOGEUSDT", "SHIBUSDT"}
+	infoMap, _ := mockInfoProvider(pairs)
+
+	result, err := f.Filter(pairs, infoMap)
+	if err != nil {
+		t.Fatalf("filter failed: %v", err)
+	}
+
+	// BTC 1B, ETH 500M pass; SOL exactly 100M fails, DOGE 50M, SHIB 10M fail
+	if len(result) != 2 {
+		t.Fatalf("expected 2 pairs, got %d: %v", len(result), result)
+	}
+}
+
+func TestVolumeFilterZero(t *testing.T) {
+	f := NewVolumeFilter(0) // no filtering
+	pairs := []string{"BTCUSDT", "ETHUSDT"}
+	infoMap, _ := mockInfoProvider(pairs)
+
+	result, err := f.Filter(pairs, infoMap)
+	if err != nil {
+		t.Fatalf("filter failed: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("expected 2 pairs, got %d", len(result))
+	}
+}
+
+func TestChangeFilter(t *testing.T) {
+	f := NewChangeFilter(1.0, 4.0) // allow volatility 1% to 4%
+	pairs := []string{"BTCUSDT", "ETHUSDT", "SOLUSDT", "DOGEUSDT", "SHIBUSDT"}
+	infoMap, _ := mockInfoProvider(pairs)
+
+	result, err := f.Filter(pairs, infoMap)
+	if err != nil {
+		t.Fatalf("filter failed: %v", err)
+	}
+
+	// BTC 2.5, ETH 1.8, DOGE 3.0, SHIB 4.0 pass; SOL 5.0 fails (> 4.0)
+	if len(result) != 4 {
+		t.Fatalf("expected 4 pairs, got %d: %v", len(result), result)
+	}
+}
+
+func TestRankFilter(t *testing.T) {
+	f := NewRankFilter(3, 0.5, 0.5)
+	pairs := []string{"BTCUSDT", "ETHUSDT", "SOLUSDT", "DOGEUSDT", "SHIBUSDT"}
+	infoMap, _ := mockInfoProvider(pairs)
+
+	result, err := f.Filter(pairs, infoMap)
+	if err != nil {
+		t.Fatalf("filter failed: %v", err)
+	}
+
+	if len(result) != 3 {
+		t.Fatalf("expected 3 pairs, got %d: %v", len(result), result)
+	}
+
+	// Top 3 by composite score (volume + volatility):
+	// BTC: 1B*0.5 + 2.5*0.5 = 500M + 1.25 = very high
+	// ETH: 500M*0.5 + 1.8*0.5 = 250M + 0.9
+	// SOL: 100M*0.5 + 5.0*0.5 = 50M + 2.5
+	// BTC should be #1
+	assertEq(t, result[0], "BTCUSDT")
+}
+
+func TestRankFilterEmpty(t *testing.T) {
+	f := NewRankFilter(5, 0.5, 0.5)
+	result, err := f.Filter([]string{}, nil)
+	if err != nil {
+		t.Fatalf("filter failed: %v", err)
+	}
+	if len(result) != 0 {
+		t.Fatalf("expected 0 pairs, got %d", len(result))
+	}
+}
+
 /* ── Helpers ─────────────────────────────────────────────────── */
 
 func assertEq[T comparable](t *testing.T, got, want T, msg ...string) {

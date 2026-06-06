@@ -1,0 +1,107 @@
+site_name: 小天量化交易系统
+site_url: https://xiaotian-quant.github.io/docs
+site_description: 小天量化交易系统 - 专业级量化交易基础设施文档
+site_author: XiaoTian Quant Team
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+
+plugins:
+  - search
+  - minify:
+      minify_html: true
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - admonition
+  - pymdownx.details
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/xiaotian-quant
+    - icon: fontawesome/brands/docker
+      link: https://hub.docker.com/r/xiaotianquant
+  version:
+    provider: mike
+
+nav:
+  - 首页: index.md
+  - 快速开始:
+    - 安装部署: quickstart/installation.md
+    - 环境配置: quickstart/configuration.md
+    - 第一个策略: quickstart/first-strategy.md
+  - 架构设计:
+    - 系统概览: architecture/overview.md
+    - Go 网关: architecture/gateway.md
+    - Rust 撮合引擎: architecture/engine.md
+    - React 前端: architecture/frontend.md
+    - AI 多智能体: architecture/ai-agents.md
+  - 策略开发:
+    - 策略框架: strategy/framework.md
+    - 参数系统: strategy/parameters.md
+    - 内置策略: strategy/built-in.md
+    - 回测引擎: strategy/backtest.md
+    - 参数优化: strategy/hyperopt.md
+  - 数据管理:
+    - 历史数据: data/historical.md
+    - 实时数据流: data/websocket.md
+    - 数据导出: data/export.md
+    - 增量更新: data/incremental.md
+  - 风控系统:
+    - 12维风控: risk/overview.md
+    - Protection 机制: risk/protection.md
+    - 仓位管理: risk/position.md
+  - 机器学习:
+    - 特征工程: ml/features.md
+    - 训练管道: ml/pipeline.md
+    - 在线学习: ml/online-learning.md
+    - 漂移检测: ml/drift-detection.md
+    - 集成投票: ml/ensemble.md
+  - API 文档:
+    - 认证: api/auth.md
+    - 策略 API: api/strategies.md
+    - 交易 API: api/trading.md
+    - 数据 API: api/data.md
+    - ML API: api/ml.md
+    - 社区 API: api/community.md
+  - 部署运维:
+    - Docker 部署: deploy/docker.md
+    - CI/CD: deploy/cicd.md
+    - 监控告警: deploy/monitoring.md
+  - 开发指南:
+    - 贡献指南: dev/contributing.md
+    - 代码规范: dev/code-style.md
+    - 测试指南: dev/testing.md

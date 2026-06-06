@@ -95,10 +95,7 @@ export function ModelManagement() {
   // Queries
   const { data: models, isLoading: modelsLoading } = useQuery({
     queryKey: ['ml-models'],
-    queryFn: async () => {
-      const res = await mlApi.list()
-      return (res as any).models as ModelInfo[]
-    },
+    queryFn: () => mlApi.list(),
   })
 
   const { data: health, isLoading: healthLoading } = useQuery({
@@ -134,7 +131,7 @@ export function ModelManagement() {
     })
   }, [trainConfig, trainMutation])
 
-  const isHealthy = (health as any)?.status === 'healthy'
+  const isHealthy = health?.status === 'healthy'
 
   return (
     <div className="h-full overflow-y-auto">
@@ -300,16 +297,16 @@ export function ModelManagement() {
             </div>
             {trainMutation.isError && (
               <div className="mt-3 p-3 rounded-md bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
-                训练失败: {(trainMutation.error as any)?.message || '未知错误'}
+                训练失败: {trainMutation.error?.message || '未知错误'}
               </div>
             )}
             {trainMutation.isSuccess && (
               <div className="mt-3 p-3 rounded-md bg-green-500/10 border border-green-500/20 text-green-400 text-sm">
                 <CheckCircle2 className="w-4 h-4 inline mr-1" />
-                模型 {(trainMutation.data as any)?.model_id} 训练成功！
-                耗时 {(trainMutation.data as any)?.duration_ms}ms，
-                加载 {(trainMutation.data as any)?.bars_loaded} 条 K线，
-                生成 {(trainMutation.data as any)?.features_generated} 个特征样本
+                模型 {trainMutation.data?.model_id} 训练成功！
+                耗时 {trainMutation.data?.duration_ms}ms，
+                加载 {trainMutation.data?.bars_loaded} 条 K线，
+                生成 {trainMutation.data?.features_generated} 个特征样本
               </div>
             )}
           </SectionCard>
@@ -415,10 +412,11 @@ export function ModelManagement() {
                         <button
                           onClick={async () => {
                             try {
-                              const res = await mlApi.importance(model.model_id) as any
+                              const res = await mlApi.importance(model.model_id)
                               alert(`特征重要性:\n${JSON.stringify(res.importance?.slice(0, 10), null, 2)}`)
-                            } catch (e: any) {
-                              alert('获取特征重要性失败: ' + e.message)
+                            } catch (e: unknown) {
+                              const err = e instanceof Error ? e : new Error(String(e))
+                              alert('获取特征重要性失败: ' + err.message)
                             }
                           }}
                           className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-quant-bg-secondary text-xs font-medium hover:bg-white/5 transition-colors"
@@ -433,10 +431,11 @@ export function ModelManagement() {
                                 model_id: model.model_id,
                                 strategy_id: 'ml_strategy_' + Date.now(),
                                 symbol: 'BTCUSDT',
-                              }) as any
+                              })
                               alert(`部署成功: ${JSON.stringify(res, null, 2)}`)
-                            } catch (e: any) {
-                              alert('部署失败: ' + e.message)
+                            } catch (e: unknown) {
+                              const err = e instanceof Error ? e : new Error(String(e))
+                              alert('部署失败: ' + err.message)
                             }
                           }}
                           className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-quant-gold/10 text-quant-gold text-xs font-medium hover:bg-quant-gold/20 transition-colors"

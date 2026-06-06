@@ -6,6 +6,7 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { SectionCard } from '@/components/ui/SectionCard'
 import { KPICard } from '@/components/ui/KPICard'
 import { communityApi, indicatorApi } from '@/lib/api'
+import type { IndicatorItem } from '@/types'
 import {
   Plus,
   TrendingUp,
@@ -24,6 +25,7 @@ import {
   CheckCircle2,
   Clock,
   XCircle,
+  type LucideIcon,
 } from 'lucide-react'
 
 /* ── Types ───────────────────────────────────────────────────────── */
@@ -61,7 +63,7 @@ function formatDate(ts?: number) {
   return new Date(ts * 1000).toLocaleDateString('zh-CN')
 }
 
-const STATUS_META: Record<string, { label: string; class: string; icon: any }> = {
+const STATUS_META: Record<string, { label: string; class: string; icon: LucideIcon }> = {
   draft: { label: '草稿', class: 'bg-quant-bg-tertiary text-muted-foreground', icon: Clock },
   pending: { label: '审核中', class: 'bg-amber-500/10 text-amber-400', icon: Clock },
   approved: { label: '已上架', class: 'bg-quant-green/10 text-quant-green', icon: CheckCircle2 },
@@ -190,15 +192,14 @@ export function AuthorDashboard() {
 
   useEffect(() => {
     setLoading(true)
-    indicatorApi.list().then((res: any) => {
-      const list = Array.isArray(res) ? res : (res?.data || [])
-      // Mock status/revenue for demo since backend may not return them
-      const enriched = (Array.isArray(list) ? list : []).map((item: any) => ({
+    indicatorApi.list().then((res: IndicatorItem[]) => {
+      const list = Array.isArray(res) ? res : []
+      const enriched = list.map((item) => ({
         ...item,
-        status: item.review_status || item.status || 'approved',
+        status: (item.review_status || item.status || 'approved') as AuthorIndicator['status'],
         revenue: item.revenue || (item.purchase_count || 0) * (item.price || 0),
       }))
-      setIndicators(enriched)
+      setIndicators(enriched as unknown as AuthorIndicator[])
     }).catch(() => {
       setIndicators([])
     }).finally(() => setLoading(false))
@@ -226,8 +227,9 @@ export function AuthorDashboard() {
     try {
       await indicatorApi.delete(id)
       setIndicators((prev) => prev.filter((i) => i.id !== id))
-    } catch (e: any) {
-      alert(e.message || '删除失败')
+    } catch (e: unknown) {
+      const err = e instanceof Error ? e : new Error(String(e))
+      alert(err.message || '删除失败')
     }
   }
 

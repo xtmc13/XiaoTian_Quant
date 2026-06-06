@@ -46,7 +46,11 @@ func InitDB() error {
 	if err != nil {
 		return err
 	}
-	db.SetMaxOpenConns(1)
+	// WAL mode allows concurrent reads; set reasonable pool limits.
+	// Writes are still serialized by SQLite, but reads can overlap.
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(time.Hour)
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS xt_users (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,22 +95,33 @@ func InitDB() error {
 		fmt.Fprintf(os.Stderr, "╚══════════════════════════════════════════════════════════╝\n\n")
 	}
 
+	// ── JWT Secret ──
+	// Priority: 1) SECRET_KEY env  2) /app/data/.jwt_secret file  3) generate & persist (dev only)
+	jwtSecret = os.Getenv("SECRET_KEY")
+	if jwtSecret == "" {
+		secretFile := "/app/data/.jwt_secret"
+		if data, err := os.ReadFile(secretFile); err == nil && len(data) > 0 {
+			jwtSecret = string(data)
+		} else {
+			// Production safety: refuse to start without an explicit secret.
+			if os.Getenv("APP_ENV") == "production" || os.Getenv("GIN_MODE") == "release" {
+				return fmt.Errorf("SECRET_KEY environment variable is required in production; set it or mount a persistent %s", secretFile)
+			}
+			jwtSecret = randomHex(32)
+			if err := os.WriteFile(secretFile, []byte(jwtSecret), 0600); err != nil {
+				fmt.Fprintf(os.Stderr, "\n⚠  WARNING: Failed to persist JWT secret to %s: %v\n", secretFile, err)
+			}
+			fmt.Fprintf(os.Stderr, "\n⚠  WARNING: SECRET_KEY not set in environment.\n")
+			fmt.Fprintf(os.Stderr, "   A random key was generated and persisted to %s.\n", secretFile)
+			fmt.Fprintf(os.Stderr, "   Set SECRET_KEY in .env to override.\n\n")
+		}
+	}
+
 	if configPath == "" {
 		configPath = "/app/data/config.yaml"
 	}
 	if strategyConfigsPath == "" {
 		strategyConfigsPath = "/app/data/strategy_configs.json"
-	}
-
-	jwtSecret = os.Getenv("SECRET_KEY")
-	if jwtSecret == "" {
-		jwtSecret = randomHex(32)
-		os.Setenv("SECRET_KEY", jwtSecret)
-		fmt.Fprintf(os.Stderr, "\n⚠  WARNING: SECRET_KEY not set in environment.\n")
-		fmt.Fprintf(os.Stderr, "   A random key was generated for this session.\n")
-		fmt.Fprintf(os.Stderr, "   All JWT tokens will be invalidated on next restart.\n")
-		fmt.Fprintf(os.Stderr, "   Set SECRET_KEY in .env to persist:\n")
-		fmt.Fprintf(os.Stderr, "     SECRET_KEY=%s\n\n", jwtSecret)
 	}
 
 	// Run schema migrations

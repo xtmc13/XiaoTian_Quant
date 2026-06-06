@@ -1,31 +1,23 @@
 import { useState, useEffect, useCallback } from 'react'
+import { DataTable } from '@/components/DataTable'
 import { adminApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import type { AdminUser, AdminStats, AdminAuditLog } from '@/types'
 import {
   Users, UserCheck, Shield, Loader2, AlertCircle, CheckCircle,
   Edit3, X, RefreshCw, UserX, UserCog, FileText, Cpu, Activity,
   Database, Zap, Clock, HardDrive
 } from 'lucide-react'
 
-interface UserRecord {
-  id: number; username: string; nickname: string; email: string
-  role: string; is_active: number; created_at: string
-}
-
-interface AdminStats {
-  total_users: number; active_users: number
-  admin_count: number; user_count: number
-}
-
 export function UserManage() {
-  const [users, setUsers] = useState<UserRecord[]>([])
+  const [users, setUsers] = useState<AdminUser[]>([])
   const [stats, setStats] = useState<AdminStats | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
 
   // Edit modal state
-  const [editing, setEditing] = useState<UserRecord | null>(null)
+  const [editing, setEditing] = useState<AdminUser | null>(null)
   const [editNickname, setEditNickname] = useState('')
   const [editEmail, setEditEmail] = useState('')
   const [editRole, setEditRole] = useState('')
@@ -33,8 +25,8 @@ export function UserManage() {
   const [saving, setSaving] = useState(false)
   const [activeTab, setActiveTab] = useState<'users' | 'audit' | 'system'>('users')
   // Enhanced stats
-  const [sysStats, setSysStats] = useState<any>(null)
-  const [auditLog, setAuditLog] = useState<any[]>([])
+  const [sysStats, setSysStats] = useState<AdminStats | null>(null)
+  const [auditLog, setAuditLog] = useState<AdminAuditLog[]>([])
   const [auditTotal, setAuditTotal] = useState(0)
 
   const fetchData = useCallback(async () => {
@@ -43,8 +35,9 @@ export function UserManage() {
       const [u, s] = await Promise.all([adminApi.users(), adminApi.stats()])
       setUsers(u)
       setStats(s)
-    } catch (e: any) {
-      setError(e.message || '加载失败')
+    } catch (e: unknown) {
+      const err = e instanceof Error ? e : new Error(String(e))
+      setError(err.message || '加载失败')
     } finally {
       setLoading(false)
     }
@@ -59,8 +52,8 @@ export function UserManage() {
         adminApi.auditLog({ limit: 50 }).catch(() => null),
       ])
       if (s) setSysStats(s)
-      if (a) { setAuditLog(a.entries || []); setAuditTotal(a.total || 0) }
-    } catch {}
+      if (a) { setAuditLog(a.logs || []); setAuditTotal(a.total || 0) }
+    } catch { /* ignore */ }
   }, [])
 
   useEffect(() => {
@@ -69,12 +62,12 @@ export function UserManage() {
 
   const showMsg = (msg: string) => { setSuccess(msg); setTimeout(() => setSuccess(''), 3000) }
 
-  const openEdit = (u: UserRecord) => {
+  const openEdit = (u: AdminUser) => {
     setEditing(u)
     setEditNickname(u.nickname || '')
     setEditEmail(u.email || '')
     setEditRole(u.role || 'user')
-    setEditActive(u.is_active)
+    setEditActive(u.is_active ?? 1)
     setError('')
   }
 
@@ -91,7 +84,7 @@ export function UserManage() {
       showMsg('用户已更新')
       setEditing(null)
       fetchData()
-    } catch (e: any) { setError(e.message || '保存失败') }
+    } catch (e: unknown) { const err = e instanceof Error ? e : new Error(String(e)); setError(err.message || '保存失败') }
     finally { setSaving(false) }
   }
 
@@ -186,96 +179,58 @@ export function UserManage() {
             <span className="text-sm font-medium">操作记录</span>
             <span className="text-xs text-muted-foreground">共 {auditTotal} 条</span>
           </div>
-          {auditLog.length === 0 ? (
-            <div className="px-4 py-12 text-center text-muted-foreground text-sm">暂无操作记录</div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b border-quant-border text-left text-muted-foreground">
-                    <th className="px-4 py-2">ID</th>
-                    <th className="px-4 py-2">操作者</th>
-                    <th className="px-4 py-2">操作</th>
-                    <th className="px-4 py-2">详情</th>
-                    <th className="px-4 py-2">时间</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {auditLog.map((e: any) => (
-                    <tr key={e.id} className="border-b border-quant-border/30 hover:bg-white/[0.02]">
-                      <td className="px-4 py-2 text-muted-foreground">{e.id}</td>
-                      <td className="px-4 py-2 font-medium">{e.actor}</td>
-                      <td className="px-4 py-2">
-                        <span className="px-1.5 py-0.5 rounded text-[10px] bg-blue-500/10 text-blue-400">{e.action}</span>
-                      </td>
-                      <td className="px-4 py-2 text-muted-foreground max-w-[300px] truncate">{e.detail}</td>
-                      <td className="px-4 py-2 text-muted-foreground">
-                        {e.created_at ? new Date(e.created_at * 1000).toLocaleString('zh-CN') : '-'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+          <DataTable<AdminAuditLog>
+            data={auditLog}
+            columns={[
+              { key: 'id', title: 'ID', render: (e) => e.id },
+              { key: 'actor', title: '操作者', render: (e) => <span className="font-medium">{e.actor}</span> },
+              { key: 'action', title: '操作', render: (e) => <span className="px-1.5 py-0.5 rounded text-[10px] bg-blue-500/10 text-blue-400">{e.action}</span> },
+              { key: 'detail', title: '详情', render: (e) => <span className="max-w-[300px] truncate">{e.detail}</span> },
+              { key: 'time', title: '时间', render: (e) => e.created_at ? new Date(e.created_at * 1000).toLocaleString('zh-CN') : '-' },
+            ]}
+            keyExtractor={(e) => String(e.id)}
+            emptyText="暂无操作记录"
+          />
         </div>
       )}
 
       {/* ── User Table ── */}
-      {activeTab === 'users' && (<>
-      <div className="rounded-xl border border-quant-border bg-quant-bg-secondary overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-quant-border text-left text-xs text-muted-foreground">
-                <th className="px-4 py-3">ID</th>
-                <th className="px-4 py-3">用户名</th>
-                <th className="px-4 py-3">邮箱</th>
-                <th className="px-4 py-3">角色</th>
-                <th className="px-4 py-3">状态</th>
-                <th className="px-4 py-3">注册时间</th>
-                <th className="px-4 py-3 w-20">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {users.map(u => (
-                <tr key={u.id} className="border-b border-quant-border/50 hover:bg-white/[0.02]">
-                  <td className="px-4 py-3 text-muted-foreground">{u.id}</td>
-                  <td className="px-4 py-3 text-white font-medium">{u.username}</td>
-                  <td className="px-4 py-3 text-muted-foreground">{u.email || '-'}</td>
-                  <td className="px-4 py-3">
-                    <span className={cn('px-2 py-0.5 rounded text-[10px] font-medium',
-                      u.role === 'admin' ? 'bg-quant-gold/20 text-quant-gold' : 'bg-blue-500/10 text-blue-400')}>
-                      {roleLabel(u.role)}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className={cn('px-2 py-0.5 rounded text-[10px] font-medium',
-                      u.is_active === 1 ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400')}>
-                      {u.is_active === 1 ? '正常' : '禁用'}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground text-xs">{u.created_at?.slice(0, 10)}</td>
-                  <td className="px-4 py-3">
-                    <button onClick={() => openEdit(u)}
-                      className="p-1.5 rounded text-muted-foreground hover:text-white hover:bg-white/10">
-                      <Edit3 className="h-3.5 w-3.5" />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {users.length === 0 && (
-                <tr><td colSpan={7} className="px-4 py-12 text-center text-muted-foreground">暂无用户数据</td></tr>
-              )}
-            </tbody>
-          </table>
+      {activeTab === 'users' && (
+        <div className="rounded-xl border border-quant-border bg-quant-bg-secondary overflow-hidden">
+          <DataTable<AdminUser>
+            data={users}
+            columns={[
+              { key: 'id', title: 'ID', render: (u) => <span className="text-muted-foreground">{u.id}</span> },
+              { key: 'username', title: '用户名', render: (u) => <span className="text-white font-medium">{u.username}</span> },
+              { key: 'email', title: '邮箱', render: (u) => <span className="text-muted-foreground">{u.email || '-'}</span> },
+              { key: 'role', title: '角色', render: (u) => (
+                <span className={cn('px-2 py-0.5 rounded text-[10px] font-medium',
+                  u.role === 'admin' ? 'bg-quant-gold/20 text-quant-gold' : 'bg-blue-500/10 text-blue-400')}>
+                  {roleLabel(u.role)}
+                </span>
+              )},
+              { key: 'status', title: '状态', render: (u) => (
+                <span className={cn('px-2 py-0.5 rounded text-[10px] font-medium',
+                  u.is_active === 1 ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400')}>
+                  {u.is_active === 1 ? '正常' : '禁用'}
+                </span>
+              )},
+              { key: 'created', title: '注册时间', render: (u) => <span className="text-muted-foreground text-xs">{u.created_at?.slice(0, 10)}</span> },
+              { key: 'action', title: '操作', render: (u) => (
+                <button onClick={() => openEdit(u)}
+                  className="p-1.5 rounded text-muted-foreground hover:text-white hover:bg-white/10">
+                  <Edit3 className="h-3.5 w-3.5" />
+                </button>
+              )},
+            ]}
+            keyExtractor={(u) => String(u.id)}
+            emptyText="暂无用户数据"
+          />
         </div>
-      </div>
-
-      </>)}
+      )}
       {/* Edit modal */}
       {editing && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setEditing(null)}>
+        <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setEditing(null)}>
           <div className="w-full max-w-md rounded-xl border border-quant-border bg-quant-bg p-6 space-y-4" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-semibold text-white">编辑用户 — {editing.username}</h3>
