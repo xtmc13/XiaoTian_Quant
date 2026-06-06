@@ -238,9 +238,9 @@ func TestDownloaderGetJobMissing(t *testing.T) {
 	dtAssert(t, job == nil, "nil for missing job")
 }
 
-func TestDownloaderInvalidConfig(t *testing.T) {
+func TestDownloaderStartDownloadDisabled(t *testing.T) {
 	s := NewStorage()
 	d := NewDownloader(s)
 	_, err := d.StartDownload(DownloadConfig{})
-	dtAssert(t, err != nil, "empty config should error")
+	dtAssert(t, err != nil, "StartDownload should return error because network download is disabled")
 }

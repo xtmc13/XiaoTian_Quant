@@ -112,7 +112,7 @@ func StartHyperopt(c *gin.Context) {
 	if len(bars) < 50 {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":  "数据不足",
-			"detail": fmt.Sprintf("本地存储中 %s %s 仅有 %d 根K线，至少需要 50 根。请先调用 /api/data/download 下载历史数据", body.Symbol, body.Interval, len(bars)),
+			"detail": fmt.Sprintf("本地存储中 %s %s 仅有 %d 根K线，至少需要 50 根。请通过数据导入功能或数据库 seeding 预先加载数据", body.Symbol, body.Interval, len(bars)),
 		})
 		return
 	}

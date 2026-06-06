@@ -35,7 +35,7 @@ const TABS = [
   { key: 'strategy', label: '策略管理', icon: FolderOpen },
   { key: 'code', label: '代码编辑器', icon: Code },
   { key: 'freqtrade', label: 'ML 策略', icon: FlaskConical },
-  { key: 'dinger', label: 'QuantDinger AI', icon: MessageSquare },
+  { key: 'dinger', label: 'AI 策略生成器', icon: MessageSquare },
 ] as const
 
 const MODELS = [
@@ -89,7 +89,7 @@ export function Strategy() {
         {tab === 'strategy' && <StrategyManagementTab />}
         {tab === 'code' && <StrategyEditor />}
         {tab === 'freqtrade' && <MLStrategyTab />}
-        {tab === 'dinger' && <QuantDingerAITab />}
+        {tab === 'dinger' && <AIStrategyGeneratorTab />}
       </div>
     </div>
   )
@@ -356,14 +356,14 @@ function MLStrategyTab() {
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   QuantDinger AI Tab
+   AI 策略生成器 Tab
    ═══════════════════════════════════════════════════════════════ */
-function QuantDingerAITab() {
+function AIStrategyGeneratorTab() {
   const [model, setModel] = useState('gpt-4o')
   const [voting, setVoting] = useState(false)
   const [confidence, setConfidence] = useState(78)
   const [messages, setMessages] = useState<ChatMessage[]>([
-    { role: 'bot', content: '你好！描述你的交易思路，我来帮你生成量化丁格策略。\n\n例如："做一个BTC的网格策略，震荡区间30000-40000"' },
+    { role: 'bot', content: '你好！描述你的交易思路，我来帮你生成量化策略。\n\n例如："做一个BTC的网格策略，震荡区间30000-40000"' },
   ])
   const [input, setInput] = useState('')
   const [codeWorkspace, setCodeWorkspace] = useState(`class GridStrategy:\n    def on_init(self, ctx):\n        ctx.param('upper', 40000)\n        ctx.param('lower', 30000)\n        ctx.param('grids', 20)\n\n    def on_bar(self, ctx, bar):\n        price = bar.close\n        step = (self.upper - self.lower) / (self.grids - 1)\n        level = int((price - self.lower) / step)\n        # ...`)
@@ -395,7 +395,7 @@ function QuantDingerAITab() {
       <div className="flex items-center justify-between px-6 py-3 border-b border-quant-border bg-quant-bg-secondary shrink-0 flex-wrap gap-3">
         <div className="flex items-center gap-2">
           <BrainCircuit className="w-4 h-4 text-quant-gold" />
-          <span className="font-semibold text-sm">QuantDinger AI · 策略生成器</span>
+          <span className="font-semibold text-sm">AI 策略生成器</span>
         </div>
         <div className="flex items-center gap-3">
           <select value={model} onChange={(e) => setModel(e.target.value)} className="bg-quant-bg border border-quant-border rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-quant-gold">

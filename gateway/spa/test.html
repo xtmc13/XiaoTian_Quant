@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <title>Test Page</title>
+</head>
+<body class="bg-quant-bg text-foreground antialiased">
+  <div id="root">ROOT</div>
+  <script>
+    console.log('Test page loaded');
+    document.getElementById('root').textContent = 'JavaScript works!';
+    
+    // Check localStorage for corrupt data
+    try {
+      const auth = localStorage.getItem('xt-auth');
+      document.getElementById('root').textContent += '\nxt-auth: ' + (auth ? 'found (' + auth.length + ' bytes)' : 'not found');
+    } catch(e) {
+      document.getElementById('root').textContent += '\nlocalStorage error: ' + e.message;
+    }
+  </script>
+</body>
+</html>

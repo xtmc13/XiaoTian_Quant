@@ -1,5 +1,5 @@
 /**
- * Indicator IDE — QuantDinger-style split-panel layout with I/O contract.
+ * Indicator IDE — XiaoTianQuant-style split-panel layout with I/O contract.
  * Code editor (left) + Chart/Backtest workspace (right).
  */
 import { useState, useEffect, useCallback, useMemo } from 'react'

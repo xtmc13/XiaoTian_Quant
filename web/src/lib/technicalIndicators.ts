@@ -1,6 +1,6 @@
 /**
  * Built-in chart indicators — aligned with CN terminals (同花顺 / 东方财富) where applicable.
- * Ported from QuantDinger reference (QuantDinger-Vue/src/utils/technicalIndicators.js).
+ * Ported from XiaoTianQuant reference (XiaoTianQuant-Vue/src/utils/technicalIndicators.js).
  *
  * Conventions:
  * - EMA / MACD: SMA seed for first period, then standard EMA multiplier 2/(n+1)

@@ -19,3 +19,24 @@ export function formatPercent(val: number): string {
 export function classNames(...classes: (string | false | null | undefined)[]) {
   return classes.filter(Boolean).join(' ')
 }
+
+/* ── Currency Converter ── */
+let conversionRate = 7.25
+let preferredCurrency = 'CNY'
+const currencySymbols: Record<string, string> = {
+  CNY: '¥', USD: '$', EUR: '€', GBP: '£', JPY: '¥',
+  KRW: '₩', HKD: 'HK$', TWD: 'NT$', SGD: 'S$', AUD: 'A$',
+}
+export const getConversionRate = () => conversionRate
+export const getPreferredCurrency = () => preferredCurrency
+export const getCurrencySymbol = () => currencySymbols[preferredCurrency] || preferredCurrency
+export const formatConverted = (usd: number) => {
+  const converted = usd * conversionRate
+  const sym = currencySymbols[preferredCurrency] || (preferredCurrency + ' ')
+  if (preferredCurrency === 'USD') return `$${converted.toFixed(2)}`
+  return `${sym}${converted.toFixed(2)}`
+}
+export const setConversion = (rate: number, currency: string) => {
+  conversionRate = rate
+  preferredCurrency = currency
+}

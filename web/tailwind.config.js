@@ -41,7 +41,7 @@ export default {
           DEFAULT: 'hsl(var(--card))',
           foreground: 'hsl(var(--card-foreground))',
         },
-        /* ── QuantDinger Pure Black Palette ── */
+        /* ── XiaoTianQuant Pure Black Palette ── */
         quant: {
           bg: '#0a0a0a',
           'bg-secondary': '#111111',

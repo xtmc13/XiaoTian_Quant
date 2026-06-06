@@ -1175,7 +1175,7 @@ export interface RLJobProgress {
 }
 
 export interface RLJob {
-  job_id: string
+  id: string
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
   algorithm: string
   n_actions: number

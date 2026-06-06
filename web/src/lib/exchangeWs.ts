@@ -1,5 +1,5 @@
 /**
- * Exchange WebSocket K-line stream client — TypeScript port of QuantDinger exchangeWs.js.
+ * Exchange WebSocket K-line stream client — TypeScript port of XiaoTianQuant exchangeWs.js.
  * Supports: Binance, OKX, Bitget, Bybit, Gate. Falls back to Binance on failure.
  *
  * Features:
