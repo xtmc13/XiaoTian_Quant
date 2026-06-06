@@ -2,7 +2,7 @@
 
 > AI 驱动的多资产量化交易平台 — Go 网关 + React 前端 + Rust 撮合引擎 + Python ML，事件驱动，回测实盘一体。
 >
-> **v3.0 新增**: ML 预测管线 · 纯 Go 本地推理 · RL 环境 · Pairlist · Protection · TrailingStop · Hyperopt · DCA · 策略社区 · Admin 面板 · Telegram/Discord Bot · CCXT Bridge · 8 交易所 · i18n 多语言 · OAuth 登录 · Billing 会员 · 凭证加密 · Edge 分析
+> **v3.0 新增**: ML 预测管线 · 纯 Go 本地推理 · RL 强化学习 · 社交交易 · 链上数据 · 高级订单(OCO/冰山/跟踪) · 套利监控 · Hyperopt 参数优化 · Protection 风控 · Pairlist 交易对筛选 · 策略社区 · Admin 面板 · Indicator IDE · Telegram/Discord Bot · CCXT Bridge · 8 交易所 · i18n 多语言 · OAuth 登录 · Billing 会员 · 凭证加密 · Edge 分析 · TensorBoard 可视化
 
 ## 架构概览
 
@@ -155,14 +155,51 @@ xiaotian_quant/
 
 ## 快速开始
 
+### 🚀 一键安装（推荐）
+
+像 OpenClaw 一样，一行命令完成安装：
+
+**Linux / macOS:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/xtmc13/XiaoTian_Quant/main/install.sh | bash
+```
+
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/xtmc13/XiaoTian_Quant/main/install.ps1 | iex
+```
+
+安装完成后启动：
+```bash
+# Linux/macOS
+cd ~/.xiaotianquant && ./start.sh
+
+# Windows
+cd $env:USERPROFILE\.xiaotianquant
+.\start-all.bat        # CMD
+.\start.ps1            # PowerShell
+```
+
+**自定义安装：**
+```bash
+# 指定安装目录
+curl -fsSL .../install.sh | bash -s -- --dir /opt/xiaotianquant
+
+# 强制从源码构建（不下载预编译包）
+curl -fsSL .../install.sh | bash -s -- --source
+
+# 指定版本
+curl -fsSL .../install.sh | bash -s -- --version v3.0.0
+```
+
 ### 前置条件
 
-- **Go** 1.25+
-- **Node.js** 20+ (仅构建前端时需要)
+- **Go** 1.25+ (仅源码构建时需要)
+- **Node.js** 20+ (仅源码构建时需要)
 - **Rust** (仅构建撮合引擎时需要, 可跳过)
 - **Docker** (可选, 容器化部署)
 
-### 方式一：一键构建 (推荐)
+### 方式一：本地构建
 
 ```bash
 # 构建前端 + Go 网关 → dist/gateway
@@ -271,15 +308,18 @@ REDIS_URL=redis://localhost:6379
 ## 功能特性
 
 ### 交易执行
-- **5 家交易所**: 币安 · OKX · Coinbase · Gate.io · MEXC
+- **8 家交易所**: 币安 · OKX · Coinbase · Gate.io · MEXC · Bybit · KuCoin · Bitget
 - **统一接口**: REST 下单 + WebSocket 实时数据推送
-- **订单类型**: 市价单 · 限价单 · 止损单 · OCO
+- **订单类型**: 市价单 · 限价单 · 止损单 · OCO · 冰山订单 · 跟踪止损 · 策略委托（Bracket）
+- **高级订单管理**: 条件委托、冰山委托、OCO、Bracket 一体化管理
+- **套利监控**: 多交易所价差检测与自动执行
 - **模拟交易**: 内置 Paper Trading，零成本测试
 
 ### 策略引擎
-- **内置策略**: 网格交易 · 突破策略
+- **12 种内置策略**: 网格交易 · 突破策略 · EMA 交叉 · MACD · RSI · 布林带 · ATR  trailing stop · Dual Thrust · Renko · 市场中性套利 · 做市商 · 马丁格尔
 - **自定义策略**: Go 插件式策略运行时
 - **AI 生成**: LLM 辅助策略代码生成与修复
+- **策略组合 (Combo)**: 多策略信号聚合，组合管理
 - **策略生命周期**: 创建 → 回测 → 模拟 → 实盘 → 监控
 
 ### 回测系统
@@ -316,14 +356,24 @@ REDIS_URL=redis://localhost:6379
 
 | 页面 | 功能 |
 |------|------|
-| **仪表盘** | KPI 卡片 · 收益日历 · 排行榜 · 实时摘要 |
-| **交易** | 实时 K 线 · 订单簿深度图 · 下单面板 · 持仓卡片 |
-| **AI** | AI 对话 · 策略生成 · 代码编辑器 · 回测集成 |
-| **策略** | 策略 CRUD · 批量启停 · 模板管理 · 运行日志 |
-| **回测** | 参数配置 · 结果图表 · 交易明细 · 指标分析 |
-| **资产** | 持仓列表 · 盈亏明细 · 历史收益 · 多账户聚合 |
+| **仪表盘** | KPI 卡片 · 收益日历 · 排行榜 · 实时摘要 · 风险卡片 · ML 状态 |
+| **交易** | 实时 K 线 · 订单簿深度图 · 下单面板 · 持仓卡片 · 现货/合约切换 |
+| **AI** | AI 对话 · 策略生成 · 代码编辑器 · 回测集成 · ML 模型管理 |
+| **策略** | 策略 CRUD · 批量启停 · 模板管理 · 运行日志 · 策略组合(Combo) |
+| **指标 IDE** | Python 指标在线编写 · 实时验证 · 沙箱执行 · AI 生成 |
+| **回测** | 参数配置 · 结果图表 · 交易明细 · 指标分析 · Tick 级回测 |
+| **资产** | 持仓列表 · 盈亏明细 · 历史收益 · 多账户聚合 · 收益日历 |
 | **机器人** | 自动化任务 · 网格机器人 · 状态监控 |
-| **设置** | 交易所配置 · AI 模型 · 通知渠道 · 用户管理 |
+| **风控中心** | 12 维度风控配置 · 熔断状态 · 交易对保护 |
+| **交易对筛选** | 多维度 Pairlist 过滤 · 成交量/波动率排序 |
+| **高级订单** | OCO · 冰山 · Bracket · 跟踪止损 一体化管理 |
+| **套利监控** | 多交易所价差实时检测 · 历史套利机会 |
+| **参数优化** | Hyperopt 多目标优化 · 自定义搜索空间 |
+| **社交交易** | 信号提供商 · 跟单配置 · 交易信号广播 |
+| **链上数据** | 链上指标 · 大额转账监控 · 交易所资金流 |
+| **指标市场** | 社区指标发布 · 购买 · 评分 · 评论 |
+| **ML 模型** | 模型训练 · 特征重要性 · 策略部署 |
+| **设置** | 交易所配置 · AI 模型 · 通知渠道 · 用户管理 · 系统默认值 |
 
 ### 通知渠道
 - **邮件** (SMTP)
