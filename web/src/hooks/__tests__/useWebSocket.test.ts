@@ -15,7 +15,7 @@ describe('useWebSocket', () => {
 
     constructor(url: string) {
       this.url = url
-      this.readyState = WebSocket.CONNECTING
+      this.readyState = (globalThis.WebSocket as any).CONNECTING ?? 0
     }
   }
 
@@ -24,15 +24,20 @@ describe('useWebSocket', () => {
 
   beforeEach(() => {
     lastSocket = null
-    OriginalWebSocket = global.WebSocket
-    global.WebSocket = function (url: string) {
+    OriginalWebSocket = globalThis.WebSocket
+    const MockWS = function (url: string) {
       lastSocket = new MockWebSocket(url)
       return lastSocket
     } as any
+    MockWS.CONNECTING = 0
+    MockWS.OPEN = 1
+    MockWS.CLOSING = 2
+    MockWS.CLOSED = 3
+    globalThis.WebSocket = MockWS
   })
 
   afterEach(() => {
-    global.WebSocket = OriginalWebSocket
+    globalThis.WebSocket = OriginalWebSocket
     vi.clearAllMocks()
   })
 

@@ -159,7 +159,11 @@ func (p *TrainingPipeline) loadBars(cfg PipelineConfig) ([]data.OHLCV, error) {
 	}
 
 	// Download from exchange if not in local storage
-	return p.downloader.FetchOHLCV(cfg.Symbol, cfg.Interval, fromMs, toMs)
+	ohlcv, err := p.downloader.FetchOHLCV(cfg.Symbol, cfg.Interval, fromMs, toMs)
+	if err != nil {
+		return nil, fmt.Errorf("无法下载 %s %s 的历史数据（%d天）: %v。请检查网络连接或VPN代理设置", cfg.Symbol, cfg.Interval, cfg.LookbackDays, err)
+	}
+	return ohlcv, nil
 }
 
 // generateFeaturesAndLabels computes feature vectors and labels from OHLCV bars.

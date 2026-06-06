@@ -6,6 +6,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -59,13 +61,56 @@ type Downloader struct {
 	mu         sync.RWMutex
 }
 
-// NewDownloader creates a new data downloader.
+// NewDownloader creates a new data downloader with proxy support.
 func NewDownloader(store *Storage) *Downloader {
+	// Check for proxy settings: HTTP_PROXY env var, or default to user's VPN
+	proxyURL := os.Getenv("HTTP_PROXY")
+	if proxyURL == "" {
+		proxyURL = os.Getenv("http_proxy")
+	}
+	if proxyURL == "" {
+		// Default to common VPN proxy ports
+		for _, addr := range []string{"http://127.0.0.1:7897", "http://127.0.0.1:7890", "http://127.0.0.1:1080", "http://127.0.0.1:10808"} {
+			if testProxy(addr) {
+				proxyURL = addr
+				log.Printf("[data] auto-detected proxy: %s", proxyURL)
+				break
+			}
+		}
+	}
+
+	transport := &http.Transport{}
+	if proxyURL != "" {
+		proxy, err := url.Parse(proxyURL)
+		if err == nil {
+			transport.Proxy = http.ProxyURL(proxy)
+			log.Printf("[data] using proxy: %s", proxyURL)
+		}
+	}
+
 	return &Downloader{
 		store:      store,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		httpClient: &http.Client{Timeout: 30 * time.Second, Transport: transport},
 		jobs:       make(map[string]*DownloadJob),
 	}
+}
+
+// testProxy checks if a proxy is reachable.
+func testProxy(proxyURL string) bool {
+	proxy, err := url.Parse(proxyURL)
+	if err != nil {
+		return false
+	}
+	client := &http.Client{
+		Timeout: 3 * time.Second,
+		Transport: &http.Transport{Proxy: http.ProxyURL(proxy)},
+	}
+	resp, err := client.Get("https://api.binance.com/api/v3/ping")
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode == 200
 }
 
 // StartDownload initiates a download job. Returns the job ID.

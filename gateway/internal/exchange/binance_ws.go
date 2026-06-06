@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
+	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -94,6 +97,8 @@ func (s *BinanceWSStream) connect() {
 	}
 	url := fmt.Sprintf("wss://stream.binance.com:9443/stream?streams=%s", strings.Join(streams, "/"))
 
+	dialer := wsDialer()
+
 	for {
 		select {
 		case <-s.stopCh:
@@ -102,7 +107,7 @@ func (s *BinanceWSStream) connect() {
 		}
 
 		log.Printf("[binance_ws] connecting to %s...", url)
-		conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+		conn, _, err := dialer.Dial(url, nil)
 		if err != nil {
 			log.Printf("[binance_ws] connect failed: %v, retrying in 5s", err)
 			select {
@@ -128,6 +133,64 @@ func (s *BinanceWSStream) connect() {
 			log.Printf("[binance_ws] reconnecting...")
 		}
 	}
+}
+
+// wsDialer creates a websocket dialer that uses the system proxy
+// or auto-detected proxy (e.g., Clash/SS/V2Ray on common ports).
+func wsDialer() *websocket.Dialer {
+	// Check environment variables first
+	proxyURL := os.Getenv("HTTP_PROXY")
+	if proxyURL == "" {
+		proxyURL = os.Getenv("http_proxy")
+	}
+	if proxyURL == "" {
+		proxyURL = os.Getenv("HTTPS_PROXY")
+	}
+	if proxyURL == "" {
+		proxyURL = os.Getenv("https_proxy")
+	}
+	if proxyURL == "" {
+		// Try common proxy ports
+		for _, addr := range []string{"http://127.0.0.1:7897", "http://127.0.0.1:7890", "http://127.0.0.1:1080", "http://127.0.0.1:10808"} {
+			if testProxy(addr) {
+				proxyURL = addr
+				log.Printf("[binance_ws] auto-detected proxy: %s", proxyURL)
+				break
+			}
+		}
+	}
+
+	dialer := websocket.DefaultDialer
+	if proxyURL != "" {
+		proxy, err := url.Parse(proxyURL)
+		if err == nil {
+			dialer = &websocket.Dialer{
+				Proxy:            http.ProxyURL(proxy),
+				HandshakeTimeout: 10 * time.Second,
+			}
+			log.Printf("[binance_ws] using proxy: %s", proxyURL)
+		}
+	}
+	dialer.HandshakeTimeout = 10 * time.Second
+	return dialer
+}
+
+// testProxy checks if a proxy is reachable.
+func testProxy(proxyURL string) bool {
+	proxy, err := url.Parse(proxyURL)
+	if err != nil {
+		return false
+	}
+	client := &http.Client{
+		Transport: &http.Transport{Proxy: http.ProxyURL(proxy)},
+		Timeout:   2 * time.Second,
+	}
+	resp, err := client.Get("http://www.gstatic.com/generate_204")
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return true
 }
 
 func (s *BinanceWSStream) readLoop(conn *websocket.Conn) {

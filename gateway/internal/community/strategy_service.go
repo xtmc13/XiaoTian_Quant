@@ -3,6 +3,7 @@ package community
 import (
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -35,6 +36,9 @@ type StrategyItem struct {
 	IsOwn         bool    `json:"is_own"`
 	CreatedAt     int64   `json:"created_at"`
 	UpdatedAt     int64   `json:"updated_at"`
+	// KPI & Overfit
+	KPIScore    *KPIScore    `json:"kpi_score,omitempty"`
+	OverfitRisk *OverfitResult `json:"overfit_risk,omitempty"`
 }
 
 // StrategyComment is a user comment on a strategy.
@@ -371,6 +375,68 @@ func (s *Service) RateStrategy(strategyID, userID, rating int) error {
 
 // GetStrategyLeaderboard returns top strategies by a metric.
 func (s *Service) GetStrategyLeaderboard(sortBy string, limit int) ([]StrategyItem, error) {
+	if limit < 1 || limit > 50 {
+		limit = 10
+	}
+	if sortBy == "kpi" {
+		items, _, err := s.GetMarketStrategies(0, 1, 200, "", "")
+		if err != nil {
+			return nil, err
+		}
+		for i := range items {
+			overfit := ComputeOverfitRisk(items[i].TotalReturn, items[i].SharpeRatio, items[i].MaxDrawdown, items[i].TotalTrades, 0.7)
+			items[i].OverfitRisk = overfit
+			items[i].KPIScore = CalculateKPIScore(&items[i], overfit)
+		}
+		sort.Slice(items, func(i, j int) bool {
+			return items[i].KPIScore.TotalScore > items[j].KPIScore.TotalScore
+		})
+		if limit < len(items) {
+			items = items[:limit]
+		}
+		return items, nil
+	}
 	items, _, err := s.GetMarketStrategies(0, 1, limit, "", sortBy)
 	return items, err
+}
+
+// GetTrendingStrategies returns recently popular strategies.
+func (s *Service) GetTrendingStrategies(limit int) ([]StrategyItem, error) {
+	db := store.GetDB()
+	if db == nil {
+		return nil, nil
+	}
+	ensureStrategyTables()
+	if limit < 1 || limit > 50 {
+		limit = 10
+	}
+	rows, err := db.Query(`
+		SELECT id, name, description, code, symbol, interval,
+		 author_id, author_name,
+		 total_return, sharpe_ratio, max_drawdown, win_rate, total_trades, profit_factor,
+		 avg_rating, rating_count, comment_count, download_count, view_count,
+		 created_at, updated_at
+		 FROM strategy_marketplace
+		 ORDER BY (download_count + comment_count + rating_count) DESC, updated_at DESC
+		 LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []StrategyItem
+	for rows.Next() {
+		si := StrategyItem{}
+		rows.Scan(
+			&si.ID, &si.Name, &si.Description, &si.Code, &si.Symbol, &si.Interval,
+			&si.AuthorID, &si.AuthorName,
+			&si.TotalReturn, &si.SharpeRatio, &si.MaxDrawdown, &si.WinRate, &si.TotalTrades, &si.ProfitFactor,
+			&si.AvgRating, &si.RatingCount, &si.CommentCount, &si.DownloadCount, &si.ViewCount,
+			&si.CreatedAt, &si.UpdatedAt,
+		)
+		items = append(items, si)
+	}
+	if items == nil {
+		items = []StrategyItem{}
+	}
+	return items, nil
 }

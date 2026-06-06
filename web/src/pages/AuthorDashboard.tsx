@@ -5,6 +5,7 @@ import { PageHeader } from '@/components/ui/PageHeader'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { SectionCard } from '@/components/ui/SectionCard'
 import { KPICard } from '@/components/ui/KPICard'
+import { OverfitRiskGauge } from '@/components/community/OverfitRiskGauge'
 import { communityApi, indicatorApi } from '@/lib/api'
 import type { IndicatorItem } from '@/types'
 import {
@@ -25,6 +26,7 @@ import {
   CheckCircle2,
   Clock,
   XCircle,
+  Trophy,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -48,6 +50,8 @@ interface AuthorIndicator {
   revenue: number
   created_at: number
   updated_at: number
+  kpi_score?: { total_score: number }
+  overfit_risk?: { score: number; risk_level: 'low' | 'medium' | 'high' | 'insufficient_data' }
 }
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
@@ -138,6 +142,15 @@ function IndicatorRow({
         <div className="text-right"
         >
           <div className="text-[9px] text-muted-foreground"
+          >KPI</div>
+          <div className="text-[11px] font-semibold font-mono text-quant-gold"
+          >
+            {item.kpi_score ? item.kpi_score.total_score.toFixed(1) : '—'}
+          </div>
+        </div>
+        <div className="text-right"
+        >
+          <div className="text-[9px] text-muted-foreground"
           >收益</div>
           <div className={cn('text-[11px] font-semibold font-mono', (item.total_return || 0) >= 0 ? 'text-quant-green' : 'text-quant-red')}
           >
@@ -157,6 +170,14 @@ function IndicatorRow({
           >回撤</div>
           <div className="text-[11px] font-semibold font-mono text-quant-red"
           >{formatPct(item.max_drawdown)}</div>
+        </div>
+        <div className="shrink-0"
+        >
+          {item.overfit_risk ? (
+            <OverfitRiskGauge result={item.overfit_risk} size="sm" showLabel={false} />
+          ) : (
+            <span className="text-[10px] text-muted-foreground">未检测</span>
+          )}
         </div>
         <div className="flex items-center gap-1"
         >
@@ -242,14 +263,25 @@ export function AuthorDashboard() {
           title="作者后台"
           subtitle="管理您发布的指标、查看销售数据"
           actions={
-            <button
-              onClick={() =>
-                navigate('/indicator-ide')}
-              className="flex items-center gap-1.5 rounded-lg bg-quant-gold px-3 py-2 text-xs font-medium text-black hover:opacity-90 transition-opacity"
+            <div className="flex items-center gap-2"
             >
-              <Plus className="h-3.5 w-3.5" />
-              新建指标
-            </button>
+              <button
+                onClick={() =>
+                  navigate('/strategy-leaderboard')}
+                className="flex items-center gap-1.5 rounded-lg bg-quant-bg-secondary px-3 py-2 text-xs font-medium text-foreground hover:bg-white/5 transition-colors"
+              >
+                <Trophy className="h-3.5 w-3.5 text-quant-gold" />
+                排行榜
+              </button>
+              <button
+                onClick={() =>
+                  navigate('/indicator-ide')}
+                className="flex items-center gap-1.5 rounded-lg bg-quant-gold px-3 py-2 text-xs font-medium text-black hover:opacity-90 transition-opacity"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                新建指标
+              </button>
+            </div>
           }
         />
 

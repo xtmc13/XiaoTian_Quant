@@ -27,7 +27,9 @@ import {
   Zap,
   Layers,
   Gauge,
+  Server,
 } from 'lucide-react'
+import { RLWorkerStatusCard } from './AI/components/RLWorkerStatusCard'
 
 /* ── Types ── */
 interface ModelInfo {
@@ -451,6 +453,11 @@ export function ModelManagement() {
             })}
           </div>
         )}
+        {/* RL Worker Status */}
+        <div className="mt-6">
+          <RLWorkerStatusCard />
+        </div>
+
       </div>
     </div>
   )

@@ -64,6 +64,8 @@ func main() {
 	strategy.RegisterStrategyFactory("grid_trading", func() strategy.Strategy { return strategies.NewGridTradingStrategy() })
 	strategy.RegisterStrategyFactory("arbitrage", func() strategy.Strategy { return strategies.NewArbitrageStrategy() })
 	strategy.RegisterStrategyFactory("market_making", func() strategy.Strategy { return strategies.NewMarketMakingStrategy() })
+	strategy.RegisterStrategyFactory("martingale", func() strategy.Strategy { return strategies.NewMartingaleStrategy() })
+	strategy.RegisterStrategyFactory("wallstreet", func() strategy.Strategy { return strategies.NewWallstreetStrategy() })
 
 	// ── Setup Gin ──
 	if cfg.Server.Mode == "debug" {
@@ -74,6 +76,7 @@ func main() {
 	r := gin.New()
 	r.Use(middleware.RequestLogger(appCtx.Logger), gin.Recovery())
 	r.Use(middleware.CORS())
+	r.Use(middleware.UnifiedResponseWrapper())
 
 	// ── Public Routes ──
 	// Serve static assets from embedded spa/assets/
@@ -295,6 +298,23 @@ func main() {
 			private.GET("/hyperopt/spaces", handler.GetHyperoptSpaces)
 			private.POST("/hyperopt/jobs/:id/export", handler.ExportHyperoptParams)
 
+			// ── RL (Reinforcement Learning) ──
+			private.POST("/rl/train", handler.RLTrain)
+			private.POST("/rl/predict", handler.RLPredict)
+			private.POST("/rl/evaluate", handler.RLEvaluate)
+			private.GET("/rl/models", handler.ListRLModels)
+			private.DELETE("/rl/models/:id", handler.DeleteRLModel)
+			private.GET("/rl/jobs/:id", handler.GetRLJob)
+			private.POST("/rl/jobs/:id/cancel", handler.CancelRLJob)
+			private.GET("/rl/worker/status", handler.GetRLWorkerStatus)
+			private.POST("/rl/worker/start", handler.StartRLWorker)
+
+			// ── TensorBoard ──
+			private.GET("/tensorboard/runs", handler.ListTensorBoardRuns)
+			private.POST("/tensorboard/scalars", handler.QueryTensorBoardScalars)
+			private.GET("/tensorboard/runs/:id", handler.GetTensorBoardRun)
+			private.DELETE("/tensorboard/runs/:id", handler.DeleteTensorBoardRun)
+
 		// ── Settings ──
 		settingsG := private.Group("/settings")
 		{
@@ -430,7 +450,9 @@ func main() {
 			// ── Strategy Marketplace ──
 			comm.GET("/strategies", community.MarketStrategies)
 			comm.GET("/strategies/leaderboard", community.StrategyLeaderboard)
+			comm.GET("/strategies/trending", community.TrendingStrategies)
 			comm.GET("/strategies/:id", community.StrategyDetail)
+			comm.GET("/strategies/:id/overfit", community.GetStrategyOverfitRisk)
 			comm.POST("/strategies/publish", community.PublishStrategy)
 			comm.POST("/strategies/:id/comment", community.AddStrategyComment)
 			comm.POST("/strategies/:id/rate", community.RateStrategy)

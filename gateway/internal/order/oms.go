@@ -66,11 +66,12 @@ type OrderManager struct {
 	orderSeq  int64
 
 	// Pipeline hooks (set during integration)
-	RiskCheck     func(req *Request) error
-	LockBalance   func(req *Request) error
-	UnlockBalance func(order *model.OrderData)
+	RiskCheck        func(req *Request) error
+	LockBalance      func(req *Request) error
+	UnlockBalance    func(order *model.OrderData)
 	SubmitToExchange func(order *model.OrderData) (map[string]any, error)
-	OnOrderUpdate func(order *model.OrderData)
+	CancelOnExchange func(order *model.OrderData) error
+	OnOrderUpdate    func(order *model.OrderData)
 
 	// Rate limiting
 	rateLimitBurst int
@@ -190,6 +191,13 @@ func (om *OrderManager) CancelOrder(orderID, symbol string) (*model.OrderData, e
 	}
 	if order.IsDone() {
 		return nil, fmt.Errorf("order %s already %s", orderID, order.Status)
+	}
+
+	// Try to cancel on exchange if applicable
+	if om.CancelOnExchange != nil {
+		if err := om.CancelOnExchange(order); err != nil {
+			return nil, fmt.Errorf("exchange cancel: %w", err)
+		}
 	}
 
 	order.Status = model.StatusCancelled

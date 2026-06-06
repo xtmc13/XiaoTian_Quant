@@ -10,6 +10,7 @@
 import type { SymbolInfo, Period, Datafeed, DatafeedSubscribeCallback } from '@klinecharts/pro'
 import type { KLineData } from 'klinecharts'
 import { api } from './api'
+import { extractArray } from './typeHelpers'
 
 /* ── Period → backend interval mapping ── */
 const PERIOD_MAP: Record<string, string> = {
@@ -108,8 +109,8 @@ async function backfillGap(entry: SubEntry): Promise<void> {
     const data: unknown = await api.get('/market/klines', {
       params: { symbol: entry.symbol.ticker, interval, limit, from: gap.from, to: gap.to },
     })
-    const klines = ((data as Record<string, unknown>)?.klines as unknown[]) || (Array.isArray(data) ? data : [])
-    if (!Array.isArray(klines) || klines.length === 0) return
+    const klines = extractArray<unknown>(data, 'klines')
+    if (klines.length === 0) return
     const newBars = klines.map(toKLineData).filter((bar) => bar.timestamp > entry.lastBarTimestamp).sort((a, b) => a.timestamp - b.timestamp)
     if (newBars.length === 0) return
     for (const bar of newBars) {
@@ -268,8 +269,8 @@ export function createBackendDatafeed(): Datafeed {
           params: { symbol: symbol.ticker, interval, limit, from: fromMs, to: toMs },
         })
 
-        const klines = ((data as Record<string, unknown>)?.klines as unknown[]) || (Array.isArray(data) ? data : [])
-        const result = (Array.isArray(klines) ? klines : []).map(toKLineData)
+        const klines = extractArray<unknown>(data, 'klines')
+        const result = klines.map(toKLineData)
 
         // Store the last (current period) bar in subscriptions so
         // handlePriceTick can preserve open/high when building running bars.

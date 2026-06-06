@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { configApi, notifyRouteApi } from '@/lib/api'
 import { useAppStore } from '@/stores/appStore'
 import { cn } from '@/lib/utils'
+import type { ExchangeTestResult } from '@/types'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { SectionCard } from '@/components/ui/SectionCard'
 import { CRAParamForm, useCRAConfig } from '@/components/strategy/CRAParamForm'
@@ -294,7 +295,20 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
   const [isRuleFormOpen, setIsRuleFormOpen] = useState(false)
 
   const saveRuleMut = useMutation({
-    mutationFn: (rule: RouteRule) => notifyRouteApi.save(rule as any),
+    mutationFn: (rule: RouteRule) => {
+      // Adapt RouteRule to NotifyRoute shape expected by the API
+      const payload: Parameters<typeof notifyRouteApi.save>[0] = {
+        id: rule.id,
+        channel: rule.channels[0] || 'log',
+        enabled: rule.enabled,
+        events: rule.events,
+        config: {
+          levels: rule.levels,
+          minReturnPct: rule.minReturnPct,
+        },
+      }
+      return notifyRouteApi.save(payload)
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['notify-routes'] })
       setIsRuleFormOpen(false)
@@ -309,11 +323,27 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
     },
   })
 
-  const testChannelMut = useMutation({
+  const testChannelMut = useMutation<{ success: boolean }, Error, { channel: string; message?: string }>({
     mutationFn: ({ channel, message }: { channel: string; message?: string }) => notifyRouteApi.test(channel, message),
   })
 
-  const notifyRoutes = (notifyRoutesData as any as RouteRule[]) || []
+  const notifyRoutes: RouteRule[] = useMemo(() => {
+    if (!Array.isArray(notifyRoutesData)) return []
+    return notifyRoutesData.map((r: unknown) => {
+      const raw = r as Record<string, unknown>
+      return {
+        id: String(raw.id || ''),
+        name: String(raw.name || raw.channel || ''),
+        events: Array.isArray(raw.events) ? raw.events as string[] : [],
+        levels: Array.isArray((raw.config as Record<string, unknown>)?.levels)
+          ? (raw.config as Record<string, unknown>).levels as string[]
+          : [],
+        channels: [String(raw.channel || 'log')],
+        enabled: Boolean(raw.enabled),
+        minReturnPct: Number((raw.config as Record<string, unknown>)?.minReturnPct || 0) || undefined,
+      }
+    })
+  }, [notifyRoutesData])
 
   /* ── Sync backend config into form state ── */
   useEffect(() => {
@@ -369,14 +399,19 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
   })
 
   /* ── Test mutations ── */
-  const testExchangeMut = useMutation({
-    mutationFn: async ({ name, cfg }: { name: string; cfg: ExchangeConfig }) => {
-      const result = await configApi.exchangeTest({ id: name, name, api_key: cfg.api_key || '', secret: cfg.secret || '', passphrase: cfg.passphrase || '', enabled: true } as any)
+  const testExchangeMut = useMutation<ExchangeTestResult, Error, { name: string; cfg: ExchangeConfig }>({
+    mutationFn: async ({ name, cfg }) => {
+      const result = await configApi.exchangeTest({
+        id: name, name,
+        api_key: cfg.api_key || '',
+        secret: cfg.secret || '',
+        passphrase: cfg.passphrase || '',
+        enabled: true,
+      })
       if (result?.status === 'error') throw new Error(result?.detail || '连接失败')
       return result
     },
     onError: (err: Error, vars) => {
-      // Store error per exchange for display
       setTestErrors(prev => ({ ...prev, [vars.name]: err.message }))
     },
     onSuccess: (_data, vars) => {
@@ -384,7 +419,7 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
     },
   })
 
-  const testAIMut = useMutation({
+  const testAIMut = useMutation<ExchangeTestResult, Error, { provider: string; cfg: AIProviderConfig }>({
     mutationFn: async ({ provider, cfg }: { provider: string; cfg: AIProviderConfig }) => {
       const prov = AI_PROVIDERS.find((p) => p.key === provider)
       return configApi.aiTest({ provider, api_key: cfg.api_key || '', base_url: cfg.base_url || prov?.baseUrl || '' })
@@ -541,7 +576,7 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
 
                 {EXCHANGES.map((ex) => {
                   const cfg = exchanges[ex.key] || {}
-                  const testStatus = (testExchangeMut.variables as any)?.name === ex.key ? (testExchangeMut.isPending ? 'testing' : testExchangeMut.isSuccess ? 'ok' : testExchangeMut.isError ? 'error' : null) : null
+                  const testStatus = testExchangeMut.variables?.name === ex.key ? (testExchangeMut.isPending ? 'testing' : testExchangeMut.isSuccess ? 'ok' : testExchangeMut.isError ? 'error' : null) : null
                   return (
                     <SectionCard key={ex.key} title={ex.label} bodyClassName="space-y-4">
                       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -623,7 +658,7 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
 
                 {AI_PROVIDERS.map((prov) => {
                   const cfg = aiProviders[prov.key] || {}
-                  const testStatus = (testAIMut.variables as any)?.provider === prov.key ? (testAIMut.isPending ? 'testing' : testAIMut.isSuccess ? 'ok' : testAIMut.isError ? 'error' : null) : null
+                  const testStatus = testAIMut.variables?.provider === prov.key ? (testAIMut.isPending ? 'testing' : testAIMut.isSuccess ? 'ok' : testAIMut.isError ? 'error' : null) : null
                   return (
                     <SectionCard key={prov.key} title={prov.label} bodyClassName="space-y-4">
                       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -983,7 +1018,7 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
                   <p className="text-xs text-muted-foreground">向指定通道发送一条测试消息，验证配置是否正确</p>
                   <div className="flex flex-wrap gap-2">
                     {CHANNELS.map((ch) => {
-                      const testStatus = (testChannelMut.variables as any)?.channel === ch
+                      const testStatus = testChannelMut.variables?.channel === ch
                         ? testChannelMut.isPending
                           ? 'testing'
                           : testChannelMut.isSuccess

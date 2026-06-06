@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, memo, useCallback } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Link2, Activity, ArrowUpRight, ArrowDownRight, Minus, Flame,
@@ -45,6 +45,70 @@ interface OnChainSignal {
   timestamp: number
 }
 
+/**
+ * MetricCard — memoized metric display card.
+ */
+const MetricCard = memo(function MetricCard({
+  label, value, unit, color = 'text-foreground',
+}: {
+  label: string
+  value: string | number
+  unit?: string
+  color?: string
+}) {
+  return (
+    <div className="bg-quant-card border border-quant-border rounded-xl p-3 shadow-sm">
+      <div className="text-[10px] text-muted-foreground mb-1">{label}</div>
+      <div className={cn('text-sm font-bold', color)}>
+        {typeof value === 'number' ? value.toLocaleString(undefined, { maximumFractionDigits: 2 }) : value}
+        {unit && <span className="text-[10px] ml-0.5 text-muted-foreground">{unit}</span>}
+      </div>
+    </div>
+  )
+})
+
+/**
+ * SignalCard — memoized on-chain signal card.
+ */
+const SignalCard = memo(function SignalCard({ signal }: { signal: OnChainSignal | null }) {
+  if (!signal) return null
+  return (
+    <div className={cn(
+      'bg-quant-card border rounded-xl p-4 shadow-sm',
+      signal.direction === 'bullish' ? 'border-quant-green/30' :
+      signal.direction === 'bearish' ? 'border-quant-red/30' : 'border-quant-border'
+    )}>
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-bold text-foreground">{signal.symbol}</span>
+          <span className={cn(
+            'text-[10px] px-2 py-0.5 rounded font-medium',
+            signal.direction === 'bullish' ? 'bg-quant-green/10 text-quant-green' :
+            signal.direction === 'bearish' ? 'bg-quant-red/10 text-quant-red' :
+            'bg-quant-gold/10 text-quant-gold'
+          )}>
+            {signal.direction === 'bullish' ? '看涨' : signal.direction === 'bearish' ? '看跌' : '中性'}
+          </span>
+        </div>
+        <div className="text-xs font-bold text-foreground">{(signal.strength ?? 0).toFixed(0)}%</div>
+      </div>
+      <div className="w-full h-1.5 bg-quant-bg-secondary rounded-full overflow-hidden mb-2">
+        <div className={cn('h-full rounded-full',
+          signal.direction === 'bullish' ? 'bg-quant-green' :
+          signal.direction === 'bearish' ? 'bg-quant-red' : 'bg-quant-gold'
+        )} style={{ width: `${signal.strength}%` }} />
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {(signal.indicators ?? []).map((ind: string) => (
+          <span key={ind} className="text-[9px] px-1.5 py-0.5 rounded bg-quant-bg-secondary text-muted-foreground">
+            {ind}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+})
+
 export function OnChain() {
   const queryClient = useQueryClient()
   const [activeTab, setActiveTab] = useState<'btc' | 'eth'>('btc')
@@ -84,58 +148,9 @@ export function OnChain() {
 
   const loading = ethLoading || btcLoading
 
-  const handleRefresh = () => {
+  const handleRefresh = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['onchain'] })
-  }
-
-  const MetricCard = ({ label, value, unit, color = 'text-foreground' }: { label: string; value: string | number; unit?: string; color?: string }) => (
-    <div className="bg-quant-card border border-quant-border rounded-xl p-3 shadow-sm">
-      <div className="text-[10px] text-muted-foreground mb-1">{label}</div>
-      <div className={cn('text-sm font-bold', color)}>
-        {typeof value === 'number' ? value.toLocaleString(undefined, { maximumFractionDigits: 2 }) : value}
-        {unit && <span className="text-[10px] ml-0.5 text-muted-foreground">{unit}</span>}
-      </div>
-    </div>
-  )
-
-  const SignalCard = ({ signal }: { signal: OnChainSignal | null }) => {
-    if (!signal) return null
-    return (
-      <div className={cn(
-        'bg-quant-card border rounded-xl p-4 shadow-sm',
-        signal.direction === 'bullish' ? 'border-quant-green/30' :
-        signal.direction === 'bearish' ? 'border-quant-red/30' : 'border-quant-border'
-      )}>
-        <div className="flex items-center justify-between mb-2">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-bold text-foreground">{signal.symbol}</span>
-            <span className={cn(
-              'text-[10px] px-2 py-0.5 rounded font-medium',
-              signal.direction === 'bullish' ? 'bg-quant-green/10 text-quant-green' :
-              signal.direction === 'bearish' ? 'bg-quant-red/10 text-quant-red' :
-              'bg-quant-gold/10 text-quant-gold'
-            )}>
-              {signal.direction === 'bullish' ? '看涨' : signal.direction === 'bearish' ? '看跌' : '中性'}
-            </span>
-          </div>
-          <div className="text-xs font-bold text-foreground">{(signal.strength ?? 0).toFixed(0)}%</div>
-        </div>
-        <div className="w-full h-1.5 bg-quant-bg-secondary rounded-full overflow-hidden mb-2">
-          <div className={cn('h-full rounded-full',
-            signal.direction === 'bullish' ? 'bg-quant-green' :
-            signal.direction === 'bearish' ? 'bg-quant-red' : 'bg-quant-gold'
-          )} style={{ width: `${signal.strength}%` }} />
-        </div>
-        <div className="flex flex-wrap gap-1">
-          {(signal.indicators ?? []).map((ind: string) => (
-            <span key={ind} className="text-[9px] px-1.5 py-0.5 rounded bg-quant-bg-secondary text-muted-foreground">
-              {ind}
-            </span>
-          ))}
-        </div>
-      </div>
-    )
-  }
+  }, [queryClient])
 
   return (
     <div className="h-full flex flex-col p-4 gap-4 overflow-auto">

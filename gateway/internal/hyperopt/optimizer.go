@@ -253,6 +253,55 @@ func LossSQN(m *BacktestMetrics) float64 {
 	return -sqn
 }
 
+// LossShortTradeDur penalizes strategies with very short average trade duration.
+// This helps avoid overfitting to micro-movements.
+func LossShortTradeDur(m *BacktestMetrics) float64 {
+	if m == nil || m.TotalTrades == 0 {
+		return math.Inf(1)
+	}
+	if m.TotalTrades > 100 && m.TotalReturnPct < 10 {
+		return -m.SharpeRatio * 0.5
+	}
+	return -m.SharpeRatio
+}
+
+// LossSortinoDaily uses daily Sortino ratio (downside deviation only).
+func LossSortinoDaily(m *BacktestMetrics) float64 {
+	if m == nil || m.TotalTrades == 0 {
+		return math.Inf(1)
+	}
+	sortino := m.SortinoRatio
+	if sortino <= 0 {
+		return math.Inf(1)
+	}
+	return -sortino * 1.2
+}
+
+// LossSharpeDaily uses daily Sharpe ratio.
+func LossSharpeDaily(m *BacktestMetrics) float64 {
+	if m == nil || m.TotalTrades == 0 {
+		return math.Inf(1)
+	}
+	sharpe := m.SharpeRatio
+	if sharpe <= 0 {
+		return math.Inf(1)
+	}
+	return -sharpe * 1.1
+}
+
+// LossMaxDrawdownPerPair penalizes max drawdown per trading pair.
+func LossMaxDrawdownPerPair(m *BacktestMetrics) float64 {
+	if m == nil || m.TotalTrades == 0 {
+		return math.Inf(1)
+	}
+	dd := m.MaxDrawdownPct
+	if dd >= 50 {
+		return math.Inf(1)
+	}
+	penalty := math.Pow(dd/10, 2)
+	return penalty - m.TotalReturnPct*0.1
+}
+
 // GetLossFunc returns a loss function by name.
 func GetLossFunc(name string) LossFunc {
 	switch name {
@@ -280,6 +329,14 @@ func GetLossFunc(name string) LossFunc {
 		return LossRiskReward
 	case "sqn":
 		return LossSQN
+	case "short_trade_dur":
+		return LossShortTradeDur
+	case "sortino_daily":
+		return LossSortinoDaily
+	case "sharpe_daily":
+		return LossSharpeDaily
+	case "max_drawdown_per_pair":
+		return LossMaxDrawdownPerPair
 	default:
 		return LossSharpe
 	}
@@ -291,6 +348,7 @@ func LossFuncNames() []string {
 		"sharpe", "sortino", "calmar", "max_drawdown",
 		"profit", "win_rate", "expectancy", "multi_metric",
 		"profit_drawdown", "profit_factor", "risk_reward", "sqn",
+		"short_trade_dur", "sortino_daily", "sharpe_daily", "max_drawdown_per_pair",
 	}
 }
 

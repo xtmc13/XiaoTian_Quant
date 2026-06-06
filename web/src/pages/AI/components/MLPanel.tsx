@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback, memo } from 'react'
-import { Cpu, Zap, Play, TrendingUp, Loader2, CheckCircle2, Trash2, ArrowUp, ArrowDown, X } from 'lucide-react'
+import { Cpu, Zap, Play, TrendingUp, Loader2, CheckCircle2, Trash2, ArrowUp, ArrowDown, X, BrainCircuit, BarChart3 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { mlApi } from '@/lib/api'
+import { RLPanel } from './RLPanel'
+import { TensorBoardPanel } from './TensorBoardPanel'
 import type { MLModelInfo, MLTrainResult } from '@/types'
 
 const MlModelCard = memo(function MlModelCard({
@@ -41,12 +43,16 @@ export function MLPanel({
   selectedSymbol,
   mlModels,
   loadMlModels,
+  rlModels,
+  loadRlModels,
 }: {
   selectedSymbol: string | undefined
   mlModels: MLModelInfo[]
   loadMlModels: () => void
+  rlModels: any[]
+  loadRlModels: () => void
 }) {
-  const [mlTab, setMlTab] = useState<'predict' | 'train' | 'models'>('predict')
+  const [mlTab, setMlTab] = useState<'predict' | 'train' | 'models' | 'rl' | 'tensorboard'>('predict')
   const [mlPredicting, setMlPredicting] = useState(false)
   const [mlTraining, setMlTraining] = useState(false)
   const [mlResult, setMlResult] = useState<{ direction: string; prediction: number; strength: number } | null>(null)
@@ -104,11 +110,13 @@ export function MLPanel({
   return (
     <div className="space-y-4">
       {/* Sub-tabs */}
-      <div className="flex gap-1 bg-quant-bg-secondary rounded-lg p-0.5 w-fit">
+      <div className="flex gap-1 bg-quant-bg-secondary rounded-lg p-0.5 w-fit flex-wrap">
         {[
           { k: 'predict' as const, label: '预测', icon: TrendingUp },
           { k: 'train' as const, label: '训练', icon: Play },
           { k: 'models' as const, label: `模型 (${mlModels.length})`, icon: Cpu },
+          { k: 'rl' as const, label: 'RL', icon: BrainCircuit },
+          { k: 'tensorboard' as const, label: 'TensorBoard', icon: BarChart3 },
         ].map(t => (
           <button key={t.k} onClick={() => setMlTab(t.k)}
             className={cn('flex items-center gap-1 px-3 py-1.5 rounded text-xs font-medium transition-colors',
@@ -241,6 +249,16 @@ export function MLPanel({
             />
           ))}
         </div>
+      )}
+
+      {/* RL Tab */}
+      {mlTab === 'rl' && (
+        <RLPanel selectedSymbol={selectedSymbol} rlModels={rlModels} loadRlModels={loadRlModels} />
+      )}
+
+      {/* TensorBoard Tab */}
+      {mlTab === 'tensorboard' && (
+        <TensorBoardPanel />
       )}
     </div>
   )

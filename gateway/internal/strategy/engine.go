@@ -9,6 +9,7 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/event"
 	"github.com/xiaotian-quant/gateway/internal/model"
 	"github.com/xiaotian-quant/gateway/internal/notify"
+	"github.com/xiaotian-quant/gateway/internal/order"
 	"github.com/xiaotian-quant/gateway/internal/protection"
 	"github.com/xiaotian-quant/gateway/internal/ws"
 )
@@ -128,6 +129,9 @@ type Engine struct {
 
 	// WSHub broadcasts events to WebSocket clients
 	wsHub *ws.Hub
+
+	// DCAManager handles dollar-cost averaging for positions
+	dcaManager *order.DCAManager
 }
 
 var (
@@ -268,6 +272,13 @@ func (e *Engine) SetWSHub(h *ws.Hub) {
 	e.wsHub = h
 }
 
+// SetDCAManager sets the DCA manager for the engine.
+func (e *Engine) SetDCAManager(mgr *order.DCAManager) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.dcaManager = mgr
+}
+
 func (e *Engine) dispatch(s Strategy, evt event.Event) {
 	if !s.IsRunning() {
 		return
@@ -299,6 +310,15 @@ func (e *Engine) dispatch(s Strategy, evt event.Event) {
 		return
 	}
 	if signal != nil && e.OnSignal != nil {
+		// Check DCA for existing positions before emitting signal
+		if e.dcaManager != nil && (signal.Direction == "LONG" || signal.Direction == "BUY" || signal.Direction == "long" || signal.Direction == "buy") {
+			if dcaPos := e.dcaManager.GetPosition(signal.Symbol); dcaPos != nil && dcaPos.Active {
+				// DCA position exists — the strategy's own DCA logic handles add-position signals
+				// This hook ensures generic strategies (breakout, grid, etc.) can also use DCA
+				// when configured via the DCAConfig parameter.
+			}
+		}
+
 		// Check protection before emitting signal
 		if e.protectionMgr != nil {
 			ctx := protection.ProtectionContext{

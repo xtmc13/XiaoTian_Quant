@@ -17,13 +17,14 @@ except ImportError:
     spaces = None
 
 
-class TradingEnv3Action:
+class TradingEnv3Action(gym.Env if HAS_GYM else object):
     """
     3-Action Trading Environment: SHORT (0), NEUTRAL (1), LONG (2).
     Aligns with FreqAI Base3ActionRLEnv.
     """
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
+        super().__init__()
         self.config = config or {}
         self.window_size = self.config.get("window_size", 50)
         self.initial_balance = self.config.get("initial_balance", 10000)
@@ -44,8 +45,9 @@ class TradingEnv3Action:
 
         self.reset()
 
-    def reset(self):
+    def reset(self, seed: Optional[int] = None, options: Optional[Dict] = None):
         """Reset environment to initial state."""
+        super().reset(seed=seed)
         self.balance = self.initial_balance
         self.position = 0  # -1=short, 0=neutral, 1=long
         self.entry_price = 0
@@ -54,8 +56,9 @@ class TradingEnv3Action:
         self.total_pnl = 0
         self.data = None
         self.data_idx = 0
-        return np.zeros(self.observation_space if isinstance(self.observation_space, int)
+        obs = np.zeros(self.observation_space if isinstance(self.observation_space, int)
                        else self.observation_space.shape[0], dtype=np.float32)
+        return (obs, {}) if HAS_GYM else obs
 
     def set_data(self, features: np.ndarray, prices: np.ndarray):
         """Load feature data for the episode."""
@@ -117,6 +120,10 @@ class TradingEnv3Action:
             "position": self.position,
             "total_pnl": self.total_pnl,
         }
+
+    def render(self):
+        """Render environment state (no-op for headless)."""
+        pass
 
     def _make_obs(self) -> np.ndarray:
         """Build observation vector from recent features + position state."""
@@ -208,3 +215,23 @@ class TradingEnv5Action(TradingEnv3Action):
             "multiplier": multiplier,
             "total_pnl": self.total_pnl,
         }
+
+
+# ── Gymnasium Registration ─────────────────────────────────────
+
+if HAS_GYM:
+    try:
+        gym.register(
+            id="TradingEnv3Action-v0",
+            entry_point="models.rl_env:TradingEnv3Action",
+        )
+    except gym.error.Error:
+        pass  # Already registered
+
+    try:
+        gym.register(
+            id="TradingEnv5Action-v0",
+            entry_point="models.rl_env:TradingEnv5Action",
+        )
+    except gym.error.Error:
+        pass  # Already registered

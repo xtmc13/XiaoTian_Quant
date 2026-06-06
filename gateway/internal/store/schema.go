@@ -2,7 +2,7 @@ package store
 
 // Schema migration constants and DDL for all 18 tables.
 
-const currentSchemaVersion = 6
+const currentSchemaVersion = 8
 
 // MigrationFunc is a function that upgrades the schema by one version.
 type MigrationFunc func(tx *dbTx) error
@@ -14,6 +14,8 @@ var migrations = map[int]MigrationFunc{
 	4: migrateV4,
 	5: migrateV5,
 	6: migrateV6,
+	7: migrateV7,
+	8: migrateV8,
 }
 
 // dbTx wraps a database transaction for migrations.
@@ -481,6 +483,71 @@ func migrateV5(tx *dbTx) error {
 	for _, ddl := range tables {
 		// SQLite ALTER TABLE may fail if column already exists; ignore those errors
 		_ = tx.exec(ddl)
+	}
+	return nil
+}
+
+// migrateV8 adds strategy_overfit table for KPI overfit persistence.
+func migrateV8(tx *dbTx) error {
+	tables := []string{
+		`CREATE TABLE IF NOT EXISTS strategy_overfit (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			strategy_id INTEGER NOT NULL UNIQUE,
+			score REAL DEFAULT 0,
+			risk_level TEXT DEFAULT 'low',
+			in_sample_return REAL DEFAULT 0,
+			out_sample_return REAL DEFAULT 0,
+			return_ratio REAL DEFAULT 0,
+			stability_score REAL DEFAULT 0,
+			updated_at INTEGER NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_overfit_strategy ON strategy_overfit(strategy_id)`,
+	}
+	for _, ddl := range tables {
+		if err := tx.exec(ddl); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// migrateV7 adds missing indexes for frequently queried tables.
+// These indexes target the hottest query paths identified by code audit.
+func migrateV7(tx *dbTx) error {
+	indexes := []string{
+		// ── xt_users: login lookups (FindUserByUsername, FindUserByEmail) ──
+		`CREATE INDEX IF NOT EXISTS idx_users_username ON xt_users(username)`,
+		`CREATE INDEX IF NOT EXISTS idx_users_email ON xt_users(email)`,
+		`CREATE INDEX IF NOT EXISTS idx_users_active ON xt_users(is_active)`,
+
+		// ── xt_orders: order listing by symbol / status ──
+		`CREATE INDEX IF NOT EXISTS idx_orders_symbol ON xt_orders(symbol)`,
+		`CREATE INDEX IF NOT EXISTS idx_orders_status ON xt_orders(status)`,
+		`CREATE INDEX IF NOT EXISTS idx_orders_created ON xt_orders(created_at)`,
+
+		// ── strategy_configs: list / filter by status ──
+		`CREATE INDEX IF NOT EXISTS idx_stratcfg_name ON strategy_configs(name)`,
+		`CREATE INDEX IF NOT EXISTS idx_stratcfg_symbol ON strategy_configs(symbol)`,
+		`CREATE INDEX IF NOT EXISTS idx_stratcfg_enabled ON strategy_configs(is_enabled)`,
+		`CREATE INDEX IF NOT EXISTS idx_stratcfg_running ON strategy_configs(is_running)`,
+
+		// ── strategy_run_logs: query by strategy / event / time ──
+		`CREATE INDEX IF NOT EXISTS idx_runlogs_strat ON strategy_run_logs(strategy_name)`,
+		`CREATE INDEX IF NOT EXISTS idx_runlogs_event ON strategy_run_logs(event_type)`,
+		`CREATE INDEX IF NOT EXISTS idx_runlogs_time ON strategy_run_logs(timestamp)`,
+
+		// ── accounts: filter by exchange / active status ──
+		`CREATE INDEX IF NOT EXISTS idx_accounts_exchange ON accounts(exchange)`,
+		`CREATE INDEX IF NOT EXISTS idx_accounts_active ON accounts(is_active)`,
+
+		// ── agent_tokens: list active / check expiry ──
+		`CREATE INDEX IF NOT EXISTS idx_agent_tokens_active ON agent_tokens(is_active)`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_tokens_expires ON agent_tokens(expires_at)`,
+	}
+	for _, ddl := range indexes {
+		if err := tx.exec(ddl); err != nil {
+			return err
+		}
 	}
 	return nil
 }

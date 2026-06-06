@@ -279,7 +279,7 @@ func TestLossSQNZeroStdDev(t *testing.T) {
 
 func TestGetLossFunc(t *testing.T) {
 	names := LossFuncNames()
-	htAssert(t, len(names) == 12, "12 loss functions")
+	htAssert(t, len(names) == 16, "16 loss functions")
 
 	for _, name := range names {
 		fn := GetLossFunc(name)

@@ -364,6 +364,16 @@ function MonthlyReturnChart({ data, isLoading }: { data?: { month: string; retur
 
 /* ── Main Page ───────────────────────────────────────────────────── */
 
+function isBacktestReport(value: unknown): value is BacktestReport {
+  const r = value as Record<string, unknown>
+  return typeof r?.initial_balance === 'number' && typeof r?.final_equity === 'number'
+}
+
+function isBacktestParams(value: unknown): value is BacktestParams {
+  const p = value as Record<string, unknown>
+  return typeof p?.symbol === 'string' && typeof p?.interval === 'string'
+}
+
 export function Backtest() {
   const [symbol, setSymbol] = useState('BTCUSDT')
   const [interval, setIntervalVal] = useState('1h')
@@ -440,8 +450,8 @@ export function Backtest() {
         direction: craDirection,
       }),
     onSuccess: (data: BacktestResult) => {
-      setReport((data?.report as unknown as BacktestReport) || null)
-      setParams((data?.params as unknown as BacktestParams) || null)
+      setReport(isBacktestReport(data?.report) ? data.report : null)
+      setParams(isBacktestParams(data?.params) ? data.params : null)
       const curve = (data?.equity_curve || []).map((p) => ({ time: p.time, equity: p.equity }))
       setEquityCurve(curve)
       setTrades(parseTrades(data?.trades || []))
