@@ -1,14 +1,7 @@
 package data
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
-	"log"
-	"net/http"
-	"net/url"
-	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -53,343 +46,52 @@ type DownloadConfig struct {
 
 // ── Downloader ─────────────────────────────────────────────────
 
-// Downloader fetches historical OHLCV data from exchanges.
+// Downloader manages historical OHLCV data from local storage only.
+// Network download functionality has been removed.
 type Downloader struct {
-	store      *Storage
-	httpClient *http.Client
-	jobs       map[string]*DownloadJob
-	mu         sync.RWMutex
+	store *Storage
+	jobs  map[string]*DownloadJob
+	mu    sync.RWMutex
 }
 
-// NewDownloader creates a new data downloader with proxy support.
+// NewDownloader creates a new data downloader using local storage only.
 func NewDownloader(store *Storage) *Downloader {
-	// Check for proxy settings: HTTP_PROXY env var, or default to user's VPN
-	proxyURL := os.Getenv("HTTP_PROXY")
-	if proxyURL == "" {
-		proxyURL = os.Getenv("http_proxy")
-	}
-	if proxyURL == "" {
-		// Default to common VPN proxy ports
-		for _, addr := range []string{"http://127.0.0.1:7897", "http://127.0.0.1:7890", "http://127.0.0.1:1080", "http://127.0.0.1:10808"} {
-			if testProxy(addr) {
-				proxyURL = addr
-				log.Printf("[data] auto-detected proxy: %s", proxyURL)
-				break
-			}
-		}
-	}
-
-	transport := &http.Transport{}
-	if proxyURL != "" {
-		proxy, err := url.Parse(proxyURL)
-		if err == nil {
-			transport.Proxy = http.ProxyURL(proxy)
-			log.Printf("[data] using proxy: %s", proxyURL)
-		}
-	}
-
 	return &Downloader{
-		store:      store,
-		httpClient: &http.Client{Timeout: 30 * time.Second, Transport: transport},
-		jobs:       make(map[string]*DownloadJob),
+		store: store,
+		jobs:  make(map[string]*DownloadJob),
 	}
 }
 
-// testProxy checks if a proxy is reachable.
-func testProxy(proxyURL string) bool {
-	proxy, err := url.Parse(proxyURL)
-	if err != nil {
-		return false
-	}
-	client := &http.Client{
-		Timeout: 3 * time.Second,
-		Transport: &http.Transport{Proxy: http.ProxyURL(proxy)},
-	}
-	resp, err := client.Get("https://api.binance.com/api/v3/ping")
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-	return resp.StatusCode == 200
-}
-
-// StartDownload initiates a download job. Returns the job ID.
+// StartDownload is disabled. Returns an error indicating network download is not available.
 func (d *Downloader) StartDownload(cfg DownloadConfig) (string, error) {
-	if len(cfg.Symbols) == 0 {
-		return "", fmt.Errorf("no symbols specified")
-	}
-	if len(cfg.Intervals) == 0 {
-		cfg.Intervals = []string{"1h"}
-	}
-	if cfg.MaxWorkers <= 0 {
-		cfg.MaxWorkers = 2
-	}
-
-	jobID := fmt.Sprintf("dl_%d", time.Now().UnixMilli())
-	job := &DownloadJob{
-		ID:        jobID,
-		Status:    "pending",
-		StartedAt: time.Now().UnixMilli(),
-	}
-
-	d.mu.Lock()
-	d.jobs[jobID] = job
-	d.mu.Unlock()
-
-	// Run async
-	go d.runDownload(jobID, cfg)
-	return jobID, nil
+	return "", fmt.Errorf("network download is disabled — please import data manually via the data import API or database seeding")
 }
 
+// runDownload is disabled.
 func (d *Downloader) runDownload(jobID string, cfg DownloadConfig) {
 	d.mu.Lock()
 	job := d.jobs[jobID]
-	job.Status = "running"
-	d.mu.Unlock()
-
-	totalTasks := len(cfg.Symbols) * len(cfg.Intervals)
-	sem := make(chan struct{}, cfg.MaxWorkers)
-	var wg sync.WaitGroup
-	var errs []string
-	var muErrs sync.Mutex
-	totalBars := 0
-
-	for _, sym := range cfg.Symbols {
-		for _, interval := range cfg.Intervals {
-			wg.Add(1)
-			go func(symbol, interval string) {
-				defer wg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
-
-				bars, err := d.downloadSymbol(symbol, interval, cfg.StartDate, cfg.EndDate)
-				if err != nil {
-					muErrs.Lock()
-					errs = append(errs, fmt.Sprintf("%s/%s: %v", symbol, interval, err))
-					muErrs.Unlock()
-					return
-				}
-
-				d.store.SaveOHLCV(bars)
-
-				d.mu.Lock()
-				job.Progress += len(bars)
-				totalBars += len(bars)
-				d.mu.Unlock()
-
-				log.Printf("[data] downloaded %s %s: %d bars", symbol, interval, len(bars))
-			}(sym, interval)
-		}
-	}
-
-	wg.Wait()
-
-	d.mu.Lock()
-	job.Total = totalTasks
-	job.EndedAt = time.Now().UnixMilli()
-	if len(errs) > 0 {
+	if job != nil {
 		job.Status = "failed"
-		job.Error = strings.Join(errs, "; ")
-	} else {
-		job.Status = "done"
-	}
-	d.mu.Unlock()
-
-	log.Printf("[data] download %s complete: %d bars, status=%s", jobID, totalBars, job.Status)
-}
-
-// FetchOHLCV downloads OHLCV bars directly from the exchange (bypassing local storage).
-func (d *Downloader) FetchOHLCV(symbol, interval string, fromMs, toMs int64) ([]OHLCV, error) {
-	return d.fetchFromBinance(symbol, interval, fromMs, toMs)
-}
-
-// IncrementalUpdate downloads only the missing data gaps for a symbol/interval.
-// It uses FindGaps to identify what needs to be downloaded, then fetches only those ranges.
-func (d *Downloader) IncrementalUpdate(symbol, interval string, fromMs, toMs int64) (*DownloadJob, error) {
-	gaps := d.store.FindGaps(symbol, interval, fromMs, toMs)
-	if len(gaps) == 0 {
-		return nil, fmt.Errorf("no gaps found — data is up to date")
-	}
-
-	jobID := fmt.Sprintf("inc_%d", time.Now().UnixMilli())
-	job := &DownloadJob{
-		ID:        jobID,
-		Symbol:    symbol,
-		Interval:  interval,
-		Status:    "running",
-		StartedAt: time.Now().UnixMilli(),
-	}
-
-	d.mu.Lock()
-	d.jobs[jobID] = job
-	d.mu.Unlock()
-
-	go func() {
-		totalBars := 0
-		var errs []string
-
-		for _, gap := range gaps {
-			gapFrom, gapTo := gap[0], gap[1]
-			log.Printf("[data] incremental gap: %s %s [%d → %d]", symbol, interval, gapFrom, gapTo)
-
-			bars, err := d.fetchFromBinance(symbol, interval, gapFrom, gapTo)
-			if err != nil {
-				errs = append(errs, fmt.Sprintf("gap %d-%d: %v", gapFrom, gapTo, err))
-				continue
-			}
-
-			if len(bars) > 0 {
-				d.store.SaveOHLCV(bars)
-				d.store.LogDownload(symbol, interval, len(bars), gapFrom, gapTo)
-				totalBars += len(bars)
-			}
-
-			// Rate limit between gaps
-			time.Sleep(200 * time.Millisecond)
-		}
-
-		d.mu.Lock()
-		job.Progress = totalBars
+		job.Error = "network download is disabled"
 		job.EndedAt = time.Now().UnixMilli()
-		if len(errs) > 0 {
-			job.Status = "failed"
-			job.Error = strings.Join(errs, "; ")
-		} else {
-			job.Status = "done"
-		}
-		d.mu.Unlock()
+	}
+	d.mu.Unlock()
+}
 
-		log.Printf("[data] incremental update %s complete: %d bars, status=%s", jobID, totalBars, job.Status)
-	}()
+// FetchOHLCV is disabled. Use LoadBarsForBacktest to read from local storage.
+func (d *Downloader) FetchOHLCV(symbol, interval string, fromMs, toMs int64) ([]OHLCV, error) {
+	return nil, fmt.Errorf("FetchOHLCV is disabled — data must be loaded from local storage via LoadBarsForBacktest")
+}
 
-	return job, nil
+// IncrementalUpdate is disabled.
+func (d *Downloader) IncrementalUpdate(symbol, interval string, fromMs, toMs int64) (*DownloadJob, error) {
+	return nil, fmt.Errorf("incremental update is disabled — network download functionality has been removed")
 }
 
 // GetStorage returns the underlying storage for direct access.
 func (d *Downloader) GetStorage() *Storage {
 	return d.store
-}
-
-func (d *Downloader) downloadSymbol(symbol, interval, startDate, endDate string) ([]OHLCV, error) {
-	var startMs, endMs int64
-
-	if startDate != "" {
-		t, err := time.Parse("2006-01-02", startDate)
-		if err != nil {
-			return nil, fmt.Errorf("invalid start date: %w", err)
-		}
-		startMs = t.UnixMilli()
-	}
-	if endDate != "" {
-		t, err := time.Parse("2006-01-02", endDate)
-		if err != nil {
-			return nil, fmt.Errorf("invalid end date: %w", err)
-		}
-		endMs = t.UnixMilli() + 86400000 // end of day
-	} else {
-		endMs = time.Now().UnixMilli()
-	}
-
-	// Check what we already have locally to avoid re-downloading
-	var existing []OHLCV
-	if startMs > 0 {
-		existing = d.store.LoadOHLCV(symbol, interval, startMs, endMs)
-		if len(existing) > 0 {
-			// Resume from the last known timestamp
-			lastTs := existing[len(existing)-1].Time
-			if lastTs+1 > startMs {
-				startMs = lastTs + 1 // resume after last bar
-			}
-		}
-	}
-
-	// Binance API max 1000 bars per request
-	bars, err := d.fetchFromBinance(symbol, interval, startMs, endMs)
-	if err != nil {
-		return nil, err
-	}
-
-	// Merge with existing
-	result := make([]OHLCV, 0, len(existing)+len(bars))
-	result = append(result, existing...)
-	result = append(result, bars...)
-
-	return result, nil
-}
-
-func (d *Downloader) fetchFromBinance(symbol, interval string, fromMs, toMs int64) ([]OHLCV, error) {
-	var allBars []OHLCV
-	currentFrom := fromMs
-
-	for {
-		url := fmt.Sprintf(
-			"https://api.binance.com/api/v3/klines?symbol=%s&interval=%s&limit=1000",
-			symbol, interval,
-		)
-		if currentFrom > 0 {
-			url += fmt.Sprintf("&startTime=%d", currentFrom)
-		}
-		if toMs > 0 {
-			url += fmt.Sprintf("&endTime=%d", toMs)
-		}
-
-		req, _ := http.NewRequest("GET", url, nil)
-		req.Header.Set("Accept", "application/json")
-
-		resp, err := d.httpClient.Do(req)
-		if err != nil {
-			return allBars, fmt.Errorf("binance request failed: %w", err)
-		}
-
-		body, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			return allBars, err
-		}
-
-		var raw [][]any
-		if err := json.Unmarshal(body, &raw); err != nil {
-			return allBars, fmt.Errorf("binance parse error: %w (body: %.200s)", err, string(body))
-		}
-
-		if len(raw) == 0 {
-			break
-		}
-
-		// Parse bars
-		batch := make([]OHLCV, 0, len(raw))
-		for _, k := range raw {
-			if len(k) < 6 {
-				continue
-			}
-			batch = append(batch, OHLCV{
-				Symbol:   symbol,
-				Interval: interval,
-				Time:     int64(k[0].(float64)),
-				Open:     parseFloat(k[1]),
-				High:     parseFloat(k[2]),
-				Low:      parseFloat(k[3]),
-				Close:    parseFloat(k[4]),
-				Volume:   parseFloat(k[5]),
-			})
-		}
-
-		allBars = append(allBars, batch...)
-
-		// If we got fewer than 1000, we're at the end
-		if len(raw) < 1000 {
-			break
-		}
-
-		// Advance to next batch (avoid duplicating the last bar)
-		lastTime := int64(raw[len(raw)-1][0].(float64))
-		currentFrom = lastTime + 1
-
-		// Rate limit: 1 request per 200ms (5 req/s, Binance allows 1200/min)
-		time.Sleep(200 * time.Millisecond)
-	}
-
-	return allBars, nil
 }
 
 // GetJob returns a download job by ID.
@@ -412,7 +114,7 @@ func (o OHLCV) ToBar() model.Bar {
 	}
 }
 
-// LoadBarsForBacktest loads historical bars from storage for backtesting.
+// LoadBarsForBacktest loads historical bars from local storage for backtesting.
 func (d *Downloader) LoadBarsForBacktest(symbol, interval string, fromMs, toMs int64) []model.Bar {
 	ohlcv := d.store.LoadOHLCV(symbol, interval, fromMs, toMs)
 	bars := make([]model.Bar, len(ohlcv))

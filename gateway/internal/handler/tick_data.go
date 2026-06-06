@@ -60,7 +60,10 @@ func StartTickDownload(c *gin.Context) {
 
 	jobID, err := TickDownloader.StartDownload(body.Symbol, startMs, endMs)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": err.Error(),
+			"note":  "network tick download is disabled — please import tick data manually via the data import API or database seeding",
+		})
 		return
 	}
 

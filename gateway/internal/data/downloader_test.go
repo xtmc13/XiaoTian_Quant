@@ -266,7 +266,7 @@ func TestStorageGetDownloadLog(t *testing.T) {
 	}
 }
 
-func TestDownloaderIncrementalUpdateNoGaps(t *testing.T) {
+func TestDownloaderIncrementalUpdateDisabled(t *testing.T) {
 	initTestDB(t)
 	store := NewStorage()
 	d := NewDownloader(store)
@@ -280,6 +280,6 @@ func TestDownloaderIncrementalUpdateNoGaps(t *testing.T) {
 
 	_, err := d.IncrementalUpdate("BTCUSDT", "1h", 1704067200000, 1704070800000)
 	if err == nil {
-		t.Error("expected error when no gaps exist")
+		t.Error("expected error because incremental update is disabled")
 	}
 }

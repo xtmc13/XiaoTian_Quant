@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
   Wallet,
-  Trophy,
-  TrendingUp,
   TrendingDown,
   Activity,
   Zap,
@@ -14,24 +13,14 @@ import {
   Plus,
   LayoutGrid,
   X,
-  Layers,
   ZapOff,
-  ArrowLeftRight,
   ArrowUpRight,
-  ArrowDownRight,
   BarChart3,
   Target,
   ChevronRight as ChevronRightIcon,
   Brain,
-  AlertTriangle,
-  CheckCircle2,
-  XCircle,
-  Clock,
-  ShieldAlert,
-  ShieldCheck,
-  Lock,
 } from 'lucide-react'
-import { cn, formatCurrency, formatPercent } from '@/lib/utils'
+import { cn, formatCurrency, formatPercent, formatConverted, setConversion } from '@/lib/utils'
 import { dashboardApi, portfolioApi, strategyApi, protectionApi, mlApi } from '@/lib/api'
 import { getEcharts } from '@/lib/echarts'
 import { KPICard } from '@/components/ui/KPICard'
@@ -72,6 +61,7 @@ interface ModelInfo {
 
 /* ── Risk Control Card ── */
 function RiskControlCard({ status, isLoading }: { status?: ProtectionStatus; isLoading: boolean }) {
+  const navigate = useNavigate()
   if (isLoading) {
     return (
       <SectionCard title="风控状态">
@@ -106,7 +96,7 @@ function RiskControlCard({ status, isLoading }: { status?: ProtectionStatus; isL
       title="风控状态"
       headerAction={
         <button
-          onClick={() => { window.location.hash = '#/risk-control' }}
+          onClick={() => { navigate('/risk-control') }}
           className="flex items-center gap-0.5 text-[10px] text-[#8a8a8a] transition-colors hover:text-white"
         >
           查看风控中心 <ChevronRightIcon className="h-3 w-3" />
@@ -166,6 +156,7 @@ function RiskControlCard({ status, isLoading }: { status?: ProtectionStatus; isL
 
 /* ── ML Status Card ── */
 function MLStatusCard({ health, models, isLoading }: { health?: { status: string }; models?: ModelInfo[]; isLoading: boolean }) {
+  const navigate = useNavigate()
   if (isLoading) {
     return (
       <SectionCard title="ML 模型状态">
@@ -180,7 +171,7 @@ function MLStatusCard({ health, models, isLoading }: { health?: { status: string
   const isHealthy = health?.status === 'healthy'
   const modelCount = models?.length ?? 0
   const latestModel = models && models.length > 0
-    ? models.sort((a, b) => new Date(b.trained_at).getTime() - new Date(a.trained_at).getTime())[0]
+    ? [...models].sort((a, b) => new Date(b.trained_at).getTime() - new Date(a.trained_at).getTime())[0]
     : undefined
 
   const pipelineHealth = isHealthy ? 'normal' : 'error'
@@ -197,7 +188,7 @@ function MLStatusCard({ health, models, isLoading }: { health?: { status: string
       title="ML 模型状态"
       headerAction={
         <button
-          onClick={() => { window.location.hash = '#/model-management' }}
+          onClick={() => { navigate('/model-management') }}
           className="flex items-center gap-0.5 text-[10px] text-[#8a8a8a] transition-colors hover:text-white"
         >
           查看模型管理 <ChevronRightIcon className="h-3 w-3" />
@@ -258,6 +249,7 @@ function MLStatusCard({ health, models, isLoading }: { health?: { status: string
 
 /* ── Setup Guide Card ── */
 function SetupGuideCard({ onDismiss }: { onDismiss: () => void }) {
+  const navigate = useNavigate()
   const steps = [
     { label: '连接交易所', done: false, action: '去设置' },
     { label: '创建首个策略', done: false, action: '创建' },
@@ -279,14 +271,14 @@ function SetupGuideCard({ onDismiss }: { onDismiss: () => void }) {
         </div>
         <div className="flex items-center gap-3">
           <button
-            onClick={() => { window.location.hash = '#/indicator-community' }}
+            onClick={() => { navigate('/indicator-community') }}
             className="flex items-center gap-1.5 rounded-lg bg-[#1c1c1c] px-4 py-2 text-sm text-white transition-colors hover:bg-[#262626]"
           >
             <LayoutGrid className="inline h-4 w-4" />
             策略市场
           </button>
           <button
-            onClick={() => { window.location.hash = '#/strategy' }}
+            onClick={() => { navigate('/strategy') }}
             className="flex items-center gap-1.5 rounded-lg bg-white px-4 py-2 text-sm font-medium text-[#0a0a0a] transition-opacity hover:opacity-90"
           >
             <Plus className="inline h-4 w-4" />
@@ -328,9 +320,9 @@ function SetupGuideCard({ onDismiss }: { onDismiss: () => void }) {
               {!step.done && (
                 <button
                   onClick={() => {
-                    if (step.action === '去设置') window.location.hash = '#/settings'
-                    if (step.action === '创建') window.location.hash = '#/strategy'
-                    if (step.action === '启动') window.location.hash = '#/bots'
+                    if (step.action === '去设置') navigate('/settings')
+                    if (step.action === '创建') navigate('/strategy')
+                    if (step.action === '启动') navigate('/bots')
                   }}
                   className="rounded bg-white px-2 py-0.5 text-[10px] font-medium text-[#0a0a0a] transition-opacity hover:opacity-90"
                 >
@@ -727,73 +719,13 @@ function StrategyRow({ s }: { s: StrategyItem }) {
   )
 }
 
-/* ── Rank Row ── */
-function RankRow({ item, index }: { item: StrategyRanking; index: number }) {
-  const pnl = item.pnl || 0
-  const badge =
-    index === 0
-      ? 'bg-yellow-500/15 text-yellow-400'
-      : index === 1
-        ? 'bg-slate-300/15 text-slate-300'
-        : index === 2
-          ? 'bg-amber-600/15 text-amber-500'
-          : 'bg-transparent text-[#8a8a8a]'
-  return (
-    <div className="flex items-center gap-3 rounded-md px-3 py-2 transition-colors hover:bg-white/[0.02]">
-      <div
-        className={cn(
-          'flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold',
-          badge
-        )}
-      >
-        {index + 1}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-medium text-white">{item.name}</div>
-        <div className="flex gap-2 text-[10px] text-[#8a8a8a]">
-          <span>{item.symbol}</span>
-          <span>胜率 {(item.win_rate || 0).toFixed(1)}%</span>
-          <span>{item.trades || 0}笔</span>
-        </div>
-      </div>
-      <div
-        className={cn(
-          'shrink-0 font-mono text-sm font-semibold',
-          pnl >= 0 ? 'text-quant-green' : 'text-quant-red'
-        )}
-      >
-        {pnl >= 0 ? '+' : ''}${Math.abs(pnl).toFixed(0)}
-      </div>
-    </div>
-  )
-}
-
-/* ── Currency Converter ── */
-let conversionRate = 7.25
-let preferredCurrency = 'CNY'
-const currencySymbols: Record<string, string> = {
-  CNY: '¥', USD: '$', EUR: '€', GBP: '£', JPY: '¥',
-  KRW: '₩', HKD: 'HK$', TWD: 'NT$', SGD: 'S$', AUD: 'A$',
-}
-export const getConversionRate = () => conversionRate
-export const getPreferredCurrency = () => preferredCurrency
-export const getCurrencySymbol = () => currencySymbols[preferredCurrency] || preferredCurrency
-export const formatConverted = (usd: number) => {
-  const converted = usd * conversionRate
-  const sym = currencySymbols[preferredCurrency] || (preferredCurrency + ' ')
-  if (preferredCurrency === 'USD') return `$${converted.toFixed(2)}`
-  return `${sym}${converted.toFixed(2)}`
-}
-export const setConversion = (rate: number, currency: string) => {
-  conversionRate = rate
-  preferredCurrency = currency
-}
-
 /* ── Main Dashboard ── */
 export function Dashboard() {
   const [showGuide, setShowGuide] = useState(() => {
     return localStorage.getItem('xt-dashboard-guide-dismissed') !== '1'
   })
+
+  const navigate = useNavigate()
 
   const { data: dash, isLoading: dashLoading } = useQuery<DashboardSummary>({
     queryKey: ['dashboard'],
@@ -858,7 +790,6 @@ export function Dashboard() {
 
   const totalEquity = dash?.total_equity ?? portfolio?.total_equity ?? 0
   const totalPnl = dash?.total_pnl ?? portfolio?.total_pnl ?? 0
-  const totalPnlPct = portfolio?.total_pnl_pct ?? 0
 
   const winRate = dash?.win_rate ?? 62.4
   const profitFactor = dash?.profit_factor ?? 1.85
@@ -867,6 +798,17 @@ export function Dashboard() {
 
   const runningStrats = useMemo(() => strategies?.filter((s) => s.status === 'running') || [], [strategies])
   const isLoading = dashLoading || portfolioLoading
+
+  // Convert calendar (daily PnL map) into chart series format
+  const dailyPnL = useMemo(() => {
+    if (!dash?.calendar) return undefined
+    return Object.entries(dash.calendar)
+      .map(([date, value]) => ({
+        time: new Date(date + 'T00:00:00').getTime() / 1000,
+        value: Number(value) || 0,
+      }))
+      .sort((a, b) => a.time - b.time)
+  }, [dash?.calendar])
 
   const handleDismissGuide = useCallback(() => {
     setShowGuide(false)
@@ -935,7 +877,7 @@ export function Dashboard() {
                 subLabel="在线"
                 trend="up"
                 onNavigate={() => {
-                  window.location.hash = '#/bots'
+                  navigate('/bots')
                 }}
               />
             </>
@@ -974,7 +916,7 @@ export function Dashboard() {
             }
           >
             <div className="h-[280px]">
-              <PnLBarChart data={dash?.equity_curve} isLoading={dashLoading} />
+              <PnLBarChart data={dailyPnL} isLoading={dashLoading} />
             </div>
           </SectionCard>
         </div>
@@ -992,7 +934,6 @@ export function Dashboard() {
                 <div className="space-y-3">
                   {(portfolio?.exchanges?.filter((ex) => ex.connected || ex.balance > 0 || ex.configured) || []).map((ex) => {
                     const isBinance = ex.name === 'binance'
-                    const hasSubItems = isBinance || ex.balance > 0
                     return (
                     <div key={ex.name}>
                       <div className="flex items-center justify-between text-sm">
@@ -1100,7 +1041,7 @@ export function Dashboard() {
             <SectionCard
               title="AI 多智能体状态"
               headerAction={
-                <span className="text-[10px] text-[#8a8a8a]">QuantDinger</span>
+                <span className="text-[10px] text-[#8a8a8a]">XiaoTianQuant v3.0</span>
               }
             >
               <div className="mb-3 grid grid-cols-3 gap-3">
@@ -1196,7 +1137,7 @@ export function Dashboard() {
                   description="在策略页面启动您的第一个策略"
                   actionLabel="去策略页面"
                   onAction={() => {
-                    window.location.hash = '#/strategy'
+                    navigate('/strategy')
                   }}
                 />
               )}
@@ -1207,7 +1148,7 @@ export function Dashboard() {
               headerAction={
                 <button
                   onClick={() => {
-                    window.location.hash = '#/strategies'
+                    navigate('/strategy')
                   }}
                   className="flex items-center gap-0.5 text-[10px] text-[#8a8a8a] transition-colors hover:text-white"
                 >
@@ -1250,7 +1191,7 @@ export function Dashboard() {
                         <div className="min-w-0">
                           <div className="truncate text-sm font-medium text-white">{item.name}</div>
                           <div className="flex gap-2 text-[10px] text-[#8a8a8a]">
-                            <span>胜率 {((item.win_rate || 0) * 100).toFixed(1)}%</span>
+                            <span>胜率 {(item.win_rate || 0).toFixed(1)}%</span>
                             <span>夏普 {(item.sharpe || 0).toFixed(2)}</span>
                           </div>
                         </div>

@@ -252,7 +252,7 @@ export function extractOutputFromCode(code: string): IndicatorOutput | null {
 }
 
 /**
- * Default indicator code template following the QuantDinger contract.
+ * Default indicator code template following the XiaoTianQuant contract.
  */
 export const DEFAULT_INDICATOR_CODE = `my_indicator_name = "双均线交叉"
 my_indicator_description = "短期均线上穿长期均线买入，下穿卖出"

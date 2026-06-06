@@ -397,7 +397,7 @@ func repairCodeViaLLM(prompt, badCode string, hints []ValidationHint, execResult
 	}
 
 	repairPrompt := fmt.Sprintf(
-		"Fix the following QuantDinger indicator code while preserving the user's trading idea.\n\n"+
+		"Fix the following indicator code while preserving the user's trading idea.\n\n"+
 			"# User request\n%s\n\n"+
 			"# Validation issues to fix\n%s\n\n"+
 			"# Current code\n```python\n%s\n```\n\n"+
@@ -488,9 +488,9 @@ output = {
 `, strings.ReplaceAll(prompt, "\n", " ")[:200])
 }
 
-// buildSystemPrompt returns the QuantDinger indicator system prompt.
+// buildSystemPrompt returns the XiaoTianQuant indicator system prompt.
 func buildSystemPrompt() string {
-	return `You write production-ready QuantDinger indicator scripts in Python.
+	return `You write production-ready XiaoTianQuant indicator scripts in Python.
 
 Rules:
 - Environment: sandboxed, no network, no file I/O, no subprocess.

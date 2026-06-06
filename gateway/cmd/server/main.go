@@ -86,6 +86,10 @@ func main() {
 		c.Request.URL.Path = c.Param("filepath")
 		fileServer.ServeHTTP(c.Writer, c.Request)
 	})
+	// Serve PWA root files from embedded spa/
+	r.GET("/manifest.json", spa.ServeRootFile("manifest.json"))
+	r.GET("/sw.js", spa.ServeRootFile("sw.js"))
+	r.GET("/favicon.svg", spa.ServeRootFile("favicon.svg"))
 	// Fallback all non-API routes to index.html for React Router
 	r.GET("/", handler.Index)
 	r.NoRoute(handler.Index)
@@ -277,43 +281,50 @@ func main() {
 		private.POST("/combos/:id/stop", handler.StopCombo)
 		private.GET("/combos/:id/signals", handler.GetComboSignals)
 
-			// ── Pairlist ──
-			private.GET("/pairlist/whitelist", handler.GetPairlistWhitelist)
-			private.POST("/pairlist/refresh", handler.RefreshPairlist)
-			private.GET("/pairlist/config", handler.GetPairlistConfig)
-			private.POST("/pairlist/config", handler.ConfigurePairlist)
+		// ── Portfolio ──
+		private.GET("/portfolio/summary", handler.PortfolioSummary)
+		private.GET("/portfolio/positions", handler.PortfolioPositions)
+		private.GET("/portfolio/snapshots", handler.PortfolioSnapshots)
+		private.GET("/portfolio/calendar", handler.PortfolioCalendar)
+		private.GET("/exchange/usdcny", handler.UsdCnyRate)
 
-			// ── Protection ──
-			private.GET("/protection/status", handler.GetProtectionStatus)
-			private.POST("/protection/config", handler.ConfigureProtection)
-			private.POST("/protection/reset", handler.ResetProtection)
-			private.POST("/protection/trade", handler.RecordTrade)
+		// ── Pairlist ──
+		private.GET("/pairlist/whitelist", handler.GetPairlistWhitelist)
+		private.POST("/pairlist/refresh", handler.RefreshPairlist)
+		private.GET("/pairlist/config", handler.GetPairlistConfig)
+		private.POST("/pairlist/config", handler.ConfigurePairlist)
 
-			// ── Hyperopt ──
-			private.POST("/hyperopt/start", handler.StartHyperopt)
-			private.GET("/hyperopt/jobs", handler.ListHyperoptJobs)
-			private.GET("/hyperopt/jobs/:id", handler.GetHyperoptJob)
-			private.POST("/hyperopt/jobs/:id/cancel", handler.CancelHyperoptJob)
-			private.DELETE("/hyperopt/jobs/:id", handler.DeleteHyperoptJob)
-			private.GET("/hyperopt/spaces", handler.GetHyperoptSpaces)
-			private.POST("/hyperopt/jobs/:id/export", handler.ExportHyperoptParams)
+		// ── Protection ──
+		private.GET("/protection/status", handler.GetProtectionStatus)
+		private.POST("/protection/config", handler.ConfigureProtection)
+		private.POST("/protection/reset", handler.ResetProtection)
+		private.POST("/protection/trade", handler.RecordTrade)
 
-			// ── RL (Reinforcement Learning) ──
-			private.POST("/rl/train", handler.RLTrain)
-			private.POST("/rl/predict", handler.RLPredict)
-			private.POST("/rl/evaluate", handler.RLEvaluate)
-			private.GET("/rl/models", handler.ListRLModels)
-			private.DELETE("/rl/models/:id", handler.DeleteRLModel)
-			private.GET("/rl/jobs/:id", handler.GetRLJob)
-			private.POST("/rl/jobs/:id/cancel", handler.CancelRLJob)
-			private.GET("/rl/worker/status", handler.GetRLWorkerStatus)
-			private.POST("/rl/worker/start", handler.StartRLWorker)
+		// ── Hyperopt ──
+		private.POST("/hyperopt/start", handler.StartHyperopt)
+		private.GET("/hyperopt/jobs", handler.ListHyperoptJobs)
+		private.GET("/hyperopt/jobs/:id", handler.GetHyperoptJob)
+		private.POST("/hyperopt/jobs/:id/cancel", handler.CancelHyperoptJob)
+		private.DELETE("/hyperopt/jobs/:id", handler.DeleteHyperoptJob)
+		private.GET("/hyperopt/spaces", handler.GetHyperoptSpaces)
+		private.POST("/hyperopt/jobs/:id/export", handler.ExportHyperoptParams)
 
-			// ── TensorBoard ──
-			private.GET("/tensorboard/runs", handler.ListTensorBoardRuns)
-			private.POST("/tensorboard/scalars", handler.QueryTensorBoardScalars)
-			private.GET("/tensorboard/runs/:id", handler.GetTensorBoardRun)
-			private.DELETE("/tensorboard/runs/:id", handler.DeleteTensorBoardRun)
+		// ── RL (Reinforcement Learning) ──
+		private.POST("/rl/train", handler.RLTrain)
+		private.POST("/rl/predict", handler.RLPredict)
+		private.POST("/rl/evaluate", handler.RLEvaluate)
+		private.GET("/rl/models", handler.ListRLModels)
+		private.DELETE("/rl/models/:id", handler.DeleteRLModel)
+		private.GET("/rl/jobs/:id", handler.GetRLJob)
+		private.POST("/rl/jobs/:id/cancel", handler.CancelRLJob)
+		private.GET("/rl/worker/status", handler.GetRLWorkerStatus)
+		private.POST("/rl/worker/start", handler.StartRLWorker)
+
+		// ── TensorBoard ──
+		private.GET("/tensorboard/runs", handler.ListTensorBoardRuns)
+		private.POST("/tensorboard/scalars", handler.QueryTensorBoardScalars)
+		private.GET("/tensorboard/runs/:id", handler.GetTensorBoardRun)
+		private.DELETE("/tensorboard/runs/:id", handler.DeleteTensorBoardRun)
 
 		// ── Settings ──
 		settingsG := private.Group("/settings")
@@ -383,13 +394,6 @@ func main() {
 
 		// ── Dashboard ──
 		private.GET("/dashboard/summary", handler.DashboardSummary)
-
-		// ── Portfolio (new) ──
-		private.GET("/portfolio/summary", handler.PortfolioSummary)
-		private.GET("/portfolio/positions", handler.PortfolioPositions)
-		private.GET("/portfolio/snapshots", handler.PortfolioSnapshots)
-		private.GET("/portfolio/calendar", handler.PortfolioCalendar)
-		private.GET("/exchange/usdcny", handler.UsdCnyRate)
 
 		// ── Settings ──
 		private.GET("/settings/currency", handler.SettingsCurrencyGet)
@@ -481,9 +485,9 @@ func main() {
 	api.POST("/webhook/tv", handler.TradingViewWebhook)
 	api.POST("/webhook/generic", handler.GenericWebhook)
 
-		r.GET("/ws", handler.WSHandler)
-		r.GET("/ws/v2", ws.HubHandler)
-		api.GET("/ws/stats", ws.Stats)
+	r.GET("/ws", handler.WSHandler)
+	r.GET("/ws/v2", ws.HubHandler)
+	api.GET("/ws/stats", ws.Stats)
 
 	// ── Metrics ──
 	r.GET("/metrics", func(c *gin.Context) {

@@ -121,7 +121,7 @@ export function RLPanel({
       if ('job_id' in result && result.job_id) {
         setJobId(result.job_id)
         setActiveJob({
-          job_id: result.job_id,
+          id: result.job_id,
           status: 'pending',
           algorithm,
           n_actions: nActions,
@@ -287,7 +287,7 @@ export function RLPanel({
               <div className="flex items-center justify-between">
                 <div className="text-xs font-medium flex items-center gap-1.5">
                   <Clock className="h-3 w-3 text-quant-gold" />
-                  任务: {activeJob.job_id}
+                  任务: {activeJob.id}
                 </div>
                 <span className={cn('text-[10px] px-1.5 py-0.5 rounded',
                   activeJob.status === 'pending' ? 'bg-yellow-500/10 text-yellow-500' :

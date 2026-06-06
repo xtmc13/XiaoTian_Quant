@@ -74,7 +74,7 @@ export function RLWorkerStatusCard() {
     }
   };
 
-  const isOnline = status?.workers?.length > 0;
+  const isOnline = (status?.workers?.length ?? 0) > 0;
 
   return (
     <SectionCard 

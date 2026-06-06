@@ -85,13 +85,15 @@ import {
   type RLPredictResult,
   type RLEvalResult,
   type RLModelInfo,
+  type RLJob,
+  type RLWorkerStatus,
   type TensorBoardSummary,
   type TensorBoardQueryResult,
   type TensorBoardRun,
 } from '@/types'
 
 
-// ── Timeout presets (QuantDinger style) ──
+// ── Timeout presets (XiaoTianQuant style) ──
 const TIMEOUTS: Record<string, number> = {
   default: 30000,
   ai: 180000,

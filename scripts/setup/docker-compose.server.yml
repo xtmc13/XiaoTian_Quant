@@ -1,0 +1,206 @@
+version: "3.9"
+
+# ═══════════════════════════════════════════════════════════════════
+# XiaoTianQuant v3.0 — Production Server Deployment
+# For: Linux servers, cloud VMs, dedicated hosts
+# ═══════════════════════════════════════════════════════════════════
+
+services:
+  # ── Go Gateway (API + Frontend) ───────────────────────────────
+  gateway:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-3.0.0}
+        BUILD_TIME: ${BUILD_TIME:-}
+    container_name: xiaotian-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - GIN_MODE=release
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+      # Proxy settings (for China mainland users)
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - NO_PROXY=localhost,127.0.0.1,sandbox,ml_server,redis
+      # Exchange API keys
+      - BINANCE_API_KEY=${BINANCE_API_KEY:-}
+      - BINANCE_API_SECRET=${BINANCE_API_SECRET:-}
+      - OKX_API_KEY=${OKX_API_KEY:-}
+      - OKX_API_SECRET=${OKX_API_SECRET:-}
+      # AI provider keys
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # Notification channels
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - LARK_WEBHOOK=${LARK_WEBHOOK:-}
+      - DINGTALK_WEBHOOK=${DINGTALK_WEBHOOK:-}
+      # Cache
+      - CACHE_ENABLED=${CACHE_ENABLED:-true}
+      - REDIS_URL=redis://redis:6379/0
+      # Internal services
+      - SANDBOX_URL=http://sandbox:9000
+      - ML_SERVER_URL=http://ml_server:8001
+      - CCXT_BRIDGE_URL=http://ccxt_bridge:8002
+    volumes:
+      - gateway_data:/app/data
+      - ./logs/gateway:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      redis:
+        condition: service_started
+      ml_server:
+        condition: service_healthy
+        required: false
+    networks:
+      - xiaotian
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ── ML Server (Python) ──────────────────────────────────────
+  ml_server:
+    build:
+      context: ../sandbox
+      dockerfile: Dockerfile
+    container_name: xiaotian-ml-server
+    command: >
+      sh -c "pip install -r /app/ml_server/requirements.txt &&
+             pip install stable-baselines3 gymnasium tensorboard scikit-learn &&
+             cd /app/ml_server &&
+             python -m uvicorn main:app --host 0.0.0.0 --port 8001"
+    ports:
+      - "8001:8001"
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+    volumes:
+      - ml_models:/app/ml_server/models
+      - tensorboard_logs:/app/ml_server/tensorboard_logs
+      - ./logs/ml:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - xiaotian
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 1G
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ── RL Worker (Python) ────────────────────────────────────────
+  rl_worker:
+    build:
+      context: ../sandbox
+      dockerfile: Dockerfile
+    container_name: xiaotian-rl-worker
+    command: >
+      sh -c "pip install -r /app/ml_server/requirements.txt &&
+             pip install stable-baselines3 gymnasium tensorboard scikit-learn redis &&
+             cd /app/ml_server &&
+             python rl_worker.py --redis-url redis://redis:6379/0"
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+    volumes:
+      - ml_models:/app/ml_server/models
+      - tensorboard_logs:/app/ml_server/tensorboard_logs
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_started
+      ml_server:
+        condition: service_healthy
+    networks:
+      - xiaotian
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  # ── Redis ─────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: xiaotian-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --requirepass ${REDIS_PASSWORD:-xiaotianquant}
+    networks:
+      - xiaotian
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── Nginx Reverse Proxy (optional) ────────────────────────────
+  nginx:
+    image: nginx:alpine
+    container_name: xiaotian-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    restart: unless-stopped
+    depends_on:
+      - gateway
+    networks:
+      - xiaotian
+    profiles:
+      - ssl
+
+volumes:
+  gateway_data:
+  redis_data:
+  ml_models:
+  tensorboard_logs:
+
+networks:
+  xiaotian:
+    driver: bridge
