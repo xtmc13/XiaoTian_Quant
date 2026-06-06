@@ -28,8 +28,12 @@ export function CodeEditor({
 }: CodeEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
+  const onChangeRef = useRef(onChange)
+  onChangeRef.current = onChange
+  const initialValueRef = useRef(value)
+  initialValueRef.current = value
 
-  // Init editor on mount
+  // Init editor on mount & when static config changes
   useEffect(() => {
     if (!containerRef.current) return
 
@@ -40,15 +44,15 @@ export function CodeEditor({
       EditorView.editable.of(!readOnly),
       EditorView.lineWrapping,
       EditorView.updateListener.of(update => {
-        if (update.docChanged && onChange) {
-          onChange(update.state.doc.toString())
+        if (update.docChanged && onChangeRef.current) {
+          onChangeRef.current(update.state.doc.toString())
         }
       }),
       ...(theme === 'dark' ? [oneDark] : []),
       ...(placeholderText ? [cmPlaceholder(placeholderText)] : []),
     ]
 
-    const state = EditorState.create({ doc: value, extensions })
+    const state = EditorState.create({ doc: initialValueRef.current, extensions })
     const view = new EditorView({ state, parent: containerRef.current })
     viewRef.current = view
 
@@ -56,9 +60,7 @@ export function CodeEditor({
       view.destroy()
       viewRef.current = null
     }
-    // Only init once — value sync handled via dispatch
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [readOnly, theme, placeholderText])
 
   // Sync value from props → editor
   useEffect(() => {

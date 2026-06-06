@@ -35,6 +35,7 @@ interface OrderForm {
 interface OCOForm extends OrderForm {
   stopPrice: number
   limitPrice: number
+  [key: string]: unknown
 }
 
 interface BracketForm extends OrderForm {
@@ -46,6 +47,7 @@ interface BracketForm extends OrderForm {
 interface IcebergForm extends OrderForm {
   totalQuantity: number
   sliceSize: number
+  [key: string]: unknown
 }
 
 /* ── Page ── */
@@ -68,17 +70,14 @@ export function AdvancedOrderManagement() {
   const { data: ocoList } = useQuery({
     queryKey: ['advanced-orders-oco'],
     queryFn: () => advancedOrderApi.oco.list(),
-    select: (r: any) => (Array.isArray(r) ? r : r?.orders ?? []),
   })
   const { data: bracketList } = useQuery({
     queryKey: ['advanced-orders-bracket'],
     queryFn: () => advancedOrderApi.bracket.list(),
-    select: (r: any) => (Array.isArray(r) ? r : r?.orders ?? []),
   })
   const { data: icebergList } = useQuery({
     queryKey: ['advanced-orders-iceberg'],
     queryFn: () => advancedOrderApi.iceberg.list(),
-    select: (r: any) => (Array.isArray(r) ? r : r?.orders ?? []),
   })
 
   // Mutations
@@ -127,21 +126,21 @@ export function AdvancedOrderManagement() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <KPICard
             label="OCO 订单"
-            value={(ocoList as any)?.length ?? 0}
+            value={ocoList?.length ?? 0}
             icon={<Target className="w-4 h-4 text-quant-gold" />}
             subValue="活跃"
             trend="neutral"
           />
           <KPICard
             label="Bracket 订单"
-            value={(bracketList as any)?.length ?? 0}
+            value={bracketList?.length ?? 0}
             icon={<Layers className="w-4 h-4 text-quant-gold" />}
             subValue="活跃"
             trend="neutral"
           />
           <KPICard
             label="冰山订单"
-            value={(icebergList as any)?.length ?? 0}
+            value={icebergList?.length ?? 0}
             icon={<Snowflake className="w-4 h-4 text-quant-gold" />}
             subValue="活跃"
             trend="neutral"
@@ -186,6 +185,7 @@ export function AdvancedOrderManagement() {
                     value={ocoForm.symbol}
                     onChange={(e) => setOcoForm({ ...ocoForm, symbol: e.target.value.toUpperCase() })}
                     className="w-full px-2 py-1.5 rounded-md bg-quant-bg-secondary border border-quant-border text-sm focus:outline-none focus:border-quant-gold"
+                    aria-label="交易对"
                   />
                 </div>
                 <div className="space-y-1">
@@ -206,6 +206,7 @@ export function AdvancedOrderManagement() {
                     value={ocoForm.quantity}
                     onChange={(e) => setOcoForm({ ...ocoForm, quantity: parseFloat(e.target.value) })}
                     className="w-full px-2 py-1.5 rounded-md bg-quant-bg-secondary border border-quant-border text-sm focus:outline-none focus:border-quant-gold"
+                    aria-label="数量"
                   />
                 </div>
                 <div className="space-y-1">
@@ -215,6 +216,7 @@ export function AdvancedOrderManagement() {
                     value={ocoForm.stopPrice}
                     onChange={(e) => setOcoForm({ ...ocoForm, stopPrice: parseFloat(e.target.value) })}
                     className="w-full px-2 py-1.5 rounded-md bg-quant-bg-secondary border border-quant-border text-sm focus:outline-none focus:border-quant-gold"
+                    aria-label="止损价"
                   />
                 </div>
                 <div className="space-y-1">
@@ -224,6 +226,7 @@ export function AdvancedOrderManagement() {
                     value={ocoForm.limitPrice}
                     onChange={(e) => setOcoForm({ ...ocoForm, limitPrice: parseFloat(e.target.value) })}
                     className="w-full px-2 py-1.5 rounded-md bg-quant-bg-secondary border border-quant-border text-sm focus:outline-none focus:border-quant-gold"
+                    aria-label="限价"
                   />
                 </div>
               </div>
@@ -246,14 +249,14 @@ export function AdvancedOrderManagement() {
 
             <SectionCard title="活跃 OCO 订单">
               <div className="space-y-2">
-                {!(ocoList as any)?.length ? (
+                {!ocoList?.length ? (
                   <EmptyState
                     icon={<Target className="w-10 h-10 text-muted-foreground" />}
                     title="无活跃 OCO 订单"
                     description="使用上方表单创建 OCO 订单"
                   />
                 ) : (
-                  (Array.isArray(ocoList) ? ocoList : []).map((order: any) => (
+                  (Array.isArray(ocoList) ? ocoList : []).map((order) => (
                     <div key={order.id} className="flex items-center justify-between p-3 rounded-md bg-quant-bg-secondary">
                       <div className="flex items-center gap-3">
                         <Target className="w-4 h-4 text-quant-gold" />
@@ -291,6 +294,7 @@ export function AdvancedOrderManagement() {
                     value={bracketForm.symbol}
                     onChange={(e) => setBracketForm({ ...bracketForm, symbol: e.target.value.toUpperCase() })}
                     className="w-full px-2 py-1.5 rounded-md bg-quant-bg-secondary border border-quant-border text-sm focus:outline-none focus:border-quant-gold"
+                    aria-label="交易对"
                   />
                 </div>
                 <div className="space-y-1">
@@ -311,6 +315,7 @@ export function AdvancedOrderManagement() {
                     value={bracketForm.quantity}
                     onChange={(e) => setBracketForm({ ...bracketForm, quantity: parseFloat(e.target.value) })}
                     className="w-full px-2 py-1.5 rounded-md bg-quant-bg-secondary border border-quant-border text-sm focus:outline-none focus:border-quant-gold"
+                    aria-label="数量"
                   />
                 </div>
                 <div className="space-y-1">
@@ -320,6 +325,7 @@ export function AdvancedOrderManagement() {
                     value={bracketForm.entryPrice}
                     onChange={(e) => setBracketForm({ ...bracketForm, entryPrice: parseFloat(e.target.value) })}
                     className="w-full px-2 py-1.5 rounded-md bg-quant-bg-secondary border border-quant-border text-sm focus:outline-none focus:border-quant-gold"
+                    aria-label="入场价"
                   />
                 </div>
                 <div className="space-y-1">
@@ -329,6 +335,7 @@ export function AdvancedOrderManagement() {
                     value={bracketForm.stopLossPrice}
                     onChange={(e) => setBracketForm({ ...bracketForm, stopLossPrice: parseFloat(e.target.value) })}
                     className="w-full px-2 py-1.5 rounded-md bg-quant-bg-secondary border border-quant-border text-sm focus:outline-none focus:border-quant-gold"
+                    aria-label="止损价"
                   />
                 </div>
                 <div className="space-y-1">
@@ -338,6 +345,7 @@ export function AdvancedOrderManagement() {
                     value={bracketForm.takeProfitPrice}
                     onChange={(e) => setBracketForm({ ...bracketForm, takeProfitPrice: parseFloat(e.target.value) })}
                     className="w-full px-2 py-1.5 rounded-md bg-quant-bg-secondary border border-quant-border text-sm focus:outline-none focus:border-quant-gold"
+                    aria-label="止盈价"
                   />
                 </div>
               </div>
@@ -360,14 +368,14 @@ export function AdvancedOrderManagement() {
 
             <SectionCard title="活跃 Bracket 订单">
               <div className="space-y-2">
-                {!(bracketList as any)?.length ? (
+                {!bracketList?.length ? (
                   <EmptyState
                     icon={<Layers className="w-10 h-10 text-muted-foreground" />}
                     title="无活跃 Bracket 订单"
                     description="使用上方表单创建 Bracket 订单"
                   />
                 ) : (
-                  (Array.isArray(bracketList) ? bracketList : []).map((order: any) => (
+                  (Array.isArray(bracketList) ? bracketList : []).map((order) => (
                     <div key={order.id} className="flex items-center justify-between p-3 rounded-md bg-quant-bg-secondary">
                       <div className="flex items-center gap-3">
                         <Layers className="w-4 h-4 text-quant-gold" />
@@ -405,6 +413,7 @@ export function AdvancedOrderManagement() {
                     value={icebergForm.symbol}
                     onChange={(e) => setIcebergForm({ ...icebergForm, symbol: e.target.value.toUpperCase() })}
                     className="w-full px-2 py-1.5 rounded-md bg-quant-bg-secondary border border-quant-border text-sm focus:outline-none focus:border-quant-gold"
+                    aria-label="交易对"
                   />
                 </div>
                 <div className="space-y-1">
@@ -425,6 +434,7 @@ export function AdvancedOrderManagement() {
                     value={icebergForm.quantity}
                     onChange={(e) => setIcebergForm({ ...icebergForm, quantity: parseFloat(e.target.value) })}
                     className="w-full px-2 py-1.5 rounded-md bg-quant-bg-secondary border border-quant-border text-sm focus:outline-none focus:border-quant-gold"
+                    aria-label="单次数量"
                   />
                 </div>
                 <div className="space-y-1">
@@ -434,6 +444,7 @@ export function AdvancedOrderManagement() {
                     value={icebergForm.totalQuantity}
                     onChange={(e) => setIcebergForm({ ...icebergForm, totalQuantity: parseFloat(e.target.value) })}
                     className="w-full px-2 py-1.5 rounded-md bg-quant-bg-secondary border border-quant-border text-sm focus:outline-none focus:border-quant-gold"
+                    aria-label="总数量"
                   />
                 </div>
                 <div className="space-y-1">
@@ -465,14 +476,14 @@ export function AdvancedOrderManagement() {
 
             <SectionCard title="活跃冰山订单">
               <div className="space-y-2">
-                {!(icebergList as any)?.length ? (
+                {!icebergList?.length ? (
                   <EmptyState
                     icon={<Snowflake className="w-10 h-10 text-muted-foreground" />}
                     title="无活跃冰山订单"
                     description="使用上方表单创建冰山订单"
                   />
                 ) : (
-                  (Array.isArray(icebergList) ? icebergList : []).map((order: any) => (
+                  (Array.isArray(icebergList) ? icebergList : []).map((order) => (
                     <div key={order.id} className="flex items-center justify-between p-3 rounded-md bg-quant-bg-secondary">
                       <div className="flex items-center gap-3">
                         <Snowflake className="w-4 h-4 text-quant-gold" />

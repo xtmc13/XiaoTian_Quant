@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/adapter"
 	"github.com/xiaotian-quant/gateway/internal/model"
+	"github.com/xiaotian-quant/gateway/internal/order"
 	"github.com/xiaotian-quant/gateway/internal/portfolio"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
@@ -40,22 +41,22 @@ func PlaceOrder(c *gin.Context) {
 		return
 	}
 
-	order := map[string]any{
-		"symbol":     getString(body, "symbol", "BTCUSDT"),
-		"side":       getString(body, "side", "BUY"),
-		"order_type": getString(body, "order_type", "LIMIT"),
-		"price":      getFloat(body, "price", 0),
-		"quantity":   getFloat(body, "quantity", 0),
-		"exchange":   getString(body, "exchange", "BINANCE"),
-	}
-	id := store.PlaceOrder(order)
-
-	// ── Auto-fill MARKET orders for paper trading ──
-	if strings.EqualFold(order["order_type"].(string), "MARKET") {
-		fillOrderAndUpdatePortfolio(order)
+	req := &order.Request{
+		Symbol:    getString(body, "symbol", "BTCUSDT"),
+		Side:      model.OrderSide(getString(body, "side", "BUY")),
+		OrderType: model.OrderType(getString(body, "order_type", "LIMIT")),
+		Price:     getFloat(body, "price", 0),
+		Quantity:  getFloat(body, "quantity", 0),
+		Exchange:  getString(body, "exchange", "paper"),
 	}
 
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "order_id": id})
+	ord, err := order.GetOrderManager().PlaceOrder(req)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "detail": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "order_id": ord.ID, "order_status": ord.Status})
 }
 
 // fillOrderAndUpdatePortfolio simulates immediate execution for market orders

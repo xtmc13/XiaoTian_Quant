@@ -6,6 +6,7 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { SectionCard } from '@/components/ui/SectionCard'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { KPICard } from '@/components/ui/KPICard'
+import type { PairlistConfig } from '@/types'
 import {
   ListFilter,
   RefreshCw,
@@ -25,10 +26,7 @@ import {
 } from 'lucide-react'
 
 /* ── Types ── */
-interface PairlistConfig {
-  producers: { name: string; params: Record<string, any> }[]
-  filters: { name: string; params: Record<string, any> }[]
-}
+// Use PairlistConfig from @/types (has index signature for compatibility)
 
 /* ── Producer Templates ── */
 interface FieldDef {
@@ -44,7 +42,7 @@ interface ProducerTemplate {
   name: string
   label: string
   description: string
-  defaultParams: Record<string, any>
+  defaultParams: Record<string, unknown>
   fields: FieldDef[]
 }
 
@@ -75,7 +73,7 @@ interface FilterTemplate {
   name: string
   label: string
   description: string
-  defaultParams: Record<string, any>
+  defaultParams: Record<string, unknown>
   fields: FieldDef[]
 }
 
@@ -160,18 +158,12 @@ export function PairlistManagement() {
   // Queries
   const { data: whitelist, isLoading: whitelistLoading } = useQuery({
     queryKey: ['pairlist-whitelist'],
-    queryFn: async () => {
-      const res = await pairlistApi.whitelist()
-      return res as any
-    },
+    queryFn: () => pairlistApi.whitelist(),
   })
 
   const { data: config } = useQuery({
     queryKey: ['pairlist-config'],
-    queryFn: async () => {
-      const res = await pairlistApi.config()
-      return res as any
-    },
+    queryFn: () => pairlistApi.config(),
   })
 
   // Mutations
@@ -205,7 +197,7 @@ export function PairlistManagement() {
     type: 'producer' | 'filter',
     index: number,
     key: string,
-    value: any
+    value: string | number | boolean | string[]
   ) => {
     if (type === 'producer') {
       setProducers((prev) => {
@@ -234,7 +226,7 @@ export function PairlistManagement() {
     configureMutation.mutate({ producers, filters })
   }, [producers, filters, configureMutation])
 
-  const pairs = whitelist?.pairs as string[] || []
+  const pairs = (whitelist?.whitelist as string[]) || []
 
   return (
     <div className="h-full overflow-y-auto">
@@ -249,28 +241,28 @@ export function PairlistManagement() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <KPICard
             label="当前白名单"
-            value={whitelist?.count ?? '-'}
+            value={String(whitelist?.whitelist?.length ?? '-')}
             icon={<Layers className="w-4 h-4 text-quant-gold" />}
             subValue="交易对"
             trend="up"
           />
           <KPICard
             label="交易所"
-            value={whitelist?.exchange ?? 'binance'}
+            value={String(whitelist?.exchange ?? 'binance')}
             icon={<Globe className="w-4 h-4 text-quant-gold" />}
             subValue="数据源"
             trend="neutral"
           />
           <KPICard
             label="计价资产"
-            value={whitelist?.quote_asset ?? 'USDT'}
+            value={String(whitelist?.quote_asset ?? 'USDT')}
             icon={<DollarSign className="w-4 h-4 text-quant-gold" />}
             subValue="基准"
             trend="neutral"
           />
           <KPICard
             label="最后更新"
-            value={whitelist?.last_update ? new Date(whitelist.last_update as string).toLocaleTimeString() : '-'}
+            value={whitelist?.generated_at ? new Date(whitelist.generated_at).toLocaleTimeString() : '-'}
             icon={<RefreshCw className="w-4 h-4 text-quant-gold" />}
             subValue="最近"
             trend="neutral"
@@ -497,7 +489,7 @@ export function PairlistManagement() {
         {/* Save */}
         <div className="flex items-center justify-end gap-3">
           {configureMutation.isError && (
-            <span className="text-xs text-red-400">保存失败: {(configureMutation.error as any)?.message}</span>
+            <span className="text-xs text-red-400">保存失败: {configureMutation.error?.message}</span>
           )}
           {configureMutation.isSuccess && (
             <span className="text-xs text-green-400 flex items-center gap-1">

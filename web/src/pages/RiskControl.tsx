@@ -40,7 +40,7 @@ interface ProtectionStatus {
 
 interface ProtectionConfigItem {
   name: string
-  params: Record<string, any>
+  params: Record<string, unknown>
 }
 
 /* ── Protection Templates ── */
@@ -59,7 +59,7 @@ interface ProtectionTemplate {
   label: string
   description: string
   icon: React.ReactNode
-  defaultParams: Record<string, any>
+  defaultParams: Record<string, unknown>
   fields: FieldDef[]
 }
 
@@ -117,7 +117,7 @@ export function RiskControl() {
   const [selectedTemplate, setSelectedTemplate] = useState<string>('')
 
   // Queries
-  const { data: status, isLoading: statusLoading } = useQuery({
+  const { data: status, isLoading: statusLoading } = useQuery<ProtectionStatus>({
     queryKey: ['protection-status'],
     queryFn: async () => {
       const res = await protectionApi.status()
@@ -125,6 +125,25 @@ export function RiskControl() {
     },
     refetchInterval: 10000,
   })
+
+  const { data: configData } = useQuery<ProtectionConfigItem[]>({
+    queryKey: ['protection-config'],
+    queryFn: async () => {
+      try {
+        const res = await protectionApi.getConfig()
+        return (res?.protections || []) as ProtectionConfigItem[]
+      } catch {
+        return undefined as unknown as ProtectionConfigItem[]
+      }
+    },
+  })
+
+  // Load existing config on mount
+  useEffect(() => {
+    if (configData && configData.length > 0) {
+      setActiveProtections(configData)
+    }
+  }, [configData])
 
   // Mutations
   const configMutation = useMutation({
@@ -151,7 +170,7 @@ export function RiskControl() {
     setSelectedTemplate('')
   }, [])
 
-  const handleUpdateParam = useCallback((index: number, key: string, value: any) => {
+  const handleUpdateParam = useCallback((index: number, key: string, value: string | number | boolean) => {
     setActiveProtections((prev) => {
       const next = [...prev]
       next[index] = { ...next[index], params: { ...next[index].params, [key]: value } }
@@ -342,7 +361,7 @@ export function RiskControl() {
                         <label className="text-xs text-muted-foreground">{field.label}</label>
                         {field.type === 'select' ? (
                           <select
-                            value={protection.params[field.key]}
+                            value={String(protection.params[field.key] ?? '')}
                             onChange={(e) => handleUpdateParam(index, field.key, e.target.value)}
                             className="w-full px-2.5 py-1.5 rounded-md bg-quant-bg-secondary border border-quant-border text-sm focus:outline-none focus:border-quant-gold"
                           >
@@ -353,7 +372,7 @@ export function RiskControl() {
                         ) : (
                           <input
                             type="number"
-                            value={protection.params[field.key]}
+                            value={Number(protection.params[field.key] ?? 0)}
                             onChange={(e) => {
                               const val = field.step && field.step < 1
                                 ? parseFloat(e.target.value)
@@ -377,7 +396,7 @@ export function RiskControl() {
             <div className="flex items-center justify-end gap-3">
               {configMutation.isError && (
                 <span className="text-xs text-red-400">
-                  保存失败: {(configMutation.error as any)?.message}
+                  保存失败: {configMutation.error?.message}
                 </span>
               )}
               {configMutation.isSuccess && (

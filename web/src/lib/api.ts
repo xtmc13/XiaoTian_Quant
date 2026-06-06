@@ -1,4 +1,87 @@
-import axios, { AxiosInstance, AxiosRequestConfig, AxiosError } from 'axios'
+import axios, { AxiosInstance, AxiosRequestConfig, AxiosError, type Method } from 'axios'
+import { useToastStore } from '@/stores/toastStore'
+import {
+  type DashboardSummary,
+  type PortfolioSummary,
+  type PortfolioPosition,
+  type EquitySnapshot,
+  type CalendarMonth,
+  type KlineBar,
+  type OrderBook,
+  type Trade,
+  type TickerSnapshot,
+  type Order,
+  type ProtectionStatus,
+  type ProtectionConfigItem,
+  type HyperoptJob,
+  type HyperoptSpace,
+  type MLModelInfo,
+  type MLTrainResult,
+  type IndicatorItem,
+  type IndicatorComment,
+  type IndicatorDetail,
+  type BillingPlan,
+  type ChainInfo,
+  type BillingOrder,
+  type BacktestResult,
+  type BotConfig,
+  type NotificationItem,
+  type StrategyItem,
+  type StrategyLog,
+  type StrategyTemplate,
+  type StrategyParamDefs,
+  type StrategyRanking,
+  type StrategyGlobalConfig,
+  type BacktestRequest,
+  type AISnapshot,
+  type AIGenerateRequest,
+  type AIGenerateResponse,
+  type AIMultiAgentRequest,
+  type AIMultiAgentResponse,
+  type AIChatResponse,
+  type AIQuickScan,
+  type AIAutoTradeConfig,
+  type AIModel,
+  type AgentToken,
+  type AgentAIConfig,
+  type AgentCCSwitchStatus,
+  type RawConfig,
+  type ExchangeTestResult,
+  type ExchangeSaveResult,
+  type AgentModel,
+  type DefaultSettings,
+  type UISettings,
+  type ExchangeSettings,
+  type HealthStatus,
+  type ComponentHealth,
+  type StrategyCommunityItem,
+  type StrategyCommunityDetail,
+  type CommunityComment,
+  type LeaderboardEntry,
+  type NotifyRoute,
+  type PairlistWhitelist,
+  type PairlistConfig,
+  type OCOOrder,
+  type BracketOrder,
+  type IcebergOrder,
+  type TrailingOrder,
+  type ArbitrageConfig,
+  type ArbitrageStatus,
+  type ArbitrageOpportunity,
+  type ArbitragePosition,
+  type ArbitrageHistoryItem,
+  type ArbitrageExchange,
+  type IndicatorParseResult,
+  type IndicatorValidateResult,
+  type IndicatorRunResult,
+  type IndicatorAIGenerateResult,
+  type IndicatorBacktestResult,
+  type AdminUser,
+  type AdminStats,
+  type AdminAuditLog,
+  type AIAnalysisResult,
+} from '@/types'
+
 
 // ── Timeout presets (QuantDinger style) ──
 const TIMEOUTS: Record<string, number> = {
@@ -41,6 +124,10 @@ class ApiError extends Error {
   }
 }
 
+// ── Retry config ──
+const MAX_RETRIES = 2
+const RETRY_DELAY = 1000
+
 // ── Create axios instance ──
 const axiosInstance: AxiosInstance = axios.create({
   baseURL: '/api',
@@ -63,6 +150,8 @@ axiosInstance.interceptors.request.use((config) => {
   if (config.method === 'get') {
     config.params = { ...config.params, _t: Date.now() }
   }
+  // Retry counter
+  config.headers['X-Retry-Count'] = config.headers['X-Retry-Count'] || '0'
   return config
 })
 
@@ -77,10 +166,26 @@ axiosInstance.interceptors.response.use(
     }
     return response
   },
-  (error: AxiosError) => {
+  async (error: AxiosError) => {
+    const config = error.config as AxiosRequestConfig & { __retryCount?: number }
+
+    // Retry logic for network errors / 5xx (except 401/403)
+    if (config && !config.__retryCount) {
+      config.__retryCount = 0
+    }
+    if (
+      config &&
+      config.__retryCount! < MAX_RETRIES &&
+      (!error.response || (error.response.status >= 500 && error.response.status !== 501))
+    ) {
+      config.__retryCount!++
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY * config.__retryCount!))
+      return axiosInstance(config)
+    }
+
     if (error.response) {
       const status = error.response.status
-      const data = error.response.data as any
+      const data = error.response.data as Record<string, unknown>
 
       // 401 Unauthorized → redirect to login (prevent loop)
       if (status === 401) {
@@ -96,16 +201,48 @@ axiosInstance.interceptors.response.use(
 
       // 403 Forbidden → show backend message
       if (status === 403) {
-        const msg = data?.msg || data?.message || '权限不足'
+        const msg = (data?.msg as string) || (data?.message as string) || '权限不足'
+        // Show toast for 403
+        try {
+          useToastStore.getState().addToast({ type: 'warning', message: msg, duration: 5000 })
+        } catch { /* ignore */ }
         return Promise.reject(new ApiError(msg, 403, 'FORBIDDEN'))
       }
 
-      const message = data?.message || data?.error || `Request failed with status ${status}`
-      return Promise.reject(new ApiError(message, status, data?.code || 'HTTP_ERROR'))
+      // 429 Rate limit
+      if (status === 429) {
+        const msg = '请求过于频繁，请稍后再试'
+        try {
+          useToastStore.getState().addToast({ type: 'warning', message: msg, duration: 6000 })
+        } catch { /* ignore */ }
+        return Promise.reject(new ApiError(msg, 429, 'RATE_LIMIT'))
+      }
+
+      // 5xx Server error
+      if (status >= 500) {
+        const msg = (data?.message as string) || '服务器错误，请稍后重试'
+        try {
+          useToastStore.getState().addToast({ type: 'error', message: msg, duration: 6000 })
+        } catch { /* ignore */ }
+        return Promise.reject(new ApiError(msg, status, (data?.code as string) || 'SERVER_ERROR'))
+      }
+
+      const message = (data?.message as string) || (data?.error as string) || `请求失败 (${status})`
+      // Show toast for client errors (4xx except 401/403/429)
+      if (status >= 400 && status !== 401 && status !== 403 && status !== 429) {
+        try {
+          useToastStore.getState().addToast({ type: 'error', message, duration: 5000 })
+        } catch { /* ignore */ }
+      }
+      return Promise.reject(new ApiError(message, status, (data?.code as string) || 'HTTP_ERROR'))
     }
 
     if (error.request) {
-      return Promise.reject(new ApiError('网络错误，请检查连接', 0, 'NETWORK_ERROR'))
+      const msg = '网络错误，请检查连接'
+      try {
+        useToastStore.getState().addToast({ type: 'error', message: msg, duration: 5000 })
+      } catch { /* ignore */ }
+      return Promise.reject(new ApiError(msg, 0, 'NETWORK_ERROR'))
     }
 
     return Promise.reject(new ApiError(error.message, 0, 'UNKNOWN'))
@@ -115,7 +252,7 @@ axiosInstance.interceptors.response.use(
 // ── Generic request helpers ──
 async function request<T>(method: string, path: string, body?: unknown, config?: AxiosRequestConfig): Promise<T> {
   const resp = await axiosInstance.request<ApiResponse<T>>({
-    method: method as any,
+    method: method as Method,
     url: path,
     data: body,
     ...config,
@@ -128,6 +265,14 @@ export const api = {
   post: <T>(path: string, body?: unknown, config?: AxiosRequestConfig) => request<T>('POST', path, body, config),
   put: <T>(path: string, body?: unknown, config?: AxiosRequestConfig) => request<T>('PUT', path, body, config),
   del: <T>(path: string, config?: AxiosRequestConfig) => request<T>('DELETE', path, undefined, config),
+}
+
+// ── Billing ──
+export const billingApi = {
+  plans: () => api.get<BillingPlan[]>('/billing/plans'),
+  chains: () => api.get<ChainInfo[]>('/billing/chains'),
+  createOrder: (data: { plan_id: string; chain: string; tx_hash: string }) =>
+    api.post<BillingOrder>('/billing/orders', data),
 }
 
 // ── Auth ──
@@ -174,63 +319,62 @@ export const userApi = {
 
 // ── Dashboard ──
 export const dashboardApi = {
-  summary: () => api.get<any>('/dashboard/summary'),
+  summary: () => api.get<DashboardSummary>('/dashboard/summary'),
 }
 
 // ── Portfolio ──
 export const portfolioApi = {
-  summary: () => api.get<any>('/portfolio/summary'),
-  positions: () => api.get<any>('/portfolio/positions'),
-  snapshots: (days?: number) => api.get<any>(`/portfolio/snapshots${days ? '?days=' + days : ''}`),
+  summary: () => api.get<PortfolioSummary>('/portfolio/summary'),
+  positions: () => api.get<{ positions: PortfolioPosition[] }>('/portfolio/positions'),
+  snapshots: (days?: number) => api.get<{ snapshots: EquitySnapshot[] }>(`/portfolio/snapshots${days ? '?days=' + days : ''}`),
   calendar: (year?: number, month?: number) =>
-    api.get<any>(`/portfolio/calendar?year=${year || new Date().getFullYear()}&month=${month || new Date().getMonth() + 1}`),
+    api.get<{ months: CalendarMonth[] }>(`/portfolio/calendar?year=${year || new Date().getFullYear()}&month=${month || new Date().getMonth() + 1}`),
 }
 
 // ── Market ──
 export const marketApi = {
   klines: (symbol: string, interval = '1h', limit = 200, from?: number, to?: number) =>
-    api.get<any>('/market/klines', { params: { symbol, interval, limit, from, to } })
-      .then((d: any) => {
-        // 兼容 envelope 格式: {success: true, data: {klines: [...]}}
-        const klines = d?.klines ?? d?.data?.klines ?? (Array.isArray(d) ? d : [])
+    api.get<{ klines: KlineBar[] } & Record<string, unknown>>('/market/klines', { params: { symbol, interval, limit, from, to } })
+      .then((d) => {
+        const klines = d?.klines ?? (d?.data as Record<string, unknown>)?.klines ?? (Array.isArray(d) ? d : [])
         return Array.isArray(klines) ? klines : []
       }),
   orderBook: (symbol: string, depth = 20) =>
-    api.get<any>('/market/orderbook', { params: { symbol, depth } }),
+    api.get<OrderBook>('/market/orderbook', { params: { symbol, depth } }),
   trades: (symbol: string, limit = 50) =>
-    api.get<any>('/market/trades', { params: { symbol, limit } })
-      .then((d: any) => Array.isArray(d?.trades) ? d.trades : Array.isArray(d) ? d : []),
+    api.get<{ trades: Trade[] }>('/market/trades', { params: { symbol, limit } })
+      .then((d) => Array.isArray(d?.trades) ? d.trades : Array.isArray(d) ? d : []),
   snapshot: (symbol?: string) =>
-    api.get<any>(`/market/snapshot${symbol ? '?symbol=' + symbol : ''}`),
-  symbolSearch: (q: string) => api.get<any[]>(`/symbols/search?q=${q}`),
-  status: () => api.get<any>('/status'),
+    api.get<TickerSnapshot>(`/market/snapshot${symbol ? '?symbol=' + symbol : ''}`),
+  symbolSearch: (q: string) => api.get<{ symbols: string[] }>(`/symbols/search?q=${q}`),
+  status: () => api.get<{ status: string }>('/status'),
 }
 
 // ── Orders ──
 export const orderApi = {
   list: (params?: Record<string, string>) => {
     const qs = params ? '?' + new URLSearchParams(params).toString() : ''
-    return api.get<any[]>(`/orders${qs}`)
+    return api.get<{ orders: Order[] }>(`/orders${qs}`).then(d => d?.orders ?? [])
   },
-  place: (order: any) => api.post<any>('/orders', order),
-  cancel: (id: string) => api.post<any>(`/orders/${id}/cancel`),
-  cancelAll: () => api.post<any>('/orders/cancel-all'),
+  place: (order: Record<string, unknown>) => api.post<Order>('/orders', order),
+  cancel: (id: string) => api.post<{ success: boolean }>(`/orders/${id}/cancel`),
+  cancelAll: () => api.post<{ success: boolean }>('/orders/cancel-all'),
   history: (params?: Record<string, string>) => {
     const qs = params ? '?' + new URLSearchParams(params).toString() : ''
-    return api.get<any[]>(`/orders/history${qs}`)
+    return api.get<{ orders: Order[] }>(`/orders/history${qs}`).then(d => d?.orders ?? [])
   },
 }
 
 // ── Account ──
 export const accountApi = {
-  balance: (symbol?: string) => api.get<any>(`/account/balance${symbol ? '?symbol=' + symbol : ''}`),
+  balance: (symbol?: string) => api.get<{ balances: { asset: string; free: number; locked: number; total: number }[]; currencies?: { currency: string; available: number; total: number }[] }>(`/account/balance${symbol ? '?symbol=' + symbol : ''}`),
 }
 
 // ── Trades ──
 export const tradesApi = {
   list: (params?: Record<string, string>) => {
     const qs = params ? '?' + new URLSearchParams(params).toString() : ''
-    return api.get<any[]>(`/trades${qs}`)
+    return api.get<{ trades: Trade[] }>(`/trades${qs}`).then(d => d?.trades ?? [])
   },
 }
 
@@ -238,134 +382,136 @@ export const tradesApi = {
 export const strategyApi = {
   list: (params?: Record<string, string>) => {
     const qs = params ? '?' + new URLSearchParams(params).toString() : ''
-    return api.get<any[]>(`/strategies/configs${qs}`)
+    return api.get<StrategyItem[]>(`/strategies/configs${qs}`)
   },
-  get: (id: string) => api.get<any>(`/strategies/configs/${id}`),
-  create: (data: any) => api.post<any>('/strategies/configs', data),
-  update: (id: string, data: any) => api.put<any>(`/strategies/configs/${id}`, data),
-  delete: (id: string) => api.del<any>(`/strategies/configs/${id}`),
-  start: (id: string) => api.post<any>(`/strategies/configs/${id}/start`),
-  stop: (id: string) => api.post<any>(`/strategies/configs/${id}/stop`),
-  batchStart: (ids: string[]) => api.post<any>('/strategies/configs/batch-start', { ids }),
-  batchStop: (ids: string[]) => api.post<any>('/strategies/configs/batch-stop', { ids }),
+  get: (id: string) => api.get<StrategyItem>(`/strategies/configs/${id}`),
+  create: (data: Partial<StrategyItem>) => api.post<{ id: string; success: boolean }>('/strategies/configs', data),
+  update: (id: string, data: Partial<StrategyItem>) => api.put<{ success: boolean }>(`/strategies/configs/${id}`, data),
+  delete: (id: string) => api.del<{ success: boolean }>(`/strategies/configs/${id}`),
+  start: (id: string) => api.post<{ success: boolean }>(`/strategies/configs/${id}/start`),
+  stop: (id: string) => api.post<{ success: boolean }>(`/strategies/configs/${id}/stop`),
+  batchStart: (ids: string[]) => api.post<{ success: boolean; started: number }>('/strategies/configs/batch-start', { ids }),
+  batchStop: (ids: string[]) => api.post<{ success: boolean; stopped: number }>('/strategies/configs/batch-stop', { ids }),
   logs: (strategyId?: string) =>
-    api.get<any[]>(`/strategies/logs${strategyId ? '?strategy_id=' + strategyId : ''}`),
+    api.get<StrategyLog[]>(`/strategies/logs${strategyId ? '?strategy_id=' + strategyId : ''}`),
   clearLogs: (strategyId?: string) =>
-    api.del<any>(`/strategies/logs${strategyId ? '?strategy_id=' + strategyId : ''}`),
-  templates: (category = 'spot') => api.get<any[]>(`/strategies/templates?category=${category}`),
-  createTemplate: (data: any) => api.post<any>('/strategies/templates', data),
-  deleteTemplate: (id: string) => api.del<any>(`/strategies/templates/${id}`),
-  global: () => api.get<any>('/strategies/global'),
-  saveGlobal: (data: any) => api.put<any>('/strategies/global', data),
-  spot: () => api.get<any[]>('/strategies/spot'),
-  contract: () => api.get<any[]>('/strategies/contract'),
-  ranking: () => api.get<any>('/strategies/ranking'),
+    api.del<{ success: boolean }>(`/strategies/logs${strategyId ? '?strategy_id=' + strategyId : ''}`),
+  templates: (category = 'spot') => api.get<StrategyTemplate[]>(`/strategies/templates?category=${category}`),
+  createTemplate: (data: Partial<StrategyTemplate>) => api.post<{ id: string; success: boolean }>('/strategies/templates', data),
+  deleteTemplate: (id: string) => api.del<{ success: boolean }>(`/strategies/templates/${id}`),
+  global: () => api.get<{ config: StrategyGlobalConfig }>('/strategies/global').then(d => d?.config ?? {}),
+  saveGlobal: (data: StrategyGlobalConfig) => api.put<{ success: boolean }>('/strategies/global', data),
+  spot: () => api.get<StrategyItem[]>('/strategies/spot'),
+  contract: () => api.get<StrategyItem[]>('/strategies/contract'),
+  ranking: () => api.get<StrategyRanking[]>('/strategies/ranking'),
+  paramDefs: (type: string) => api.get<StrategyParamDefs>(`/strategies/param-defs?type=${type}`),
 }
 
 // ── Backtest ──
 export const backtestApi = {
-  run: (config: any) => api.post<any>('/backtest/run', config, { timeout: TIMEOUTS.backtest }),
-  native: (config: any) => api.post<any>('/native/backtest', config, { timeout: TIMEOUTS.backtest }),
+  run: (config: BacktestRequest) => api.post<BacktestResult>('/backtest/run', config, { timeout: TIMEOUTS.backtest }),
+  native: (config: BacktestRequest) => api.post<BacktestResult>('/native/backtest', config, { timeout: TIMEOUTS.backtest }),
 }
 
 // ── AI ──
 export const aiApi = {
   snapshot: (symbol?: string) =>
-    api.get<any>(`/ai/snapshot${symbol ? '?symbol=' + symbol : ''}`),
+    api.get<AISnapshot>(`/ai/snapshot${symbol ? '?symbol=' + symbol : ''}`),
   klines: (symbol: string, interval?: string) =>
-    api.get<any>(`/ai/klines?symbol=${symbol}&interval=${interval || '1h'}`),
-  generate: (data: any) => api.post<any>('/ai/generate', data, { timeout: TIMEOUTS.ai }),
-  multiAgent: (data: any) => api.post<any>('/ai/multi-agent', data, { timeout: TIMEOUTS.ai }),
-  backtest: (data: any) => api.post<any>('/ai/backtest', data, { timeout: TIMEOUTS.backtest }),
-  optimize: (data: any) => api.post<any>('/ai/optimize', data, { timeout: TIMEOUTS.ai }),
-  deploy: (data: any) => api.post<any>('/ai/deploy', data),
-  analyze: (data: any) => api.post<any>('/ai/analyze', data, { timeout: TIMEOUTS.analysis }),
-  quickScan: () => api.get<any>('/ai/quickscan'),
-  chat: (message: string) => api.post<any>('/ai/chat', { message }),
-  models: () => api.get<any[]>('/ai/models'),
-  autoTradeGet: () => api.get<any>('/auto-trade/config'),
-  autoTradeSave: (config: any) => api.put<any>('/auto-trade/config', config),
+    api.get<{ klines: KlineBar[] }>(`/ai/klines?symbol=${symbol}&interval=${interval || '1h'}`),
+  generate: (data: AIGenerateRequest) => api.post<AIGenerateResponse>('/ai/generate', data, { timeout: TIMEOUTS.ai }),
+  multiAgent: (data: AIMultiAgentRequest) => api.post<AIMultiAgentResponse>('/ai/multi-agent', data, { timeout: TIMEOUTS.ai }),
+  backtest: (data: BacktestRequest) => api.post<BacktestResult>('/ai/backtest', data, { timeout: TIMEOUTS.backtest }),
+  optimize: (data: Record<string, unknown>) => api.post<BacktestResult>('/ai/optimize', data, { timeout: TIMEOUTS.ai }),
+  deploy: (data: Record<string, unknown>) => api.post<{ success: boolean; strategy_id: string }>('/ai/deploy', data),
+  analyze: (data: Record<string, unknown>) => api.post<AIAnalysisResult>('/ai/analyze', data, { timeout: TIMEOUTS.analysis }),
+  quickScan: () => api.get<AIQuickScan>('/ai/quickscan'),
+  chat: (message: string) => api.post<AIChatResponse>('/ai/chat', { message }),
+  models: () => api.get<AIModel[]>('/ai/models'),
+  autoTradeGet: () => api.get<AIAutoTradeConfig>('/auto-trade/config'),
+  autoTradeSave: (config: AIAutoTradeConfig) => api.put<AIAutoTradeConfig>('/auto-trade/config', config),
 }
 
 // ── Chat ──
 export const chatApi = {
-  send: (message: string) => api.post<any>('/chat/send', { message }),
+  send: (message: string) => api.post<AIChatResponse>('/chat/send', { message }),
 }
 
 // ── Agent ──
 export const agentApi = {
-  tokens: () => api.get<any[]>('/agent/tokens'),
-  createToken: (data: any) => api.post<any>('/agent/tokens', data),
-  deleteToken: (id: string) => api.del<any>(`/agent/tokens/${id}`),
-  ccSwitchStatus: () => api.get<any>('/agent/cc-switch'),
-  aiConfig: () => api.get<any>('/agent/ai-config'),
-  saveAIConfig: (data: any) => api.put<any>('/agent/ai-config', data),
-  chat: (message: string) => api.post<any>('/agent/chat', { message }),
+  tokens: () => api.get<AgentToken[]>('/agent/tokens'),
+  createToken: (data: Partial<AgentToken>) => api.post<AgentToken>('/agent/tokens', data),
+  deleteToken: (id: string) => api.del<{ success: boolean }>(`/agent/tokens/${id}`),
+  ccSwitchStatus: () => api.get<AgentCCSwitchStatus>('/agent/cc-switch'),
+  aiConfig: () => api.get<AgentAIConfig>('/agent/ai-config'),
+  saveAIConfig: (data: AgentAIConfig) => api.put<AgentAIConfig>('/agent/ai-config', data),
+  chat: (message: string) => api.post<AIChatResponse>('/agent/chat', { message }),
 }
 
 // ── Config (raw store config) ──
 export const configApi = {
-  get: () => api.get<any>('/config'),
-  save: (data: any) => api.put<any>('/config', data),
-  exchangeTest: (data: any) => api.post<any>('/exchange/test', data),
-  exchangeSave: (data: any) => api.post<any>('/exchange/save', data),
-  currencyGet: () => api.get<any>('/settings/currency'),
-  currencySet: (currency: string) => api.put<any>('/settings/currency', { currency }),
-  aiTest: (data: any) => api.post<any>('/ai/test', data),
-  aiSave: (data: any) => api.post<any>('/ai/save', data),
+  get: () => api.get<RawConfig>('/config'),
+  save: (data: RawConfig) => api.put<RawConfig>('/config', data),
+  exchangeTest: (data: ExchangeSettings) => api.post<ExchangeTestResult>('/exchange/test', data),
+  exchangeSave: (data: ExchangeSettings) => api.post<ExchangeSaveResult>('/exchange/save', data),
+  currencyGet: () => api.get<{ currency: string }>('/settings/currency'),
+  currencySet: (currency: string) => api.put<{ currency: string }>('/settings/currency', { currency }),
+  aiTest: (data: Record<string, unknown>) => api.post<{ success: boolean }>('/ai/test', data),
+  aiSave: (data: Record<string, unknown>) => api.post<{ success: boolean }>('/ai/save', data),
 }
 
 // ── Settings ──
 export const settingsApi = {
-  agentModels: () => api.get<any[]>('/settings/agent/models'),
-  defaults: () => api.get<any>('/settings/defaults'),
-  saveDefaults: (data: any) => api.post<any>('/settings/defaults', data),
-  saveUI: (data: any) => api.post<any>('/settings/ui', data),
-  exchangeTest: (id: string) => api.post<any>(`/settings/exchange/${id}/test`),
-  exchangeSave: (id: string, data: any) => api.put<any>(`/settings/exchange/${id}`, data),
-  aiTest: (id: string) => api.post<any>(`/settings/ai/${id}/test`),
-  aiSave: (id: string, data: any) => api.put<any>(`/settings/ai/${id}`, data),
+  agentModels: () => api.get<AgentModel[]>('/settings/agent/models'),
+  defaults: () => api.get<DefaultSettings>('/settings/defaults'),
+  saveDefaults: (data: DefaultSettings) => api.post<DefaultSettings>('/settings/defaults', data),
+  saveUI: (data: UISettings) => api.post<UISettings>('/settings/ui', data),
+  exchangeTest: (id: string) => api.post<ExchangeTestResult>(`/settings/exchange/${id}/test`),
+  exchangeSave: (id: string, data: ExchangeSettings) => api.put<ExchangeSettings>(`/settings/exchange/${id}`, data),
+  aiTest: (id: string) => api.post<{ success: boolean }>(`/settings/ai/${id}/test`),
+  aiSave: (id: string, data: Record<string, unknown>) => api.put<{ success: boolean }>(`/settings/ai/${id}`, data),
 }
 
 // ── Health ──
 export const healthApi = {
-  check: () => api.get<any>('/health'),
-  components: () => api.get<any[]>('/health/components'),
+  check: () => api.get<HealthStatus>('/health'),
+  components: () => api.get<ComponentHealth[]>('/health/components'),
 }
 
 // ── Strategy Community ──
 export const strategyCommunityApi = {
   list: (params?: { page?: number; page_size?: number; keyword?: string; sort_by?: string }) =>
-    api.get<any>('/community/strategies', { params }),
-  detail: (id: number) => api.get<any>(`/community/strategies/${id}`),
-  publish: (data: any) => api.post<any>('/community/strategies/publish', data),
-  comment: (id: number, content: string) => api.post<any>(`/community/strategies/${id}/comment`, { content }),
-  rate: (id: number, rating: number) => api.post<any>(`/community/strategies/${id}/rate`, { rating }),
+    api.get<{ items: StrategyCommunityItem[]; total: number }>('/community/strategies', { params }),
+  detail: (id: number) => api.get<StrategyCommunityDetail>(`/community/strategies/${id}`),
+  publish: (data: Partial<StrategyCommunityItem>) => api.post<{ success: boolean }>('/community/strategies/publish', data),
+  comment: (id: number, content: string) => api.post<{ success: boolean; comment_id?: number }>(`/community/strategies/${id}/comment`, { content }),
+  rate: (id: number, rating: number) => api.post<{ success: boolean }>(`/community/strategies/${id}/rate`, { rating }),
   leaderboard: (sortBy?: string, limit?: number) =>
-    api.get<any>('/community/strategies/leaderboard', { params: { sort_by: sortBy, limit } }),
+    api.get<LeaderboardEntry[]>('/community/strategies/leaderboard', { params: { sort_by: sortBy, limit } }),
 }
 
 // ── ML ──
 export const mlApi = {
-  train: (config: any) => api.post<any>('/ml/train', config, { timeout: 120000 }),
-  predict: (data: any) => api.post<any>('/ml/predict', data),
-  list: () => api.get<any>('/ml/models'),
-  detail: (id: string) => api.get<any>(`/ml/models/${id}`),
-  deleteModel: (id: string) => api.del<any>(`/ml/models/${id}`),
-  importance: (id: string) => api.get<any>(`/ml/models/${id}/importance`),
-  generateFeatures: (data: any) => api.post<any>('/ml/features', data),
-  health: () => api.get<any>('/ml/health'),
-  deploy: (data: any) => api.post<any>('/ml/deploy', data),
-  strategyModels: () => api.get<any>('/ml/strategy-models'),
+  train: (config: Record<string, unknown>) => api.post<MLTrainResult>('/ml/train', config, { timeout: 120000 }),
+  predict: (data: Record<string, unknown>) => api.post<{ prediction: number; confidence: number }>('/ml/predict', data),
+  list: () => api.get<{ models: MLModelInfo[] }>('/ml/models').then(d => d?.models ?? []),
+  detail: (id: string) => api.get<MLModelInfo>(`/ml/models/${id}`),
+  deleteModel: (id: string) => api.del<{ success: boolean }>(`/ml/models/${id}`),
+  importance: (id: string) => api.get<{ importance: { feature: string; score: number }[] }>(`/ml/models/${id}/importance`),
+  generateFeatures: (data: Record<string, unknown>) => api.post<{ features: string[] }>('/ml/features', data),
+  health: () => api.get<{ status: string }>('/ml/health'),
+  deploy: (data: Record<string, unknown>) => api.post<{ success: boolean; strategy_id: string }>('/ml/deploy', data),
+  strategyModels: () => api.get<{ models: MLModelInfo[] }>('/ml/strategy-models').then(d => d?.models ?? []),
 }
 
 // ── Protection / Risk Control ──
 export const protectionApi = {
-  status: () => api.get<any>('/protection/status'),
-  config: (data: { protections: { name: string; params: Record<string, any> }[] }) =>
-    api.post<any>('/protection/config', data),
+  status: () => api.get<ProtectionStatus>('/protection/status'),
+  getConfig: () => api.get<{ protections: ProtectionConfigItem[] }>('/protection/config'),
+  config: (data: { protections: ProtectionConfigItem[] }) =>
+    api.post<{ success: boolean }>('/protection/config', data),
   reset: (scope?: 'global' | 'pair' | 'all', symbol?: string) =>
-    api.post<any>('/protection/reset', undefined, { params: { scope, symbol } }),
+    api.post<{ success: boolean }>('/protection/reset', undefined, { params: { scope, symbol } }),
   recordTrade: (data: {
     symbol: string
     side: string
@@ -376,120 +522,120 @@ export const protectionApi = {
     pnl_pct: number
     is_stoploss: boolean
     exit_time?: number
-  }) => api.post<any>('/protection/trade', data),
+  }) => api.post<{ success: boolean }>('/protection/trade', data),
 }
 
 // ── Pairlist ──
 export const pairlistApi = {
   whitelist: (exchange?: string, quoteAsset?: string) =>
-    api.get<any>('/pairlist/whitelist', { params: { exchange, quote_asset: quoteAsset } }),
+    api.get<PairlistWhitelist>('/pairlist/whitelist', { params: { exchange, quote_asset: quoteAsset } }),
   refresh: (exchange?: string, quoteAsset?: string) =>
-    api.get<any>('/pairlist/refresh', { params: { exchange, quote_asset: quoteAsset } }),
-  config: () => api.get<any>('/pairlist/config'),
-  configure: (data: { producers: { name: string; params: Record<string, any> }[]; filters: { name: string; params: Record<string, any> }[] }) =>
-    api.post<any>('/pairlist/config', data),
+    api.get<PairlistWhitelist>('/pairlist/refresh', { params: { exchange, quote_asset: quoteAsset } }),
+  config: () => api.get<PairlistConfig>('/pairlist/config'),
+  configure: (data: PairlistConfig) =>
+    api.post<PairlistConfig>('/pairlist/config', data),
 }
 
 // ── Advanced Orders ──
 export const advancedOrderApi = {
   oco: {
-    place: (data: any) => api.post<any>('/orders/oco', data),
-    list: () => api.get<any>('/orders/oco'),
-    cancel: (id: string) => api.del<any>(`/orders/oco/${id}`),
+    place: (data: Partial<OCOOrder>) => api.post<OCOOrder>('/orders/oco', data),
+    list: () => api.get<OCOOrder[]>('/orders/oco'),
+    cancel: (id: string) => api.del<{ success: boolean }>(`/orders/oco/${id}`),
   },
   bracket: {
-    place: (data: any) => api.post<any>('/orders/bracket', data),
-    list: () => api.get<any>('/orders/bracket'),
-    cancel: (id: string) => api.del<any>(`/orders/bracket/${id}`),
+    place: (data: Partial<BracketOrder>) => api.post<BracketOrder>('/orders/bracket', data),
+    list: () => api.get<BracketOrder[]>('/orders/bracket'),
+    cancel: (id: string) => api.del<{ success: boolean }>(`/orders/bracket/${id}`),
   },
   iceberg: {
-    place: (data: any) => api.post<any>('/orders/iceberg', data),
-    list: () => api.get<any>('/orders/iceberg'),
-    cancel: (id: string) => api.del<any>(`/orders/iceberg/${id}`),
+    place: (data: Partial<IcebergOrder>) => api.post<IcebergOrder>('/orders/iceberg', data),
+    list: () => api.get<IcebergOrder[]>('/orders/iceberg'),
+    cancel: (id: string) => api.del<{ success: boolean }>(`/orders/iceberg/${id}`),
   },
   trailing: {
-    place: (data: any) => api.post<any>('/orders/trailing', data),
-    list: () => api.get<any>('/orders/trailing'),
-    cancel: (id: string) => api.del<any>(`/orders/trailing/${id}`),
+    place: (data: Partial<TrailingOrder>) => api.post<TrailingOrder>('/orders/trailing', data),
+    list: () => api.get<TrailingOrder[]>('/orders/trailing'),
+    cancel: (id: string) => api.del<{ success: boolean }>(`/orders/trailing/${id}`),
   },
 }
 
 // ── Arbitrage ──
 export const arbitrageApi = {
-  config: () => api.get<any>('/arbitrage/config'),
-  updateConfig: (data: any) => api.post<any>('/arbitrage/config', data),
-  start: () => api.post<any>('/arbitrage/start'),
-  stop: () => api.post<any>('/arbitrage/stop'),
-  status: () => api.get<any>('/arbitrage/status'),
-  opportunity: () => api.get<any>('/arbitrage/opportunity'),
-  positions: () => api.get<any>('/arbitrage/positions'),
-  history: (limit?: number) => api.get<any>('/arbitrage/history', { params: { limit } }),
-  exchanges: () => api.get<any>('/arbitrage/exchanges'),
-  registerExchange: (data: any) => api.post<any>('/arbitrage/exchanges', data),
-  execute: (data: any) => api.post<any>('/arbitrage/execute', data),
+  config: () => api.get<ArbitrageConfig>('/arbitrage/config'),
+  updateConfig: (data: ArbitrageConfig) => api.post<ArbitrageConfig>('/arbitrage/config', data),
+  start: () => api.post<{ success: boolean }>('/arbitrage/start'),
+  stop: () => api.post<{ success: boolean }>('/arbitrage/stop'),
+  status: () => api.get<ArbitrageStatus>('/arbitrage/status'),
+  opportunity: () => api.get<ArbitrageOpportunity[]>('/arbitrage/opportunity'),
+  positions: () => api.get<ArbitragePosition[]>('/arbitrage/positions'),
+  history: (limit?: number) => api.get<ArbitrageHistoryItem[]>('/arbitrage/history', { params: { limit } }),
+  exchanges: () => api.get<ArbitrageExchange[]>('/arbitrage/exchanges'),
+  registerExchange: (data: Partial<ArbitrageExchange>) => api.post<ArbitrageExchange>('/arbitrage/exchanges', data),
+  execute: (data: { symbol: string; buy_exchange: string; sell_exchange: string; quantity: number }) => api.post<{ success: boolean; trade_id: string }>('/arbitrage/execute', data),
 }
 
 // ── Hyperopt ──
 export const hyperoptApi = {
-  start: (data: any) => api.post<any>('/hyperopt/start', data, { timeout: 600000 }),
-  jobs: () => api.get<any>('/hyperopt/jobs'),
-  job: (id: string) => api.get<any>(`/hyperopt/jobs/${id}`),
-  cancel: (id: string) => api.post<any>(`/hyperopt/jobs/${id}/cancel`),
-  delete: (id: string) => api.del<any>(`/hyperopt/jobs/${id}`),
-  spaces: (strategy?: string) => api.get<any>('/hyperopt/spaces', { params: { strategy } }),
+  start: (data: Record<string, unknown>) => api.post<{ job_id: string }>('/hyperopt/start', data, { timeout: 600000 }),
+  jobs: () => api.get<{ jobs: HyperoptJob[] }>('/hyperopt/jobs').then(d => d?.jobs ?? []),
+  job: (id: string) => api.get<HyperoptJob>(`/hyperopt/jobs/${id}`),
+  cancel: (id: string) => api.post<{ success: boolean }>(`/hyperopt/jobs/${id}/cancel`),
+  delete: (id: string) => api.del<{ success: boolean }>(`/hyperopt/jobs/${id}`),
+  spaces: (strategy?: string) => api.get<{ spaces: HyperoptSpace[] }>('/hyperopt/spaces', { params: { strategy } }).then(d => d?.spaces ?? []),
 }
 
 // ── Notifications ──
 export const notificationApi = {
   list: (params?: { limit?: number; offset?: number; unread?: boolean }) =>
-    api.get<any>('/notifications', { params }),
-  unreadCount: () => api.get<any>('/notifications/unread-count'),
-  markRead: (id: number) => api.post<any>(`/notifications/${id}/read`),
-  markAllRead: () => api.post<any>('/notifications/read-all'),
-  clear: () => api.del<any>('/notifications'),
+    api.get<{ notifications: NotificationItem[]; total: number }>('/notifications', { params }).then(d => d?.notifications ?? []),
+  unreadCount: () => api.get<{ count: number }>('/notifications/unread-count').then(d => d?.count ?? 0),
+  markRead: (id: number) => api.post<{ success: boolean }>(`/notifications/${id}/read`),
+  markAllRead: () => api.post<{ success: boolean }>('/notifications/read-all'),
+  clear: () => api.del<{ success: boolean }>('/notifications'),
 }
 
 // ── Notify Routes ──
 export const notifyRouteApi = {
-  list: () => api.get<{ rules: any[] }>('/notify/routes'),
-  save: (rule: any) => api.post<any>('/notify/routes', rule),
-  delete: (id: string) => api.del<any>(`/notify/routes/${id}`),
-  test: (channel: string, message?: string) => api.post<any>('/notify/test', { channel, message: message || '测试消息' }),
+  list: () => api.get<{ rules: NotifyRoute[] }>('/notify/routes').then(d => d?.rules ?? []),
+  save: (rule: Partial<NotifyRoute>) => api.post<{ id: string }>('/notify/routes', rule),
+  delete: (id: string) => api.del<{ success: boolean }>(`/notify/routes/${id}`),
+  test: (channel: string, message?: string) => api.post<{ success: boolean }>('/notify/test', { channel, message: message || '测试消息' }),
 }
 
 // ── Indicators ──
 export const indicatorApi = {
   // --- New contract-based API ---
-  parse: (code: string) => api.post<any>('/indicator/parse', { code }),
-  validate: (code: string) => api.post<any>('/indicator/validate', { code }),
-  save: (data: any) => api.post<any>('/indicator/save', data),
-  list: () => api.get<any[]>('/indicator/list'),
-  get: (id: number) => api.get<any>(`/indicator/${id}`),
-  delete: (id: number) => api.del<any>(`/indicator/${id}`),
-  applyParamDefaults: (code: string, indicatorParams: Record<string, any>) =>
-    api.post<any>('/indicator/applyParamDefaults', { code, indicatorParams }),
+  parse: (code: string) => api.post<{ success: boolean; params?: Record<string, unknown>; error?: string }>('/indicator/parse', { code }),
+  validate: (code: string) => api.post<{ success: boolean; error?: string; params?: Record<string, unknown> }>('/indicator/validate', { code }),
+  save: (data: Record<string, unknown>) => api.post<{ id: number; success: boolean }>('/indicator/save', data),
+  list: () => api.get<{ items: IndicatorItem[]; total: number }>('/indicator/list').then(d => d?.items ?? []),
+  get: (id: number) => api.get<IndicatorDetail>(`/indicator/${id}`),
+  delete: (id: number) => api.del<{ success: boolean }>(`/indicator/${id}`),
+  applyParamDefaults: (code: string, indicatorParams: Record<string, unknown>) =>
+    api.post<{ params: Record<string, unknown> }>('/indicator/applyParamDefaults', { code, indicatorParams }).then(d => d?.params ?? {}),
 
   // --- Legacy API (keep for compatibility) ---
   listLegacy: (params?: Record<string, string>) => {
     const qs = params ? '?' + new URLSearchParams(params).toString() : ''
-    return api.get<any[]>(`/indicator/getIndicators${qs}`)
+    return api.get<IndicatorItem[]>(`/indicator/getIndicators${qs}`).then(d => d ?? [])
   },
-  create: (data: any) => api.post<any>('/indicator/saveIndicator', data),
-  update: (id: number, data: any) => api.put<any>(`/indicator/${id}`, data),
-  saveAs: (data: any) => api.post<any>('/indicator/saveIndicator', { ...data, is_new_copy: true }),
-  publish: (id: number, data: any) => api.post<any>('/indicator/publish', { id, ...data }),
+  create: (data: Partial<IndicatorDetail>) => api.post<IndicatorDetail>('/indicator/saveIndicator', data),
+  update: (id: number, data: Partial<IndicatorDetail>) => api.put<IndicatorDetail>(`/indicator/${id}`, data),
+  saveAs: (data: Partial<IndicatorDetail>) => api.post<IndicatorDetail>('/indicator/saveIndicator', { ...data, is_new_copy: true }),
+  publish: (id: number, data: Record<string, unknown>) => api.post<{ success: boolean }>('/indicator/publish', { id, ...data }),
   decrypt: (userId: number, indicatorId: number) =>
-    api.post<any>('/indicator/getDecryptKey', { user_id: userId, indicator_id: indicatorId }),
-  backtest: (data: any) => api.post<any>('/indicator/backtest', data, { timeout: TIMEOUTS.backtest }),
-  aiGenerate: (data: any) => api.post<any>('/indicator/aiGenerate', data, { timeout: TIMEOUTS.ai }),
+    api.post<{ key: string; success: boolean }>('/indicator/getDecryptKey', { user_id: userId, indicator_id: indicatorId }),
+  backtest: (data: Record<string, unknown>) => api.post<IndicatorBacktestResult>('/indicator/backtest', data, { timeout: TIMEOUTS.backtest }),
+  aiGenerate: (data: Record<string, unknown>) => api.post<IndicatorAIGenerateResult>('/indicator/aiGenerate', data, { timeout: TIMEOUTS.ai }),
   aiGenerateStream: (
     data: { prompt: string; existingCode?: string },
     handlers: {
       onCodeChunk?: (chunk: string) => void
       onStatus?: (status: string) => void
-      onValidation?: (result: any) => void
+      onValidation?: (result: { success: boolean; error?: string; params?: Record<string, unknown> }) => void
       onCodeReplace?: (code: string) => void
-      onDebug?: (info: any) => void
+      onDebug?: (info: { event: string; data: Record<string, unknown> }) => void
       onDone?: () => void
       onError?: (err: string) => void
     }
@@ -583,60 +729,86 @@ export const indicatorApi = {
           }
           flushEvent()
           resolve()
-        } catch (e: any) {
-          handlers.onError?.(e.message || 'Stream error')
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : 'Stream error'
+          handlers.onError?.(msg)
           reject(e)
         }
-      }).catch((err: any) => {
-        handlers.onError?.(err.message || 'Network error')
+      }).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : 'Network error'
+        handlers.onError?.(msg)
         reject(err)
       })
     })
   },
-  run: (data: any) => api.post<any>('/indicator/run', data),
-  watchlist: () => api.get<any[]>('/watchlist'),
-  addWatchlist: (data: any) => api.post<any>('/watchlist', data),
-  kline: (params: Record<string, any>) => api.get<any>('/indicator/kline', { params }),
+  run: (data: Record<string, unknown>) => api.post<IndicatorRunResult>('/indicator/run', data),
+  watchlist: () => api.get<{ items: IndicatorItem[] }>('/watchlist').then(d => d?.items ?? []),
+  addWatchlist: (data: Record<string, unknown>) => api.post<{ success: boolean }>('/watchlist', data),
+  kline: (params: Record<string, string | number>) => api.get<{ klines: KlineBar[] }>('/indicator/kline', { params }).then(d => d?.klines ?? []),
   experiment: {
-    run: (data: any) => api.post<any>('/experiment/run', data, { timeout: TIMEOUTS.backtest }),
-    sensitivity: (data: any) => api.post<any>('/experiment/sensitivity', data, { timeout: TIMEOUTS.backtest }),
-    walkForward: (data: any) => api.post<any>('/experiment/walk-forward', data, { timeout: TIMEOUTS.backtest }),
-    aiOptimize: (data: any) => api.post<any>('/experiment/ai-optimize', data, { timeout: TIMEOUTS.backtest }),
-    structuredTune: (data: any) => api.post<any>('/experiment/structured-tune', data, { timeout: TIMEOUTS.backtest }),
+    run: (data: Record<string, unknown>) => api.post<IndicatorRunResult>('/experiment/run', data, { timeout: TIMEOUTS.backtest }),
+    sensitivity: (data: Record<string, unknown>) => api.post<IndicatorRunResult>('/experiment/sensitivity', data, { timeout: TIMEOUTS.backtest }),
+    walkForward: (data: Record<string, unknown>) => api.post<IndicatorRunResult>('/experiment/walk-forward', data, { timeout: TIMEOUTS.backtest }),
+    aiOptimize: (data: Record<string, unknown>) => api.post<IndicatorRunResult>('/experiment/ai-optimize', data, { timeout: TIMEOUTS.backtest }),
+    structuredTune: (data: Record<string, unknown>) => api.post<IndicatorRunResult>('/experiment/structured-tune', data, { timeout: TIMEOUTS.backtest }),
   },
+}
+
+// ── Social Trading ──
+export const socialApi = {
+  providers: () => api.get<{ providers: any[] }>('/social/providers').then(d => d?.providers ?? []),
+  follow: (providerId: number, followerId: number) =>
+    api.post<{ success: boolean }>(`/social/providers/${providerId}/follow`, undefined, { params: { follower_id: followerId } }),
+  unfollow: (providerId: number, followerId: number) =>
+    api.post<{ success: boolean }>(`/social/providers/${providerId}/unfollow`, undefined, { params: { follower_id: followerId } }),
+  signals: (providerId?: number, limit?: number) =>
+    api.get<{ signals: any[] }>('/social/signals', { params: { provider_id: providerId, limit } }).then(d => d?.signals ?? []),
+  publishSignal: (data: Record<string, unknown>) => api.post<{ signal: any }>('/social/signals', data),
+  followerConfigs: (followerId: number) =>
+    api.get<{ configs: any[] }>('/social/followers/configs', { params: { follower_id: followerId } }).then(d => d?.configs ?? []),
+}
+
+// ── On-Chain Data ──
+export const onchainApi = {
+  ethMetrics: () => api.get<any>('/onchain/eth/metrics'),
+  btcMetrics: () => api.get<any>('/onchain/btc/metrics'),
+  exchangeFlow: (exchange?: string) => api.get<any>('/onchain/exchange-flow', { params: { exchange } }),
+  whaleAlerts: (minUSD?: number) => api.get<{ alerts: any[] }>('/onchain/whale-alerts', { params: { min_usd: minUSD } }).then(d => d?.alerts ?? []),
+  btcSignal: () => api.get<any>('/onchain/signal/btc'),
+  ethSignal: () => api.get<any>('/onchain/signal/eth'),
 }
 
 // ── Community ──
 export const communityApi = {
   market: (params?: { page?: number; page_size?: number; keyword?: string; pricing_type?: string; sort_by?: string }) => {
     const qs = params ? '?' + new URLSearchParams(Object.entries(params).filter(([_, v]) => v !== undefined) as [string, string][]).toString() : ''
-    return api.get<any>(`/community/indicators${qs}`)
+    return api.get<{ items: IndicatorItem[]; total: number }>(`/community/indicators${qs}`).then(d => d?.items ?? [])
   },
   publish: (data: { indicatorId: number; pricingType?: string; price?: number }) =>
-    api.post<any>('/community/publish', data),
-  purchase: (id: number) => api.post<any>(`/community/purchase/${id}`, {}),
+    api.post<{ success: boolean }>('/community/publish', data),
+  purchase: (id: number) => api.post<{ success: boolean; order_id?: string }>(`/community/purchase/${id}`, {}),
   comments: (id: number, page?: number, pageSize?: number) =>
-    api.get<any>(`/community/comments/${id}?page=${page || 1}&page_size=${pageSize || 20}`),
+    api.get<{ comments: CommunityComment[]; total: number }>(`/community/comments/${id}?page=${page || 1}&page_size=${pageSize || 20}`).then(d => d?.comments ?? []),
   addComment: (id: number, data: { rating: number; content: string }) =>
-    api.post<any>(`/community/comments/${id}`, data),
+    api.post<{ success: boolean; comment_id?: number }>(`/community/comments/${id}`, data),
 }
 
 // ── Admin ──
 export const adminApi = {
-  users: () => api.get<any[]>('/auth/admin/users'),
-  user: (id: number) => api.get<any>(`/auth/admin/users/${id}`),
-  updateUser: (id: number, data: any) => api.put<any>(`/auth/admin/users/${id}`, data),
-  stats: () => api.get<any>('/auth/admin/stats'),
-  enhancedStats: () => api.get<any>('/admin/stats'),
-  auditLog: (params?: { limit?: number; offset?: number }) => api.get<any>('/admin/audit-log', { params }),
+  users: () => api.get<AdminUser[]>('/auth/admin/users').then(d => d ?? []),
+  user: (id: number) => api.get<AdminUser>(`/auth/admin/users/${id}`),
+  updateUser: (id: number, data: Partial<AdminUser>) => api.put<{ success: boolean }>(`/auth/admin/users/${id}`, data),
+  stats: () => api.get<AdminStats>('/auth/admin/stats'),
+  enhancedStats: () => api.get<AdminStats>('/admin/stats'),
+  auditLog: (params?: { limit?: number; offset?: number }) => api.get<{ logs: AdminAuditLog[]; total: number }>('/admin/audit-log', { params }),
 }
 
 // ── Agent (admin) ──
 export const agentAdminApi = {
   tokens: () => agentApi.tokens(),
-  createToken: (data: any) => agentApi.createToken(data),
+  createToken: (data: Partial<AgentToken>) => agentApi.createToken(data),
   deleteToken: (id: string) => agentApi.deleteToken(id),
-  auditLog: () => api.get<any[]>('/agent/audit-log'),
+  auditLog: () => api.get<AdminAuditLog[]>('/agent/audit-log').then(d => d ?? []),
 }
 
 export { ApiError }

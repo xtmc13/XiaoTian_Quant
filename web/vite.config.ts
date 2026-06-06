@@ -30,6 +30,25 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
-    sourcemap: true,
+    sourcemap: false,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
+          'echarts': ['echarts'],
+          'klinecharts': ['klinecharts', '@klinecharts/pro'],
+          'query': ['@tanstack/react-query'],
+          'codemirror': ['codemirror', '@codemirror/lang-python', '@codemirror/theme-one-dark', '@codemirror/commands', '@codemirror/state', '@codemirror/language', '@codemirror/view'],
+        },
+      },
+    },
+    minify: 'terser',
+    chunkSizeWarningLimit: 1200,
+    terserOptions: {
+      compress: {
+        drop_console: true,
+        drop_debugger: true,
+      },
+    },
   },
 })

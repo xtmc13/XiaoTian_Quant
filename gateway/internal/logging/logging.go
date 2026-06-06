@@ -39,7 +39,8 @@ func (l Level) String() string {
 	return "UNKNOWN"
 }
 
-func levelFromString(s string) Level {
+// LevelFromString parses a log level string.
+func LevelFromString(s string) Level {
 	switch strings.ToUpper(s) {
 	case "DEBUG":
 		return LevelDebug
@@ -91,7 +92,7 @@ func initDefault() {
 
 	defaultLogger = &Logger{
 		service:  "gateway",
-		level:    levelFromString(levelStr),
+		level:    LevelFromString(levelStr),
 		writer:   os.Stdout,
 		useJSON:  useJSON,
 		useColor: useColor,

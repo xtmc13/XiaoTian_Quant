@@ -10,14 +10,14 @@ export interface SectionCardProps {
   noPadding?: boolean;
 }
 
-export const SectionCard: React.FC<SectionCardProps> = ({
+export const SectionCard: React.FC<SectionCardProps> = React.memo(function SectionCard({
   title,
   headerAction,
   children,
   className,
   bodyClassName,
   noPadding = false,
-}) => {
+}) {
   return (
     <div
       className={cn(
@@ -41,4 +41,4 @@ export const SectionCard: React.FC<SectionCardProps> = ({
       </div>
     </div>
   );
-};
+});

@@ -33,7 +33,7 @@ interface HyperoptJob {
   interval: string
   status: 'running' | 'completed' | 'failed' | 'cancelled'
   best_score: number
-  best_params: Record<string, any>
+  best_params: Record<string, unknown>
   trials_completed: number
   total_trials: number
   created_at: number
@@ -85,7 +85,7 @@ export function HyperoptManagement() {
     queryKey: ['hyperopt-jobs'],
     queryFn: async () => {
       const res = await hyperoptApi.jobs()
-      return (res as any).jobs as HyperoptJob[]
+      return res
     },
     refetchInterval: 10000,
   })
@@ -94,7 +94,7 @@ export function HyperoptManagement() {
     queryKey: ['hyperopt-spaces', jobConfig.strategy_type],
     queryFn: async () => {
       const res = await hyperoptApi.spaces(jobConfig.strategy_type)
-      return (res as any).spaces as HyperoptSpace[]
+      return res
     },
     enabled: showSpaces,
   })
@@ -103,8 +103,7 @@ export function HyperoptManagement() {
     queryKey: ['hyperopt-job', selectedJob],
     queryFn: async () => {
       if (!selectedJob) return null
-      const res = await hyperoptApi.job(selectedJob)
-      return res as any
+      return await hyperoptApi.job(selectedJob)
     },
     enabled: !!selectedJob,
     refetchInterval: selectedJob ? 5000 : false,
@@ -284,7 +283,7 @@ export function HyperoptManagement() {
                 {startMutation.isPending ? '启动中...' : '开始优化'}
               </button>
               {startMutation.isError && (
-                <span className="text-xs text-red-400">{(startMutation.error as any)?.message}</span>
+                <span className="text-xs text-red-400">{startMutation.error?.message}</span>
               )}
             </div>
           </SectionCard>
@@ -404,7 +403,7 @@ export function HyperoptManagement() {
                         <div className="p-2 rounded-md bg-quant-bg-secondary">
                           <div className="text-[10px] text-muted-foreground">耗时</div>
                           <div className="text-sm font-medium">
-                            {jobDetail.duration_ms ? `${(jobDetail.duration_ms / 1000).toFixed(0)}s` : '-'}
+                            {jobDetail.duration_ms ? `${(Number(jobDetail.duration_ms) / 1000).toFixed(0)}s` : '-'}
                           </div>
                         </div>
                       </div>

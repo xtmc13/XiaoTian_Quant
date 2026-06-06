@@ -1,13 +1,12 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { SectionCard } from '@/components/ui/SectionCard'
+import { billingApi } from '@/lib/api'
 import { CheckCircle2, Zap, Crown, Star, Loader2, ExternalLink, Copy, Clock } from 'lucide-react'
 
 interface Plan { id: string; name: string; name_en: string; price: number; credits: number | string; period_days: number }
 interface ChainInfo { chain: string; address: string; memo: string }
-
-const BILLING_API = '/api/billing'
 
 export function Billing() {
   const [plans, setPlans] = useState<Plan[]>([])
@@ -18,31 +17,40 @@ export function Billing() {
   const [orderId, setOrderId] = useState('')
   const [loading, setLoading] = useState(false)
   const [copied, setCopied] = useState('')
+  const copiedTimerRef = useRef<number | null>(null)
 
   useEffect(() => {
-    fetch(BILLING_API + '/plans').then(r => r.json()).then(d => setPlans(d.plans || [])).catch(() => {})
-    fetch(BILLING_API + '/chains').then(r => r.json()).then(d => setChains(d.chains || [])).catch(() => {})
+    billingApi.plans().then((r: any) => setPlans(Array.isArray(r) ? r : r?.plans ?? [])).catch(() => {})
+    billingApi.chains().then((r: any) => setChains(Array.isArray(r) ? r : r?.chains ?? [])).catch(() => {})
   }, [])
 
   const handlePurchase = async () => {
     if (!selectedPlan) return
     setLoading(true)
     try {
-      const res = await fetch(BILLING_API + '/orders', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ plan_id: selectedPlan, chain: selectedChain, tx_hash: txHash }),
+      const data = await billingApi.createOrder({
+        plan_id: selectedPlan,
+        chain: selectedChain,
+        tx_hash: txHash,
       })
-      const data = await res.json()
       setOrderId(data.order_id)
-    } catch (e) { alert('创建订单失败') }
-    finally { setLoading(false) }
+    } catch (e: unknown) {
+      // 错误已通过 UI 反馈，生产环境 console 由构建配置移除
+    } finally { setLoading(false) }
   }
 
   const handleCopy = (text: string) => {
     navigator.clipboard.writeText(text)
     setCopied(text)
-    setTimeout(() => setCopied(''), 2000)
+    if (copiedTimerRef.current) window.clearTimeout(copiedTimerRef.current)
+    copiedTimerRef.current = window.setTimeout(() => setCopied(''), 2000)
   }
+
+  useEffect(() => {
+    return () => {
+      if (copiedTimerRef.current) window.clearTimeout(copiedTimerRef.current)
+    }
+  }, [])
 
   return (
     <div className="h-full overflow-y-auto p-5">

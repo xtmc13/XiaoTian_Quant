@@ -65,8 +65,9 @@ export function UserProfile() {
       setProfile(p)
       setNickname(p.nickname || '')
       setEmail(p.email || '')
-    } catch (e: any) {
-      setError(e.message || '加载失败')
+    } catch (e: unknown) {
+      const err = e instanceof Error ? e : new Error(String(e))
+      setError(err.message || '加载失败')
     } finally {
       setLoading(false)
     }
@@ -89,7 +90,7 @@ export function UserProfile() {
       await userApi.updateProfile({ nickname, email })
       showMsg('个人资料已更新')
       fetchProfile()
-    } catch (e: any) { setError(e.message || '保存失败') }
+    } catch (e: unknown) { const err = e instanceof Error ? e : new Error(String(e)); setError(err.message || '保存失败') }
     finally { setSavingProfile(false) }
   }
 
@@ -99,7 +100,7 @@ export function UserProfile() {
       await userApi.changePassword(oldPw, newPw)
       showMsg('密码已修改，下次登录请使用新密码')
       setOldPw(''); setNewPw('')
-    } catch (e: any) { setError(e.message || '修改失败') }
+    } catch (e: unknown) { const err = e instanceof Error ? e : new Error(String(e)); setError(err.message || '修改失败') }
     finally { setChangingPw(false) }
   }
 
@@ -108,7 +109,7 @@ export function UserProfile() {
     try {
       await userApi.saveNotificationSettings(notifyChannels)
       showMsg('通知设置已保存')
-    } catch (e: any) { setError(e.message || '保存失败') }
+    } catch (e: unknown) { const err = e instanceof Error ? e : new Error(String(e)); setError(err.message || '保存失败') }
     finally { setSavingNotif(false) }
   }
 

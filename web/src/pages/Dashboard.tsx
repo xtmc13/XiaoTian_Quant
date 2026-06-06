@@ -33,18 +33,15 @@ import {
 } from 'lucide-react'
 import { cn, formatCurrency, formatPercent } from '@/lib/utils'
 import { dashboardApi, portfolioApi, strategyApi, protectionApi, mlApi } from '@/lib/api'
+import { getEcharts } from '@/lib/echarts'
 import { KPICard } from '@/components/ui/KPICard'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { SectionCard } from '@/components/ui/SectionCard'
-import type { DashboardSummary, PortfolioSummary, StrategyConfig } from '@/types'
-
-/* ── ECharts lazy load ── */
-let echartsLib: any = null
-async function getEcharts() {
-  if (!echartsLib) echartsLib = await import('echarts')
-  return echartsLib
-}
+import { DataTable } from '@/components/DataTable'
+import type { ECharts } from 'echarts'
+import type { StrategyRanking } from '@/types'
+import type { DashboardSummary, PortfolioSummary, StrategyItem } from '@/types'
 
 /* ── Types ── */
 interface CalendarDay {
@@ -110,7 +107,7 @@ function RiskControlCard({ status, isLoading }: { status?: ProtectionStatus; isL
       headerAction={
         <button
           onClick={() => { window.location.hash = '#/risk-control' }}
-          className="flex items-center gap-0.5 text-[10px] text-[#555555] transition-colors hover:text-white"
+          className="flex items-center gap-0.5 text-[10px] text-[#8a8a8a] transition-colors hover:text-white"
         >
           查看风控中心 <ChevronRightIcon className="h-3 w-3" />
         </button>
@@ -118,19 +115,19 @@ function RiskControlCard({ status, isLoading }: { status?: ProtectionStatus; isL
     >
       <div className="mb-3 grid grid-cols-3 gap-2">
         <div className="rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-2.5 text-center">
-          <div className="text-[10px] text-[#555555]">活跃规则</div>
+          <div className="text-[10px] text-[#8a8a8a]">活跃规则</div>
           <div className={cn('mt-1 text-sm font-semibold', blockedCount > 0 ? 'text-quant-red' : 'text-quant-green')}>
             {ruleItems.length}
           </div>
         </div>
         <div className="rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-2.5 text-center">
-          <div className="text-[10px] text-[#555555]">阻断交易对</div>
+          <div className="text-[10px] text-[#8a8a8a]">阻断交易对</div>
           <div className={cn('mt-1 text-sm font-semibold', pairBlocks.length > 0 ? 'text-quant-red' : 'text-quant-green')}>
             {pairBlocks.length}
           </div>
         </div>
         <div className="rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-2.5 text-center">
-          <div className="text-[10px] text-[#555555]">最近触发</div>
+          <div className="text-[10px] text-[#8a8a8a]">最近触发</div>
           <div className="mt-1 truncate text-sm font-semibold text-[#aaaaaa]" title={lastReason}>
             {lastReason}
           </div>
@@ -158,7 +155,7 @@ function RiskControlCard({ status, isLoading }: { status?: ProtectionStatus; isL
           </div>
         ))}
         {ruleItems.length === 0 && (
-          <div className="py-4 text-center text-[11px] text-[#444444]">
+          <div className="py-4 text-center text-[11px] text-[#8a8a8a]">
             暂无风控数据
           </div>
         )}
@@ -201,7 +198,7 @@ function MLStatusCard({ health, models, isLoading }: { health?: { status: string
       headerAction={
         <button
           onClick={() => { window.location.hash = '#/model-management' }}
-          className="flex items-center gap-0.5 text-[10px] text-[#555555] transition-colors hover:text-white"
+          className="flex items-center gap-0.5 text-[10px] text-[#8a8a8a] transition-colors hover:text-white"
         >
           查看模型管理 <ChevronRightIcon className="h-3 w-3" />
         </button>
@@ -209,17 +206,17 @@ function MLStatusCard({ health, models, isLoading }: { health?: { status: string
     >
       <div className="mb-3 grid grid-cols-3 gap-2">
         <div className="rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-2.5 text-center">
-          <div className="text-[10px] text-[#555555]">模型数量</div>
+          <div className="text-[10px] text-[#8a8a8a]">模型数量</div>
           <div className="mt-1 text-sm font-semibold text-white">{modelCount}</div>
         </div>
         <div className="rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-2.5 text-center">
-          <div className="text-[10px] text-[#555555]">最新状态</div>
+          <div className="text-[10px] text-[#8a8a8a]">最新状态</div>
           <div className={cn('mt-1 text-sm font-semibold', modelStatus === 'deployed' ? 'text-quant-green' : modelStatus === 'idle' ? 'text-quant-gold' : 'text-quant-red')}>
             {modelStatus === 'deployed' ? '已部署' : modelStatus === 'idle' ? '空闲' : '异常'}
           </div>
         </div>
         <div className="rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-2.5 text-center">
-          <div className="text-[10px] text-[#555555]">特征管道</div>
+          <div className="text-[10px] text-[#8a8a8a]">特征管道</div>
           <div className={cn('mt-1 text-sm font-semibold', pipelineHealth === 'normal' ? 'text-quant-green' : 'text-quant-red')}>
             {pipelineHealth === 'normal' ? '正常' : '异常'}
           </div>
@@ -243,14 +240,14 @@ function MLStatusCard({ health, models, isLoading }: { health?: { status: string
               <Activity className="h-3.5 w-3.5 text-[#888888]" />
               <span className="truncate text-xs text-white">{latestModel.model_id}</span>
             </div>
-            <span className="shrink-0 text-[10px] text-[#555555]">
+            <span className="shrink-0 text-[10px] text-[#8a8a8a]">
               {latestModel.feature_count} 特征
             </span>
           </div>
         )}
 
         {modelCount === 0 && (
-          <div className="py-4 text-center text-[11px] text-[#444444]">
+          <div className="py-4 text-center text-[11px] text-[#8a8a8a]">
             暂无训练好的模型
           </div>
         )}
@@ -276,22 +273,29 @@ function SetupGuideCard({ onDismiss }: { onDismiss: () => void }) {
             快速开始
           </div>
           <h3 className="text-lg font-semibold text-white">创建您的第一个量化策略</h3>
-          <p className="mt-1 text-sm text-[#666666]">
+          <p className="mt-1 text-sm text-[#999999]">
             完成 {completed}/{steps.length} 步即可开始量化交易。选择策略类型、配置参数、一键启动实盘。
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <button className="flex items-center gap-1.5 rounded-lg bg-[#1c1c1c] px-4 py-2 text-sm text-white transition-colors hover:bg-[#262626]">
+          <button
+            onClick={() => { window.location.hash = '#/indicator-community' }}
+            className="flex items-center gap-1.5 rounded-lg bg-[#1c1c1c] px-4 py-2 text-sm text-white transition-colors hover:bg-[#262626]"
+          >
             <LayoutGrid className="inline h-4 w-4" />
             策略市场
           </button>
-          <button className="flex items-center gap-1.5 rounded-lg bg-white px-4 py-2 text-sm font-medium text-[#0a0a0a] transition-opacity hover:opacity-90">
+          <button
+            onClick={() => { window.location.hash = '#/strategy' }}
+            className="flex items-center gap-1.5 rounded-lg bg-white px-4 py-2 text-sm font-medium text-[#0a0a0a] transition-opacity hover:opacity-90"
+          >
             <Plus className="inline h-4 w-4" />
             创建策略
           </button>
           <button
             onClick={onDismiss}
-            className="rounded-lg p-2 text-[#666666] transition-colors hover:bg-[#1c1c1c] hover:text-white"
+            aria-label="关闭提示"
+            className="rounded-lg p-2 text-[#999999] transition-colors hover:bg-[#1c1c1c] hover:text-white"
           >
             <X className="h-4 w-4" />
           </button>
@@ -308,7 +312,7 @@ function SetupGuideCard({ onDismiss }: { onDismiss: () => void }) {
                   'flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-bold',
                   step.done
                     ? 'bg-emerald-500/15 text-emerald-400'
-                    : 'bg-[#1c1c1c] text-[#555555]'
+                    : 'bg-[#1c1c1c] text-[#8a8a8a]'
                 )}
               >
                 {step.done ? <ArrowUpRight className="h-3 w-3" /> : i + 1}
@@ -316,13 +320,20 @@ function SetupGuideCard({ onDismiss }: { onDismiss: () => void }) {
               <span
                 className={cn(
                   'text-xs',
-                  step.done ? 'text-[#555555] line-through' : 'text-[#aaaaaa]'
+                  step.done ? 'text-[#8a8a8a] line-through' : 'text-[#aaaaaa]'
                 )}
               >
                 {step.label}
               </span>
               {!step.done && (
-                <button className="rounded bg-white px-2 py-0.5 text-[10px] font-medium text-[#0a0a0a] transition-opacity hover:opacity-90">
+                <button
+                  onClick={() => {
+                    if (step.action === '去设置') window.location.hash = '#/settings'
+                    if (step.action === '创建') window.location.hash = '#/strategy'
+                    if (step.action === '启动') window.location.hash = '#/bots'
+                  }}
+                  className="rounded bg-white px-2 py-0.5 text-[10px] font-medium text-[#0a0a0a] transition-opacity hover:opacity-90"
+                >
                   {step.action}
                 </button>
               )}
@@ -411,6 +422,7 @@ function ProfitCalendar({
         <div className="flex items-center gap-2">
           <button
             onClick={() => setCurrentOffset((o) => o + 1)}
+            aria-label="上个月"
             className="rounded p-1 text-muted-foreground transition-colors hover:bg-white/5"
           >
             <ChevronLeft className="h-3.5 w-3.5" />
@@ -421,6 +433,7 @@ function ProfitCalendar({
           <button
             onClick={() => setCurrentOffset((o) => Math.max(0, o - 1))}
             disabled={currentOffset === 0}
+            aria-label="下个月"
             className="rounded p-1 text-muted-foreground transition-colors hover:bg-white/5 disabled:opacity-30"
           >
             <ChevronRight className="h-3.5 w-3.5" />
@@ -455,7 +468,7 @@ function ProfitCalendar({
       {/* Weekday headers */}
       <div className="mb-1 grid grid-cols-7 gap-0.5">
         {weeks.map((w) => (
-          <div key={w} className="py-1 text-center text-[10px] font-medium text-[#444444]">
+          <div key={w} className="py-1 text-center text-[10px] font-medium text-[#8a8a8a]">
             {w}
           </div>
         ))}
@@ -484,7 +497,7 @@ function ProfitCalendar({
               <span
                 className={cn(
                   'font-medium',
-                  !style && 'text-[#555555]',
+                  !style && 'text-[#8a8a8a]',
                   today && !style && 'text-white'
                 )}
               >
@@ -508,7 +521,7 @@ function ProfitCalendar({
 /* ── Equity Chart ── */
 function EquityChart({ data, isLoading }: { data?: { time: number; value: number }[]; isLoading?: boolean }) {
   const ref = useRef<HTMLDivElement>(null)
-  const chartRef = useRef<any>(null)
+  const chartRef = useRef<ECharts | null>(null)
 
   useEffect(() => {
     let disposed = false
@@ -534,7 +547,7 @@ function EquityChart({ data, isLoading }: { data?: { time: number; value: number
           backgroundColor: 'rgba(17,17,17,0.95)',
           borderColor: '#2a2a2a',
           textStyle: { color: '#cccccc', fontSize: 11 },
-          formatter: (params: any[]) => {
+          formatter: (params: Array<{ value: [number, number] }>) => {
             const p = params[0]
             return `<div style="font-size:10px;color:#888;margin-bottom:4px">${new Date(p.value[0]).toLocaleDateString()}</div>
                     <div style="font-weight:600;color:#fff">$${formatCurrency(p.value[1])}</div>`
@@ -585,7 +598,7 @@ function EquityChart({ data, isLoading }: { data?: { time: number; value: number
 /* ── PnL Bar Chart ── */
 function PnLBarChart({ data, isLoading }: { data?: { time: number; value: number }[]; isLoading?: boolean }) {
   const ref = useRef<HTMLDivElement>(null)
-  const chartRef = useRef<any>(null)
+  const chartRef = useRef<ECharts | null>(null)
 
   useEffect(() => {
     let disposed = false
@@ -611,7 +624,7 @@ function PnLBarChart({ data, isLoading }: { data?: { time: number; value: number
           backgroundColor: 'rgba(17,17,17,0.95)',
           borderColor: '#2a2a2a',
           textStyle: { color: '#cccccc', fontSize: 11 },
-          formatter: (params: any[]) => {
+          formatter: (params: Array<{ value: [number, number] }>) => {
             const p = params[0]
             const color = p.value[1] >= 0 ? '#34d399' : '#f87171'
             return `<div style="font-size:10px;color:#888;margin-bottom:4px">${new Date(p.value[0]).toLocaleDateString()}</div>
@@ -624,7 +637,7 @@ function PnLBarChart({ data, isLoading }: { data?: { time: number; value: number
             data: [],
             barWidth: '55%',
             itemStyle: {
-              color: (p: any) => (p.value[1] >= 0 ? '#03A66D' : '#ef4444'),
+              color: (p: { value: [number, number] }) => (p.value[1] >= 0 ? '#03A66D' : '#ef4444'),
               borderRadius: [2, 2, 0, 0],
             },
           },
@@ -650,12 +663,12 @@ function PnLBarChart({ data, isLoading }: { data?: { time: number; value: number
 }
 
 /* ── Strategy Row ── */
-function StrategyRow({ s }: { s: StrategyConfig }) {
-  const pnl = (s as any).total_pnl || 0
+function StrategyRow({ s }: { s: StrategyItem }) {
+  const pnl = s.total_pnl || 0
   const isRunning = s.status === 'running'
   // CRA 参数展示
-  const craParams = (s as any)
-  const direction = craParams.trade_direction === 'long' ? '多' : craParams.trade_direction === 'short' ? '空' : '双向'
+  const craParams = (s.trading_config || {}) as Record<string, unknown>
+  const direction = s.trade_direction === 'long' ? '多' : s.trade_direction === 'short' ? '空' : '双向'
   const tpMethod = craParams.take_profit_method === 'full' ? '全仓止盈' : craParams.take_profit_method === 'tail' ? '尾单' : craParams.take_profit_method === 'head_tail' ? '首尾' : craParams.take_profit_method === 'moving' ? '移动' : ''
   const stratDesc = craParams.order_count ? `${craParams.order_count}单·首${craParams.first_order_amount || '-'}U` : ''
   return (
@@ -668,19 +681,19 @@ function StrategyRow({ s }: { s: StrategyConfig }) {
       />
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-medium text-white">{s.name}</div>
-        <div className="text-[10px] text-[#555555]">
+        <div className="text-[10px] text-[#8a8a8a]">
           {s.coin} · {s.leverage}x · {s.strategy_type}
-          {craParams.trade_direction && (
+          {!!craParams.trade_direction && (
             <span className={cn('ml-1.5 px-1 rounded text-[9px]',
               craParams.trade_direction === 'long' ? 'bg-quant-green/10 text-quant-green' :
               craParams.trade_direction === 'short' ? 'bg-quant-red/10 text-quant-red' :
               'bg-quant-gold/10 text-quant-gold'
             )}>{direction}</span>
           )}
-          {tpMethod && <span className="ml-1 text-[#444444]">· {tpMethod}</span>}
+          {tpMethod && <span className="ml-1 text-[#8a8a8a]">· {tpMethod}</span>}
         </div>
         {stratDesc && (
-          <div className="text-[9px] text-[#444444] mt-0.5">{stratDesc} · 补差{craParams.add_position_spread || '-'}% · 止盈{craParams.take_profit_ratio || '-'}%</div>
+          <div className="text-[9px] text-[#8a8a8a] mt-0.5">{stratDesc} · 补差{String(craParams.add_position_spread || '-')}% · 止盈{String(craParams.take_profit_ratio || '-')}%</div>
         )}
       </div>
       <div className="text-right">
@@ -697,13 +710,13 @@ function StrategyRow({ s }: { s: StrategyConfig }) {
             'rounded px-1.5 py-0.5 text-[10px]',
             isRunning
               ? 'border border-quant-green/20 bg-quant-green/10 text-quant-green'
-              : 'border border-[#1c1c1c] bg-[#111111] text-[#555555]'
+              : 'border border-[#1c1c1c] bg-[#111111] text-[#8a8a8a]'
           )}
         >
           {isRunning ? '运行中' : s.status}
         </span>
-        {craParams.open_indicator && (
-          <div className="text-[9px] text-[#444444] mt-0.5">
+        {!!craParams.open_indicator && (
+          <div className="text-[9px] text-[#8a8a8a] mt-0.5">
             {craParams.open_indicator === 'macd_golden' ? 'MACD金叉' :
              craParams.open_indicator === 'macd_death' ? 'MACD死叉' :
              craParams.open_indicator === 'ema' ? 'EMA拐点' : '市价'}
@@ -715,7 +728,7 @@ function StrategyRow({ s }: { s: StrategyConfig }) {
 }
 
 /* ── Rank Row ── */
-function RankRow({ item, index }: { item: any; index: number }) {
+function RankRow({ item, index }: { item: StrategyRanking; index: number }) {
   const pnl = item.pnl || 0
   const badge =
     index === 0
@@ -724,7 +737,7 @@ function RankRow({ item, index }: { item: any; index: number }) {
         ? 'bg-slate-300/15 text-slate-300'
         : index === 2
           ? 'bg-amber-600/15 text-amber-500'
-          : 'bg-transparent text-[#444444]'
+          : 'bg-transparent text-[#8a8a8a]'
   return (
     <div className="flex items-center gap-3 rounded-md px-3 py-2 transition-colors hover:bg-white/[0.02]">
       <div
@@ -737,9 +750,9 @@ function RankRow({ item, index }: { item: any; index: number }) {
       </div>
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-medium text-white">{item.name}</div>
-        <div className="flex gap-2 text-[10px] text-[#555555]">
+        <div className="flex gap-2 text-[10px] text-[#8a8a8a]">
           <span>{item.symbol}</span>
-          <span>胜率 {((item as any).win_rate || 0).toFixed(1)}%</span>
+          <span>胜率 {(item.win_rate || 0).toFixed(1)}%</span>
           <span>{item.trades || 0}笔</span>
         </div>
       </div>
@@ -801,13 +814,13 @@ export function Dashboard() {
     setConversion(rate, currency)
   }, [portfolio?.conversion_rate, portfolio?.usd_cny_rate, portfolio?.preferred_currency])
 
-  const { data: strategies, isLoading: stratLoading } = useQuery<StrategyConfig[]>({
+  const { data: strategies, isLoading: stratLoading } = useQuery<StrategyItem[]>({
     queryKey: ['strategies'],
     queryFn: () => strategyApi.list(),
     refetchInterval: 30000,
   })
 
-  const { data: rankingData, isLoading: rankingLoading } = useQuery<any>({
+  const { data: rankingData, isLoading: rankingLoading } = useQuery<StrategyRanking[] | { ranking: StrategyRanking[] }>({
     queryKey: ['ranking'],
     queryFn: () => strategyApi.ranking(),
   })
@@ -838,7 +851,7 @@ export function Dashboard() {
     queryKey: ['ml-models'],
     queryFn: async () => {
       const res = await mlApi.list()
-      return (res as any).models as ModelInfo[] || []
+      return res || []
     },
     refetchInterval: 30000,
   })
@@ -847,12 +860,12 @@ export function Dashboard() {
   const totalPnl = dash?.total_pnl ?? portfolio?.total_pnl ?? 0
   const totalPnlPct = portfolio?.total_pnl_pct ?? 0
 
-  const winRate = (dash as any)?.win_rate ?? 62.4
-  const profitFactor = (dash as any)?.profit_factor ?? 1.85
-  const maxDrawdown = (dash as any)?.max_drawdown ?? 8.2
-  const totalTrades = (dash as any)?.total_trades ?? 1247
+  const winRate = dash?.win_rate ?? 62.4
+  const profitFactor = dash?.profit_factor ?? 1.85
+  const maxDrawdown = dash?.max_drawdown ?? 8.2
+  const totalTrades = dash?.total_trades ?? 1247
 
-  const runningStrats = strategies?.filter((s) => s.status === 'running') || []
+  const runningStrats = useMemo(() => strategies?.filter((s) => s.status === 'running') || [], [strategies])
   const isLoading = dashLoading || portfolioLoading
 
   const handleDismissGuide = useCallback(() => {
@@ -934,7 +947,7 @@ export function Dashboard() {
           <SectionCard
             title="权益曲线"
             headerAction={
-              <div className="flex items-center gap-1 text-[10px] text-[#444444]">
+              <div className="flex items-center gap-1 text-[10px] text-[#8a8a8a]">
                 <span className="inline-block h-1.5 w-1.5 rounded-full bg-quant-green" />
                 实时
               </div>
@@ -948,7 +961,7 @@ export function Dashboard() {
           <SectionCard
             title="日盈亏分布"
             headerAction={
-              <div className="flex items-center gap-2 text-[10px] text-[#444444]">
+              <div className="flex items-center gap-2 text-[10px] text-[#8a8a8a]">
                 <span className="flex items-center gap-1">
                   <span className="inline-block h-1.5 w-1.5 rounded-sm bg-quant-green" />
                   盈利
@@ -975,9 +988,9 @@ export function Dashboard() {
                 <div className="space-y-3">
                   <Skeleton variant="text" lines={4} />
                 </div>
-              ) : (portfolio?.exchanges?.filter((ex: any) => ex.connected || ex.balance > 0 || ex.configured) || []).length > 0 ? (
+              ) : (portfolio?.exchanges?.filter((ex) => ex.connected || ex.balance > 0 || ex.configured) || []).length > 0 ? (
                 <div className="space-y-3">
-                  {(portfolio?.exchanges?.filter((ex: any) => ex.connected || ex.balance > 0 || ex.configured) || []).map((ex: any) => {
+                  {(portfolio?.exchanges?.filter((ex) => ex.connected || ex.balance > 0 || ex.configured) || []).map((ex) => {
                     const isBinance = ex.name === 'binance'
                     const hasSubItems = isBinance || ex.balance > 0
                     return (
@@ -1007,7 +1020,7 @@ export function Dashboard() {
                             <span className="text-[#666666]">├ 现货</span>
                             <span className="font-mono text-[#aaaaaa]">
                               ${(portfolio?.spot_balance || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                              <span className="text-[#555555] ml-1">
+                              <span className="text-[#8a8a8a] ml-1">
                                 ≈ {formatConverted(portfolio?.spot_balance || 0)}
                               </span>
                             </span>
@@ -1021,7 +1034,7 @@ export function Dashboard() {
                                   ({(portfolio?.futures_unrealized_pnl || 0) >= 0 ? '+' : ''}{portfolio?.futures_unrealized_pnl?.toFixed(4)})
                                 </span>
                               )}
-                              <span className="text-[#555555] ml-1">≈ {formatConverted(portfolio?.futures_balance || 0)}</span>
+                              <span className="text-[#8a8a8a] ml-1">≈ {formatConverted(portfolio?.futures_balance || 0)}</span>
                             </span>
                           </div>
                           {hasFunding && (
@@ -1029,7 +1042,7 @@ export function Dashboard() {
                               <span className="text-[#666666]">{lastVisible === 'funding' ? '└' : '├'} 资金</span>
                               <span className="font-mono text-[#aaaaaa]">
                                 ${(portfolio?.funding_balance || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
-                                <span className="text-[#555555] ml-1">≈ {formatConverted(portfolio?.funding_balance || 0)}</span>
+                                <span className="text-[#8a8a8a] ml-1">≈ {formatConverted(portfolio?.funding_balance || 0)}</span>
                               </span>
                             </div>
                           )}
@@ -1038,7 +1051,7 @@ export function Dashboard() {
                               <span className="text-[#666666]">└ 理财</span>
                               <span className="font-mono text-[#aaaaaa]">
                                 ${(portfolio?.earn_balance || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
-                                <span className="text-[#555555] ml-1">≈ {formatConverted(portfolio?.earn_balance || 0)}</span>
+                                <span className="text-[#8a8a8a] ml-1">≈ {formatConverted(portfolio?.earn_balance || 0)}</span>
                               </span>
                             </div>
                           )}
@@ -1052,7 +1065,7 @@ export function Dashboard() {
                             <span className="text-[#666666]">└ 现货</span>
                             <span className="font-mono text-[#aaaaaa]">
                               ${(ex.balance || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                              <span className="text-[#555555] ml-1">
+                              <span className="text-[#8a8a8a] ml-1">
                                 ≈ {formatConverted(ex.balance || 0)}
                               </span>
                             </span>
@@ -1062,10 +1075,10 @@ export function Dashboard() {
                     </div>
                     )})}
                   <div className="mt-2 flex items-center justify-between border-t border-[#1c1c1c] pt-3 text-sm">
-                    <span className="text-[#555555]">合计</span>
+                    <span className="text-[#8a8a8a]">合计</span>
                     <span className="font-mono font-semibold text-white">
                       ${totalEquity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      <span className="text-[#555555] ml-1 text-xs">≈ {formatConverted(totalEquity)}</span>
+                      <span className="text-[#8a8a8a] ml-1 text-xs">≈ {formatConverted(totalEquity)}</span>
                     </span>
                   </div>
                 </div>
@@ -1087,7 +1100,7 @@ export function Dashboard() {
             <SectionCard
               title="AI 多智能体状态"
               headerAction={
-                <span className="text-[10px] text-[#555555]">QuantDinger</span>
+                <span className="text-[10px] text-[#8a8a8a]">QuantDinger</span>
               }
             >
               <div className="mb-3 grid grid-cols-3 gap-3">
@@ -1095,7 +1108,7 @@ export function Dashboard() {
                   { name: '市场情报', status: 'running', detail: '-- 条新信号' },
                   { name: '策略生成', status: 'running', detail: '-- 个策略待审' },
                   { name: '风控AI', status: 'normal', detail: '所有指标安全' },
-                ]).map((agent: any) => (
+                ]).map((agent: { name: string; status: string; detail: string }) => (
                   <div
                     key={agent.name}
                     className="rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-3 text-center transition-colors hover:border-[#2a2a2a]"
@@ -1112,7 +1125,7 @@ export function Dashboard() {
                     <div className="mt-2 text-xs font-medium text-white">
                       {agent.name}
                     </div>
-                    <div className="mt-1 flex items-center justify-center gap-1 text-[10px] text-[#555555]">
+                    <div className="mt-1 flex items-center justify-center gap-1 text-[10px] text-[#8a8a8a]">
                       <span
                         className={cn(
                           'h-1.5 w-1.5 rounded-full',
@@ -1127,21 +1140,21 @@ export function Dashboard() {
                           ? '正常'
                           : '异常'}
                     </div>
-                    <div className="mt-0.5 truncate text-[10px] text-[#444444]">
+                    <div className="mt-0.5 truncate text-[10px] text-[#8a8a8a]">
                       {agent.detail}
                     </div>
                   </div>
                 ))}
               </div>
               <div className="max-h-24 space-y-1 overflow-y-auto rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-2">
-                {(dash?.ai_logs || []).slice(0, 10).map((log: any, i: number) => (
+                {(dash?.ai_logs || []).slice(0, 10).map((log: { time: string; message: string }, i: number) => (
                   <div key={i} className="font-mono text-[11px]">
-                    <span className="text-[#444444]">[{log.time}]</span>{' '}
+                    <span className="text-[#8a8a8a]">[{log.time}]</span>{' '}
                     <span className="text-[#aaaaaa]">{log.message}</span>
                   </div>
                 ))}
                 {!(dash?.ai_logs?.length) && (
-                  <div className="py-6 text-center text-[11px] text-[#444444]">
+                  <div className="py-6 text-center text-[11px] text-[#8a8a8a]">
                     等待AI智能体数据...
                   </div>
                 )}
@@ -1196,7 +1209,7 @@ export function Dashboard() {
                   onClick={() => {
                     window.location.hash = '#/strategies'
                   }}
-                  className="flex items-center gap-0.5 text-[10px] text-[#555555] transition-colors hover:text-white"
+                  className="flex items-center gap-0.5 text-[10px] text-[#8a8a8a] transition-colors hover:text-white"
                 >
                   全部 <ChevronRightIcon className="h-3 w-3" />
                 </button>
@@ -1209,11 +1222,52 @@ export function Dashboard() {
                   ))}
                 </div>
               ) : ranking.length > 0 ? (
-                <div className="-mx-2 max-h-[300px] overflow-y-auto">
-                  {ranking.slice(0, 10).map((item: any, i: number) => (
-                    <RankRow key={item.id || i} item={item} index={i} />
-                  ))}
-                </div>
+                <DataTable<StrategyRanking>
+                  data={ranking.slice(0, 10)}
+                  keyExtractor={(item, i) => item.strategy_id || String(i)}
+                  columns={[
+                    {
+                      key: 'rank',
+                      title: '#',
+                      width: '40px',
+                      render: (_, i) => {
+                        const badge =
+                          i === 0 ? 'bg-yellow-500/15 text-yellow-400'
+                            : i === 1 ? 'bg-slate-300/15 text-slate-300'
+                            : i === 2 ? 'bg-amber-600/15 text-amber-500'
+                            : 'bg-transparent text-[#8a8a8a]'
+                        return (
+                          <div className={cn('flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold', badge)}>
+                            {i + 1}
+                          </div>
+                        )
+                      },
+                    },
+                    {
+                      key: 'name',
+                      title: '策略',
+                      render: (item) => (
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-medium text-white">{item.name}</div>
+                          <div className="flex gap-2 text-[10px] text-[#8a8a8a]">
+                            <span>胜率 {((item.win_rate || 0) * 100).toFixed(1)}%</span>
+                            <span>夏普 {(item.sharpe || 0).toFixed(2)}</span>
+                          </div>
+                        </div>
+                      ),
+                    },
+                    {
+                      key: 'return',
+                      title: '收益',
+                      width: '80px',
+                      render: (item) => (
+                        <div className={cn('shrink-0 font-mono text-sm font-semibold', (item.total_return || 0) >= 0 ? 'text-emerald-400' : 'text-red-400')}>
+                          {formatPercent(item.total_return || 0)}
+                        </div>
+                      ),
+                    },
+                  ]}
+                />
               ) : (
                 <EmptyState
                   title="暂无排行数据"

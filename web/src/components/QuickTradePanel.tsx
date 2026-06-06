@@ -148,10 +148,10 @@ const handlePresetSize = (pct: number) => {
       {tradeMode === 'contract' && (
         <div className="px-4 pb-3">
           <div className="flex items-center justify-between mb-1.5">
-            <label className="text-[11px] text-muted-foreground flex items-center gap-1">
+            <span className="text-[11px] text-muted-foreground flex items-center gap-1">
               <Shield className="w-3 h-3" />
               杠杆
-            </label>
+            </span>
             <div className="relative">
               <button
                 onClick={() => setShowLeverageDropdown(!showLeverageDropdown)}
@@ -210,9 +210,10 @@ const handlePresetSize = (pct: number) => {
       {/* Price Input */}
       {orderType === 'LIMIT' && (
         <div className="px-4 pb-3">
-          <label className="text-[11px] text-muted-foreground mb-1 block">价格 (USDT)</label>
+          <label htmlFor="quick-price" className="text-[11px] text-muted-foreground mb-1 block">价格 (USDT)</label>
           <div className="relative">
             <input
+              id="quick-price"
               type="number"
               value={price}
               onChange={(e) => onPriceChange(e.target.value)}
@@ -267,10 +268,10 @@ const handlePresetSize = (pct: number) => {
       {/* TP / SL */}
       <div className="px-4 pb-3">
         <div className="flex items-center gap-2 mb-1.5">
-          <label className="text-[11px] text-muted-foreground flex items-center gap-1">
+          <span className="text-[11px] text-muted-foreground flex items-center gap-1">
             <Info className="w-3 h-3" />
             止盈 / 止损
-          </label>
+          </span>
         </div>
         <div className="flex gap-2">
           <div className="relative flex-1">

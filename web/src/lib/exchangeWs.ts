@@ -44,7 +44,7 @@ interface ExchangeConf {
   base: string
   buildUrl(symbol: string, interval: string): string
   subscribe?(ws: WebSocket, symbol: string, interval: string): void
-  parseBar(data: any): BarData | null
+  parseBar(data: Record<string, unknown>): BarData | null
   ping(ws: WebSocket): void
 }
 
@@ -108,14 +108,14 @@ const EXCHANGE_WS: Record<string, ExchangeConf> = {
     },
     parseBar(data) {
       if (data.e !== 'kline' || !data.k) return null
-      const k = data.k
+      const k = data.k as Record<string, unknown>
       return {
-        timestamp: k.t, open: parseFloat(k.o), high: parseFloat(k.h),
-        low: parseFloat(k.l), close: parseFloat(k.c), volume: parseFloat(k.v),
-        isClosed: !!k.x,
+        timestamp: k.t as number, open: parseFloat(k.o as string), high: parseFloat(k.h as string),
+        low: parseFloat(k.l as string), close: parseFloat(k.c as string), volume: parseFloat(k.v as string),
+        isClosed: !!(k.x as boolean),
       }
     },
-    ping(ws) { try { ws.send(JSON.stringify({ pong: Date.now() })) } catch (_) {} },
+    ping(ws) { try { ws.send(JSON.stringify({ pong: Date.now() })) } catch { /* ignore */ } },
   },
 
   okx: {
@@ -128,8 +128,10 @@ const EXCHANGE_WS: Record<string, ExchangeConf> = {
       }))
     },
     parseBar(data) {
-      if (!data.data || !data.arg?.channel?.startsWith('candle')) return null
-      const c = data.data[0]
+      const d = data.data as unknown[]
+      const arg = data.arg as Record<string, unknown>
+      if (!d || !arg?.channel?.toString().startsWith('candle')) return null
+      const c = d[0] as string[]
       if (!c) return null
       return {
         timestamp: parseInt(c[0]), open: parseFloat(c[1]), high: parseFloat(c[2]),
@@ -137,7 +139,7 @@ const EXCHANGE_WS: Record<string, ExchangeConf> = {
         isClosed: !!c[8],
       }
     },
-    ping(ws) { try { ws.send('ping') } catch (_) {} },
+    ping(ws) { try { ws.send('ping') } catch { /* ignore */ } },
   },
 
   bitget: {
@@ -150,9 +152,11 @@ const EXCHANGE_WS: Record<string, ExchangeConf> = {
       }))
     },
     parseBar(data) {
-      if (!Array.isArray(data.data) || !data.data.length) return null
-      if (!String(data.arg?.channel || '').startsWith('candle')) return null
-      const c = data.data[0]
+      const d = data.data as unknown[]
+      const arg = data.arg as Record<string, unknown>
+      if (!Array.isArray(d) || !d.length) return null
+      if (!String(arg?.channel || '').startsWith('candle')) return null
+      const c = d[0] as string[]
       if (!Array.isArray(c)) return null
       return {
         timestamp: parseInt(c[0]), open: parseFloat(c[1]), high: parseFloat(c[2]),
@@ -160,7 +164,7 @@ const EXCHANGE_WS: Record<string, ExchangeConf> = {
         isClosed: true,
       }
     },
-    ping(ws) { try { ws.send('ping') } catch (_) {} },
+    ping(ws) { try { ws.send('ping') } catch { /* ignore */ } },
   },
 
   bybit: {
@@ -171,8 +175,9 @@ const EXCHANGE_WS: Record<string, ExchangeConf> = {
       ws.send(JSON.stringify({ op: 'subscribe', args: [`kline.${interval}.${s}`] }))
     },
     parseBar(data) {
-      if (!data.data || !data.topic?.startsWith('kline.')) return null
-      const c = data.data[0]
+      const d = data.data as Record<string, string>[]
+      if (!d || !data.topic?.toString().startsWith('kline.')) return null
+      const c = d[0]
       if (!c) return null
       return {
         timestamp: parseInt(c.start), open: parseFloat(c.open), high: parseFloat(c.high),
@@ -180,7 +185,7 @@ const EXCHANGE_WS: Record<string, ExchangeConf> = {
         isClosed: !!c.confirm,
       }
     },
-    ping(ws) { try { ws.send(JSON.stringify({ op: 'ping' })) } catch (_) {} },
+    ping(ws) { try { ws.send(JSON.stringify({ op: 'ping' })) } catch { /* ignore */ } },
   },
 
   gate: {
@@ -197,18 +202,18 @@ const EXCHANGE_WS: Record<string, ExchangeConf> = {
     },
     parseBar(data) {
       if (data.channel !== 'spot.candlesticks' || data.event !== 'update') return null
-      const c = data.result
+      const c = data.result as Record<string, unknown>
       if (!c) return null
       return {
-        timestamp: parseInt(c.t) * 1000, open: parseFloat(c.o), high: parseFloat(c.h),
-        low: parseFloat(c.l), close: parseFloat(c.c), volume: parseFloat(c.v),
-        isClosed: !!c.n,
+        timestamp: parseInt(c.t as string) * 1000, open: parseFloat(c.o as string), high: parseFloat(c.h as string),
+        low: parseFloat(c.l as string), close: parseFloat(c.c as string), volume: parseFloat(c.v as string),
+        isClosed: !!(c.n as boolean),
       }
     },
     ping(ws) {
       try {
         ws.send(JSON.stringify({ time: Math.floor(Date.now() / 1000), channel: 'spot.ping' }))
-      } catch (_) {}
+      } catch { /* ignore */ }
     },
   },
 }
@@ -278,7 +283,7 @@ export class ExchangeKlineWs {
     this._closed = true
     this._clearTimers()
     if (this._ws) {
-      try { this._ws.close() } catch (_) {}
+      try { this._ws.close() } catch { /* ignore */ }
       this._ws = null
     }
   }
@@ -358,7 +363,7 @@ export class ExchangeKlineWs {
           // Emit to callbacks
           this._onTick?.(bar)
           if (bar.isClosed) this._onNewBar?.(bar)
-        } catch (_) {}
+        } catch { /* ignore */ }
       }
 
       ws.onclose = () => {
@@ -391,7 +396,7 @@ export class ExchangeKlineWs {
     this._fallbackUsed = true
     this._exchangeId = 'binance'
     this._clearTimers()
-    try { this._ws?.close() } catch (_) {}
+    try { this._ws?.close() } catch { /* ignore */ }
     this._ws = null
     this._openConnection()
   }
@@ -413,7 +418,7 @@ export class ExchangeKlineWs {
     const delay = Math.min(1000 * Math.pow(2, this._reconnectAttempts), 30000)
     this._reconnectAttempts++
 
-    console.log(
+    console.warn(
       `[ExchangeWS:${this._exchangeId}] Reconnecting in ${delay}ms ` +
       `(attempt ${this._reconnectAttempts}/${this._maxReconnectAttempts}, ` +
       `last bar: ${this._lastBarTimestamp ? new Date(this._lastBarTimestamp).toISOString() : 'none'})`

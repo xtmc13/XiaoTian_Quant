@@ -24,12 +24,14 @@ import {
   ArrowUpDown,
   ArrowLeftRight,
   Search,
+  Link2,
+  Share2,
 } from 'lucide-react'
 
 interface NavItem {
   path?: string
   label: string
-  icon: any
+  icon: React.ComponentType<{ className?: string }>
   adminOnly?: boolean
   children?: { path: string; label: string }[]
 }
@@ -54,6 +56,8 @@ const navItems: NavItem[] = [
   { path: '/advanced-orders', label: '高级订单', icon: ArrowUpDown },
   { path: '/arbitrage', label: '套利监控', icon: ArrowLeftRight },
   { path: '/hyperopt', label: '参数优化', icon: Search },
+  { path: '/social-trading', label: '社交交易', icon: Share2 },
+  { path: '/onchain', label: '链上数据', icon: Link2 },
   { path: '/exchange-account', label: '账户', icon: Wallet },
   { path: '/indicator-community', label: '指标市场', icon: ShoppingBag },
   { path: '/author-dashboard', label: '作者后台', icon: BarChart3 },
@@ -123,6 +127,7 @@ export function Sidebar() {
                     setExpandedItem(isExpanded ? null : item.label)
                   }}
                   onMouseEnter={() => { if (isHover) setExpandedItem(item.label) }}
+                  aria-expanded={isExpanded}
                   className={cn(
                     'w-full flex items-center gap-3 px-2 py-2.5 rounded-md text-sm font-medium transition-colors',
                     active
@@ -150,6 +155,7 @@ export function Sidebar() {
                           key={child.path}
                           to={child.path}
                           onClick={() => { if (!isHover) { setSidebarCollapsed(true); setExpandedItem(null) } }}
+                          aria-current={childActive ? 'page' : undefined}
                           className={cn(
                             'flex items-center gap-2 px-2 py-2 rounded-md text-xs font-medium transition-colors',
                             childActive
@@ -173,6 +179,7 @@ export function Sidebar() {
               key={item.path}
               to={item.path!}
               onClick={() => { if (!isHover) setSidebarCollapsed(true) }}
+              aria-current={active ? 'page' : undefined}
               className={cn(
                 'flex items-center gap-3 px-2 py-2.5 rounded-md text-sm font-medium transition-colors',
                 active
@@ -192,6 +199,7 @@ export function Sidebar() {
       <div className="p-2 border-t border-quant-border">
         <Link
           to="/settings"
+          aria-current={location.pathname === '/settings' ? 'page' : undefined}
           className={cn(
             'flex items-center gap-3 px-2 py-2.5 rounded-md text-sm font-medium transition-colors',
             location.pathname === '/settings'

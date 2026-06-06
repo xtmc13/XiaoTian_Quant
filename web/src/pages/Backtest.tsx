@@ -1,5 +1,8 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
-import { useMutation } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
+import type { EChartsType } from 'echarts'
+import { DataTable } from '@/components/DataTable'
+import { BacktestResult, BacktestTrade } from '@/types'
 import {
   Play,
   Download,
@@ -20,9 +23,19 @@ import {
   Database,
   Info,
   SlidersHorizontal,
+  GitBranch,
+  Beaker,
+  CheckSquare,
+  Square as SquareIcon,
+  BarChart4,
+  ArrowUp,
+  ArrowDown,
+  Maximize2,
+  Minimize2,
 } from 'lucide-react'
 import { cn, formatCurrency } from '@/lib/utils'
-import { backtestApi } from '@/lib/api'
+import { backtestApi, indicatorApi } from '@/lib/api'
+import { getEcharts } from '@/lib/echarts'
 import { KPICard } from '@/components/ui/KPICard'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { SectionCard } from '@/components/ui/SectionCard'
@@ -145,14 +158,6 @@ function daysAgo(n: number): string {
   return dateToISO(d)
 }
 
-/* ── ECharts lazy load ───────────────────────────────────────────── */
-
-let echartsLib: any = null
-async function getEcharts() {
-  if (!echartsLib) echartsLib = await import('echarts')
-  return echartsLib
-}
-
 /* ── Helpers ─────────────────────────────────────────────────────── */
 
 function formatPct(n: number): string {
@@ -174,23 +179,23 @@ function computeMonthlyReturns(curve: EquityPoint[]): { month: string; returnPct
   }))
 }
 
-function parseTrades(raw: any[]): TradeRecord[] {
+function parseTrades(raw: Record<string, unknown>[]): TradeRecord[] {
   return (raw || []).map((t) => ({
-    side: t.side || 'buy',
-    entry_price: t.entry_price,
-    exit_price: t.exit_price,
-    qty: t.qty || 0,
-    pnl: t.pnl,
-    time: t.time || Date.now(),
-    bar: t.bar || 0,
+    side: (t.side as 'buy' | 'sell') || 'buy',
+    entry_price: t.entry_price as number | undefined,
+    exit_price: t.exit_price as number | undefined,
+    qty: (t.qty as number) || 0,
+    pnl: t.pnl as number | undefined,
+    time: (t.time as number) || Date.now(),
+    bar: (t.bar as number) || 0,
   }))
 }
 
 /* ── Equity Chart Component ──────────────────────────────────────── */
 
-function EquityChart({ data, isLoading }: { data?: EquityPoint[]; isLoading?: boolean }) {
+function EquityChart({ data, trades, isLoading }: { data?: EquityPoint[]; trades?: TradeRecord[]; isLoading?: boolean }) {
   const ref = useRef<HTMLDivElement>(null)
-  const chartRef = useRef<any>(null)
+  const chartRef = useRef<EChartsType | null>(null)
 
   useEffect(() => {
     let disposed = false
@@ -205,7 +210,7 @@ function EquityChart({ data, isLoading }: { data?: EquityPoint[]; isLoading?: bo
           backgroundColor: 'rgba(17,17,17,0.95)',
           borderColor: '#2a2a2a',
           textStyle: { color: '#cccccc', fontSize: 11 },
-          formatter: (params: any[]) => {
+          formatter: (params: Array<{ value: [number, number] }>) => {
             const p = params[0]
             return `<div style="font-size:10px;color:#888;margin-bottom:4px">${new Date(p.value[0]).toLocaleDateString()}</div>
                     <div style="font-weight:600;color:#fff">$${formatCurrency(p.value[1])}</div>`
@@ -225,6 +230,7 @@ function EquityChart({ data, isLoading }: { data?: EquityPoint[]; isLoading?: bo
         series: [
           {
             type: 'line',
+            name: '权益',
             data: [],
             smooth: true,
             symbol: 'none',
@@ -240,6 +246,28 @@ function EquityChart({ data, isLoading }: { data?: EquityPoint[]; isLoading?: bo
               },
             },
           },
+          // Buy markers
+          {
+            name: '买入',
+            type: 'scatter',
+            data: [],
+            symbol: 'pin',
+            symbolSize: 24,
+            itemStyle: { color: '#03A66D' },
+            label: { show: true, formatter: 'B', color: '#fff', fontSize: 10, fontWeight: 'bold' },
+            z: 10,
+          },
+          // Sell markers
+          {
+            name: '卖出',
+            type: 'scatter',
+            data: [],
+            symbol: 'pin',
+            symbolSize: 24,
+            itemStyle: { color: '#CF304A' },
+            label: { show: true, formatter: 'S', color: '#fff', fontSize: 10, fontWeight: 'bold' },
+            z: 10,
+          },
         ],
       })
       const ro = new ResizeObserver(() => chartRef.current?.resize())
@@ -250,11 +278,17 @@ function EquityChart({ data, isLoading }: { data?: EquityPoint[]; isLoading?: bo
 
   useEffect(() => {
     if (chartRef.current && data) {
+      const buyData = trades?.filter(t => t.side === 'buy').map(t => [t.time, t.entry_price ?? 0]) ?? []
+      const sellData = trades?.filter(t => t.side === 'sell').map(t => [t.time, t.exit_price ?? 0]) ?? []
       chartRef.current.setOption({
-        series: [{ data: data.map((d) => [d.time, d.equity]) }],
+        series: [
+          { data: data.map((d) => [d.time, d.equity]) },
+          { data: buyData },
+          { data: sellData },
+        ],
       })
     }
-  }, [data])
+  }, [data, trades])
 
   if (isLoading) return <div className="h-64 animate-pulse rounded-lg bg-quant-bg-secondary" />
   return <div ref={ref} className="h-64 w-full" />
@@ -264,7 +298,7 @@ function EquityChart({ data, isLoading }: { data?: EquityPoint[]; isLoading?: bo
 
 function MonthlyReturnChart({ data, isLoading }: { data?: { month: string; returnPct: number }[]; isLoading?: boolean }) {
   const ref = useRef<HTMLDivElement>(null)
-  const chartRef = useRef<any>(null)
+  const chartRef = useRef<EChartsType | null>(null)
 
   useEffect(() => {
     let disposed = false
@@ -279,7 +313,7 @@ function MonthlyReturnChart({ data, isLoading }: { data?: { month: string; retur
           backgroundColor: 'rgba(17,17,17,0.95)',
           borderColor: '#2a2a2a',
           textStyle: { color: '#cccccc', fontSize: 11 },
-          formatter: (params: any[]) => {
+          formatter: (params: Array<{ value: [string, number] }>) => {
             const p = params[0]
             const color = p.value[1] >= 0 ? '#34d399' : '#f87171'
             return `<div style="font-size:10px;color:#888;margin-bottom:4px">${p.value[0]}</div>
@@ -303,7 +337,7 @@ function MonthlyReturnChart({ data, isLoading }: { data?: { month: string; retur
             data: [],
             barWidth: '55%',
             itemStyle: {
-              color: (p: any) => (p.value[1] >= 0 ? '#03A66D' : '#ef4444'),
+              color: (p: { value: [string, number] }) => (p.value[1] >= 0 ? '#03A66D' : '#ef4444'),
               borderRadius: [2, 2, 0, 0],
             },
           },
@@ -334,6 +368,10 @@ export function Backtest() {
   const [symbol, setSymbol] = useState('BTCUSDT')
   const [interval, setIntervalVal] = useState('1h')
   const [strategyType, setStrategyType] = useState('sma_cross')
+  const CRA_STRATEGIES = ['martin_trend', 'wallstreet', 'macd_golden_long', 'macd_death_short',
+    'ema_follow_trend', 'ema_counter_trend', 'dual_burn', 'global_burn',
+    'trend_long', 'trend_short', 'counter_stable', 'head_tail_arb']
+  const isCraStrategy = CRA_STRATEGIES.includes(strategyType)
   const [initialBalance, setInitialBalance] = useState(10000)
   const [fromDate, setFromDate] = useState(daysAgo(180))
   const [toDate, setToDate] = useState(dateToISO(new Date()))
@@ -357,6 +395,15 @@ export function Backtest() {
   const [craCloseAdd, setCraCloseAdd] = useState(false)
   const [craLeverage, setCraLeverage] = useState(5)
   const [craDirection, setCraDirection] = useState<'long' | 'short' | 'dual'>('long')
+
+  // Multi-strategy comparison
+  const [compareStrategies, setCompareStrategies] = useState<string[]>([])
+  const [compareResults, setCompareResults] = useState<Record<string, { report: BacktestReport; params: BacktestParams; trades: TradeRecord[] }>>({})
+  const [showCompare, setShowCompare] = useState(false)
+  // Optimizer
+  const [showOptimizer, setShowOptimizer] = useState(false)
+  const [optimizerConfig, setOptimizerConfig] = useState({ method: 'de' as 'de' | 'tpe', generations: 10, population: 20 })
+  const [optimizerResult, setOptimizerResult] = useState<any>(null)
 
   const [report, setReport] = useState<BacktestReport | null>(null)
   const [params, setParams] = useState<BacktestParams | null>(null)
@@ -387,15 +434,15 @@ export function Backtest() {
         trend_indicator: craTrendInd,
         trend_timeframe: craTrendTf,
         follow_trend: craFollowTrend,
-        burn_cut: craBurnCut,
+        burn_cut: craBurnCut ? { enabled: true, dual_burn_start: 3, global_burn_start: 5 } : undefined,
         close_add_position: craCloseAdd,
         leverage: craLeverage,
         direction: craDirection,
       }),
-    onSuccess: (data: any) => {
-      setReport(data?.report || null)
-      setParams(data?.params || null)
-      const curve = (data?.equity_curve || []).map((p: any) => ({ time: p.time, equity: p.equity }))
+    onSuccess: (data: BacktestResult) => {
+      setReport((data?.report as unknown as BacktestReport) || null)
+      setParams((data?.params as unknown as BacktestParams) || null)
+      const curve = (data?.equity_curve || []).map((p) => ({ time: p.time, equity: p.equity }))
       setEquityCurve(curve)
       setTrades(parseTrades(data?.trades || []))
     },
@@ -408,6 +455,73 @@ export function Backtest() {
     setActivePreset(label)
     setFromDate(daysAgo(days))
     setToDate(dateToISO(new Date()))
+  }
+
+  const handleRunCompare = async () => {
+    if (compareStrategies.length < 2) return
+    setCompareResults({})
+    const results: Record<string, any> = {}
+    for (const st of compareStrategies) {
+      try {
+        const data = await backtestApi.run({
+          symbol, interval, strategy_type: st,
+          initial_balance: { USDT: initialBalance },
+          from: fromDate, to: toDate,
+          order_count: craOrderCount, first_order_amount: craFirstAmount,
+          add_position_spread: craAddSpread, add_position_callback: craAddCallback,
+          take_profit_ratio: craTpRatio, profit_callback: craProfitCallback,
+          take_profit_method: craTpMethod, open_indicator: craOpenInd,
+          add_position_indicator: craAddInd, waterfall_protection: craWaterfall,
+          open_double: craOpenDouble, trend_indicator: craTrendInd,
+          trend_timeframe: craTrendTf, follow_trend: craFollowTrend,
+          burn_cut: craBurnCut ? { enabled: true, dual_burn_start: 3, global_burn_start: 5 } : undefined,
+          close_add_position: craCloseAdd, leverage: craLeverage, direction: craDirection,
+        })
+        results[st] = {
+          report: data?.report || null,
+          params: data?.params || null,
+          trades: parseTrades(data?.trades || []),
+        }
+      } catch { /* skip failed */ }
+    }
+    setCompareResults(results)
+  }
+
+  const handleRunOptimizer = async () => {
+    setOptimizerResult(null)
+    try {
+      const data = await indicatorApi.experiment.run({
+        symbol, interval,
+        strategy_type: strategyType,
+        optimizer: optimizerConfig.method,
+        param_space: {
+          order_count: { min: 3, max: 15, step: 1 },
+          first_order_amount: { min: 50, max: 500, step: 10 },
+          add_position_spread: { min: 1, max: 10, step: 0.5 },
+          take_profit_ratio: { min: 0.5, max: 5, step: 0.1 },
+          waterfall_protection: { min: 1, max: 10, step: 0.5 },
+        },
+        generations: optimizerConfig.generations,
+        population_size: optimizerConfig.population,
+        backtest_config: {
+          initial_balance: initialBalance,
+          from: fromDate, to: toDate,
+        },
+      })
+      setOptimizerResult(data?.data || data)
+    } catch (e) {
+      // 优化器错误已在 UI 中反馈
+    }
+  }
+
+  const applyOptimizerResult = (result: any) => {
+    if (!result?.best_params) return
+    const p = result.best_params
+    if (p.order_count !== undefined) setCraOrderCount(p.order_count)
+    if (p.first_order_amount !== undefined) setCraFirstAmount(p.first_order_amount)
+    if (p.add_position_spread !== undefined) setCraAddSpread(p.add_position_spread)
+    if (p.take_profit_ratio !== undefined) setCraTpRatio(p.take_profit_ratio)
+    if (p.waterfall_protection !== undefined) setCraWaterfall(p.waterfall_protection)
   }
 
   const handleRun = () => {
@@ -474,11 +588,32 @@ export function Backtest() {
                 disabled={isRunning}
                 className={cn(
                   'flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium transition-opacity',
-                  isRunning ? 'cursor-not-allowed bg-quant-gold/50' : 'bg-quant-gold text-white hover:opacity-90'
+                  isRunning ? 'cursor-not-allowed bg-quant-gold/50' : 'bg-quant-gold text-[#0a0a0a] hover:opacity-90'
                 )}
               >
                 {isRunning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
                 {isRunning ? '回测中...' : '开始回测'}
+              </button>
+              {isCraStrategy && (
+                <button
+                  onClick={() => setShowOptimizer(true)}
+                  className="flex items-center gap-1.5 rounded-lg border border-quant-gold/30 bg-quant-gold/10 px-4 py-2 text-sm font-medium text-quant-gold transition-colors hover:bg-quant-gold/20"
+                >
+                  <Beaker className="h-3.5 w-3.5" />
+                  自动调参
+                </button>
+              )}
+              <button
+                onClick={() => setShowCompare(!showCompare)}
+                className={cn(
+                  'flex items-center gap-1.5 rounded-lg border px-4 py-2 text-sm font-medium transition-colors',
+                  showCompare
+                    ? 'border-quant-gold/30 bg-quant-gold/10 text-quant-gold'
+                    : 'border-quant-border text-muted-foreground hover:text-foreground'
+                )}
+              >
+                <GitBranch className="h-3.5 w-3.5" />
+                策略对比
               </button>
             </>
           }
@@ -495,6 +630,7 @@ export function Backtest() {
                 onChange={(e) => setSymbol(e.target.value.toUpperCase())}
                 className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold"
                 placeholder="例如: BTCUSDT"
+                aria-label="交易对"
               />
             </div>
             <div>
@@ -502,6 +638,7 @@ export function Backtest() {
               <select
                 value={interval}
                 onChange={(e) => setIntervalVal(e.target.value)}
+                aria-label="K线周期"
                 className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold"
               >
                 {INTERVALS.map((opt) => (
@@ -514,6 +651,7 @@ export function Backtest() {
               <select
                 value={strategyType}
                 onChange={(e) => setStrategyType(e.target.value)}
+                aria-label="策略类型"
                 className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold"
               >
                 {STRATEGIES.map((s) => (
@@ -536,50 +674,50 @@ export function Backtest() {
               <div>
                 <label className="mb-1.5 block text-xs text-muted-foreground">做单数量</label>
                 <input type="number" min={1} max={20} value={craOrderCount} onChange={(e) => setCraOrderCount(Number(e.target.value))}
-                  className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold" />
+                  className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold" aria-label="做单数量" />
               </div>
               <div>
                 <label className="mb-1.5 block text-xs text-muted-foreground">首单仓位 (USDT)</label>
                 <input type="number" min={10} max={10000} step={10} value={craFirstAmount} onChange={(e) => setCraFirstAmount(Number(e.target.value))}
-                  className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold" />
+                  className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold" aria-label="首单仓位 USDT" />
               </div>
               <div>
                 <label className="mb-1.5 block text-xs text-muted-foreground">杠杆倍数</label>
                 <input type="number" min={1} max={125} value={craLeverage} onChange={(e) => setCraLeverage(Number(e.target.value))}
-                  className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold" />
+                  className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold" aria-label="杠杆倍数" />
               </div>
             </div>
             <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
               <div>
                 <label className="mb-1.5 block text-xs text-muted-foreground">补仓价差 (%)</label>
                 <input type="number" min={0.5} max={50} step={0.5} value={craAddSpread} onChange={(e) => setCraAddSpread(Number(e.target.value))}
-                  className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold" />
+                  className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold" aria-label="补仓价差百分比" />
               </div>
               <div>
                 <label className="mb-1.5 block text-xs text-muted-foreground">补仓回调 (%)</label>
                 <input type="number" min={0.01} max={0.5} step={0.01} value={craAddCallback} onChange={(e) => setCraAddCallback(Number(e.target.value))}
-                  className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold" />
+                  className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold" aria-label="补仓回调百分比" />
               </div>
               <div>
                 <label className="mb-1.5 block text-xs text-muted-foreground">防瀑布 (%)</label>
                 <input type="number" min={0.5} max={20} step={0.5} value={craWaterfall} onChange={(e) => setCraWaterfall(Number(e.target.value))}
-                  className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold" />
+                  className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold" aria-label="防瀑布百分比" />
               </div>
             </div>
             <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
               <div>
                 <label className="mb-1.5 block text-xs text-muted-foreground">止盈比例 (%)</label>
                 <input type="number" min={0.1} max={50} step={0.1} value={craTpRatio} onChange={(e) => setCraTpRatio(Number(e.target.value))}
-                  className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold" />
+                  className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold" aria-label="止盈比例百分比" />
               </div>
               <div>
                 <label className="mb-1.5 block text-xs text-muted-foreground">盈利回调 (%)</label>
                 <input type="number" min={0.01} max={0.5} step={0.01} value={craProfitCallback} onChange={(e) => setCraProfitCallback(Number(e.target.value))}
-                  className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold" />
+                  className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold" aria-label="盈利回调百分比" />
               </div>
               <div>
                 <label className="mb-1.5 block text-xs text-muted-foreground">止盈方式</label>
-                <select value={craTpMethod} onChange={(e) => setCraTpMethod(e.target.value as any)}
+                <select value={craTpMethod} onChange={(e) => setCraTpMethod(e.target.value as 'full' | 'tail' | 'head_tail' | 'moving')} aria-label="止盈方式"
                   className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold">
                   <option value="full">全仓止盈</option>
                   <option value="tail">尾单止盈</option>
@@ -591,7 +729,7 @@ export function Backtest() {
             <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
               <div>
                 <label className="mb-1.5 block text-xs text-muted-foreground">开仓指标</label>
-                <select value={craOpenInd} onChange={(e) => setCraOpenInd(e.target.value)}
+                <select value={craOpenInd} onChange={(e) => setCraOpenInd(e.target.value)} aria-label="开仓指标"
                   className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold">
                   <option value="macd_golden">MACD金叉开多</option>
                   <option value="macd_death">MACD死叉开空</option>
@@ -601,7 +739,7 @@ export function Backtest() {
               </div>
               <div>
                 <label className="mb-1.5 block text-xs text-muted-foreground">补仓指标</label>
-                <select value={craAddInd} onChange={(e) => setCraAddInd(e.target.value)}
+                <select value={craAddInd} onChange={(e) => setCraAddInd(e.target.value)} aria-label="补仓指标"
                   className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold">
                   <option value="macd">MACD补仓</option>
                   <option value="ema">EMA4补仓</option>
@@ -610,7 +748,7 @@ export function Backtest() {
               </div>
               <div>
                 <label className="mb-1.5 block text-xs text-muted-foreground">交易方向</label>
-                <select value={craDirection} onChange={(e) => setCraDirection(e.target.value as any)}
+                <select value={craDirection} onChange={(e) => setCraDirection(e.target.value as 'long' | 'short' | 'dual')} aria-label="交易方向"
                   className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold">
                   <option value="long">做多</option>
                   <option value="short">做空</option>
@@ -620,23 +758,23 @@ export function Backtest() {
             </div>
             <div className="flex flex-wrap gap-4">
               <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                <input type="checkbox" checked={craOpenDouble} onChange={(e) => setCraOpenDouble(e.target.checked)} className="rounded border-quant-border" />
+                <input type="checkbox" checked={craOpenDouble} onChange={(e) => setCraOpenDouble(e.target.checked)} className="rounded border-quant-border" aria-label="开仓加倍" />
                 开仓加倍
               </label>
               <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                <input type="checkbox" checked={craTrendInd} onChange={(e) => setCraTrendInd(e.target.checked)} className="rounded border-quant-border" />
+                <input type="checkbox" checked={craTrendInd} onChange={(e) => setCraTrendInd(e.target.checked)} className="rounded border-quant-border" aria-label="趋势指标EMA4" />
                 趋势指标(EMA4)
               </label>
               <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                <input type="checkbox" checked={craFollowTrend} onChange={(e) => setCraFollowTrend(e.target.checked)} className="rounded border-quant-border" />
+                <input type="checkbox" checked={craFollowTrend} onChange={(e) => setCraFollowTrend(e.target.checked)} className="rounded border-quant-border" aria-label="顺势而为" />
                 顺势而为
               </label>
               <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                <input type="checkbox" checked={craBurnCut} onChange={(e) => setCraBurnCut(e.target.checked)} className="rounded border-quant-border" />
+                <input type="checkbox" checked={craBurnCut} onChange={(e) => setCraBurnCut(e.target.checked)} className="rounded border-quant-border" aria-label="斩仓燃烧" />
                 斩仓燃烧
               </label>
               <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                <input type="checkbox" checked={craCloseAdd} onChange={(e) => setCraCloseAdd(e.target.checked)} className="rounded border-quant-border" />
+                <input type="checkbox" checked={craCloseAdd} onChange={(e) => setCraCloseAdd(e.target.checked)} className="rounded border-quant-border" aria-label="关闭补仓" />
                 关闭补仓
               </label>
             </div>
@@ -665,6 +803,7 @@ export function Backtest() {
                 value={initialBalance}
                 onChange={(e) => setInitialBalance(Number(e.target.value))}
                 className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold"
+                aria-label="初始资金 USDT"
               />
             </div>
             <div>
@@ -674,6 +813,7 @@ export function Backtest() {
                 value={fromDate}
                 onChange={(e) => { setFromDate(e.target.value); setActivePreset(null) }}
                 className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold"
+                aria-label="开始日期"
               />
             </div>
             <div>
@@ -683,6 +823,7 @@ export function Backtest() {
                 value={toDate}
                 onChange={(e) => { setToDate(e.target.value); setActivePreset(null) }}
                 className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold"
+                aria-label="结束日期"
               />
             </div>
           </div>
@@ -742,7 +883,7 @@ export function Backtest() {
 
         {/* ── Error state ── */}
         {runMut.isError && (
-          <div className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400">
+          <div role="alert" className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400">
             <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
             <div>
               <p className="font-medium">回测执行失败</p>
@@ -780,7 +921,7 @@ export function Backtest() {
 
             <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
               <SectionCard title="权益曲线">
-                <EquityChart data={equityCurve} isLoading={isRunning} />
+                <EquityChart data={equityCurve} trades={trades} isLoading={isRunning} />
               </SectionCard>
               <SectionCard title="月度收益分布">
                 <MonthlyReturnChart data={monthlyReturns} isLoading={isRunning} />
@@ -794,54 +935,26 @@ export function Backtest() {
               }
             >
               <div className="overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="text-left text-muted-foreground border-b border-quant-border">
-                      <th className="pb-3 font-medium px-2">时间</th>
-                      <th className="pb-3 font-medium px-2">方向</th>
-                      <th className="pb-3 font-medium px-2">价格</th>
-                      <th className="pb-3 font-medium px-2">数量</th>
-                      <th className="pb-3 font-medium px-2">盈亏</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {trades.map((t, i) => (
-                      <tr key={i} className="border-b border-quant-border/50 hover:bg-white/[0.02] transition-colors">
-                        <td className="py-3 px-2 text-muted-foreground">
-                          {new Date(t.time).toLocaleString()}
-                        </td>
-                        <td className="py-3 px-2">
-                          <span
-                            className={cn(
-                              'px-1.5 py-0.5 rounded text-[10px]',
-                              t.side === 'buy'
-                                ? 'bg-quant-green/10 text-quant-green'
-                                : 'bg-quant-red/10 text-quant-red'
-                            )}
-                          >
-                            {t.side === 'buy' ? '买入' : '卖出'}
-                          </span>
-                        </td>
-                        <td className="py-3 px-2 font-mono">
-                          ${formatCurrency(t.exit_price ?? t.entry_price ?? 0)}
-                        </td>
-                        <td className="py-3 px-2 font-mono">
-                          {t.qty}
-                        </td>
-                        <td className={cn('py-3 px-2 font-mono', (t.pnl || 0) >= 0 ? 'text-quant-green' : 'text-quant-red')}>
-                          {t.pnl != null ? `${t.pnl >= 0 ? '+' : ''}$${t.pnl.toFixed(2)}` : '-'}
-                        </td>
-                      </tr>
-                    ))}
-                    {trades.length === 0 && (
-                      <tr>
-                        <td colSpan={5} className="py-8 text-center text-muted-foreground">
-                          暂无交易记录
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
+                <DataTable<TradeRecord>
+                  data={trades}
+                  columns={[
+                    { key: 'time', title: '时间', render: (t) => <span className="text-muted-foreground">{new Date(t.time).toLocaleString()}</span> },
+                    { key: 'side', title: '方向', render: (t) => (
+                      <span className={cn('px-1.5 py-0.5 rounded text-[10px]', t.side === 'buy' ? 'bg-quant-green/10 text-quant-green' : 'bg-quant-red/10 text-quant-red')}>
+                        {t.side === 'buy' ? '买入' : '卖出'}
+                      </span>
+                    )},
+                    { key: 'price', title: '价格', render: (t) => <span className="font-mono">${formatCurrency(t.exit_price ?? t.entry_price ?? 0)}</span> },
+                    { key: 'qty', title: '数量', render: (t) => <span className="font-mono">{t.qty}</span> },
+                    { key: 'pnl', title: '盈亏', render: (t) => (
+                      <span className={cn('font-mono', (t.pnl || 0) >= 0 ? 'text-quant-green' : 'text-quant-red')}>
+                        {t.pnl != null ? `${t.pnl >= 0 ? '+' : ''}$${t.pnl.toFixed(2)}` : '-'}
+                      </span>
+                    )},
+                  ]}
+                  keyExtractor={(_, i) => String(i)}
+                  emptyText="暂无交易记录"
+                />
               </div>
             </SectionCard>
           </>

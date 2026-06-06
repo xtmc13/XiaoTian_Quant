@@ -1,11 +1,19 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
+	"os"
+	"runtime"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/app"
+	"github.com/xiaotian-quant/gateway/internal/config"
+	"github.com/xiaotian-quant/gateway/internal/logging"
+	"github.com/xiaotian-quant/gateway/internal/order"
+	"github.com/xiaotian-quant/gateway/internal/service"
+	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
 var startTime = time.Now()
@@ -13,19 +21,47 @@ var startTime = time.Now()
 // HealthCheck returns basic service health.
 func HealthCheck(c *gin.Context) {
 	appCtx := app.Get()
+	logLevel := "info"
+	if appCtx != nil && appCtx.Config != nil {
+		logLevel = appCtx.Config.Server.LogLevel
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"status":       "ok",
 		"uptime_secs":  int(time.Since(startTime).Seconds()),
 		"version":      "2.0.0",
-		"log_level":    appCtx.Config.Server.LogLevel,
+		"log_level":    logLevel,
 	})
 }
 
-// ComponentHealth returns health status of all internal components.
+// ReloadConfig triggers a hot reload of the configuration file.
+func ReloadConfig(c *gin.Context) {
+	appCtx := app.Get()
+	cfgPath := os.Getenv("CONFIG_PATH")
+	if cfgPath == "" {
+		cfgPath = "config.yaml"
+	}
+	newCfg, err := config.Reload(cfgPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "reload failed", "details": err.Error()})
+		return
+	}
+
+	// Apply log level change immediately
+	if appCtx.Logger != nil {
+		appCtx.Logger.SetLevel(logging.LevelFromString(newCfg.Server.LogLevel))
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":    "reloaded",
+		"log_level": newCfg.Server.LogLevel,
+		"timestamp": time.Now().UnixMilli(),
+	})
+}
 func ComponentHealth(c *gin.Context) {
 	appCtx := app.Get()
-	components := map[string]string{}
+	components := map[string]any{}
 
+	// Core services
 	if appCtx.EventBus != nil {
 		components["event_bus"] = "healthy"
 	} else {
@@ -52,6 +88,37 @@ func ComponentHealth(c *gin.Context) {
 		components["notifier"] = "not_initialized"
 	}
 
+	// Order pipeline
+	if om := order.GetOrderManager(); om != nil {
+		components["order_manager"] = "healthy"
+	} else {
+		components["order_manager"] = "not_initialized"
+	}
+	if ms := service.GetMatchingService(); ms != nil {
+		components["matching_service"] = "healthy"
+	} else {
+		components["matching_service"] = "not_initialized"
+	}
+
+	// Exchange adapter
+	if appCtx.BinanceWS != nil {
+		components["binance_ws"] = "healthy"
+	} else {
+		components["binance_ws"] = "not_initialized"
+	}
+
+	// Store (via DB connection)
+	if db := store.GetDB(); db != nil {
+		if err := db.Ping(); err == nil {
+			components["store"] = "healthy"
+		} else {
+			components["store"] = "degraded"
+		}
+	} else {
+		components["store"] = "not_initialized"
+	}
+
+	// Watchdog
 	if appCtx.Watchdog != nil {
 		wdStatus := appCtx.Watchdog.GetStatus()
 		for name, s := range wdStatus {
@@ -65,8 +132,26 @@ func ComponentHealth(c *gin.Context) {
 		}
 	}
 
+	// Runtime stats
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	components["runtime"] = map[string]any{
+		"goroutines": runtime.NumGoroutine(),
+		"memory_mb":  fmt.Sprintf("%.2f", float64(m.Alloc)/1024/1024),
+		"gc_count":   m.NumGC,
+	}
+
+	// Overall status
+	overall := "ok"
+	for _, v := range components {
+		if s, ok := v.(string); ok && s == "unhealthy" {
+			overall = "degraded"
+			break
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"status":     "ok",
+		"status":     overall,
 		"timestamp":  time.Now().UnixMilli(),
 		"components": components,
 	})

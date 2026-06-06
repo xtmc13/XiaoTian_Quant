@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { agentAdminApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import {
@@ -23,6 +23,7 @@ export function AgentTokens() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  const successTimerRef = useRef<number | null>(null)
   const [tab, setTab] = useState<'tokens' | 'audit'>('tokens')
 
   // Create dialog
@@ -36,10 +37,29 @@ export function AgentTokens() {
     setLoading(true)
     try {
       const [t, a] = await Promise.all([agentAdminApi.tokens(), agentAdminApi.auditLog()])
-      setTokens(t || [])
-      setAuditLog(a || [])
-    } catch (e: any) {
-      setError(e.message || '加载失败')
+      setTokens((t || []).map(item => ({
+        id: item.id,
+        name: item.name,
+        token: item.token,
+        scopes: Array.isArray(item.scopes) ? item.scopes.join(',') : item.scopes,
+        created_at: item.created_at ? new Date(item.created_at).getTime() : 0,
+        last_used_at: item.last_used ? new Date(item.last_used).getTime() : null,
+      })))
+      setAuditLog((a || []).map(item => ({
+        id: item.id,
+        token_id: item.user_id ?? 0,
+        name: item.action,
+        endpoint: item.details || '-',
+        method: '-',
+        params_summary: item.details || '-',
+        status_code: 200,
+        ip: '-',
+        user_agent: '-',
+        timestamp: typeof item.created_at === 'number' ? item.created_at : new Date(item.created_at).getTime(),
+      })))
+    } catch (e: unknown) {
+      const err = e instanceof Error ? e : new Error(String(e))
+      setError(err.message || '加载失败')
     } finally {
       setLoading(false)
     }
@@ -47,21 +67,33 @@ export function AgentTokens() {
 
   useEffect(() => { fetchData() }, [fetchData])
 
-  const showMsg = (msg: string) => { setSuccess(msg); setTimeout(() => setSuccess(''), 3000) }
+  const showMsg = (msg: string) => {
+    setSuccess(msg)
+    if (successTimerRef.current) window.clearTimeout(successTimerRef.current)
+    successTimerRef.current = window.setTimeout(() => setSuccess(''), 3000)
+  }
+
+  useEffect(() => {
+    return () => {
+      if (successTimerRef.current) window.clearTimeout(successTimerRef.current)
+    }
+  }, [])
 
   const handleCreate = async () => {
     if (!newName.trim()) return
     setCreating(true); setError('')
     try {
       const tokenValue = 'qd_agent_' + Math.random().toString(36).slice(2) + Date.now().toString(36)
-      await agentAdminApi.createToken({ name: newName, token: tokenValue, scopes: newScopes })
+      await agentAdminApi.createToken({ name: newName, token: tokenValue, scopes: [newScopes] })
       setRevealedToken(tokenValue)
       setShowCreate(false)
       setNewName('')
       showMsg('令牌已创建')
       fetchData()
-    } catch (e: any) { setError(e.message || '创建失败') }
-    finally { setCreating(false) }
+    } catch (e: unknown) {
+      const err = e instanceof Error ? e : new Error(String(e))
+      setError(err.message || '创建失败')
+    } finally { setCreating(false) }
   }
 
   const handleDelete = async (id: string) => {
@@ -69,7 +101,10 @@ export function AgentTokens() {
       await agentAdminApi.deleteToken(id)
       showMsg('令牌已删除')
       fetchData()
-    } catch (e: any) { setError(e.message || '删除失败') }
+    } catch (e: unknown) {
+      const err = e instanceof Error ? e : new Error(String(e))
+      setError(err.message || '删除失败')
+    }
   }
 
   const scopeLabel = (s?: string) => {
@@ -92,8 +127,8 @@ export function AgentTokens() {
       </div>
 
       {/* Messages */}
-      {success && <div className="flex items-center gap-2 rounded-lg border border-green-500/20 bg-green-500/10 px-3 py-2 text-xs text-green-400"><CheckCircle className="h-3.5 w-3.5" />{success}</div>}
-      {error && <div className="flex items-center gap-2 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-400"><AlertCircle className="h-3.5 w-3.5" />{error}</div>}
+      {success && <div role="status" className="flex items-center gap-2 rounded-lg border border-green-500/20 bg-green-500/10 px-3 py-2 text-xs text-green-400"><CheckCircle className="h-3.5 w-3.5" />{success}</div>}
+      {error && <div role="alert" className="flex items-center gap-2 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-400"><AlertCircle className="h-3.5 w-3.5" />{error}</div>}
 
       {/* Revealed token */}
       {revealedToken && (
@@ -168,12 +203,12 @@ export function AgentTokens() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-quant-border text-left text-xs text-muted-foreground">
-                  <th className="px-3 py-2">时间</th>
-                  <th className="px-3 py-2">令牌</th>
-                  <th className="px-3 py-2">方法</th>
-                  <th className="px-3 py-2">端点</th>
-                  <th className="px-3 py-2">状态</th>
-                  <th className="px-3 py-2">IP</th>
+                  <th scope="col" className="px-3 py-2">时间</th>
+                  <th scope="col" className="px-3 py-2">令牌</th>
+                  <th scope="col" className="px-3 py-2">方法</th>
+                  <th scope="col" className="px-3 py-2">端点</th>
+                  <th scope="col" className="px-3 py-2">状态</th>
+                  <th scope="col" className="px-3 py-2">IP</th>
                 </tr>
               </thead>
               <tbody>
@@ -207,11 +242,11 @@ export function AgentTokens() {
 
       {/* Create dialog */}
       {showCreate && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowCreate(false)}>
+        <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowCreate(false)}>
           <div className="w-full max-w-sm rounded-xl border border-quant-border bg-quant-bg p-6 space-y-4" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-semibold text-white">创建 Agent 令牌</h3>
-              <button onClick={() => setShowCreate(false)} className="text-muted-foreground hover:text-white"><X className="h-5 w-5" /></button>
+              <button onClick={() => setShowCreate(false)} aria-label="关闭" className="text-muted-foreground hover:text-white"><X className="h-5 w-5" /></button>
             </div>
             <div className="space-y-1.5">
               <label className="text-xs text-muted-foreground">名称</label>

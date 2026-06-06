@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/store"
+	"github.com/xiaotian-quant/gateway/internal/strategy"
 	"github.com/xiaotian-quant/gateway/internal/strategy/strategies"
 )
 
@@ -191,8 +193,10 @@ func BatchStartConfigs(c *gin.Context) {
 	mu.Lock()
 	for _, sid := range ids {
 		if item, ok := store.GetStrategyConfigs()[sid]; ok {
-			item["status"] = "running"
-			item["updated_at"] = nowTS
+			if err := startStrategyInEngine(sid, item); err == nil {
+				item["status"] = "running"
+				item["updated_at"] = nowTS
+			}
 		}
 	}
 	mu.Unlock()
@@ -209,6 +213,7 @@ func BatchStopConfigs(c *gin.Context) {
 	mu.Lock()
 	for _, sid := range ids {
 		if item, ok := store.GetStrategyConfigs()[sid]; ok {
+			stopStrategyInEngine(sid)
 			item["status"] = "stopped"
 			item["updated_at"] = nowTS
 		}
@@ -222,32 +227,124 @@ func StartStrategyConfig(c *gin.Context) {
 	id := c.Param("id")
 	mu := store.GetStrategyConfigMu()
 	mu.Lock()
-	if item, ok := store.GetStrategyConfigs()[id]; ok {
-		item["status"] = "running"
-		item["updated_at"] = float64(time.Now().UnixMilli())
+	item, ok := store.GetStrategyConfigs()[id]
+	if !ok {
 		mu.Unlock()
-		store.PersistStrategyConfigs()
-		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+		c.JSON(http.StatusNotFound, gin.H{"detail": "not found"})
 		return
 	}
+	if err := startStrategyInEngine(id, item); err != nil {
+		mu.Unlock()
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
+		return
+	}
+	item["status"] = "running"
+	item["updated_at"] = float64(time.Now().UnixMilli())
 	mu.Unlock()
-	c.JSON(http.StatusNotFound, gin.H{"detail": "not found"})
+	store.PersistStrategyConfigs()
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
 func StopStrategyConfig(c *gin.Context) {
 	id := c.Param("id")
 	mu := store.GetStrategyConfigMu()
 	mu.Lock()
-	if item, ok := store.GetStrategyConfigs()[id]; ok {
-		item["status"] = "stopped"
-		item["updated_at"] = float64(time.Now().UnixMilli())
+	item, ok := store.GetStrategyConfigs()[id]
+	if !ok {
 		mu.Unlock()
-		store.PersistStrategyConfigs()
-		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+		c.JSON(http.StatusNotFound, gin.H{"detail": "not found"})
 		return
 	}
+	stopStrategyInEngine(id)
+	item["status"] = "stopped"
+	item["updated_at"] = float64(time.Now().UnixMilli())
 	mu.Unlock()
-	c.JSON(http.StatusNotFound, gin.H{"detail": "not found"})
+	store.PersistStrategyConfigs()
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
+// startStrategyInEngine registers and starts a strategy instance in the engine.
+func startStrategyInEngine(id string, item map[string]any) error {
+	strategyType, _ := item["strategy_type"].(string)
+	if strategyType == "" {
+		return fmt.Errorf("strategy_type not set")
+	}
+
+	eng := strategy.GetEngine(nil)
+	if eng == nil {
+		return fmt.Errorf("strategy engine not initialized")
+	}
+
+	// If already registered with this id, stop and unregister first
+	if existing := eng.Get(id); existing != nil {
+		_ = eng.Stop(id)
+		_ = eng.Unregister(id)
+	}
+
+	// Create strategy instance from factory
+	s := strategy.StrategyFactory(strategyType)
+	if s == nil {
+		return fmt.Errorf("unknown strategy type: %s", strategyType)
+	}
+
+	// Wrap with config id as unique name
+	wrapped := strategy.WrapStrategy(id, s)
+
+	// Build params from config
+	params := buildStrategyParams(item)
+
+	// Register and start
+	if err := eng.Register(wrapped); err != nil {
+		return fmt.Errorf("register strategy: %w", err)
+	}
+	if err := eng.Start(id, params); err != nil {
+		_ = eng.Unregister(id)
+		return fmt.Errorf("start strategy: %w", err)
+	}
+	return nil
+}
+
+// stopStrategyInEngine stops and unregisters a strategy from the engine.
+func stopStrategyInEngine(id string) {
+	eng := strategy.GetEngine(nil)
+	if eng == nil {
+		return
+	}
+	_ = eng.Stop(id)
+	_ = eng.Unregister(id)
+}
+
+// buildStrategyParams extracts strategy parameters from a config item.
+func buildStrategyParams(item map[string]any) map[string]any {
+	params := make(map[string]any)
+
+	// Copy basic fields
+	for _, key := range []string{"symbol", "coin", "direction", "leverage", "category"} {
+		if v, ok := item[key]; ok {
+			params[key] = v
+		}
+	}
+
+	// Parse config_json
+	if cj, ok := item["config_json"].(string); ok && cj != "" {
+		var parsed map[string]any
+		if json.Unmarshal([]byte(cj), &parsed) == nil {
+			for k, v := range parsed {
+				params[k] = v
+			}
+		}
+	}
+
+	// Ensure symbol is set
+	if params["symbol"] == nil || params["symbol"] == "" {
+		if coin, ok := params["coin"].(string); ok && coin != "" {
+			params["symbol"] = coin + "USDT"
+		} else {
+			params["symbol"] = "BTCUSDT"
+		}
+	}
+
+	return params
 }
 
 func GetStrategyLogs(c *gin.Context) {

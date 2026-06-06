@@ -4,7 +4,7 @@ interface WSOptions {
   reconnect?: boolean
   maxRetries?: number
   heartbeatInterval?: number
-  heartbeatMsg?: any
+  heartbeatMsg?: unknown
   onReconnect?: () => void
 }
 
@@ -18,7 +18,7 @@ export function useWebSocket(url: string, options: WSOptions = {}) {
   } = options
 
   const ws = useRef<WebSocket | null>(null)
-  const handlers = useRef<Map<string, ((data: any) => void)[]>>(new Map())
+  const handlers = useRef<Map<string, ((data: unknown) => void)[]>>(new Map())
   const retryCount = useRef(0)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const heartbeatTimer = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -61,7 +61,7 @@ export function useWebSocket(url: string, options: WSOptions = {}) {
 
         socket.onopen = () => {
           if (disposed) return
-          console.log('[WS] Connected')
+          console.warn('[WS] Connected')
           setIsConnected(true)
           const wasReconnect = retryCount.current > 0
           retryCount.current = 0
@@ -73,13 +73,13 @@ export function useWebSocket(url: string, options: WSOptions = {}) {
 
         socket.onclose = () => {
           if (disposed) return
-          console.log('[WS] Disconnected')
+          console.warn('[WS] Disconnected')
           setIsConnected(false)
           stopHeartbeat()
 
           if (reconnect && retryCount.current < maxRetries) {
             const delay = getBackoffDelay(retryCount.current)
-            console.log(`[WS] Reconnecting in ${delay}ms (retry ${retryCount.current + 1}/${maxRetries})`)
+            console.warn(`[WS] Reconnecting in ${delay}ms (retry ${retryCount.current + 1}/${maxRetries})`)
             reconnectTimer.current = setTimeout(() => {
               retryCount.current++
               connect()
@@ -131,7 +131,7 @@ export function useWebSocket(url: string, options: WSOptions = {}) {
     }
   }, [url, reconnect, maxRetries, heartbeatInterval])
 
-  const on = useCallback((type: string, callback: (data: any) => void) => {
+  const on = useCallback((type: string, callback: (data: unknown) => void) => {
     const list = handlers.current.get(type) || []
     list.push(callback)
     handlers.current.set(type, list)
@@ -141,9 +141,10 @@ export function useWebSocket(url: string, options: WSOptions = {}) {
     }
   }, [])
 
-  const send = useCallback((data: any) => {
-    if (ws.current?.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify(data))
+  const send = useCallback((data: unknown) => {
+    const socket = ws.current
+    if (socket != null && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify(data))
     } else {
       console.warn('[WS] Not connected, message dropped:', data)
     }

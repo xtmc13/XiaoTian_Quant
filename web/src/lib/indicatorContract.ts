@@ -14,10 +14,10 @@ export interface ParamRange {
 export interface ParamDecl {
   name: string
   type: ParamType
-  default: any
+  default: unknown
   description: string
   range?: ParamRange
-  values?: any[]
+  values?: unknown[]
 }
 
 export interface StrategyConfig {
@@ -32,7 +32,7 @@ export interface StrategyConfig {
 
 export interface Plot {
   name: string
-  data: any[]
+  data: unknown[]
   color?: string
   overlay?: boolean
   type?: string
@@ -41,7 +41,7 @@ export interface Plot {
 export interface Signal {
   type: 'buy' | 'sell'
   text?: string
-  data: any[]
+  data: unknown[]
   color?: string
 }
 
@@ -49,13 +49,13 @@ export interface IndicatorOutput {
   name: string
   plots: Plot[]
   signals: Signal[]
-  calculatedVars?: Record<string, any>
+  calculatedVars?: Record<string, unknown>
 }
 
 export interface ValidationHint {
   severity: 'error' | 'warn' | 'info'
   code: string
-  params?: Record<string, any>
+  params?: Record<string, unknown>
 }
 
 export interface ValidateResult {
@@ -118,7 +118,7 @@ function normalizeParamType(t: string): ParamType {
   }
 }
 
-function parseDefaultValue(typ: ParamType, val: string): any {
+function parseDefaultValue(typ: ParamType, val: string): unknown {
   switch (typ) {
     case 'int':
       return parseInt(val, 10) || 0
@@ -159,7 +159,7 @@ export function parseParamsFromCode(code: string): ParseResult {
       const name = paramMatch[1]
       const typ = normalizeParamType(paramMatch[2])
       const defaultVal = paramMatch[3]
-      let rest = paramMatch[4]
+      const rest = paramMatch[4]
 
       const param: ParamDecl = {
         name,
@@ -224,7 +224,7 @@ function applyStrategyKey(cfg: StrategyConfig, key: string, value: string) {
       cfg.trailingActivationPct = parseFloat(value)
       break
     case 'tradeDirection':
-      cfg.tradeDirection = value as any
+      cfg.tradeDirection = value as StrategyConfig['tradeDirection']
       break
   }
 }
@@ -238,7 +238,7 @@ export function extractOutputFromCode(code: string): IndicatorOutput | null {
   if (!outputMatch) return null
   try {
     // Replace Python None/null, True/true, False/false, single quotes
-    let jsonLike = outputMatch[1]
+    const jsonLike = outputMatch[1]
       .replace(/\bNone\b/g, 'null')
       .replace(/\bTrue\b/g, 'true')
       .replace(/\bFalse\b/g, 'false')

@@ -1,10 +1,11 @@
-import { useState, useEffect, useMemo } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { SectionCard } from '@/components/ui/SectionCard'
 import { communityApi, indicatorApi } from '@/lib/api'
+import type { CommunityComment } from '@/types'
 import {
   Star,
   Download,
@@ -32,8 +33,9 @@ interface IndicatorComment {
   id: number
   rating: number
   content: string
-  created_at: number
-  user_nickname: string
+  created_at: number | string
+  user_nickname?: string
+  user?: string
 }
 
 interface IndicatorDetailData {
@@ -71,8 +73,9 @@ function formatPct(v?: number) {
   return `${sign}${v.toFixed(2)}%`
 }
 
-function formatDate(ts?: number) {
+function formatDate(ts?: number | string) {
   if (!ts) return '—'
+  if (typeof ts === 'string') return new Date(ts).toLocaleDateString('zh-CN')
   return new Date(ts * 1000).toLocaleDateString('zh-CN')
 }
 
@@ -86,15 +89,15 @@ function scoreBadgeClass(score?: number) {
 
 /* ── Comment Card ────────────────────────────────────────────────── */
 
-function CommentCard({ comment }: { comment: IndicatorComment }) {
+const CommentCard = React.memo(function CommentCard({ comment }: { comment: IndicatorComment }) {
   return (
     <div className="rounded-lg border border-quant-border bg-quant-bg-secondary p-3">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="h-6 w-6 rounded-full bg-quant-gold/20 text-quant-gold flex items-center justify-center text-[10px] font-bold">
-            {comment.user_nickname?.slice(0, 2) || 'U'}
+            {(comment.user_nickname || comment.user || 'U').slice(0, 2)}
           </div>
-          <span className="text-xs font-medium">{comment.user_nickname}</span>
+          <span className="text-xs font-medium">{comment.user_nickname || comment.user}</span>
         </div>
         <div className="flex items-center gap-1">
           {Array.from({ length: 5 }).map((_, i) => (
@@ -109,7 +112,7 @@ function CommentCard({ comment }: { comment: IndicatorComment }) {
       <span className="text-[10px] text-muted-foreground/60 mt-1 block">{formatDate(comment.created_at)}</span>
     </div>
   )
-}
+})
 
 /* ── Main Page ───────────────────────────────────────────────────── */
 
@@ -138,10 +141,9 @@ export function IndicatorDetail() {
         const d = res?.data ?? res
         setIndicator(d)
       }).catch(() => setIndicator(null)),
-      communityApi.comments(indicatorId, 1, 20).then((res: any) => {
-        const d = res?.data ?? res
-        setComments(d?.comments || d || [])
-        setCommentsTotal(d?.total || 0)
+      communityApi.comments(indicatorId, 1, 20).then((comments: CommunityComment[]) => {
+        setComments(comments || [])
+        setCommentsTotal(comments?.length || 0)
       }).catch(() => {}),
     ]).finally(() => setLoading(false))
   }, [indicatorId])
@@ -154,13 +156,12 @@ export function IndicatorDetail() {
     try {
       await communityApi.addComment(indicatorId, { rating: myRating, content: myComment.trim() })
       // Refresh comments
-      const res: any = await communityApi.comments(indicatorId, 1, 20)
-      const d = res?.data ?? res
-      setComments(d?.comments || d || [])
-      setCommentsTotal(d?.total || 0)
+      const comments: CommunityComment[] = await communityApi.comments(indicatorId, 1, 20)
+      setComments(comments || [])
+      setCommentsTotal(comments?.length || 0)
       setMyComment('')
       setMyRating(0)
-    } catch (e: any) { alert(e?.message || '提交失败') }
+    } catch (e: unknown) { const err = e instanceof Error ? e : new Error(String(e)); alert(err.message || '提交失败') }
     finally { setSubmitting(false) }
   }
 
@@ -170,8 +171,9 @@ export function IndicatorDetail() {
     try {
       await communityApi.purchase(indicator.id)
       setIndicator(prev => prev ? { ...prev, is_purchased: true } : prev)
-    } catch (e: any) {
-      alert(e.message || '购买失败')
+    } catch (e: unknown) {
+      const err = e instanceof Error ? e : new Error(String(e))
+      alert(err.message || '购买失败')
     } finally {
       setPurchasing(false)
     }

@@ -1,220 +1,465 @@
 package metrics
 
 import (
-	"math"
+	"fmt"
+	"net/http"
+	"runtime"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
-// ── Counter ──
+// ── Metric Types ──
 
-// Counter is a monotonically increasing metric.
 type Counter struct {
-	name  string
-	help  string
-	value int64
+	name   string
+	help   string
+	labels []string
+	values map[string]*int64
+	mu     sync.RWMutex
 }
 
-func NewCounter(name, help string) *Counter {
-	counter := &Counter{name: name, help: help}
-	registry.Register(counter)
-	return counter
+func NewCounter(name, help string, labels ...string) *Counter {
+	return &Counter{
+		name:   name,
+		help:   help,
+		labels: labels,
+		values: make(map[string]*int64),
+	}
 }
 
-func (c *Counter) Name() string     { return c.name }
-func (c *Counter) Help() string     { return c.help }
-func (c *Counter) Type() string     { return "counter" }
-func (c *Counter) Value() float64   { return float64(atomic.LoadInt64(&c.value)) }
-
-func (c *Counter) Inc()             { atomic.AddInt64(&c.value, 1) }
-func (c *Counter) Add(n int64)      { atomic.AddInt64(&c.value, n) }
-func (c *Counter) Reset()           { atomic.StoreInt64(&c.value, 0) }
-
-// ── Gauge ──
-
-// Gauge is a metric that can go up and down.
-type Gauge struct {
-	name  string
-	help  string
-	value int64 // atomic, stored as float64 bits
+func (c *Counter) Inc(labelValues ...string) {
+	key := c.key(labelValues)
+	c.mu.Lock()
+	v, ok := c.values[key]
+	if !ok {
+		v = new(int64)
+		c.values[key] = v
+	}
+	c.mu.Unlock()
+	atomic.AddInt64(v, 1)
 }
 
-func NewGauge(name, help string) *Gauge {
-	g := &Gauge{name: name, help: help}
-	registry.Register(g)
-	return g
+func (c *Counter) Add(delta float64, labelValues ...string) {
+	key := c.key(labelValues)
+	c.mu.Lock()
+	v, ok := c.values[key]
+	if !ok {
+		v = new(int64)
+		c.values[key] = v
+	}
+	c.mu.Unlock()
+	atomic.AddInt64(v, int64(delta))
 }
 
-func (g *Gauge) Name() string   { return g.name }
-func (g *Gauge) Help() string   { return g.help }
-func (g *Gauge) Type() string   { return "gauge" }
-func (g *Gauge) Value() float64 { return math.Float64frombits(uint64(atomic.LoadInt64(&g.value))) }
+func (c *Counter) key(labelValues []string) string {
+	if len(c.labels) == 0 {
+		return "_"
+	}
+	parts := make([]string, 0, len(c.labels))
+	for i, l := range c.labels {
+		v := ""
+		if i < len(labelValues) {
+			v = labelValues[i]
+		}
+		parts = append(parts, fmt.Sprintf("%s=%q", l, v))
+	}
+	return strings.Join(parts, ",")
+}
 
-func (g *Gauge) Set(v float64) { atomic.StoreInt64(&g.value, int64(math.Float64bits(v))) }
-func (g *Gauge) Inc()          { g.Add(1) }
-func (g *Gauge) Dec()          { g.Add(-1) }
-func (g *Gauge) Add(v float64) {
-	for {
-		old := atomic.LoadInt64(&g.value)
-		newVal := math.Float64frombits(uint64(old)) + v
-		if atomic.CompareAndSwapInt64(&g.value, old, int64(math.Float64bits(newVal))) {
-			return
+func (c *Counter) String() string {
+	var b strings.Builder
+	if c.help != "" {
+		fmt.Fprintf(&b, "# HELP %s %s\n", c.name, c.help)
+	}
+	fmt.Fprintf(&b, "# TYPE %s counter\n", c.name)
+	c.mu.RLock()
+	keys := make([]string, 0, len(c.values))
+	for k := range c.values {
+		keys = append(keys, k)
+	}
+	c.mu.RUnlock()
+	sort.Strings(keys)
+	for _, k := range keys {
+		c.mu.RLock()
+		v := atomic.LoadInt64(c.values[k])
+		c.mu.RUnlock()
+		if k == "_" {
+			fmt.Fprintf(&b, "%s %d\n", c.name, v)
+		} else {
+			fmt.Fprintf(&b, "%s{%s} %d\n", c.name, k, v)
 		}
 	}
+	return b.String()
 }
 
-// ── Histogram ──
-
-// Histogram records observed values and computes quantiles.
-type Histogram struct {
-	name    string
-	help    string
-	buckets []float64
-	counts  []int64
-	sum     int64 // atomic
-	count   int64 // atomic
-	mu      sync.Mutex
+type Gauge struct {
+	name   string
+	help   string
+	labels []string
+	values map[string]*int64
+	mu     sync.RWMutex
 }
 
-func NewHistogram(name, help string, buckets []float64) *Histogram {
-	if len(buckets) == 0 {
-		buckets = []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10}
+func NewGauge(name, help string, labels ...string) *Gauge {
+	return &Gauge{
+		name:   name,
+		help:   help,
+		labels: labels,
+		values: make(map[string]*int64),
 	}
-	h := &Histogram{
+}
+
+func (g *Gauge) Set(val float64, labelValues ...string) {
+	key := g.key(labelValues)
+	g.mu.Lock()
+	v, ok := g.values[key]
+	if !ok {
+		v = new(int64)
+		g.values[key] = v
+	}
+	g.mu.Unlock()
+	atomic.StoreInt64(v, int64(val*1000)) // store as milli
+}
+
+func (g *Gauge) key(labelValues []string) string {
+	if len(g.labels) == 0 {
+		return "_"
+	}
+	parts := make([]string, 0, len(g.labels))
+	for i, l := range g.labels {
+		v := ""
+		if i < len(labelValues) {
+			v = labelValues[i]
+		}
+		parts = append(parts, fmt.Sprintf("%s=%q", l, v))
+	}
+	return strings.Join(parts, ",")
+}
+
+func (g *Gauge) String() string {
+	var b strings.Builder
+	if g.help != "" {
+		fmt.Fprintf(&b, "# HELP %s %s\n", g.name, g.help)
+	}
+	fmt.Fprintf(&b, "# TYPE %s gauge\n", g.name)
+	g.mu.RLock()
+	keys := make([]string, 0, len(g.values))
+	for k := range g.values {
+		keys = append(keys, k)
+	}
+	g.mu.RUnlock()
+	sort.Strings(keys)
+	for _, k := range keys {
+		g.mu.RLock()
+		v := atomic.LoadInt64(g.values[k])
+		g.mu.RUnlock()
+		val := float64(v) / 1000.0
+		if k == "_" {
+			fmt.Fprintf(&b, "%s %.3f\n", g.name, val)
+		} else {
+			fmt.Fprintf(&b, "%s{%s} %.3f\n", g.name, k, val)
+		}
+	}
+	return b.String()
+}
+
+type Histogram struct {
+	name   string
+	help   string
+	labels []string
+	buckets []float64
+	counts  map[string][]*int64
+	sums   map[string]*int64
+	mu     sync.RWMutex
+}
+
+func NewHistogram(name, help string, buckets []float64, labels ...string) *Histogram {
+	if len(buckets) == 0 {
+		buckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
+	}
+	return &Histogram{
 		name:    name,
 		help:    help,
+		labels:  labels,
 		buckets: buckets,
-		counts:  make([]int64, len(buckets)),
+		counts:  make(map[string][]*int64),
+		sums:    make(map[string]*int64),
 	}
-	registry.Register(h)
-	return h
 }
 
-func (h *Histogram) Name() string { return h.name }
-func (h *Histogram) Help() string { return h.help }
-func (h *Histogram) Type() string { return "histogram" }
-
-func (h *Histogram) Observe(v float64) {
-	atomic.AddInt64(&h.count, 1)
-	atomic.AddInt64(&h.sum, int64(math.Float64bits(v)))
-
+func (h *Histogram) Observe(val float64, labelValues ...string) {
+	key := h.key(labelValues)
 	h.mu.Lock()
-	for i, b := range h.buckets {
-		if v <= b {
-			atomic.AddInt64(&h.counts[i], 1)
+	counts, ok := h.counts[key]
+	if !ok {
+		counts = make([]*int64, len(h.buckets)+1)
+		for i := range counts {
+			counts[i] = new(int64)
 		}
+		h.counts[key] = counts
+		h.sums[key] = new(int64)
 	}
 	h.mu.Unlock()
-}
-
-func (h *Histogram) Value() float64 {
-	count := atomic.LoadInt64(&h.count)
-	if count == 0 {
-		return 0
-	}
-	sum := math.Float64frombits(uint64(atomic.LoadInt64(&h.sum)))
-	return sum / float64(count)
-}
-
-func (h *Histogram) Buckets() map[float64]int64 {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	result := make(map[float64]int64)
 	for i, b := range h.buckets {
-		result[b] = atomic.LoadInt64(&h.counts[i])
+		if val <= b {
+			atomic.AddInt64(counts[i], 1)
+		}
 	}
-	return result
+	atomic.AddInt64(counts[len(h.buckets)], 1) // +Inf bucket
+	atomic.AddInt64(h.sums[key], int64(val*1000))
+}
+
+func (h *Histogram) key(labelValues []string) string {
+	if len(h.labels) == 0 {
+		return "_"
+	}
+	parts := make([]string, 0, len(h.labels))
+	for i, l := range h.labels {
+		v := ""
+		if i < len(labelValues) {
+			v = labelValues[i]
+		}
+		parts = append(parts, fmt.Sprintf("%s=%q", l, v))
+	}
+	return strings.Join(parts, ",")
+}
+
+func (h *Histogram) String() string {
+	var b strings.Builder
+	if h.help != "" {
+		fmt.Fprintf(&b, "# HELP %s %s\n", h.name, h.help)
+	}
+	fmt.Fprintf(&b, "# TYPE %s histogram\n", h.name)
+	h.mu.RLock()
+	keys := make([]string, 0, len(h.counts))
+	for k := range h.counts {
+		keys = append(keys, k)
+	}
+	h.mu.RUnlock()
+	sort.Strings(keys)
+	for _, k := range keys {
+		h.mu.RLock()
+		counts := h.counts[k]
+		sum := atomic.LoadInt64(h.sums[k])
+		h.mu.RUnlock()
+		for i, bucket := range h.buckets {
+			c := atomic.LoadInt64(counts[i])
+			if k == "_" {
+				fmt.Fprintf(&b, "%s_bucket{le=%q} %d\n", h.name, fmt.Sprintf("%.3f", bucket), c)
+			} else {
+				fmt.Fprintf(&b, "%s_bucket{%s,le=%q} %d\n", h.name, k, fmt.Sprintf("%.3f", bucket), c)
+			}
+		}
+		inf := atomic.LoadInt64(counts[len(h.buckets)])
+		if k == "_" {
+			fmt.Fprintf(&b, "%s_bucket{le=\"+Inf\"} %d\n", h.name, inf)
+			fmt.Fprintf(&b, "%s_sum %.3f\n", h.name, float64(sum)/1000.0)
+			fmt.Fprintf(&b, "%s_count %d\n", h.name, inf)
+		} else {
+			fmt.Fprintf(&b, "%s_bucket{%s,le=\"+Inf\"} %d\n", h.name, k, inf)
+			fmt.Fprintf(&b, "%s_sum{%s} %.3f\n", h.name, k, float64(sum)/1000.0)
+			fmt.Fprintf(&b, "%s_count{%s} %d\n", h.name, k, inf)
+		}
+	}
+	return b.String()
 }
 
 // ── Registry ──
 
-// Metric is the interface all metric types implement.
-type Metric interface {
-	Name() string
-	Help() string
-	Type() string
-}
-
-type Valuer interface {
-	Value() float64
-}
-
-// Registry holds all registered metrics.
 type Registry struct {
-	mu      sync.RWMutex
-	metrics map[string]Metric
+	counters   map[string]*Counter
+	gauges     map[string]*Gauge
+	histograms map[string]*Histogram
+	mu         sync.RWMutex
 }
 
-var registry = &Registry{metrics: make(map[string]Metric)}
+func NewRegistry() *Registry {
+	return &Registry{
+		counters:   make(map[string]*Counter),
+		gauges:     make(map[string]*Gauge),
+		histograms: make(map[string]*Histogram),
+	}
+}
 
-func (r *Registry) Register(m Metric) {
+func (r *Registry) RegisterCounter(c *Counter) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.metrics[m.Name()] = m
+	r.counters[c.name] = c
 }
 
-func (r *Registry) GetAll() map[string]Metric {
+func (r *Registry) RegisterGauge(g *Gauge) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.gauges[g.name] = g
+}
+
+func (r *Registry) RegisterHistogram(h *Histogram) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.histograms[h.name] = h
+}
+
+func (r *Registry) String() string {
+	var b strings.Builder
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-	result := make(map[string]Metric, len(r.metrics))
-	for k, v := range r.metrics {
-		result[k] = v
+	cNames := make([]string, 0, len(r.counters))
+	for n := range r.counters {
+		cNames = append(cNames, n)
 	}
-	return result
-}
-
-func (r *Registry) Get(name string) Metric {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.metrics[name]
-}
-
-// ── Pre-defined metrics ──
-
-var (
-	OrdersTotal     *Counter
-	OrdersFilled    *Counter
-	OrdersRejected  *Counter
-	RiskIntercepts  *Counter
-	WSReconnects    *Counter
-	OrderLatencyMs  *Histogram
-	CurrentEquity   *Gauge
-	CurrentDrawdown *Gauge
-)
-
-func init() {
-	OrdersTotal = NewCounter("orders_total", "Total number of orders placed")
-	OrdersFilled = NewCounter("orders_filled", "Total number of orders filled")
-	OrdersRejected = NewCounter("orders_rejected", "Total number of orders rejected")
-	RiskIntercepts = NewCounter("risk_intercepts", "Total number of risk check interceptions")
-	WSReconnects = NewCounter("ws_reconnects", "Total number of WebSocket reconnections")
-
-	OrderLatencyMs = NewHistogram("order_latency_ms", "Order execution latency in milliseconds",
-		[]float64{1, 5, 10, 25, 50, 100, 250, 500, 1000, 5000})
-
-	CurrentEquity = NewGauge("current_equity", "Current total portfolio equity")
-	CurrentDrawdown = NewGauge("current_drawdown", "Current portfolio drawdown percentage")
-}
-
-// ── Snapshot ──
-
-// Snapshot captures all metric values at a point in time.
-type Snapshot struct {
-	Timestamp int64               `json:"timestamp"`
-	Metrics   map[string]float64  `json:"metrics"`
-}
-
-// SnapshotAll returns a snapshot of all metrics.
-func SnapshotAll() Snapshot {
-	snap := Snapshot{
-		Timestamp: time.Now().UnixMilli(),
-		Metrics:   make(map[string]float64),
+	gNames := make([]string, 0, len(r.gauges))
+	for n := range r.gauges {
+		gNames = append(gNames, n)
 	}
-	for _, m := range registry.GetAll() {
-		if v, ok := m.(Valuer); ok {
-			snap.Metrics[m.Name()] = v.Value()
+	hNames := make([]string, 0, len(r.histograms))
+	for n := range r.histograms {
+		hNames = append(hNames, n)
+	}
+	r.mu.RUnlock()
+
+	sort.Strings(cNames)
+	sort.Strings(gNames)
+	sort.Strings(hNames)
+
+	for _, n := range cNames {
+		r.mu.RLock()
+		c := r.counters[n]
+		r.mu.RUnlock()
+		b.WriteString(c.String())
+	}
+	for _, n := range gNames {
+		r.mu.RLock()
+		g := r.gauges[n]
+		r.mu.RUnlock()
+		b.WriteString(g.String())
+	}
+	for _, n := range hNames {
+		r.mu.RLock()
+		h := r.histograms[n]
+		r.mu.RUnlock()
+		b.WriteString(h.String())
+	}
+	return b.String()
+}
+
+// ── Go Runtime Metrics ──
+
+func runtimeMetrics() string {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	var b strings.Builder
+	fmt.Fprintf(&b, "# HELP go_goroutines Number of goroutines\n")
+	fmt.Fprintf(&b, "# TYPE go_goroutines gauge\n")
+	fmt.Fprintf(&b, "go_goroutines %d\n", runtime.NumGoroutine())
+	fmt.Fprintf(&b, "# HELP go_memstats_alloc_bytes Bytes allocated and still in use\n")
+	fmt.Fprintf(&b, "# TYPE go_memstats_alloc_bytes gauge\n")
+	fmt.Fprintf(&b, "go_memstats_alloc_bytes %d\n", m.HeapAlloc)
+	fmt.Fprintf(&b, "# HELP go_memstats_sys_bytes Bytes obtained from system\n")
+	fmt.Fprintf(&b, "# TYPE go_memstats_sys_bytes gauge\n")
+	fmt.Fprintf(&b, "go_memstats_sys_bytes %d\n", m.HeapSys)
+	fmt.Fprintf(&b, "# HELP go_memstats_heap_alloc_bytes Bytes allocated and still in use\n")
+	fmt.Fprintf(&b, "# TYPE go_memstats_heap_alloc_bytes gauge\n")
+	fmt.Fprintf(&b, "go_memstats_heap_alloc_bytes %d\n", m.HeapAlloc)
+	fmt.Fprintf(&b, "# HELP go_memstats_heap_sys_bytes Bytes obtained from system for heap\n")
+	fmt.Fprintf(&b, "# TYPE go_memstats_heap_sys_bytes gauge\n")
+	fmt.Fprintf(&b, "go_memstats_heap_sys_bytes %d\n", m.HeapSys)
+	fmt.Fprintf(&b, "# HELP go_memstats_heap_idle_bytes Bytes in idle spans\n")
+	fmt.Fprintf(&b, "# TYPE go_memstats_heap_idle_bytes gauge\n")
+	fmt.Fprintf(&b, "go_memstats_heap_idle_bytes %d\n", m.HeapIdle)
+	fmt.Fprintf(&b, "# HELP go_memstats_heap_inuse_bytes Bytes in non-idle spans\n")
+	fmt.Fprintf(&b, "# TYPE go_memstats_heap_inuse_bytes gauge\n")
+	fmt.Fprintf(&b, "go_memstats_heap_inuse_bytes %d\n", m.HeapInuse)
+	fmt.Fprintf(&b, "# HELP go_memstats_heap_released_bytes Bytes released to OS\n")
+	fmt.Fprintf(&b, "# TYPE go_memstats_heap_released_bytes gauge\n")
+	fmt.Fprintf(&b, "go_memstats_heap_released_bytes %d\n", m.HeapReleased)
+	fmt.Fprintf(&b, "# HELP go_memstats_heap_objects Number of allocated objects\n")
+	fmt.Fprintf(&b, "# TYPE go_memstats_heap_objects gauge\n")
+	fmt.Fprintf(&b, "go_memstats_heap_objects %d\n", m.HeapObjects)
+	fmt.Fprintf(&b, "# HELP go_memstats_gc_cpu_fraction Fraction of CPU time used by GC\n")
+	fmt.Fprintf(&b, "# TYPE go_memstats_gc_cpu_fraction gauge\n")
+	fmt.Fprintf(&b, "go_memstats_gc_cpu_fraction %.6f\n", m.GCCPUFraction)
+	fmt.Fprintf(&b, "# HELP go_memstats_last_gc_time_seconds Time of last GC\n")
+	fmt.Fprintf(&b, "# TYPE go_memstats_last_gc_time_seconds gauge\n")
+	fmt.Fprintf(&b, "go_memstats_last_gc_time_seconds %.3f\n", float64(m.LastGC)/1e9)
+	return b.String()
+}
+
+// ── HTTP Handler ──
+
+var globalRegistry = NewRegistry()
+
+func GetRegistry() *Registry { return globalRegistry }
+
+func Handler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(globalRegistry.String()))
+	w.Write([]byte(runtimeMetrics()))
+}
+
+// ── Middleware ──
+
+func HTTPMiddleware(next http.Handler) http.Handler {
+	requestCounter := NewCounter("http_requests_total", "Total HTTP requests", "method", "path", "status")
+	requestDuration := NewHistogram("http_request_duration_seconds", "HTTP request duration", []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}, "method", "path")
+	globalRegistry.RegisterCounter(requestCounter)
+	globalRegistry.RegisterHistogram(requestDuration)
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		// Wrap writer to capture status code
+		ww := &responseWriter{ResponseWriter: w, statusCode: 200}
+		next.ServeHTTP(ww, r)
+		dur := time.Since(start).Seconds()
+		path := r.URL.Path
+		if len(path) > 100 {
+			path = path[:100]
 		}
-	}
-	return snap
+		requestCounter.Inc(r.Method, path, fmt.Sprintf("%d", ww.statusCode))
+		requestDuration.Observe(dur, r.Method, path)
+	})
+}
+
+type responseWriter struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (w *responseWriter) WriteHeader(code int) {
+	w.statusCode = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+// ── Convenience ──
+
+func RecordOrder(side, status string) {
+	c := NewCounter("orders_total", "Total orders placed", "side", "status")
+	globalRegistry.RegisterCounter(c)
+	c.Inc(side, status)
+}
+
+func RecordSignal(strategy, direction string) {
+	c := NewCounter("signals_total", "Total strategy signals", "strategy", "direction")
+	globalRegistry.RegisterCounter(c)
+	c.Inc(strategy, direction)
+}
+
+func SetEquity(val float64) {
+	g := NewGauge("portfolio_equity_usdt", "Current portfolio equity in USDT")
+	globalRegistry.RegisterGauge(g)
+	g.Set(val)
+}
+
+func SetPositionCount(n int) {
+	g := NewGauge("portfolio_positions", "Number of open positions")
+	globalRegistry.RegisterGauge(g)
+	g.Set(float64(n))
+}
+
+func SetActiveStrategies(n int) {
+	g := NewGauge("strategies_active", "Number of active strategies")
+	globalRegistry.RegisterGauge(g)
+	g.Set(float64(n))
 }

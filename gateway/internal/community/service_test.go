@@ -99,3 +99,51 @@ func TestExtractUniqueAuthorIDs(t *testing.T) {
 		seen[id] = true
 	}
 }
+
+func TestComputeWilsonScore(t *testing.T) {
+	// Perfect 5-star with 100 ratings
+	score := ComputeWilsonScore(5.0, 100)
+	if score < 4.5 {
+		t.Errorf("perfect rating with 100 reviews should have high Wilson score, got %.2f", score)
+	}
+
+	// 3-star with 10 ratings (less reliable)
+	score2 := ComputeWilsonScore(3.0, 10)
+	if score2 > 3.5 {
+		t.Errorf("3-star with few reviews should have lower Wilson score, got %.2f", score2)
+	}
+
+	// No ratings
+	score3 := ComputeWilsonScore(0, 0)
+	if score3 != 0 {
+		t.Errorf("no ratings should score 0, got %.2f", score3)
+	}
+
+	// 4-star with 1000 ratings (very reliable)
+	score4 := ComputeWilsonScore(4.0, 1000)
+	if score4 < 3.8 || score4 > 4.0 {
+		t.Errorf("4-star with 1000 reviews should be close to 4.0, got %.2f", score4)
+	}
+}
+
+func TestRevenueShareConfig(t *testing.T) {
+	cfg := DefaultRevenueShareConfig()
+	if cfg.AuthorPct != 0.70 {
+		t.Errorf("expected author 70%%, got %.2f", cfg.AuthorPct)
+	}
+	if cfg.PlatformPct != 0.30 {
+		t.Errorf("expected platform 30%%, got %.2f", cfg.PlatformPct)
+	}
+}
+
+func TestReviewStatusConstants(t *testing.T) {
+	if ReviewPending != "pending" {
+		t.Error("ReviewPending should be 'pending'")
+	}
+	if ReviewApproved != "approved" {
+		t.Error("ReviewApproved should be 'approved'")
+	}
+	if ReviewRejected != "rejected" {
+		t.Error("ReviewRejected should be 'rejected'")
+	}
+}

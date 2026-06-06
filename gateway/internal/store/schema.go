@@ -2,7 +2,7 @@ package store
 
 // Schema migration constants and DDL for all 18 tables.
 
-const currentSchemaVersion = 5
+const currentSchemaVersion = 6
 
 // MigrationFunc is a function that upgrades the schema by one version.
 type MigrationFunc func(tx *dbTx) error
@@ -13,6 +13,7 @@ var migrations = map[int]MigrationFunc{
 	3: migrateV3,
 	4: migrateV4,
 	5: migrateV5,
+	6: migrateV6,
 }
 
 // dbTx wraps a database transaction for migrations.
@@ -378,7 +379,53 @@ func migrateV4(tx *dbTx) error {
 	return nil
 }
 
-// migrateV5 adds community marketplace tables and indicator i18n fields.
+// migrateV6 adds social trading tables (signals and copy_trades).
+func migrateV6(tx *dbTx) error {
+	tables := []string{
+		// Social trading signals
+		`CREATE TABLE IF NOT EXISTS social_signals (
+			id TEXT PRIMARY KEY,
+			provider_id INTEGER NOT NULL,
+			provider_name TEXT DEFAULT '',
+			symbol TEXT NOT NULL,
+			direction TEXT NOT NULL,
+			price REAL DEFAULT 0,
+			stop_loss REAL DEFAULT 0,
+			take_profit REAL DEFAULT 0,
+			size REAL DEFAULT 0,
+			confidence REAL DEFAULT 0,
+			strategy TEXT DEFAULT '',
+			reason TEXT DEFAULT '',
+			timestamp INTEGER NOT NULL,
+			expires_at INTEGER DEFAULT 0
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_social_signals_provider ON social_signals(provider_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_social_signals_symbol ON social_signals(symbol)`,
+		`CREATE INDEX IF NOT EXISTS idx_social_signals_time ON social_signals(timestamp)`,
+
+		// Copy trades execution log
+		`CREATE TABLE IF NOT EXISTS copy_trades (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			follower_id INTEGER NOT NULL,
+			signal_id TEXT NOT NULL,
+			provider_id INTEGER NOT NULL,
+			symbol TEXT NOT NULL,
+			direction TEXT NOT NULL,
+			executed INTEGER DEFAULT 0,
+			reason TEXT DEFAULT '',
+			created_at INTEGER NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_copy_trades_follower ON copy_trades(follower_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_copy_trades_provider ON copy_trades(provider_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_copy_trades_signal ON copy_trades(signal_id)`,
+	}
+	for _, ddl := range tables {
+		if err := tx.exec(ddl); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 func migrateV5(tx *dbTx) error {
 	tables := []string{
 		// Extend indicator_codes with community fields

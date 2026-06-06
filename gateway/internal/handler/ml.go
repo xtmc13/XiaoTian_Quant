@@ -1,11 +1,16 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xiaotian-quant/gateway/internal/app"
 	"github.com/xiaotian-quant/gateway/internal/ml"
+	"github.com/xiaotian-quant/gateway/internal/store"
+	"github.com/xiaotian-quant/gateway/internal/strategy"
+	"github.com/xiaotian-quant/gateway/internal/strategy/strategies"
 )
 
 // MLClient is the global ML service client.
@@ -490,12 +495,13 @@ func MLGenerateFeatures(c *gin.Context) {
 	GenerateFeatures(c)
 }
 
-// MLDeployStrategy deploys a trained model to a strategy.
+// MLDeployStrategy deploys a trained model to a strategy and registers it in the engine.
 func MLDeployStrategy(c *gin.Context) {
 	var req struct {
 		ModelID    string `json:"model_id" binding:"required"`
 		StrategyID string `json:"strategy_id" binding:"required"`
 		Symbol     string `json:"symbol" binding:"required"`
+		AutoStart  bool   `json:"auto_start"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -503,18 +509,87 @@ func MLDeployStrategy(c *gin.Context) {
 	}
 
 	// Verify model exists
-	_, err := MLClient.GetModel(req.ModelID)
+	model, err := MLClient.GetModel(req.ModelID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "model not found: " + err.Error()})
 		return
 	}
 
+	// Build strategy config with model reference
+	config := map[string]any{
+		"model_id":      req.ModelID,
+		"model_type":    model.ModelType,
+		"symbol":        req.Symbol,
+		"task_type":     model.TaskType,
+		"feature_count": model.FeatureCount,
+	}
+
+	// Update or create strategy config in store
+	mu := store.GetStrategyConfigMu()
+	mu.Lock()
+	item := store.GetStrategyConfigs()[req.StrategyID]
+	if item == nil {
+		// Create new strategy config for this ML model
+		item = map[string]any{
+			"id":            req.StrategyID,
+			"name":          "ML-" + req.ModelID,
+			"strategy_type": "ml",
+			"coin":          req.Symbol,
+			"symbol":        req.Symbol,
+			"config_json":   "{}",
+			"status":        "stopped",
+			"created_at":    float64(time.Now().UnixMilli()),
+			"updated_at":    float64(time.Now().UnixMilli()),
+		}
+		store.GetStrategyConfigs()[req.StrategyID] = item
+	}
+	item["strategy_type"] = "ml"
+	item["symbol"] = req.Symbol
+	item["config_json"] = func() string {
+		b, _ := json.Marshal(config)
+		return string(b)
+	}()
+	item["updated_at"] = float64(time.Now().UnixMilli())
+	mu.Unlock()
+	store.PersistStrategyConfigs()
+
+	// Register in strategy engine if available and auto_start requested
+	var engineStatus string
+	if req.AutoStart {
+		eng := app.Get().StrategyEngine
+		if eng != nil {
+			// Unregister if already exists
+			if eng.Get(req.StrategyID) != nil {
+				_ = eng.Stop(req.StrategyID)
+				_ = eng.Unregister(req.StrategyID)
+			}
+			// ML strategy uses a generic signal generator backed by the model
+			mlStrat := strategies.NewMLStrategy(req.ModelID, MLClient)
+			wrapped := strategy.WrapStrategy(req.StrategyID, mlStrat)
+			if err := eng.Register(wrapped); err != nil {
+				engineStatus = "register_failed: " + err.Error()
+			} else if err := eng.Start(req.StrategyID, config); err != nil {
+				engineStatus = "start_failed: " + err.Error()
+			} else {
+				engineStatus = "running"
+				item["status"] = "running"
+				store.PersistStrategyConfigs()
+			}
+		} else {
+			engineStatus = "engine_not_available"
+		}
+	} else {
+		engineStatus = "registered_not_started"
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"success":     true,
-		"model_id":    req.ModelID,
-		"strategy_id": req.StrategyID,
-		"symbol":      req.Symbol,
-		"deployed_at": time.Now().Unix(),
+		"success":      true,
+		"model_id":     req.ModelID,
+		"strategy_id":  req.StrategyID,
+		"symbol":       req.Symbol,
+		"deployed_at":  time.Now().Unix(),
+		"engine_status": engineStatus,
+		"config":       config,
 	})
 }
 

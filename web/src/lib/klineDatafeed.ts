@@ -46,14 +46,15 @@ function periodMs(p: Period): number {
   return PERIOD_MS[periodKey(p)] || 3_600_000
 }
 
-function toKLineData(raw: any): KLineData {
+function toKLineData(raw: unknown): KLineData {
+  const r = raw as Record<string, unknown>
   return {
-    timestamp: raw.time || raw.timestamp || 0,
-    open: parseFloat(raw.open) || 0,
-    high: parseFloat(raw.high) || 0,
-    low: parseFloat(raw.low) || 0,
-    close: parseFloat(raw.close) || 0,
-    volume: parseFloat(raw.volume) || 0,
+    timestamp: Number(r.time ?? r.timestamp ?? 0),
+    open: parseFloat(String(r.open ?? 0)),
+    high: parseFloat(String(r.high ?? 0)),
+    low: parseFloat(String(r.low ?? 0)),
+    close: parseFloat(String(r.close ?? 0)),
+    volume: parseFloat(String(r.volume ?? 0)),
   }
 }
 
@@ -91,7 +92,7 @@ function detectGap(entry: SubEntry): { from: number; to: number } | null {
   const cappedBars = Math.min(missedBars, MAX_BACKFILL_BARS)
   const from = entry.lastBarTimestamp + barMs
   const to = now
-  console.log(
+  console.warn(
     `[KLineDatafeed] Gap detected for ${entry.symbol.ticker} ${periodKey(entry.period)}: ` +
     `${missedBars} bars missed (capped to ${cappedBars}), fetching ${new Date(from).toISOString()} → ${new Date(to).toISOString()}`
   )
@@ -104,16 +105,16 @@ async function backfillGap(entry: SubEntry): Promise<void> {
   try {
     const interval = toInterval(entry.period)
     const limit = Math.min(Math.ceil((gap.to - gap.from) / periodMs(entry.period)) + 10, MAX_BACKFILL_BARS)
-    const data: any = await api.get('/market/klines', {
+    const data: unknown = await api.get('/market/klines', {
       params: { symbol: entry.symbol.ticker, interval, limit, from: gap.from, to: gap.to },
     })
-    const klines: any[] = data?.klines || data || []
+    const klines = ((data as Record<string, unknown>)?.klines as unknown[]) || (Array.isArray(data) ? data : [])
     if (!Array.isArray(klines) || klines.length === 0) return
     const newBars = klines.map(toKLineData).filter((bar) => bar.timestamp > entry.lastBarTimestamp).sort((a, b) => a.timestamp - b.timestamp)
     if (newBars.length === 0) return
     for (const bar of newBars) {
       entry.lastBarTimestamp = Math.max(entry.lastBarTimestamp, bar.timestamp)
-      entry.callbacks.forEach((cb) => { try { cb(bar) } catch {} })
+      entry.callbacks.forEach((cb) => { try { cb(bar) } catch { /* ignore */ } })
     }
   } catch (err) {
     console.error('[KLineDatafeed] Backfill failed:', err)
@@ -201,7 +202,7 @@ export function handlePriceTick(symbol: string, lastPrice: number, volume: numbe
         entry.lastPushTs = now
         if (entry.pushTimer) { clearTimeout(entry.pushTimer); entry.pushTimer = null }
         entry.pendingBar = null
-        entry.callbacks.forEach((cb) => { try { cb(bar) } catch {} })
+        entry.callbacks.forEach((cb) => { try { cb(bar) } catch { /* ignore */ } })
       }
       return
     }
@@ -219,7 +220,7 @@ export function handlePriceTick(symbol: string, lastPrice: number, volume: numbe
     if (elapsed >= PUSH_THROTTLE_MS) {
       entry.lastPushTs = now
       entry.pendingBar = null
-      entry.callbacks.forEach((cb) => { try { cb(bar) } catch {} })
+      entry.callbacks.forEach((cb) => { try { cb(bar) } catch { /* ignore */ } })
     } else if (!entry.pushTimer) {
       entry.pushTimer = setTimeout(() => {
         entry.pushTimer = null
@@ -227,7 +228,7 @@ export function handlePriceTick(symbol: string, lastPrice: number, volume: numbe
           entry.lastPushTs = Date.now()
           const pending = entry.pendingBar
           entry.pendingBar = null
-          entry.callbacks.forEach((cb) => { try { cb(pending) } catch {} })
+          entry.callbacks.forEach((cb) => { try { cb(pending) } catch { /* ignore */ } })
         }
       }, PUSH_THROTTLE_MS - elapsed)
     }
@@ -258,16 +259,16 @@ export function createBackendDatafeed(): Datafeed {
         const barDuration = periodMs(period)
         const limit = Math.min(Math.ceil((toMs - fromMs) / barDuration) + 200, 1500)
 
-        console.log('[KLineDatafeed] getHistoryKLineData CALLED:', {
+        console.warn('[KLineDatafeed] getHistoryKLineData CALLED:', {
           symbol: symbol.ticker, periodText: period.text, interval, limit,
           from: new Date(fromMs).toISOString(), to: new Date(toMs).toISOString(),
         })
 
-        const data: any = await api.get('/market/klines', {
+        const data: unknown = await api.get('/market/klines', {
           params: { symbol: symbol.ticker, interval, limit, from: fromMs, to: toMs },
         })
 
-        const klines = data?.klines || data || []
+        const klines = ((data as Record<string, unknown>)?.klines as unknown[]) || (Array.isArray(data) ? data : [])
         const result = (Array.isArray(klines) ? klines : []).map(toKLineData)
 
         // Store the last (current period) bar in subscriptions so
@@ -281,7 +282,7 @@ export function createBackendDatafeed(): Datafeed {
           })
         }
 
-        console.log('[KLineDatafeed] getHistoryKLineData RESULT:', {
+        console.warn('[KLineDatafeed] getHistoryKLineData RESULT:', {
           symbol: symbol.ticker, periodText: period.text, barsCount: result.length,
           firstBar: result[0] ? { time: new Date(result[0].timestamp).toISOString(), o: result[0].open, c: result[0].close } : null,
           lastBar: result[result.length - 1] ? { time: new Date(result[result.length - 1].timestamp).toISOString(), o: result[result.length - 1].open, c: result[result.length - 1].close } : null,

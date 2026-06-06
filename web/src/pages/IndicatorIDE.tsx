@@ -5,7 +5,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { cn, formatCurrency } from '@/lib/utils'
-import { marketApi, indicatorApi, strategyApi } from '@/lib/api'
+import { marketApi, indicatorApi, strategyApi, communityApi } from '@/lib/api'
+import { TRADING_INTERVALS } from '@/lib/constants'
 import { KlineChart } from '@/components/charts/KlineChart'
 import { CodeEditor } from '@/components/ide/CodeEditor'
 import { ParamPanel } from '@/components/ide/ParamPanel'
@@ -26,10 +27,6 @@ import {
   type ParseResult,
   type ValidationHint,
 } from '@/lib/indicatorContract'
-
-/* ── Constants ───────────────────────────────────────────────────── */
-
-const INTERVALS = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w']
 
 /* ── Types ───────────────────────────────────────────────────────── */
 
@@ -61,7 +58,7 @@ export function IndicatorIDE() {
 
   // Parsed contract state
   const [parsed, setParsed] = useState<ParseResult>(() => parseParamsFromCode(DEFAULT_INDICATOR_CODE))
-  const [paramValues, setParamValues] = useState<Record<string, any>>({})
+  const [paramValues, setParamValues] = useState<Record<string, unknown>>({})
   const [validationHints, setValidationHints] = useState<ValidationHint[]>([])
   const [validating, setValidating] = useState(false)
 
@@ -83,7 +80,7 @@ export function IndicatorIDE() {
 
   // Experiment
   const [experimentRunning, setExperimentRunning] = useState(false)
-  const [experimentResult, setExperimentResult] = useState<any>(null)
+  const [experimentResult, setExperimentResult] = useState<Record<string, unknown> | null>(null)
   const [experimentPanelExpanded, setExperimentPanelExpanded] = useState(false)
   const [optimizer, setOptimizer] = useState<'de' | 'tpe'>('de')
 
@@ -95,15 +92,15 @@ export function IndicatorIDE() {
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
   const [running, setRunning] = useState(false)
-  const [backtestResult, setBacktestResult] = useState<any>(null)
+  const [backtestResult, setBacktestResult] = useState<Record<string, unknown> | null>(null)
 
   // Indicator list
   const [indicators, setIndicators] = useState<SavedIndicator[]>([])
 
   /* ── Load saved indicators ── */
   useEffect(() => {
-    indicatorApi.list().then((res: any) => {
-      const list = Array.isArray(res) ? res : (res?.data || [])
+    indicatorApi.list().then((res: unknown) => {
+      const list = Array.isArray(res) ? res : ((res as Record<string, unknown>)?.data || [])
       setIndicators(Array.isArray(list) ? list : [])
     }).catch(() => {})
   }, [])
@@ -113,7 +110,7 @@ export function IndicatorIDE() {
     const result = parseParamsFromCode(code)
     setParsed(result)
     // Reset param values when params declarations change
-    const defaults: Record<string, any> = {}
+    const defaults: Record<string, unknown> = {}
     for (const p of result.params) {
       defaults[p.name] = p.default
     }
@@ -135,14 +132,14 @@ export function IndicatorIDE() {
 
   const klines: KLineBar[] = useMemo(() => {
     if (!klinesRaw) return []
-    const raw = (klinesRaw as any)?.data ?? klinesRaw
-    const arr = Array.isArray(raw) ? raw : (raw as any)?.klines || []
+    const raw = Array.isArray(klinesRaw) ? klinesRaw : (klinesRaw as Record<string, unknown>)?.data ?? klinesRaw
+    const arr = Array.isArray(raw) ? raw : (raw as Record<string, unknown>)?.klines || []
     if (!Array.isArray(arr) || !arr.length) return []
-    return arr.map((k: any) => ({
-      timestamp: k.time || k.timestamp || 0,
-      open: parseFloat(k.open) || 0, high: parseFloat(k.high) || 0,
-      low: parseFloat(k.low) || 0, close: parseFloat(k.close) || 0,
-      volume: parseFloat(k.volume) || 0,
+    return arr.map((k: Record<string, unknown>) => ({
+      timestamp: (k.time || k.timestamp || 0) as number,
+      open: parseFloat(String(k.open)) || 0, high: parseFloat(String(k.high)) || 0,
+      low: parseFloat(String(k.low)) || 0, close: parseFloat(String(k.close)) || 0,
+      volume: parseFloat(String(k.volume)) || 0,
     }))
   }, [klinesRaw])
 
@@ -152,7 +149,7 @@ export function IndicatorIDE() {
     queryFn: () => marketApi.snapshot(symbol),
     refetchInterval: 5000,
   })
-  const snapshot = (snapshotRaw as any)?.data ?? snapshotRaw
+  const snapshot = snapshotRaw
   const lastPrice = snapshot?.price ? Number(snapshot.price) : 0
   const change24h = snapshot?.change_24h ? Number(snapshot.change_24h) : 0
 
@@ -168,15 +165,15 @@ export function IndicatorIDE() {
   const handleValidate = useCallback(async () => {
     setValidating(true)
     try {
-      const res = await indicatorApi.validate(code)
+      const res = await indicatorApi.validate(code) as unknown as { data?: { hints?: ValidationHint[] }; hints?: ValidationHint[] }
       const data = res?.data ?? res
       if (data?.hints) {
         setValidationHints(data.hints)
       } else {
         setValidationHints([])
       }
-    } catch (e: any) {
-      setValidationHints([{ severity: 'error', code: 'VALIDATE_REQUEST_FAILED', params: { msg: e.message } }])
+    } catch (e: unknown) {
+      setValidationHints([{ severity: 'error', code: 'VALIDATE_REQUEST_FAILED', params: { msg: e instanceof Error ? e.message : String(e) } }])
     } finally {
       setValidating(false)
     }
@@ -196,11 +193,11 @@ export function IndicatorIDE() {
         interval,
       })
       setCodeDirty(false)
-      indicatorApi.list().then((res: any) => {
-        const list = Array.isArray(res) ? res : (res?.data || [])
+      indicatorApi.list().then((res: unknown) => {
+        const list = Array.isArray(res) ? res : ((res as Record<string, unknown>)?.data || [])
         setIndicators(Array.isArray(list) ? list : [])
       }).catch(() => {})
-    } catch (_) {}
+    } catch { /* ignore */ }
   }, [code, symbol, interval, selectedIndicatorId, parsed, handleValidate])
 
   const handleDelete = useCallback(async () => {
@@ -211,12 +208,53 @@ export function IndicatorIDE() {
       setCode(DEFAULT_INDICATOR_CODE)
       setCodeDirty(false)
       setValidationHints([])
-      indicatorApi.list().then((res: any) => {
-        const list = Array.isArray(res) ? res : (res?.data || [])
+      indicatorApi.list().then((res: unknown) => {
+        const list = Array.isArray(res) ? res : ((res as Record<string, unknown>)?.data || [])
         setIndicators(Array.isArray(list) ? list : [])
       }).catch(() => {})
-    } catch (_) {}
+    } catch { /* ignore */ }
   }, [selectedIndicatorId])
+
+  const handleSaveAs = useCallback(async () => {
+    try {
+      await indicatorApi.saveAs({
+        name: parsed.name + ' (副本)',
+        description: parsed.description,
+        code,
+        symbol,
+        interval,
+      })
+      setCodeDirty(false)
+      indicatorApi.list().then((res: unknown) => {
+        const list = Array.isArray(res) ? res : ((res as Record<string, unknown>)?.data || [])
+        setIndicators(Array.isArray(list) ? list : [])
+      }).catch(() => {})
+    } catch { /* ignore */ }
+  }, [code, symbol, interval, parsed])
+
+  const handlePublish = useCallback(async () => {
+    if (!selectedIndicatorId) {
+      // 先保存再发布
+      await handleSave()
+      const latest = await indicatorApi.list()
+      const list = Array.isArray(latest) ? latest : []
+      const newest = list[list.length - 1]
+      if (!newest?.id) return
+      setSelectedIndicatorId(newest.id)
+    }
+    const pricingType = confirm('是否设置为付费指标？\n确定=付费，取消=免费') ? 'paid' : 'free'
+    const price = pricingType === 'paid' ? Number(prompt('请输入积分价格', '100') || '100') : 0
+    try {
+      await communityApi.publish({
+        indicatorId: selectedIndicatorId || 0,
+        pricingType,
+        price,
+      })
+      alert('发布成功！')
+    } catch (e: unknown) {
+      alert('发布失败: ' + (e instanceof Error ? e.message : '未知错误'))
+    }
+  }, [selectedIndicatorId, code, symbol, interval, parsed, handleSave])
 
   /* ── AI Generate (SSE Streaming) ── */
   const handleAiGenerate = useCallback(async () => {
@@ -241,8 +279,9 @@ export function IndicatorIDE() {
             }
           },
           onValidation: (result) => {
-            if (result?.hints) {
-              setValidationHints(result.hints)
+            const r = result as unknown as { hints?: ValidationHint[] }
+            if (r?.hints) {
+              setValidationHints(r.hints)
             }
           },
           onCodeReplace: (newCode) => {
@@ -251,7 +290,7 @@ export function IndicatorIDE() {
             setAiStreamedCode(newCode)
           },
           onDebug: (info) => {
-            console.log('[AI Debug]', info)
+            console.warn('[AI Debug]', info)
           },
           onDone: () => {
             setAiStatus('completed')
@@ -270,9 +309,9 @@ export function IndicatorIDE() {
           },
         }
       )
-    } catch (e: any) {
+    } catch (e: unknown) {
       setAiStatus('error')
-      setValidationHints([{ severity: 'error', code: 'AI_GENERATE_ERROR', params: { msg: e.message || '生成失败' } }])
+      setValidationHints([{ severity: 'error', code: 'AI_GENERATE_ERROR', params: { msg: e instanceof Error ? e.message : '生成失败' } }])
     } finally {
       setAiGenerating(false)
     }
@@ -283,7 +322,7 @@ export function IndicatorIDE() {
     if (parsed.params.length === 0) return
     setExperimentRunning(true); setExperimentResult(null)
     try {
-      const payload: any = {
+      const payload: Record<string, unknown> = {
         code,
         symbol,
         interval,
@@ -301,8 +340,8 @@ export function IndicatorIDE() {
       if (best) {
         setParamValues(prev => ({ ...prev, ...best }))
       }
-    } catch (e: any) {
-      setExperimentResult({ error: e.message || '实验失败' })
+    } catch (e: unknown) {
+      setExperimentResult({ error: e instanceof Error ? e.message : '实验失败' })
     } finally { setExperimentRunning(false) }
   }, [code, symbol, interval, optimizer, parsed.params.length, initialCapital, commission, slippage])
 
@@ -310,7 +349,7 @@ export function IndicatorIDE() {
   const handleRunBacktest = useCallback(async () => {
     setRunning(true); setBacktestResult(null)
     try {
-      const payload: any = {
+      const payload: Record<string, unknown> = {
         symbol, interval, code,
         initial_balance: { USDT: initialCapital },
         leverage, commission: commission / 100, slippage: slippage / 100,
@@ -320,17 +359,17 @@ export function IndicatorIDE() {
       if (endDate) payload.end_date = endDate
       const result = await indicatorApi.backtest(payload)
       setBacktestResult(result)
-    } catch (e: any) {
-      setBacktestResult({ error: e.message || '回测失败' })
+    } catch (e: unknown) {
+      setBacktestResult({ error: e instanceof Error ? e.message : '回测失败' })
     } finally { setRunning(false) }
   }, [symbol, interval, code, initialCapital, leverage, commission, slippage, startDate, endDate])
 
   /* ── Backtest metrics ── */
   const backtestMetrics = useMemo(() => {
     if (!backtestResult?.report) return null
-    const r = backtestResult.report; const t = 'up' as const; const d = 'down' as const; const n = 'neutral' as const
+    const r = backtestResult.report as Record<string, number>; const t = 'up' as const; const d = 'down' as const; const n = 'neutral' as const
     return [
-      { label: '总收益率', value: `${r.total_return_pct >= 0 ? '+' : ''}${r.total_return_pct?.toFixed(2)}%`, icon: TrendingUp, trend: r.total_return_pct >= 0 ? t : d },
+      { label: '总收益率', value: `${(r.total_return_pct ?? 0) >= 0 ? '+' : ''}${r.total_return_pct?.toFixed(2)}%`, icon: TrendingUp, trend: (r.total_return_pct ?? 0) >= 0 ? t : d },
       { label: '最终权益', value: `$${formatCurrency(r.final_equity)}`, icon: BarChart3, trend: n },
       { label: '最大回撤', value: `${r.max_drawdown_pct?.toFixed(2)}%`, icon: TrendingDown, trend: d },
       { label: '夏普比率', value: r.sharpe_ratio?.toFixed(2), icon: Target, trend: n },
@@ -387,8 +426,8 @@ export function IndicatorIDE() {
       })
       setShowCreateStrategy(false)
       alert('策略创建成功！请到策略管理页面启动。')
-    } catch (e: any) {
-      alert('创建策略失败: ' + (e.message || e))
+    } catch (e: unknown) {
+      alert('创建策略失败: ' + (e instanceof Error ? e.message : String(e)))
     }
   }, [stratForm, code, parsed.name])
 
@@ -427,31 +466,31 @@ export function IndicatorIDE() {
               </div>
               <div className="flex items-center gap-0.5">
                 {/* New */}
-                <button onClick={() => { setCode(DEFAULT_INDICATOR_CODE); setSelectedIndicatorId(null); setCodeDirty(false); setValidationHints([]) }} className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/5" title="新建"><Plus className="w-3.5 h-3.5" /></button>
+                <button onClick={() => { setCode(DEFAULT_INDICATOR_CODE); setSelectedIndicatorId(null); setCodeDirty(false); setValidationHints([]) }} className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/5" title="新建" aria-label="新建"><Plus className="w-3.5 h-3.5" /></button>
                 {/* Save */}
-                <button onClick={handleSave} disabled={!codeDirty} className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/5 disabled:opacity-30" title="保存"><Save className="w-3.5 h-3.5" /></button>
+                <button onClick={handleSave} disabled={!codeDirty} className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/5 disabled:opacity-30" title="保存" aria-label="保存"><Save className="w-3.5 h-3.5" /></button>
                 {/* Delete */}
-                <button onClick={handleDelete} disabled={!selectedIndicatorId} className="p-1.5 rounded text-muted-foreground hover:text-quant-red hover:bg-white/5 disabled:opacity-30" title="删除"><Trash2 className="w-3.5 h-3.5" /></button>
+                <button onClick={handleDelete} disabled={!selectedIndicatorId} className="p-1.5 rounded text-muted-foreground hover:text-quant-red hover:bg-white/5 disabled:opacity-30" title="删除" aria-label="删除"><Trash2 className="w-3.5 h-3.5" /></button>
                 {/* Validate */}
-                <button onClick={handleValidate} disabled={validating} className="p-1.5 rounded text-muted-foreground hover:text-quant-gold hover:bg-white/5 disabled:opacity-30" title="验证代码">
+                <button onClick={handleValidate} disabled={validating} className="p-1.5 rounded text-muted-foreground hover:text-quant-gold hover:bg-white/5 disabled:opacity-30" title="验证代码" aria-label="验证代码">
                   {validating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <AlertCircle className="w-3.5 h-3.5" />}
                 </button>
                 {/* Publish */}
-                <button className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/5" title="发布到社区"><Upload className="w-3.5 h-3.5" /></button>
+                <button onClick={handlePublish} className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/5" title="发布到社区" aria-label="发布到社区"><Upload className="w-3.5 h-3.5" /></button>
                 {/* Create Strategy */}
-                <button onClick={() => setShowCreateStrategy(true)} className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/5" title="从指标创建策略"><GitBranch className="w-3.5 h-3.5" /></button>
+                <button onClick={() => setShowCreateStrategy(true)} className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/5" title="从指标创建策略" aria-label="从指标创建策略"><GitBranch className="w-3.5 h-3.5" /></button>
                 {/* Save As */}
-                <button className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/5" title="另存为"><Copy className="w-3.5 h-3.5" /></button>
+                <button onClick={handleSaveAs} className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/5" title="另存为" aria-label="另存为"><Copy className="w-3.5 h-3.5" /></button>
                 {/* Fullscreen */}
-                <button onClick={() => setEditorFullscreen(!editorFullscreen)} className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/5" title={editorFullscreen ? '退出全屏' : '全屏编辑器'}>
+                <button onClick={() => setEditorFullscreen(!editorFullscreen)} className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/5" title={editorFullscreen ? '退出全屏' : '全屏编辑器'} aria-label={editorFullscreen ? '退出全屏' : '全屏编辑器'}>
                   {editorFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
                 </button>
                 {/* Run/Stop on chart */}
-                <button onClick={() => setChartIndicatorRunning(!chartIndicatorRunning)} className={cn('p-1.5 rounded', chartIndicatorRunning ? 'text-quant-green bg-quant-green/10' : 'text-muted-foreground hover:text-foreground hover:bg-white/5')} title={chartIndicatorRunning ? '停止' : '在图表上运行'}>
+                <button onClick={() => setChartIndicatorRunning(!chartIndicatorRunning)} className={cn('p-1.5 rounded', chartIndicatorRunning ? 'text-quant-green bg-quant-green/10' : 'text-muted-foreground hover:text-foreground hover:bg-white/5')} title={chartIndicatorRunning ? '停止' : '在图表上运行'} aria-label={chartIndicatorRunning ? '停止' : '在图表上运行'}>
                   {chartIndicatorRunning ? <PauseCircle className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
                 </button>
                 {/* Collapse */}
-                <button onClick={() => setCodePanelExpanded(!codePanelExpanded)} className="p-1 rounded text-muted-foreground hover:text-foreground ml-1">
+                <button onClick={() => setCodePanelExpanded(!codePanelExpanded)} className="p-1 rounded text-muted-foreground hover:text-foreground ml-1" aria-label={codePanelExpanded ? '收起代码面板' : '展开代码面板'}>
                   {codePanelExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                 </button>
               </div>
@@ -464,7 +503,7 @@ export function IndicatorIDE() {
                 <div className="flex items-center gap-1.5 px-3 py-1.5 text-[10px] text-muted-foreground border-b border-quant-border bg-quant-bg-tertiary">
                   <BookOpen className="w-3 h-3" />
                   <span>策略开发指南</span>
-                  <a href="#" className="text-quant-gold hover:underline ml-auto">查看文档 →</a>
+                  <button onClick={() => window.open('/docs/strategy-guide', '_blank')} className="text-quant-gold hover:underline ml-auto text-[10px]">查看文档 →</button>
                 </div>
 
                 {/* AI Panel toggle */}
@@ -565,17 +604,17 @@ export function IndicatorIDE() {
                             {experimentRunning ? '优化中...' : '开始优化'}
                           </button>
                         </div>
-                        {experimentResult?.error && (
-                          <div className="text-[10px] text-red-400">{experimentResult.error}</div>
+                        {!!experimentResult?.error && (
+                          <div className="text-[10px] text-red-400">{String(experimentResult.error)}</div>
                         )}
-                        {experimentResult?.best_score > 0 && (
+                        {experimentResult && (experimentResult.best_score as number) > 0 && (
                           <div className="space-y-1">
                             <div className="text-[10px] text-quant-green">
-                              最佳评分: {experimentResult.best_score.toFixed(1)}
+                              最佳评分: {(experimentResult.best_score as number).toFixed(1)}
                             </div>
-                            {experimentResult.is_score?.factor_scores && (
+                            {!!(experimentResult.is_score as Record<string, unknown>)?.factor_scores && (
                               <div className="grid grid-cols-3 gap-1">
-                                {Object.entries(experimentResult.is_score.factor_scores).map(([k, v]: [string, any]) => (
+                                {Object.entries(((experimentResult.is_score as Record<string, unknown>).factor_scores) as Record<string, number>).map(([k, v]: [string, number]) => (
                                   <div key={k} className="rounded bg-quant-bg px-1.5 py-0.5 text-[9px]">
                                     <span className="text-muted-foreground">{k}</span>
                                     <span className="ml-1 text-quant-gold font-mono">{v.toFixed(0)}</span>
@@ -583,10 +622,10 @@ export function IndicatorIDE() {
                                 ))}
                               </div>
                             )}
-                            {experimentResult.oos_validation?.passed === false && (
+                            {(experimentResult.oos_validation as Record<string, unknown>)?.passed === false && (
                               <div className="text-[10px] text-amber-400">⚠ 样本外验证未通过（可能过拟合）</div>
                             )}
-                            {experimentResult.oos_validation?.passed && (
+                            {!!(experimentResult.oos_validation as Record<string, unknown>)?.passed && (
                               <div className="text-[10px] text-quant-green">✓ 样本外验证通过</div>
                             )}
                           </div>
@@ -657,7 +696,7 @@ export function IndicatorIDE() {
 
               {/* Timeframe */}
               <div className="flex rounded bg-quant-bg-tertiary p-0.5">
-                {INTERVALS.map(int => (
+                {TRADING_INTERVALS.map(int => (
                   <button key={int} onClick={() => setInterval(int)}
                     className={cn('px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors', interval === int ? 'bg-quant-gold/10 text-quant-gold' : 'text-muted-foreground hover:text-foreground')}>
                     {int}
@@ -700,12 +739,12 @@ export function IndicatorIDE() {
                     <div>
                       <label className="text-[10px] text-muted-foreground mb-1 block">开始日期</label>
                       <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
-                        className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1.5 text-xs text-white outline-none focus:border-quant-gold" />
+                        className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1.5 text-xs text-white outline-none focus:border-quant-gold" aria-label="开始日期" />
                     </div>
                     <div>
                       <label className="text-[10px] text-muted-foreground mb-1 block">结束日期</label>
                       <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)}
-                        className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1.5 text-xs text-white outline-none focus:border-quant-gold" />
+                        className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1.5 text-xs text-white outline-none focus:border-quant-gold" aria-label="结束日期" />
                     </div>
                   </div>
                   {/* Capital + Leverage */}
@@ -713,22 +752,22 @@ export function IndicatorIDE() {
                     <div>
                       <label className="text-[10px] text-muted-foreground mb-1 block">初始资金</label>
                       <input type="number" min={100} value={initialCapital} onChange={e => setInitialCapital(Number(e.target.value))}
-                        className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1.5 text-xs text-white outline-none focus:border-quant-gold" />
+                        className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1.5 text-xs text-white outline-none focus:border-quant-gold" aria-label="初始资金" />
                     </div>
                     <div>
                       <label className="text-[10px] text-muted-foreground mb-1 block">杠杆</label>
                       <input type="number" min={1} max={125} value={leverage} onChange={e => setLeverage(Number(e.target.value))}
-                        className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1.5 text-xs text-white outline-none focus:border-quant-gold" />
+                        className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1.5 text-xs text-white outline-none focus:border-quant-gold" aria-label="杠杆倍数" />
                     </div>
                     <div>
                       <label className="text-[10px] text-muted-foreground mb-1 block">手续费 %</label>
                       <input type="number" min={0} max={10} step={0.01} value={commission} onChange={e => setCommission(Number(e.target.value))}
-                        className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1.5 text-xs text-white outline-none focus:border-quant-gold" />
+                        className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1.5 text-xs text-white outline-none focus:border-quant-gold" aria-label="手续费百分比" />
                     </div>
                     <div>
                       <label className="text-[10px] text-muted-foreground mb-1 block">滑点 %</label>
                       <input type="number" min={0} max={10} step={0.01} value={slippage} onChange={e => setSlippage(Number(e.target.value))}
-                        className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1.5 text-xs text-white outline-none focus:border-quant-gold" />
+                        className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1.5 text-xs text-white outline-none focus:border-quant-gold" aria-label="滑点百分比" />
                     </div>
                   </div>
                   <button onClick={handleRunBacktest} disabled={running}
@@ -739,8 +778,8 @@ export function IndicatorIDE() {
                 </SectionCard>
 
                 {/* Error */}
-                {backtestResult?.error && (
-                  <div className="flex items-center gap-2 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-400"><AlertCircle className="w-3.5 h-3.5" />{backtestResult.error}</div>
+                {!!backtestResult?.error && (
+                  <div className="flex items-center gap-2 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-400"><AlertCircle className="w-3.5 h-3.5" />{String(backtestResult.error)}</div>
                 )}
 
                 {/* Results */}
@@ -749,14 +788,14 @@ export function IndicatorIDE() {
                     <div className="grid grid-cols-3 gap-3">
                       {backtestMetrics.map(m => <KPICard key={m.label} icon={<m.icon className="w-3.5 h-3.5 text-muted-foreground" />} label={m.label} value={m.value} trend={m.trend} />)}
                     </div>
-                    {backtestResult?.trades?.length > 0 && (
-                      <SectionCard title={`交易记录 (${backtestResult.trades.length}笔)`}>
+                    {backtestResult && Array.isArray(backtestResult.trades) && backtestResult.trades.length > 0 && (
+                      <SectionCard title={`交易记录 (${(backtestResult.trades as unknown as { length: number }).length}笔)`}>
                         <div className="overflow-x-auto max-h-52">
                           <table className="w-full text-[10px]">
-                            <thead><tr className="text-muted-foreground text-left"><th className="px-2 py-1 font-medium">#</th><th className="px-2 py-1 font-medium">方向</th><th className="px-2 py-1 font-medium">价格</th><th className="px-2 py-1 font-medium">数量</th><th className="px-2 py-1 font-medium">盈亏</th></tr></thead>
+                            <thead><tr className="text-muted-foreground text-left"><th scope="col" className="px-2 py-1 font-medium">#</th><th scope="col" className="px-2 py-1 font-medium">方向</th><th scope="col" className="px-2 py-1 font-medium">价格</th><th scope="col" className="px-2 py-1 font-medium">数量</th><th scope="col" className="px-2 py-1 font-medium">盈亏</th></tr></thead>
                             <tbody>
-                              {backtestResult.trades.map((t: any, i: number) => (
-                                <tr key={i} className="border-t border-quant-border/40"><td className="px-2 py-1 text-muted-foreground">{i + 1}</td><td className="px-2 py-1">{t.side === 'buy' ? '买' : '卖'}</td><td className="px-2 py-1 font-mono">${formatCurrency(t.exit_price || t.entry_price)}</td><td className="px-2 py-1 font-mono">{t.qty}</td><td className={cn('px-2 py-1 font-mono font-bold', (t.pnl || 0) >= 0 ? 'text-quant-green' : 'text-quant-red')}>${t.pnl?.toFixed(2) || '-'}</td></tr>
+                              {backtestResult.trades.map((t: Record<string, unknown>, i: number) => (
+                                <tr key={i} className="border-t border-quant-border/40"><td className="px-2 py-1 text-muted-foreground">{i + 1}</td><td className="px-2 py-1">{t.side === 'buy' ? '买' : '卖'}</td><td className="px-2 py-1 font-mono">${formatCurrency((t.exit_price as number) || (t.entry_price as number))}</td><td className="px-2 py-1 font-mono">{String(t.qty)}</td><td className={cn('px-2 py-1 font-mono font-bold', ((t.pnl as number) || 0) >= 0 ? 'text-quant-green' : 'text-quant-red')}>${(t.pnl as number)?.toFixed(2) || '-'}</td></tr>
                               ))}
                             </tbody>
                           </table>
@@ -778,14 +817,14 @@ export function IndicatorIDE() {
 
     {/* ── Create Strategy from Indicator Modal ── */}
     {showCreateStrategy && (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
         <div className="w-full max-w-2xl max-h-[85vh] flex flex-col rounded-2xl border border-quant-border bg-quant-card shadow-2xl overflow-hidden">
           <div className="flex items-center justify-between px-6 py-4 border-b border-quant-border shrink-0">
             <h3 className="text-sm font-bold flex items-center gap-2">
               <GitBranch className="w-4 h-4 text-quant-gold" />
               从指标创建策略
             </h3>
-            <button onClick={() => setShowCreateStrategy(false)} className="text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button>
+            <button onClick={() => setShowCreateStrategy(false)} aria-label="关闭" className="text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button>
           </div>
           <div className="flex-1 overflow-y-auto p-6 space-y-4">
             <div className="text-xs text-muted-foreground mb-2">
@@ -811,7 +850,7 @@ export function IndicatorIDE() {
                 <label className="text-[11px] text-muted-foreground mb-1.5 block">K线周期</label>
                 <select value={stratForm.interval} onChange={(e) => setStratForm({ ...stratForm, interval: e.target.value })}
                   className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold">
-                  {INTERVALS.map((i) => <option key={i} value={i}>{i}</option>)}
+                  {TRADING_INTERVALS.map((i) => <option key={i} value={i}>{i}</option>)}
                 </select>
               </div>
               <div>
@@ -821,7 +860,7 @@ export function IndicatorIDE() {
               </div>
               <div>
                 <label className="text-[11px] text-muted-foreground mb-1.5 block">方向</label>
-                <select value={stratForm.direction} onChange={(e) => setStratForm({ ...stratForm, direction: e.target.value as any })}
+                <select value={stratForm.direction} onChange={(e) => setStratForm({ ...stratForm, direction: e.target.value as typeof stratForm.direction })}
                   className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold">
                   <option value="long">做多</option>
                   <option value="short">做空</option>

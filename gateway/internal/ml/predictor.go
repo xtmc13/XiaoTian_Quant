@@ -263,6 +263,142 @@ func (fc *FeatureCalculator) Compute(bars []OHLCV) map[string]float64 {
 		}
 	}
 
+	// ── Extended Features (FreqAI-style) ─────────────────────────
+
+	// RSI
+	for _, p := range fc.periods {
+		if n > p {
+			features[fmt.Sprintf("rsi_%d", p)] = fc.rsi(closePrices, p)
+		}
+	}
+
+	// ATR (Average True Range)
+	for _, p := range fc.periods {
+		if n > p {
+			features[fmt.Sprintf("atr_%d", p)] = fc.atr(bars, p)
+		}
+	}
+
+	// Momentum & ROC
+	for _, p := range fc.periods {
+		if n > p {
+			features[fmt.Sprintf("momentum_%d", p)] = c - closePrices[n-1-p]
+			if closePrices[n-1-p] > 0 {
+				features[fmt.Sprintf("roc_%d", p)] = (c - closePrices[n-1-p]) / closePrices[n-1-p] * 100
+			}
+		}
+	}
+
+	// Williams %R
+	for _, p := range fc.periods {
+		if n > p {
+			features[fmt.Sprintf("williams_r_%d", p)] = fc.williamsR(bars, p)
+		}
+	}
+
+	// Stochastic
+	for _, p := range fc.periods {
+		if n > p {
+			k, d := fc.stochastic(bars, p, 3)
+			features[fmt.Sprintf("stoch_k_%d", p)] = k
+			features[fmt.Sprintf("stoch_d_%d", p)] = d
+		}
+	}
+
+	// CCI (Commodity Channel Index)
+	for _, p := range fc.periods {
+		if n > p {
+			features[fmt.Sprintf("cci_%d", p)] = fc.cci(bars, p)
+		}
+	}
+
+	// ADX (Average Directional Index)
+	for _, p := range fc.periods {
+		if n > p+1 {
+			features[fmt.Sprintf("adx_%d", p)] = fc.adx(bars, p)
+		}
+	}
+
+	// OBV (On Balance Volume)
+	features["obv"] = fc.obv(bars)
+
+	// CMF (Chaikin Money Flow)
+	for _, p := range fc.periods {
+		if n > p {
+			features[fmt.Sprintf("cmf_%d", p)] = fc.cmf(bars, p)
+		}
+	}
+
+	// Price position within HL range
+	for _, p := range fc.periods {
+		if n > p {
+			low, high := fc.minMaxClose(closePrices[n-p:])
+			range_ := high - low
+			if range_ > 0 {
+				features[fmt.Sprintf("price_position_%d", p)] = (c - low) / range_
+			}
+		}
+	}
+
+	// Candlestick features (latest bar)
+	latest := bars[n-1]
+	body := math.Abs(latest.Close - latest.Open)
+	upperShadow := latest.High - math.Max(latest.Close, latest.Open)
+	lowerShadow := math.Min(latest.Close, latest.Open) - latest.Low
+	if c > 0 {
+		features["body_pct"] = body / c
+		features["upper_shadow_pct"] = upperShadow / c
+		features["lower_shadow_pct"] = lowerShadow / c
+	}
+	if body > 0 {
+		features["shadow_to_body"] = (upperShadow + lowerShadow) / body
+	}
+
+	// Linear regression slope & R²
+	for _, p := range fc.periods {
+		if n > p {
+			slope, r2 := fc.linearRegression(closePrices[n-p:])
+			features[fmt.Sprintf("linreg_slope_%d", p)] = slope
+			features[fmt.Sprintf("linreg_r2_%d", p)] = r2
+		}
+	}
+
+	// Skewness & Kurtosis of returns
+	for _, p := range fc.periods {
+		if n > p+1 && len(returns) >= p {
+			start := len(returns) - p
+			if start < 0 {
+				start = 0
+			}
+			slice := returns[start:]
+			features[fmt.Sprintf("skew_%d", p)] = fc.skewness(slice)
+			features[fmt.Sprintf("kurt_%d", p)] = fc.kurtosis(slice)
+		}
+	}
+
+	// Distance from recent high/low
+	for _, p := range fc.periods {
+		if n > p {
+			low, high := fc.minMaxClose(closePrices[n-p:])
+			if high > 0 {
+				features[fmt.Sprintf("dist_from_high_%d", p)] = (high - c) / high
+			}
+			if low > 0 {
+				features[fmt.Sprintf("dist_from_low_%d", p)] = (c - low) / low
+			}
+		}
+	}
+
+	// VWAP deviation
+	for _, p := range fc.periods {
+		if n > p {
+			vwap := fc.vwap(bars[n-p:])
+			if vwap > 0 {
+				features[fmt.Sprintf("vwap_dev_%d", p)] = (c - vwap) / vwap
+			}
+		}
+	}
+
 	return features
 }
 
@@ -313,4 +449,303 @@ func max(a, b float64) float64 {
 		return a
 	}
 	return b
+}
+
+// ── Technical Indicator Helpers ────────────────────────────────
+
+func (fc *FeatureCalculator) rsi(prices []float64, period int) float64 {
+	if len(prices) < period+1 {
+		return 50
+	}
+	var gain, loss float64
+	for i := len(prices) - period; i < len(prices); i++ {
+		diff := prices[i] - prices[i-1]
+		if diff > 0 {
+			gain += diff
+		} else {
+			loss += -diff
+		}
+	}
+	avgGain := gain / float64(period)
+	avgLoss := loss / float64(period)
+	if avgLoss == 0 {
+		return 100
+	}
+	rs := avgGain / avgLoss
+	return 100.0 - 100.0/(1.0+rs)
+}
+
+func (fc *FeatureCalculator) atr(bars []OHLCV, period int) float64 {
+	if len(bars) < period+1 {
+		return 0
+	}
+	var sum float64
+	for i := len(bars) - period; i < len(bars); i++ {
+		tr1 := bars[i].High - bars[i].Low
+		tr2 := math.Abs(bars[i].High - bars[i-1].Close)
+		tr3 := math.Abs(bars[i].Low - bars[i-1].Close)
+		sum += max(tr1, max(tr2, tr3))
+	}
+	return sum / float64(period)
+}
+
+func (fc *FeatureCalculator) williamsR(bars []OHLCV, period int) float64 {
+	if len(bars) < period {
+		return -50
+	}
+	high := bars[len(bars)-1].High
+	low := bars[len(bars)-1].Low
+	for i := len(bars) - period; i < len(bars); i++ {
+		if bars[i].High > high {
+			high = bars[i].High
+		}
+		if bars[i].Low < low {
+			low = bars[i].Low
+		}
+	}
+	c := bars[len(bars)-1].Close
+	range_ := high - low
+	if range_ == 0 {
+		return -50
+	}
+	return -100 * (high - c) / range_
+}
+
+func (fc *FeatureCalculator) stochastic(bars []OHLCV, kPeriod, dPeriod int) (k, d float64) {
+	if len(bars) < kPeriod+dPeriod {
+		return 50, 50
+	}
+	// %K
+	c := bars[len(bars)-1].Close
+	high := bars[len(bars)-1].High
+	low := bars[len(bars)-1].Low
+	for i := len(bars) - kPeriod; i < len(bars); i++ {
+		if bars[i].High > high {
+			high = bars[i].High
+		}
+		if bars[i].Low < low {
+			low = bars[i].Low
+		}
+	}
+	range_ := high - low
+	if range_ == 0 {
+		k = 50
+	} else {
+		k = 100 * (c - low) / range_
+	}
+	// %D = SMA of %K over dPeriod
+	var sumK float64
+	for i := len(bars) - kPeriod - dPeriod + 1; i <= len(bars)-kPeriod; i++ {
+		subHigh := bars[i].High
+		subLow := bars[i].Low
+		for j := i; j < i+kPeriod && j < len(bars); j++ {
+			if bars[j].High > subHigh {
+				subHigh = bars[j].High
+			}
+			if bars[j].Low < subLow {
+				subLow = bars[j].Low
+			}
+		}
+		subRange := subHigh - subLow
+		if subRange > 0 {
+			sumK += 100 * (bars[i+kPeriod-1].Close - subLow) / subRange
+		} else {
+			sumK += 50
+		}
+	}
+	d = sumK / float64(dPeriod)
+	return k, d
+}
+
+func (fc *FeatureCalculator) cci(bars []OHLCV, period int) float64 {
+	if len(bars) < period {
+		return 0
+	}
+	var sumTP float64
+	for i := len(bars) - period; i < len(bars); i++ {
+		tp := (bars[i].High + bars[i].Low + bars[i].Close) / 3.0
+		sumTP += tp
+	}
+	meanTP := sumTP / float64(period)
+	var sumDev float64
+	for i := len(bars) - period; i < len(bars); i++ {
+		tp := (bars[i].High + bars[i].Low + bars[i].Close) / 3.0
+		sumDev += math.Abs(tp - meanTP)
+	}
+	meanDev := sumDev / float64(period)
+	if meanDev == 0 {
+		return 0
+	}
+	latestTP := (bars[len(bars)-1].High + bars[len(bars)-1].Low + bars[len(bars)-1].Close) / 3.0
+	return (latestTP - meanTP) / (0.015 * meanDev)
+}
+
+func (fc *FeatureCalculator) adx(bars []OHLCV, period int) float64 {
+	if len(bars) < period+2 {
+		return 25
+	}
+	var sumDX float64
+	for i := len(bars) - period; i < len(bars); i++ {
+		upMove := bars[i].High - bars[i-1].High
+		downMove := bars[i-1].Low - bars[i].Low
+		var plusDM, minusDM float64
+		if upMove > downMove && upMove > 0 {
+			plusDM = upMove
+		}
+		if downMove > upMove && downMove > 0 {
+			minusDM = downMove
+		}
+		tr1 := bars[i].High - bars[i].Low
+		tr2 := math.Abs(bars[i].High - bars[i-1].Close)
+		tr3 := math.Abs(bars[i].Low - bars[i-1].Close)
+		tr := max(tr1, max(tr2, tr3))
+		if tr > 0 {
+			plusDI := 100 * plusDM / tr
+			minusDI := 100 * minusDM / tr
+			dx := math.Abs(plusDI-minusDI) / (plusDI + minusDI + 1e-10) * 100
+			sumDX += dx
+		}
+	}
+	return sumDX / float64(period)
+}
+
+func (fc *FeatureCalculator) obv(bars []OHLCV) float64 {
+	if len(bars) < 2 {
+		return 0
+	}
+	obv := 0.0
+	for i := 1; i < len(bars); i++ {
+		if bars[i].Close > bars[i-1].Close {
+			obv += bars[i].Volume
+		} else if bars[i].Close < bars[i-1].Close {
+			obv -= bars[i].Volume
+		}
+	}
+	return obv
+}
+
+func (fc *FeatureCalculator) cmf(bars []OHLCV, period int) float64 {
+	if len(bars) < period {
+		return 0
+	}
+	var sumMFV, sumVol float64
+	for i := len(bars) - period; i < len(bars); i++ {
+		range_ := bars[i].High - bars[i].Low
+		if range_ > 0 {
+			mfm := ((bars[i].Close - bars[i].Low) - (bars[i].High - bars[i].Close)) / range_
+			mfv := mfm * bars[i].Volume
+			sumMFV += mfv
+			sumVol += bars[i].Volume
+		}
+	}
+	if sumVol == 0 {
+		return 0
+	}
+	return sumMFV / sumVol
+}
+
+func (fc *FeatureCalculator) minMaxClose(prices []float64) (min, max float64) {
+	if len(prices) == 0 {
+		return 0, 0
+	}
+	min = prices[0]
+	max = prices[0]
+	for _, p := range prices[1:] {
+		if p < min {
+			min = p
+		}
+		if p > max {
+			max = p
+		}
+	}
+	return min, max
+}
+
+func (fc *FeatureCalculator) linearRegression(prices []float64) (slope, r2 float64) {
+	n := float64(len(prices))
+	if n < 2 {
+		return 0, 0
+	}
+	var sumX, sumY, sumXY, sumX2, sumY2 float64
+	for i, y := range prices {
+		x := float64(i)
+		sumX += x
+		sumY += y
+		sumXY += x * y
+		sumX2 += x * x
+		sumY2 += y * y
+	}
+	denominator := n*sumX2 - sumX*sumX
+	if denominator == 0 {
+		return 0, 0
+	}
+	slope = (n*sumXY - sumX*sumY) / denominator
+	intercept := (sumY - slope*sumX) / n
+	// R²
+	var ssTot, ssRes float64
+	meanY := sumY / n
+	for i, y := range prices {
+		x := float64(i)
+		pred := slope*x + intercept
+		ssRes += (y - pred) * (y - pred)
+		ssTot += (y - meanY) * (y - meanY)
+	}
+	if ssTot > 0 {
+		r2 = 1 - ssRes/ssTot
+	}
+	return slope, r2
+}
+
+func (fc *FeatureCalculator) skewness(data []float64) float64 {
+	n := float64(len(data))
+	if n < 3 {
+		return 0
+	}
+	m := fc.sma(data, len(data))
+	var sum3, sum2 float64
+	for _, v := range data {
+		d := v - m
+		sum2 += d * d
+		sum3 += d * d * d
+	}
+	std := math.Sqrt(sum2 / n)
+	if std == 0 {
+		return 0
+	}
+	return (sum3 / n) / (std * std * std)
+}
+
+func (fc *FeatureCalculator) kurtosis(data []float64) float64 {
+	n := float64(len(data))
+	if n < 4 {
+		return 3
+	}
+	m := fc.sma(data, len(data))
+	var sum2, sum4 float64
+	for _, v := range data {
+		d := v - m
+		sum2 += d * d
+		sum4 += d * d * d * d
+	}
+	std2 := sum2 / n
+	if std2 == 0 {
+		return 3
+	}
+	return (sum4 / n) / (std2 * std2)
+}
+
+func (fc *FeatureCalculator) vwap(bars []OHLCV) float64 {
+	if len(bars) == 0 {
+		return 0
+	}
+	var sumPV, sumV float64
+	for _, b := range bars {
+		tp := (b.High + b.Low + b.Close) / 3.0
+		sumPV += tp * b.Volume
+		sumV += b.Volume
+	}
+	if sumV == 0 {
+		return 0
+	}
+	return sumPV / sumV
 }

@@ -23,17 +23,11 @@ const routeTitles: Record<string, string> = {
   '/agent-tokens': 'Agent 令牌',
   '/market-overview': '全球市场',
   '/bot-wizard': 'Bot 向导',
+  '/social-trading': '社交交易',
+  '/onchain': '链上数据',
 }
 
-interface Notification {
-  id: number
-  title: string
-  content: string
-  level: string
-  category: string
-  read: boolean
-  created_at: number
-}
+import { NotificationItem } from '@/types'
 
 const levelIcon: Record<string, React.ReactNode> = {
   CRITICAL: <AlertTriangle className="h-3.5 w-3.5 text-quant-red" />,
@@ -56,7 +50,7 @@ export function TopBar() {
   const [pnl, setPnl] = useState<number | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const [notifOpen, setNotifOpen] = useState(false)
-  const [notifications, setNotifications] = useState<Notification[]>([])
+  const [notifications, setNotifications] = useState<NotificationItem[]>([])
   const [unreadCount, setUnreadCount] = useState(0)
   const notifRef = useRef<HTMLDivElement>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -79,9 +73,10 @@ export function TopBar() {
   const fetchNotifications = useCallback(async () => {
     if (!isAuthenticated) return
     try {
-      const data = await notificationApi.list({ limit: 20 })
-      setNotifications(data.notifications || [])
-      setUnreadCount(data.unread_count || 0)
+      const items = await notificationApi.list({ limit: 20 })
+      setNotifications(items)
+      const count = await notificationApi.unreadCount()
+      setUnreadCount(count)
     } catch { /* ignore */ }
   }, [isAuthenticated])
 
@@ -170,6 +165,7 @@ export function TopBar() {
           <button
             onClick={() => { setNotifOpen(!notifOpen); if (!notifOpen) fetchNotifications() }}
             className="relative p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-white/5 transition-colors"
+            aria-label="通知"
           >
             <Bell className="h-4 w-4" />
             {unreadCount > 0 && (
@@ -225,7 +221,7 @@ export function TopBar() {
                     >
                       <div className="flex items-start gap-2.5">
                         <div className="mt-0.5 shrink-0">
-                          {levelIcon[n.level] || levelIcon.INFO}
+                          {levelIcon[n.level || 'INFO'] || levelIcon.INFO}
                         </div>
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2">
@@ -256,13 +252,14 @@ export function TopBar() {
         <select
           value={lang}
           onChange={(e) => setLang(e.target.value as Lang)}
+          aria-label="切换语言"
           className="bg-quant-bg border border-quant-border rounded px-1.5 py-0.5 text-[10px] text-muted-foreground outline-none focus:border-quant-gold cursor-pointer"
         >
           {LANGS.map((l) => (
             <option key={l.code} value={l.code}>{l.flag} {l.label}</option>
           ))}
         </select>
-        <span className="text-[10px] text-muted-foreground/50">v2.0.0</span>
+        <span className="text-[10px] text-muted-foreground">v2.0.0</span>
 
         {/* User menu */}
         <div className="relative">
@@ -275,7 +272,7 @@ export function TopBar() {
           </button>
           {menuOpen && (
             <>
-              <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} />
+              <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} onKeyDown={(e) => { if (e.key === 'Escape') setMenuOpen(false) }} tabIndex={-1} role="presentation" />
               <div className="absolute right-0 top-full mt-2 w-48 rounded-xl border border-quant-border bg-quant-card shadow-xl z-50 py-1">
                 <div className="px-3 py-2 border-b border-quant-border">
                   <div className="text-sm font-medium text-foreground">{displayName}</div>

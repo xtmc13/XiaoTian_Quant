@@ -60,7 +60,7 @@ export function ArbitrageMonitor() {
     queryKey: ['arbitrage-status'],
     queryFn: async () => {
       const res = await arbitrageApi.status()
-      return res as any
+      return res
     },
     refetchInterval: 5000,
   })
@@ -69,26 +69,22 @@ export function ArbitrageMonitor() {
     queryKey: ['arbitrage-opportunity'],
     queryFn: async () => {
       const res = await arbitrageApi.opportunity()
-      return (res as any).opportunity as ArbitrageOpportunity | null
+      return res[0] ?? null
     },
     refetchInterval: 3000,
   })
 
   const { data: positions } = useQuery({
     queryKey: ['arbitrage-positions'],
-    queryFn: async () => {
-      const res = await arbitrageApi.positions()
-      return (res as any).positions as TradePair[]
-    },
+    queryFn: () => arbitrageApi.positions(),
+    select: (r: any) => (Array.isArray(r) ? r : r?.positions ?? []),
     refetchInterval: 5000,
   })
 
   const { data: history } = useQuery({
     queryKey: ['arbitrage-history'],
-    queryFn: async () => {
-      const res = await arbitrageApi.history(50)
-      return (res as any).history as TradePair[]
-    },
+    queryFn: () => arbitrageApi.history(50),
+    select: (r: any) => (Array.isArray(r) ? r : r?.history ?? r?.trades ?? []),
     enabled: showHistory,
   })
 
@@ -96,7 +92,7 @@ export function ArbitrageMonitor() {
     queryKey: ['arbitrage-config'],
     queryFn: async () => {
       const res = await arbitrageApi.config()
-      return (res as any).config as Record<string, any>
+      return res as unknown as Record<string, unknown>
     },
     enabled: showConfig,
   })
@@ -113,7 +109,7 @@ export function ArbitrageMonitor() {
   })
 
   const isRunning = status?.running ?? false
-  const stats = status?.stats as Record<string, any> || {}
+  const stats = (status?.stats ?? {}) as Record<string, string | number | undefined>
 
   return (
     <div className="h-full overflow-y-auto">
@@ -149,7 +145,7 @@ export function ArbitrageMonitor() {
           />
           <KPICard
             label="总利润"
-            value={stats.total_profit ? `$${stats.total_profit.toFixed(2)}` : '$0.00'}
+            value={stats.total_profit ? `$${(stats.total_profit as number).toFixed(2)}` : '$0.00'}
             icon={<DollarSign className="w-4 h-4 text-quant-gold" />}
             subValue="累计"
             trend="up"
@@ -287,7 +283,7 @@ export function ArbitrageMonitor() {
             {!positions || positions.length === 0 ? (
               <div className="text-sm text-muted-foreground text-center py-4">无活跃持仓</div>
             ) : (
-              positions.map((pos, i) => (
+              positions.map((pos: TradePair, i: number) => (
                 <div key={i} className="flex items-center justify-between p-3 rounded-md bg-quant-bg-secondary">
                   <div className="flex items-center gap-3">
                     <ArrowLeftRight className="w-4 h-4 text-quant-gold" />
@@ -326,7 +322,7 @@ export function ArbitrageMonitor() {
               {!history || history.length === 0 ? (
                 <div className="text-sm text-muted-foreground text-center py-4">无历史记录</div>
               ) : (
-                history.map((trade, i) => (
+                history.map((trade: TradePair, i: number) => (
                   <div key={i} className="flex items-center justify-between p-3 rounded-md bg-quant-bg-secondary">
                     <div className="flex items-center gap-3">
                       <CheckCircle2 className={cn('w-4 h-4', trade.net_profit > 0 ? 'text-green-400' : 'text-red-400')} />

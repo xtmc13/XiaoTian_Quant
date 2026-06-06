@@ -2,6 +2,7 @@ package ml_test
 
 import (
 	"encoding/json"
+	"math"
 	"testing"
 
 	"github.com/xiaotian-quant/gateway/internal/ml"
@@ -141,6 +142,130 @@ func TestFeatureCalculator(t *testing.T) {
 	ptAssert(t, ok, "bb_position exists")
 	_, ok = features["macd"]
 	ptAssert(t, ok, "macd exists")
+}
+
+func TestFeatureCalculatorExtended(t *testing.T) {
+	fc := ml.NewFeatureCalculator([]int{5, 10, 20})
+
+	// 50 bars with realistic OHLCV patterns
+	bars := make([]ml.OHLCV, 50)
+	for i := 0; i < 50; i++ {
+		price := 100.0 + float64(i)*0.3 + math.Sin(float64(i)*0.5)*2.0
+		bars[i] = ml.OHLCV{
+			Open:   price - 0.2,
+			High:   price + 1.5,
+			Low:    price - 1.5,
+			Close:  price,
+			Volume: 1000 + float64(i%10)*100,
+		}
+	}
+
+	features := fc.Compute(bars)
+	ptAssert(t, len(features) >= 40, "should have 40+ features")
+
+	// RSI
+	_, ok := features["rsi_5"]
+	ptAssert(t, ok, "rsi_5 exists")
+	_, ok = features["rsi_10"]
+	ptAssert(t, ok, "rsi_10 exists")
+
+	// ATR
+	_, ok = features["atr_5"]
+	ptAssert(t, ok, "atr_5 exists")
+
+	// Williams %R
+	_, ok = features["williams_r_5"]
+	ptAssert(t, ok, "williams_r_5 exists")
+
+	// Stochastic
+	_, ok = features["stoch_k_5"]
+	ptAssert(t, ok, "stoch_k_5 exists")
+	_, ok = features["stoch_d_5"]
+	ptAssert(t, ok, "stoch_d_5 exists")
+
+	// CCI
+	_, ok = features["cci_5"]
+	ptAssert(t, ok, "cci_5 exists")
+
+	// ADX
+	_, ok = features["adx_5"]
+	ptAssert(t, ok, "adx_5 exists")
+
+	// OBV
+	_, ok = features["obv"]
+	ptAssert(t, ok, "obv exists")
+
+	// CMF
+	_, ok = features["cmf_5"]
+	ptAssert(t, ok, "cmf_5 exists")
+
+	// Price position
+	_, ok = features["price_position_5"]
+	ptAssert(t, ok, "price_position_5 exists")
+
+	// Candlestick
+	_, ok = features["body_pct"]
+	ptAssert(t, ok, "body_pct exists")
+	_, ok = features["upper_shadow_pct"]
+	ptAssert(t, ok, "upper_shadow_pct exists")
+
+	// Linear regression
+	_, ok = features["linreg_slope_5"]
+	ptAssert(t, ok, "linreg_slope_5 exists")
+	_, ok = features["linreg_r2_5"]
+	ptAssert(t, ok, "linreg_r2_5 exists")
+
+	// Skewness & Kurtosis
+	_, ok = features["skew_5"]
+	ptAssert(t, ok, "skew_5 exists")
+	_, ok = features["kurt_5"]
+	ptAssert(t, ok, "kurt_5 exists")
+
+	// Distance from high/low
+	_, ok = features["dist_from_high_5"]
+	ptAssert(t, ok, "dist_from_high_5 exists")
+	_, ok = features["dist_from_low_5"]
+	ptAssert(t, ok, "dist_from_low_5 exists")
+
+	// VWAP deviation
+	_, ok = features["vwap_dev_5"]
+	ptAssert(t, ok, "vwap_dev_5 exists")
+
+	// Momentum & ROC
+	_, ok = features["momentum_5"]
+	ptAssert(t, ok, "momentum_5 exists")
+	_, ok = features["roc_5"]
+	ptAssert(t, ok, "roc_5 exists")
+
+	// Validate RSI range [0, 100]
+	if rsi, ok := features["rsi_5"]; ok {
+		ptAssert(t, rsi >= 0 && rsi <= 100, "rsi in [0,100]")
+	}
+
+	// Validate Williams %R range [-100, 0]
+	if wr, ok := features["williams_r_5"]; ok {
+		ptAssert(t, wr >= -100 && wr <= 0, "williams_r in [-100,0]")
+	}
+
+	// Validate Stochastic range [0, 100]
+	if k, ok := features["stoch_k_5"]; ok {
+		ptAssert(t, k >= 0 && k <= 100, "stoch_k in [0,100]")
+	}
+
+	// Validate ADX range [0, 100]
+	if adx, ok := features["adx_5"]; ok {
+		ptAssert(t, adx >= 0 && adx <= 100, "adx in [0,100]")
+	}
+
+	// Validate price_position range [0, 1]
+	if pp, ok := features["price_position_5"]; ok {
+		ptAssert(t, pp >= 0 && pp <= 1, "price_position in [0,1]")
+	}
+
+	// Validate body_pct is positive
+	if bp, ok := features["body_pct"]; ok {
+		ptAssert(t, bp >= 0, "body_pct >= 0")
+	}
 }
 
 func TestFeatureCalculatorInsufficientData(t *testing.T) {
