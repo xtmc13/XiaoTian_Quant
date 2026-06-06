@@ -100,5 +100,5 @@ func RateLimiter(requestsPerSecond float64, burst int) gin.HandlerFunc {
 
 // StrictRateLimiter is a stricter variant for auth endpoints.
 func StrictRateLimiter() gin.HandlerFunc {
-	return RateLimiter(0.5, 3) // 3 burst, 0.5/sec = 1 request per 2 seconds
+	return RateLimiter(2, 10) // 10 burst, 2/sec
 }

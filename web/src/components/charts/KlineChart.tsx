@@ -2,7 +2,7 @@
  * Enhanced KLineChart — wraps klinecharts with drawing tools, built-in indicators,
  * signal overlays, and theme support.  Ported from QuantDinger KlineChart.vue.
  */
-import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo, memo } from 'react'
 import { init, dispose, registerOverlay } from 'klinecharts'
 import type { Chart } from 'klinecharts'
 import { cn } from '@/lib/utils'
@@ -177,7 +177,7 @@ function ensureSignalOverlay() {
 /*  Main Component                                                   */
 /* ═════════════════════════════════════════════════════════════════ */
 
-export function KlineChart({
+export const KlineChart = memo(function KlineChart({
   data,
   signals,
   loading,
@@ -496,4 +496,4 @@ export function KlineChart({
       )}
     </div>
   )
-}
+})

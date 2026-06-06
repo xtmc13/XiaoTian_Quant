@@ -20,6 +20,7 @@ var corsAllowedOrigins = func() map[string]bool {
 	m := map[string]bool{
 		"http://localhost:5173": true,
 		"http://localhost:3000": true,
+		"http://localhost:8080": true,
 	}
 	if env := os.Getenv("CORS_ALLOWED_ORIGINS"); env != "" {
 		for _, o := range strings.Split(env, ",") {

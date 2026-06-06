@@ -17,6 +17,19 @@ type PairInfo struct {
 	MinNotional   float64 `json:"min_notional"`    // minimum order value
 	Status        string  `json:"status"`          // TRADING, BREAK, DELISTED
 	Exchange      string  `json:"exchange"`
+
+	// Extended fields for advanced filters
+	AgeDays         int     `json:"age_days"`         // 上市天数
+	MarketCap       float64 `json:"market_cap"`       // 市值
+	BidDepth        float64 `json:"bid_depth"`        // 买盘深度
+	AskDepth        float64 `json:"ask_depth"`        // 卖盘深度
+	FundingRate     float64 `json:"funding_rate"`     // 资金费率
+	VolumeChange    float64 `json:"volume_change"`    // 成交量变化率
+	PriceChange     float64 `json:"price_change"`     // 价格变化率
+	Correlation     float64 `json:"correlation"`      // 与BTC的相关性
+	HasPosition     bool    `json:"has_position"`     // 是否已有持仓
+	RecentReturn    float64 `json:"recent_return"`    // 近期收益率
+	PriceRangeRatio float64 `json:"price_range_ratio"` // 价格区间比率 (high-low)/low
 }
 
 // IProducer generates an initial whitelist of trading pairs.

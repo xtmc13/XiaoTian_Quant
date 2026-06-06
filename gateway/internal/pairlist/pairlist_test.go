@@ -11,21 +11,27 @@ func mockInfoProvider(symbols []string) (map[string]*PairInfo, error) {
 	for _, sym := range symbols {
 		switch sym {
 		case "BTCUSDT":
-			infoMap[sym] = &PairInfo{Symbol: sym, BaseAsset: "BTC", QuoteAsset: "USDT", Price: 50000, Volume24h: 1_000_000_000, Spread: 0.01, Volatility: 2.5, PricePrecision: 2, QtyPrecision: 6, MinNotional: 10, Status: "TRADING"}
+			infoMap[sym] = &PairInfo{Symbol: sym, BaseAsset: "BTC", QuoteAsset: "USDT", Price: 50000, Volume24h: 1_000_000_000, Spread: 0.01, Volatility: 2.5, PricePrecision: 2, QtyPrecision: 6, MinNotional: 10, Status: "TRADING", AgeDays: 1000, MarketCap: 1_000_000_000_000, BidDepth: 10_000_000, AskDepth: 10_000_000, FundingRate: 0.0001, VolumeChange: 0.1, PriceChange: 2.0, Correlation: 1.0, HasPosition: false, RecentReturn: 5.0, PriceRangeRatio: 0.03}
 		case "ETHUSDT":
-			infoMap[sym] = &PairInfo{Symbol: sym, BaseAsset: "ETH", QuoteAsset: "USDT", Price: 3000, Volume24h: 500_000_000, Spread: 0.02, Volatility: 1.8, PricePrecision: 2, QtyPrecision: 5, MinNotional: 10, Status: "TRADING"}
+			infoMap[sym] = &PairInfo{Symbol: sym, BaseAsset: "ETH", QuoteAsset: "USDT", Price: 3000, Volume24h: 500_000_000, Spread: 0.02, Volatility: 1.8, PricePrecision: 2, QtyPrecision: 5, MinNotional: 10, Status: "TRADING", AgeDays: 800, MarketCap: 300_000_000_000, BidDepth: 5_000_000, AskDepth: 5_000_000, FundingRate: 0.0002, VolumeChange: -0.1, PriceChange: 1.5, Correlation: 0.75, HasPosition: false, RecentReturn: 3.0, PriceRangeRatio: 0.025}
 		case "SOLUSDT":
-			infoMap[sym] = &PairInfo{Symbol: sym, BaseAsset: "SOL", QuoteAsset: "USDT", Price: 150, Volume24h: 100_000_000, Spread: 0.05, Volatility: 5.0, PricePrecision: 2, QtyPrecision: 4, MinNotional: 10, Status: "TRADING"}
+			infoMap[sym] = &PairInfo{Symbol: sym, BaseAsset: "SOL", QuoteAsset: "USDT", Price: 150, Volume24h: 100_000_000, Spread: 0.05, Volatility: 5.0, PricePrecision: 2, QtyPrecision: 4, MinNotional: 10, Status: "TRADING", AgeDays: 400, MarketCap: 50_000_000_000, BidDepth: 1_000_000, AskDepth: 1_000_000, FundingRate: 0.0005, VolumeChange: 0.5, PriceChange: 5.0, Correlation: 0.6, HasPosition: false, RecentReturn: 8.0, PriceRangeRatio: 0.06}
 		case "DOGEUSDT":
-			infoMap[sym] = &PairInfo{Symbol: sym, BaseAsset: "DOGE", QuoteAsset: "USDT", Price: 0.15, Volume24h: 50_000_000, Spread: 0.10, Volatility: 3.0, PricePrecision: 4, QtyPrecision: 0, MinNotional: 10, Status: "TRADING"}
+			infoMap[sym] = &PairInfo{Symbol: sym, BaseAsset: "DOGE", QuoteAsset: "USDT", Price: 0.15, Volume24h: 50_000_000, Spread: 0.10, Volatility: 3.0, PricePrecision: 4, QtyPrecision: 0, MinNotional: 10, Status: "TRADING", AgeDays: 600, MarketCap: 20_000_000_000, BidDepth: 500_000, AskDepth: 500_000, FundingRate: 0.001, VolumeChange: -0.6, PriceChange: -2.0, Correlation: 0.5, HasPosition: false, RecentReturn: -1.0, PriceRangeRatio: 0.04}
 		case "SHIBUSDT":
-			infoMap[sym] = &PairInfo{Symbol: sym, BaseAsset: "SHIB", QuoteAsset: "USDT", Price: 0.00001, Volume24h: 10_000_000, Spread: 0.20, Volatility: 4.0, PricePrecision: 8, QtyPrecision: 0, MinNotional: 10, Status: "TRADING"}
+			infoMap[sym] = &PairInfo{Symbol: sym, BaseAsset: "SHIB", QuoteAsset: "USDT", Price: 0.00001, Volume24h: 10_000_000, Spread: 0.20, Volatility: 4.0, PricePrecision: 8, QtyPrecision: 0, MinNotional: 10, Status: "TRADING", AgeDays: 300, MarketCap: 5_000_000_000, BidDepth: 100_000, AskDepth: 100_000, FundingRate: 0.002, VolumeChange: 2.0, PriceChange: 10.0, Correlation: 0.45, HasPosition: false, RecentReturn: 2.0, PriceRangeRatio: 0.05}
 		case "NEWCOIN":
-			infoMap[sym] = &PairInfo{Symbol: sym, BaseAsset: "NEW", QuoteAsset: "USDT", Price: 1.0, Volume24h: 0, Spread: 0.50, Volatility: 10.0, PricePrecision: 2, QtyPrecision: 2, MinNotional: 0, Status: "TRADING"}
+			infoMap[sym] = &PairInfo{Symbol: sym, BaseAsset: "NEW", QuoteAsset: "USDT", Price: 1.0, Volume24h: 0, Spread: 0.50, Volatility: 10.0, PricePrecision: 2, QtyPrecision: 2, MinNotional: 0, Status: "TRADING", AgeDays: 1, MarketCap: 1_000_000, BidDepth: 1000, AskDepth: 1000, FundingRate: 0.01, VolumeChange: 10.0, PriceChange: 50.0, Correlation: 0.3, HasPosition: false, RecentReturn: -10.0, PriceRangeRatio: 0.5}
 		case "INACTIVE":
-			infoMap[sym] = &PairInfo{Symbol: sym, BaseAsset: "INA", QuoteAsset: "USDT", Price: 100, Volume24h: 0, Spread: 1.0, Volatility: 0, PricePrecision: 2, QtyPrecision: 2, MinNotional: 10, Status: "BREAK"}
+			infoMap[sym] = &PairInfo{Symbol: sym, BaseAsset: "INA", QuoteAsset: "USDT", Price: 100, Volume24h: 0, Spread: 1.0, Volatility: 0, PricePrecision: 2, QtyPrecision: 2, MinNotional: 10, Status: "BREAK", AgeDays: 100, MarketCap: 0, BidDepth: 0, AskDepth: 0, FundingRate: 0, VolumeChange: 0, PriceChange: 0, Correlation: 0, HasPosition: false, RecentReturn: 0, PriceRangeRatio: 0}
+		case "WBTCUSDT":
+			infoMap[sym] = &PairInfo{Symbol: sym, BaseAsset: "WBTC", QuoteAsset: "USDT", Price: 50000, Volume24h: 50_000_000, Spread: 0.03, Volatility: 2.4, PricePrecision: 2, QtyPrecision: 5, MinNotional: 10, Status: "TRADING", AgeDays: 200, MarketCap: 10_000_000_000, BidDepth: 500_000, AskDepth: 500_000, FundingRate: 0.0001, VolumeChange: 0.05, PriceChange: 2.1, Correlation: 0.98, HasPosition: false, RecentReturn: 4.8, PriceRangeRatio: 0.028}
+		case "BTCBUSD":
+			infoMap[sym] = &PairInfo{Symbol: sym, BaseAsset: "BTC", QuoteAsset: "BUSD", Price: 50000, Volume24h: 100_000_000, Spread: 0.02, Volatility: 2.5, PricePrecision: 2, QtyPrecision: 5, MinNotional: 10, Status: "TRADING", AgeDays: 900, MarketCap: 0, BidDepth: 1_000_000, AskDepth: 1_000_000, FundingRate: 0, VolumeChange: 0, PriceChange: 2.0, Correlation: 1.0, HasPosition: false, RecentReturn: 5.0, PriceRangeRatio: 0.03}
+		case "ETHBUSD":
+			infoMap[sym] = &PairInfo{Symbol: sym, BaseAsset: "ETH", QuoteAsset: "BUSD", Price: 3000, Volume24h: 50_000_000, Spread: 0.03, Volatility: 1.8, PricePrecision: 2, QtyPrecision: 5, MinNotional: 10, Status: "TRADING", AgeDays: 800, MarketCap: 0, BidDepth: 500_000, AskDepth: 500_000, FundingRate: 0, VolumeChange: 0, PriceChange: 1.5, Correlation: 0.75, HasPosition: false, RecentReturn: 3.0, PriceRangeRatio: 0.025}
 		default:
-			infoMap[sym] = &PairInfo{Symbol: sym, BaseAsset: sym, QuoteAsset: "USDT", Price: 10, Volume24h: 1_000_000, Spread: 0.1, Volatility: 1.0, PricePrecision: 2, QtyPrecision: 2, MinNotional: 10, Status: "TRADING"}
+			infoMap[sym] = &PairInfo{Symbol: sym, BaseAsset: sym, QuoteAsset: "USDT", Price: 10, Volume24h: 1_000_000, Spread: 0.1, Volatility: 1.0, PricePrecision: 2, QtyPrecision: 2, MinNotional: 10, Status: "TRADING", AgeDays: 365, MarketCap: 1_000_000_000, BidDepth: 100_000, AskDepth: 100_000, FundingRate: 0.0001, VolumeChange: 0, PriceChange: 0, Correlation: 0.5, HasPosition: false, RecentReturn: 1.0, PriceRangeRatio: 0.02}
 		}
 	}
 	return infoMap, nil
@@ -160,19 +166,18 @@ func TestVolatilityFilter(t *testing.T) {
 }
 
 func TestCorrelationFilter(t *testing.T) {
-	f := NewCorrelationFilter(1)
+	f := NewCorrelationFilter(0.95)
 	pairs := []string{"BTCUSDT", "BTCBUSD", "ETHUSDT", "ETHBUSD", "SOLUSDT"}
 	infoMap, _ := mockInfoProvider(pairs)
-	// Override base assets for correlation test
-	infoMap["BTCBUSD"] = &PairInfo{Symbol: "BTCBUSD", BaseAsset: "BTC", QuoteAsset: "BUSD", Price: 50000, Volume24h: 100_000_000}
-	infoMap["ETHBUSD"] = &PairInfo{Symbol: "ETHBUSD", BaseAsset: "ETH", QuoteAsset: "BUSD", Price: 3000, Volume24h: 50_000_000}
 
 	result, err := f.Filter(pairs, infoMap)
 	if err != nil {
 		t.Fatalf("filter failed: %v", err)
 	}
 
-	// Max 1 per base asset: BTCUSDT, ETHUSDT, SOLUSDT
+	// BTCUSDT (corr=1.0) kept, BTCBUSD (corr=1.0) skipped as homogeneous
+	// ETHUSDT (corr=0.75) kept, ETHBUSD (corr=0.75) skipped as homogeneous
+	// SOLUSDT (corr=0.6) kept
 	if len(result) != 3 {
 		t.Fatalf("expected 3 pairs, got %d: %v", len(result), result)
 	}
@@ -434,6 +439,182 @@ func TestRankFilterEmpty(t *testing.T) {
 	if len(result) != 0 {
 		t.Fatalf("expected 0 pairs, got %d", len(result))
 	}
+}
+
+/* ── Advanced Filter Tests ───────────────────────────────────── */
+
+func TestAgeFilter(t *testing.T) {
+	f := NewAgeFilter(7)
+	pairs := []string{"BTCUSDT", "ETHUSDT", "NEWCOIN"}
+	infoMap, _ := mockInfoProvider(pairs)
+
+	result, err := f.Filter(pairs, infoMap)
+	if err != nil {
+		t.Fatalf("filter failed: %v", err)
+	}
+	// NEWCOIN has AgeDays=1, excluded
+	if len(result) != 2 {
+		t.Fatalf("expected 2 pairs, got %d: %v", len(result), result)
+	}
+	assertEq(t, result[0], "BTCUSDT")
+	assertEq(t, result[1], "ETHUSDT")
+}
+
+func TestDelistFilter(t *testing.T) {
+	f := NewDelistFilter()
+	pairs := []string{"BTCUSDT", "ETHUSDT", "INACTIVE"}
+	infoMap, _ := mockInfoProvider(pairs)
+
+	result, err := f.Filter(pairs, infoMap)
+	if err != nil {
+		t.Fatalf("filter failed: %v", err)
+	}
+	// INACTIVE has Status=BREAK, excluded
+	if len(result) != 2 {
+		t.Fatalf("expected 2 pairs, got %d: %v", len(result), result)
+	}
+}
+
+func TestRangeStabilityFilter(t *testing.T) {
+	f := NewRangeStabilityFilter(0.01) // min 1%
+	pairs := []string{"BTCUSDT", "ETHUSDT", "INACTIVE"}
+	infoMap, _ := mockInfoProvider(pairs)
+
+	result, err := f.Filter(pairs, infoMap)
+	if err != nil {
+		t.Fatalf("filter failed: %v", err)
+	}
+	// INACTIVE has PriceRangeRatio=0, excluded
+	if len(result) != 2 {
+		t.Fatalf("expected 2 pairs, got %d: %v", len(result), result)
+	}
+}
+
+func TestFullTradesFilter(t *testing.T) {
+	f := NewFullTradesFilter()
+	pairs := []string{"BTCUSDT", "ETHUSDT"}
+	infoMap, _ := mockInfoProvider(pairs)
+	infoMap["BTCUSDT"].HasPosition = true
+
+	result, err := f.Filter(pairs, infoMap)
+	if err != nil {
+		t.Fatalf("filter failed: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("expected 1 pair, got %d: %v", len(result), result)
+	}
+	assertEq(t, result[0], "ETHUSDT")
+}
+
+func TestMarketCapFilter(t *testing.T) {
+	f := NewMarketCapFilter(10_000_000_000, 0) // min 10B
+	pairs := []string{"BTCUSDT", "ETHUSDT", "SHIBUSDT"}
+	infoMap, _ := mockInfoProvider(pairs)
+
+	result, err := f.Filter(pairs, infoMap)
+	if err != nil {
+		t.Fatalf("filter failed: %v", err)
+	}
+	// SHIBUSDT has MarketCap=5B, excluded
+	if len(result) != 2 {
+		t.Fatalf("expected 2 pairs, got %d: %v", len(result), result)
+	}
+}
+
+func TestVolumeChangeFilter(t *testing.T) {
+	f := NewVolumeChangeFilter(-0.5, 1.0) // allow -50% to +100%
+	pairs := []string{"BTCUSDT", "DOGEUSDT", "SHIBUSDT"}
+	infoMap, _ := mockInfoProvider(pairs)
+
+	result, err := f.Filter(pairs, infoMap)
+	if err != nil {
+		t.Fatalf("filter failed: %v", err)
+	}
+	// DOGEUSDT VolumeChange=-0.6 (excluded), SHIBUSDT VolumeChange=2.0 (excluded)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 pair, got %d: %v", len(result), result)
+	}
+	assertEq(t, result[0], "BTCUSDT")
+}
+
+func TestPriceJumpFilter(t *testing.T) {
+	f := NewPriceJumpFilter(15.0) // max 15% jump
+	pairs := []string{"BTCUSDT", "SOLUSDT", "NEWCOIN"}
+	infoMap, _ := mockInfoProvider(pairs)
+
+	result, err := f.Filter(pairs, infoMap)
+	if err != nil {
+		t.Fatalf("filter failed: %v", err)
+	}
+	// NEWCOIN PriceChange=50%, excluded
+	if len(result) != 2 {
+		t.Fatalf("expected 2 pairs, got %d: %v", len(result), result)
+	}
+}
+
+func TestLiquidityFilter(t *testing.T) {
+	f := NewLiquidityFilter(1_000_000, 1_000_000)
+	pairs := []string{"BTCUSDT", "ETHUSDT", "SHIBUSDT"}
+	infoMap, _ := mockInfoProvider(pairs)
+
+	result, err := f.Filter(pairs, infoMap)
+	if err != nil {
+		t.Fatalf("filter failed: %v", err)
+	}
+	// SHIBUSDT BidDepth=100k, excluded
+	if len(result) != 2 {
+		t.Fatalf("expected 2 pairs, got %d: %v", len(result), result)
+	}
+}
+
+func TestFundingRateFilter(t *testing.T) {
+	f := NewFundingRateFilter(0.001) // max 0.1%
+	pairs := []string{"BTCUSDT", "DOGEUSDT", "SHIBUSDT"}
+	infoMap, _ := mockInfoProvider(pairs)
+
+	result, err := f.Filter(pairs, infoMap)
+	if err != nil {
+		t.Fatalf("filter failed: %v", err)
+	}
+	// DOGEUSDT FundingRate=0.001 (abs=0.001, not > 0.001, so passes? Wait, 0.001 > 0.001 is false. So passes.)
+	// SHIBUSDT FundingRate=0.002 > 0.001, excluded
+	if len(result) != 2 {
+		t.Fatalf("expected 2 pairs, got %d: %v", len(result), result)
+	}
+}
+
+func TestLowProfitPairsFilterAdvanced(t *testing.T) {
+	f := NewLowProfitPairsFilter(0.0) // min 0% profit
+	pairs := []string{"BTCUSDT", "DOGEUSDT", "NEWCOIN"}
+	infoMap, _ := mockInfoProvider(pairs)
+
+	result, err := f.Filter(pairs, infoMap)
+	if err != nil {
+		t.Fatalf("filter failed: %v", err)
+	}
+	// DOGEUSDT RecentReturn=-1.0, excluded; NEWCOIN RecentReturn=-10.0, excluded
+	if len(result) != 1 {
+		t.Fatalf("expected 1 pair, got %d: %v", len(result), result)
+	}
+	assertEq(t, result[0], "BTCUSDT")
+}
+
+func TestCorrelationFilterWBTC(t *testing.T) {
+	f := NewCorrelationFilter(0.95)
+	pairs := []string{"BTCUSDT", "WBTCUSDT", "ETHUSDT"}
+	infoMap, _ := mockInfoProvider(pairs)
+
+	result, err := f.Filter(pairs, infoMap)
+	if err != nil {
+		t.Fatalf("filter failed: %v", err)
+	}
+	// BTCUSDT (corr=1.0) kept, WBTCUSDT (corr=0.98) skipped as homogeneous to BTC
+	// ETHUSDT (corr=0.75) kept
+	if len(result) != 2 {
+		t.Fatalf("expected 2 pairs, got %d: %v", len(result), result)
+	}
+	assertEq(t, result[0], "BTCUSDT")
+	assertEq(t, result[1], "ETHUSDT")
 }
 
 /* ── Helpers ─────────────────────────────────────────────────── */

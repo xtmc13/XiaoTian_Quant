@@ -6,6 +6,7 @@ import '@klinecharts/pro/dist/klinecharts-pro.css'
 import { createBackendDatafeed, handlePriceTick, runBackfill, setChartUpdater, clearChartUpdater } from '@/lib/klineDatafeed'
 import { TRADING_INTERVALS } from '@/lib/constants'
 import type { Chart } from 'klinecharts'
+import { extractArray, extractObject, safeNumber, safeString } from '@/lib/typeHelpers'
 import { cn } from '@/lib/utils'
 import { useWebSocket } from '@/hooks/useWebSocket'
 import { toast, ToastContainer } from '@/lib/useToast'
@@ -103,12 +104,10 @@ export function SpotTrading() {
   const priceMap = useMemo(()=>{
     if(!allSnapshots) return {}
     const map:Record<string,number> = {}
-    const raw = (((allSnapshots as unknown) as Record<string, unknown>)?.data ?? ((allSnapshots as unknown) as Record<string, unknown>)?.result ?? allSnapshots) as Record<string, unknown>
-    const list = raw?.tickers || raw?.prices || raw?.list || (Array.isArray(raw) ? raw : Array.isArray(allSnapshots) ? allSnapshots : [])
-    ;(Array.isArray(list) ? list : []).forEach((item: unknown)=>{
-      const it = item as Record<string, unknown>
-      const sym = String(it.symbol||it.ticker||'')
-      if(sym) map[sym] = parseFloat(String(it.price??it.last??it.close??0)) || 0
+    const list = extractArray<Record<string, unknown>>(allSnapshots, 'tickers', 'prices', 'list', 'data', 'result')
+    list.forEach((item)=>{
+      const sym = safeString(item.symbol || item.ticker)
+      if(sym) map[sym] = safeNumber(item.price ?? item.last ?? item.close)
     })
     return map
   },[allSnapshots])
@@ -125,12 +124,8 @@ export function SpotTrading() {
   const {data:allBalances, isLoading:balLoading} = useQuery({queryKey:['balances','all'], queryFn:()=>accountApi.balance(), refetchInterval:10000})
   const holdingsList = useMemo(()=>{
     if(!allBalances) return []
-    const raw = (((allBalances as unknown) as Record<string, unknown>)?.data ?? ((allBalances as unknown) as Record<string, unknown>)?.result ?? allBalances) as Record<string, unknown>
-    const list = raw?.balances || raw?.currencies || raw?.list || (Array.isArray(raw) ? raw : [])
-    return Array.isArray(list) ? list.filter((b: unknown)=>{
-      const bal = b as Record<string, unknown>
-      return parseFloat(String(bal.free??bal.available??0))>0
-    }) : []
+    const list = extractArray<Record<string, unknown>>(allBalances, 'balances', 'currencies', 'list', 'data', 'result')
+    return list.filter((b)=> safeNumber(b.free ?? b.available) > 0)
   },[allBalances])
 
   /* websocket */

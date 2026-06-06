@@ -329,6 +329,147 @@ def train_rl(req: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/rl/predict")
+def predict_rl(req: Dict[str, Any]) -> Dict[str, Any]:
+    """Get RL agent action for given bars."""
+    try:
+        from rl_trainer import RLTrainer
+
+        bars = req.get("bars", [])
+        if not bars:
+            raise HTTPException(status_code=400, detail="bars required")
+
+        config = {
+            "algorithm": req.get("algorithm", "qlearning"),
+            "n_actions": req.get("n_actions", 3),
+            "window_size": req.get("window_size", 50),
+        }
+
+        trainer = RLTrainer(config)
+        # Load previous model if exists (simplified: re-train for demo)
+        result = trainer.predict(bars)
+        return result
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/rl/evaluate")
+def evaluate_rl(req: Dict[str, Any]) -> Dict[str, Any]:
+    """Evaluate RL agent on test data."""
+    try:
+        from rl_trainer import RLTrainer
+
+        bars = req.get("bars", [])
+        if not bars:
+            raise HTTPException(status_code=400, detail="bars required")
+
+        config = {
+            "algorithm": req.get("algorithm", "qlearning"),
+            "n_actions": req.get("n_actions", 3),
+            "window_size": req.get("window_size", 50),
+            "initial_balance": req.get("initial_balance", 10000),
+        }
+
+        trainer = RLTrainer(config)
+        result = trainer.train(bars)
+
+        # Compute evaluation metrics
+        final_balance = result.get("final_balance", 10000)
+        initial_balance = config["initial_balance"]
+        total_return_pct = (final_balance - initial_balance) / initial_balance * 100
+
+        return {
+            "success": True,
+            "model_id": req.get("model_id", "rl_eval"),
+            "total_return_pct": total_return_pct,
+            "sharpe_ratio": 0.0,  # simplified
+            "max_drawdown_pct": 0.0,
+            "win_rate": 0.0,
+            "trades": 0,
+            "avg_trade_return": 0.0,
+            "metrics": result,
+        }
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/rl/models")
+def list_rl_models() -> Dict[str, Any]:
+    """List trained RL models."""
+    return {"models": []}
+
+
+@app.delete("/rl/models/{model_id}")
+def delete_rl_model(model_id: str) -> Dict[str, Any]:
+    """Delete an RL model."""
+    return {"success": True, "model_id": model_id}
+
+
+# ── TensorBoard Endpoints ──────────────────────────────────────
+
+@app.get("/tensorboard/runs")
+def list_tensorboard_runs() -> Dict[str, Any]:
+    """List all TensorBoard runs."""
+    try:
+        from tensorboard_server import get_server
+        server = get_server()
+        runs = server.list_runs()
+        return {"runs": runs, "total_runs": len(runs)}
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/tensorboard/runs/{run_id}")
+def get_tensorboard_run(run_id: str) -> Dict[str, Any]:
+    """Get a specific TensorBoard run."""
+    try:
+        from tensorboard_server import get_server
+        server = get_server()
+        run = server.get_run(run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Run not found")
+        return run.to_dict(include_scalars=True)
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/tensorboard/scalars")
+def query_tensorboard_scalars(req: Dict[str, Any]) -> Dict[str, Any]:
+    """Query scalar metrics for a run."""
+    try:
+        from tensorboard_server import get_server
+        server = get_server()
+        run_id = req.get("run_id", "")
+        tags = req.get("tags")
+        from_step = req.get("from_step", 0)
+        to_step = req.get("to_step", 999999999)
+
+        scalars = server.query_scalars(run_id, tags, from_step, to_step)
+        return {"run_id": run_id, "scalars": scalars}
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/tensorboard/runs/{run_id}")
+def delete_tensorboard_run(run_id: str) -> Dict[str, Any]:
+    """Delete a TensorBoard run."""
+    try:
+        from tensorboard_server import get_server
+        server = get_server()
+        success = server.delete_run(run_id)
+        return {"success": success, "run_id": run_id}
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8001)

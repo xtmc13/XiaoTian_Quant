@@ -185,3 +185,52 @@ func StrategyLeaderboard(c *gin.Context) {
 		"data": items,
 	})
 }
+
+// ── Trending Strategies ──
+
+func TrendingStrategies(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
+	if limit > 50 {
+		limit = 50
+	}
+
+	items, _ := svc.GetTrendingStrategies(limit)
+	if items == nil {
+		items = []StrategyItem{}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code": 1,
+		"msg":  "ok",
+		"data": items,
+	})
+}
+
+// ── Overfit Risk ──
+
+func GetStrategyOverfitRisk(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 0, "msg": "invalid id"})
+		return
+	}
+
+	result, err := svc.GetOverfitRisk(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 0, "msg": err.Error()})
+		return
+	}
+	if result == nil {
+		// Real-time compute if not persisted
+		strategy, _, err := svc.GetStrategyDetail(id)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"code": 0, "msg": err.Error()})
+			return
+		}
+		result = ComputeOverfitRisk(strategy.TotalReturn, strategy.SharpeRatio, strategy.MaxDrawdown, strategy.TotalTrades, 0.7)
+		_ = svc.SaveOverfitRisk(id, result)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 1, "msg": "ok", "data": result})
+}

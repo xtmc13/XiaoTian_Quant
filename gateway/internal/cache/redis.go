@@ -17,6 +17,8 @@ type Cache interface {
 	Set(key string, value string, ttl time.Duration) error
 	Delete(key string) error
 	Exists(key string) bool
+	GetJSON(key string, dest any) error
+	SetJSON(key string, value any, ttl time.Duration) error
 }
 
 // ── In-Memory Cache ──
@@ -126,28 +128,40 @@ var globalCache Cache
 var cacheOnce sync.Once
 
 // GetCache returns the global cache instance.
+// It attempts to connect to Redis if REDIS_URL is set and CACHE_ENABLED is true;
+// otherwise falls back to in-memory cache.
 func GetCache() Cache {
 	cacheOnce.Do(func() {
 		if os.Getenv("CACHE_ENABLED") == "true" && os.Getenv("REDIS_URL") != "" {
-			// Redis is optional; fall back to memory cache
-			globalCache = NewMemCache("xt:")
-		} else {
-			globalCache = NewMemCache("xt:")
+			rc, err := NewRedisCache("xt:")
+			if err == nil {
+				globalCache = rc
+				return
+			}
+			// Log the error but fall back to memory cache
+			fmt.Fprintf(os.Stderr, "⚠  WARNING: Redis cache init failed: %v. Falling back to memory cache.\n", err)
 		}
+		globalCache = NewMemCache("xt:")
 	})
 	return globalCache
 }
 
-// InvalidatePattern removes keys matching a pattern (prefix match for MemCache).
+// InvalidatePattern removes keys matching a pattern (prefix match for MemCache,
+// SCAN+DEL for RedisCache).
 func InvalidatePattern(pattern string) {
 	c := GetCache()
-	if mc, ok := c.(*MemCache); ok {
-		mc.mu.Lock()
-		defer mc.mu.Unlock()
-		for k := range mc.data {
+	switch cache := c.(type) {
+	case *MemCache:
+		cache.mu.Lock()
+		defer cache.mu.Unlock()
+		for k := range cache.data {
 			if strings.HasPrefix(k, pattern) {
-				delete(mc.data, k)
+				delete(cache.data, k)
 			}
+		}
+	case *RedisCache:
+		if err := cache.InvalidatePattern(pattern); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠  WARNING: Redis invalidate pattern failed: %v\n", err)
 		}
 	}
 }

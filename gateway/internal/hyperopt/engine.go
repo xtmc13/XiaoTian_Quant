@@ -25,6 +25,7 @@ type Engine struct {
 	cancelled  bool
 	maxEvals   int
 	currentID  int
+	earlyStop  EarlyStopConfig
 
 	// Callbacks
 	OnTrialComplete func(trial Trial)
@@ -34,18 +35,22 @@ type Engine struct {
 
 // EngineConfig configures the hyperopt engine.
 type EngineConfig struct {
-	MaxEvals   int    `json:"max_evals"`   // maximum number of evaluations
-	Sampler    string `json:"sampler"`     // "tpe", "random", "grid"
-	GridPoints int    `json:"grid_points"` // points per dimension for grid search
-	Seed       int64  `json:"seed"`
+	MaxEvals        int             `json:"max_evals"`   // maximum number of evaluations
+	Sampler         string          `json:"sampler"`     // "tpe", "random", "grid"
+	GridPoints      int             `json:"grid_points"` // points per dimension for grid search
+	Seed            int64           `json:"seed"`
+	ParallelWorkers int             `json:"parallel_workers"` // number of parallel workers
+	EarlyStop       EarlyStopConfig `json:"early_stop"`       // early stopping configuration
 }
 
 func DefaultEngineConfig() EngineConfig {
 	return EngineConfig{
-		MaxEvals:   100,
-		Sampler:    "tpe",
-		GridPoints: 5,
-		Seed:       time.Now().UnixNano(),
+		MaxEvals:        100,
+		Sampler:         "tpe",
+		GridPoints:      5,
+		Seed:            time.Now().UnixNano(),
+		ParallelWorkers: 4,
+		EarlyStop:       DefaultEarlyStopConfig(),
 	}
 }
 
@@ -74,6 +79,7 @@ func NewEngine(cfg EngineConfig, space *SearchSpace, objective ObjectiveFunc) *E
 		rng:       rng,
 		maxEvals:  cfg.MaxEvals,
 		trials:    make([]Trial, 0, cfg.MaxEvals),
+		earlyStop: cfg.EarlyStop,
 	}
 }
 
@@ -152,6 +158,13 @@ func (e *Engine) Run(ctx context.Context) (*Result, error) {
 		}
 
 		e.trials = append(e.trials, trial)
+
+		// Early stopping check
+		shouldStop := false
+		if e.earlyStop.Enabled && e.bestTrial != nil {
+			shouldStop = e.earlyStop.ShouldStop(e.trials, e.bestTrial.Loss)
+		}
+
 		e.mu.Unlock()
 
 		if e.OnTrialComplete != nil {
@@ -160,6 +173,10 @@ func (e *Engine) Run(ctx context.Context) (*Result, error) {
 		if e.OnProgress != nil {
 			e.OnProgress(i+1, e.maxEvals, e.bestTrial.Loss)
 		}
+
+		if shouldStop {
+			break
+		}
 	}
 
 	e.mu.Lock()
@@ -167,6 +184,164 @@ func (e *Engine) Run(ctx context.Context) (*Result, error) {
 	e.mu.Unlock()
 
 	return e.buildResult(startTime), nil
+}
+
+// RunParallel executes optimization with parallel workers.
+func (e *Engine) RunParallel(ctx context.Context, workers int) (*Result, error) {
+	if workers <= 0 {
+		workers = 4
+	}
+
+	e.mu.Lock()
+	e.running = true
+	e.cancelled = false
+	e.currentID = 0
+	e.trials = e.trials[:0]
+	e.bestTrial = nil
+	e.mu.Unlock()
+
+	startTime := time.Now()
+
+	innerCtx, innerCancel := context.WithCancel(ctx)
+	defer innerCancel()
+
+	paramsCh := make(chan map[string]any, workers*2)
+	trialCh := make(chan Trial, e.maxEvals)
+	var wg sync.WaitGroup
+
+	// Parameter generator (serial, snapshot-safe)
+	go func() {
+		defer close(paramsCh)
+		for i := 0; i < e.maxEvals; i++ {
+			select {
+			case <-innerCtx.Done():
+				return
+			default:
+			}
+
+			e.mu.RLock()
+			cancelled := e.cancelled
+			trialSnapshot := make([]Trial, len(e.trials))
+			copy(trialSnapshot, e.trials)
+			e.mu.RUnlock()
+
+			if cancelled {
+				return
+			}
+
+			params := e.sampler.Next(e.space, trialSnapshot, e.rng)
+			if params == nil {
+				return
+			}
+			params = e.space.Quantize(params)
+
+			select {
+			case paramsCh <- params:
+			case <-innerCtx.Done():
+				return
+			}
+		}
+	}()
+
+	// Worker pool
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for params := range paramsCh {
+				select {
+				case <-innerCtx.Done():
+					return
+				default:
+				}
+
+				trialStart := time.Now()
+				loss, metrics, err := e.objective(params)
+				duration := time.Since(trialStart)
+
+				if err != nil {
+					loss = math.Inf(1)
+					if metrics == nil {
+						metrics = map[string]float64{"error": 1}
+					}
+				}
+
+				e.mu.Lock()
+				e.currentID++
+				trial := Trial{
+					ID:        e.currentID,
+					Params:    params,
+					Loss:      loss,
+					Metrics:   metrics,
+					Duration:  duration,
+					Timestamp: time.Now().UnixMilli(),
+				}
+
+				if e.bestTrial == nil || loss < e.bestTrial.Loss {
+					trial.IsBest = true
+					if e.bestTrial != nil {
+						e.bestTrial.IsBest = false
+					}
+					e.bestTrial = &trial
+					if e.OnBestUpdate != nil {
+						e.mu.Unlock()
+						e.OnBestUpdate(trial)
+						e.mu.Lock()
+					}
+				}
+
+				e.trials = append(e.trials, trial)
+
+				// Early stopping check
+				shouldStop := false
+				if e.earlyStop.Enabled && e.bestTrial != nil {
+					shouldStop = e.earlyStop.ShouldStop(e.trials, e.bestTrial.Loss)
+				}
+
+				e.mu.Unlock()
+
+				if e.OnTrialComplete != nil {
+					e.OnTrialComplete(trial)
+				}
+
+				select {
+				case trialCh <- trial:
+				case <-innerCtx.Done():
+					return
+				}
+
+				if shouldStop {
+					innerCancel()
+					return
+				}
+			}
+		}()
+	}
+
+	go func() {
+		wg.Wait()
+		close(trialCh)
+	}()
+
+	done := 0
+	for range trialCh {
+		done++
+		if e.OnProgress != nil {
+			e.mu.RLock()
+			bestLoss := math.Inf(1)
+			if e.bestTrial != nil {
+				bestLoss = e.bestTrial.Loss
+			}
+			e.mu.RUnlock()
+			e.OnProgress(done, e.maxEvals, bestLoss)
+		}
+	}
+
+	e.mu.Lock()
+	e.running = false
+	e.mu.Unlock()
+
+	return e.buildResult(startTime), ctx.Err()
 }
 
 // Cancel stops the optimization.
@@ -295,147 +470,7 @@ func NewParallelEngine(cfg EngineConfig, space *SearchSpace, objective Objective
 
 // RunParallel executes optimization with parallel workers.
 func (pe *ParallelEngine) RunParallel(ctx context.Context) (*Result, error) {
-	pe.mu.Lock()
-	pe.running = true
-	pe.cancelled = false
-	pe.currentID = 0
-	pe.trials = pe.trials[:0]
-	pe.bestTrial = nil
-	pe.mu.Unlock()
-
-	startTime := time.Now()
-
-	// Inner context for coordinated cancellation
-	innerCtx, innerCancel := context.WithCancel(ctx)
-	defer innerCancel()
-
-	paramsCh := make(chan map[string]any, pe.workers*2)
-	trialCh := make(chan Trial, pe.maxEvals)
-	var wg sync.WaitGroup
-
-	// ── Parameter generator (serial, snapshot-safe) ────────────
-	go func() {
-		defer close(paramsCh)
-		for i := 0; i < pe.maxEvals; i++ {
-			select {
-			case <-innerCtx.Done():
-				return
-			default:
-			}
-
-			// Snapshot trials to avoid racing with workers
-			pe.mu.RLock()
-			cancelled := pe.cancelled
-			trialSnapshot := make([]Trial, len(pe.trials))
-			copy(trialSnapshot, pe.trials)
-			pe.mu.RUnlock()
-
-			if cancelled {
-				return
-			}
-
-			params := pe.sampler.Next(pe.space, trialSnapshot, pe.rng)
-			if params == nil {
-				return // grid exhausted
-			}
-			params = pe.space.Quantize(params)
-
-			select {
-			case paramsCh <- params:
-			case <-innerCtx.Done():
-				return
-			}
-		}
-	}()
-
-	// ── Worker pool ──────────────────────────────────────────────
-	for w := 0; w < pe.workers; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for params := range paramsCh {
-				select {
-				case <-innerCtx.Done():
-					return
-				default:
-				}
-
-				trialStart := time.Now()
-				loss, metrics, err := pe.objective(params)
-				duration := time.Since(trialStart)
-
-				if err != nil {
-					loss = math.Inf(1)
-					if metrics == nil {
-						metrics = map[string]float64{"error": 1}
-					}
-				}
-
-				pe.mu.Lock()
-				pe.currentID++
-				trial := Trial{
-					ID:        pe.currentID,
-					Params:    params,
-					Loss:      loss,
-					Metrics:   metrics,
-					Duration:  duration,
-					Timestamp: time.Now().UnixMilli(),
-				}
-
-				if pe.bestTrial == nil || loss < pe.bestTrial.Loss {
-					trial.IsBest = true
-					if pe.bestTrial != nil {
-						pe.bestTrial.IsBest = false
-					}
-					pe.bestTrial = &trial
-					if pe.OnBestUpdate != nil {
-						pe.mu.Unlock()
-						pe.OnBestUpdate(trial)
-						pe.mu.Lock()
-					}
-				}
-
-				pe.trials = append(pe.trials, trial)
-				pe.mu.Unlock()
-
-				if pe.OnTrialComplete != nil {
-					pe.OnTrialComplete(trial)
-				}
-
-				select {
-				case trialCh <- trial:
-				case <-innerCtx.Done():
-					return
-				}
-			}
-		}()
-	}
-
-	// ── Collector + progress ─────────────────────────────────────
-	go func() {
-		wg.Wait()
-		close(trialCh)
-	}()
-
-	done := 0
-	for range trialCh {
-		done++
-		if pe.OnProgress != nil {
-			pe.mu.RLock()
-			bestLoss := math.Inf(1)
-			if pe.bestTrial != nil {
-				bestLoss = pe.bestTrial.Loss
-			}
-			pe.mu.RUnlock()
-			pe.OnProgress(done, pe.maxEvals, bestLoss)
-		}
-	}
-
-	pe.mu.Lock()
-	pe.running = false
-	pe.mu.Unlock()
-
-	return pe.buildResult(startTime), ctx.Err()
+	return pe.Engine.RunParallel(ctx, pe.workers)
 }
 
 // ── Statistics helpers ─────────────────────────────────────────

@@ -3,6 +3,7 @@ import { Sidebar } from './Sidebar'
 import { TopBar } from './TopBar'
 import { BottomNav } from './BottomNav'
 import { ToastContainer } from '@/components/ToastContainer'
+import { PWAInstallPrompt } from '@/components/PWAInstallPrompt'
 
 export function Layout() {
   return (
@@ -21,6 +22,7 @@ export function Layout() {
       {/* Bottom navigation — visible only on mobile (< md) */}
       <BottomNav />
       <ToastContainer />
+      <PWAInstallPrompt />
     </div>
   )
 }

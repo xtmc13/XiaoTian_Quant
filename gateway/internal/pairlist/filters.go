@@ -2,6 +2,7 @@ package pairlist
 
 import (
 	"fmt"
+	"math"
 	"math/rand"
 	"sort"
 )
@@ -196,41 +197,50 @@ func (f *MaxPairsFilter) Filter(pairs []string, _ map[string]*PairInfo) ([]strin
 
 // ── CorrelationFilter ──────────────────────────────────────────
 
-// CorrelationFilter removes pairs that are highly correlated with
-// already-selected pairs (avoids concentration in same sector).
+// CorrelationFilter removes pairs that are highly correlated with the
+// market benchmark (e.g. BTC). This avoids homogeneous pairs such as
+// BTC and WBTC being traded simultaneously.
 type CorrelationFilter struct {
-	MaxCorrelated int // max number of pairs from the same base asset category
+	MaxCorrelation float64 // max allowed correlation with benchmark
 }
 
-func NewCorrelationFilter(maxCorrelated int) *CorrelationFilter {
-	if maxCorrelated <= 0 {
-		maxCorrelated = 2
+func NewCorrelationFilter(maxCorrelation float64) *CorrelationFilter {
+	if maxCorrelation <= 0 {
+		maxCorrelation = 0.95
 	}
-	return &CorrelationFilter{MaxCorrelated: maxCorrelated}
+	return &CorrelationFilter{MaxCorrelation: maxCorrelation}
 }
 
 func (f *CorrelationFilter) Name() string { return "CorrelationFilter" }
 
 func (f *CorrelationFilter) Filter(pairs []string, infoMap map[string]*PairInfo) ([]string, error) {
-	// Simple category-based dedup: group by base asset prefix
-	// e.g., "BTC" category covers BTCUSDT, BTCBUSD, BTCTUSD
-	seen := make(map[string]int)
+	if f.MaxCorrelation <= 0 {
+		return pairs, nil
+	}
 	result := make([]string, 0, len(pairs))
-
+	// correlation buckets: two pairs are considered homogeneous if their
+	// correlation with the benchmark differs by less than (1 - MaxCorrelation).
+	buckets := make([]float64, 0)
 	for _, sym := range pairs {
-		// Extract base asset from pair info
-		category := sym
-		if info, ok := infoMap[sym]; ok && info.BaseAsset != "" {
-			category = info.BaseAsset
-		}
-
-		if seen[category] >= f.MaxCorrelated {
+		info, ok := infoMap[sym]
+		if !ok {
+			result = append(result, sym)
 			continue
 		}
-		seen[category]++
+		corr := info.Correlation
+		inBucket := false
+		for _, b := range buckets {
+			if math.Abs(corr-b) < (1 - f.MaxCorrelation) {
+				inBucket = true
+				break
+			}
+		}
+		if inBucket {
+			continue
+		}
+		buckets = append(buckets, corr)
 		result = append(result, sym)
 	}
-
 	if len(result) == 0 {
 		return nil, fmt.Errorf("correlation filter removed all pairs")
 	}
@@ -245,8 +255,8 @@ type AgeFilter struct {
 }
 
 func NewAgeFilter(minAgeDays int) *AgeFilter {
-	if minAgeDays < 0 {
-		minAgeDays = 0
+	if minAgeDays <= 0 {
+		minAgeDays = 7
 	}
 	return &AgeFilter{MinAgeDays: minAgeDays}
 }
@@ -264,13 +274,8 @@ func (f *AgeFilter) Filter(pairs []string, infoMap map[string]*PairInfo) ([]stri
 			result = append(result, sym) // keep if no data
 			continue
 		}
-		// Use a simple heuristic: if price is very low and volume is low, treat as new
-		// In production, this would use actual listing date from exchange info
-		if info.MinNotional > 0 && info.Volume24h > 0 {
+		if info.AgeDays >= f.MinAgeDays {
 			result = append(result, sym)
-		} else {
-			// Skip pairs with no trading history (effectively age=0)
-			continue
 		}
 	}
 	return result, nil
@@ -404,9 +409,7 @@ func (f *LowProfitPairsFilter) Filter(pairs []string, infoMap map[string]*PairIn
 			result = append(result, sym) // keep if no data
 			continue
 		}
-		// Use volatility as a proxy for profit potential
-		// In production, this would use actual backtested profit data
-		if info.Volatility >= f.MinProfitPct {
+		if info.RecentReturn >= f.MinProfitPct {
 			result = append(result, sym)
 		}
 	}

@@ -128,6 +128,15 @@ export function AI() {
   /* -- ML states -- */
   const [mlMode, setMlMode] = useState(false)
   const [mlModels, setMlModels] = useState<MLModelInfo[]>([])
+  const [rlModels, setRlModels] = useState<any[]>([])
+
+  const loadRlModels = useCallback(async () => {
+    try {
+      const { rlApi } = await import('@/lib/api')
+      const data = await rlApi.list()
+      setRlModels(data || [])
+    } catch { /* ignore */ }
+  }, [])
 
   /* -- Derived -- */
   const currentHeatmap = useMemo(() => marketData.heatmap[heatmapType] || [], [marketData.heatmap, heatmapType])
@@ -227,6 +236,17 @@ export function AI() {
     } catch { /* ignore */ }
   }, [])
 
+  const toggleMlMode = useCallback(() => {
+    const next = !mlMode
+    setMlMode(next)
+    setAnalysisResult(null)
+    setAnalysisError('')
+    if (next) {
+      loadMlModels()
+      loadRlModels()
+    }
+  }, [mlMode, loadMlModels, loadRlModels])
+
   const addToWatchlist = useCallback((sym: string) => {
     setWatchlist((prev) => {
       if (prev.some((s) => s.symbol === sym)) return prev
@@ -288,7 +308,7 @@ export function AI() {
               <Zap className="w-3.5 h-3.5" /> AI 分析
             </button>
             <button
-              onClick={() => { setMlMode(!mlMode); setAnalysisResult(null); setAnalysisError('') }}
+              onClick={toggleMlMode}
               className={cn(
                 'inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold transition-all',
                 mlMode ? 'bg-quant-gold text-white' : 'bg-quant-card border border-quant-border text-foreground hover:border-quant-gold/40'
@@ -307,7 +327,7 @@ export function AI() {
 
           <div className="flex-1 overflow-auto p-4 min-h-0">
             {mlMode ? (
-              <MLPanel selectedSymbol={selectedSymbol} mlModels={mlModels} loadMlModels={loadMlModels} />
+              <MLPanel selectedSymbol={selectedSymbol} mlModels={mlModels} loadMlModels={loadMlModels} rlModels={rlModels} loadRlModels={loadRlModels} />
             ) : !analysisResult && !analyzing && !analysisError ? (
               <AnalysisPlaceholder
                 onAddStock={() => setShowAddStockModal(true)}

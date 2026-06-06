@@ -83,6 +83,50 @@ func ComputeOverfitRisk(totalReturn, sharpe, maxDrawdown float64, totalTrades in
 	}
 }
 
+// SaveOverfitRisk persists overfit analysis for a strategy.
+func (s *Service) SaveOverfitRisk(strategyID int, result *OverfitResult) error {
+	db := store.GetDB()
+	if db == nil || result == nil {
+		return fmt.Errorf("database not available")
+	}
+	now := time.Now().Unix()
+	_, err := db.Exec(`
+		INSERT INTO strategy_overfit (strategy_id, score, risk_level, in_sample_return, out_sample_return, return_ratio, stability_score, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(strategy_id) DO UPDATE SET
+			score = excluded.score,
+			risk_level = excluded.risk_level,
+			in_sample_return = excluded.in_sample_return,
+			out_sample_return = excluded.out_sample_return,
+			return_ratio = excluded.return_ratio,
+			stability_score = excluded.stability_score,
+			updated_at = excluded.updated_at`,
+		strategyID, result.Score, result.RiskLevel, result.InSampleReturn, result.OutSampleReturn,
+		result.ReturnRatio, result.StabilityScore, now,
+	)
+	return err
+}
+
+// GetOverfitRisk retrieves persisted overfit analysis for a strategy.
+func (s *Service) GetOverfitRisk(strategyID int) (*OverfitResult, error) {
+	db := store.GetDB()
+	if db == nil {
+		return nil, fmt.Errorf("database not available")
+	}
+	var result OverfitResult
+	err := db.QueryRow(`
+		SELECT score, risk_level, in_sample_return, out_sample_return, return_ratio, stability_score
+		FROM strategy_overfit WHERE strategy_id = ?`, strategyID,
+	).Scan(&result.Score, &result.RiskLevel, &result.InSampleReturn, &result.OutSampleReturn, &result.ReturnRatio, &result.StabilityScore)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 // ReviewStatus constants for indicator moderation.
 const (
 	ReviewPending  = "pending"

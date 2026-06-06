@@ -45,6 +45,7 @@ type Context struct {
 	RiskManager      *risk.Manager
 	PortfolioManager *portfolio.Manager
 	StrategyEngine   *strategy.Engine
+	DCAManager       *order.DCAManager
 	FactorPipeline   *factor.Pipeline
 	BacktestRunner   *backtest.Runner
 	Notifier         *notify.Manager
@@ -135,6 +136,11 @@ func (ctx *Context) Init(cfg *config.Config) error {
 	// 7. Strategy Engine
 	ctx.StrategyEngine = strategy.GetEngine(ctx.EventBus)
 	ctx.Logger.Info("Strategy engine initialized")
+
+	// 7a. DCA Manager — integrated with strategy engine and order pipeline
+	ctx.DCAManager = order.NewDCAManager()
+	ctx.StrategyEngine.SetDCAManager(ctx.DCAManager)
+	ctx.Logger.Info("DCA manager initialized")
 
 	// 8. Factor Pipeline
 	ctx.FactorPipeline = factor.NewPipeline(
@@ -361,22 +367,79 @@ func (ctx *Context) wireOrderManager() {
 
 	// ── Submit to Exchange (real or paper) ──
 	om.SubmitToExchange = func(ord *model.OrderData) (map[string]any, error) {
-		// Try real exchange if credentials exist and not explicitly paper
 		if ord.Exchange != "paper" {
-			apiKey, secret, _ := adapter.GetCredential("binance")
-			if apiKey != "" && secret != "" {
-				binance := adapter.NewBinanceAdapter(apiKey, secret, false)
-				result, err := binance.PlaceOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity)
-				if err == nil {
-					ctx.Logger.Info("Order submitted to Binance", "symbol", ord.Symbol, "side", ord.Side, "id", result["orderId"])
-					return map[string]any{
-						"order_id": result["orderId"],
-						"status":   "NEW",
-						"filled":   0.0,
-						"exchange": "binance",
-					}, nil
+			var result map[string]any
+			var err error
+
+			switch ord.Exchange {
+			case "binance":
+				apiKey, secret, _ := adapter.GetCredential("binance")
+				if apiKey != "" && secret != "" {
+					binance := adapter.NewBinanceAdapter(apiKey, secret, false)
+					result, err = binance.PlaceOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity)
 				}
-				ctx.Logger.Warn("Binance order failed, falling back to paper", "error", err.Error())
+			case "okx":
+				apiKey, secret, passphrase := adapter.GetCredential("okx")
+				if apiKey != "" && secret != "" {
+					okx := adapter.NewOKXAdapter(apiKey, secret, passphrase, false)
+					result, err = okx.PlaceOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity)
+				}
+			case "bybit":
+				apiKey, secret, _ := adapter.GetCredential("bybit")
+				if apiKey != "" && secret != "" {
+					bybit := adapter.NewBybitAdapter(apiKey, secret, false)
+					result, err = bybit.PlaceOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity)
+				}
+			case "gateio":
+				apiKey, secret, _ := adapter.GetCredential("gateio")
+				if apiKey != "" && secret != "" {
+					gateio := adapter.NewGateIOAdapter(apiKey, secret)
+					result, err = gateio.PlaceOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity)
+				}
+			case "mexc":
+				apiKey, secret, _ := adapter.GetCredential("mexc")
+				if apiKey != "" && secret != "" {
+					mexc := adapter.NewMEXCAdapter(apiKey, secret)
+					result, err = mexc.PlaceOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity)
+				}
+			case "bitget":
+				apiKey, secret, passphrase := adapter.GetCredential("bitget")
+				if apiKey != "" && secret != "" {
+					bitget := adapter.NewBitgetAdapter(apiKey, secret, passphrase)
+					result, err = bitget.PlaceOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity)
+				}
+			case "coinbase":
+				apiKey, secret, _ := adapter.GetCredential("coinbase")
+				if apiKey != "" && secret != "" {
+					coinbase := adapter.NewCoinbaseAdapter(apiKey, secret)
+					result, err = coinbase.PlaceOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity)
+				}
+			case "kraken":
+				apiKey, secret, _ := adapter.GetCredential("kraken")
+				if apiKey != "" && secret != "" {
+					kraken := adapter.NewKrakenAdapter(apiKey, secret)
+					result, err = kraken.PlaceOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity)
+				}
+			case "alpaca":
+				apiKey, secret, _ := adapter.GetCredential("alpaca")
+				if apiKey != "" && secret != "" {
+					alpaca := adapter.NewAlpacaAdapter(apiKey, secret, false)
+					result, err = alpaca.PlaceOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity)
+				}
+			}
+
+			if err == nil && result != nil {
+				ctx.Logger.Info("Order submitted to exchange", "symbol", ord.Symbol, "side", ord.Side, "exchange", ord.Exchange, "id", result["orderId"])
+				return map[string]any{
+					"order_id": result["orderId"],
+					"status":   "NEW",
+					"filled":   0.0,
+					"exchange": ord.Exchange,
+				}, nil
+			}
+
+			if err != nil {
+				ctx.Logger.Warn("Exchange order failed, falling back to paper", "exchange", ord.Exchange, "error", err.Error())
 			}
 		}
 
@@ -384,22 +447,94 @@ func (ctx *Context) wireOrderManager() {
 		return ctx.simulatePaperFill(ord)
 	}
 
-	// ── On Order Update ──
-	om.OnOrderUpdate = func(ord *model.OrderData) {
-		if ord.Status == model.StatusFilled {
-			ctx.updatePortfolioFromFill(ord)
+	// ── Cancel on Exchange ──
+	om.CancelOnExchange = func(ord *model.OrderData) error {
+		if ord.Exchange == "paper" {
+			return nil
 		}
-		// Publish to event bus for strategies
-		ctx.EventBus.Publish(event.Event{
-			Type:     event.TypeOrderUpdate,
-			Symbol:   ord.Symbol,
-			Data:     *ord,
-			Priority: event.PrioNormal,
-		})
+		var err error
+		switch ord.Exchange {
+		case "binance":
+			apiKey, secret, _ := adapter.GetCredential("binance")
+			if apiKey != "" && secret != "" {
+				binance := adapter.NewBinanceAdapter(apiKey, secret, false)
+				_, err = binance.CancelOrder(ord.Symbol, ord.ID)
+			}
+		case "okx":
+			apiKey, secret, passphrase := adapter.GetCredential("okx")
+			if apiKey != "" && secret != "" {
+				okx := adapter.NewOKXAdapter(apiKey, secret, passphrase, false)
+				_, err = okx.CancelOrder(ord.Symbol, ord.ID)
+			}
+		case "bybit":
+			apiKey, secret, _ := adapter.GetCredential("bybit")
+			if apiKey != "" && secret != "" {
+				bybit := adapter.NewBybitAdapter(apiKey, secret, false)
+				_, err = bybit.CancelOrder(ord.Symbol, ord.ID)
+			}
+		case "gateio":
+			apiKey, secret, _ := adapter.GetCredential("gateio")
+			if apiKey != "" && secret != "" {
+				gateio := adapter.NewGateIOAdapter(apiKey, secret)
+				_, err = gateio.CancelOrder(ord.Symbol, ord.ID)
+			}
+		case "mexc":
+			apiKey, secret, _ := adapter.GetCredential("mexc")
+			if apiKey != "" && secret != "" {
+				mexc := adapter.NewMEXCAdapter(apiKey, secret)
+				_, err = mexc.CancelOrder(ord.Symbol, ord.ID)
+			}
+		case "bitget":
+			apiKey, secret, passphrase := adapter.GetCredential("bitget")
+			if apiKey != "" && secret != "" {
+				bitget := adapter.NewBitgetAdapter(apiKey, secret, passphrase)
+				_, err = bitget.CancelOrder(ord.Symbol, ord.ID)
+			}
+		case "coinbase":
+			apiKey, secret, _ := adapter.GetCredential("coinbase")
+			if apiKey != "" && secret != "" {
+				coinbase := adapter.NewCoinbaseAdapter(apiKey, secret)
+				_, err = coinbase.CancelOrder(ord.Symbol, ord.ID)
+			}
+		case "kraken":
+			apiKey, secret, _ := adapter.GetCredential("kraken")
+			if apiKey != "" && secret != "" {
+				kraken := adapter.NewKrakenAdapter(apiKey, secret)
+				_, err = kraken.CancelOrder(ord.Symbol, ord.ID)
+			}
+		case "alpaca":
+			apiKey, secret, _ := adapter.GetCredential("alpaca")
+			if apiKey != "" && secret != "" {
+				alpaca := adapter.NewAlpacaAdapter(apiKey, secret, false)
+				_, err = alpaca.CancelOrder(ord.Symbol, ord.ID)
+			}
+		}
+		if err != nil {
+			ctx.Logger.Warn("Exchange cancel failed", "exchange", ord.Exchange, "order_id", ord.ID, "error", err.Error())
+		}
+		return err
 	}
 
-	ctx.Logger.Info("OrderManager pipeline wired")
-}
+		// ── On Order Update ──
+		om.OnOrderUpdate = func(ord *model.OrderData) {
+			if ord.Status == model.StatusFilled {
+				ctx.updatePortfolioFromFill(ord)
+				// Record DCA entry if applicable
+				if ctx.DCAManager != nil && ord.Side == model.SideBuy {
+					ctx.DCAManager.RecordEntry(ord.Symbol, ord.AvgFillPrice, 0)
+				}
+			}
+			// Publish to event bus for strategies
+			ctx.EventBus.Publish(event.Event{
+				Type:     event.TypeOrderUpdate,
+				Symbol:   ord.Symbol,
+				Data:     *ord,
+				Priority: event.PrioNormal,
+			})
+		}
+
+		ctx.Logger.Info("OrderManager pipeline wired")
+	}
 
 // simulatePaperFill simulates immediate execution for paper trading.
 func (ctx *Context) simulatePaperFill(ord *model.OrderData) (map[string]any, error) {

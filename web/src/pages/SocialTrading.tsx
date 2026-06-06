@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, memo, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Users, Signal, TrendingUp, TrendingDown, Star, Plus, Trash2, Zap,
@@ -7,6 +7,7 @@ import {
 import { cn } from '@/lib/utils'
 import { socialApi } from '@/lib/api'
 import { useToastStore } from '@/stores/toastStore'
+import { useAuthStore } from '@/stores/authStore'
 
 interface Provider {
   provider_id: number
@@ -39,11 +40,115 @@ interface SignalItem {
   expires_at: number
 }
 
-const followerId = 1 // TODO: replace with real user id from auth store
+function useFollowerId(): number {
+  const { user } = useAuthStore()
+  return user?.id ?? 1
+}
+
+/**
+ * ProviderCard — memoized signal-provider card.
+ * Only re-renders when its own props change, not when the list filters/sorts.
+ */
+const ProviderCard = memo(function ProviderCard({
+  provider,
+  isFollowing,
+  onToggleFollow,
+  isPending,
+}: {
+  provider: Provider
+  isFollowing: boolean
+  onToggleFollow: (id: number) => void
+  isPending: boolean
+}) {
+  return (
+    <div className="bg-quant-card border border-quant-border rounded-xl p-4 shadow-sm">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 rounded-full bg-quant-gold/10 flex items-center justify-center text-quant-gold text-xs font-bold">
+            {provider.provider_id}
+          </div>
+          <div>
+            <div className="text-sm font-semibold text-foreground">Provider #{provider.provider_id}</div>
+            <div className="text-[10px] text-muted-foreground">{provider.total_signals} 信号 · {provider.follower_count} 关注</div>
+          </div>
+        </div>
+        {provider.monthly_fee > 0 && (
+          <span className="text-[10px] px-2 py-0.5 rounded bg-quant-gold/10 text-quant-gold border border-quant-gold/20">
+            ${provider.monthly_fee}/月
+          </span>
+        )}
+      </div>
+
+      <div className="grid grid-cols-3 gap-2 mb-3">
+        <div className="text-center p-2 bg-quant-bg-secondary rounded-lg">
+          <div className={cn('text-sm font-bold', provider.win_rate >= 0.5 ? 'text-quant-green' : 'text-quant-red')}>
+            {(provider.win_rate * 100).toFixed(1)}%
+          </div>
+          <div className="text-[9px] text-muted-foreground">胜率</div>
+        </div>
+        <div className="text-center p-2 bg-quant-bg-secondary rounded-lg">
+          <div className="text-sm font-bold text-quant-green">{provider.avg_return_pct?.toFixed(2)}%</div>
+          <div className="text-[9px] text-muted-foreground">平均收益</div>
+        </div>
+        <div className="text-center p-2 bg-quant-bg-secondary rounded-lg">
+          <div className="text-sm font-bold text-quant-blue">{provider.sharpe_ratio?.toFixed(2)}</div>
+          <div className="text-[9px] text-muted-foreground">Sharpe</div>
+        </div>
+      </div>
+
+      <button
+        onClick={() => onToggleFollow(provider.provider_id)}
+        disabled={isPending}
+        className={cn(
+          'w-full py-1.5 rounded-lg text-xs font-medium transition-colors',
+          isFollowing
+            ? 'bg-quant-bg-secondary text-muted-foreground hover:text-quant-red'
+            : 'bg-quant-gold text-white hover:opacity-90'
+        )}
+      >
+        {isFollowing ? '已关注' : '关注'}
+      </button>
+    </div>
+  )
+})
+
+/**
+ * SignalCard — memoized trading-signal card.
+ */
+const SignalCard = memo(function SignalCard({ signal }: { signal: SignalItem }) {
+  return (
+    <div className="bg-quant-card border border-quant-border rounded-xl p-3 shadow-sm">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <span className={cn(
+            'text-xs font-bold px-2 py-0.5 rounded',
+            signal.direction === 'buy' ? 'bg-quant-green/10 text-quant-green' : 'bg-quant-red/10 text-quant-red'
+          )}>
+            {signal.direction === 'buy' ? '买入' : '卖出'}
+          </span>
+          <span className="text-sm font-semibold text-foreground">{signal.symbol}</span>
+          <span className="text-[10px] text-muted-foreground">@{signal.price}</span>
+        </div>
+        <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+          <CheckCircle2 className="w-3 h-3" />
+          {signal.confidence}%
+        </div>
+      </div>
+      <div className="flex items-center gap-4 mt-2 text-[10px] text-muted-foreground">
+        <span>止损: {signal.stop_loss || '--'}</span>
+        <span>止盈: {signal.take_profit || '--'}</span>
+        <span>仓位: {(signal.size * 100).toFixed(1)}%</span>
+        <span>策略: {signal.strategy}</span>
+      </div>
+      {signal.reason && <div className="mt-1 text-[10px] text-muted-foreground">{signal.reason}</div>}
+    </div>
+  )
+})
 
 export function SocialTrading() {
   const queryClient = useQueryClient()
   const addToast = useToastStore((s) => s.addToast)
+  const followerId = useFollowerId()
   const [activeTab, setActiveTab] = useState<'providers' | 'signals' | 'following'>('providers')
   const [following, setFollowing] = useState<Set<number>>(new Set())
   const [showPublishModal, setShowPublishModal] = useState(false)
@@ -107,6 +212,17 @@ export function SocialTrading() {
 
   const loading = providersLoading || signalsLoading
 
+  /* ── Memoized callbacks ── */
+  const handleToggleFollow = useCallback((providerId: number) => {
+    if (following.has(providerId)) {
+      unfollowMut.mutate(providerId)
+    } else {
+      followMut.mutate(providerId)
+    }
+  }, [following, followMut, unfollowMut])
+
+  const isFollowPending = followMut.isPending || unfollowMut.isPending
+
   return (
     <div className="h-full flex flex-col p-4 gap-4 overflow-auto">
       {/* Header */}
@@ -147,56 +263,13 @@ export function SocialTrading() {
               暂无公开信号源
             </div>
           ) : providers.map(p => (
-            <div key={p.provider_id} className="bg-quant-card border border-quant-border rounded-xl p-4 shadow-sm">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-full bg-quant-gold/10 flex items-center justify-center text-quant-gold text-xs font-bold">
-                    {p.provider_id}
-                  </div>
-                  <div>
-                    <div className="text-sm font-semibold text-foreground">Provider #{p.provider_id}</div>
-                    <div className="text-[10px] text-muted-foreground">{p.total_signals} 信号 · {p.follower_count} 关注</div>
-                  </div>
-                </div>
-                {p.monthly_fee > 0 && (
-                  <span className="text-[10px] px-2 py-0.5 rounded bg-quant-gold/10 text-quant-gold border border-quant-gold/20">
-                    ${p.monthly_fee}/月
-                  </span>
-                )}
-              </div>
-
-              <div className="grid grid-cols-3 gap-2 mb-3">
-                <div className="text-center p-2 bg-quant-bg-secondary rounded-lg">
-                  <div className={cn('text-sm font-bold', p.win_rate >= 0.5 ? 'text-quant-green' : 'text-quant-red')}>
-                    {(p.win_rate * 100).toFixed(1)}%
-                  </div>
-                  <div className="text-[9px] text-muted-foreground">胜率</div>
-                </div>
-                <div className="text-center p-2 bg-quant-bg-secondary rounded-lg">
-                  <div className="text-sm font-bold text-quant-green">{p.avg_return_pct?.toFixed(2)}%</div>
-                  <div className="text-[9px] text-muted-foreground">平均收益</div>
-                </div>
-                <div className="text-center p-2 bg-quant-bg-secondary rounded-lg">
-                  <div className="text-sm font-bold text-quant-blue">{p.sharpe_ratio?.toFixed(2)}</div>
-                  <div className="text-[9px] text-muted-foreground">Sharpe</div>
-                </div>
-              </div>
-
-              <button
-                onClick={() => following.has(p.provider_id)
-                  ? unfollowMut.mutate(p.provider_id)
-                  : followMut.mutate(p.provider_id)}
-                disabled={followMut.isPending || unfollowMut.isPending}
-                className={cn(
-                  'w-full py-1.5 rounded-lg text-xs font-medium transition-colors',
-                  following.has(p.provider_id)
-                    ? 'bg-quant-bg-secondary text-muted-foreground hover:text-quant-red'
-                    : 'bg-quant-gold text-white hover:opacity-90'
-                )}
-              >
-                {following.has(p.provider_id) ? '已关注' : '关注'}
-              </button>
-            </div>
+            <ProviderCard
+              key={p.provider_id}
+              provider={p}
+              isFollowing={following.has(p.provider_id)}
+              onToggleFollow={handleToggleFollow}
+              isPending={isFollowPending}
+            />
           ))}
         </div>
       )}
@@ -214,31 +287,7 @@ export function SocialTrading() {
               暂无信号
             </div>
           ) : signals.map(s => (
-            <div key={s.id} className="bg-quant-card border border-quant-border rounded-xl p-3 shadow-sm">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <span className={cn(
-                    'text-xs font-bold px-2 py-0.5 rounded',
-                    s.direction === 'buy' ? 'bg-quant-green/10 text-quant-green' : 'bg-quant-red/10 text-quant-red'
-                  )}>
-                    {s.direction === 'buy' ? '买入' : '卖出'}
-                  </span>
-                  <span className="text-sm font-semibold text-foreground">{s.symbol}</span>
-                  <span className="text-[10px] text-muted-foreground">@{s.price}</span>
-                </div>
-                <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
-                  <CheckCircle2 className="w-3 h-3" />
-                  {s.confidence}%
-                </div>
-              </div>
-              <div className="flex items-center gap-4 mt-2 text-[10px] text-muted-foreground">
-                <span>止损: {s.stop_loss || '--'}</span>
-                <span>止盈: {s.take_profit || '--'}</span>
-                <span>仓位: {(s.size * 100).toFixed(1)}%</span>
-                <span>策略: {s.strategy}</span>
-              </div>
-              {s.reason && <div className="mt-1 text-[10px] text-muted-foreground">{s.reason}</div>}
-            </div>
+            <SignalCard key={s.id} signal={s} />
           ))}
         </div>
       )}

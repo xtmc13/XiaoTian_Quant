@@ -36,6 +36,7 @@ const AgentTokens = lazyPage(() => import('./pages/AgentTokens'), 'AgentTokens')
 const IndicatorDetail = lazyPage(() => import('./pages/IndicatorDetail'), 'IndicatorDetail')
 const AuthorDashboard = lazyPage(() => import('./pages/AuthorDashboard'), 'AuthorDashboard')
 const Billing = lazyPage(() => import('./pages/Billing'), 'Billing')
+const StrategyLeaderboard = lazyPage(() => import('./pages/StrategyLeaderboard'), 'StrategyLeaderboard')
 const ModelManagement = lazyPage(() => import('./pages/ModelManagement'), 'ModelManagement')
 const RiskControl = lazyPage(() => import('./pages/RiskControl'), 'RiskControl')
 const PairlistManagement = lazyPage(() => import('./pages/PairlistManagement'), 'PairlistManagement')
@@ -74,6 +75,7 @@ function DocumentTitle() {
     '/users': '用户管理 - 小天量化',
     '/agent-tokens': 'Agent令牌 - 小天量化',
     '/billing': '会员 - 小天量化',
+    '/strategy-leaderboard': '策略排行榜 - 小天量化',
   }
 
   const title = titles[location.pathname] || '小天量化'
@@ -99,7 +101,7 @@ function RequireAuth() {
 
   // E2E test bypass: check localStorage token or window flag
   const hasToken = typeof window !== 'undefined' && !!localStorage.getItem('xt-token')
-  const e2eAuth = typeof window !== 'undefined' && (window as any).__E2E_AUTH__
+  const e2eAuth = typeof window !== 'undefined' && window.__E2E_AUTH__
 
   if (!hydrated && !e2eAuth && !hasToken) {
     return (
@@ -153,6 +155,7 @@ export default function App() {
                 <Route path="/users" element={<UserManage />} />
                 <Route path="/agent-tokens" element={<AgentTokens />} />
                 <Route path="/billing" element={<Billing />} />
+                <Route path="/strategy-leaderboard" element={<StrategyLeaderboard />} />
               </Route>
             </Route>
           </Routes>

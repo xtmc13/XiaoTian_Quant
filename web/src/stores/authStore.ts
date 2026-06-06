@@ -31,20 +31,20 @@ interface AuthState {
 export const useAuthStore = create<AuthState>()(
   persist(
     (set, get) => ({
-      token: (typeof window !== 'undefined' && (window as any).__E2E_AUTH__) ? 'e2e-test-token' : null,
-      user: (typeof window !== 'undefined' && (window as any).__E2E_AUTH__)
+      token: (typeof window !== 'undefined' && window.__E2E_AUTH__) ? 'e2e-test-token' : null,
+      user: (typeof window !== 'undefined' && window.__E2E_AUTH__)
         ? { id: 1, username: 'e2e_user', role: 'user', nickname: 'E2E Tester' }
         : null,
-      isAuthenticated: (typeof window !== 'undefined' && (window as any).__E2E_AUTH__) || false,
+      isAuthenticated: (typeof window !== 'undefined' && window.__E2E_AUTH__) || false,
       isLoading: false,
       error: null,
-      hydrated: (typeof window !== 'undefined' && (window as any).__E2E_AUTH__) || false,
+      hydrated: true,
 
       login: async (username, password) => {
         set({ isLoading: true, error: null })
         try {
           // E2E test bypass
-          if (typeof window !== 'undefined' && (window as any).__E2E_AUTH__) {
+          if (typeof window !== 'undefined' && window.__E2E_AUTH__) {
             const token = 'e2e-test-token'
             localStorage.setItem('xt-token', token)
             set({
@@ -145,10 +145,9 @@ export const useAuthStore = create<AuthState>()(
       name: 'xt-auth',
       partialize: (state) => ({ token: state.token, user: state.user, isAuthenticated: state.isAuthenticated }),
       merge: (persistedState, currentState) => {
-        // E2E test bypass: check localStorage token or window flag
-        const hasToken = typeof window !== 'undefined' && !!localStorage.getItem('xt-token')
-        const e2eAuth = typeof window !== 'undefined' && (window as any).__E2E_AUTH__
-        if (hasToken || e2eAuth) {
+        // E2E test bypass (window flag only, not localStorage token)
+        const e2eAuth = typeof window !== 'undefined' && window.__E2E_AUTH__
+        if (e2eAuth) {
           return {
             ...currentState,
             isAuthenticated: true,
@@ -157,7 +156,17 @@ export const useAuthStore = create<AuthState>()(
             hydrated: true,
           }
         }
-        return { ...currentState, ...(persistedState as object), hydrated: true }
+        // Strip corrupted E2E test data from previous versions
+        const restored = { ...currentState, ...(persistedState as object), hydrated: true }
+        if (restored.token === 'e2e-test-token') {
+          restored.token = null
+          restored.isAuthenticated = false
+          restored.user = null
+          if (typeof window !== 'undefined') {
+            localStorage.removeItem('xt-token')
+          }
+        }
+        return restored
       },
       onRehydrateStorage: () => (state) => {
         if (state) {

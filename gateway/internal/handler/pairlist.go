@@ -206,7 +206,7 @@ func ConfigurePairlist(c *gin.Context) {
 			if v, ok := fc.Params["max_correlated"].(float64); ok {
 				maxCorr = int(v)
 			}
-			newManager.AddFilter(pairlist.NewCorrelationFilter(maxCorr))
+			newManager.AddFilter(pairlist.NewCorrelationFilter(float64(maxCorr)))
 		case "AgeFilter":
 			minAge := 0
 			if v, ok := fc.Params["min_age_days"].(float64); ok {

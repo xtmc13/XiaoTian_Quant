@@ -393,3 +393,146 @@ func TestStatisticsHelpers(t *testing.T) {
 		t.Errorf("max expected 5, got %f", maxFloat(vals))
 	}
 }
+
+func TestEarlyStopConfig(t *testing.T) {
+	es := DefaultEarlyStopConfig()
+	if !es.Enabled {
+		t.Error("expected early stop enabled by default")
+	}
+	if es.MinTrials != 20 {
+		t.Errorf("expected minTrials 20, got %d", es.MinTrials)
+	}
+	if es.Patience != 10 {
+		t.Errorf("expected patience 10, got %d", es.Patience)
+	}
+}
+
+func TestShouldStop(t *testing.T) {
+	es := EarlyStopConfig{
+		Enabled:        true,
+		MinTrials:      5,
+		Patience:       3,
+		ImprovementPct: 0.01,
+	}
+
+	trials := []Trial{
+		{ID: 1, Loss: 10.0},
+		{ID: 2, Loss: 9.5},
+		{ID: 3, Loss: 9.0},
+		{ID: 4, Loss: 8.5},
+		{ID: 5, Loss: 8.0},
+		{ID: 6, Loss: 8.0},
+		{ID: 7, Loss: 8.0},
+		{ID: 8, Loss: 8.0},
+	}
+
+	if es.ShouldStop(trials[:4], 8.0) {
+		t.Error("should not stop before minTrials")
+	}
+
+	if !es.ShouldStop(trials, 8.0) {
+		t.Error("should stop after patience trials with no improvement")
+	}
+
+	if !es.ShouldStop(trials, 7.0) {
+		t.Error("should stop when recent trials are worse than best")
+	}
+
+	trials[7].Loss = 6.0
+	if es.ShouldStop(trials, 8.0) {
+		t.Error("should not stop when there is improvement")
+	}
+}
+
+func TestEngineRunWithEarlyStop(t *testing.T) {
+	reg := strategy.NewParamRegistry()
+	reg.Register(strategy.FloatParameter("x", 0.5, 0.0, 1.0, 0.1, "buy"))
+	space := NewSearchSpaceFromRegistry(reg)
+
+	objective := func(params map[string]any) (float64, map[string]float64, error) {
+		x := params["x"].(float64)
+		loss := (x - 0.3) * (x - 0.3)
+		return loss, map[string]float64{"x": x}, nil
+	}
+
+	cfg := EngineConfig{
+		MaxEvals:  100,
+		Sampler:   "random",
+		Seed:      42,
+		EarlyStop: EarlyStopConfig{Enabled: true, MinTrials: 10, Patience: 5, ImprovementPct: 0.001},
+	}
+	engine := NewEngine(cfg, space, objective)
+
+	ctx := context.Background()
+	result, err := engine.Run(ctx)
+	if err != nil {
+		t.Fatalf("engine run failed: %v", err)
+	}
+
+	if result.TotalEvals >= 100 {
+		t.Logf("did not stop early, completed all %d evals", result.TotalEvals)
+	}
+}
+
+func TestEngineRunParallel(t *testing.T) {
+	reg := strategy.NewParamRegistry()
+	reg.Register(strategy.FloatParameter("x", 0.5, 0.0, 1.0, 0.1, "buy"))
+	space := NewSearchSpaceFromRegistry(reg)
+
+	objective := func(params map[string]any) (float64, map[string]float64, error) {
+		x := params["x"].(float64)
+		loss := (x - 0.3) * (x - 0.3)
+		return loss, map[string]float64{"x": x}, nil
+	}
+
+	cfg := EngineConfig{MaxEvals: 30, Sampler: "random", Seed: 42}
+	engine := NewEngine(cfg, space, objective)
+
+	ctx := context.Background()
+	result, err := engine.RunParallel(ctx, 4)
+	if err != nil {
+		t.Fatalf("parallel run failed: %v", err)
+	}
+
+	if result.TotalEvals != 30 {
+		t.Errorf("expected 30 evals, got %d", result.TotalEvals)
+	}
+
+	if result.BestTrial == nil {
+		t.Fatal("best trial is nil")
+	}
+}
+
+func TestEngineRunParallelWithEarlyStop(t *testing.T) {
+	reg := strategy.NewParamRegistry()
+	reg.Register(strategy.FloatParameter("x", 0.5, 0.0, 1.0, 0.1, "buy"))
+	space := NewSearchSpaceFromRegistry(reg)
+
+	objective := func(params map[string]any) (float64, map[string]float64, error) {
+		x := params["x"].(float64)
+		loss := (x - 0.3) * (x - 0.3)
+		return loss, map[string]float64{"x": x}, nil
+	}
+
+	cfg := EngineConfig{
+		MaxEvals:  100,
+		Sampler:   "random",
+		Seed:      42,
+		EarlyStop: EarlyStopConfig{Enabled: true, MinTrials: 10, Patience: 5, ImprovementPct: 0.001},
+	}
+	engine := NewEngine(cfg, space, objective)
+
+	ctx := context.Background()
+	result, err := engine.RunParallel(ctx, 4)
+	if err != nil {
+		t.Fatalf("parallel run with early stop failed: %v", err)
+	}
+
+	if result.TotalEvals >= 100 {
+		t.Logf("did not stop early, completed all %d evals", result.TotalEvals)
+	}
+
+	if result.BestTrial == nil {
+		t.Fatal("best trial is nil")
+	}
+}

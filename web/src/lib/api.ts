@@ -58,6 +58,7 @@ import {
   type StrategyCommunityDetail,
   type CommunityComment,
   type LeaderboardEntry,
+  type OverfitResult,
   type NotifyRoute,
   type PairlistWhitelist,
   type PairlistConfig,
@@ -80,6 +81,13 @@ import {
   type AdminStats,
   type AdminAuditLog,
   type AIAnalysisResult,
+  type RLTrainResult,
+  type RLPredictResult,
+  type RLEvalResult,
+  type RLModelInfo,
+  type TensorBoardSummary,
+  type TensorBoardQueryResult,
+  type TensorBoardRun,
 } from '@/types'
 
 
@@ -159,9 +167,9 @@ axiosInstance.interceptors.request.use((config) => {
 let isRedirectingToLogin = false
 axiosInstance.interceptors.response.use(
   (response) => {
-    // If backend wraps with { data: ... }, unwrap it — always return response object
+    // If backend wraps with { success: true, data: ..., meta: ... }, unwrap it
     const data = response.data
-    if (data && typeof data === 'object' && 'data' in data && !('success' in data)) {
+    if (data && typeof data === 'object' && 'success' in data && 'data' in data && 'meta' in data) {
       response.data = data.data
     }
     return response
@@ -220,11 +228,13 @@ axiosInstance.interceptors.response.use(
 
       // 5xx Server error
       if (status >= 500) {
-        const msg = (data?.message as string) || '服务器错误，请稍后重试'
+        // Try wrapped error format first: { error: { message: ... } }
+        const wrappedError = data?.error as Record<string, unknown> | undefined
+        const msg = (wrappedError?.message as string) || (data?.message as string) || (data?.error as string) || '服务器错误，请稍后重试'
         try {
           useToastStore.getState().addToast({ type: 'error', message: msg, duration: 6000 })
         } catch { /* ignore */ }
-        return Promise.reject(new ApiError(msg, status, (data?.code as string) || 'SERVER_ERROR'))
+        return Promise.reject(new ApiError(msg, status, (wrappedError?.code as string) || (data?.code as string) || 'SERVER_ERROR'))
       }
 
       const message = (data?.message as string) || (data?.error as string) || `请求失败 (${status})`
@@ -487,7 +497,11 @@ export const strategyCommunityApi = {
   comment: (id: number, content: string) => api.post<{ success: boolean; comment_id?: number }>(`/community/strategies/${id}/comment`, { content }),
   rate: (id: number, rating: number) => api.post<{ success: boolean }>(`/community/strategies/${id}/rate`, { rating }),
   leaderboard: (sortBy?: string, limit?: number) =>
-    api.get<LeaderboardEntry[]>('/community/strategies/leaderboard', { params: { sort_by: sortBy, limit } }),
+    api.get<StrategyCommunityItem[]>('/community/strategies/leaderboard', { params: { sort_by: sortBy, limit } }),
+  trending: (limit?: number) =>
+    api.get<StrategyCommunityItem[]>('/community/strategies/trending', { params: { limit } }),
+  overfit: (id: number) =>
+    api.get<OverfitResult>(`/community/strategies/${id}/overfit`),
 }
 
 // ── ML ──
@@ -502,6 +516,27 @@ export const mlApi = {
   health: () => api.get<{ status: string }>('/ml/health'),
   deploy: (data: Record<string, unknown>) => api.post<{ success: boolean; strategy_id: string }>('/ml/deploy', data),
   strategyModels: () => api.get<{ models: MLModelInfo[] }>('/ml/strategy-models').then(d => d?.models ?? []),
+}
+
+// ── RL (Reinforcement Learning) ──
+export const rlApi = {
+  train: (config: Record<string, unknown>) => api.post<RLTrainResult | { job_id: string; status: string; message: string }>('/rl/train', config, { timeout: 300000 }),
+  predict: (data: Record<string, unknown>) => api.post<RLPredictResult>('/rl/predict', data),
+  evaluate: (data: Record<string, unknown>) => api.post<RLEvalResult>('/rl/evaluate', data),
+  list: () => api.get<{ models: RLModelInfo[] }>('/rl/models').then(d => d?.models ?? []),
+  deleteModel: (id: string) => api.del<{ success: boolean }>(`/rl/models/${id}`),
+  getJob: (id: string) => api.get<RLJob>(`/rl/jobs/${id}`),
+  cancelJob: (id: string) => api.post<{ success: boolean }>(`/rl/jobs/${id}/cancel`),
+  getWorkerStatus: () => api.get<RLWorkerStatus>('/rl/worker/status'),
+  startWorker: (config: Record<string, unknown>) => api.post<{ success: boolean; message: string; worker_pid?: number; command?: string; error?: string }>('/rl/worker/start', config),
+}
+
+// ── TensorBoard ──
+export const tensorboardApi = {
+  listRuns: () => api.get<TensorBoardSummary>('/tensorboard/runs'),
+  queryScalars: (data: Record<string, unknown>) => api.post<TensorBoardQueryResult>('/tensorboard/scalars', data),
+  getRun: (id: string) => api.get<TensorBoardRun>(`/tensorboard/runs/${id}`),
+  deleteRun: (id: string) => api.del<{ success: boolean }>(`/tensorboard/runs/${id}`),
 }
 
 // ── Protection / Risk Control ──
