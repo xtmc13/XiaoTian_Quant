@@ -42,6 +42,8 @@ python/
 *.dll
 *.so
 *.pyd
+gateway/gateway-server
+*.exe~
 
 # Rust build artifacts
 engine/target/
@@ -51,3 +53,13 @@ docker-compose.override.yml
 
 # Vite cache
 .vite/
+
+# External project copies
+QuantDinger/
+QuantDinger-Vue/
+freqtrade/
+
+# Temporary analysis files
+COMPREHENSIVE_GAP_ANALYSIS.md
+IMPLEMENTATION_REPORT_*.md
+*test_train.json
