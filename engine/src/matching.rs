@@ -318,6 +318,219 @@ mod tests {
         assert!(tps > 10_000.0, "Should exceed 10k TPS, got {:.0}", tps);
     }
 
+    // ── Cancel Order Tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_cancel_existing_order() {
+        let mut engine = MatchingEngine::new("CANCEL".into());
+        let (id, _) = engine.submit_order(Order::new(0, 100.0, 1.0, Side::Buy, OrderType::Limit, 1));
+        
+        let cancelled = engine.cancel_order(id);
+        assert!(cancelled.is_some(), "Should cancel existing order");
+        assert_eq!(cancelled.unwrap().id, id);
+        assert!(engine.book.best_bid().is_none(), "Book should be empty after cancel");
+    }
+
+    #[test]
+    fn test_cancel_nonexistent_order() {
+        let mut engine = MatchingEngine::new("CANCEL".into());
+        let cancelled = engine.cancel_order(99999);
+        assert!(cancelled.is_none(), "Should return None for non-existent order");
+    }
+
+    #[test]
+    fn test_cancel_from_middle_of_price_level() {
+        let mut engine = MatchingEngine::new("CANCEL".into());
+        // Add 3 orders at same price
+        let (_id1, _) = engine.submit_order(Order::new(0, 100.0, 1.0, Side::Buy, OrderType::Limit, 1));
+        let (id2, _) = engine.submit_order(Order::new(0, 100.0, 2.0, Side::Buy, OrderType::Limit, 2));
+        let (_id3, _) = engine.submit_order(Order::new(0, 100.0, 3.0, Side::Buy, OrderType::Limit, 3));
+        
+        // Cancel middle order
+        let cancelled = engine.cancel_order(id2);
+        assert!(cancelled.is_some());
+        assert_eq!(cancelled.unwrap().quantity, 2.0);
+        
+        // Remaining orders should still be there
+        let (bids, _) = engine.book.depth(10);
+        assert_eq!(bids.len(), 1);
+        assert_eq!(bids[0].1, 4.0, "Remaining qty should be 1+3=4"); // 1.0 + 3.0
+    }
+
+    #[test]
+    fn test_cancel_after_partial_fill() {
+        let mut engine = MatchingEngine::new("CANCEL".into());
+        // Sell 1.0 at 100
+        engine.submit_order(Order::new(0, 100.0, 1.0, Side::Sell, OrderType::Limit, 1));
+        // Buy 3.0 at 100 — partial fill
+        let (buy_id, trades) = engine.submit_order(Order::new(0, 100.0, 3.0, Side::Buy, OrderType::Limit, 2));
+        
+        assert_eq!(trades.len(), 1);
+        assert_eq!(trades[0].quantity, 1.0);
+        
+        // Cancel remaining 2.0
+        let cancelled = engine.cancel_order(buy_id);
+        assert!(cancelled.is_some());
+        assert_eq!(cancelled.unwrap().remaining(), 2.0);
+        assert!(engine.book.best_bid().is_none());
+    }
+
+    #[test]
+    fn test_cancel_all_orders_in_book() {
+        let mut engine = MatchingEngine::new("CANCEL".into());
+        let mut ids = Vec::new();
+        
+        for i in 0..100 {
+            let side = if i % 2 == 0 { Side::Buy } else { Side::Sell };
+            let price = if i % 2 == 0 { 100.0 + i as f64 } else { 200.0 + i as f64 };
+            let (id, _) = engine.submit_order(Order::new(0, price, 1.0, side, OrderType::Limit, i as u64 + 1));
+            ids.push(id);
+        }
+        
+        for id in ids {
+            assert!(engine.cancel_order(id).is_some(), "Should cancel order {}", id);
+        }
+        
+        let (bids, asks) = engine.book.depth(100);
+        assert!(bids.is_empty() && asks.is_empty(), "Book should be empty");
+    }
+
+    // ── Market Order Tests ───────────────────────────────────────
+
+    #[test]
+    fn test_market_buy_order() {
+        let mut engine = MatchingEngine::new("MARKET".into());
+        engine.submit_order(Order::new(0, 100.0, 1.0, Side::Sell, OrderType::Limit, 1));
+        engine.submit_order(Order::new(0, 101.0, 1.0, Side::Sell, OrderType::Limit, 2));
+        
+        let (_, trades) = engine.submit_order(Order::new(0, 0.0, 1.5, Side::Buy, OrderType::Market, 3));
+        
+        assert_eq!(trades.len(), 2, "Market buy should match both asks");
+        assert_eq!(trades[0].price, 100.0);
+        assert_eq!(trades[1].price, 101.0);
+    }
+
+    #[test]
+    fn test_market_sell_order() {
+        let mut engine = MatchingEngine::new("MARKET".into());
+        engine.submit_order(Order::new(0, 100.0, 1.0, Side::Buy, OrderType::Limit, 1));
+        engine.submit_order(Order::new(0, 99.0, 1.0, Side::Buy, OrderType::Limit, 2));
+        
+        let (_, trades) = engine.submit_order(Order::new(0, 0.0, 1.5, Side::Sell, OrderType::Market, 3));
+        
+        assert_eq!(trades.len(), 2, "Market sell should match both bids");
+        assert_eq!(trades[0].price, 100.0);
+        assert_eq!(trades[1].price, 99.0);
+    }
+
+    #[test]
+    fn test_market_order_no_liquidity() {
+        let mut engine = MatchingEngine::new("MARKET".into());
+        let (_, trades) = engine.submit_order(Order::new(0, 0.0, 1.0, Side::Buy, OrderType::Market, 1));
+        assert!(trades.is_empty(), "Market order with no liquidity should not trade");
+    }
+
+    // ── Additional Benchmarks ────────────────────────────────────
+
+    #[test]
+    fn benchmark_cancel_10k() {
+        let mut engine = MatchingEngine::new("BENCH_CANCEL".into());
+        let mut ids = Vec::with_capacity(10_000);
+        
+        for i in 0..10_000 {
+            let side = if i % 2 == 0 { Side::Buy } else { Side::Sell };
+            let price = 50000.0 + (i % 1000) as f64;
+            let (id, _) = engine.submit_order(Order::new(0, price, 0.1, side, OrderType::Limit, i as u64 + 1));
+            ids.push(id);
+        }
+        
+        let start = std::time::Instant::now();
+        for id in ids {
+            engine.cancel_order(id);
+        }
+        let elapsed = start.elapsed();
+        let ops_per_sec = 10_000.0 / elapsed.as_secs_f64();
+        
+        println!("\n═══ CANCEL BENCHMARK ═══");
+        println!("  10,000 cancels in {:?}", elapsed);
+        println!("  Throughput: {:.0} cancels/sec", ops_per_sec);
+        println!("  Avg latency: {:.2} μs/cancel", elapsed.as_micros() as f64 / 10_000.0);
+        println!("═════════════════════════\n");
+        
+        assert!(ops_per_sec > 5_000.0, "Should exceed 5k cancels/sec");
+    }
+
+    #[test]
+    fn benchmark_snapshot_1k_depth() {
+        let mut engine = MatchingEngine::new("BENCH_SNAP".into());
+        
+        for i in 0..10_000 {
+            let side = if i % 2 == 0 { Side::Buy } else { Side::Sell };
+            let price = 50000.0 + (i % 1000) as f64;
+            engine.submit_order(Order::new(0, price, 0.1, side, OrderType::Limit, i as u64 + 1));
+        }
+        
+        let start = std::time::Instant::now();
+        for _ in 0..1_000 {
+            let _ = engine.snapshot(100);
+        }
+        let elapsed = start.elapsed();
+        let ops_per_sec = 1_000.0 / elapsed.as_secs_f64();
+        
+        println!("\n═══ SNAPSHOT BENCHMARK ═══");
+        println!("  1,000 snapshots (depth=100) in {:?}", elapsed);
+        println!("  Throughput: {:.0} snapshots/sec", ops_per_sec);
+        println!("  Avg latency: {:.2} μs/snapshot", elapsed.as_micros() as f64 / 1_000.0);
+        println!("═══════════════════════════\n");
+        
+        assert!(ops_per_sec > 1_000.0, "Should exceed 1k snapshots/sec");
+    }
+
+    #[test]
+    fn benchmark_mixed_workload() {
+        let mut engine = MatchingEngine::new("BENCH_MIXED".into());
+        let mut ids = Vec::with_capacity(5_000);
+        
+        // Seed with 5k orders
+        for i in 0..5_000 {
+            let side = if i % 2 == 0 { Side::Buy } else { Side::Sell };
+            let price = 50000.0 + (i % 500) as f64;
+            let (id, _) = engine.submit_order(Order::new(0, price, 0.1, side, OrderType::Limit, i as u64 + 1));
+            ids.push(id);
+        }
+        
+        let start = std::time::Instant::now();
+        for i in 0..10_000 {
+            match i % 4 {
+                0 | 1 => {
+                    let side = if i % 2 == 0 { Side::Buy } else { Side::Sell };
+                    let price = 50000.0 + (i % 500) as f64;
+                    let (id, _) = engine.submit_order(Order::new(0, price, 0.1, side, OrderType::Limit, 5000 + i as u64 + 1));
+                    ids.push(id);
+                }
+                2 => {
+                    if let Some(id) = ids.pop() {
+                        engine.cancel_order(id);
+                    }
+                }
+                _ => {
+                    let _ = engine.snapshot(50);
+                }
+            }
+        }
+        let elapsed = start.elapsed();
+        let ops_per_sec = 10_000.0 / elapsed.as_secs_f64();
+        
+        println!("\n═══ MIXED WORKLOAD BENCHMARK ═══");
+        println!("  10,000 mixed ops in {:?}", elapsed);
+        println!("  Throughput: {:.0} ops/sec", ops_per_sec);
+        println!("  Avg latency: {:.2} μs/op", elapsed.as_micros() as f64 / 10_000.0);
+        println!("  Final book orders: {}", ids.len());
+        println!("═════════════════════════════════\n");
+        
+        assert!(ops_per_sec > 5_000.0, "Should exceed 5k mixed ops/sec");
+    }
+
     fn fast_rng() -> u64 {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

@@ -33,12 +33,25 @@ unsafe fn from_c_str(ptr: *const c_char) -> String {
 
 // ═══════════════════════════════════════════ Engine Lifecycle ═══════════════════════════════════════
 
+/// Helper to get a locked reference to the engines map, or return an error string.
+macro_rules! lock_engines {
+    () => {
+        match get_engines().lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                let guard = poisoned.into_inner();
+                guard
+            }
+        }
+    };
+}
+
 /// Create a new matching engine for a symbol. Returns the symbol as confirmation.
 #[no_mangle]
 pub extern "C" fn engine_create(symbol: *const c_char) -> *mut c_char {
     let sym = unsafe { from_c_str(symbol) };
     let engine = MatchingEngine::new(sym.clone());
-    get_engines().lock().unwrap().insert(sym.clone(), engine);
+    lock_engines!().insert(sym.clone(), engine);
     to_c_string(format!("{{\"status\":\"ok\",\"symbol\":\"{}\"}}", sym))
 }
 
@@ -46,7 +59,7 @@ pub extern "C" fn engine_create(symbol: *const c_char) -> *mut c_char {
 #[no_mangle]
 pub extern "C" fn engine_destroy(symbol: *const c_char) {
     let sym = unsafe { from_c_str(symbol) };
-    get_engines().lock().unwrap().remove(&sym);
+    lock_engines!().remove(&sym);
 }
 
 // ═══════════════════════════════════════════ Order Submission ═══════════════════════════════════════
@@ -81,7 +94,7 @@ pub extern "C" fn engine_submit_order(json_ptr: *const c_char) -> *mut c_char {
 
     let order = Order::new(0, price, quantity, side, order_type, user_id);
 
-    let result = match get_engines().lock().unwrap().get_mut(symbol) {
+    let result = match lock_engines!().get_mut(symbol) {
         Some(engine) => {
             let (order_id, trades) = engine.submit_order(order);
             serde_json::json!({
@@ -110,7 +123,7 @@ pub extern "C" fn engine_submit_order(json_ptr: *const c_char) -> *mut c_char {
 #[no_mangle]
 pub extern "C" fn engine_cancel_order(symbol: *const c_char, order_id: u64) -> *mut c_char {
     let sym = unsafe { from_c_str(symbol) };
-    let result = match get_engines().lock().unwrap().get_mut(&sym) {
+    let result = match lock_engines!().get_mut(&sym) {
         Some(engine) => match engine.cancel_order(order_id) {
             Some(_) => format!("{{\"status\":\"ok\",\"order_id\":{}}}", order_id),
             None => format!("{{\"error\":\"order {} not found\"}}", order_id),
@@ -125,7 +138,7 @@ pub extern "C" fn engine_cancel_order(symbol: *const c_char, order_id: u64) -> *
 #[no_mangle]
 pub extern "C" fn engine_snapshot(symbol: *const c_char, depth: u32) -> *mut c_char {
     let sym = unsafe { from_c_str(symbol) };
-    let result = match get_engines().lock().unwrap().get(&sym) {
+    let result = match lock_engines!().get(&sym) {
         Some(engine) => {
             let (bids, asks) = engine.snapshot(depth as usize);
             serde_json::json!({
@@ -146,7 +159,7 @@ pub extern "C" fn engine_snapshot(symbol: *const c_char, depth: u32) -> *mut c_c
 #[no_mangle]
 pub extern "C" fn engine_trade_count(symbol: *const c_char) -> u64 {
     let sym = unsafe { from_c_str(symbol) };
-    match get_engines().lock().unwrap().get(&sym) {
+    match lock_engines!().get(&sym) {
         Some(engine) => engine.book.trade_count,
         None => 0,
     }
@@ -156,7 +169,7 @@ pub extern "C" fn engine_trade_count(symbol: *const c_char) -> u64 {
 #[no_mangle]
 pub extern "C" fn engine_get_trades(symbol: *const c_char, limit: u32) -> *mut c_char {
     let sym = unsafe { from_c_str(symbol) };
-    let result = match get_engines().lock().unwrap().get(&sym) {
+    let result = match lock_engines!().get(&sym) {
         Some(engine) => {
             let trades = engine.get_trades(limit as usize);
             serde_json::json!(trades.iter().map(|t| {

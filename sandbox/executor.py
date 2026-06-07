@@ -4,10 +4,7 @@ Provides: AST security check, whitelisted builtins, timeout, memory limit.
 """
 
 import ast
-import copy
-import json
 import os
-import re
 import sys
 import threading
 import traceback
@@ -15,7 +12,6 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
-import requests
 
 # ── Configuration ─────────────────────────────────────────────────
 
@@ -25,7 +21,7 @@ MAX_MEMORY_MB = 512
 SAFE_MODULES = {
     "numpy", "np", "pandas", "pd", "talib", "math", "random", "json",
     "datetime", "time", "collections", "itertools", "statistics",
-    "typing", " fractions", "decimal",
+    "typing", "fractions", "decimal",
 }
 
 UNSAFE_MODULES = {
@@ -143,6 +139,20 @@ def build_safe_builtins() -> Dict[str, Any]:
         if name in __builtins__:
             safe[name] = __builtins__[name]
     return safe
+
+
+# ── Memory Limit ─────────────────────────────────────────────────
+
+def apply_memory_limit(mb: int):
+    """Apply memory limit (POSIX only). Silently skips on Windows."""
+    try:
+        import resource
+        soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+        limit_bytes = mb * 1024 * 1024
+        if soft > limit_bytes or soft == -1:
+            resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, hard))
+    except (ImportError, OSError, ValueError):
+        pass  # memory limiting not available on this platform (Windows, etc.)
 
 
 # ── Timeout Context Manager ───────────────────────────────────────
@@ -273,8 +283,9 @@ def safe_exec_with_validation(
         'call_indicator': call_indicator,
     }
 
-    # 3. Execute with timeout
+    # 3. Execute with timeout and memory limit
     try:
+        apply_memory_limit(MAX_MEMORY_MB)
         with timeout_context(min(timeout, MAX_TIMEOUT_SECONDS)):
             exec(compile(code, '<sandbox>', 'exec'), exec_globals)
     except TimeoutException as e:

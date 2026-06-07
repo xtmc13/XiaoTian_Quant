@@ -56,6 +56,7 @@ export function WatchlistPanel({
             const priceData = watchlistPrices[key]
             const pos = positionSummaryMap[key]
             const isActive = selectedSymbol === key
+            const hasPrice = priceData?.price != null || stock.price != null
             const change = priceData?.change ?? stock.change ?? 0
             const price = priceData?.price ?? stock.price ?? 0
 
@@ -83,16 +84,24 @@ export function WatchlistPanel({
                     )}
                   </div>
                   <div className="text-right shrink-0 ml-2">
-                    <div className="text-xs font-mono font-semibold text-foreground">{formatPrice(price)}</div>
-                    <div
-                      className={cn(
-                        'text-[10px] font-mono font-semibold inline-flex items-center gap-0.5 px-1 py-0.5 rounded',
-                        change >= 0 ? 'text-quant-green bg-quant-green/10' : 'text-quant-red bg-quant-red/10'
-                      )}
-                    >
-                      {change >= 0 ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                      {formatNum(change)}%
+                    <div className="text-xs font-mono font-semibold text-foreground">
+                      {hasPrice ? formatPrice(price) : <span className="text-muted-foreground/50">--</span>}
                     </div>
+                    {hasPrice ? (
+                      <div
+                        className={cn(
+                          'text-[10px] font-mono font-semibold inline-flex items-center gap-0.5 px-1 py-0.5 rounded',
+                          change >= 0 ? 'text-quant-green bg-quant-green/10' : 'text-quant-red bg-quant-red/10'
+                        )}
+                      >
+                        {change >= 0 ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                        {formatNum(change)}%
+                      </div>
+                    ) : (
+                      <div className="text-[10px] font-mono text-muted-foreground/50 px-1 py-0.5">
+                        <span className="animate-pulse">加载中...</span>
+                      </div>
+                    )}
                   </div>
                 </div>
 

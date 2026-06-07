@@ -1,0 +1,179 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g. v3.0.0)'
+        required: true
+        default: 'v3.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  # ── Build Frontend ──
+  build-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: './web/package-lock.json'
+      - run: cd web && npm ci && npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+
+  # ── Build Rust Engine ──
+  build-engine:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            name: linux-amd64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            name: macos-amd64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            name: macos-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            name: windows-amd64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: cd engine && cargo build --release --target ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engine-${{ matrix.name }}
+          path: engine/target/${{ matrix.target }}/release/libxiaotian_engine.*
+
+  # ── Build Go Backend ──
+  build-gateway:
+    needs: [build-web, build-engine]
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            name: linux-amd64
+            ext: ''
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+            name: linux-arm64
+            ext: ''
+          - os: macos-latest
+            goos: darwin
+            goarch: amd64
+            name: macos-amd64
+            ext: ''
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            name: macos-arm64
+            ext: ''
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            name: windows-amd64
+            ext: '.exe'
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: engine-${{ matrix.name }}
+          path: gateway/engine_lib/
+      - name: Build Go binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          cd gateway
+          # Copy frontend assets
+          mkdir -p spa
+          cp -r ../web/dist/* spa/ 2>/dev/null || true
+          # Build
+          go build \
+            -ldflags="-s -w -X main.version=${{ github.ref_name || github.event.inputs.version }} -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -trimpath \
+            -o gateway-server${{ matrix.ext }} \
+            ./cmd/server
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gateway-${{ matrix.name }}
+          path: gateway/gateway-server${{ matrix.ext }}
+
+  # ── Package Release ──
+  package:
+    needs: [build-gateway]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Package releases
+        run: |
+          VERSION="${{ github.ref_name || github.event.inputs.version }}"
+          mkdir -p releases
+          for dir in artifacts/gateway-*; do
+            name=$(basename "$dir")
+            platform=${name#gateway-}
+            mkdir -p "tmp/${platform}"
+            # Binary
+            cp "${dir}"/gateway-server* "tmp/${platform}/" 2>/dev/null || true
+            # Frontend
+            mkdir -p "tmp/${platform}/spa"
+            cp -r artifacts/web-dist/* "tmp/${platform}/spa/" 2>/dev/null || true
+            # Python ML Server
+            mkdir -p "tmp/${platform}/sandbox/ml_server"
+            cp -r sandbox/ml_server/* "tmp/${platform}/sandbox/ml_server/" 2>/dev/null || true
+            # Config
+            mkdir -p "tmp/${platform}/config"
+            cp config/*.yaml "tmp/${platform}/config/" 2>/dev/null || true
+            # Start scripts
+            cp install.sh "tmp/${platform}/" 2>/dev/null || true
+            cp install.ps1 "tmp/${platform}/" 2>/dev/null || true
+            cp start.sh "tmp/${platform}/" 2>/dev/null || true
+            # Create archive
+            cd "tmp/${platform}"
+            if [[ "$platform" == windows-* ]]; then
+              zip -r "../../releases/xiaotianquant-${VERSION}-${platform}.zip" .
+            else
+              tar czf "../../releases/xiaotianquant-${VERSION}-${platform}.tar.gz" .
+            fi
+            cd ../..
+          done
+          ls -la releases/
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        with:
+          tag_name: ${{ github.ref_name || github.event.inputs.version }}
+          name: ${{ github.ref_name || github.event.inputs.version }}
+          files: releases/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true

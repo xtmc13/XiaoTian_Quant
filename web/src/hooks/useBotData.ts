@@ -149,17 +149,12 @@ export function useBotData() {
 
   const bots: BotItem[] = useMemo(() => {
     const all = Array.isArray(strategies) ? strategies : []
-    return all
-      .filter(
-        (s: StrategyItem) =>
-          s.strategy_mode === 'bot' || (s as StrategyItem & { bot_type?: string }).bot_type || (s.trading_config && (s.trading_config as Record<string, unknown>).bot_type)
-      )
-      .map((s: StrategyItem) => ({
-        ...s,
-        id: String(s.id),
-        bot_type: ((s as StrategyItem & { bot_type?: string }).bot_type || ((s.trading_config as Record<string, unknown> | undefined)?.bot_type as string) || 'custom') as BotItem['bot_type'],
-        name: s.strategy_name || s.name,
-      }))
+    return all.map((s: StrategyItem) => ({
+      ...s,
+      id: String(s.id),
+      bot_type: ((s as StrategyItem & { bot_type?: string }).bot_type || ((s.trading_config as Record<string, unknown> | undefined)?.bot_type as string) || 'custom') as BotItem['bot_type'],
+      name: s.strategy_name || s.name,
+    }))
   }, [strategies])
 
   const kpi = useMemo(() => {

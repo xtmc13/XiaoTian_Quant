@@ -123,7 +123,7 @@ export default function App() {
     <I18nProvider>
       <BrowserRouter>
         <DocumentTitle />
-        <ErrorBoundary>
+        <ErrorBoundary fallback={<div className="min-h-screen flex items-center justify-center text-destructive">应用出现异常，请刷新页面</div>}>
           <Suspense fallback={<PageLoader />}>
             <Routes>
             <Route path="/login" element={<Login />} />

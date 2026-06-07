@@ -140,7 +140,13 @@ func (m *DCAManager) CheckEntry(symbol string, currentPrice float64) (*DCAEntry,
 	}
 
 	if pos.FilledCount >= len(pos.Entries) {
-		pos.Active = false
+		// Upgrade to write lock to deactivate
+		m.mu.Lock()
+		// Re-check after acquiring write lock
+		if pos2, ok2 := m.positions[symbol]; ok2 && pos2.FilledCount >= len(pos2.Entries) {
+			pos2.Active = false
+		}
+		m.mu.Unlock()
 		return nil, nil
 	}
 
@@ -280,13 +286,13 @@ func (p *DCAPosition) calcTriggerPrice(level int) float64 {
 	}
 
 	if p.Side == "LONG" {
-		// Each level is deviation % lower than the initial entry
-		steps := float64(level)
-		return lastPrice * (1 - steps*deviation)
+		// Each level is deviation % lower than the previous entry
+		
+		return lastPrice * (1 - deviation)
 	}
-	// SHORT: each level is deviation % higher
-	steps := float64(level)
-	return lastPrice * (1 + steps*deviation)
+	// SHORT: each level is deviation % higher than the previous entry
+	
+	return lastPrice * (1 + deviation)
 }
 
 // UnrealizedPnL calculates the current unrealized P&L for the DCA position.

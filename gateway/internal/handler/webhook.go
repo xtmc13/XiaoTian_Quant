@@ -1,13 +1,42 @@
 package handler
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 )
+
+// verifyWebhookSignature checks HMAC-SHA256 signature from X-Webhook-Signature header.
+// If WEBHOOK_SECRET is not set, authentication is skipped (development mode).
+func verifyWebhookSignature(c *gin.Context) bool {
+	secret := os.Getenv("WEBHOOK_SECRET")
+	if secret == "" {
+		return true // no secret configured — allow (dev mode)
+	}
+	signature := c.GetHeader("X-Webhook-Signature")
+	if signature == "" {
+		return false
+	}
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		return false
+	}
+	// Restore body for re-reading
+	c.Request.Body = io.NopCloser(strings.NewReader(string(body)))
+
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	expected := hex.EncodeToString(mac.Sum(nil))
+	return hmac.Equal([]byte(signature), []byte(expected))
+}
 
 // TradingViewWebhook receives alerts from TradingView Pine Script strategies.
 //
@@ -18,6 +47,10 @@ import (
 //
 // The webhook automatically places paper/real orders through the order manager.
 func TradingViewWebhook(c *gin.Context) {
+	if !verifyWebhookSignature(c) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or missing signature"})
+		return
+	}
 	var body map[string]any
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON"})
@@ -85,7 +118,12 @@ func TradingViewWebhook(c *gin.Context) {
 //
 // POST /api/webhook/generic
 // Body: {"symbol":"BTCUSDT","side":"BUY","type":"MARKET","quantity":0.1,"price":0}
+// Requires X-Webhook-Signature header with HMAC-SHA256 of the body (set WEBHOOK_SECRET env var).
 func GenericWebhook(c *gin.Context) {
+	if !verifyWebhookSignature(c) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or missing signature"})
+		return
+	}
 	var body map[string]any
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON"})

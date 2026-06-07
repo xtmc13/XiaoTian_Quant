@@ -81,16 +81,30 @@ type ValidateResult struct {
 
 // SavedIndicator represents a stored indicator in the database.
 type SavedIndicator struct {
-	ID           int    `json:"id"`
-	UserID       int    `json:"userId"`
-	Name         string `json:"name"`
-	Description  string `json:"description"`
-	Code         string `json:"code"`
-	ParamsJSON   string `json:"paramsJson"`
-	StrategyJSON string `json:"strategyJson"`
-	IsEncrypted  int    `json:"isEncrypted"`
-	CreatedAt    int64  `json:"createdAt"`
-	UpdatedAt    int64  `json:"updatedAt"`
+	ID           int     `json:"id"`
+	UserID       int     `json:"user_id"`
+	Name         string  `json:"name"`
+	Description  string  `json:"description"`
+	Code         string  `json:"code"`
+	ParamsJSON   string  `json:"params_json"`
+	StrategyJSON string  `json:"strategy_json"`
+	IsEncrypted  int     `json:"is_encrypted"`
+	CreatedAt    int64   `json:"created_at"`
+	UpdatedAt    int64   `json:"updated_at"`
+	// Community metrics
+	PricingType   string  `json:"pricing_type,omitempty"`
+	Price         float64 `json:"price,omitempty"`
+	PurchaseCount int     `json:"purchase_count,omitempty"`
+	AvgRating     float64 `json:"avg_rating,omitempty"`
+	RatingCount   int     `json:"rating_count,omitempty"`
+	ViewCount     int     `json:"view_count,omitempty"`
+	ReviewStatus  string  `json:"review_status,omitempty"`
+	Status        string  `json:"status,omitempty"`
+	Revenue       float64 `json:"revenue,omitempty"`
+	// Performance metrics (placeholder, populated by backtest or community)
+	TotalReturn float64 `json:"total_return,omitempty"`
+	Sharpe      float64 `json:"sharpe,omitempty"`
+	MaxDrawdown float64 `json:"max_drawdown,omitempty"`
 }
 
 // ValidStrategyKeys defines the allowed keys for # @strategy annotations.

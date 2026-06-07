@@ -88,8 +88,9 @@ func StrategyAIGenerate(c *gin.Context) {
 func getActiveAIProvider() *ai.Provider {
 	cfg := store.GetConfig()
 	providerName := ""
+	var providerCfg map[string]any
 
-	// Try the configured AI provider from store
+	// 1. Read configured provider name from store
 	if aiCfg, ok := cfg["ai"].(map[string]any); ok {
 		if defaults, ok := aiCfg["defaults"].(map[string]any); ok {
 			providerName = getStringFromMap(defaults, "provider", "")
@@ -97,17 +98,44 @@ func getActiveAIProvider() *ai.Provider {
 		if providerName == "" {
 			providerName = getStringFromMap(aiCfg, "provider", "")
 		}
-	}
-
-	// Try to get the named provider
-	if providerName != "" {
-		if p := ai.GetProvider(providerName); p != nil && p.APIKey != "" {
-			return p
+		// Read provider-specific config from store (frontend saves as ai.{provider_name})
+		if providerName != "" {
+			providerCfg, _ = aiCfg[providerName].(map[string]any)
+		}
+		// Also try nested "providers" key
+		if providerCfg == nil {
+			if providers, ok := aiCfg["providers"].(map[string]any); ok {
+				providerCfg, _ = providers[providerName].(map[string]any)
+			}
 		}
 	}
 
-	// Fallback: first provider with an API key set
-	// Check env-based providers (deepseek, openai, etc.)
+	// 2. Resolve provider: use store config to override env-based defaults
+	if providerName != "" {
+		p := ai.GetProvider(providerName)
+		if p != nil {
+			// If store has api_key, create a clone with overridden credentials
+			if providerCfg != nil {
+				key := getStringFromMap(providerCfg, "api_key", "")
+				if key != "" {
+					clone := *p
+					clone.APIKey = key
+					if model := getStringFromMap(providerCfg, "model", ""); model != "" {
+						clone.Model = model
+					}
+					if baseURL := getStringFromMap(providerCfg, "base_url", ""); baseURL != "" {
+						clone.BaseURL = baseURL
+					}
+					return &clone
+				}
+			}
+			if p.APIKey != "" {
+				return p
+			}
+		}
+	}
+
+	// 3. Fallback: first env-based provider with an API key
 	for _, name := range []string{"deepseek", "openai", "qwen", "hunyuan", "glm", "kimi", "claude", "gemini"} {
 		if p := ai.GetProvider(name); p != nil && p.APIKey != "" {
 			return p

@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/notify"
@@ -31,8 +32,24 @@ func GetNotifications(c *gin.Context) {
 		items = []*notify.Notification{}
 	}
 
+	// Normalize to frontend NotificationItem format
+	notifications := make([]map[string]any, 0, len(items))
+	for _, n := range items {
+		notifications = append(notifications, map[string]any{
+			"id":         n.ID,
+			"title":      n.Title,
+			"message":    n.Content,
+			"content":    n.Content,
+			"level":      n.Level,
+			"category":   n.Category,
+			"type":       normalizeNotifyLevel(n.Level),
+			"read":       n.Read,
+			"created_at": n.CreatedAt,
+		})
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"notifications": items,
+		"notifications": notifications,
 		"unread_count":  store.UnreadCount(),
 		"total":         store.Total(),
 	})
@@ -68,6 +85,22 @@ func ClearNotifications(c *gin.Context) {
 	store := notify.GetNotificationStore()
 	store.Clear()
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
+// normalizeNotifyLevel maps backend notification levels to frontend type values.
+func normalizeNotifyLevel(level string) string {
+	switch strings.ToUpper(level) {
+	case "INFO":
+		return "info"
+	case "WARN", "WARNING":
+		return "warning"
+	case "CRITICAL", "ERROR":
+		return "error"
+	case "SUCCESS":
+		return "success"
+	default:
+		return "info"
+	}
 }
 
 // GetUnreadCount returns the unread notification count.

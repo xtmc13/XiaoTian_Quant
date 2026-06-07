@@ -5,16 +5,34 @@ Provides safe execution and static analysis for indicator Python code.
 
 import os
 import sys
+import time
 import traceback
+from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
 from executor import safe_exec_with_validation
 from analyzer import analyze_indicator_code_quality
 
 app = FastAPI(title="XiaoTianQuant Sandbox", version="2.0.0")
+
+# ── Simple in-memory rate limiter ──
+_rate_limit: Dict[str, List[float]] = defaultdict(list)
+RATE_LIMIT_WINDOW = 60  # seconds
+RATE_LIMIT_MAX = 30     # requests per window
+
+
+def check_rate_limit(client_ip: str):
+    now = time.time()
+    window_start = now - RATE_LIMIT_WINDOW
+    timestamps = _rate_limit[client_ip]
+    # Prune old entries
+    _rate_limit[client_ip] = [t for t in timestamps if t > window_start]
+    if len(_rate_limit[client_ip]) >= RATE_LIMIT_MAX:
+        raise HTTPException(status_code=429, detail="Rate limit exceeded. Try again later.")
+    _rate_limit[client_ip].append(now)
 
 
 # ── Request/Response Models ───────────────────────────────────────
@@ -51,11 +69,13 @@ def health() -> Dict[str, str]:
 
 
 @app.post("/execute", response_model=ExecuteResponse)
-def execute(req: ExecuteRequest) -> ExecuteResponse:
+def execute(req: ExecuteRequest, request: Request) -> ExecuteResponse:
     """
     Safely execute indicator Python code in a sandboxed environment.
     Returns the output dict (plots, signals) or an error.
     """
+    client_ip = request.client.host if request.client else "unknown"
+    check_rate_limit(client_ip)
     if not req.code or not req.code.strip():
         return ExecuteResponse(success=False, msg="Code is empty", error_type="EmptyCode")
 

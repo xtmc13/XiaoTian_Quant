@@ -38,9 +38,18 @@ var (
 )
 
 // GetVault returns the global credential vault.
+// Panics if VAULT_MASTER_KEY is not set (production safety).
 func GetVault() *CredentialVault {
 	vaultOnce.Do(func() {
-		vault = NewCredentialVault(os.Getenv("VAULT_MASTER_KEY"))
+		key := os.Getenv("VAULT_MASTER_KEY")
+		if key == "" {
+			env := os.Getenv("APP_ENV")
+			if env == "production" || env == "release" {
+				panic("VAULT_MASTER_KEY environment variable is required in production")
+			}
+			key = "xiaotian-quant-default-vault-key" // dev fallback
+		}
+		vault = NewCredentialVault(key)
 	})
 	return vault
 }
@@ -57,7 +66,7 @@ func NewCredentialVault(masterKey string) *CredentialVault {
 // deriveKey creates a 32-byte AES key from a master secret.
 func deriveKey(secret string) []byte {
 	if secret == "" {
-		secret = "xiaotian-quant-default-vault-key" // default for dev
+		secret = "changeme-please-set-vault-master-key"
 	}
 	h := sha256.Sum256([]byte(secret))
 	return h[:]

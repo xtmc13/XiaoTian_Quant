@@ -1,8 +1,11 @@
 package middleware
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
 	"time"
 
@@ -29,6 +32,15 @@ func (w *responseBuffer) WriteString(s string) (int, error) {
 func (w *responseBuffer) WriteHeader(statusCode int) {
 	// Delay writing header until middleware decides
 	w.ResponseWriter.WriteHeader(statusCode)
+}
+
+// Hijack implements http.Hijacker for WebSocket support.
+func (w *responseBuffer) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("hijack not supported")
+	}
+	return hijacker.Hijack()
 }
 
 // UnifiedResponseWrapper wraps all JSON responses into the unified envelope format.

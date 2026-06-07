@@ -63,3 +63,4 @@ freqtrade/
 COMPREHENSIVE_GAP_ANALYSIS.md
 IMPLEMENTATION_REPORT_*.md
 *test_train.json
+.workbuddy/

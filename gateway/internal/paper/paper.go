@@ -654,9 +654,9 @@ func (pe *PaperExchange) updateBalance(trade model.TradeData) {
 
 		currency := pe.getBaseCurrency(trade.Symbol)
 		if currency != "" {
-			if bal, ok := pe.balances[currency]; ok {
-				bal.Free -= trade.Quantity
-				bal.Total = bal.Free + bal.Used
+			if _, ok := pe.balances[currency]; ok {
+				pe.balances[currency].Free -= trade.Quantity
+				pe.balances[currency].Total = pe.balances[currency].Free + pe.balances[currency].Used
 			}
 		}
 	}
@@ -748,15 +748,34 @@ func (pe *PaperExchange) calculateTotalEquity() float64 {
 	pe.mu.RLock()
 	defer pe.mu.RUnlock()
 
+	// Start with USDT balance
 	total := 0.0
-	for _, bal := range pe.balances {
-		total += bal.Total
+	if bal, ok := pe.balances["USDT"]; ok {
+		total = bal.Total
 	}
-	for _, symPos := range pe.positions {
-		for _, pos := range symPos {
-			total += pos.UnrealizedPnL
+
+	// Convert non-USDT crypto balances to USDT value using position current prices
+	for cur, bal := range pe.balances {
+		if cur == "USDT" {
+			continue
 		}
+		// Try to find a position for this asset to get current price
+		p := 0.0
+		sym := cur + "USDT"
+		if symPos, ok := pe.positions[sym]; ok {
+			for _, pos := range symPos {
+				if pos.CurrentPrice > 0 && pos.Quantity > 0 {
+					p = pos.CurrentPrice
+					break
+				}
+			}
+		}
+		if p > 0 {
+			total += bal.Total * p
+		}
+		// If no position price, the asset has no market value in our system
 	}
+
 	return total
 }
 

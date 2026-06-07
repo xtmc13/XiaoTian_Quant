@@ -1,0 +1,3544 @@
+openapi: 3.0.3
+info:
+  title: 小田量化 (XiaoTianQuant) API
+  description: |
+    小田量化交易系统 REST API 文档。
+    覆盖交易所适配、策略回测、风控、AI 分析、社交交易与链上数据等完整链路。
+  version: 2.0.0
+  contact:
+    name: XiaoTianQuant Team
+
+servers:
+  - url: http://localhost:8080/api
+    description: 本地开发环境
+  - url: https://api.xiaotianquant.com/api
+    description: 生产环境
+
+security:
+  - BearerAuth: []
+
+paths:
+  # ═════════════════════════════════════════════════════════════════
+  # Auth
+  # ═════════════════════════════════════════════════════════════════
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: 用户登录
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: 登录成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: 用户注册
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '200':
+          description: 注册成功
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: 获取当前用户信息
+      responses:
+        '200':
+          description: 用户信息
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: 刷新访问令牌
+      responses:
+        '200':
+          description: 新令牌
+
+  # ═════════════════════════════════════════════════════════════════
+  # Market Data (Public)
+  # ═════════════════════════════════════════════════════════════════
+  /klines/{symbol}:
+    get:
+      tags: [Market]
+      summary: K 线数据
+      security: []
+      parameters:
+        - name: symbol
+          in: path
+          required: true
+          schema: { type: string, example: BTCUSDT }
+        - name: interval
+          in: query
+          schema: { type: string, default: 1h, example: 1h }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 100, maximum: 1000 }
+      responses:
+        '200':
+          description: K 线数组
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/KlineBar'
+
+  /market/klines:
+    get:
+      tags: [Market]
+      summary: 市场 K 线（批量）
+      security: []
+      parameters:
+        - name: symbols
+          in: query
+          schema: { type: string, example: BTCUSDT,ETHUSDT }
+        - name: interval
+          in: query
+          schema: { type: string, default: 1h }
+      responses:
+        '200':
+          description: 多标的 K 线数据
+
+  /market/orderbook:
+    get:
+      tags: [Market]
+      summary: 订单簿深度
+      security: []
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20, maximum: 500 }
+      responses:
+        '200':
+          description: 订单簿快照
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderBook'
+
+  /market/trades:
+    get:
+      tags: [Market]
+      summary: 最近成交
+      security: []
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50 }
+      responses:
+        '200':
+          description: 成交记录列表
+
+  /market/snapshot:
+    get:
+      tags: [Market]
+      summary: 市场快照（支持多态路由）
+      description: |
+        根据 `symbol` 参数智能返回不同数据：
+        - 普通 symbol（如 `BTCUSDT`）→ 24h ticker
+        - `SENTIMENT` → 恐惧贪婪/VIX/DXY
+        - `CALENDAR` → 经济日历
+        - 逗号分隔（如 `SPX,NDX,DJI`）→ 全球指数
+      security: []
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          schema:
+            type: string
+            example: BTCUSDT
+      responses:
+        '200':
+          description: 市场快照数据
+
+  /symbols/search:
+    get:
+      tags: [Market]
+      summary: 交易对搜索
+      security: []
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 匹配的交易对列表
+
+  /status:
+    get:
+      tags: [System]
+      summary: 系统状态
+      security: []
+      responses:
+        '200':
+          description: 系统运行状态
+
+  # ═════════════════════════════════════════════════════════════════
+  # Orders
+  # ═════════════════════════════════════════════════════════════════
+  /orders:
+    get:
+      tags: [Orders]
+      summary: 获取当前委托
+      parameters:
+        - name: symbol
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          schema: { type: string, enum: [open, filled, cancelled, all] }
+      responses:
+        '200':
+          description: 订单列表
+    post:
+      tags: [Orders]
+      summary: 下单
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlaceOrderRequest'
+      responses:
+        '200':
+          description: 下单结果
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /orders/{order_id}:
+    delete:
+      tags: [Orders]
+      summary: 撤单
+      parameters:
+        - name: order_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 撤单成功
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /orders/cancel-all:
+    post:
+      tags: [Orders]
+      summary: 全部撤单
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                symbol:
+                  type: string
+      responses:
+        '200':
+          description: 批量撤单结果
+
+  /orders/history:
+    get:
+      tags: [Orders]
+      summary: 历史委托
+      parameters:
+        - name: symbol
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50 }
+      responses:
+        '200':
+          description: 历史订单列表
+
+  # ── OCO ──
+  /orders/oco:
+    get:
+      tags: [Orders, Advanced]
+      summary: 查询 OCO 订单列表
+      responses:
+        '200':
+          description: OCO 订单列表
+    post:
+      tags: [Orders, Advanced]
+      summary: 创建 OCO 订单
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OCOOrderRequest'
+      responses:
+        '200':
+          description: 创建成功
+
+  /orders/oco/{id}:
+    get:
+      tags: [Orders, Advanced]
+      summary: 获取 OCO 订单详情
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: OCO 详情
+    delete:
+      tags: [Orders, Advanced]
+      summary: 取消 OCO 订单
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 取消成功
+
+  # ── Bracket ──
+  /orders/bracket:
+    get:
+      tags: [Orders, Advanced]
+      summary: 查询 Bracket 订单列表
+      responses:
+        '200':
+          description: Bracket 订单列表
+    post:
+      tags: [Orders, Advanced]
+      summary: 创建 Bracket 订单
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BracketOrderRequest'
+      responses:
+        '200':
+          description: 创建成功
+
+  /orders/bracket/{id}:
+    get:
+      tags: [Orders, Advanced]
+      summary: 获取 Bracket 订单详情
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Bracket 详情
+    delete:
+      tags: [Orders, Advanced]
+      summary: 取消 Bracket 订单
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 取消成功
+
+  /orders/bracket/calculate:
+    post:
+      tags: [Orders, Advanced]
+      summary: 计算 Bracket 参数
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                entry_price:
+                  type: number
+                side:
+                  type: string
+                  enum: [buy, sell]
+      responses:
+        '200':
+          description: 计算结果
+
+  # ── Iceberg ──
+  /orders/iceberg:
+    get:
+      tags: [Orders, Advanced]
+      summary: 查询 Iceberg 订单列表
+      responses:
+        '200':
+          description: Iceberg 订单列表
+    post:
+      tags: [Orders, Advanced]
+      summary: 创建 Iceberg 订单
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IcebergOrderRequest'
+      responses:
+        '200':
+          description: 创建成功
+
+  /orders/iceberg/{id}:
+    get:
+      tags: [Orders, Advanced]
+      summary: 获取 Iceberg 订单详情
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Iceberg 详情
+    delete:
+      tags: [Orders, Advanced]
+      summary: 取消 Iceberg 订单
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 取消成功
+
+  # ═════════════════════════════════════════════════════════════════
+  # Account
+  # ═════════════════════════════════════════════════════════════════
+  /account/balance:
+    get:
+      tags: [Account]
+      summary: 账户余额
+      responses:
+        '200':
+          description: 各币种余额
+
+  /account/transfer:
+    post:
+      tags: [Account]
+      summary: 资金划转
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                from:
+                  type: string
+                to:
+                  type: string
+                asset:
+                  type: string
+                amount:
+                  type: number
+      responses:
+        '200':
+          description: 划转结果
+
+  /trades:
+    get:
+      tags: [Account]
+      summary: 成交历史
+      parameters:
+        - name: symbol
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50 }
+      responses:
+        '200':
+          description: 成交记录
+
+  # ═════════════════════════════════════════════════════════════════
+  # Strategy
+  # ═════════════════════════════════════════════════════════════════
+  /strategies/configs:
+    get:
+      tags: [Strategy]
+      summary: 策略配置列表
+      responses:
+        '200':
+          description: 策略配置数组
+    post:
+      tags: [Strategy]
+      summary: 创建策略配置
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StrategyConfig'
+      responses:
+        '200':
+          description: 创建成功
+
+  /strategies/configs/{id}:
+    get:
+      tags: [Strategy]
+      summary: 获取策略配置
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 策略配置详情
+    put:
+      tags: [Strategy]
+      summary: 更新策略配置
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StrategyConfig'
+      responses:
+        '200':
+          description: 更新成功
+    delete:
+      tags: [Strategy]
+      summary: 删除策略配置
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 删除成功
+
+  /strategies/configs/{id}/start:
+    post:
+      tags: [Strategy]
+      summary: 启动策略
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 启动结果
+
+  /strategies/configs/{id}/stop:
+    post:
+      tags: [Strategy]
+      summary: 停止策略
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 停止结果
+
+  /strategies/logs:
+    get:
+      tags: [Strategy]
+      summary: 策略日志
+      parameters:
+        - name: id
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 100 }
+      responses:
+        '200':
+          description: 日志列表
+
+  /strategies/templates:
+    get:
+      tags: [Strategy]
+      summary: 策略模板列表
+      responses:
+        '200':
+          description: 模板数组
+    post:
+      tags: [Strategy]
+      summary: 创建策略模板
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StrategyTemplate'
+      responses:
+        '200':
+          description: 创建成功
+
+  /strategies/ranking:
+    get:
+      tags: [Strategy]
+      summary: 策略排行榜
+      responses:
+        '200':
+          description: 排名列表
+
+  /strategies/spot:
+    get:
+      tags: [Strategy]
+      summary: 现货策略列表
+      responses:
+        '200':
+          description: 现货策略
+
+  /strategies/contract:
+    get:
+      tags: [Strategy]
+      summary: 合约策略列表
+      responses:
+        '200':
+          description: 合约策略
+
+  /strategies/global:
+    get:
+      tags: [Strategy]
+      summary: 获取全局策略配置
+      responses:
+        '200':
+          description: 全局配置
+
+  /strategies/param-defs:
+    get:
+      tags: [Strategy]
+      summary: 策略参数定义
+      responses:
+        '200':
+          description: 参数定义列表
+
+  # ═════════════════════════════════════════════════════════════════
+  # Combo
+  # ═════════════════════════════════════════════════════════════════
+  /combos:
+    get:
+      tags: [Combo]
+      summary: 组合策略列表
+      responses:
+        '200':
+          description: 组合列表
+    post:
+      tags: [Combo]
+      summary: 创建组合策略
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ComboConfig'
+      responses:
+        '200':
+          description: 创建成功
+
+  /combos/{id}:
+    get:
+      tags: [Combo]
+      summary: 获取组合策略
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 组合详情
+    put:
+      tags: [Combo]
+      summary: 更新组合策略
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ComboConfig'
+      responses:
+        '200':
+          description: 更新成功
+    delete:
+      tags: [Combo]
+      summary: 删除组合策略
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 删除成功
+
+  /combos/{id}/start:
+    post:
+      tags: [Combo]
+      summary: 启动组合
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 启动结果
+
+  /combos/{id}/stop:
+    post:
+      tags: [Combo]
+      summary: 停止组合
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 停止结果
+
+  /combos/{id}/signals:
+    get:
+      tags: [Combo]
+      summary: 组合信号
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 信号列表
+
+  # ═════════════════════════════════════════════════════════════════
+  # Backtest
+  # ═════════════════════════════════════════════════════════════════
+  /backtest/run:
+    post:
+      tags: [Backtest]
+      summary: 运行回测
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BacktestRequest'
+      responses:
+        '200':
+          description: 回测结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BacktestResult'
+
+  /native/backtest:
+    post:
+      tags: [Backtest]
+      summary: 原生回测（Rust 引擎）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BacktestRequest'
+      responses:
+        '200':
+          description: 回测结果
+
+  # ═════════════════════════════════════════════════════════════════
+  # Portfolio
+  # ═════════════════════════════════════════════════════════════════
+  /portfolio/summary:
+    get:
+      tags: [Portfolio]
+      summary: 资产总览
+      responses:
+        '200':
+          description: 资产摘要
+
+  /portfolio/positions:
+    get:
+      tags: [Portfolio]
+      summary: 持仓列表
+      responses:
+        '200':
+          description: 持仓详情
+
+  /portfolio/snapshots:
+    get:
+      tags: [Portfolio]
+      summary: 权益曲线快照
+      parameters:
+        - name: days
+          in: query
+          schema: { type: integer, default: 30 }
+      responses:
+        '200':
+          description: 快照数组
+
+  /portfolio/calendar:
+    get:
+      tags: [Portfolio]
+      summary: 盈亏日历
+      parameters:
+        - name: year
+          in: query
+          schema: { type: integer }
+        - name: month
+          in: query
+          schema: { type: integer }
+      responses:
+        '200':
+          description: 月度盈亏日历
+
+  # ═════════════════════════════════════════════════════════════════
+  # AI
+  # ═════════════════════════════════════════════════════════════════
+  /ai/snapshot:
+    get:
+      tags: [AI]
+      summary: AI 市场快照
+      parameters:
+        - name: symbol
+          in: query
+          schema: { type: string, default: BTCUSDT }
+        - name: interval
+          in: query
+          schema: { type: string, default: 1h }
+      responses:
+        '200':
+          description: AI 分析快照
+
+  /ai/generate:
+    post:
+      tags: [AI]
+      summary: AI 生成策略代码
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                prompt:
+                  type: string
+                symbol:
+                  type: string
+                interval:
+                  type: string
+      responses:
+        '200':
+          description: 生成的代码
+
+  /ai/multi-agent:
+    post:
+      tags: [AI]
+      summary: 多智能体分析
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                symbol:
+                  type: string
+                agents:
+                  type: array
+                  items: { type: string }
+      responses:
+        '200':
+          description: 多智能体分析结果
+
+  /ai/backtest:
+    post:
+      tags: [AI]
+      summary: AI 回测
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BacktestRequest'
+      responses:
+        '200':
+          description: 回测结果
+
+  /ai/chat:
+    post:
+      tags: [AI]
+      summary: AI 聊天
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                message:
+                  type: string
+                history:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      role: { type: string }
+                      content: { type: string }
+      responses:
+        '200':
+          description: AI 回复
+
+  /ai/analyze:
+    post:
+      tags: [AI]
+      summary: AI 深度分析
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                symbol:
+                  type: string
+                type:
+                  type: string
+                  enum: [technical, fundamental, sentiment, risk]
+      responses:
+        '200':
+          description: 分析报告
+
+  /ai/quickscan:
+    get:
+      tags: [AI]
+      summary: 快速扫描
+      parameters:
+        - name: symbol
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: 扫描结果
+
+  /ai/optimize:
+    post:
+      tags: [AI]
+      summary: AI 参数优化
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                strategy_id:
+                  type: string
+                params:
+                  type: object
+      responses:
+        '200':
+          description: 优化结果
+
+  /ai/deploy:
+    post:
+      tags: [AI]
+      summary: AI 策略部署
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                code:
+                  type: string
+                symbol:
+                  type: string
+      responses:
+        '200':
+          description: 部署结果
+
+  /ai/validate:
+    post:
+      tags: [AI]
+      summary: AI 策略验证
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                code:
+                  type: string
+      responses:
+        '200':
+          description: 验证结果
+
+  /ai/fix:
+    post:
+      tags: [AI]
+      summary: AI 策略修复
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                code:
+                  type: string
+                error:
+                  type: string
+      responses:
+        '200':
+          description: 修复后的代码
+
+  /strategies/ai-generate:
+    post:
+      tags: [AI, Strategy]
+      summary: AI 生成策略
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                description:
+                  type: string
+                symbol:
+                  type: string
+      responses:
+        '200':
+          description: 生成的策略配置
+
+  # ═════════════════════════════════════════════════════════════════
+  # ML
+  # ═════════════════════════════════════════════════════════════════
+  /ml/health:
+    get:
+      tags: [ML]
+      summary: ML 服务健康检查
+      responses:
+        '200':
+          description: 健康状态
+
+  /ml/train:
+    post:
+      tags: [ML]
+      summary: 训练 ML 模型
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                symbol:
+                  type: string
+                model_type:
+                  type: string
+                  enum: [lgb, xgb, rf, nn]
+                features:
+                  type: array
+                  items: { type: string }
+      responses:
+        '200':
+          description: 训练任务 ID
+
+  /ml/predict:
+    post:
+      tags: [ML]
+      summary: ML 预测
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                model_id:
+                  type: string
+                symbol:
+                  type: string
+      responses:
+        '200':
+          description: 预测结果
+
+  /ml/models:
+    get:
+      tags: [ML]
+      summary: ML 模型列表
+      responses:
+        '200':
+          description: 模型列表
+
+  /ml/models/{id}:
+    get:
+      tags: [ML]
+      summary: 获取 ML 模型详情
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 模型详情
+    delete:
+      tags: [ML]
+      summary: 删除 ML 模型
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 删除成功
+
+  /ml/models/{id}/importance:
+    get:
+      tags: [ML]
+      summary: 特征重要性
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 特征重要性列表
+
+  /ml/features:
+    post:
+      tags: [ML]
+      summary: 生成特征工程
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                symbol:
+                  type: string
+                methods:
+                  type: array
+                  items: { type: string }
+      responses:
+        '200':
+          description: 特征数据
+
+  /ml/deploy:
+    post:
+      tags: [ML]
+      summary: 部署 ML 策略
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                model_id:
+                  type: string
+                strategy_name:
+                  type: string
+      responses:
+        '200':
+          description: 部署结果
+
+  /ml/strategy-models:
+    get:
+      tags: [ML]
+      summary: 策略关联模型
+      responses:
+        '200':
+          description: 模型列表
+
+  # ═════════════════════════════════════════════════════════════════
+  # Hyperopt
+  # ═════════════════════════════════════════════════════════════════
+  /hyperopt/start:
+    post:
+      tags: [Hyperopt]
+      summary: 启动参数优化
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                strategy_id:
+                  type: string
+                space:
+                  type: object
+                epochs:
+                  type: integer
+                  default: 100
+      responses:
+        '200':
+          description: 优化任务 ID
+
+  /hyperopt/jobs:
+    get:
+      tags: [Hyperopt]
+      summary: 优化任务列表
+      responses:
+        '200':
+          description: 任务列表
+
+  /hyperopt/jobs/{id}:
+    get:
+      tags: [Hyperopt]
+      summary: 获取优化任务
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 任务详情
+
+  /hyperopt/jobs/{id}/cancel:
+    post:
+      tags: [Hyperopt]
+      summary: 取消优化任务
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 取消结果
+
+  /hyperopt/jobs/{id}/export:
+    post:
+      tags: [Hyperopt]
+      summary: 导出优化参数
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 最优参数
+
+  /hyperopt/spaces:
+    get:
+      tags: [Hyperopt]
+      summary: 参数空间定义
+      responses:
+        '200':
+          description: 空间定义列表
+
+  # ═════════════════════════════════════════════════════════════════
+  # RL (Reinforcement Learning)
+  # ═════════════════════════════════════════════════════════════════
+  /rl/train:
+    post:
+      tags: [RL]
+      summary: 训练 RL 模型
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                env:
+                  type: string
+                algo:
+                  type: string
+                  enum: [ppo, a2c, dqn, sac]
+                episodes:
+                  type: integer
+      responses:
+        '200':
+          description: 训练任务 ID
+
+  /rl/predict:
+    post:
+      tags: [RL]
+      summary: RL 预测
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                model_id:
+                  type: string
+                state:
+                  type: object
+      responses:
+        '200':
+          description: 动作与置信度
+
+  /rl/evaluate:
+    post:
+      tags: [RL]
+      summary: RL 模型评估
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                model_id:
+                  type: string
+                episodes:
+                  type: integer
+      responses:
+        '200':
+          description: 评估指标
+
+  /rl/models:
+    get:
+      tags: [RL]
+      summary: RL 模型列表
+      responses:
+        '200':
+          description: 模型列表
+
+  /rl/models/{id}:
+    delete:
+      tags: [RL]
+      summary: 删除 RL 模型
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 删除成功
+
+  /rl/jobs/{id}:
+    get:
+      tags: [RL]
+      summary: 获取 RL 训练任务
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 任务详情
+
+  /rl/jobs/{id}/cancel:
+    post:
+      tags: [RL]
+      summary: 取消 RL 训练
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 取消结果
+
+  /rl/worker/status:
+    get:
+      tags: [RL]
+      summary: RL Worker 状态
+      responses:
+        '200':
+          description: Worker 状态
+
+  /rl/worker/start:
+    post:
+      tags: [RL]
+      summary: 启动 RL Worker
+      responses:
+        '200':
+          description: 启动结果
+
+  # ═════════════════════════════════════════════════════════════════
+  # Indicator IDE
+  # ═════════════════════════════════════════════════════════════════
+  /indicator/parse:
+    post:
+      tags: [Indicator]
+      summary: 解析指标代码
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                code:
+                  type: string
+      responses:
+        '200':
+          description: 解析结果
+
+  /indicator/validate:
+    post:
+      tags: [Indicator]
+      summary: 验证指标代码
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                code:
+                  type: string
+      responses:
+        '200':
+          description: 验证结果
+
+  /indicator/save:
+    post:
+      tags: [Indicator]
+      summary: 保存指标
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                code:
+                  type: string
+                params:
+                  type: object
+      responses:
+        '200':
+          description: 保存结果
+
+  /indicator/list:
+    get:
+      tags: [Indicator]
+      summary: 指标列表
+      responses:
+        '200':
+          description: 指标数组
+
+  /indicator/{id}:
+    get:
+      tags: [Indicator]
+      summary: 获取指标详情
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 指标详情
+    delete:
+      tags: [Indicator]
+      summary: 删除指标
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 删除成功
+
+  /indicator/execute:
+    post:
+      tags: [Indicator]
+      summary: 沙箱执行指标
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                code:
+                  type: string
+                symbol:
+                  type: string
+                interval:
+                  type: string
+      responses:
+        '200':
+          description: 执行结果
+
+  /indicator/analyze:
+    post:
+      tags: [Indicator]
+      summary: 沙箱分析指标
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                code:
+                  type: string
+      responses:
+        '200':
+          description: 分析结果
+
+  /indicator/ai-generate:
+    post:
+      tags: [Indicator]
+      summary: AI 生成指标
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                description:
+                  type: string
+      responses:
+        '200':
+          description: 生成的指标代码
+
+  /indicator/backtest:
+    post:
+      tags: [Indicator]
+      summary: 指标回测
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                indicator_id:
+                  type: string
+                symbol:
+                  type: string
+      responses:
+        '200':
+          description: 回测结果
+
+  /indicator/publish:
+    post:
+      tags: [Indicator]
+      summary: 发布指标到社区
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                indicator_id:
+                  type: string
+                price:
+                  type: number
+      responses:
+        '200':
+          description: 发布结果
+
+  # ═════════════════════════════════════════════════════════════════
+  # Community
+  # ═════════════════════════════════════════════════════════════════
+  /community/indicators:
+    get:
+      tags: [Community]
+      summary: 社区指标市场
+      parameters:
+        - name: sort
+          in: query
+          schema: { type: string, enum: [popular, newest, top_rated], default: popular }
+        - name: category
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: 指标列表
+
+  /community/publish:
+    post:
+      tags: [Community]
+      summary: 发布指标
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                indicator_id:
+                  type: string
+                price:
+                  type: number
+      responses:
+        '200':
+          description: 发布结果
+
+  /community/purchase/{id}:
+    post:
+      tags: [Community]
+      summary: 购买指标
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 购买结果
+
+  /community/comments/{id}:
+    get:
+      tags: [Community]
+      summary: 获取评论
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 评论列表
+    post:
+      tags: [Community]
+      summary: 发表评论
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                content:
+                  type: string
+                rating:
+                  type: integer
+                  minimum: 1
+                  maximum: 5
+      responses:
+        '200':
+          description: 发表成功
+
+  /community/review/{id}:
+    post:
+      tags: [Community]
+      summary: 审核指标
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                action:
+                  type: string
+                  enum: [approve, reject]
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: 审核结果
+
+  /community/reviews/pending:
+    get:
+      tags: [Community]
+      summary: 待审核列表
+      responses:
+        '200':
+          description: 待审核指标
+
+  /community/author/revenue:
+    get:
+      tags: [Community]
+      summary: 作者收入
+      responses:
+        '200':
+          description: 收入统计
+
+  /community/strategies:
+    get:
+      tags: [Community]
+      summary: 策略市场
+      responses:
+        '200':
+          description: 策略列表
+
+  /community/strategies/leaderboard:
+    get:
+      tags: [Community]
+      summary: 策略排行榜
+      responses:
+        '200':
+          description: 排行榜
+
+  /community/strategies/trending:
+    get:
+      tags: [Community]
+      summary: 热门策略
+      responses:
+        '200':
+          description: 热门策略列表
+
+  /community/strategies/{id}:
+    get:
+      tags: [Community]
+      summary: 策略详情
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 策略详情
+
+  /community/strategies/{id}/overfit:
+    get:
+      tags: [Community]
+      summary: 过拟合风险
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 过拟合评估
+
+  /community/strategies/publish:
+    post:
+      tags: [Community]
+      summary: 发布策略
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                strategy_id:
+                  type: string
+                price:
+                  type: number
+      responses:
+        '200':
+          description: 发布结果
+
+  /community/strategies/{id}/comment:
+    post:
+      tags: [Community]
+      summary: 策略评论
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                content:
+                  type: string
+      responses:
+        '200':
+          description: 评论成功
+
+  /community/strategies/{id}/rate:
+    post:
+      tags: [Community]
+      summary: 策略评分
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                rating:
+                  type: integer
+                  minimum: 1
+                  maximum: 5
+      responses:
+        '200':
+          description: 评分成功
+
+  # ═════════════════════════════════════════════════════════════════
+  # Social Trading
+  # ═════════════════════════════════════════════════════════════════
+  /social/*:
+    x-internal: true
+    summary: 社交交易路由组（动态注册）
+    tags: [Social]
+
+  # ═════════════════════════════════════════════════════════════════
+  # On-Chain
+  # ═════════════════════════════════════════════════════════════════
+  /onchain/*:
+    x-internal: true
+    summary: 链上数据路由组（动态注册）
+    tags: [OnChain]
+
+  # ═════════════════════════════════════════════════════════════════
+  # Arbitrage
+  # ═════════════════════════════════════════════════════════════════
+  /arbitrage/config:
+    get:
+      tags: [Arbitrage]
+      summary: 获取套利配置
+      responses:
+        '200':
+          description: 配置详情
+    post:
+      tags: [Arbitrage]
+      summary: 更新套利配置
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                min_spread_pct:
+                  type: number
+                max_position:
+                  type: number
+      responses:
+        '200':
+          description: 更新成功
+
+  /arbitrage/start:
+    post:
+      tags: [Arbitrage]
+      summary: 启动套利引擎
+      responses:
+        '200':
+          description: 启动结果
+
+  /arbitrage/stop:
+    post:
+      tags: [Arbitrage]
+      summary: 停止套利引擎
+      responses:
+        '200':
+          description: 停止结果
+
+  /arbitrage/status:
+    get:
+      tags: [Arbitrage]
+      summary: 套利状态
+      responses:
+        '200':
+          description: 运行状态
+
+  /arbitrage/opportunity:
+    get:
+      tags: [Arbitrage]
+      summary: 套利机会
+      responses:
+        '200':
+          description: 机会列表
+
+  /arbitrage/positions:
+    get:
+      tags: [Arbitrage]
+      summary: 套利持仓
+      responses:
+        '200':
+          description: 持仓列表
+
+  /arbitrage/history:
+    get:
+      tags: [Arbitrage]
+      summary: 套利历史
+      responses:
+        '200':
+          description: 历史记录
+
+  /arbitrage/exchanges:
+    get:
+      tags: [Arbitrage]
+      summary: 已注册交易所
+      responses:
+        '200':
+          description: 交易所列表
+    post:
+      tags: [Arbitrage]
+      summary: 注册套利交易所
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                exchange:
+                  type: string
+                api_key:
+                  type: string
+      responses:
+        '200':
+          description: 注册结果
+
+  /arbitrage/execute:
+    post:
+      tags: [Arbitrage]
+      summary: 手动执行套利
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                symbol:
+                  type: string
+                buy_exchange:
+                  type: string
+                sell_exchange:
+                  type: string
+                amount:
+                  type: number
+      responses:
+        '200':
+          description: 执行结果
+
+  # ═════════════════════════════════════════════════════════════════
+  # Protection
+  # ═════════════════════════════════════════════════════════════════
+  /protection/status:
+    get:
+      tags: [Protection]
+      summary: 风控状态
+      responses:
+        '200':
+          description: 风控状态详情
+
+  /protection/config:
+    post:
+      tags: [Protection]
+      summary: 配置风控规则
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                max_drawdown_pct:
+                  type: number
+                daily_loss_limit:
+                  type: number
+      responses:
+        '200':
+          description: 配置结果
+
+  /protection/reset:
+    post:
+      tags: [Protection]
+      summary: 重置风控计数器
+      responses:
+        '200':
+          description: 重置结果
+
+  /protection/trade:
+    post:
+      tags: [Protection]
+      summary: 记录交易用于风控计算
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                pnl:
+                  type: number
+      responses:
+        '200':
+          description: 记录结果
+
+  # ═════════════════════════════════════════════════════════════════
+  # Pairlist
+  # ═════════════════════════════════════════════════════════════════
+  /pairlist/whitelist:
+    get:
+      tags: [Pairlist]
+      summary: 白名单
+      responses:
+        '200':
+          description: 交易对列表
+
+  /pairlist/refresh:
+    post:
+      tags: [Pairlist]
+      summary: 刷新交易对列表
+      responses:
+        '200':
+          description: 刷新结果
+
+  /pairlist/config:
+    get:
+      tags: [Pairlist]
+      summary: 获取筛选配置
+      responses:
+        '200':
+          description: 配置详情
+    post:
+      tags: [Pairlist]
+      summary: 配置筛选规则
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                volume_min:
+                  type: number
+                volatility_max:
+                  type: number
+      responses:
+        '200':
+          description: 配置结果
+
+  # ═════════════════════════════════════════════════════════════════
+  # Notifications
+  # ═════════════════════════════════════════════════════════════════
+  /notifications:
+    get:
+      tags: [Notifications]
+      summary: 通知列表
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50 }
+      responses:
+        '200':
+          description: 通知数组
+
+  /notifications/unread-count:
+    get:
+      tags: [Notifications]
+      summary: 未读通知数
+      responses:
+        '200':
+          description: 未读数量
+
+  /notifications/{id}/read:
+    post:
+      tags: [Notifications]
+      summary: 标记已读
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 标记成功
+
+  /notifications/read-all:
+    post:
+      tags: [Notifications]
+      summary: 全部已读
+      responses:
+        '200':
+          description: 标记成功
+
+  /notify/channels:
+    get:
+      tags: [Notifications]
+      summary: 通知渠道列表
+      responses:
+        '200':
+          description: 渠道列表
+
+  /notify/routes:
+    get:
+      tags: [Notifications]
+      summary: 通知路由列表
+      responses:
+        '200':
+          description: 路由列表
+    post:
+      tags: [Notifications]
+      summary: 更新通知路由
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                event:
+                  type: string
+                channel:
+                  type: string
+                enabled:
+                  type: boolean
+      responses:
+        '200':
+          description: 更新结果
+
+  /notify/routes/{id}:
+    delete:
+      tags: [Notifications]
+      summary: 删除通知路由
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 删除成功
+
+  /notify/test:
+    post:
+      tags: [Notifications]
+      summary: 测试通知渠道
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                channel:
+                  type: string
+      responses:
+        '200':
+          description: 测试结果
+
+  /notify/send:
+    post:
+      tags: [Notifications]
+      summary: 发送自定义通知
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                channel:
+                  type: string
+                title:
+                  type: string
+                body:
+                  type: string
+      responses:
+        '200':
+          description: 发送结果
+
+  # ═════════════════════════════════════════════════════════════════
+  # Settings
+  # ═════════════════════════════════════════════════════════════════
+  /config:
+    get:
+      tags: [Settings]
+      summary: 获取系统配置
+      responses:
+        '200':
+          description: 配置对象
+    put:
+      tags: [Settings]
+      summary: 保存系统配置
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: 保存结果
+
+  /settings/agent/models:
+    get:
+      tags: [Settings]
+      summary: 可用 AI 模型列表
+      responses:
+        '200':
+          description: 模型列表
+
+  /settings/defaults:
+    get:
+      tags: [Settings]
+      summary: 默认设置
+      responses:
+        '200':
+          description: 默认配置
+    post:
+      tags: [Settings]
+      summary: 保存默认设置
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: 保存结果
+
+  /settings/ui:
+    post:
+      tags: [Settings]
+      summary: 保存 UI 偏好
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                theme:
+                  type: string
+                  enum: [light, dark, system]
+                language:
+                  type: string
+                  enum: [zh-CN, en-US]
+      responses:
+        '200':
+          description: 保存结果
+
+  /settings/currency:
+    get:
+      tags: [Settings]
+      summary: 获取货币设置
+      responses:
+        '200':
+          description: 货币配置
+    put:
+      tags: [Settings]
+      summary: 设置货币
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                currency:
+                  type: string
+                  enum: [USD, CNY, EUR, JPY]
+      responses:
+        '200':
+          description: 设置结果
+
+  /exchange/save:
+    post:
+      tags: [Settings]
+      summary: 保存交易所配置
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                exchange:
+                  type: string
+                api_key:
+                  type: string
+                secret:
+                  type: string
+      responses:
+        '200':
+          description: 保存结果
+
+  /exchange/test:
+    post:
+      tags: [Settings]
+      summary: 测试交易所连接
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                exchange:
+                  type: string
+      responses:
+        '200':
+          description: 测试结果
+
+  /exchange/default:
+    post:
+      tags: [Settings]
+      summary: 设置默认交易所
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                exchange:
+                  type: string
+      responses:
+        '200':
+          description: 设置结果
+
+  /exchange/status:
+    get:
+      tags: [Settings]
+      summary: 交易所连接状态
+      responses:
+        '200':
+          description: 状态列表
+
+  /exchanges/configured:
+    get:
+      tags: [Settings]
+      summary: 已配置交易所
+      responses:
+        '200':
+          description: 交易所列表
+
+  /ai/save:
+    post:
+      tags: [Settings]
+      summary: 保存 AI 配置
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                provider:
+                  type: string
+                api_key:
+                  type: string
+                model:
+                  type: string
+      responses:
+        '200':
+          description: 保存结果
+
+  /ai/test:
+    post:
+      tags: [Settings]
+      summary: 测试 AI 连接
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                provider:
+                  type: string
+      responses:
+        '200':
+          description: 测试结果
+
+  /ai/default:
+    post:
+      tags: [Settings]
+      summary: 设置默认 AI
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                provider:
+                  type: string
+      responses:
+        '200':
+          description: 设置结果
+
+  /restart:
+    post:
+      tags: [System]
+      summary: 重启系统
+      responses:
+        '200':
+          description: 重启指令已发送
+
+  # ═════════════════════════════════════════════════════════════════
+  # Dashboard
+  # ═════════════════════════════════════════════════════════════════
+  /dashboard/summary:
+    get:
+      tags: [Dashboard]
+      summary: 仪表盘摘要
+      responses:
+        '200':
+          description: 摘要数据
+
+  # ═════════════════════════════════════════════════════════════════
+  # User Profile
+  # ═════════════════════════════════════════════════════════════════
+  /user/profile:
+    get:
+      tags: [User]
+      summary: 获取个人资料
+      responses:
+        '200':
+          description: 用户资料
+    put:
+      tags: [User]
+      summary: 更新个人资料
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                nickname:
+                  type: string
+                avatar:
+                  type: string
+      responses:
+        '200':
+          description: 更新结果
+
+  /user/change-password:
+    post:
+      tags: [User]
+      summary: 修改密码
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                old_password:
+                  type: string
+                new_password:
+                  type: string
+      responses:
+        '200':
+          description: 修改结果
+
+  /user/notification-settings:
+    get:
+      tags: [User]
+      summary: 通知设置
+      responses:
+        '200':
+          description: 设置详情
+    put:
+      tags: [User]
+      summary: 更新通知设置
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: 更新结果
+
+  # ═════════════════════════════════════════════════════════════════
+  # Billing
+  # ═════════════════════════════════════════════════════════════════
+  /billing/plans:
+    get:
+      tags: [Billing]
+      summary: 会员方案
+      security: []
+      responses:
+        '200':
+          description: 方案列表
+
+  /billing/chains:
+    get:
+      tags: [Billing]
+      summary: 支持的链
+      security: []
+      responses:
+        '200':
+          description: 链列表
+
+  /billing/orders:
+    post:
+      tags: [Billing]
+      summary: 创建订单
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                plan_id:
+                  type: string
+                chain:
+                  type: string
+      responses:
+        '200':
+          description: 订单信息
+
+  /billing/orders/{id}:
+    get:
+      tags: [Billing]
+      summary: 订单状态
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 订单状态
+
+  # ═════════════════════════════════════════════════════════════════
+  # Admin
+  # ═════════════════════════════════════════════════════════════════
+  /admin/users:
+    get:
+      tags: [Admin]
+      summary: 用户列表
+      responses:
+        '200':
+          description: 用户数组
+
+  /admin/users/{id}:
+    get:
+      tags: [Admin]
+      summary: 获取用户详情
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 用户详情
+    put:
+      tags: [Admin]
+      summary: 更新用户
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: 更新结果
+
+  /admin/stats:
+    get:
+      tags: [Admin]
+      summary: 统计数据
+      responses:
+        '200':
+          description: 统计指标
+
+  /admin/summary:
+    get:
+      tags: [Admin]
+      summary: 管理摘要
+      responses:
+        '200':
+          description: 摘要数据
+
+  /admin/audit-log:
+    get:
+      tags: [Admin]
+      summary: 审计日志
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50 }
+      responses:
+        '200':
+          description: 日志列表
+
+  /admin/activity:
+    get:
+      tags: [Admin]
+      summary: 最近活动
+      responses:
+        '200':
+          description: 活动列表
+
+  /admin/users/{id}/disable:
+    post:
+      tags: [Admin]
+      summary: 禁用用户
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 禁用结果
+
+  /admin/users/{id}/enable:
+    post:
+      tags: [Admin]
+      summary: 启用用户
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 启用结果
+
+  /admin/config/reload:
+    post:
+      tags: [Admin]
+      summary: 重载配置
+      responses:
+        '200':
+          description: 重载结果
+
+  # ═════════════════════════════════════════════════════════════════
+  # Health
+  # ═════════════════════════════════════════════════════════════════
+  /health:
+    get:
+      tags: [System]
+      summary: 健康检查
+      security: []
+      responses:
+        '200':
+          description: 系统健康
+
+  /health/components:
+    get:
+      tags: [System]
+      summary: 组件健康
+      security: []
+      responses:
+        '200':
+          description: 各组件状态
+
+  # ═════════════════════════════════════════════════════════════════
+  # Data Management
+  # ═════════════════════════════════════════════════════════════════
+  /data/coverage:
+    get:
+      tags: [Data]
+      summary: 数据覆盖范围
+      responses:
+        '200':
+          description: 覆盖统计
+
+  /data/info:
+    get:
+      tags: [Data]
+      summary: 数据信息
+      responses:
+        '200':
+          description: 数据元信息
+
+  /data/download:
+    post:
+      tags: [Data]
+      summary: 启动数据下载
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                symbol:
+                  type: string
+                interval:
+                  type: string
+                start:
+                  type: string
+                end:
+                  type: string
+      responses:
+        '200':
+          description: 下载任务 ID
+
+  /data/download/{id}:
+    get:
+      tags: [Data]
+      summary: 下载任务状态
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 任务状态
+
+  /data/bars:
+    get:
+      tags: [Data]
+      summary: 历史 K 线数据
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          schema: { type: string }
+        - name: interval
+          in: query
+          schema: { type: string, default: 1h }
+        - name: start
+          in: query
+          schema: { type: string }
+        - name: end
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: K 线数组
+
+  /data/ticks/download:
+    post:
+      tags: [Data]
+      summary: 启动 Tick 下载
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                symbol:
+                  type: string
+                date:
+                  type: string
+      responses:
+        '200':
+          description: 下载任务 ID
+
+  /data/ticks:
+    get:
+      tags: [Data]
+      summary: Tick 数据
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          schema: { type: string }
+        - name: date
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Tick 数组
+
+  /data/ticks/info:
+    get:
+      tags: [Data]
+      summary: Tick 数据信息
+      parameters:
+        - name: symbol
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: 信息详情
+
+  # ═════════════════════════════════════════════════════════════════
+  # Tick Backtest
+  # ═════════════════════════════════════════════════════════════════
+  /backtest/tick:
+    post:
+      tags: [Backtest]
+      summary: Tick 级别回测
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                symbol:
+                  type: string
+                strategy_code:
+                  type: string
+                date:
+                  type: string
+      responses:
+        '200':
+          description: 回测结果
+
+  /backtest/tick/jobs:
+    get:
+      tags: [Backtest]
+      summary: Tick 回测任务列表
+      responses:
+        '200':
+          description: 任务列表
+
+  /backtest/tick/jobs/{id}:
+    get:
+      tags: [Backtest]
+      summary: Tick 回测任务详情
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 任务详情
+
+  # ═════════════════════════════════════════════════════════════════
+  # TensorBoard
+  # ═════════════════════════════════════════════════════════════════
+  /tensorboard/runs:
+    get:
+      tags: [TensorBoard]
+      summary: 实验运行列表
+      responses:
+        '200':
+          description: 运行列表
+
+  /tensorboard/scalars:
+    post:
+      tags: [TensorBoard]
+      summary: 查询标量数据
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                run:
+                  type: string
+                tag:
+                  type: string
+      responses:
+        '200':
+          description: 标量数据
+
+  /tensorboard/runs/{id}:
+    get:
+      tags: [TensorBoard]
+      summary: 运行详情
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 运行详情
+    delete:
+      tags: [TensorBoard]
+      summary: 删除运行
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 删除成功
+
+  # ═════════════════════════════════════════════════════════════════
+  # Experiment
+  # ═════════════════════════════════════════════════════════════════
+  /experiment/run:
+    post:
+      tags: [Experiment]
+      summary: 运行实验
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                strategy_id:
+                  type: string
+                params:
+                  type: object
+      responses:
+        '200':
+          description: 实验 ID
+
+  /experiment/sensitivity:
+    post:
+      tags: [Experiment]
+      summary: 敏感性分析
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                strategy_id:
+                  type: string
+                param:
+                  type: string
+                range:
+                  type: array
+                  items: { type: number }
+      responses:
+        '200':
+          description: 分析结果
+
+  /experiment/walk-forward:
+    post:
+      tags: [Experiment]
+      summary: 滚动前向分析
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                strategy_id:
+                  type: string
+                train_days:
+                  type: integer
+                test_days:
+                  type: integer
+      responses:
+        '200':
+          description: 分析结果
+
+  /experiment/status/{id}:
+    get:
+      tags: [Experiment]
+      summary: 实验状态
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 状态详情
+
+  # ═════════════════════════════════════════════════════════════════
+  # Agent
+  # ═════════════════════════════════════════════════════════════════
+  /agent/tokens:
+    get:
+      tags: [Agent]
+      summary: Agent 令牌列表
+      responses:
+        '200':
+          description: 令牌列表
+    post:
+      tags: [Agent]
+      summary: 创建 Agent 令牌
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                permissions:
+                  type: array
+                  items: { type: string }
+      responses:
+        '200':
+          description: 创建结果
+
+  /agent/tokens/{id}:
+    delete:
+      tags: [Agent]
+      summary: 删除 Agent 令牌
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 删除成功
+
+  /agent/audit-log:
+    get:
+      tags: [Agent]
+      summary: Agent 审计日志
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50 }
+      responses:
+        '200':
+          description: 日志列表
+
+  /agent/cc-switch:
+    get:
+      tags: [Agent]
+      summary: CC Switch 状态
+      responses:
+        '200':
+          description: 状态详情
+
+  /agent/cc-switch/configure:
+    post:
+      tags: [Agent]
+      summary: 配置 CC Switch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: 配置结果
+
+  /agent/cc-switch/start:
+    post:
+      tags: [Agent]
+      summary: 启动 CC Switch
+      responses:
+        '200':
+          description: 启动结果
+
+  /agent/cc-switch/stop:
+    post:
+      tags: [Agent]
+      summary: 停止 CC Switch
+      responses:
+        '200':
+          description: 停止结果
+
+  /agent/ai-config:
+    get:
+      tags: [Agent]
+      summary: 获取 Agent AI 配置
+      responses:
+        '200':
+          description: 配置详情
+    put:
+      tags: [Agent]
+      summary: 保存 Agent AI 配置
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: 保存结果
+
+  /agent/ai-test:
+    post:
+      tags: [Agent]
+      summary: 测试 Agent AI
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: 测试结果
+
+  /agent/chat:
+    post:
+      tags: [Agent]
+      summary: Agent 聊天
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                message:
+                  type: string
+      responses:
+        '200':
+          description: 回复内容
+
+  # ═════════════════════════════════════════════════════════════════
+  # Chart
+  # ═════════════════════════════════════════════════════════════════
+  /chart:
+    get:
+      tags: [Market]
+      summary: 图表数据聚合
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          schema: { type: string }
+        - name: interval
+          in: query
+          schema: { type: string, default: 1h }
+        - name: indicators
+          in: query
+          schema: { type: string, example: ma,rsi,boll }
+      responses:
+        '200':
+          description: 图表数据
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 从登录接口获取的 JWT Token
+
+  schemas:
+    # ── Auth ──
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          example: trader001
+        password:
+          type: string
+          format: password
+          example: '******'
+
+    LoginResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          description: JWT 访问令牌
+        refresh_token:
+          type: string
+        user:
+          $ref: '#/components/schemas/User'
+
+    RegisterRequest:
+      type: object
+      required: [username, password, email]
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+          format: password
+        email:
+          type: string
+          format: email
+        referral_code:
+          type: string
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+        username:
+          type: string
+        email:
+          type: string
+        nickname:
+          type: string
+        avatar:
+          type: string
+        role:
+          type: string
+          enum: [user, admin, author]
+        created_at:
+          type: string
+          format: date-time
+
+    # ── Market ──
+    KlineBar:
+      type: object
+      properties:
+        timestamp:
+          type: integer
+          description: 毫秒时间戳
+        open:
+          type: number
+        high:
+          type: number
+        low:
+          type: number
+        close:
+          type: number
+        volume:
+          type: number
+
+    OrderBook:
+      type: object
+      properties:
+        symbol:
+          type: string
+        bids:
+          type: array
+          description: 买单 [[price, quantity], ...]
+          items:
+            type: array
+            items: { type: number }
+        asks:
+          type: array
+          description: 卖单 [[price, quantity], ...]
+          items:
+            type: array
+            items: { type: number }
+        timestamp:
+          type: integer
+
+    TickerSnapshot:
+      type: object
+      properties:
+        symbol:
+          type: string
+        price:
+          type: number
+        change_24h:
+          type: number
+        change_pct_24h:
+          type: number
+        volume_24h:
+          type: number
+        high_24h:
+          type: number
+        low_24h:
+          type: number
+
+    # ── Orders ──
+    PlaceOrderRequest:
+      type: object
+      required: [symbol, side, type]
+      properties:
+        symbol:
+          type: string
+          example: BTCUSDT
+        side:
+          type: string
+          enum: [buy, sell]
+        type:
+          type: string
+          enum: [limit, market]
+        price:
+          type: number
+          description: 限价单必填
+        quantity:
+          type: number
+        quote_order_qty:
+          type: number
+          description: 市价单按金额买入
+        time_in_force:
+          type: string
+          enum: [GTC, IOC, FOK]
+          default: GTC
+
+    OCOOrderRequest:
+      type: object
+      required: [symbol, side, quantity, price, stopPrice, stopLimitPrice]
+      properties:
+        symbol: { type: string }
+        side: { type: string, enum: [buy, sell] }
+        quantity: { type: number }
+        price: { type: number, description: 限价单价格 }
+        stopPrice: { type: number, description: 触发价 }
+        stopLimitPrice: { type: number, description: 止损限价 }
+
+    BracketOrderRequest:
+      type: object
+      required: [symbol, side, quantity, entry_price, tp_price, sl_price]
+      properties:
+        symbol: { type: string }
+        side: { type: string, enum: [buy, sell] }
+        quantity: { type: number }
+        entry_price: { type: number }
+        tp_price: { type: number, description: 止盈价 }
+        sl_price: { type: number, description: 止损价 }
+        tp_type: { type: string, enum: [limit, market] }
+        sl_type: { type: string, enum: [limit, market] }
+
+    IcebergOrderRequest:
+      type: object
+      required: [symbol, side, total_quantity, visible_quantity, price]
+      properties:
+        symbol: { type: string }
+        side: { type: string, enum: [buy, sell] }
+        total_quantity: { type: number }
+        visible_quantity: { type: number }
+        price: { type: number }
+
+    # ── Strategy ──
+    StrategyConfig:
+      type: object
+      required: [name, strategy_type, symbol]
+      properties:
+        name:
+          type: string
+        strategy_type:
+          type: string
+          enum: [breakout, ema_cross, macd, rsi, bollinger_bands, atr_trailing_stop, dual_thrust, renko, grid_trading, arbitrage, market_making, martingale, wallstreet]
+        symbol:
+          type: string
+        interval:
+          type: string
+          default: 1h
+        params:
+          type: object
+        enabled:
+          type: boolean
+          default: false
+
+    StrategyTemplate:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        strategy_type:
+          type: string
+        description:
+          type: string
+        default_params:
+          type: object
+
+    ComboConfig:
+      type: object
+      required: [name, strategies]
+      properties:
+        name:
+          type: string
+        strategies:
+          type: array
+          items: { type: string }
+        allocation:
+          type: object
+          description: 各策略资金分配比例
+        rebalance:
+          type: boolean
+          default: false
+
+    # ── Backtest ──
+    BacktestRequest:
+      type: object
+      required: [symbol, interval, start_date, end_date, initial_balance]
+      properties:
+        symbol:
+          type: string
+          example: BTCUSDT
+        interval:
+          type: string
+          example: 1h
+        start_date:
+          type: string
+          format: date
+          example: '2024-01-01'
+        end_date:
+          type: string
+          format: date
+          example: '2024-06-01'
+        initial_balance:
+          type: number
+          default: 10000
+        strategy_type:
+          type: string
+        strategy_config:
+          type: object
+        fee_rate:
+          type: number
+          default: 0.001
+
+    BacktestResult:
+      type: object
+      properties:
+        id:
+          type: string
+        strategy_id:
+          type: string
+        symbol:
+          type: string
+        start_date:
+          type: string
+        end_date:
+          type: string
+        initial_capital:
+          type: number
+        final_equity:
+          type: number
+        total_return_pct:
+          type: number
+        max_drawdown_pct:
+          type: number
+        sharpe_ratio:
+          type: number
+        win_rate:
+          type: number
+        profit_factor:
+          type: number
+        total_trades:
+          type: integer
+        trades:
+          type: array
+          items:
+            $ref: '#/components/schemas/BacktestTrade'
+        equity_curve:
+          type: array
+          items:
+            type: object
+            properties:
+              time: { type: integer }
+              equity: { type: number }
+        report:
+          type: object
+
+    BacktestTrade:
+      type: object
+      properties:
+        id:
+          type: string
+        symbol:
+          type: string
+        side:
+          type: string
+          enum: [BUY, SELL]
+        entry_price:
+          type: number
+        exit_price:
+          type: number
+        quantity:
+          type: number
+        pnl:
+          type: number
+        pnl_pct:
+          type: number
+        entry_time:
+          type: integer
+        exit_time:
+          type: integer
+
+    # ── Common ──
+    Error:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        message:
+          type: string
+        code:
+          type: string
+        request_id:
+          type: string
+
+  responses:
+    BadRequest:
+      description: 请求参数错误
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    Unauthorized:
+      description: 未授权（Token 无效或过期）
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    InternalError:
+      description: 服务器内部错误
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'

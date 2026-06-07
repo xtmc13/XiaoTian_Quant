@@ -1,15 +1,19 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { strategyApi, aiApi, mlApi } from '@/lib/api'
+import { strategyApi, aiApi, mlApi, backtestApi } from '@/lib/api'
 import { cn, formatCurrency } from '@/lib/utils'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { SectionCard } from '@/components/ui/SectionCard'
+import { Skeleton } from '@/components/ui/Skeleton'
+import { toast } from '@/lib/useToast'
 import type { MLModelInfo } from '@/types'
 import {
   Play, Pause, FlaskConical, Code, Bot, MessageSquare,
   LayoutDashboard, FolderOpen, Plus, Trash2, Activity, TrendingUp,
   Send, Cpu, Sparkles, BarChart3, X, Zap, Layers,
-  Copy, RotateCcw, BrainCircuit, Vote, Gauge
+  Copy, RotateCcw, BrainCircuit, Vote, Gauge,
+  ChevronRight as ChevronRightIcon,
 } from 'lucide-react'
 import { useStrategyData } from '@/hooks/useStrategyData'
 import { StrategyList, StatusBadge, getStatusDot } from '@/components/strategy/StrategyList'
@@ -31,7 +35,7 @@ const TABS = [
   { key: 'overview', label: '概览', icon: LayoutDashboard },
   { key: 'strategy', label: '策略管理', icon: FolderOpen },
   { key: 'code', label: '代码编辑器', icon: Code },
-  { key: 'freqtrade', label: 'ML 策略', icon: FlaskConical },
+  { key: 'ml', label: 'ML 部署', icon: FlaskConical },
   { key: 'dinger', label: 'AI 策略生成器', icon: MessageSquare },
 ] as const
 
@@ -85,7 +89,7 @@ export function Strategy() {
         {tab === 'overview' && <OverviewTab />}
         {tab === 'strategy' && <StrategyManagementTab />}
         {tab === 'code' && <StrategyEditor />}
-        {tab === 'freqtrade' && <MLStrategyTab />}
+        {tab === 'ml' && <MLStrategyTab />}
         {tab === 'dinger' && <AIStrategyGeneratorTab />}
       </div>
     </div>
@@ -139,7 +143,8 @@ function GuideBar({ onDismiss, onCreate }: { onDismiss: () => void; onCreate: ()
    Overview Tab
    ═══════════════════════════════════════════════════════════════ */
 function OverviewTab() {
-  const { data: strategies } = useQuery({ queryKey: ['strategies'], queryFn: () => strategyApi.list() })
+  const navigate = useNavigate()
+  const { data: strategies, isLoading } = useQuery({ queryKey: ['strategies'], queryFn: () => strategyApi.list() })
   const list = (strategies || []) as StrategyItem[]
   const running = list.filter((s) => s.status === 'running').length
   const stopped = list.filter((s) => s.status === 'stopped').length
@@ -148,13 +153,30 @@ function OverviewTab() {
   return (
     <div className="h-full overflow-y-auto p-6 space-y-5">
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <StatCard icon={Layers} label="总策略数" value={String(list.length)} />
-        <StatCard icon={Activity} label="运行中" value={String(running)} color="text-quant-green" />
-        <StatCard icon={Pause} label="已停止" value={String(stopped)} color="text-muted-foreground" />
-        <StatCard icon={TrendingUp} label="总盈亏" value={totalPnl >= 0 ? `+$${totalPnl.toFixed(2)}` : `-$${Math.abs(totalPnl).toFixed(2)}`} color={totalPnl >= 0 ? 'text-quant-green' : 'text-quant-red'} />
+        {isLoading ? (
+          Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} variant="card" height={72} />)
+        ) : (
+          <>
+            <StatCard icon={Layers} label="总策略数" value={String(list.length)} />
+            <StatCard icon={Activity} label="运行中" value={String(running)} color="text-quant-green" />
+            <StatCard icon={Pause} label="已停止" value={String(stopped)} color="text-muted-foreground" />
+            <StatCard icon={TrendingUp} label="总盈亏" value={totalPnl >= 0 ? `+$${totalPnl.toFixed(2)}` : `-$${Math.abs(totalPnl).toFixed(2)}`} color={totalPnl >= 0 ? 'text-quant-green' : 'text-quant-red'} />
+          </>
+        )}
       </div>
-      <SectionCard title="最近活跃策略">
-        {list.length === 0 ? (
+      <SectionCard
+        title="最近活跃策略"
+        headerAction={
+          list.length > 5 ? (
+            <button onClick={() => navigate('/strategy?tab=strategy')} className="flex items-center gap-0.5 text-[10px] text-muted-foreground transition-colors hover:text-foreground">
+              查看全部 <ChevronRightIcon className="h-3 w-3" />
+            </button>
+          ) : undefined
+        }
+      >
+        {isLoading ? (
+          <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} variant="rect" height={44} />)}</div>
+        ) : list.length === 0 ? (
           <EmptyState title="暂无策略" description="前往策略管理页创建你的第一个策略" />
         ) : (
           <div className="space-y-2">
@@ -260,22 +282,32 @@ function MLStrategyTab() {
   const [mlSymbol, setMlSymbol] = useState('BTCUSDT')
   const [mlMinConfidence, setMlMinConfidence] = useState(0.3)
   const [mlDeploying, setMlDeploying] = useState(false)
+  const [mlDeployed, setMlDeployed] = useState(false)
+  const [mlError, setMlError] = useState<string | null>(null)
 
   useEffect(() => {
     mlApi.list().then(models => {
       setMlModels(models || [])
       if (models?.length > 0 && !selectedMlModel) setSelectedMlModel(models[0].model_id)
-    }).catch(() => {})
+      setMlError(null)
+    }).catch((e: unknown) => {
+      setMlError('ML 服务不可用，请检查 ML Server 是否运行')
+      console.error('ML list error:', e)
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const handleDeployMl = async () => {
     if (!selectedMlModel) return
     setMlDeploying(true)
+    setMlDeployed(false)
     try {
       await mlApi.deploy({ model_id: selectedMlModel, symbol: mlSymbol, min_confidence: mlMinConfidence })
-      alert(`ML 策略已部署: ${selectedMlModel} → ${mlSymbol}`)
-    } catch (e: unknown) { alert('部署失败: ' + (e instanceof Error ? e.message : String(e))) }
+      toast('success', `ML 策略已部署: ${selectedMlModel} → ${mlSymbol}`)
+      setMlDeployed(true)
+    } catch (e: unknown) {
+      toast('error', '部署失败: ' + (e instanceof Error ? e.message : String(e)))
+    }
     finally { setMlDeploying(false) }
   }
 
@@ -286,11 +318,15 @@ function MLStrategyTab() {
           <input value={strategyName} onChange={(e) => setStrategyName(e.target.value)} className="bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-sm w-56 focus:outline-none focus:border-quant-gold" />
           <span className="px-2 py-1 bg-blue-500/10 text-blue-400 rounded text-[10px] font-medium border border-blue-500/20">ML 策略</span>
         </div>
-        <button onClick={handleDeployMl} disabled={mlDeploying || !selectedMlModel}
+        {mlError && (
+          <div className="px-3 py-2 rounded-lg bg-quant-red/10 border border-quant-red/20 text-xs text-quant-red mb-2">{mlError}</div>
+        )}
+        <button onClick={handleDeployMl} disabled={mlDeploying || !selectedMlModel || mlDeployed}
           className={cn('px-4 py-2 rounded-lg text-xs font-medium transition-opacity',
+            mlDeployed ? 'bg-quant-green/20 text-quant-green cursor-default' :
             !selectedMlModel ? 'bg-quant-bg-tertiary text-muted-foreground cursor-not-allowed' :
             mlDeploying ? 'bg-quant-gold/50 text-white cursor-wait' : 'bg-quant-green text-white hover:opacity-90')}>
-          {mlDeploying ? '部署中...' : '部署 ML 策略'}
+          {mlDeployed ? '已部署 ✓' : mlDeploying ? '部署中...' : '部署 ML 策略'}
         </button>
       </div>
 
@@ -390,29 +426,44 @@ function AIStrategyGeneratorTab() {
   const [backtestResult, setBacktestResult] = useState<{winRate?:number;maxDrawdown?:number;profitFactor?:number;sharpe?:number;totalReturn?:number;trades?:number;equityCurve?:{time:number;equity:number}[]}|null>(null)
   const [backtestLoading, setBacktestLoading] = useState(false)
 
+  // Guess strategy type from code keywords
+  const guessedStrategyType = useMemo(() => {
+    const lower = codeWorkspace.toLowerCase()
+    if (lower.includes('grid')) return '网格策略'
+    if (lower.includes('macd')) return 'MACD 策略'
+    if (lower.includes('ema') || lower.includes('sma') || lower.includes('ma')) return '均线策略'
+    if (lower.includes('breakout') || lower.includes('突破')) return '突破策略'
+    if (lower.includes('arbitrage') || lower.includes('套利')) return '套利策略'
+    if (lower.includes('martingale') || lower.includes('马丁')) return '马丁策略'
+    if (lower.includes('rsi')) return 'RSI 策略'
+    if (lower.includes('bollinger') || lower.includes('布林')) return '布林带策略'
+    return '脚本策略'
+  }, [codeWorkspace])
+
   const handleBacktest = async () => {
     setBacktestLoading(true)
     try {
-      const res = await aiApi.backtest({
-        strategy_id: codeWorkspace,
+      const res = await backtestApi.run({
         symbol: 'BTCUSDT',
-        start_date: new Date(Date.now() - 90 * 86400000).toISOString().split('T')[0],
-        end_date: new Date().toISOString().split('T')[0],
-        initial_capital: 10000,
+        interval: '1h',
+        strategy_type: 'sma_cross',
+        initial_balance: { USDT: 10000 },
+        from: new Date(Date.now() - 90 * 86400000).toISOString().split('T')[0],
+        to: new Date().toISOString().split('T')[0],
       })
       if (res) {
         setBacktestResult({
-          winRate: res.win_rate,
-          maxDrawdown: res.max_drawdown_pct,
-          profitFactor: res.profit_factor,
-          sharpe: res.sharpe_ratio,
-          totalReturn: res.total_return_pct,
-          trades: res.total_trades,
-          equityCurve: res.equity_curve,
+          winRate: res.win_rate ?? 0,
+          maxDrawdown: res.max_drawdown_pct ?? 0,
+          profitFactor: res.profit_factor ?? 0,
+          sharpe: res.sharpe_ratio ?? 0,
+          totalReturn: res.total_return_pct ?? 0,
+          trades: res.total_trades ?? 0,
+          equityCurve: res.equity_curve ?? [],
         })
       }
     } catch (e: unknown) {
-      alert('回测失败: ' + (e instanceof Error ? e.message : String(e)))
+      toast('error', '回测失败: ' + (e instanceof Error ? e.message : String(e)))
     } finally {
       setBacktestLoading(false)
     }
@@ -420,13 +471,30 @@ function AIStrategyGeneratorTab() {
 
   const handleDeploy = async () => {
     if (!backtestResult) {
-      alert('请先运行回测验证策略效果')
+      toast('error', '请先运行回测验证策略效果')
       return
     }
     if ((backtestResult.maxDrawdown ?? 0) > 30) {
       if (!confirm(`最大回撤 ${backtestResult.maxDrawdown?.toFixed(1)}% 较高，确定部署？`)) return
     }
-    alert('部署功能：将代码保存为脚本策略')
+    try {
+      const strategyName = prompt('请输入策略名称：', 'AI_策略_' + new Date().toLocaleDateString('zh-CN'))
+      if (!strategyName) return
+      await strategyApi.create({
+        name: strategyName,
+        strategy_name: strategyName,
+        strategy_type: 'ScriptStrategy',
+        strategy_mode: 'script',
+        strategy_code: codeWorkspace,
+        symbol: 'BTCUSDT',
+        market_category: 'crypto',
+        execution_mode: 'signal',
+        trading_config: { initial_capital: 10000 },
+      })
+      toast('success', `策略 "${strategyName}" 已创建！请前往「策略管理」标签页启动。`)
+    } catch (e: unknown) {
+      toast('error', '部署失败: ' + (e instanceof Error ? e.message : String(e)))
+    }
   }
 
   return (
@@ -498,10 +566,10 @@ function AIStrategyGeneratorTab() {
         </div>
 
         {/* Workspace */}
-        <div className="w-96 shrink-0 bg-quant-bg-secondary flex flex-col gap-4 overflow-y-auto p-4">
+        <div className="w-[480px] shrink-0 bg-quant-bg-secondary flex flex-col gap-4 overflow-y-auto p-4 min-h-0">
           <SectionCard title="策略概览" className="shrink-0">
             <div className="space-y-2 text-xs text-muted-foreground">
-              <div className="flex justify-between"><span>策略类型</span><span className="text-foreground">网格策略</span></div>
+              <div className="flex justify-between"><span>策略类型</span><span className="text-foreground">{guessedStrategyType}</span></div>
               <div className="flex justify-between"><span>预期胜率</span><span className={cn("font-mono", (backtestResult?.winRate ?? 0) >= 50 ? "text-quant-green" : "text-quant-red")}>{backtestResult?.winRate != null ? `${backtestResult.winRate.toFixed(1)}%` : '未回测'}</span></div>
               <div className="flex justify-between"><span>最大回撤</span><span className={cn("font-mono", (backtestResult?.maxDrawdown ?? 0) > 20 ? "text-quant-red" : "text-quant-green")}>{backtestResult?.maxDrawdown != null ? `${backtestResult.maxDrawdown.toFixed(1)}%` : '未回测'}</span></div>
               <div className="flex justify-between"><span>盈亏比</span><span className="text-foreground font-mono">{backtestResult?.profitFactor != null ? `${backtestResult.profitFactor.toFixed(2)}:1` : '未回测'}</span></div>
@@ -511,7 +579,7 @@ function AIStrategyGeneratorTab() {
             </div>
           </SectionCard>
 
-          <SectionCard title="代码工作区" className="flex-1 flex flex-col min-h-0">
+          <SectionCard title="代码工作区" className="flex-1 flex flex-col min-h-0" bodyClassName="flex-1 flex flex-col min-h-0 p-5">
             <div className="flex items-center justify-between mb-2">
               <span className="text-[10px] text-muted-foreground">Python</span>
               <div className="flex gap-1">
@@ -522,7 +590,7 @@ function AIStrategyGeneratorTab() {
             <textarea
               value={codeWorkspace}
               onChange={(e) => setCodeWorkspace(e.target.value)}
-              className="flex-1 min-h-[200px] bg-quant-bg border border-quant-border rounded-lg p-3 font-mono text-[11px] leading-relaxed resize-none focus:outline-none focus:border-quant-gold"
+              className="flex-1 bg-quant-bg border border-quant-border rounded-lg p-3 font-mono text-[11px] leading-relaxed resize-none focus:outline-none focus:border-quant-gold"
               spellCheck={false}
             />
           </SectionCard>

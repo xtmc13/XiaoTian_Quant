@@ -39,14 +39,15 @@ func RunExperimentHandler(c *gin.Context) {
 
 	result, err := RunExperiment(req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 0, "msg": err.Error(), "data": nil})
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"code": 1,
-		"msg":  "experiment completed",
-		"data": result,
+		"success":     true,
+		"result":      result,
+		"data":        result,
+		"best_params": result.BestParams,
 	})
 }
 
@@ -100,9 +101,9 @@ func SensitivityAnalysisHandler(c *gin.Context) {
 	result := SensitivityAnalysis(req.Code, req.Symbol, req.BaseParams, space, bars, btCfg, scoreCfg)
 
 	c.JSON(http.StatusOK, gin.H{
-		"code": 1,
-		"msg":  "sensitivity analysis completed",
-		"data": result,
+		"success": true,
+		"result":  result,
+		"data":    result,
 	})
 }
 
@@ -112,9 +113,9 @@ func SensitivityAnalysisHandler(c *gin.Context) {
 func ExperimentStatusHandler(c *gin.Context) {
 	id := c.Param("id")
 	c.JSON(http.StatusOK, gin.H{
-		"code": 1,
-		"msg":  "ok",
-		"data": gin.H{"experiment_id": id, "status": "completed"},
+		"success": true,
+		"result":  gin.H{"experiment_id": id, "status": "completed"},
+		"data":    gin.H{"experiment_id": id, "status": "completed"},
 	})
 }
 
@@ -125,7 +126,7 @@ func WalkForwardHandler(c *gin.Context) {
 	userID, _ := c.Get(middleware.UserIDKey)
 	_, ok := userID.(int)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": 0, "msg": "unauthorized"})
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": "unauthorized"})
 		return
 	}
 
@@ -141,7 +142,7 @@ func WalkForwardHandler(c *gin.Context) {
 		BacktestConfig backtest.RunnerConfig `json:"backtest_config,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 0, "msg": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
 		return
 	}
 
@@ -160,13 +161,13 @@ func WalkForwardHandler(c *gin.Context) {
 
 	bars := klinesToBars(req.Klines, req.Symbol, req.Interval)
 	if len(bars) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 0, "msg": "no bar data"})
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "no bar data"})
 		return
 	}
 
 	strategy := NewIndicatorStrategy(req.Code, req.Symbol, req.Params)
 	if err := strategy.Precompute(bars); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 0, "msg": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
 	}
 
@@ -184,8 +185,8 @@ func WalkForwardHandler(c *gin.Context) {
 	result := WalkForward(bars, strategy, btCfg, scoreCfg, wfCfg)
 
 	c.JSON(http.StatusOK, gin.H{
-		"code": 1,
-		"msg":  "walk-forward completed",
-		"data": result,
+		"success": true,
+		"result":  result,
+		"data":    result,
 	})
 }

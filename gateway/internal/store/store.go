@@ -38,9 +38,18 @@ var (
 )
 
 func InitDB() error {
-	dbPath := "/app/data/gateway.db"
+	dbPath := os.Getenv("DB_PATH")
+	if dbPath == "" {
+		dbPath = "/app/data/gateway.db"
+	}
 	// Ensure data directory exists
-	os.MkdirAll("/app/data", 0755)
+	dataDir := dbPath[:len(dbPath)-len("/gateway.db")]
+	if dataDir == dbPath {
+		dataDir = "/app/data"
+	}
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		return fmt.Errorf("failed to create data directory: %w", err)
+	}
 	var err error
 	db, err = sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
@@ -82,16 +91,20 @@ func InitDB() error {
 
 	// Ensure default admin user with a random password (printed to logs on first boot)
 	var count int
-	db.QueryRow("SELECT COUNT(*) FROM xt_users WHERE username='admin'").Scan(&count)
+	if err := db.QueryRow("SELECT COUNT(*) FROM xt_users WHERE username='admin'").Scan(&count); err != nil {
+		return fmt.Errorf("failed to check admin user: %w", err)
+	}
 	if count == 0 {
 		adminPass := randomHex(8)
 		hash := HashPassword(adminPass)
-		db.Exec("INSERT INTO xt_users (username, password_hash, nickname, role) VALUES (?, ?, ?, ?)",
-			"admin", hash, "Admin", "admin")
+		if _, err := db.Exec("INSERT INTO xt_users (username, password_hash, nickname, role) VALUES (?, ?, ?, ?)",
+			"admin", hash, "Admin", "admin"); err != nil {
+			return fmt.Errorf("failed to create admin user: %w", err)
+		}
 		fmt.Fprintf(os.Stderr, "\n╔══════════════════════════════════════════════════════════╗\n")
 		fmt.Fprintf(os.Stderr, "║  Default admin created:  username=admin                  ║\n")
 		fmt.Fprintf(os.Stderr, "║  Temporary password:     %s               ║\n", adminPass)
-		fmt.Fprintf(os.Stderr, "║  Change this immediately after first login.              ║\n")
+		fmt.Fprintf(os.Stderr, "║  CHANGE THIS PASSWORD IMMEDIATELY after first login.     ║\n")
 		fmt.Fprintf(os.Stderr, "╚══════════════════════════════════════════════════════════╝\n\n")
 	}
 
@@ -153,7 +166,10 @@ func LoadConfig() {
 		configCache = make(map[string]any)
 		return
 	}
-	yaml.Unmarshal(data, &configCache)
+	if err := yaml.Unmarshal(data, &configCache); err != nil {
+		fmt.Fprintf(os.Stderr, "WARNING: Failed to parse config.yaml: %v\n", err)
+		configCache = make(map[string]any)
+	}
 }
 
 // SaveUIConfig saves UI preferences into the config cache.

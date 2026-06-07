@@ -28,14 +28,15 @@ export default defineConfig(({ mode }) => ({
     },
   },
   server: {
+    host: '0.0.0.0',
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:8080',
+        target: 'http://127.0.0.1:8080',
         changeOrigin: true,
       },
       '/ws': {
-        target: 'ws://localhost:8080',
+        target: 'ws://127.0.0.1:8080',
         ws: true,
       },
     },

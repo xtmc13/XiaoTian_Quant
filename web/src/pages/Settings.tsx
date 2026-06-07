@@ -275,7 +275,7 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
   const [aiProviders, setAiProviders] = useState<Record<string, AIProviderConfig>>({})
   const [profitProtection, setProfitProtection] = useState(false)
   const [maxOrders, setMaxOrders] = useState(5)
-  const { config: craConfig, update: craUpdate } = useCRAConfig()
+  const { config: craConfig, setAll: setCraConfig } = useCRAConfig()
   const [dirty, setDirty] = useState(false)
 
   /* ── Local settings (frontend-only) ── */
@@ -720,9 +720,9 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
 
                 {/* CRA 参数表单 */}
                 <CRAParamForm
-                  config={craConfig}
-                  onChange={(k, v) => {
-                    craUpdate(k, v)
+                  value={craConfig}
+                  onChange={(next) => {
+                    setCraConfig(next)
                     setDirty(true)
                   }}
                 />

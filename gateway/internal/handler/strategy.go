@@ -74,7 +74,12 @@ func GetStrategyConfigs(c *gin.Context) {
 	if items == nil {
 		items = []map[string]any{}
 	}
-	c.JSON(http.StatusOK, items)
+	// Normalize field names to match frontend StrategyItem interface
+	normalized := make([]map[string]any, 0, len(items))
+	for _, it := range items {
+		normalized = append(normalized, normalizeStrategyConfig(it))
+	}
+	c.JSON(http.StatusOK, normalized)
 }
 
 func GetStrategyConfig(c *gin.Context) {
@@ -94,7 +99,7 @@ func GetStrategyConfig(c *gin.Context) {
 			result["config"] = config
 		}
 	}
-	c.JSON(http.StatusOK, result)
+	c.JSON(http.StatusOK, normalizeStrategyConfig(result))
 }
 
 func CreateStrategyConfig(c *gin.Context) {
@@ -137,12 +142,18 @@ func CreateStrategyConfig(c *gin.Context) {
 		"name":          strings.TrimSpace(name),
 		"category":      getString(body, "category", "spot"),
 		"strategy_type": strategyType,
+		"type":          strategyType,
+		"strategy_name": strategyType,
 		"coin":          getString(body, "coin", ""),
 		"config_json":   configJSON,
 		"direction":     getString(body, "direction", "long"),
+		"trade_direction": getString(body, "direction", "long"),
 		"leverage":      getFloat(body, "leverage", 1.0),
 		"status":        "stopped",
 		"pnl":           0.0,
+		"total_pnl":     0.0,
+		"total_pnl_percent": 0.0,
+		"current_equity": getFloat(body, "initial_capital", 1000),
 		"created_at":    float64(nowTS),
 		"updated_at":    float64(nowTS),
 		// ── Contract fields ──
@@ -152,6 +163,11 @@ func CreateStrategyConfig(c *gin.Context) {
 		"timeframe":     getString(body, "timeframe", "15m"),
 		"initial_capital": getFloat(body, "initial_capital", 1000),
 		"execution_mode": getString(body, "execution_mode", "signal"),
+		"mode":          getString(body, "execution_mode", "signal"),
+		"strategy_mode": getString(body, "execution_mode", "signal"),
+		"group_id":      getString(body, "group_id", ""),
+		"group_name":    getString(body, "group_name", ""),
+		"indicator_name": getString(body, "indicator_name", ""),
 	}
 
 	mu := store.GetStrategyConfigMu()
@@ -177,10 +193,22 @@ func UpdateStrategyConfig(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"detail": "not found"})
 		return
 	}
-	for _, f := range []string{"name", "coin", "strategy_type", "direction", "leverage", "category", "market_type", "margin_mode", "symbol", "timeframe", "execution_mode", "initial_capital"} {
+	for _, f := range []string{"name", "coin", "strategy_type", "direction", "leverage", "category", "market_type", "margin_mode", "symbol", "timeframe", "execution_mode", "initial_capital", "group_id", "group_name", "indicator_name"} {
 		if v, ok := body[f]; ok {
 			item[f] = v
 		}
+	}
+	// Keep alias fields in sync
+	if v, ok := body["strategy_type"]; ok {
+		item["type"] = v
+		item["strategy_name"] = v
+	}
+	if v, ok := body["direction"]; ok {
+		item["trade_direction"] = v
+	}
+	if v, ok := body["execution_mode"]; ok {
+		item["mode"] = v
+		item["strategy_mode"] = v
 	}
 	if config, ok := body["config"].(map[string]any); ok {
 		data, _ := json.Marshal(config)
@@ -591,4 +619,65 @@ func GetStrategyParamDefs(c *gin.Context) {
 		defs = []map[string]any{}
 	}
 	c.JSON(http.StatusOK, gin.H{"type": strategyType, "parameters": defs})
+}
+
+// normalizeStrategyConfig converts a raw store strategy config map into the
+// frontend-expected StrategyItem format. It maps backend field names to frontend
+// field names and converts Unix timestamps to ISO-8601 strings.
+func normalizeStrategyConfig(it map[string]any) map[string]any {
+	result := make(map[string]any)
+
+	// Copy basic fields
+	for _, k := range []string{"id", "name", "symbol", "status", "leverage", "timeframe", "initial_capital", "current_equity", "total_pnl", "total_pnl_percent", "group_id", "group_name", "indicator_name", "market_type", "margin_mode", "config", "config_json"} {
+		if v, ok := it[k]; ok {
+			result[k] = v
+		}
+	}
+
+	// Field name mappings
+	if v, ok := it["strategy_type"].(string); ok && v != "" {
+		result["type"] = v
+		result["strategy_name"] = v
+	} else if v, ok := it["type"].(string); ok {
+		result["type"] = v
+		result["strategy_name"] = v
+	}
+
+	if v, ok := it["execution_mode"].(string); ok && v != "" {
+		result["mode"] = v
+		result["strategy_mode"] = v
+	} else if v, ok := it["mode"].(string); ok {
+		result["mode"] = v
+		result["strategy_mode"] = v
+	}
+
+	if v, ok := it["direction"].(string); ok && v != "" {
+		result["trade_direction"] = v
+	} else if v, ok := it["trade_direction"].(string); ok {
+		result["trade_direction"] = v
+	}
+
+	if v, ok := it["category"].(string); ok && v != "" {
+		result["market_category"] = v
+	}
+
+	if v, ok := it["pnl"].(float64); ok {
+		if _, hasTotalPnl := result["total_pnl"]; !hasTotalPnl {
+			result["total_pnl"] = v
+		}
+	}
+
+	// Time conversion: backend stores float64 Unix milliseconds, frontend expects ISO string
+	if v, ok := it["created_at"].(float64); ok && v > 0 {
+		result["created_at"] = time.UnixMilli(int64(v)).Format(time.RFC3339)
+	} else if v, ok := it["created_at"].(string); ok {
+		result["created_at"] = v
+	}
+	if v, ok := it["updated_at"].(float64); ok && v > 0 {
+		result["updated_at"] = time.UnixMilli(int64(v)).Format(time.RFC3339)
+	} else if v, ok := it["updated_at"].(string); ok {
+		result["updated_at"] = v
+	}
+
+	return result
 }

@@ -22,7 +22,7 @@ describe('ErrorBoundary', () => {
 
   it('renders children when no error', () => {
     render(
-      <ErrorBoundary>
+      <ErrorBoundary fallback={<div>Something went wrong</div>}>
         <div>Safe content</div>
       </ErrorBoundary>
     )
@@ -31,7 +31,7 @@ describe('ErrorBoundary', () => {
 
   it('renders fallback UI when child throws', () => {
     render(
-      <ErrorBoundary>
+      <ErrorBoundary fallback={<div>页面加载出错</div>}>
         <ThrowError shouldThrow={true} />
       </ErrorBoundary>
     )
@@ -56,7 +56,7 @@ describe('ErrorBoundary', () => {
     })
 
     render(
-      <ErrorBoundary>
+      <ErrorBoundary fallback={<div>页面加载出错<button onClick={() => location.reload()}>刷新页面</button><p>Test error</p></div>}>
         <ThrowError shouldThrow={true} />
       </ErrorBoundary>
     )

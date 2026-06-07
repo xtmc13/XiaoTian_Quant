@@ -791,10 +791,11 @@ export function Dashboard() {
   const totalEquity = dash?.total_equity ?? portfolio?.total_equity ?? 0
   const totalPnl = dash?.total_pnl ?? portfolio?.total_pnl ?? 0
 
-  const winRate = dash?.win_rate ?? 62.4
-  const profitFactor = dash?.profit_factor ?? 1.85
-  const maxDrawdown = dash?.max_drawdown ?? 8.2
-  const totalTrades = dash?.total_trades ?? 1247
+  // Real metrics from backend (no hardcoded defaults)
+  const winRate = dash?.win_rate ?? null
+  const profitFactor = dash?.profit_factor ?? null
+  const maxDrawdown = dash?.max_drawdown ?? null
+  const totalTrades = dash?.total_trades ?? 0
 
   const runningStrats = useMemo(() => strategies?.filter((s) => s.status === 'running') || [], [strategies])
   const isLoading = dashLoading || portfolioLoading
@@ -843,29 +844,29 @@ export function Dashboard() {
               <KPICard
                 icon={<Target className="h-4 w-4 text-[#888888]" />}
                 label="胜率"
-                value={`${winRate.toFixed(1)}%`}
+                value={winRate !== null ? `${winRate.toFixed(1)}%` : '--'}
                 subLabel="近30天"
                 trend="up"
-                ringProgress={winRate}
+                ringProgress={winRate ?? undefined}
               />
               <KPICard
                 icon={<BarChart3 className="h-4 w-4 text-[#888888]" />}
                 label="盈亏比"
-                value={profitFactor.toFixed(2)}
+                value={profitFactor !== null ? profitFactor.toFixed(2) : '--'}
                 subLabel="Profit Factor"
                 trend="neutral"
               />
               <KPICard
                 icon={<TrendingDown className="h-4 w-4 text-red-400" />}
                 label="最大回撤"
-                value={`${maxDrawdown.toFixed(2)}%`}
+                value={maxDrawdown !== null ? `${maxDrawdown.toFixed(2)}%` : '--'}
                 subLabel="历史最大"
                 trend="down"
               />
               <KPICard
                 icon={<Activity className="h-4 w-4 text-[#888888]" />}
                 label="总交易数"
-                value={totalTrades.toLocaleString()}
+                value={totalTrades > 0 ? totalTrades.toLocaleString() : '--'}
                 subLabel="笔"
                 trend="neutral"
               />

@@ -146,6 +146,59 @@ export interface TickerSnapshot {
   low_24h?: number
 }
 
+/** Market index data for global indices */
+export interface MarketIndex {
+  flag: string
+  symbol: string
+  name?: string
+  price: number
+  change: number
+}
+
+/** Economic calendar event */
+export interface CalendarEvent {
+  id: string
+  date: string
+  time?: string
+  country: string
+  name: string
+  name_en?: string
+  importance: 'high' | 'medium' | 'low'
+  actual?: string | number
+  forecast?: string | number
+  actual_impact?: 'bullish' | 'bearish' | 'neutral'
+  expected_impact?: 'bullish' | 'bearish' | 'neutral'
+}
+
+/** Market snapshot for global indices (comma-separated symbols) */
+export interface IndicesSnapshot {
+  indices: MarketIndex[]
+  status: string
+  source?: string
+}
+
+/** Market snapshot for sentiment data */
+export interface SentimentSnapshot {
+  fear_greed: number
+  fear_greed_label?: string
+  vix: number
+  vix_change?: number
+  dxy: number
+  dxy_change?: number
+  status: string
+  source?: string
+}
+
+/** Market snapshot for economic calendar */
+export interface CalendarSnapshot {
+  events: CalendarEvent[]
+  status: string
+  source?: string
+}
+
+/** Union type for all market snapshot responses */
+export type MarketSnapshotResponse = TickerSnapshot | IndicesSnapshot | SentimentSnapshot | CalendarSnapshot
+
 export interface KlineBar {
   timestamp: number
   open: number

@@ -30,9 +30,9 @@ const queryClient = new QueryClient({
   },
 })
 
-// Register PWA Service Worker
-registerSW()
-listenInstallPrompt()
+// Register PWA Service Worker (disabled in dev to avoid stale cache)
+// registerSW()
+// listenInstallPrompt()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

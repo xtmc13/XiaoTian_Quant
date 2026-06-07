@@ -34,7 +34,7 @@ func SaveConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	c.JSON(http.StatusOK, data)
 }
 
 func GetGlobalStrategy(c *gin.Context) {
@@ -101,7 +101,7 @@ func ExchangeSave(c *gin.Context) {
 		ex["enabled"] = true
 	}
 	store.SaveConfig(cfg)
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	c.JSON(http.StatusOK, gin.H{"success": true, "id": name})
 }
 
 func ExchangeTest(c *gin.Context) {
@@ -110,7 +110,7 @@ func ExchangeTest(c *gin.Context) {
 	apiKey := getString(data, "api_key", "")
 	secret := getString(data, "secret", "")
 	if apiKey == "" || secret == "" {
-		c.JSON(http.StatusOK, gin.H{"status": "error", "detail": "API key and secret required"})
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "API key and secret required"})
 		return
 	}
 	name := getString(data, "name", "")
@@ -204,11 +204,11 @@ func ExchangeTest(c *gin.Context) {
 		req.Header.Set("Content-Type", "application/json")
 
 	case "kucoin", "htx", "zb", "phemex", "deribit":
-		c.JSON(http.StatusOK, gin.H{"status": "error", "detail": fmt.Sprintf("ℹ️ %s 适配器尚未实现，连接测试暂不可用", name)})
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": fmt.Sprintf("ℹ️ %s 适配器尚未实现，连接测试暂不可用", name)})
 		return
 
 	default:
-		c.JSON(http.StatusOK, gin.H{"status": "error", "detail": fmt.Sprintf("交易所 %s 暂不支持直接测试", name)})
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": fmt.Sprintf("交易所 %s 暂不支持直接测试", name)})
 		return
 	}
 
@@ -223,7 +223,7 @@ func ExchangeTest(c *gin.Context) {
 	}
 
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"status": "error", "detail": "⚠️ 网络连接失败，请检查网络后重试"})
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "⚠️ 网络连接失败，请检查网络后重试"})
 		return
 	}
 
@@ -241,10 +241,10 @@ func ExchangeTest(c *gin.Context) {
 		msgStr := fmt.Sprintf("%v", jr["msg"])
 		// 50102 on OKX often means IP whitelist restriction
 		if name == "okx" && (codeStr == "50102" || strings.Contains(msgStr, "Timestamp")) {
-			c.JSON(http.StatusOK, gin.H{"status": "error", "detail": "🔒 OKX: API Key 签名正确，但被拒绝（可能是 IP 白名单限制，请将 43.165.169.27 加入 OKX API 白名单）"})
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": "🔒 OKX: API Key 签名正确，但被拒绝（可能是 IP 白名单限制，请将 43.165.169.27 加入 OKX API 白名单）"})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"status": "error", "detail": fmt.Sprintf("🔑 %s: %s", name, msgStr)})
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": fmt.Sprintf("🔑 %s: %s", name, msgStr)})
 		return
 
 	case "bybit":
@@ -259,7 +259,7 @@ func ExchangeTest(c *gin.Context) {
 		if msg == "<nil>" || msg == "" {
 			msg = fmt.Sprintf("HTTP %d (请确认 API 是否有效)", code)
 		}
-		c.JSON(http.StatusOK, gin.H{"status": "error", "detail": "🔑 Bybit: " + msg})
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "🔑 Bybit: " + msg})
 		return
 
 	case "gate":
@@ -269,9 +269,9 @@ func ExchangeTest(c *gin.Context) {
 			return
 		}
 		if strings.Contains(respBody, "invalid_key") || strings.Contains(respBody, "INVALID") {
-			c.JSON(http.StatusOK, gin.H{"status": "error", "detail": "🔑 Gate.io: API Key 无效"})
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": "🔑 Gate.io: API Key 无效"})
 		} else {
-			c.JSON(http.StatusOK, gin.H{"status": "error", "detail": fmt.Sprintf("⚠️ Gate.io 返回异常: %s", trunc(respBody, 50))})
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": fmt.Sprintf("⚠️ Gate.io 返回异常: %s", trunc(respBody, 50))})
 		}
 		return
 
@@ -279,9 +279,9 @@ func ExchangeTest(c *gin.Context) {
 		if code >= 200 && code < 300 {
 			saveExchangeTest(name, c)
 		} else if code == 401 {
-			c.JSON(http.StatusOK, gin.H{"status": "error", "detail": "🔑 Coinbase: API Key 或 Secret 无效"})
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": "🔑 Coinbase: API Key 或 Secret 无效"})
 		} else {
-			c.JSON(http.StatusOK, gin.H{"status": "error", "detail": fmt.Sprintf("⚠️ Coinbase: HTTP %d", code)})
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": fmt.Sprintf("⚠️ Coinbase: HTTP %d", code)})
 		}
 		return
 
@@ -290,9 +290,9 @@ func ExchangeTest(c *gin.Context) {
 		if code >= 200 && code < 300 {
 			saveExchangeTest(name, c)
 		} else if code == 401 || code == 403 {
-			c.JSON(http.StatusOK, gin.H{"status": "error", "detail": "🔑 API Key 或 Secret 无效，请检查后重新填写"})
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": "🔑 API Key 或 Secret 无效，请检查后重新填写"})
 		} else {
-			c.JSON(http.StatusOK, gin.H{"status": "error", "detail": fmt.Sprintf("⚠️ 服务器返回 %d（%s），请稍后重试", code, trunc(respBody, 50))})
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": fmt.Sprintf("⚠️ 服务器返回 %d（%s），请稍后重试", code, trunc(respBody, 50))})
 		}
 	}
 }
@@ -310,7 +310,7 @@ func saveExchangeTest(name string, c *gin.Context) {
 	}
 	ex["tested"] = true
 	store.SaveConfig(cfg)
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "detail": "✅ " + name + " 连接测试通过"})
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "✅ " + name + " 连接测试通过"})
 }
 
 func ExchangeDefault(c *gin.Context) {
@@ -319,7 +319,7 @@ func ExchangeDefault(c *gin.Context) {
 	cfg := store.GetConfig()
 	cfg["default_exchange"] = getString(data, "exchange", "")
 	store.SaveConfig(cfg)
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
 func ExchangeStatus(c *gin.Context) {

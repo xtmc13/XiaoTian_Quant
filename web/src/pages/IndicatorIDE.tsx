@@ -8,6 +8,9 @@ import { useSearchParams } from 'react-router-dom'
 import { cn, formatCurrency } from '@/lib/utils'
 import { marketApi, indicatorApi, strategyApi, communityApi } from '@/lib/api'
 import { TRADING_INTERVALS } from '@/lib/constants'
+import type { TickerSnapshot } from '@/types'
+import { toast } from '@/lib/useToast'
+import { CRAParamForm, type CRAParams, DEFAULT_CRA_PARAMS, craParamsToApiPayload } from '@/components/strategy/CRAParamForm'
 import { KlineChart } from '@/components/charts/KlineChart'
 import { EquityCurve } from '@/components/charts/EquityCurve'
 import { CodeEditor } from '@/components/ide/CodeEditor'
@@ -229,10 +232,10 @@ export function IndicatorIDE() {
   /* ── Snapshot ── */
   const { data: snapshotRaw } = useQuery({
     queryKey: ['ide-snap', symbol],
-    queryFn: () => marketApi.snapshot(symbol),
+    queryFn: () => marketApi.snapshot(symbol).then(d => d as TickerSnapshot),
     refetchInterval: 5000,
   })
-  const snapshot = snapshotRaw
+  const snapshot = snapshotRaw as TickerSnapshot | undefined
   const lastPrice = snapshot?.price ? Number(snapshot.price) : 0
   const change24h = snapshot?.change_24h ? Number(snapshot.change_24h) : 0
 
@@ -321,9 +324,9 @@ export function IndicatorIDE() {
         pricingType,
         price,
       })
-      alert('发布成功！')
+      toast('success', '发布成功！')
     } catch (e: unknown) {
-      alert('发布失败: ' + (e instanceof Error ? e.message : '未知错误'))
+      toast('error', '发布失败: ' + (e instanceof Error ? e.message : '未知错误'))
     }
   }, [selectedIndicatorId, handleSave])
 
@@ -473,54 +476,34 @@ export function IndicatorIDE() {
 
   /* ── Create Strategy from Indicator ── */
   const [showCreateStrategy, setShowCreateStrategy] = useState(false)
-  const [stratForm, setStratForm] = useState({
+  const [stratBase, setStratBase] = useState({
     name: '', symbol: 'BTCUSDT', interval: '1h', leverage: 5,
     direction: 'long' as 'long' | 'short' | 'dual',
-    orderCount: 7, firstOrderAmount: 100, addPosSpread: 3,
-    addPosCallback: 0.1, tpRatio: 1.3, profitCallback: 0.1,
-    tpMethod: 'full' as 'full' | 'tail' | 'head_tail' | 'moving',
-    openInd: 'macd_golden', addInd: 'macd',
-    waterfall: 2, openDouble: false, trendInd: false,
-    trendTf: '15m', followTrend: false, burnCut: false,
-    closeAddPos: false, tradeCountMode: 'cycle' as 'single' | 'cycle',
+  })
+  const [stratCra, setStratCra] = useState<CRAParams>({
+    ...DEFAULT_CRA_PARAMS,
+    tradeCountMode: 'cycle',
   })
 
   const handleCreateStrategyFromIndicator = useCallback(async () => {
     try {
       await strategyApi.create({
-        name: stratForm.name || `${parsed.name}策略`,
-        symbol: stratForm.symbol,
-        timeframe: stratForm.interval,
-        leverage: stratForm.leverage,
-        trade_direction: stratForm.direction,
+        name: stratBase.name || `${parsed.name}策略`,
+        symbol: stratBase.symbol,
+        timeframe: stratBase.interval,
+        trade_direction: stratBase.direction,
         market_type: 'swap',
         strategy_type: 'custom_indicator',
         strategy_code: code,
         status: 'stopped',
-        order_count: stratForm.orderCount,
-        first_order_amount: stratForm.firstOrderAmount,
-        add_position_spread: stratForm.addPosSpread,
-        add_position_callback: stratForm.addPosCallback,
-        take_profit_ratio: stratForm.tpRatio,
-        profit_callback: stratForm.profitCallback,
-        take_profit_method: stratForm.tpMethod,
-        open_indicator: stratForm.openInd,
-        add_position_indicator: stratForm.addInd,
-        waterfall_protection: stratForm.waterfall,
-        open_double: stratForm.openDouble,
-        trend_indicator: stratForm.trendInd,
-        trend_timeframe: stratForm.trendTf,
-        follow_trend: stratForm.followTrend,
-        burn_cut: { enabled: stratForm.burnCut, dual_burn_start: 3, global_burn_start: 5 },
-        close_add_position: stratForm.closeAddPos,
-        trade_count_mode: stratForm.tradeCountMode,
+        ...craParamsToApiPayload(stratCra),
       })
       setShowCreateStrategy(false)
-      alert('策略创建成功！请到策略管理页面启动。')
+      toast('success', '策略创建成功！请到策略管理页面启动。')
     } catch (e: unknown) {
-      alert('创建策略失败: ' + (e instanceof Error ? e.message : String(e)))
+      toast('error', '创建策略失败: ' + (e instanceof Error ? e.message : String(e)))
     }
-  }, [stratForm, code, parsed.name])
+  }, [stratBase, stratCra, code, parsed.name])
 
   /* ═══════════════════════════════════════════════════════════════ */
   /*  Render                                                          */
@@ -965,32 +948,32 @@ export function IndicatorIDE() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="text-[11px] text-muted-foreground mb-1.5 block">策略名称</label>
-                <input value={stratForm.name} onChange={(e) => setStratForm({ ...stratForm, name: e.target.value })}
+                <input value={stratBase.name} onChange={(e) => setStratBase({ ...stratBase, name: e.target.value })}
                   placeholder={`${parsed.name}策略`}
                   className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold" />
               </div>
               <div>
                 <label className="text-[11px] text-muted-foreground mb-1.5 block">交易对</label>
-                <input value={stratForm.symbol} onChange={(e) => setStratForm({ ...stratForm, symbol: e.target.value.toUpperCase() })}
+                <input value={stratBase.symbol} onChange={(e) => setStratBase({ ...stratBase, symbol: e.target.value.toUpperCase() })}
                   className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold" />
               </div>
             </div>
             <div className="grid grid-cols-3 gap-4">
               <div>
                 <label className="text-[11px] text-muted-foreground mb-1.5 block">K线周期</label>
-                <select value={stratForm.interval} onChange={(e) => setStratForm({ ...stratForm, interval: e.target.value })}
+                <select value={stratBase.interval} onChange={(e) => setStratBase({ ...stratBase, interval: e.target.value })}
                   className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold">
                   {TRADING_INTERVALS.map((i) => <option key={i} value={i}>{i}</option>)}
                 </select>
               </div>
               <div>
                 <label className="text-[11px] text-muted-foreground mb-1.5 block">杠杆</label>
-                <input type="number" min={1} max={125} value={stratForm.leverage} onChange={(e) => setStratForm({ ...stratForm, leverage: Number(e.target.value) })}
+                <input type="number" min={1} max={125} value={stratBase.leverage} onChange={(e) => setStratBase({ ...stratBase, leverage: Number(e.target.value) })}
                   className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold" />
               </div>
               <div>
                 <label className="text-[11px] text-muted-foreground mb-1.5 block">方向</label>
-                <select value={stratForm.direction} onChange={(e) => setStratForm({ ...stratForm, direction: e.target.value as typeof stratForm.direction })}
+                <select value={stratBase.direction} onChange={(e) => setStratBase({ ...stratBase, direction: e.target.value as typeof stratBase.direction })}
                   className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold">
                   <option value="long">做多</option>
                   <option value="short">做空</option>
@@ -1000,123 +983,7 @@ export function IndicatorIDE() {
             </div>
 
             {/* CRA 参数 */}
-            <div className="rounded-xl border border-quant-border bg-quant-bg-tertiary p-4 space-y-4">
-              <div className="text-xs font-semibold text-quant-gold">CRA 量化参数</div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-[11px] text-muted-foreground mb-1.5 block">做单数量</label>
-                  <input type="number" min={1} max={20} value={stratForm.orderCount} onChange={(e) => setStratForm({ ...stratForm, orderCount: Number(e.target.value) })}
-                    className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold" />
-                </div>
-                <div>
-                  <label className="text-[11px] text-muted-foreground mb-1.5 block">首单仓位 (USDT)</label>
-                  <input type="number" min={10} max={10000} step={10} value={stratForm.firstOrderAmount} onChange={(e) => setStratForm({ ...stratForm, firstOrderAmount: Number(e.target.value) })}
-                    className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold" />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-[11px] text-muted-foreground mb-1.5 block">补仓价差 (%)</label>
-                  <input type="number" min={0.5} max={50} step={0.5} value={stratForm.addPosSpread} onChange={(e) => setStratForm({ ...stratForm, addPosSpread: Number(e.target.value) })}
-                    className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold" />
-                </div>
-                <div>
-                  <label className="text-[11px] text-muted-foreground mb-1.5 block">补仓回调 (%)</label>
-                  <input type="number" min={0.01} max={0.5} step={0.01} value={stratForm.addPosCallback} onChange={(e) => setStratForm({ ...stratForm, addPosCallback: Number(e.target.value) })}
-                    className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold" />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-[11px] text-muted-foreground mb-1.5 block">止盈比例 (%)</label>
-                  <input type="number" min={0.1} max={50} step={0.1} value={stratForm.tpRatio} onChange={(e) => setStratForm({ ...stratForm, tpRatio: Number(e.target.value) })}
-                    className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold" />
-                </div>
-                <div>
-                  <label className="text-[11px] text-muted-foreground mb-1.5 block">盈利回调 (%)</label>
-                  <input type="number" min={0.01} max={0.5} step={0.01} value={stratForm.profitCallback} onChange={(e) => setStratForm({ ...stratForm, profitCallback: Number(e.target.value) })}
-                    className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold" />
-                </div>
-              </div>
-              <div>
-                <label className="text-[11px] text-muted-foreground mb-1.5 block">止盈方式</label>
-                <div className="flex gap-2">
-                  {([
-                    { key: 'full', label: '全仓止盈' },
-                    { key: 'tail', label: '尾单止盈' },
-                    { key: 'head_tail', label: '首尾止盈' },
-                    { key: 'moving', label: '移动止盈' },
-                  ] as const).map((m) => (
-                    <button key={m.key} onClick={() => setStratForm({ ...stratForm, tpMethod: m.key })}
-                      className={cn('flex-1 py-2 rounded-lg text-xs border transition-colors', stratForm.tpMethod === m.key ? 'bg-quant-gold/10 border-quant-gold/20 text-quant-gold' : 'border-quant-border text-muted-foreground hover:text-foreground')}>
-                      {m.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-[11px] text-muted-foreground mb-1.5 block">开仓指标</label>
-                  <select value={stratForm.openInd} onChange={(e) => setStratForm({ ...stratForm, openInd: e.target.value })}
-                    className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold">
-                    <option value="macd_golden">MACD金叉开多</option>
-                    <option value="macd_death">MACD死叉开空</option>
-                    <option value="ema">EMA拐点开仓</option>
-                    <option value="close">关闭（无脑买入）</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="text-[11px] text-muted-foreground mb-1.5 block">补仓指标</label>
-                  <select value={stratForm.addInd} onChange={(e) => setStratForm({ ...stratForm, addInd: e.target.value })}
-                    className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold">
-                    <option value="macd">MACD补仓</option>
-                    <option value="ema">EMA4补仓</option>
-                    <option value="close">仅按跌幅</option>
-                  </select>
-                </div>
-              </div>
-              <div>
-                <label className="text-[11px] text-muted-foreground mb-1.5 block">防瀑布 (%)</label>
-                <input type="number" min={0.5} max={20} step={0.5} value={stratForm.waterfall} onChange={(e) => setStratForm({ ...stratForm, waterfall: Number(e.target.value) })}
-                  className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold" />
-              </div>
-              <div className="flex flex-wrap gap-3">
-                <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <input type="checkbox" checked={stratForm.openDouble} onChange={(e) => setStratForm({ ...stratForm, openDouble: e.target.checked })} className="rounded" />
-                  开仓加倍
-                </label>
-                <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <input type="checkbox" checked={stratForm.trendInd} onChange={(e) => setStratForm({ ...stratForm, trendInd: e.target.checked })} className="rounded" />
-                  趋势指标(EMA4)
-                </label>
-                <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <input type="checkbox" checked={stratForm.followTrend} onChange={(e) => setStratForm({ ...stratForm, followTrend: e.target.checked })} className="rounded" />
-                  顺势而为
-                </label>
-                <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <input type="checkbox" checked={stratForm.burnCut} onChange={(e) => setStratForm({ ...stratForm, burnCut: e.target.checked })} className="rounded" />
-                  斩仓燃烧
-                </label>
-                <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <input type="checkbox" checked={stratForm.closeAddPos} onChange={(e) => setStratForm({ ...stratForm, closeAddPos: e.target.checked })} className="rounded" />
-                  关闭补仓
-                </label>
-              </div>
-              <div>
-                <label className="text-[11px] text-muted-foreground mb-1.5 block">交易次数</label>
-                <div className="flex gap-2">
-                  {([
-                    { key: 'single', label: '单次循环' },
-                    { key: 'cycle', label: '策略循环' },
-                  ] as const).map((m) => (
-                    <button key={m.key} onClick={() => setStratForm({ ...stratForm, tradeCountMode: m.key })}
-                      className={cn('flex-1 py-2 rounded-lg text-xs border transition-colors', stratForm.tradeCountMode === m.key ? 'bg-quant-gold/10 border-quant-gold/20 text-quant-gold' : 'border-quant-border text-muted-foreground hover:text-foreground')}>
-                      {m.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
+            <CRAParamForm value={stratCra} onChange={setStratCra} showTradeCountMode />
           </div>
           <div className="flex items-center justify-end gap-2 px-6 py-4 border-t border-quant-border shrink-0">
             <button onClick={() => setShowCreateStrategy(false)} className="px-4 py-2 rounded-lg border border-quant-border text-xs hover:bg-quant-hover transition-colors">取消</button>
