@@ -1,5 +1,7 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { cn } from '@/lib/utils'
+import { toast } from '@/lib/useToast'
 import { SectionCard } from '@/components/ui/SectionCard'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { PageHeader } from '@/components/ui/PageHeader'
@@ -144,6 +146,7 @@ const IndicatorCard = React.memo(function IndicatorCard({
   isOwn: boolean
   onPurchase: (id: number) => void
 }) {
+  const navigate = useNavigate()
   const hasKpi =
     (indicator.sample_size || 0) > 0 ||
     (indicator.total_return || 0) !== 0 ||
@@ -286,7 +289,7 @@ const IndicatorCard = React.memo(function IndicatorCard({
 
           {indicator.pricing_type === 'free' || isPurchased || isOwn ? (
             <button
-              onClick={() => { window.location.hash = `#/indicator-ide?id=${indicator.id}` }}
+              onClick={() => { navigate(`/indicator-ide?id=${indicator.id}`) }}
               className="px-2.5 py-1 rounded-md bg-quant-gold/10 text-quant-gold text-[10px] font-medium hover:bg-quant-gold/20 transition-colors flex items-center gap-1"
             >
               <Zap className="h-3 w-3" /> 使用
@@ -308,6 +311,7 @@ const IndicatorCard = React.memo(function IndicatorCard({
 /* ── Main Page ───────────────────────────────────────────────────── */
 
 export function IndicatorCommunity() {
+  const navigate = useNavigate()
   const [activeTab, setActiveTab] = useState<'market' | 'author' | 'purchases'>('market')
   const [keyword, setKeyword] = useState('')
   const [pricingFilter, setPricingFilter] = useState<'all' | 'free' | 'paid'>('all')
@@ -339,7 +343,7 @@ export function IndicatorCommunity() {
       setKeyword((k) => k)
     } catch (e: unknown) {
       const err = e instanceof Error ? e : new Error(String(e))
-      alert(err.message || '购买失败')
+      toast('error', err.message || '购买失败')
     } finally {
       setPurchasingId(null)
     }
@@ -363,7 +367,7 @@ export function IndicatorCommunity() {
                 {viewMode === 'grid' ? <List className="h-4 w-4" /> : <Grid3X3 className="h-4 w-4" />}
               </button>
               <button
-                onClick={() => { window.location.hash = '#/indicator-ide' }}
+                onClick={() => { navigate('/indicator-ide') }}
                 className="flex items-center gap-1.5 rounded-lg bg-quant-gold px-3 py-2 text-xs font-medium text-black hover:opacity-90 transition-opacity"
               >
                 <Plus className="h-3.5 w-3.5" /> 发布指标
@@ -517,7 +521,7 @@ export function IndicatorCommunity() {
                   title="暂无发布的指标"
                   description="点击右上角「发布指标」创建您的第一个策略指标"
                   actionLabel="发布指标"
-                  onAction={() => { window.location.hash = '#/indicator-ide' }}
+                  onAction={() => { navigate('/indicator-ide') }}
                 />
               )}
             </SectionCard>

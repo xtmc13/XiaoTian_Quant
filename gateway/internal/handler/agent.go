@@ -3,9 +3,11 @@ package handler
 import (
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xiaotian-quant/gateway/internal/ai"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
@@ -25,11 +27,12 @@ func CreateAgentToken(c *gin.Context) {
 		"name":         getString(data, "name", "Untitled"),
 		"token":        getString(data, "token", ""),
 		"scopes":       data["scopes"],
-		"created_at":   time.Now().Unix(),
-		"last_used_at": nil,
+		"created_at":   time.Now().Format(time.RFC3339),
+		"expires_at":   data["expires_at"],
+		"last_used":    nil,
 	}
 	*store.GetAgentTokensStore() = append(*store.GetAgentTokensStore(), token)
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "id": token["id"]})
+	c.JSON(http.StatusOK, token)
 }
 
 func DeleteAgentToken(c *gin.Context) {
@@ -38,33 +41,33 @@ func DeleteAgentToken(c *gin.Context) {
 	for i, t := range *tokens {
 		if getString(t, "id", "") == id {
 			*tokens = append((*tokens)[:i], (*tokens)[i+1:]...)
-			c.JSON(http.StatusOK, gin.H{"status": "ok"})
+			c.JSON(http.StatusOK, gin.H{"success": true})
 			return
 		}
 	}
-	c.JSON(http.StatusNotFound, gin.H{"detail": "Token not found"})
+	c.JSON(http.StatusNotFound, gin.H{"success": false, "detail": "Token not found"})
 }
 
 func CCSwitchStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
-		"status":  "stopped",
-		"running": false,
-		"port":    8082,
+		"enabled":        false,
+		"mode":           "manual",
+		"current_model":  "",
 	})
 }
 
 func CCSwitchConfigure(c *gin.Context) {
 	var data map[string]any
 	c.ShouldBindJSON(&data)
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "message": "CC Switch configured"})
+	c.JSON(http.StatusOK, gin.H{"enabled": true, "mode": getString(data, "mode", "manual"), "current_model": getString(data, "current_model", "")})
 }
 
 func CCSwitchStart(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "message": "CC Switch started"})
+	c.JSON(http.StatusOK, gin.H{"enabled": true, "mode": "auto", "current_model": "default"})
 }
 
 func CCSwitchStop(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "message": "CC Switch stopped"})
+	c.JSON(http.StatusOK, gin.H{"enabled": false, "mode": "manual", "current_model": ""})
 }
 
 func GetAgentAIConfig(c *gin.Context) {
@@ -75,13 +78,10 @@ func GetAgentAIConfig(c *gin.Context) {
 		aiCfg = make(map[string]any)
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"provider":       getString(aiCfg, "provider", ""),
-		"api_key":        getString(aiCfg, "api_key", ""),
-		"base_url":       getString(aiCfg, "base_url", ""),
-		"model":          getString(aiCfg, "model", ""),
-		"proxy_enabled":  aiCfg["proxy_enabled"],
-		"http_proxy":     getString(aiCfg, "http_proxy", ""),
-		"https_proxy":    getString(aiCfg, "https_proxy", ""),
+		"model":          getString(aiCfg, "model", "deepseek-chat"),
+		"temperature":    0.7,
+		"max_tokens":     2048,
+		"system_prompt":  getString(aiCfg, "system_prompt", ""),
 	})
 }
 
@@ -99,7 +99,7 @@ func SaveAgentAIConfig(c *gin.Context) {
 		aiCfg = make(map[string]any)
 		agentCfg["ai"] = aiCfg
 	}
-	for _, k := range []string{"provider", "api_key", "base_url", "model", "http_proxy", "https_proxy"} {
+	for _, k := range []string{"provider", "api_key", "base_url", "model", "http_proxy", "https_proxy", "system_prompt"} {
 		if v, ok := data[k].(string); ok {
 			aiCfg[k] = v
 		}
@@ -107,12 +107,23 @@ func SaveAgentAIConfig(c *gin.Context) {
 	if v, ok := data["proxy_enabled"]; ok {
 		aiCfg["proxy_enabled"] = v
 	}
+	if v, ok := data["temperature"].(float64); ok {
+		aiCfg["temperature"] = v
+	}
+	if v, ok := data["max_tokens"].(float64); ok {
+		aiCfg["max_tokens"] = int(v)
+	}
 	store.SaveConfig(cfg)
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	c.JSON(http.StatusOK, gin.H{
+		"model":         getString(aiCfg, "model", "deepseek-chat"),
+		"temperature":   0.7,
+		"max_tokens":    2048,
+		"system_prompt": getString(aiCfg, "system_prompt", ""),
+	})
 }
 
 func AgentAITest(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "message": "Connected (HTTP 200)"})
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Connected (HTTP 200)"})
 }
 
 func AgentChat(c *gin.Context) {
@@ -123,8 +134,50 @@ func AgentChat(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"reply": "Please send a message."})
 		return
 	}
+
+	// Use configured provider or default to deepseek
+	cfg := store.GetConfig()
+	agentCfg, _ := cfg["agent"].(map[string]any)
+	aiCfg, _ := agentCfg["ai"].(map[string]any)
+	providerName := "deepseek"
+	if aiCfg != nil {
+		if p, ok := aiCfg["provider"].(string); ok && p != "" {
+			providerName = p
+		}
+	}
+
+	provider := ai.GetProvider(providerName)
+	if provider == nil || provider.APIKey == "" {
+		c.JSON(http.StatusOK, gin.H{
+			"status": "error",
+			"reply":  fmt.Sprintf("AI provider '%s' not configured. Please set API key in Settings → AI.", providerName),
+		})
+		return
+	}
+
+	resp, err := provider.ChatCompletion(ai.CompletionRequest{
+		Messages:    []ai.ChatMessage{{Role: ai.RoleUser, Content: message}},
+		MaxTokens:   2048,
+		Temperature: 0.7,
+	})
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"status": "error",
+			"reply":  "AI service error: " + err.Error(),
+		})
+		return
+	}
+	if len(resp.Choices) == 0 {
+		c.JSON(http.StatusOK, gin.H{
+			"status": "error",
+			"reply":  "AI returned empty response.",
+		})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"reply": "您好！我是小天量化(XiaoTianQuant)的AI助手。这是一个Go网关的placeholder回复。完整的AI聊天功能需要连接到DeepSeek或其他LLM提供商。",
+		"status": "ok",
+		"reply":  resp.Choices[0].Message.Content,
 	})
 }
 
@@ -153,17 +206,80 @@ func ChatSend(c *gin.Context) {
 		}
 	}
 	if len(enabledModels) == 0 {
-		enabledModels = []string{"deepseek-v3", "claude-opus-4-7"}
+		enabledModels = []string{"deepseek", "claude"}
 	}
 
-	responses := make([]map[string]any, 0)
+	type modelResponse struct {
+		model    string
+		reply    string
+		signal   string
+		err      string
+	}
+
+	var wg sync.WaitGroup
+	results := make(chan modelResponse, len(enabledModels))
+
 	for _, model := range enabledModels {
-		responses = append(responses, map[string]any{
-			"model":    model,
-			"reply":    fmt.Sprintf("[%s] 收到您的问题：「%s」。这是AI讨论室的placeholder回复，连接真实LLM API后将有完整的多模型讨论功能。", model, message),
-			"signal":   "neutral",
-			"language": "zh",
-		})
+		wg.Add(1)
+		go func(m string) {
+			defer wg.Done()
+			provider := ai.GetProvider(m)
+			if provider == nil || provider.APIKey == "" {
+				results <- modelResponse{
+					model: m,
+					err:   fmt.Sprintf("Provider '%s' not configured", m),
+				}
+				return
+			}
+			resp, err := provider.ChatCompletion(ai.CompletionRequest{
+				Messages: []ai.ChatMessage{
+					{Role: ai.RoleSystem, Content: "You are a trading assistant. Give a concise 1-2 sentence view. End with a signal: bullish, bearish, or neutral."},
+					{Role: ai.RoleUser, Content: message},
+				},
+				MaxTokens:   512,
+				Temperature: 0.7,
+			})
+			if err != nil {
+				results <- modelResponse{model: m, err: err.Error()}
+				return
+			}
+			if len(resp.Choices) == 0 {
+				results <- modelResponse{model: m, err: "Empty response"}
+				return
+			}
+			content := resp.Choices[0].Message.Content
+			signal := "neutral"
+			if containsSignal(content, "bullish") {
+				signal = "bullish"
+			} else if containsSignal(content, "bearish") {
+				signal = "bearish"
+			}
+			results <- modelResponse{model: m, reply: content, signal: signal}
+		}(model)
+	}
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	responses := make([]map[string]any, 0)
+	for r := range results {
+		if r.err != "" {
+			responses = append(responses, map[string]any{
+				"model":    r.model,
+				"reply":    fmt.Sprintf("[%s] Error: %s", r.model, r.err),
+				"signal":   "neutral",
+				"language": "zh",
+			})
+		} else {
+			responses = append(responses, map[string]any{
+				"model":    r.model,
+				"reply":    r.reply,
+				"signal":   r.signal,
+				"language": "zh",
+			})
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -171,4 +287,15 @@ func ChatSend(c *gin.Context) {
 		"responses": responses,
 		"message":   message,
 	})
+}
+
+func containsSignal(text, signal string) bool {
+	return len(text) > 0 && (func() bool {
+		for i := 0; i <= len(text)-len(signal); i++ {
+			if text[i:i+len(signal)] == signal {
+				return true
+			}
+		}
+		return false
+	}())
 }

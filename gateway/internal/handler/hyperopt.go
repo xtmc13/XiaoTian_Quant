@@ -361,12 +361,19 @@ func GetHyperoptJob(c *gin.Context) {
 
 	// Build response
 	resp := gin.H{
-		"id":        job.ID,
-		"status":    job.Status,
-		"config":    job.Config,
-		"progress":  job.Progress,
-		"created_at": job.CreatedAt,
-		"updated_at": job.UpdatedAt,
+		"id":               job.ID,
+		"status":           job.Status,
+		"strategy_type":    job.Config.StrategyType,
+		"symbol":           job.Config.Symbol,
+		"interval":         job.Config.Interval,
+		"best_score":       job.Progress.BestLoss,
+		"best_params":      job.Result.BestParams(),
+		"trials_completed": job.Progress.Done,
+		"total_trials":     job.Progress.Total,
+		"config":           job.Config,
+		"progress":         job.Progress,
+		"created_at":       job.CreatedAt,
+		"updated_at":       job.UpdatedAt,
 	}
 
 	if job.Error != "" {
@@ -420,13 +427,18 @@ func ListHyperoptJobs(c *gin.Context) {
 	jobs := make([]gin.H, 0, len(hyperoptJobs))
 	for _, job := range hyperoptJobs {
 		jobs = append(jobs, gin.H{
-			"id":        job.ID,
-			"status":    job.Status,
-			"strategy":  job.Config.StrategyType,
-			"symbol":    job.Config.Symbol,
-			"progress":  job.Progress,
-			"created_at": job.CreatedAt,
-			"updated_at": job.UpdatedAt,
+			"id":               job.ID,
+			"status":           job.Status,
+			"strategy_type":    job.Config.StrategyType,
+			"symbol":           job.Config.Symbol,
+			"interval":         job.Config.Interval,
+			"best_score":       job.Progress.BestLoss,
+			"best_params":      job.Result.BestParams(),
+			"trials_completed": job.Progress.Done,
+			"total_trials":     job.Progress.Total,
+			"progress":         job.Progress,
+			"created_at":       job.CreatedAt,
+			"updated_at":       job.UpdatedAt,
 		})
 	}
 

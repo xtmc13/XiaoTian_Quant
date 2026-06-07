@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { hyperoptApi, backtestApi } from '@/lib/api'
+import { MODEL_INTERVALS } from '@/lib/constants'
 import { cn } from '@/lib/utils'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { SectionCard } from '@/components/ui/SectionCard'
@@ -57,12 +58,6 @@ const STRATEGIES = [
   { value: 'grid', label: '网格交易' },
   { value: 'arbitrage', label: '套利' },
   { value: 'market_making', label: '做市' },
-]
-
-const INTERVALS = [
-  { value: '1h', label: '1小时' },
-  { value: '4h', label: '4小时' },
-  { value: '1d', label: '日线' },
 ]
 
 /* ── Page ── */
@@ -239,7 +234,7 @@ export function HyperoptManagement() {
                   onChange={(e) => setJobConfig({ ...jobConfig, interval: e.target.value })}
                   className="w-full px-2 py-1.5 rounded-md bg-quant-bg-secondary border border-quant-border text-sm focus:outline-none focus:border-quant-gold"
                 >
-                  {INTERVALS.map((i) => (
+                  {MODEL_INTERVALS.map((i) => (
                     <option key={i.value} value={i.value}>{i.label}</option>
                   ))}
                 </select>

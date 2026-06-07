@@ -102,12 +102,12 @@ func fetchBinanceKlines(symbol, interval string, limit int, fromMs, toMs int64) 
 	klines := make([]map[string]any, 0, len(raw))
 	for _, k := range raw {
 		klines = append(klines, map[string]any{
-			"time":   int64(k[0].(float64)),
-			"open":   parseFloat(k[1]),
-			"high":   parseFloat(k[2]),
-			"low":    parseFloat(k[3]),
-			"close":  parseFloat(k[4]),
-			"volume": parseFloat(k[5]),
+			"timestamp": int64(k[0].(float64)),
+			"open":      parseFloat(k[1]),
+			"high":      parseFloat(k[2]),
+			"low":       parseFloat(k[3]),
+			"close":     parseFloat(k[4]),
+			"volume":    parseFloat(k[5]),
 		})
 	}
 	return klines, nil
@@ -433,16 +433,26 @@ func RunBacktest(c *gin.Context) {
 
 	// Convert trades
 	trades := make([]map[string]any, 0, len(result.Trades))
-	for _, t := range result.Trades {
+	for i, t := range result.Trades {
+		pnlPct := 0.0
+		if t.EntryPrice != 0 {
+			pnlPct = (t.ExitPrice - t.EntryPrice) / t.EntryPrice * 100
+			if t.Side == "SELL" || t.Side == "sell" {
+				pnlPct = -pnlPct
+			}
+		}
 		trades = append(trades, map[string]any{
-			"entry_price": t.EntryPrice,
-			"exit_price":  t.ExitPrice,
-			"qty":         t.Quantity,
-			"side":        t.Side,
-			"pnl":         store.RoundFloat(t.RealizedPnL, 2),
-			"time":        t.EntryTime,
-			"exit_time":   t.ExitTime,
-			"reason":      t.ExitReason,
+			"id":           fmt.Sprintf("trade-%d-%d", time.Now().UnixMilli(), i),
+			"symbol":       symbol,
+			"side":         t.Side,
+			"entry_price":  t.EntryPrice,
+			"exit_price":   t.ExitPrice,
+			"quantity":     t.Quantity,
+			"pnl":          store.RoundFloat(t.RealizedPnL, 2),
+			"pnl_pct":      store.RoundFloat(pnlPct, 2),
+			"entry_time":   t.EntryTime,
+			"exit_time":    t.ExitTime,
+			"reason":       t.ExitReason,
 		})
 	}
 
@@ -465,7 +475,21 @@ func RunBacktest(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"status": "ok",
+		"id":               fmt.Sprintf("bt-%d", time.Now().UnixMilli()),
+		"strategy_id":      strategyType,
+		"symbol":           symbol,
+		"start_date":       time.UnixMilli(bars[0].Time).Format("2006-01-02"),
+		"end_date":         time.UnixMilli(bars[len(bars)-1].Time).Format("2006-01-02"),
+		"initial_balance":  initialBalance,
+		"final_equity":     store.RoundFloat(finalEquity, 2),
+		"total_return_pct": store.RoundFloat(result.TotalReturnPct, 2),
+		"max_drawdown_pct": store.RoundFloat(result.MaxDrawdownPct, 2),
+		"sharpe_ratio":     store.RoundFloat(result.SharpeRatio, 2),
+		"win_rate":         store.RoundFloat(result.WinRate, 1),
+		"profit_factor":    store.RoundFloat(result.ProfitFactor, 2),
+		"total_trades":     result.TotalTrades,
+		"equity_curve":     equityCurve,
+		"trades":           trades,
 		"source": func() string {
 			if useLocalData {
 				return "local_storage"
@@ -473,13 +497,13 @@ func RunBacktest(c *gin.Context) {
 			return "Binance"
 		}(),
 		"params": gin.H{
-			"symbol":          symbol,
-			"interval":        interval,
-			"strategy_type":   strategyType,
+			"symbol":        symbol,
+			"interval":      interval,
+			"strategy_type": strategyType,
 			"initial_balance": initialBalance,
-			"bars_used":       len(bars),
-			"from":            time.UnixMilli(bars[0].Time).Format("2006-01-02"),
-			"to":              time.UnixMilli(bars[len(bars)-1].Time).Format("2006-01-02"),
+			"bars_used":     len(bars),
+			"from":          time.UnixMilli(bars[0].Time).Format("2006-01-02"),
+			"to":            time.UnixMilli(bars[len(bars)-1].Time).Format("2006-01-02"),
 		},
 		"report": gin.H{
 			"initial_balance":  initialBalance,
@@ -491,8 +515,6 @@ func RunBacktest(c *gin.Context) {
 			"total_trades":     result.TotalTrades,
 			"profit_factor":    store.RoundFloat(result.ProfitFactor, 2),
 		},
-		"equity_curve": equityCurve,
-		"trades":       trades,
 	})
 }
 

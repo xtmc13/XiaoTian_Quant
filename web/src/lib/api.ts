@@ -90,6 +90,10 @@ import {
   type TensorBoardSummary,
   type TensorBoardQueryResult,
   type TensorBoardRun,
+  type MarketSnapshotResponse,
+  type IndicesSnapshot,
+  type SentimentSnapshot,
+  type CalendarSnapshot,
 } from '@/types'
 
 
@@ -357,7 +361,7 @@ export const marketApi = {
     api.get<{ trades: Trade[] }>('/market/trades', { params: { symbol, limit } })
       .then((d) => Array.isArray(d?.trades) ? d.trades : Array.isArray(d) ? d : []),
   snapshot: (symbol?: string) =>
-    api.get<TickerSnapshot>(`/market/snapshot${symbol ? '?symbol=' + symbol : ''}`),
+    api.get<MarketSnapshotResponse>(`/market/snapshot${symbol ? '?symbol=' + symbol : ''}`),
   symbolSearch: (q: string) => api.get<{ symbols: string[] }>(`/symbols/search?q=${q}`),
   status: () => api.get<{ status: string }>('/status'),
   // Binance public API — funding rate & mark price
@@ -403,6 +407,12 @@ export const orderApi = {
 // ── Account ──
 export const accountApi = {
   balance: (symbol?: string) => api.get<{ balances: { asset: string; free: number; locked: number; total: number }[]; currencies?: { currency: string; available: number; total: number }[] }>(`/account/balance${symbol ? '?symbol=' + symbol : ''}`),
+  transfer: (data: { from: string; to: string; currency: string; amount: number }) =>
+    api.post<{ success: boolean; message: string }>('/account/transfer', data),
+  buy: (data: { currency: string; amount: number; payment_method?: string }) =>
+    api.post<{ success: boolean; order_id: string; message: string }>('/account/buy', data),
+  swap: (data: { from_currency: string; to_currency: string; amount: number }) =>
+    api.post<{ success: boolean; order_id: string; rate: number; message: string }>('/account/swap', data),
 }
 
 // ── Trades ──
@@ -457,7 +467,7 @@ export const aiApi = {
   generate: (data: AIGenerateRequest) => api.post<AIGenerateResponse>('/ai/generate', data, { timeout: TIMEOUTS.ai }),
   multiAgent: (data: AIMultiAgentRequest) => api.post<AIMultiAgentResponse>('/ai/multi-agent', data, { timeout: TIMEOUTS.ai }),
   backtest: (data: BacktestRequest) => api.post<BacktestResult>('/ai/backtest', data, { timeout: TIMEOUTS.backtest }),
-  optimize: (data: Record<string, unknown>) => api.post<BacktestResult>('/ai/optimize', data, { timeout: TIMEOUTS.ai }),
+  optimize: (data: Record<string, unknown>) => api.post<{ iteration_history: { iteration: number; sharpe: number; return: number; max_drawdown?: number; win_rate?: number; total_trades?: number; params?: Record<string, unknown> }[]; best_sharpe?: number; best_return?: number; symbol?: string; strategy_type?: string }>('/ai/optimize', data, { timeout: TIMEOUTS.ai }),
   deploy: (data: Record<string, unknown>) => api.post<{ success: boolean; strategy_id: string }>('/ai/deploy', data),
   analyze: (data: Record<string, unknown>) => api.post<AIAnalysisResult>('/ai/analyze', data, { timeout: TIMEOUTS.analysis }),
   quickScan: () => api.get<AIQuickScan>('/ai/quickscan'),

@@ -192,12 +192,18 @@ func PortfolioPositions(c *gin.Context) {
 	posList := make([]gin.H, 0, len(positions))
 	for _, p := range positions {
 		posList = append(posList, gin.H{
-			"symbol":          p.Symbol,
-			"quantity":        p.Quantity,
-			"avg_entry_price": p.AvgEntryPrice,
-			"current_price":   p.CurrentPrice,
-			"unrealized_pnl":  p.UnrealizedPnL,
-			"realized_pnl":    p.RealizedPnL,
+			"symbol":            p.Symbol,
+			"quantity":          p.Quantity,
+			"avg_entry_price":   p.AvgEntryPrice,
+			"current_price":     p.CurrentPrice,
+			"unrealized_pnl":    p.UnrealizedPnL,
+			"realized_pnl":      p.RealizedPnL,
+			"side":              p.Side,
+			"margin":            p.Margin,
+			"liquidation_price": p.LiquidationPrice,
+			"leverage":          p.Leverage,
+			"market_type":       p.MarketType,
+			"margin_mode":       p.MarginMode,
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{"positions": posList})

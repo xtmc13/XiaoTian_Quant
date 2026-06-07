@@ -7,6 +7,7 @@ import { SectionCard } from '@/components/ui/SectionCard'
 import { KPICard } from '@/components/ui/KPICard'
 import { OverfitRiskGauge } from '@/components/community/OverfitRiskGauge'
 import { communityApi, indicatorApi } from '@/lib/api'
+import { toast } from '@/lib/useToast'
 import type { IndicatorItem } from '@/types'
 import {
   Plus,
@@ -250,7 +251,7 @@ export function AuthorDashboard() {
       setIndicators((prev) => prev.filter((i) => i.id !== id))
     } catch (e: unknown) {
       const err = e instanceof Error ? e : new Error(String(e))
-      alert(err.message || '删除失败')
+      toast('error', err.message || '删除失败')
     }
   }
 

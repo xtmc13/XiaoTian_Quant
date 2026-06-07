@@ -3,7 +3,6 @@ package handler
 import (
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -47,31 +46,35 @@ func Login(c *gin.Context) {
 		return
 	}
 
-	// Dev mode
-	devUser := os.Getenv("ADMIN_USER")
-	devPass := os.Getenv("ADMIN_PASSWORD")
-	if devUser != "" && devPass != "" && req.Username == devUser && req.Password == devPass {
-		token, _ := store.GenerateJWT(1, devUser, "admin", 1)
-		c.JSON(http.StatusOK, gin.H{
-			"access_token": token, "token_type": "bearer",
-			"user": gin.H{"id": 1, "username": devUser, "role": "admin", "nickname": "Admin"},
-		})
-		return
-	}
-
 	row := store.FindUserByUsername(req.Username)
 	if row == nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"detail": "Invalid username or password"})
 		return
 	}
-	if !store.VerifyPassword(req.Password, row["password_hash"].(string)) {
+	passHash, ok := row["password_hash"].(string)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "Internal error"})
+		return
+	}
+	if !store.VerifyPassword(req.Password, passHash) {
 		c.JSON(http.StatusUnauthorized, gin.H{"detail": "Invalid username or password"})
 		return
 	}
 
-	token, _ := store.GenerateJWT(
-		row["id"].(int), row["username"].(string), row["role"].(string), row["token_version"].(int),
-	)
+	userID, ok := row["id"].(int)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "Internal error"})
+		return
+	}
+	username, _ := row["username"].(string)
+	role, _ := row["role"].(string)
+	tokenVersion, _ := row["token_version"].(int)
+
+	token, err := store.GenerateJWT(userID, username, role, tokenVersion)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "Failed to generate token"})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"access_token": token, "token_type": "bearer",
 		"user": gin.H{
@@ -134,7 +137,11 @@ func Register(c *gin.Context) {
 	// Mark email as verified
 	store.SetEmailVerified(userID)
 
-	token, _ := store.GenerateJWT(userID, req.Username, "user", 1)
+	token, err := store.GenerateJWT(userID, req.Username, "user", 1)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "Failed to generate token"})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"access_token": token, "token_type": "bearer",
 		"user": gin.H{"id": userID, "username": req.Username, "role": "user", "nickname": req.Nickname, "email": req.Email},
@@ -152,7 +159,11 @@ func RefreshToken(c *gin.Context) {
 	userID := c.GetInt("user_id")
 	username := c.GetString("username")
 	role := c.GetString("role")
-	token, _ := store.GenerateJWT(userID, username, role, 1)
+	token, err := store.GenerateJWT(userID, username, role, 1)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "Failed to generate token"})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"access_token": token, "token_type": "bearer"})
 }
 
@@ -271,9 +282,13 @@ func LoginByCode(c *gin.Context) {
 		}
 	}
 
-	token, _ := store.GenerateJWT(
+	token, err := store.GenerateJWT(
 		user["id"].(int), user["username"].(string), user["role"].(string), user["token_version"].(int),
 	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "Failed to generate token"})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"access_token": token, "token_type": "bearer",
 		"user": gin.H{

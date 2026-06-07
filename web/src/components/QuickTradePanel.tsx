@@ -29,6 +29,9 @@ interface QuickTradePanelProps {
   price: string
   quantity: string
   preview: PositionPreview
+  availableBalance?: number
+  spotUsdtBalance?: number
+  spotBaseBalance?: number
   onSideChange: (side: 'BUY' | 'SELL') => void
   onOrderTypeChange: (type: 'LIMIT' | 'MARKET') => void
   onPlaceOrder: (side: 'BUY' | 'SELL') => void
@@ -66,6 +69,9 @@ export function QuickTradePanel({
   onSlChange,
   onPriceChange,
   onQuantityChange,
+  availableBalance,
+  spotUsdtBalance,
+  spotBaseBalance,
 }: QuickTradePanelProps) {
   const [showLeverageDropdown, setShowLeverageDropdown] = useState(false)
   const isUp = side === "BUY"
@@ -88,8 +94,8 @@ export function QuickTradePanel({
   }, [slPrice, qtyNum, priceNum])
 
 const handlePresetSize = (pct: number) => {
-    // Mock: assume balance = 10000 USDT for demo
-    const balance = 10000
+    const balance = tradeMode === 'contract' ? (availableBalance ?? 0) : (spotUsdtBalance ?? 0)
+    if (balance <= 0) return
     const targetNotional = balance * (pct / 100)
     if (orderType === 'MARKET' && markPrice > 0) {
       const q = targetNotional / markPrice
@@ -343,7 +349,9 @@ const handlePresetSize = (pct: number) => {
             </div>
             <div className="flex justify-between text-[11px]">
               <span className="text-muted-foreground">可用保证金</span>
-              <span className="font-mono text-foreground">12,450.50 USDT</span>
+              <span className="font-mono text-foreground">
+                {availableBalance != null ? availableBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '--'} USDT
+              </span>
             </div>
             <div className="flex justify-between text-[11px]">
               <span className="text-muted-foreground">预估手续费</span>
@@ -366,8 +374,12 @@ const handlePresetSize = (pct: number) => {
       {/* ── Balance (spot) ── */}
       {tradeMode !== 'contract' && (
         <div className="px-4 pb-2 flex justify-between text-[11px]">
-          <span className="text-muted-foreground">可用 <span className="text-foreground font-mono">12,450.50</span> USDT</span>
-          <span className="text-muted-foreground">可用 <span className="text-foreground font-mono">0.8450</span> BTC</span>
+          <span className="text-muted-foreground">
+            可用 <span className="text-foreground font-mono">{spotUsdtBalance?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) ?? '--'}</span> USDT
+          </span>
+          <span className="text-muted-foreground">
+            可用 <span className="text-foreground font-mono">{spotBaseBalance?.toFixed(4) ?? '--'}</span> {symbol.replace('/USDT','').replace('USDT','')}
+          </span>
         </div>
       )}
 

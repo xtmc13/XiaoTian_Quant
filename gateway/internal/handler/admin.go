@@ -100,7 +100,7 @@ func AdminAuditLog(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"entries": entries,
+		"logs":    entries,
 		"total":   total,
 		"limit":   limit,
 		"offset":  offset,

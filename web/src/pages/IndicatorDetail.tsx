@@ -5,6 +5,7 @@ import { PageHeader } from '@/components/ui/PageHeader'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { SectionCard } from '@/components/ui/SectionCard'
 import { communityApi, indicatorApi } from '@/lib/api'
+import { toast } from '@/lib/useToast'
 import type { CommunityComment } from '@/types'
 import {
   Star,
@@ -161,7 +162,7 @@ export function IndicatorDetail() {
       setCommentsTotal(comments?.length || 0)
       setMyComment('')
       setMyRating(0)
-    } catch (e: unknown) { const err = e instanceof Error ? e : new Error(String(e)); alert(err.message || '提交失败') }
+    } catch (e: unknown) { const err = e instanceof Error ? e : new Error(String(e)); toast('error', err.message || '提交失败') }
     finally { setSubmitting(false) }
   }
 
@@ -173,7 +174,7 @@ export function IndicatorDetail() {
       setIndicator(prev => prev ? { ...prev, is_purchased: true } : prev)
     } catch (e: unknown) {
       const err = e instanceof Error ? e : new Error(String(e))
-      alert(err.message || '购买失败')
+      toast('error', err.message || '购买失败')
     } finally {
       setPurchasing(false)
     }

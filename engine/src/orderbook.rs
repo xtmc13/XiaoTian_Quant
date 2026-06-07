@@ -180,17 +180,30 @@ impl OrderBook {
         let mut order = orders.remove(pos);
         order.status = OrderStatus::Cancelled;
         self.order_index.remove(&order_id);
+        // Clean up empty price level
+        if orders.is_empty() {
+            match side {
+                Side::Buy => { self.bids.remove(&key); }
+                Side::Sell => { self.asks.remove(&key); }
+            }
+        }
         Some(order)
     }
 
-    /// Get best bid price
+    /// Get best bid price (skips empty levels)
     pub fn best_bid(&self) -> Option<f64> {
-        self.bids.keys().next().map(|k| k.to_price(Side::Buy))
+        self.bids
+            .iter()
+            .find(|(_, orders)| !orders.is_empty())
+            .map(|(k, _)| k.to_price(Side::Buy))
     }
 
-    /// Get best ask price
+    /// Get best ask price (skips empty levels)
     pub fn best_ask(&self) -> Option<f64> {
-        self.asks.keys().next().map(|k| k.to_price(Side::Sell))
+        self.asks
+            .iter()
+            .find(|(_, orders)| !orders.is_empty())
+            .map(|(k, _)| k.to_price(Side::Sell))
     }
 
     /// Get spread

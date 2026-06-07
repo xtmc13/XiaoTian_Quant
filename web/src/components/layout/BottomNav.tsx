@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { cn } from '@/lib/utils'
+import { useI18n } from '@/i18n'
 import {
   LayoutDashboard, TrendingUp, BrainCircuit, Settings,
   ChevronUp, X, Bot, FlaskConical, BarChart3, LineChart,
@@ -8,31 +9,32 @@ import {
 } from 'lucide-react'
 
 const MAIN_NAV = [
-  { path: '/dashboard', label: '仪表盘', icon: LayoutDashboard },
-  { path: '/trading', label: '交易', icon: TrendingUp },
-  { path: '/ai', label: 'AI', icon: BrainCircuit },
-  { path: '/settings', label: '设置', icon: Settings },
+  { path: '/dashboard', key: 'nav.dashboard', icon: LayoutDashboard },
+  { path: '/trading', key: 'nav.trading', icon: TrendingUp },
+  { path: '/ai', key: 'nav.ai', icon: BrainCircuit },
+  { path: '/settings', key: 'nav.settings', icon: Settings },
 ]
 
 const MORE_NAV = [
-  { path: '/bots', label: '机器人', icon: Bot },
-  { path: '/strategy', label: '策略', icon: Zap },
-  { path: '/backtest', label: '回测', icon: FlaskConical },
-  { path: '/portfolio', label: '持仓', icon: Wallet },
-  { path: '/risk-control', label: '风控', icon: Shield },
-  { path: '/hyperopt', label: '优化', icon: Cpu },
-  { path: '/model-management', label: 'ML模型', icon: LineChart },
-  { path: '/indicator-community', label: '指标社区', icon: ShoppingBag },
-  { path: '/indicator-ide', label: '指标IDE', icon: Code },
-  { path: '/arbitrage', label: '套利', icon: BarChart3 },
-  { path: '/social-trading', label: '社交交易', icon: Users },
-  { path: '/onchain', label: '链上数据', icon: Link2 },
+  { path: '/bots', key: 'nav.bots', icon: Bot },
+  { path: '/strategy', key: 'nav.strategy', icon: Zap },
+  { path: '/backtest', key: 'nav.backtest', icon: FlaskConical },
+  { path: '/portfolio', key: 'nav.portfolio', icon: Wallet },
+  { path: '/risk-control', key: 'nav.riskControl', icon: Shield },
+  { path: '/hyperopt', key: 'nav.hyperopt', icon: Cpu },
+  { path: '/model-management', key: 'nav.modelManagement', icon: LineChart },
+  { path: '/indicator-community', key: 'nav.indicatorCommunity', icon: ShoppingBag },
+  { path: '/indicator-ide', key: 'nav.indicatorIDE', icon: Code },
+  { path: '/arbitrage', key: 'nav.arbitrage', icon: BarChart3 },
+  { path: '/social-trading', key: 'nav.socialTrading', icon: Users },
+  { path: '/onchain', key: 'nav.onchain', icon: Link2 },
 ]
 
 export function BottomNav() {
   const navigate = useNavigate()
   const location = useLocation()
   const [showMore, setShowMore] = useState(false)
+  const { t } = useI18n()
 
   const isActive = (path: string) =>
     location.pathname === path || location.pathname.startsWith(path + '/')
@@ -53,7 +55,7 @@ export function BottomNav() {
                 )}
               >
                 <item.icon className={cn('h-5 w-5', active && 'text-quant-gold')} />
-                <span className="text-[10px] font-medium truncate">{item.label}</span>
+                <span className="text-[10px] font-medium truncate">{t(item.key)}</span>
               </button>
             )
           })}
@@ -65,7 +67,7 @@ export function BottomNav() {
             )}
           >
             <ChevronUp className={cn('h-5 w-5', showMore && 'text-quant-gold')} />
-            <span className="text-[10px] font-medium truncate">更多</span>
+            <span className="text-[10px] font-medium truncate">{t('common.more')}</span>
           </button>
         </div>
       </nav>
@@ -80,7 +82,7 @@ export function BottomNav() {
             aria-modal="true"
           >
             <div className="flex items-center justify-between mb-3">
-              <span className="text-xs font-semibold text-muted-foreground">全部功能</span>
+              <span className="text-xs font-semibold text-muted-foreground">{t('common.all')}</span>
               <button onClick={() => setShowMore(false)} className="p-1 rounded text-muted-foreground hover:text-foreground">
                 <X className="h-4 w-4" />
               </button>
@@ -98,7 +100,7 @@ export function BottomNav() {
                     )}
                   >
                     <item.icon className="h-5 w-5" />
-                    <span className="text-[10px] font-medium">{item.label}</span>
+                    <span className="text-[10px] font-medium">{t(item.key)}</span>
                   </button>
                 )
               })}

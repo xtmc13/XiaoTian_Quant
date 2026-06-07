@@ -73,7 +73,8 @@ func (r *TradeRepo) List(filter map[string]any, limit int) ([]*TradeRecord, erro
 	}
 	query += " ORDER BY created_at DESC"
 	if limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", limit)
+		query += " LIMIT ?"
+		args = append(args, limit)
 	}
 	rows, err := db.Query(query, args...)
 	if err != nil {
@@ -165,7 +166,8 @@ func (r *PositionRepo) List(filter map[string]any, limit int) ([]*PositionRecord
 	}
 	query += " ORDER BY updated_at DESC"
 	if limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", limit)
+		query += " LIMIT ?"
+		args = append(args, limit)
 	}
 	rows, err := db.Query(query, args...)
 	if err != nil {
@@ -257,7 +259,8 @@ func (r *SignalRepo) List(filter map[string]any, limit int) ([]*SignalRecord, er
 	}
 	query += " ORDER BY created_at DESC"
 	if limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", limit)
+		query += " LIMIT ?"
+		args = append(args, limit)
 	}
 	rows, err := db.Query(query, args...)
 	if err != nil {
@@ -331,7 +334,8 @@ func (r *RiskEventRepo) List(filter map[string]any, limit int) ([]*RiskEventReco
 	}
 	query += " ORDER BY timestamp DESC"
 	if limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", limit)
+		query += " LIMIT ?"
+		args = append(args, limit)
 	}
 	rows, err := db.Query(query, args...)
 	if err != nil {
@@ -423,7 +427,8 @@ func (r *MarketDataRepo) GetBars(symbol, interval string, startTime, endTime int
 	}
 	query += " ORDER BY timestamp ASC"
 	if limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", limit)
+		query += " LIMIT ?"
+		args = append(args, limit)
 	}
 	rows, err := db.Query(query, args...)
 	if err != nil {
@@ -511,7 +516,8 @@ func (r *BacktestRepo) List(filter map[string]any, limit int) ([]*BacktestRecord
 	}
 	query += " ORDER BY created_at DESC"
 	if limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", limit)
+		query += " LIMIT ?"
+		args = append(args, limit)
 	}
 	rows, err := db.Query(query, args...)
 	if err != nil {
@@ -659,7 +665,8 @@ func (r *AgentTokenRepo) List(filter map[string]any, limit int) ([]*AgentTokenRe
 	}
 	query += " ORDER BY created_at DESC"
 	if limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", limit)
+		query += " LIMIT ?"
+		args = append(args, limit)
 	}
 	rows, err := db.Query(query, args...)
 	if err != nil {

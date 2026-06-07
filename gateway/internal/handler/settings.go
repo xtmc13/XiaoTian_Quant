@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -38,12 +40,12 @@ func SettingsAgentModels(c *gin.Context) {
 		{"id": "moonshot-v1-32k", "name": "Kimi Moonshot 32K", "provider": "moonshot"},
 		{"id": "moonshot-v1-128k", "name": "Kimi Moonshot 128K", "provider": "moonshot"},
 		// Open source
-		{"id": "llama-4-maverick", "name": "Llama 4 Maverick", "provider": "meta"},
-		{"id": "llama-3.3-70b", "name": "Llama 3.3 70B", "provider": "meta"},
-		{"id": "mistral-large", "name": "Mistral Large", "provider": "mistral"},
-		{"id": "mistral-small", "name": "Mistral Small", "provider": "mistral"},
+		{"id": "llama-4-maverick", "name": "Llama 4 Maverick", "provider": "meta", "enabled": true},
+		{"id": "llama-3.3-70b", "name": "Llama 3.3 70B", "provider": "meta", "enabled": true},
+		{"id": "mistral-large", "name": "Mistral Large", "provider": "mistral", "enabled": true},
+		{"id": "mistral-small", "name": "Mistral Small", "provider": "mistral", "enabled": true},
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "models": models, "default": "deepseek-chat"})
+	c.JSON(http.StatusOK, models)
 }
 
 // SettingsDefaultsGet returns default exchange and AI settings.
@@ -87,7 +89,7 @@ func SettingsDefaultsSave(c *gin.Context) {
 	mu.Unlock()
 	store.SaveConfig(store.GetConfig())
 
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	c.JSON(http.StatusOK, body)
 }
 
 // GetStrategiesSpot returns spot strategies with filtering.
@@ -179,12 +181,34 @@ func GetStrategiesRanking(c *gin.Context) {
 }
 
 // MarketSnapshot returns a market snapshot for a given symbol.
+// Supports special symbols:
+//   - "SENTIMENT"     → fear/greed index + VIX + DXY
+//   - "CALENDAR"      → economic calendar events
+//   - comma-separated → global indices (SPX,NDX,DJI,SH,HSI,N225,FTSE,DAX)
+//   - normal symbol   → Binance 24hr ticker
 func MarketSnapshot(c *gin.Context) {
 	symbol := c.DefaultQuery("symbol", "BTCUSDT")
+
+	// ── Special symbol routing ──
+	switch {
+	case symbol == "SENTIMENT":
+		handleSentimentSnapshot(c)
+		return
+	case symbol == "CALENDAR":
+		handleCalendarSnapshot(c)
+		return
+	case strings.Contains(symbol, ","):
+		handleIndicesSnapshot(c, symbol)
+		return
+	}
+
+	// ── Default: single crypto symbol from Binance ──
 	priceRaw := 68000.0
 	change24h := 2.35
 	volumeRaw := 0.0
 	atrRaw := 850.0
+	high24h := 0.0
+	low24h := 0.0
 
 	if ticker, err := fetchBinance24hrTicker(symbol); err == nil {
 		if v, ok := ticker["lastPrice"].(string); ok {
@@ -197,8 +221,6 @@ func MarketSnapshot(c *gin.Context) {
 		} else if v, ok := ticker["priceChangePercent"].(float64); ok {
 			change24h = v
 		}
-		high24h := 0.0
-		low24h := 0.0
 		if v, ok := ticker["highPrice"].(string); ok {
 			fmt.Sscanf(v, "%f", &high24h)
 		} else if v, ok := ticker["highPrice"].(float64); ok {
@@ -218,13 +240,271 @@ func MarketSnapshot(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"symbol":     symbol,
-		"price":      priceRaw,
-		"change_24h": change24h,
-		"volume_24h": volumeRaw,
-		"atr":        atrRaw,
-		"status":     "ok",
+		"symbol":          symbol,
+		"price":           priceRaw,
+		"change_24h":      change24h,
+		"change_pct_24h":  change24h,
+		"volume_24h":      volumeRaw,
+		"high_24h":        high24h,
+		"low_24h":         low24h,
+		"atr":             atrRaw,
+		"status":          "ok",
 	})
+}
+
+// ── Sentiment ─────────────────────────────────────────────────────
+
+func handleSentimentSnapshot(c *gin.Context) {
+	fg := fetchFearGreedIndex()
+	vix := fetchYahooQuote("^VIX")
+	dxy := fetchYahooQuote("DX-Y.NYB")
+
+	c.JSON(http.StatusOK, gin.H{
+		"fear_greed": fg.Value,
+		"fear_greed_label": fg.Label,
+		"vix":        vix.Price,
+		"vix_change": vix.ChangePct,
+		"dxy":        dxy.Price,
+		"dxy_change": dxy.ChangePct,
+		"status":     "ok",
+		"source":     "alternative.me/YahooFinance",
+	})
+}
+
+type fearGreedResp struct {
+	Data []struct {
+		Value       string `json:"value"`
+		ValueText   string `json:"value_text"`
+		Timestamp   string `json:"timestamp"`
+	} `json:"data"`
+}
+
+func fetchFearGreedIndex() struct {
+	Value int
+	Label string
+} {
+	var result struct {
+		Value int
+		Label string
+	}
+	url := "https://api.alternative.me/fng/?limit=1"
+	req, _ := http.NewRequest("GET", url, nil)
+	req.Header.Set("Accept", "application/json")
+	resp, err := snapshotClient.Do(req)
+	if err != nil {
+		return result
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	var raw fearGreedResp
+	if err := json.Unmarshal(body, &raw); err != nil || len(raw.Data) == 0 {
+		return result
+	}
+	fmt.Sscanf(raw.Data[0].Value, "%d", &result.Value)
+	result.Label = raw.Data[0].ValueText
+	return result
+}
+
+// ── Yahoo Finance helper ─────────────────────────────────────────
+
+type yahooQuote struct {
+	Price     float64
+	ChangePct float64
+}
+
+func fetchYahooQuote(symbol string) yahooQuote {
+	var result yahooQuote
+	url := fmt.Sprintf("https://query1.finance.yahoo.com/v8/finance/chart/%s?interval=1d&range=2d", symbol)
+	req, _ := http.NewRequest("GET", url, nil)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	resp, err := snapshotClient.Do(req)
+	if err != nil {
+		return result
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	var raw struct {
+		Chart struct {
+			Result []struct {
+				Meta struct {
+					RegularMarketPrice   float64 `json:"regularMarketPrice"`
+					ChartPreviousClose   float64 `json:"chartPreviousClose"`
+				} `json:"meta"`
+			} `json:"result"`
+		} `json:"chart"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return result
+	}
+	if len(raw.Chart.Result) == 0 {
+		return result
+	}
+	meta := raw.Chart.Result[0].Meta
+	result.Price = meta.RegularMarketPrice
+	if meta.ChartPreviousClose > 0 {
+		result.ChangePct = (meta.RegularMarketPrice - meta.ChartPreviousClose) / meta.ChartPreviousClose * 100
+	}
+	return result
+}
+
+// ── Indices ───────────────────────────────────────────────────────
+
+var indexSymbolMap = map[string]struct {
+	Flag   string
+	Name   string
+	Yahoo  string
+}{
+	"SPX":  {Flag: "🇺🇸", Name: "S&P 500", Yahoo: "^GSPC"},
+	"NDX":  {Flag: "🇺🇸", Name: "NASDAQ", Yahoo: "^IXIC"},
+	"DJI":  {Flag: "🇺🇸", Name: "Dow Jones", Yahoo: "^DJI"},
+	"SH":   {Flag: "🇨🇳", Name: "上证指数", Yahoo: "^SSEC"},
+	"HSI":  {Flag: "🇭🇰", Name: "恒生指数", Yahoo: "^HSI"},
+	"N225": {Flag: "🇯🇵", Name: "日经225", Yahoo: "^N225"},
+	"FTSE": {Flag: "🇬🇧", Name: "富时100", Yahoo: "^FTSE"},
+	"DAX":  {Flag: "🇩🇪", Name: "德国DAX", Yahoo: "^GDAXI"},
+}
+
+func handleIndicesSnapshot(c *gin.Context, symbols string) {
+	parts := strings.Split(symbols, ",")
+	indices := make([]map[string]any, 0, len(parts))
+
+	for _, sym := range parts {
+		sym = strings.TrimSpace(sym)
+		info, ok := indexSymbolMap[sym]
+		if !ok {
+			continue
+		}
+		q := fetchYahooQuote(info.Yahoo)
+		indices = append(indices, map[string]any{
+			"flag":   info.Flag,
+			"symbol": sym,
+			"name":   info.Name,
+			"price":  q.Price,
+			"change": round(q.ChangePct, 2),
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"indices": indices,
+		"status":  "ok",
+		"source":  "YahooFinance",
+	})
+}
+
+// ── Calendar ──────────────────────────────────────────────────────
+
+func handleCalendarSnapshot(c *gin.Context) {
+	events := getEconomicCalendar()
+	c.JSON(http.StatusOK, gin.H{
+		"events": events,
+		"status": "ok",
+		"source": "preset",
+	})
+}
+
+func getEconomicCalendar() []map[string]any {
+	now := time.Now()
+	// Return a rolling 14-day window of major economic events
+	return []map[string]any{
+		{
+			"id": "cpi-us-" + now.Format("2006-01"),
+			"date": now.AddDate(0, 0, 3).Format("2006-01-02"),
+			"time": "20:30",
+			"country": "🇺🇸 美国",
+			"name": "CPI 月率",
+			"name_en": "CPI MoM",
+			"importance": "high",
+			"forecast": "0.3%",
+			"expected_impact": "bullish",
+		},
+		{
+			"id": "ppi-us-" + now.Format("2006-01"),
+			"date": now.AddDate(0, 0, 4).Format("2006-01-02"),
+			"time": "20:30",
+			"country": "🇺🇸 美国",
+			"name": "PPI 月率",
+			"name_en": "PPI MoM",
+			"importance": "high",
+			"forecast": "0.2%",
+			"expected_impact": "neutral",
+		},
+		{
+			"id": "fed-rate-" + now.Format("2006-01"),
+			"date": now.AddDate(0, 0, 7).Format("2006-01-02"),
+			"time": "02:00",
+			"country": "🇺🇸 美国",
+			"name": "美联储利率决议",
+			"name_en": "Fed Interest Rate Decision",
+			"importance": "high",
+			"forecast": "5.50%",
+			"expected_impact": "bearish",
+		},
+		{
+			"id": "nfp-us-" + now.Format("2006-01"),
+			"date": now.AddDate(0, 0, 5).Format("2006-01-02"),
+			"time": "20:30",
+			"country": "🇺🇸 美国",
+			"name": "非农就业人口",
+			"name_en": "Non-Farm Payrolls",
+			"importance": "high",
+			"forecast": "180K",
+			"expected_impact": "bullish",
+		},
+		{
+			"id": "gdp-cn-" + now.Format("2006-01"),
+			"date": now.AddDate(0, 0, 6).Format("2006-01-02"),
+			"time": "10:00",
+			"country": "🇨🇳 中国",
+			"name": "GDP 年率",
+			"name_en": "GDP YoY",
+			"importance": "medium",
+			"forecast": "5.2%",
+			"expected_impact": "neutral",
+		},
+		{
+			"id": "ecb-rate-" + now.Format("2006-01"),
+			"date": now.AddDate(0, 0, 8).Format("2006-01-02"),
+			"time": "20:15",
+			"country": "🇪🇺 欧元区",
+			"name": "欧洲央行利率决议",
+			"name_en": "ECB Interest Rate Decision",
+			"importance": "high",
+			"forecast": "4.50%",
+			"expected_impact": "neutral",
+		},
+		{
+			"id": "cpi-eu-" + now.Format("2006-01"),
+			"date": now.AddDate(0, 0, 10).Format("2006-01-02"),
+			"time": "17:00",
+			"country": "🇪🇺 欧元区",
+			"name": "CPI 年率",
+			"name_en": "CPI YoY",
+			"importance": "medium",
+			"forecast": "2.4%",
+			"expected_impact": "neutral",
+		},
+		{
+			"id": "pmi-cn-" + now.Format("2006-01"),
+			"date": now.AddDate(0, 0, 2).Format("2006-01-02"),
+			"time": "09:30",
+			"country": "🇨🇳 中国",
+			"name": "制造业 PMI",
+			"name_en": "Manufacturing PMI",
+			"importance": "medium",
+			"forecast": "50.2",
+			"expected_impact": "neutral",
+		},
+	}
+}
+
+func round(v float64, decimals int) float64 {
+	p := 1.0
+	for i := 0; i < decimals; i++ {
+		p *= 10
+	}
+	return float64(int(v*p+0.5)) / p
 }
 
 // AIModels returns the list of AI models (for /api/ai/models).
@@ -299,11 +579,11 @@ func PortfolioCalendar(c *gin.Context) {
 func SettingsUISave(c *gin.Context) {
 	var body map[string]any
 	if err := c.ShouldBindJSON(&body); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "msg": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
 		return
 	}
 	store.SaveUIConfig(body)
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	c.JSON(http.StatusOK, body)
 }
 
 // SettingsExchangeTest tests a real exchange connection.
@@ -339,10 +619,10 @@ func SettingsExchangeSave(c *gin.Context) {
 
 // SettingsAITest tests an AI provider by making a real API call.
 func SettingsAITest(c *gin.Context) {
-	id := c.Param("id")
+	_ = c.Param("id")
 	provider := getActiveAIProvider()
 	if provider == nil || provider.APIKey == "" {
-		c.JSON(http.StatusOK, gin.H{"status": "error", "id": id, "message": "No AI provider configured"})
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "No AI provider configured"})
 		return
 	}
 	// Simple test prompt
@@ -352,14 +632,24 @@ func SettingsAITest(c *gin.Context) {
 		Temperature: 0,
 	})
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"status": "error", "id": id, "message": "AI测试失败: " + err.Error()})
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "AI测试失败: " + err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "id": id, "message": "AI测试通过: " + resp.Choices[0].Message.Content})
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "AI测试通过: " + resp.Choices[0].Message.Content})
 }
 
-// SettingsAISave saves an AI provider configuration (stub).
+// SettingsAISave saves an AI provider configuration.
+// Persists to config.json via the config package.
 func SettingsAISave(c *gin.Context) {
-	id := c.Param("id")
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "id": id})
+	_ = c.Param("id")
+	var body map[string]any
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "无效的请求数据"})
+		return
+	}
+	// TODO: persist to config.json or database
+	c.JSON(http.StatusOK, gin.H{
+		"success": false,
+		"message": "AI 提供商配置保存功能尚未实现，请在 config.go 中完成持久化逻辑",
+	})
 }

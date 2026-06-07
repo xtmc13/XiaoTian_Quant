@@ -334,7 +334,7 @@ func sampleEquity(equity []EquityPoint, maxPoints int) []EquityPoint {
 	step := float64(len(equity)-1) / float64(maxPoints-1)
 	sampled := make([]EquityPoint, maxPoints)
 	for i := 0; i < maxPoints; i++ {
-		idx := int(float64(i) * step)
+		idx := int(math.Round(float64(i) * step))
 		if idx >= len(equity) {
 			idx = len(equity) - 1
 		}

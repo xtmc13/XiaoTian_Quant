@@ -23,9 +23,9 @@ func GetOrders(c *gin.Context) {
 	allOrders := store.GetOrders(symbol)
 	var active []map[string]any
 	for _, o := range allOrders {
-		status := o["status"].(string)
+		status := getString(o, "status", "")
 		if status != "CANCELLED" && status != "FILLED" && status != "REJECTED" {
-			active = append(active, o)
+			active = append(active, normalizeOrder(o))
 		}
 	}
 	if active == nil {
@@ -65,18 +65,102 @@ func PlaceOrder(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "order_id": ord.ID, "order_status": ord.Status})
+	// Store in the shared store so GetOrders / OrderHistory can find it
+	storeOrder := map[string]any{
+		"symbol":         ord.Symbol,
+		"side":           string(ord.Side),
+		"order_type":     string(ord.OrderType),
+		"price":          ord.Price,
+		"quantity":       ord.Quantity,
+		"filled":         ord.Filled,
+		"status":         string(ord.Status),
+		"exchange":       ord.Exchange,
+		"market_type":    string(ord.MarketType),
+		"position_side":  string(ord.PositionSide),
+		"leverage":       ord.Leverage,
+		"margin_mode":    string(ord.MarginMode),
+		"tp_price":       ord.TPPrice,
+		"sl_price":       ord.SLPrice,
+		"close_position": ord.ClosePosition,
+	}
+	store.PlaceOrder(storeOrder)
+
+	c.JSON(http.StatusOK, normalizeOrder(storeOrder))
+}
+
+// normalizeOrder converts a raw store order map into the frontend-expected format.
+// It maps backend field names (order_type → type, filled → filled_quantity)
+// and converts Unix timestamps to ISO-8601 strings.
+func normalizeOrder(o map[string]any) map[string]any {
+	result := make(map[string]any)
+
+	// Basic fields
+	result["id"] = getString(o, "order_id", getString(o, "id", ""))
+	result["symbol"] = getString(o, "symbol", "")
+	result["side"] = strings.ToUpper(getString(o, "side", ""))
+
+	// Type mapping: backend uses "order_type", frontend uses "type"
+	if ot, ok := o["order_type"].(string); ok && ot != "" {
+		result["type"] = ot
+	} else if t, ok := o["type"].(string); ok {
+		result["type"] = t
+	} else {
+		result["type"] = "LIMIT"
+	}
+
+	result["price"] = getFloat(o, "price", 0)
+	result["quantity"] = getFloat(o, "quantity", 0)
+
+	// Filled quantity mapping
+	if filled, ok := o["filled"].(float64); ok {
+		result["filled_quantity"] = filled
+	} else {
+		result["filled_quantity"] = 0
+	}
+
+	result["status"] = getString(o, "status", "NEW")
+
+	// Time conversion: backend stores float64 Unix timestamp, frontend expects ISO string
+	if created, ok := o["created_at"].(float64); ok && created > 0 {
+		result["created_at"] = time.Unix(int64(created), 0).Format(time.RFC3339)
+	} else if createdStr, ok := o["created_at"].(string); ok {
+		result["created_at"] = createdStr
+	} else {
+		result["created_at"] = time.Now().Format(time.RFC3339)
+	}
+
+	// Contract fields
+	result["market_type"] = getString(o, "market_type", "spot")
+	result["position_side"] = getString(o, "position_side", "")
+	result["leverage"] = getFloat(o, "leverage", 0)
+	result["margin_mode"] = getString(o, "margin_mode", "cross")
+	result["tp_price"] = getFloat(o, "tp_price", 0)
+	result["sl_price"] = getFloat(o, "sl_price", 0)
+	result["close_position"] = getBool(o, "close_position", false)
+
+	return result
 }
 
 // fillOrderAndUpdatePortfolio simulates immediate execution for market orders
 // and updates the portfolio manager balances and positions.
 // Supports both spot and contract (swap) trading.
+// NOTE: This is called from webhooks — basic sanity checks are applied.
 func fillOrderAndUpdatePortfolio(order map[string]any) {
 	symbol := getString(order, "symbol", "BTCUSDT")
 	side := strings.ToUpper(getString(order, "side", "BUY"))
 	price := getFloat(order, "price", 0)
 	qty := getFloat(order, "quantity", 0)
 	if price <= 0 || qty <= 0 {
+		return
+	}
+
+	// Basic sanity checks (bypass OrderManager risk checks — webhook path)
+	if qty > 1000000 {
+		log.Printf("[risk] Webhook order quantity too large: %.4f %s", qty, symbol)
+		return
+	}
+	if price > 10000000 || price < 1e-8 {
+		log.Printf("[risk] Webhook order price suspicious: %.8f %s", price, symbol)
 		return
 	}
 
@@ -247,20 +331,33 @@ func fillOrderAndUpdatePortfolio(order map[string]any) {
 		// ── SPOT LOGIC (original) ──
 		// Calculate realized PnL: if this trade closes or reduces an opposite position
 		var realizedPnL float64
+		var closedQty float64
 		oppositeSide := "SELL"
 		if side == "SELL" {
 			oppositeSide = "BUY"
 		}
 		oppositePos := acct.Positions[symbol+"-"+oppositeSide]
 		if oppositePos != nil && oppositePos.Quantity > 0 {
-			closeQty := qty
-			if closeQty > oppositePos.Quantity {
-				closeQty = oppositePos.Quantity
+			closedQty = qty
+			if closedQty > oppositePos.Quantity {
+				closedQty = oppositePos.Quantity
 			}
 			if side == "SELL" {
-				realizedPnL = (price - oppositePos.AvgEntryPrice) * closeQty
+				// SELL 卖出平仓 LONG 持仓
+				// 利润 = (卖出价 - 成本价) * 平仓数量
+				realizedPnL = (price - oppositePos.AvgEntryPrice) * closedQty
 			} else {
-				realizedPnL = (oppositePos.AvgEntryPrice - price) * closeQty
+				// BUY 买入平仓 SHORT 持仓
+				// 利润 = (成本价 - 买入价) * 平仓数量
+				realizedPnL = (oppositePos.AvgEntryPrice - price) * closedQty
+			}
+
+			// 更新反向持仓（减少数量或删除）
+			oppositePos.Quantity -= closedQty
+			if oppositePos.Quantity <= 0 {
+				delete(acct.Positions, symbol+"-"+oppositeSide)
+			} else {
+				mgr.UpdatePosition(*oppositePos)
 			}
 		}
 		order["realized_pnl"] = realizedPnL
@@ -287,6 +384,12 @@ func fillOrderAndUpdatePortfolio(order map[string]any) {
 			}
 			baseBal.Free += qty
 			baseBal.Total += qty
+
+			// 如果是平仓操作，将 PnL 加到 quote 余额中
+			if closedQty > 0 {
+				quoteBal.Free += realizedPnL
+				quoteBal.Total += realizedPnL
+			}
 		} else {
 			// Deduct base, add quote
 			baseBal.Free -= qty
@@ -299,39 +402,48 @@ func fillOrderAndUpdatePortfolio(order map[string]any) {
 			}
 			quoteBal.Free += cost
 			quoteBal.Total += cost
+
+			// 如果是平仓操作，将 PnL 加到 quote 余额中
+			if closedQty > 0 {
+				quoteBal.Free += realizedPnL
+				quoteBal.Total += realizedPnL
+			}
 		}
 
 		mgr.UpdateBalance("default", quote, quoteBal.Total, quoteBal.Free, quoteBal.Used)
 		mgr.UpdateBalance("default", base, baseBal.Total, baseBal.Free, baseBal.Used)
 
-		// Update position
-		posID := symbol + "-" + side
-		existing := acct.Positions[posID]
-		if existing != nil {
-			// Average down/up
-			totalQty := existing.Quantity + qty
-			totalCost := existing.AvgEntryPrice*existing.Quantity + price*qty
-			avgPrice := totalCost / totalQty
-			existing.Quantity = totalQty
-			existing.AvgEntryPrice = avgPrice
-			existing.CurrentPrice = price
-			existing.UnrealizedPnL = (existing.CurrentPrice - existing.AvgEntryPrice) * existing.Quantity
-			if side == "SELL" {
-				existing.UnrealizedPnL = (existing.AvgEntryPrice - existing.CurrentPrice) * existing.Quantity
+		// Update position only if this is NOT a closing trade (or only partially closing)
+		remainingQty := qty - closedQty
+		if remainingQty > 0 {
+			posID := symbol + "-" + side
+			existing := acct.Positions[posID]
+			if existing != nil {
+				// Average down/up
+				totalQty := existing.Quantity + remainingQty
+				totalCost := existing.AvgEntryPrice*existing.Quantity + price*remainingQty
+				avgPrice := totalCost / totalQty
+				existing.Quantity = totalQty
+				existing.AvgEntryPrice = avgPrice
+				existing.CurrentPrice = price
+				existing.UnrealizedPnL = (existing.CurrentPrice - existing.AvgEntryPrice) * existing.Quantity
+				if side == "SELL" {
+					existing.UnrealizedPnL = (existing.AvgEntryPrice - existing.CurrentPrice) * existing.Quantity
+				}
+				mgr.UpdatePosition(*existing)
+			} else {
+				newPos := model.PositionData{
+					ID:            posID,
+					Symbol:        symbol,
+					Side:          side,
+					Quantity:      remainingQty,
+					AvgEntryPrice: price,
+					CurrentPrice:  price,
+					UnrealizedPnL: 0,
+					OpenedAt:      time.Now().UnixMilli(),
+				}
+				mgr.UpdatePosition(newPos)
 			}
-			mgr.UpdatePosition(*existing)
-		} else {
-			newPos := model.PositionData{
-				ID:            posID,
-				Symbol:        symbol,
-				Side:          side,
-				Quantity:      qty,
-				AvgEntryPrice: price,
-				CurrentPrice:  price,
-				UnrealizedPnL: 0,
-				OpenedAt:      time.Now().UnixMilli(),
-			}
-			mgr.UpdatePosition(newPos)
 		}
 	}
 
@@ -381,24 +493,29 @@ func OrderHistory(c *gin.Context) {
 	}
 
 	allOrders := store.GetOrders("")
-	var history []map[string]any
+	var rawHistory []map[string]any
 	for _, o := range allOrders {
-		status := o["status"].(string)
+		status := getString(o, "status", "")
 		if status == "CANCELLED" || status == "FILLED" || status == "REJECTED" {
-			if symbol == "" || o["symbol"] == symbol {
-				history = append(history, o)
+			if symbol == "" || getString(o, "symbol", "") == symbol {
+				rawHistory = append(rawHistory, o)
 			}
 		}
 	}
 
-	sort.Slice(history, func(i, j int) bool {
-		a := getFloat(history[i], "created_at", 0)
-		b := getFloat(history[j], "created_at", 0)
+	sort.Slice(rawHistory, func(i, j int) bool {
+		a := getFloat(rawHistory[i], "created_at", 0)
+		b := getFloat(rawHistory[j], "created_at", 0)
 		return a > b
 	})
 
-	if len(history) > limit {
-		history = history[:limit]
+	if len(rawHistory) > limit {
+		rawHistory = rawHistory[:limit]
+	}
+
+	history := make([]map[string]any, 0, len(rawHistory))
+	for _, o := range rawHistory {
+		history = append(history, normalizeOrder(o))
 	}
 	if history == nil {
 		history = []map[string]any{}
@@ -420,19 +537,16 @@ func CancelAllOrders(c *gin.Context) {
 
 // GetAccountBalance fetches real account balances from configured exchanges.
 func GetAccountBalance(c *gin.Context) {
-	// Try Binance first (main exchange)
 	apiKey, secret, _ := adapter.GetCredential("binance")
 	if apiKey == "" || secret == "" {
-		// Fall back to mock data if no credentials
-		symbol := c.DefaultQuery("symbol", "BTCUSDT")
-		base := strings.Replace(symbol, "USDT", "", 1)
-		balances := []map[string]any{
-			{"asset": "USDT", "currency": "USDT", "free": 50000.0, "available": 50000.0, "total": 52000.0},
-			{"asset": base, "currency": base, "free": 0.5, "available": 0.5, "total": 0.55},
-			{"asset": "ETH", "currency": "ETH", "free": 3.2, "available": 3.2, "total": 3.5},
-			{"asset": "SOL", "currency": "SOL", "free": 25.0, "available": 25.0, "total": 28.0},
-		}
-		c.JSON(http.StatusOK, gin.H{"balances": balances, "currencies": balances, "source": "mock"})
+		// No credentials configured — return empty balances with clear source
+		c.JSON(http.StatusOK, gin.H{
+			"balances":        []map[string]any{},
+			"currencies":      []map[string]any{},
+			"estimated_usdt":  0,
+			"source":          "unconfigured",
+			"message":         "请在「设置 → 交易所」中配置 Binance API Key 以获取真实余额",
+		})
 		return
 	}
 
@@ -463,10 +577,10 @@ func GetAccountBalance(c *gin.Context) {
 			"currency":  asset,
 			"free":      free,
 			"available": free,
+			"locked":    locked,
 			"total":     total,
 		})
 
-		// Estimate USDT value for major coins using latest prices
 		switch asset {
 		case "USDT", "BUSD", "USDC":
 			totalUSDT += total
@@ -489,7 +603,6 @@ func GetAccountBalance(c *gin.Context) {
 		}
 	}
 
-	// Update portfolio manager with real data
 	mgr := portfolio.GetManager()
 	if mgr != nil && totalUSDT > 0 {
 		mgr.UpdateBalance("binance", "USDT", totalUSDT, totalUSDT, 0)
@@ -532,33 +645,52 @@ func getLastPrice(symbol string) float64 {
 	return 0
 }
 
-// GetTradeHistory returns mock executed trade history.
+// GetTradeHistory fetches executed trade history from the exchange.
 func GetTradeHistory(c *gin.Context) {
 	limit := 50
 	if l := c.Query("limit"); l != "" {
-		if v, err := strconv.Atoi(l); err == nil {
+		if v, err := strconv.Atoi(l); err == nil && v > 0 && v <= 1000 {
 			limit = v
 		}
 	}
-	now := time.Now()
-	trades := make([]map[string]any, limit)
-	for i := 0; i < limit; i++ {
-		side := "BUY"
-		if i%2 == 0 {
-			side = "SELL"
-		}
-		trades[i] = map[string]any{
-			"symbol":    "BTCUSDT",
-			"side":      side,
-			"price":     67200.0 + float64(i)*10.0,
-			"qty":       0.01,
-			"quantity":  0.01,
-			"pnl":       50.0 - float64(i%5)*25.0,
-			"time":      now.Add(-time.Duration(i*30) * time.Minute).UnixMilli(),
-			"timestamp": now.Add(-time.Duration(i*30) * time.Minute).UnixMilli(),
-		}
+
+	apiKey, secret, _ := adapter.GetCredential("binance")
+	if apiKey == "" || secret == "" {
+		c.JSON(http.StatusOK, gin.H{
+			"trades": []map[string]any{},
+			"source": "unconfigured",
+			"message": "请在「设置 → 交易所」中配置 Binance API Key 以获取成交记录",
+		})
+		return
 	}
-	c.JSON(http.StatusOK, gin.H{"trades": trades})
+
+	binance := adapter.NewBinanceAdapter(apiKey, secret, false)
+	rawTrades, err := binance.GetAccountTradeHistory(c.Query("symbol"), limit)
+	if err != nil {
+		log.Printf("[Binance] GetTradeHistory error: %v", err)
+		c.JSON(http.StatusOK, gin.H{"trades": []map[string]any{}, "error": err.Error()})
+		return
+	}
+
+	trades := make([]map[string]any, 0, len(rawTrades))
+	for _, t := range rawTrades {
+		trades = append(trades, map[string]any{
+			"symbol":    t.Symbol,
+			"side":      t.Side,
+			"price":     t.Price,
+			"qty":       t.Quantity,
+			"quantity":  t.Quantity,
+			"pnl":       t.RealizedPnl,
+			"time":      t.Time,
+			"timestamp": t.Time,
+			"id":        t.ID,
+			"order_id":  t.OrderID,
+			"commission": t.Commission,
+			"commission_asset": t.CommissionAsset,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"trades": trades, "source": "binance"})
 }
 
 func fmtScan(s string, v *int) {

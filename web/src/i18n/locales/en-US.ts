@@ -49,6 +49,8 @@ const dict = flatten({
     indicatorIDE: 'Indicator IDE',
     arbitrage: 'Arbitrage',
     billing: 'Billing',
+    socialTrading: 'Social Trading',
+    onchain: 'On-chain',
   },
 
   /* ── Dashboard ── */

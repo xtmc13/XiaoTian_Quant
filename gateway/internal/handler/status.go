@@ -26,10 +26,10 @@ func HealthCheck(c *gin.Context) {
 		logLevel = appCtx.Config.Server.LogLevel
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"status":       "ok",
-		"uptime_secs":  int(time.Since(startTime).Seconds()),
-		"version":      "3.0.0",
-		"log_level":    logLevel,
+		"status":    "healthy",
+		"uptime":    int(time.Since(startTime).Seconds()),
+		"version":   "3.0.0",
+		"log_level": logLevel,
 	})
 }
 
@@ -142,17 +142,31 @@ func ComponentHealth(c *gin.Context) {
 	}
 
 	// Overall status
-	overall := "ok"
+	overall := "healthy"
 	for _, v := range components {
 		if s, ok := v.(string); ok && s == "unhealthy" {
 			overall = "degraded"
 			break
 		}
 	}
+	_ = overall // suppress unused variable warning
 
-	c.JSON(http.StatusOK, gin.H{
-		"status":     overall,
-		"timestamp":  time.Now().UnixMilli(),
-		"components": components,
-	})
+	// Convert to array format for frontend ComponentHealth[]
+	result := make([]map[string]any, 0, len(components))
+	for name, status := range components {
+		if s, ok := status.(string); ok {
+			result = append(result, map[string]any{
+				"name":   name,
+				"status": s,
+			})
+		} else if m, ok := status.(map[string]any); ok {
+			result = append(result, map[string]any{
+				"name":   name,
+				"status": "healthy",
+				"message": fmt.Sprintf("%v", m),
+			})
+		}
+	}
+
+	c.JSON(http.StatusOK, result)
 }

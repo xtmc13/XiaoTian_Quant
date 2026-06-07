@@ -207,6 +207,9 @@ func main() {
 
 		// ── Account ──
 		private.GET("/account/balance", handler.GetAccountBalance)
+			private.POST("/account/transfer", handler.Transfer)
+			private.POST("/account/buy", handler.BuyCrypto)
+			private.POST("/account/swap", handler.SwapCurrency)
 
 		// ── Trades ──
 		private.GET("/trades", handler.GetTradeHistory)
@@ -422,6 +425,10 @@ func main() {
 			indicatorG.POST("/parse", indicator.ParseIndicator)
 			indicatorG.POST("/validate", indicator.ValidateIndicator)
 			indicatorG.POST("/save", indicator.SaveIndicator)
+			indicatorG.POST("/saveIndicator", indicator.SaveIndicator)
+			indicatorG.POST("/getIndicators", indicator.GetIndicators)
+			indicatorG.POST("/getDecryptKey", indicator.DecryptIndicator)
+			indicatorG.GET("/kline", indicator.GetIndicatorKline)
 			indicatorG.GET("/list", indicator.ListIndicators)
 			indicatorG.GET("/:id", indicator.GetIndicator)
 			indicatorG.DELETE("/:id", indicator.DeleteIndicator)
@@ -433,6 +440,10 @@ func main() {
 			indicatorG.POST("/publish", indicator.PublishIndicator)
 		}
 
+		// Watchlist routes
+		api.GET("/watchlist", middleware.AuthRequired(), indicator.GetWatchlist)
+		api.POST("/watchlist", middleware.AuthRequired(), indicator.AddWatchlist)
+
 		// Internal indicator call (for sandbox call_indicator()) — no auth, IP-restricted in production
 		api.POST("/indicator/internal-call", indicator.InternalCallIndicator)
 
@@ -443,6 +454,8 @@ func main() {
 			experimentG.POST("/run", experiment.RunExperimentHandler)
 			experimentG.POST("/sensitivity", experiment.SensitivityAnalysisHandler)
 			experimentG.POST("/walk-forward", experiment.WalkForwardHandler)
+			experimentG.POST("/ai-optimize", experiment.RunExperimentHandler)
+			experimentG.POST("/structured-tune", experiment.RunExperimentHandler)
 			experimentG.GET("/status/:id", experiment.ExperimentStatusHandler)
 		}
 
@@ -487,7 +500,7 @@ func main() {
 		onchainG := api.Group("/onchain")
 		onchainG.Use(middleware.AuthRequired())
 		{
-			onchainClient := onchain.NewClient("")
+			onchainClient := onchain.NewClient(os.Getenv("ONCHAIN_API_KEY"))
 			onchain.RegisterRoutes(onchainG, onchainClient)
 		}
 

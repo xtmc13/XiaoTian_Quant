@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { mlApi } from '@/lib/api'
+import { INTERVAL_OPTIONS } from '@/lib/constants'
+import { toast } from '@/lib/useToast'
 import { cn, formatCurrency } from '@/lib/utils'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { SectionCard } from '@/components/ui/SectionCard'
@@ -56,15 +58,6 @@ interface TrainResult {
 }
 
 /* ── Constants ── */
-const INTERVALS = [
-  { value: '1m', label: '1分钟' },
-  { value: '5m', label: '5分钟' },
-  { value: '15m', label: '15分钟' },
-  { value: '30m', label: '30分钟' },
-  { value: '1h', label: '1小时' },
-  { value: '4h', label: '4小时' },
-  { value: '1d', label: '日线' },
-]
 
 const MODEL_TYPES = [
   { value: 'lightgbm', label: 'LightGBM' },
@@ -214,7 +207,7 @@ export function ModelManagement() {
                   onChange={(e) => setTrainConfig({ ...trainConfig, interval: e.target.value })}
                   className="w-full px-3 py-2 rounded-md bg-quant-bg-secondary border border-quant-border text-sm focus:outline-none focus:border-quant-gold"
                 >
-                  {INTERVALS.map((i) => (
+                  {INTERVAL_OPTIONS.map((i) => (
                     <option key={i.value} value={i.value}>{i.label}</option>
                   ))}
                 </select>
@@ -415,10 +408,10 @@ export function ModelManagement() {
                           onClick={async () => {
                             try {
                               const res = await mlApi.importance(model.model_id)
-                              alert(`特征重要性:\n${JSON.stringify(res.importance?.slice(0, 10), null, 2)}`)
+                              toast('info', `特征重要性:\n${JSON.stringify(res.importance?.slice(0, 10), null, 2)}`)
                             } catch (e: unknown) {
                               const err = e instanceof Error ? e : new Error(String(e))
-                              alert('获取特征重要性失败: ' + err.message)
+                              toast('error', '获取特征重要性失败: ' + err.message)
                             }
                           }}
                           className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-quant-bg-secondary text-xs font-medium hover:bg-white/5 transition-colors"
@@ -434,10 +427,10 @@ export function ModelManagement() {
                                 strategy_id: 'ml_strategy_' + Date.now(),
                                 symbol: 'BTCUSDT',
                               })
-                              alert(`部署成功: ${JSON.stringify(res, null, 2)}`)
+                              toast('success', `部署成功: ${JSON.stringify(res, null, 2)}`)
                             } catch (e: unknown) {
                               const err = e instanceof Error ? e : new Error(String(e))
-                              alert('部署失败: ' + err.message)
+                              toast('error', '部署失败: ' + err.message)
                             }
                           }}
                           className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-quant-gold/10 text-quant-gold text-xs font-medium hover:bg-quant-gold/20 transition-colors"

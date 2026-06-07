@@ -46,7 +46,7 @@ func PublishStrategy(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 0, "msg": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"code": 1, "msg": "published", "data": gin.H{"id": id}})
+	c.JSON(http.StatusOK, gin.H{"success": true, "id": id})
 }
 
 // ── List Strategies ──
@@ -67,11 +67,9 @@ func MarketStrategies(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"code":      1,
-		"msg":       "ok",
-		"data":      items,
-		"total":     total,
-		"page":      page,
+		"items": items,
+		"total": total,
+		"page":  page,
 		"page_size": pageSize,
 	})
 }
@@ -82,21 +80,39 @@ func StrategyDetail(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 0, "msg": "invalid id"})
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid id"})
 		return
 	}
 
 	strategy, comments, err := svc.GetStrategyDetail(id)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": 0, "msg": err.Error()})
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": err.Error()})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"code":     1,
-		"msg":      "ok",
-		"data":     strategy,
-		"comments": comments,
+		"id":              strategy.ID,
+		"name":            strategy.Name,
+		"description":     strategy.Description,
+		"code":            strategy.Code,
+		"symbol":          strategy.Symbol,
+		"interval":        strategy.Interval,
+		"author_id":       strategy.AuthorID,
+		"author_name":     strategy.AuthorName,
+		"total_return":    strategy.TotalReturn,
+		"sharpe_ratio":    strategy.SharpeRatio,
+		"max_drawdown":    strategy.MaxDrawdown,
+		"win_rate":        strategy.WinRate,
+		"profit_factor":   strategy.ProfitFactor,
+		"total_trades":    strategy.TotalTrades,
+		"avg_trade":       strategy.TotalReturn / float64(max(strategy.TotalTrades, 1)),
+		"rating":          strategy.AvgRating,
+		"rating_count":    strategy.RatingCount,
+		"purchase_count":  strategy.DownloadCount,
+		"view_count":      strategy.ViewCount,
+		"created_at":      strategy.CreatedAt,
+		"updated_at":      strategy.UpdatedAt,
+		"comments":        comments,
 	})
 }
 
@@ -115,23 +131,23 @@ func AddStrategyComment(c *gin.Context) {
 	idStr := c.Param("id")
 	strategyID, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 0, "msg": "invalid id"})
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid id"})
 		return
 	}
 
 	var req addCommentReq
 	if err := c.ShouldBindJSON(&req); err != nil || req.Content == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 0, "msg": "content is required"})
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "content is required"})
 		return
 	}
 
 	comment, err := svc.AddStrategyComment(strategyID, uid, uname, req.Content)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 0, "msg": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"code": 1, "msg": "comment added", "data": comment})
+	c.JSON(http.StatusOK, gin.H{"success": true, "comment_id": comment.ID})
 }
 
 // ── Rate Strategy ──
@@ -147,22 +163,22 @@ func RateStrategy(c *gin.Context) {
 	idStr := c.Param("id")
 	strategyID, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 0, "msg": "invalid id"})
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid id"})
 		return
 	}
 
 	var req rateReq
 	if err := c.ShouldBindJSON(&req); err != nil || req.Rating < 1 || req.Rating > 5 {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 0, "msg": "rating must be 1-5"})
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "rating must be 1-5"})
 		return
 	}
 
 	if err := svc.RateStrategy(strategyID, uid, req.Rating); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 0, "msg": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"code": 1, "msg": "rated"})
+	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
 // ── Leaderboard ──
@@ -179,11 +195,7 @@ func StrategyLeaderboard(c *gin.Context) {
 		items = []StrategyItem{}
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code": 1,
-		"msg":  "ok",
-		"data": items,
-	})
+	c.JSON(http.StatusOK, items)
 }
 
 // ── Trending Strategies ──
@@ -199,11 +211,7 @@ func TrendingStrategies(c *gin.Context) {
 		items = []StrategyItem{}
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code": 1,
-		"msg":  "ok",
-		"data": items,
-	})
+	c.JSON(http.StatusOK, items)
 }
 
 // ── Overfit Risk ──
@@ -212,25 +220,25 @@ func GetStrategyOverfitRisk(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 0, "msg": "invalid id"})
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid id"})
 		return
 	}
 
 	result, err := svc.GetOverfitRisk(id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 0, "msg": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
 	}
 	if result == nil {
 		// Real-time compute if not persisted
 		strategy, _, err := svc.GetStrategyDetail(id)
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"code": 0, "msg": err.Error()})
+			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": err.Error()})
 			return
 		}
 		result = ComputeOverfitRisk(strategy.TotalReturn, strategy.SharpeRatio, strategy.MaxDrawdown, strategy.TotalTrades, 0.7)
 		_ = svc.SaveOverfitRisk(id, result)
 	}
 
-	c.JSON(http.StatusOK, gin.H{"code": 1, "msg": "ok", "data": result})
+	c.JSON(http.StatusOK, result)
 }

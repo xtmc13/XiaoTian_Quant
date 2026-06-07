@@ -2,6 +2,7 @@ import { useState, useCallback, memo } from 'react'
 import { Cpu, Zap, Play, TrendingUp, Loader2, CheckCircle2, Trash2, ArrowUp, ArrowDown, X, BrainCircuit, BarChart3 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { mlApi } from '@/lib/api'
+import { toast } from '@/lib/useToast'
 import { RLPanel } from './RLPanel'
 import { TensorBoardPanel } from './TensorBoardPanel'
 import type { MLModelInfo, MLTrainResult, RLModelInfo } from '@/types'
@@ -70,8 +71,8 @@ export function MLPanel({
     try {
       const symbol = (selectedSymbol?.includes(':') ? selectedSymbol.split(':')[1] : selectedSymbol) || 'BTCUSDT'
       await mlApi.deploy({ model_id: modelId, symbol, min_confidence: 0.3 })
-      alert(`ML 策略已部署: ${modelId} → ${symbol}`)
-    } catch (e: unknown) { const err = e instanceof Error ? e : new Error(String(e)); alert('部署失败: ' + (err.message || err)) }
+      toast('success', `ML 策略已部署: ${modelId} → ${symbol}`)
+    } catch (e: unknown) { const err = e instanceof Error ? e : new Error(String(e)); toast('error', '部署失败: ' + (err.message || err)) }
     finally { setMlDeploying('') }
   }, [selectedSymbol])
 

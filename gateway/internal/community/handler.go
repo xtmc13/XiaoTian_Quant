@@ -40,15 +40,11 @@ func MarketIndicators(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"code": 1,
-		"msg":  "success",
-		"data": gin.H{
-			"items":      items,
-			"total":      total,
-			"page":       page,
-			"page_size":  pageSize,
-			"total_pages": (total + pageSize - 1) / pageSize,
-		},
+		"items": items,
+		"total": total,
+		"page":  page,
+		"page_size": pageSize,
+		"total_pages": (total + pageSize - 1) / pageSize,
 	})
 }
 

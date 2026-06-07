@@ -26,7 +26,7 @@ var usdtChains = []map[string]string{
 // ── Endpoints ──
 
 func BillingPlans(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"plans": billingPlans})
+	c.JSON(http.StatusOK, billingPlans)
 }
 
 func BillingChains(c *gin.Context) {
@@ -40,7 +40,7 @@ func BillingChains(c *gin.Context) {
 	if chains == nil {
 		chains = []map[string]string{}
 	}
-	c.JSON(http.StatusOK, gin.H{"chains": chains})
+	c.JSON(http.StatusOK, chains)
 }
 
 type billingCreateReq struct {
@@ -58,10 +58,12 @@ func BillingCreateOrder(c *gin.Context) {
 
 	orderID := "bill_" + time.Now().Format("20060102150405")
 	c.JSON(http.StatusOK, gin.H{
-		"order_id":  orderID,
-		"plan_id":   req.PlanID,
-		"chain":     req.Chain,
-		"status":    "pending",
+		"order_id":   orderID,
+		"plan_id":    req.PlanID,
+		"chain":      req.Chain,
+		"tx_hash":    req.TxHash,
+		"status":     "pending",
+		"created_at": time.Now().Unix(),
 		"expires_in": 1800, // 30 minutes
 	})
 }

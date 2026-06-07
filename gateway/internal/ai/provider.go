@@ -3,6 +3,7 @@ package ai
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -165,7 +166,11 @@ func (p *Provider) openAICompatibleChat(req CompletionRequest) (*CompletionRespo
 
 func (p *Provider) doChatRequest(url string, req CompletionRequest) (*CompletionResponse, error) {
 	body, _ := json.Marshal(req)
-	httpReq, err := http.NewRequest("POST", url, bytes.NewReader(body))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}

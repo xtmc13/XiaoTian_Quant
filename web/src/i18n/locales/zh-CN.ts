@@ -49,6 +49,8 @@ const dict = flatten({
     indicatorIDE: '指标IDE',
     arbitrage: '套利',
     billing: '会员',
+    socialTrading: '社交交易',
+    onchain: '链上数据',
   },
 
   /* ── Dashboard ── */

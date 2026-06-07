@@ -124,10 +124,12 @@ func (m *Manager) SyncFromBinance() {
 
 	// Remove paper account when real exchange data is available
 	m.mu.Lock()
-	delete(m.accounts, "paper")
-	// Reset peak to actual current equity (paper account was 100k)
-	if m.peak > m.spotTotalUSDT+m.futuresTotalUSDT*10 {
-		m.peak = m.spotTotalUSDT + m.futuresTotalUSDT + m.fundingTotalUSDT + m.earnTotalUSDT
+	if m.spotTotalUSDT > 0 || m.futuresTotalUSDT > 0 {
+		delete(m.accounts, "paper")
+		// Reset peak to actual current equity (paper account was 100k)
+		if m.peak > m.spotTotalUSDT+m.futuresTotalUSDT*10 {
+			m.peak = m.spotTotalUSDT + m.futuresTotalUSDT + m.fundingTotalUSDT + m.earnTotalUSDT
+		}
 	}
 	m.mu.Unlock()
 }
@@ -642,7 +644,14 @@ func (m *Manager) TotalEquity() float64 {
 		other += v
 	}
 	m.otherExcMu.RUnlock()
-	return m.spotTotalUSDT + m.futuresTotalUSDT + m.fundingTotalUSDT + m.earnTotalUSDT + other
+	// Include account balances (e.g., default paper trading account)
+	accountTotal := 0.0
+	for _, acct := range m.accounts {
+		for _, bal := range acct.Balances {
+			accountTotal += bal.Total
+		}
+	}
+	return m.spotTotalUSDT + m.futuresTotalUSDT + m.fundingTotalUSDT + m.earnTotalUSDT + other + accountTotal
 }
 
 // AvailableBalance returns the sum of free balances.
@@ -774,7 +783,9 @@ func (m *Manager) Drawdown() float64 {
 	if peak <= 0 {
 		return 0
 	}
-	return (peak - equity) / peak * 100
+	dd := (peak - equity) / peak * 100
+	log.Printf("[Portfolio] Drawdown debug: peak=%.2f equity=%.2f drawdown=%.2f%%", peak, equity, dd)
+	return dd
 }
 
 // TotalPnL returns the sum of all unrealized PnL across positions.

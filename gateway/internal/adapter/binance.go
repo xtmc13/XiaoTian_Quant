@@ -430,6 +430,110 @@ func (b *BinanceAdapter) GetOpenOrders(symbol string) ([]map[string]any, error) 
 	return orders, nil
 }
 
+// AccountTrade represents a single executed trade from the exchange.
+type AccountTrade struct {
+	ID               string  `json:"id"`
+	OrderID          string  `json:"order_id"`
+	Symbol          string  `json:"symbol"`
+	Side            string  `json:"side"`
+	Price           float64 `json:"price"`
+	Quantity        float64 `json:"quantity"`
+	QuoteQuantity   float64 `json:"quote_qty"`
+	Commission      float64 `json:"commission"`
+	CommissionAsset string  `json:"commission_asset"`
+	Time            int64   `json:"time"`
+	IsBuyer         bool    `json:"is_buyer"`
+	IsMaker         bool    `json:"is_maker"`
+	RealizedPnl     float64 `json:"realized_pnl"`
+}
+
+// GetAccountTradeHistory fetches executed trade history from Binance.
+func (b *BinanceAdapter) GetAccountTradeHistory(symbol string, limit int) ([]AccountTrade, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 500
+	}
+
+	// Try futures first (more relevant for a quant platform)
+	trades, err := b.getFuturesTradeHistory(symbol, limit)
+	if err != nil {
+		// Fall back to spot
+		return b.getSpotTradeHistory(symbol, limit)
+	}
+	return trades, nil
+}
+
+func (b *BinanceAdapter) getSpotTradeHistory(symbol string, limit int) ([]AccountTrade, error) {
+	params := url.Values{}
+	if symbol != "" {
+		params.Set("symbol", symbol)
+	}
+	params.Set("limit", strconv.Itoa(limit))
+
+	result, err := b.request("GET", "/myTrades", params, true)
+	if err != nil {
+		return nil, err
+	}
+
+	var trades []AccountTrade
+	raw, _ := json.Marshal(result)
+	if err := json.Unmarshal(raw, &trades); err != nil {
+		// Try as array
+		if arr, ok := result["trades"].([]any); ok {
+			raw2, _ := json.Marshal(arr)
+			json.Unmarshal(raw2, &trades)
+		}
+	}
+
+	// Normalize side field from isBuyer
+	for i := range trades {
+		if trades[i].Side == "" {
+			if trades[i].IsBuyer {
+				trades[i].Side = "BUY"
+			} else {
+				trades[i].Side = "SELL"
+			}
+		}
+		trades[i].ID = strconv.FormatInt(trades[i].Time, 10)
+		trades[i].OrderID = strconv.FormatInt(trades[i].Time, 10)
+	}
+
+	return trades, nil
+}
+
+func (b *BinanceAdapter) getFuturesTradeHistory(symbol string, limit int) ([]AccountTrade, error) {
+	params := url.Values{}
+	if symbol != "" {
+		params.Set("symbol", symbol)
+	}
+	params.Set("limit", strconv.Itoa(limit))
+
+	result, err := b.futuresRequest("GET", "/fapi/v1/userTrades", params)
+	if err != nil {
+		return nil, err
+	}
+
+	var trades []AccountTrade
+	raw, _ := json.Marshal(result)
+	if err := json.Unmarshal(raw, &trades); err != nil {
+		if arr, ok := result["trades"].([]any); ok {
+			raw2, _ := json.Marshal(arr)
+			json.Unmarshal(raw2, &trades)
+		}
+	}
+
+	for i := range trades {
+		if trades[i].Side == "" {
+			if trades[i].IsBuyer {
+				trades[i].Side = "BUY"
+			} else {
+				trades[i].Side = "SELL"
+			}
+		}
+	}
+
+	return trades, nil
+}
+
 // GetFundingRate fetches the current funding rate for a futures symbol.
 func (b *BinanceAdapter) GetFundingRate(symbol string) (float64, error) {
 	params := url.Values{}

@@ -10,7 +10,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="小天量化" />
     <meta name="mobile-web-app-capable" content="yes" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss: http: https:; img-src 'self' data: blob: https:; font-src 'self' data:; base-uri 'self';" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss: http: https:; img-src 'self' data: blob: https:; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self';" />
     <meta http-equiv="X-Content-Type-Options" content="nosniff" />
     <meta http-equiv="Referrer-Policy" content="strict-origin-when-cross-origin" />
     <link rel="manifest" href="/manifest.json" />
@@ -22,17 +22,16 @@
         font-family: 'Cascadia Code';
         src: local('Cascadia Code'), local('Consolas'), local('monospace');
       }
-      html, body { background-color: #0a0a0a; color: #e0e0e0; }
     </style>
-    <script type="module" src="/assets/index-B7f5CULG.js"></script>
-    <link rel="modulepreload" href="/assets/query-BDIvXWR3.js">
-    <link rel="modulepreload" href="/assets/react-vendor-D1X4tD55.js">
-    <link rel="modulepreload" href="/assets/axios-CT76seSz.js">
-    <link rel="modulepreload" href="/assets/state-BVOvbVqO.js">
-    <link rel="modulepreload" href="/assets/ui-utils-Cw5fCaE0.js">
-    <link rel="stylesheet" href="/assets/index-CiQl2UOe.css">
+    <script type="module" crossorigin src="/assets/index-DiuGjTBm.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/query-BDIvXWR3.js">
+    <link rel="modulepreload" crossorigin href="/assets/react-vendor-D1X4tD55.js">
+    <link rel="modulepreload" crossorigin href="/assets/axios-CT76seSz.js">
+    <link rel="modulepreload" crossorigin href="/assets/state-BVOvbVqO.js">
+    <link rel="modulepreload" crossorigin href="/assets/ui-utils-Cw5fCaE0.js">
+    <link rel="stylesheet" crossorigin href="/assets/index-YegXyI62.css">
   </head>
   <body class="bg-quant-bg text-foreground antialiased">
-    <div id="root"></div>
+    <div id="root"></div>
   </body>
 </html>

@@ -66,25 +66,23 @@ func GetConditionalEngine() *ConditionalEngine {
 // Start begins the price monitoring loop.
 func (ce *ConditionalEngine) Start() {
 	ce.mu.Lock()
+	defer ce.mu.Unlock()
 	if ce.running {
-		ce.mu.Unlock()
 		return
 	}
 	ce.running = true
-	ce.mu.Unlock()
-
+	ce.stopCh = make(chan struct{})
 	go ce.monitorLoop()
 }
 
 // Stop halts the monitoring loop.
 func (ce *ConditionalEngine) Stop() {
 	ce.mu.Lock()
+	defer ce.mu.Unlock()
 	if !ce.running {
-		ce.mu.Unlock()
 		return
 	}
 	ce.running = false
-	ce.mu.Unlock()
 	close(ce.stopCh)
 }
 
