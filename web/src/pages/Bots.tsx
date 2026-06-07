@@ -1,24 +1,18 @@
-import React, { useState, useCallback } from 'react'
+import { useState, useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import {
   Bot,
   TrendingUp,
   TrendingDown,
   Wallet,
-  Activity,
   PauseCircle,
   Sparkles,
   Terminal,
   ChevronRight,
   BrainCircuit,
   Plus,
-  Grid3X3,
-  Layers,
-  ArrowLeftRight,
-  BarChart3,
-  Zap,
 } from 'lucide-react'
-import { cn, formatCurrency } from '@/lib/utils'
+import { formatCurrency } from '@/lib/utils'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { KPICard } from '@/components/ui/KPICard'
 import { SectionCard } from '@/components/ui/SectionCard'
@@ -26,7 +20,7 @@ import type { BotItem } from '@/hooks/useBotData'
 import { useBotData, BOT_TYPES } from '@/hooks/useBotData'
 import { BotList } from '@/components/bots/BotList'
 import { BotCreateModal, AiCreateDialog } from '@/components/bots/BotCreateModal'
-import { StatusBadge, BotDetailView } from '@/components/bots/BotCard'
+import { BotDetailView } from '@/components/bots/BotCard'
 
 function BotTypeCards({
   onSelect,

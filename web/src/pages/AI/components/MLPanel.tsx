@@ -1,10 +1,10 @@
-import { useState, useEffect, useCallback, memo } from 'react'
+import { useState, useCallback, memo } from 'react'
 import { Cpu, Zap, Play, TrendingUp, Loader2, CheckCircle2, Trash2, ArrowUp, ArrowDown, X, BrainCircuit, BarChart3 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { mlApi } from '@/lib/api'
 import { RLPanel } from './RLPanel'
 import { TensorBoardPanel } from './TensorBoardPanel'
-import type { MLModelInfo, MLTrainResult } from '@/types'
+import type { MLModelInfo, MLTrainResult, RLModelInfo } from '@/types'
 
 const MlModelCard = memo(function MlModelCard({
   model,
@@ -49,7 +49,7 @@ export function MLPanel({
   selectedSymbol: string | undefined
   mlModels: MLModelInfo[]
   loadMlModels: () => void
-  rlModels: any[]
+  rlModels: RLModelInfo[]
   loadRlModels: () => void
 }) {
   const [mlTab, setMlTab] = useState<'predict' | 'train' | 'models' | 'rl' | 'tensorboard'>('predict')
@@ -157,16 +157,16 @@ export function MLPanel({
           </button>
           {mlResult && (
             <div className={cn('flex items-center gap-3 p-4 rounded-xl border',
-              mlResult.direction === 'LONG' ? 'bg-quant-green/5 border-quant-green/20' : 'bg-quant-red/5 border-quant-red/20')}>
+              mlResult.direction === 'up' ? 'bg-quant-green/5 border-quant-green/20' : 'bg-quant-red/5 border-quant-red/20')}>
               <div className={cn('w-10 h-10 rounded-full flex items-center justify-center',
-                mlResult.direction === 'LONG' ? 'bg-quant-green/10' : 'bg-quant-red/10')}>
-                {mlResult.direction === 'LONG'
+                mlResult.direction === 'up' ? 'bg-quant-green/10' : 'bg-quant-red/10')}>
+                {mlResult.direction === 'up'
                   ? <ArrowUp className="h-5 w-5 text-quant-green" />
                   : <ArrowDown className="h-5 w-5 text-quant-red" />}
               </div>
               <div>
-                <div className={cn('text-base font-bold', mlResult.direction === 'LONG' ? 'text-quant-green' : 'text-quant-red')}>
-                  {mlResult.direction === 'LONG' ? '做多 LONG' : '做空 SHORT'}
+                <div className={cn('text-base font-bold', mlResult.direction === 'up' ? 'text-quant-green' : 'text-quant-red')}>
+                  {mlResult.direction === 'up' ? '做多 LONG' : '做空 SHORT'}
                 </div>
                 <div className="text-[11px] text-muted-foreground">
                   预测值: {mlResult.prediction?.toFixed(6)} · 强度: {(mlResult.strength * 100).toFixed(0)}%

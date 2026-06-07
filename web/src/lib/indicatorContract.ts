@@ -291,3 +291,127 @@ output = {
     ]
 }
 `
+
+export const RSI_TEMPLATE = `my_indicator_name = "RSI超买超卖"
+my_indicator_description = "RSI低于超卖线买入，高于超买线卖出"
+
+# @param period int 14 RSI周期 range=5:30:1
+# @param oversold float 30 超卖阈值 range=10:40:1
+# @param overbought float 70 超买阈值 range=60:90:1
+# @strategy stopLossPct 0.03
+# @strategy takeProfitPct 0.05
+# @strategy tradeDirection both
+
+import talib
+
+period = params.get('period', 14)
+oversold = params.get('oversold', 30)
+overbought = params.get('overbought', 70)
+
+df = df.copy()
+close = df['close'].values
+rsi = talib.RSI(close, timeperiod=period)
+
+raw_buy = pd.Series(rsi < oversold, index=df.index) & pd.Series(rsi.shift(1) >= oversold, index=df.index)
+raw_sell = pd.Series(rsi > overbought, index=df.index) & pd.Series(rsi.shift(1) <= overbought, index=df.index)
+
+df['buy'] = raw_buy.fillna(False).astype(bool)
+df['sell'] = raw_sell.fillna(False).astype(bool)
+
+output = {
+    'name': my_indicator_name,
+    'plots': [
+        {'name': f'RSI({period})', 'data': rsi.tolist(), 'color': '#faad14', 'overlay': False}
+    ],
+    'signals': [
+        {'type': 'buy', 'text': 'B', 'data': [df['low'].iloc[i]*0.995 if df['buy'].iloc[i] else None for i in range(len(df))], 'color': '#00E676'},
+        {'type': 'sell', 'text': 'S', 'data': [df['high'].iloc[i]*1.005 if df['sell'].iloc[i] else None for i in range(len(df))], 'color': '#FF5252'}
+    ]
+}
+`
+
+export const MACD_TEMPLATE = `my_indicator_name = "MACD金叉死叉"
+my_indicator_description = "MACD金叉买入，死叉卖出"
+
+# @param fast int 12 快线周期 range=5:50:1
+# @param slow int 26 慢线周期 range=10:100:1
+# @param signal int 9 信号线周期 range=5:30:1
+# @strategy stopLossPct 0.03
+# @strategy takeProfitPct 0.06
+# @strategy tradeDirection both
+
+import talib
+
+fast = params.get('fast', 12)
+slow = params.get('slow', 26)
+signal_period = params.get('signal', 9)
+
+df = df.copy()
+close = df['close'].values
+macd, macdsignal, macdhist = talib.MACD(close, fastperiod=fast, slowperiod=slow, signalperiod=signal_period)
+
+raw_buy = pd.Series(macd > macdsignal, index=df.index) & pd.Series(pd.Series(macd).shift(1) <= pd.Series(macdsignal).shift(1), index=df.index)
+raw_sell = pd.Series(macd < macdsignal, index=df.index) & pd.Series(pd.Series(macd).shift(1) >= pd.Series(macdsignal).shift(1), index=df.index)
+
+df['buy'] = raw_buy.fillna(False).astype(bool)
+df['sell'] = raw_sell.fillna(False).astype(bool)
+
+output = {
+    'name': my_indicator_name,
+    'plots': [
+        {'name': 'MACD', 'data': macd.tolist(), 'color': '#00E676', 'overlay': False},
+        {'name': 'Signal', 'data': macdsignal.tolist(), 'color': '#FF5252', 'overlay': False},
+        {'name': 'Hist', 'data': macdhist.tolist(), 'color': '#faad14', 'overlay': False}
+    ],
+    'signals': [
+        {'type': 'buy', 'text': 'B', 'data': [df['low'].iloc[i]*0.995 if df['buy'].iloc[i] else None for i in range(len(df))], 'color': '#00E676'},
+        {'type': 'sell', 'text': 'S', 'data': [df['high'].iloc[i]*1.005 if df['sell'].iloc[i] else None for i in range(len(df))], 'color': '#FF5252'}
+    ]
+}
+`
+
+export const BOLLINGER_TEMPLATE = `my_indicator_name = "布林带突破"
+my_indicator_description = "价格突破下轨买入，突破上轨卖出"
+
+# @param period int 20 周期 range=10:50:1
+# @param mult float 2.0 标准差倍数 range=1:4:0.5
+# @strategy stopLossPct 0.03
+# @strategy takeProfitPct 0.06
+# @strategy tradeDirection both
+
+import talib
+
+period = params.get('period', 20)
+mult = params.get('mult', 2.0)
+
+df = df.copy()
+close = df['close'].values
+upper, middle, lower = talib.BBANDS(close, timeperiod=period, nbdevup=mult, nbdevdn=mult)
+
+raw_buy = pd.Series(df['close'] < lower, index=df.index) & pd.Series(df['close'].shift(1) >= pd.Series(lower).shift(1), index=df.index)
+raw_sell = pd.Series(df['close'] > upper, index=df.index) & pd.Series(df['close'].shift(1) <= pd.Series(upper).shift(1), index=df.index)
+
+df['buy'] = raw_buy.fillna(False).astype(bool)
+df['sell'] = raw_sell.fillna(False).astype(bool)
+
+output = {
+    'name': my_indicator_name,
+    'plots': [
+        {'name': f'BB({period},{mult})', 'data': middle.tolist(), 'color': '#00E676', 'overlay': True},
+        {'name': 'Upper', 'data': upper.tolist(), 'color': '#FF5252', 'overlay': True},
+        {'name': 'Lower', 'data': lower.tolist(), 'color': '#FF5252', 'overlay': True}
+    ],
+    'signals': [
+        {'type': 'buy', 'text': 'B', 'data': [df['low'].iloc[i]*0.995 if df['buy'].iloc[i] else None for i in range(len(df))], 'color': '#00E676'},
+        {'type': 'sell', 'text': 'S', 'data': [df['high'].iloc[i]*1.005 if df['sell'].iloc[i] else None for i in range(len(df))], 'color': '#FF5252'}
+    ]
+}
+`
+
+export const INDICATOR_TEMPLATES = [
+  { key: 'sma_cross', label: '双均线交叉', code: DEFAULT_INDICATOR_CODE },
+  { key: 'rsi', label: 'RSI 超买超卖', code: RSI_TEMPLATE },
+  { key: 'macd', label: 'MACD 金叉死叉', code: MACD_TEMPLATE },
+  { key: 'bollinger', label: '布林带突破', code: BOLLINGER_TEMPLATE },
+]
+

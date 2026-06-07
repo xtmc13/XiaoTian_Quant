@@ -4,10 +4,12 @@
  */
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useSearchParams } from 'react-router-dom'
 import { cn, formatCurrency } from '@/lib/utils'
 import { marketApi, indicatorApi, strategyApi, communityApi } from '@/lib/api'
 import { TRADING_INTERVALS } from '@/lib/constants'
 import { KlineChart } from '@/components/charts/KlineChart'
+import { EquityCurve } from '@/components/charts/EquityCurve'
 import { CodeEditor } from '@/components/ide/CodeEditor'
 import { ParamPanel } from '@/components/ide/ParamPanel'
 import { ValidationBanner } from '@/components/ide/ValidationBanner'
@@ -15,14 +17,15 @@ import { SectionCard } from '@/components/ui/SectionCard'
 import { KPICard } from '@/components/ui/KPICard'
 import type { KLineBar } from '@/lib/technicalIndicators'
 import {
-  Play, Save, RotateCcw, Code, BarChart3, TrendingUp, TrendingDown,
-  Target, Activity, Zap, ChevronUp, ChevronDown, Download,
+  Play, Save, Code, BarChart3, TrendingUp, TrendingDown,
+  Target, Activity, Zap, ChevronUp, ChevronDown,
   Maximize2, Minimize2, Plus, Trash2, Loader2, AlertCircle,
-  Search, Clock, X, Settings, Send, Sparkles, PanelLeft,
+  X, Sparkles, PanelLeft,
   Copy, Upload, BookOpen, GitBranch, PauseCircle, Wand2,
 } from 'lucide-react'
 import {
   DEFAULT_INDICATOR_CODE,
+  INDICATOR_TEMPLATES,
   parseParamsFromCode,
   type ParseResult,
   type ValidationHint,
@@ -50,6 +53,7 @@ export function IndicatorIDE() {
   // Selection
   const [symbol, setSymbol] = useState('BTCUSDT')
   const [interval, setInterval] = useState('1h')
+  const [searchParams, setSearchParams] = useSearchParams()
 
   // Code
   const [code, setCode] = useState(DEFAULT_INDICATOR_CODE)
@@ -97,6 +101,17 @@ export function IndicatorIDE() {
   // Indicator list
   const [indicators, setIndicators] = useState<SavedIndicator[]>([])
 
+  /* ── Select indicator ── */
+  const selectIndicator = useCallback((ind: SavedIndicator) => {
+    setSelectedIndicatorId(ind.id)
+    setCode(ind.code)
+    setCodeDirty(false)
+    setValidationHints([])
+  }, [])
+
+  // Chart signals from indicator execution
+  const [chartSignals, setChartSignals] = useState<Array<{timestamp: number; price: number; side: 'buy' | 'sell'; text: string; color: string}>>([])
+
   /* ── Load saved indicators ── */
   useEffect(() => {
     indicatorApi.list().then((res: unknown) => {
@@ -104,6 +119,20 @@ export function IndicatorIDE() {
       setIndicators(Array.isArray(list) ? list : [])
     }).catch(() => {})
   }, [])
+
+  /* ── Auto-load indicator from URL ?id=xxx ── */
+  useEffect(() => {
+    const idParam = searchParams.get('id')
+    if (!idParam || indicators.length === 0) return
+    const id = Number(idParam)
+    if (!id) return
+    const ind = indicators.find(i => i.id === id)
+    if (ind) {
+      selectIndicator(ind)
+      // Clear id from URL after loading to avoid re-trigger on refresh
+      setSearchParams({}, { replace: true })
+    }
+  }, [searchParams, indicators, selectIndicator, setSearchParams])
 
   /* ── Parse code on change ── */
   useEffect(() => {
@@ -143,6 +172,60 @@ export function IndicatorIDE() {
     }))
   }, [klinesRaw])
 
+  /* ── Execute indicator on chart when running ── */
+  useEffect(() => {
+    if (!chartIndicatorRunning || klines.length === 0) {
+      setChartSignals([])
+      return
+    }
+    let cancelled = false
+    const runIndicator = async () => {
+      try {
+        const dfJSON = klines.map(k => ({
+          time: k.timestamp,
+          open: k.open,
+          high: k.high,
+          low: k.low,
+          close: k.close,
+          volume: k.volume,
+        }))
+        const res = await indicatorApi.execute({
+          code,
+          params: paramValues,
+          df_json: dfJSON,
+        }) as unknown as { data?: { output?: { signals?: Array<{type: string; text?: string; data?: (number|null)[]; color?: string}>; plots?: Array<{name: string; data: unknown[]; color?: string; overlay?: boolean}> } }; success?: boolean }
+        if (cancelled) return
+        const output = res?.data?.output
+        if (!output?.signals) {
+          setChartSignals([])
+          return
+        }
+        const signals: Array<{timestamp: number; price: number; side: 'buy' | 'sell'; text: string; color: string}> = []
+        for (const sig of output.signals) {
+          if (!sig.data) continue
+          for (let i = 0; i < sig.data.length; i++) {
+            const price = sig.data[i]
+            if (price === null || price === undefined) continue
+            const kline = klines[i]
+            if (!kline) continue
+            signals.push({
+              timestamp: kline.timestamp ?? 0,
+              price: Number(price),
+              side: sig.type === 'buy' ? 'buy' : 'sell',
+              text: sig.text || (sig.type === 'buy' ? 'B' : 'S'),
+              color: sig.color || (sig.type === 'buy' ? '#00E676' : '#FF5252'),
+            })
+          }
+        }
+        if (!cancelled) setChartSignals(signals)
+      } catch {
+        if (!cancelled) setChartSignals([])
+      }
+    }
+    runIndicator()
+    return () => { cancelled = true }
+  }, [chartIndicatorRunning, code, klines, paramValues])
+
   /* ── Snapshot ── */
   const { data: snapshotRaw } = useQuery({
     queryKey: ['ide-snap', symbol],
@@ -152,14 +235,6 @@ export function IndicatorIDE() {
   const snapshot = snapshotRaw
   const lastPrice = snapshot?.price ? Number(snapshot.price) : 0
   const change24h = snapshot?.change_24h ? Number(snapshot.change_24h) : 0
-
-  /* ── Select indicator ── */
-  const selectIndicator = useCallback((ind: SavedIndicator) => {
-    setSelectedIndicatorId(ind.id)
-    setCode(ind.code)
-    setCodeDirty(false)
-    setValidationHints([])
-  }, [])
 
   /* ── Validate ── */
   const handleValidate = useCallback(async () => {
@@ -189,8 +264,6 @@ export function IndicatorIDE() {
         name: parsed.name,
         description: parsed.description,
         code,
-        symbol,
-        interval,
       })
       setCodeDirty(false)
       indicatorApi.list().then((res: unknown) => {
@@ -198,7 +271,7 @@ export function IndicatorIDE() {
         setIndicators(Array.isArray(list) ? list : [])
       }).catch(() => {})
     } catch { /* ignore */ }
-  }, [code, symbol, interval, selectedIndicatorId, parsed, handleValidate])
+  }, [code, selectedIndicatorId, parsed, handleValidate])
 
   const handleDelete = useCallback(async () => {
     if (!selectedIndicatorId || !confirm('确认删除？')) return
@@ -221,8 +294,6 @@ export function IndicatorIDE() {
         name: parsed.name + ' (副本)',
         description: parsed.description,
         code,
-        symbol,
-        interval,
       })
       setCodeDirty(false)
       indicatorApi.list().then((res: unknown) => {
@@ -230,7 +301,7 @@ export function IndicatorIDE() {
         setIndicators(Array.isArray(list) ? list : [])
       }).catch(() => {})
     } catch { /* ignore */ }
-  }, [code, symbol, interval, parsed])
+  }, [code, parsed])
 
   const handlePublish = useCallback(async () => {
     if (!selectedIndicatorId) {
@@ -254,7 +325,7 @@ export function IndicatorIDE() {
     } catch (e: unknown) {
       alert('发布失败: ' + (e instanceof Error ? e.message : '未知错误'))
     }
-  }, [selectedIndicatorId, code, symbol, interval, parsed, handleSave])
+  }, [selectedIndicatorId, handleSave])
 
   /* ── AI Generate (SSE Streaming) ── */
   const handleAiGenerate = useCallback(async () => {
@@ -350,10 +421,22 @@ export function IndicatorIDE() {
     setRunning(true); setBacktestResult(null)
     try {
       const payload: Record<string, unknown> = {
-        symbol, interval, code,
-        initial_balance: { USDT: initialCapital },
-        leverage, commission: commission / 100, slippage: slippage / 100,
-        num_bars: 500,
+        code,
+        symbol,
+        interval,
+        klines: klines.map(k => ({
+          time: k.timestamp,
+          open: k.open,
+          high: k.high,
+          low: k.low,
+          close: k.close,
+          volume: k.volume,
+        })),
+        backtest_config: {
+          initial_balance: initialCapital,
+          commission: commission / 100,
+          slippage: slippage / 100,
+        },
       }
       if (startDate) payload.start_date = startDate
       if (endDate) payload.end_date = endDate
@@ -362,21 +445,29 @@ export function IndicatorIDE() {
     } catch (e: unknown) {
       setBacktestResult({ error: e instanceof Error ? e.message : '回测失败' })
     } finally { setRunning(false) }
-  }, [symbol, interval, code, initialCapital, leverage, commission, slippage, startDate, endDate])
+  }, [code, symbol, interval, klines, initialCapital, commission, slippage, startDate, endDate])
 
   /* ── Backtest metrics ── */
   const backtestMetrics = useMemo(() => {
-    if (!backtestResult?.report) return null
-    const r = backtestResult.report as Record<string, number>; const t = 'up' as const; const d = 'down' as const; const n = 'neutral' as const
+    if (!backtestResult || backtestResult.error) return null
+    const r = backtestResult as Record<string, unknown>
+    const totalReturnPct = Number(r.total_return_pct ?? 0)
+    const totalReturn = Number(r.total_return ?? 0)
+    const finalEquity = initialCapital + totalReturn
+    const maxDrawdownPct = Number(r.max_drawdown_pct ?? 0)
+    const sharpeRatio = Number(r.sharpe_ratio ?? 0)
+    const winRate = Number(r.win_rate ?? 0)
+    const profitFactor = Number(r.profit_factor ?? 0)
+    const t = 'up' as const; const d = 'down' as const; const n = 'neutral' as const
     return [
-      { label: '总收益率', value: `${(r.total_return_pct ?? 0) >= 0 ? '+' : ''}${r.total_return_pct?.toFixed(2)}%`, icon: TrendingUp, trend: (r.total_return_pct ?? 0) >= 0 ? t : d },
-      { label: '最终权益', value: `$${formatCurrency(r.final_equity)}`, icon: BarChart3, trend: n },
-      { label: '最大回撤', value: `${r.max_drawdown_pct?.toFixed(2)}%`, icon: TrendingDown, trend: d },
-      { label: '夏普比率', value: r.sharpe_ratio?.toFixed(2), icon: Target, trend: n },
-      { label: '胜率', value: `${r.win_rate_pct?.toFixed(1)}%`, icon: Target, trend: t },
-      { label: '盈亏比', value: r.profit_factor?.toFixed(2), icon: Activity, trend: n },
+      { label: '总收益率', value: `${totalReturnPct >= 0 ? '+' : ''}${totalReturnPct.toFixed(2)}%`, icon: TrendingUp, trend: totalReturnPct >= 0 ? t : d },
+      { label: '最终权益', value: `$${formatCurrency(finalEquity)}`, icon: BarChart3, trend: n },
+      { label: '最大回撤', value: `${maxDrawdownPct.toFixed(2)}%`, icon: TrendingDown, trend: d },
+      { label: '夏普比率', value: sharpeRatio.toFixed(2), icon: Target, trend: n },
+      { label: '胜率', value: `${winRate.toFixed(1)}%`, icon: Target, trend: t },
+      { label: '盈亏比', value: profitFactor.toFixed(2), icon: Activity, trend: n },
     ]
-  }, [backtestResult])
+  }, [backtestResult, initialCapital])
 
   const isUp = change24h >= 0
 
@@ -465,6 +556,25 @@ export function IndicatorIDE() {
                 {codeDirty && <span className="px-1.5 py-0 rounded text-[9px] font-medium bg-amber-500/10 text-amber-400">已修改</span>}
               </div>
               <div className="flex items-center gap-0.5">
+                {/* Template selector */}
+                <select
+                  value=""
+                  onChange={e => {
+                    const tmpl = INDICATOR_TEMPLATES.find(t => t.key === e.target.value)
+                    if (tmpl) {
+                      setCode(tmpl.code)
+                      setCodeDirty(true)
+                      setSelectedIndicatorId(null)
+                      setValidationHints([])
+                    }
+                    e.target.value = ''
+                  }}
+                  className="bg-quant-bg border border-quant-border rounded px-1.5 py-1 text-[10px] text-white outline-none focus:border-quant-gold mr-1"
+                  title="加载模板"
+                >
+                  <option value="">模板 ▾</option>
+                  {INDICATOR_TEMPLATES.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
+                </select>
                 {/* New */}
                 <button onClick={() => { setCode(DEFAULT_INDICATOR_CODE); setSelectedIndicatorId(null); setCodeDirty(false); setValidationHints([]) }} className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/5" title="新建" aria-label="新建"><Plus className="w-3.5 h-3.5" /></button>
                 {/* Save */}
@@ -725,7 +835,7 @@ export function IndicatorIDE() {
 
                 {/* KLineChart */}
                 <div className="flex-1 min-h-0 rounded-lg overflow-hidden border border-quant-border">
-                  <KlineChart data={klines} loading={klLoading} activeIndicators={activeIndicators} onActiveIndicatorsChange={setActiveIndicators} theme="dark" />
+                  <KlineChart data={klines} loading={klLoading} signals={chartSignals} activeIndicators={activeIndicators} onActiveIndicatorsChange={setActiveIndicators} theme="dark" />
                 </div>
               </div>
             )}
@@ -788,15 +898,35 @@ export function IndicatorIDE() {
                     <div className="grid grid-cols-3 gap-3">
                       {backtestMetrics.map(m => <KPICard key={m.label} icon={<m.icon className="w-3.5 h-3.5 text-muted-foreground" />} label={m.label} value={m.value} trend={m.trend} />)}
                     </div>
+                    {/* Equity Curve */}
+                    {Array.isArray(backtestResult?.equity_curve) && (backtestResult.equity_curve as Array<{timestamp: number; equity: number}>).length > 1 && (
+                      <SectionCard title="权益曲线">
+                        <EquityCurve data={backtestResult.equity_curve as Array<{timestamp: number; equity: number}>} height={160} />
+                      </SectionCard>
+                    )}
                     {backtestResult && Array.isArray(backtestResult.trades) && backtestResult.trades.length > 0 && (
                       <SectionCard title={`交易记录 (${(backtestResult.trades as unknown as { length: number }).length}笔)`}>
                         <div className="overflow-x-auto max-h-52">
                           <table className="w-full text-[10px]">
-                            <thead><tr className="text-muted-foreground text-left"><th scope="col" className="px-2 py-1 font-medium">#</th><th scope="col" className="px-2 py-1 font-medium">方向</th><th scope="col" className="px-2 py-1 font-medium">价格</th><th scope="col" className="px-2 py-1 font-medium">数量</th><th scope="col" className="px-2 py-1 font-medium">盈亏</th></tr></thead>
+                            <thead><tr className="text-muted-foreground text-left"><th scope="col" className="px-2 py-1 font-medium">#</th><th scope="col" className="px-2 py-1 font-medium">方向</th><th scope="col" className="px-2 py-1 font-medium">入场价</th><th scope="col" className="px-2 py-1 font-medium">出场价</th><th scope="col" className="px-2 py-1 font-medium">数量</th><th scope="col" className="px-2 py-1 font-medium">盈亏</th></tr></thead>
                             <tbody>
-                              {backtestResult.trades.map((t: Record<string, unknown>, i: number) => (
-                                <tr key={i} className="border-t border-quant-border/40"><td className="px-2 py-1 text-muted-foreground">{i + 1}</td><td className="px-2 py-1">{t.side === 'buy' ? '买' : '卖'}</td><td className="px-2 py-1 font-mono">${formatCurrency((t.exit_price as number) || (t.entry_price as number))}</td><td className="px-2 py-1 font-mono">{String(t.qty)}</td><td className={cn('px-2 py-1 font-mono font-bold', ((t.pnl as number) || 0) >= 0 ? 'text-quant-green' : 'text-quant-red')}>${(t.pnl as number)?.toFixed(2) || '-'}</td></tr>
-                              ))}
+                              {(backtestResult.trades as Record<string, unknown>[]).map((t, i: number) => {
+                                const side = String(t.side || t.Side || '')
+                                const entryPrice = Number(t.entry_price ?? t.EntryPrice ?? 0)
+                                const exitPrice = Number(t.exit_price ?? t.ExitPrice ?? 0)
+                                const qty = Number(t.quantity ?? t.Quantity ?? t.qty ?? 0)
+                                const pnl = Number(t.realized_pnl ?? t.RealizedPnL ?? t.pnl ?? 0)
+                                return (
+                                  <tr key={i} className="border-t border-quant-border/40">
+                                    <td className="px-2 py-1 text-muted-foreground">{i + 1}</td>
+                                    <td className="px-2 py-1">{side === 'buy' || side === 'BUY' || side === 'LONG' ? '买' : '卖'}</td>
+                                    <td className="px-2 py-1 font-mono">${formatCurrency(entryPrice)}</td>
+                                    <td className="px-2 py-1 font-mono">${formatCurrency(exitPrice)}</td>
+                                    <td className="px-2 py-1 font-mono">{qty.toFixed(4)}</td>
+                                    <td className={cn('px-2 py-1 font-mono font-bold', pnl >= 0 ? 'text-quant-green' : 'text-quant-red')}>${pnl.toFixed(2)}</td>
+                                  </tr>
+                                )
+                              })}
                             </tbody>
                           </table>
                         </div>

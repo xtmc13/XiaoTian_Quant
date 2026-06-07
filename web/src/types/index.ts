@@ -28,6 +28,16 @@ export interface Order {
   quantity: number
   status: 'NEW' | 'FILLED' | 'CANCELLED' | 'PARTIALLY_FILLED'
   created_at: string
+
+  // ── Contract fields ──
+  market_type?: 'spot' | 'swap' | 'margin'
+  position_side?: 'LONG' | 'SHORT'
+  leverage?: number
+  margin_mode?: 'cross' | 'isolated'
+  tp_price?: number
+  sl_price?: number
+  close_position?: boolean
+
   [key: string]: unknown
 }
 

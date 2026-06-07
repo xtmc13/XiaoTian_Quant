@@ -1,6 +1,6 @@
-import { Plus, Zap, LineChart, Gauge, Building2, Loader2, BrainCircuit, TrendingUp, TrendingDown, Minus, X } from 'lucide-react'
+import { Plus, Zap, LineChart, Gauge, Building2, Loader2, BrainCircuit, TrendingUp, TrendingDown, Minus } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import type { AIAnalysisResult, AIModelAnalysis } from '@/types'
+import type { AIAnalysisResult } from '@/types'
 
 export function AnalysisPlaceholder({ onAddStock, onAnalyze, canAnalyze }: {
   onAddStock: () => void
@@ -150,8 +150,8 @@ export function AnalysisResultView({
       </div>
 
       <div className="space-y-3">
-        {result.analyses.map((a) => (
-          <div key={a.model} className="bg-quant-card border border-quant-border rounded-xl p-4">
+        {result.analyses.map((a, idx) => (
+          <div key={`${a.model}-${idx}`} className="bg-quant-card border border-quant-border rounded-xl p-4">
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-2">
                 <BrainCircuit className="h-4 w-4 text-quant-gold" />

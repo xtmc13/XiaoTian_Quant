@@ -360,6 +360,29 @@ export const marketApi = {
     api.get<TickerSnapshot>(`/market/snapshot${symbol ? '?symbol=' + symbol : ''}`),
   symbolSearch: (q: string) => api.get<{ symbols: string[] }>(`/symbols/search?q=${q}`),
   status: () => api.get<{ status: string }>('/status'),
+  // Binance public API — funding rate & mark price
+  fundingRate: async (symbol: string) => {
+    try {
+      const resp = await axios.get(`https://fapi.binance.com/fapi/v1/premiumIndex?symbol=${symbol}`)
+      const data = resp.data as Record<string, unknown>
+      return {
+        fundingRate: parseFloat(String(data.lastFundingRate ?? 0)),
+        markPrice: parseFloat(String(data.markPrice ?? 0)),
+        nextFundingTime: Number(data.nextFundingTime ?? 0),
+      }
+    } catch {
+      return { fundingRate: 0, markPrice: 0, nextFundingTime: 0 }
+    }
+  },
+  markPrice: async (symbol: string) => {
+    try {
+      const resp = await axios.get(`https://fapi.binance.com/fapi/v1/premiumIndex?symbol=${symbol}`)
+      const data = resp.data as Record<string, unknown>
+      return parseFloat(String(data.markPrice ?? 0))
+    } catch {
+      return 0
+    }
+  },
 }
 
 // ── Orders ──
@@ -778,7 +801,8 @@ export const indicatorApi = {
       })
     })
   },
-  run: (data: Record<string, unknown>) => api.post<IndicatorRunResult>('/indicator/run', data),
+  run: (data: Record<string, unknown>) => api.post<IndicatorRunResult>('/indicator/execute', data),
+  execute: (data: Record<string, unknown>) => api.post<IndicatorRunResult>('/indicator/execute', data),
   watchlist: () => api.get<{ items: IndicatorItem[] }>('/watchlist').then(d => d?.items ?? []),
   addWatchlist: (data: Record<string, unknown>) => api.post<{ success: boolean }>('/watchlist', data),
   kline: (params: Record<string, string | number>) => api.get<{ klines: KlineBar[] }>('/indicator/kline', { params }).then(d => d?.klines ?? []),

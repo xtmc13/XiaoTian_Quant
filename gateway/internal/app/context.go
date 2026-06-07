@@ -91,7 +91,7 @@ func (ctx *Context) Init(cfg *config.Config) error {
 	case "ERROR":
 		ctx.Logger.SetLevel(logging.LevelError)
 	}
-	ctx.Logger.Info("Initializing XiaoTianQuant Gateway", "version", "2.0")
+	ctx.Logger.Info("Initializing XiaoTianQuant Gateway", "version", "3.0")
 
 	// 2. Database
 	if err := store.InitDB(); err != nil {
@@ -208,6 +208,12 @@ func (ctx *Context) Init(cfg *config.Config) error {
 	// 15. Wire OrderManager pipeline — risk → balance lock → exchange submit → portfolio update
 	ctx.wireOrderManager()
 
+	// 15a. Start Conditional Order Engine (TP/SL/Stop-Limit monitoring)
+	ctx.wireConditionalEngine()
+
+	// 15b. Start Advanced Order Engine (Iceberg/TWAP/VWAP)
+	ctx.wireAdvancedOrderEngine()
+
 	// 16. Wire StrategyEngine — signal → order placement + protection + broadcast
 	ctx.wireStrategyEngine()
 
@@ -298,6 +304,13 @@ func (ctx *Context) wireOrderManager() {
 			NetExposure:      ctx.PortfolioManager.NetExposure(),
 			MaxDrawdownPct:   ctx.PortfolioManager.Drawdown(),
 			Blacklist:        make(map[string]bool),
+
+			// ── Contract fields ──
+			MarketType:    req.MarketType,
+			PositionSide:  req.PositionSide,
+			Leverage:      req.Leverage,
+			MarginMode:    req.MarginMode,
+			ClosePosition: req.ClosePosition,
 		}
 		return ctx.RiskManager.Check(riskCtx)
 	}
@@ -308,6 +321,31 @@ func (ctx *Context) wireOrderManager() {
 		if acct == nil {
 			return fmt.Errorf("default account not found")
 		}
+
+		// ── CONTRACT (SWAP) ──
+		if req.MarketType == model.MarketSwap {
+			price := req.Price
+			if req.OrderType == model.TypeMarket || price <= 0 {
+				price = getLastPrice(req.Symbol)
+			}
+			notional := price * req.Quantity
+			leverage := req.Leverage
+			if leverage <= 0 {
+				leverage = 1
+			}
+			margin := notional / leverage
+
+			quote := "USDT"
+			qb := acct.Balances[quote]
+			if qb == nil || qb.Free < margin {
+				return fmt.Errorf("insufficient margin: %.4f < %.4f USDT", qb.Free, margin)
+			}
+			qb.Free -= margin
+			qb.Used += margin
+			return nil
+		}
+
+		// ── SPOT ──
 		base, quote := parseSymbolPair(req.Symbol)
 		cost := req.Price * req.Quantity
 		if req.OrderType == model.TypeMarket {
@@ -338,6 +376,33 @@ func (ctx *Context) wireOrderManager() {
 		if acct == nil {
 			return
 		}
+
+		// ── CONTRACT (SWAP) ──
+		if ord.MarketType == model.MarketSwap {
+			price := ord.Price
+			if ord.OrderType == model.TypeMarket || price <= 0 {
+				price = getLastPrice(ord.Symbol)
+			}
+			notional := price * ord.Quantity
+			leverage := ord.Leverage
+			if leverage <= 0 {
+				leverage = 1
+			}
+			margin := notional / leverage
+
+			quote := "USDT"
+			qb := acct.Balances[quote]
+			if qb != nil {
+				qb.Free += margin
+				qb.Used -= margin
+				if qb.Used < 0 {
+					qb.Used = 0
+				}
+			}
+			return
+		}
+
+		// ── SPOT ──
 		base, quote := parseSymbolPair(ord.Symbol)
 		cost := ord.Price * ord.Quantity
 		if ord.OrderType == model.TypeMarket {
@@ -376,19 +441,31 @@ func (ctx *Context) wireOrderManager() {
 				apiKey, secret, _ := adapter.GetCredential("binance")
 				if apiKey != "" && secret != "" {
 					binance := adapter.NewBinanceAdapter(apiKey, secret, false)
-					result, err = binance.PlaceOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity)
+					if ord.MarketType == model.MarketSwap {
+						result, err = binance.PlaceFuturesOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity, ord.Leverage, string(ord.PositionSide))
+					} else {
+						result, err = binance.PlaceOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity)
+					}
 				}
 			case "okx":
 				apiKey, secret, passphrase := adapter.GetCredential("okx")
 				if apiKey != "" && secret != "" {
 					okx := adapter.NewOKXAdapter(apiKey, secret, passphrase, false)
-					result, err = okx.PlaceOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity)
+					if ord.MarketType == model.MarketSwap {
+						result, err = okx.PlaceFuturesOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity, ord.Leverage, string(ord.PositionSide))
+					} else {
+						result, err = okx.PlaceOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity)
+					}
 				}
 			case "bybit":
 				apiKey, secret, _ := adapter.GetCredential("bybit")
 				if apiKey != "" && secret != "" {
 					bybit := adapter.NewBybitAdapter(apiKey, secret, false)
-					result, err = bybit.PlaceOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity)
+					if ord.MarketType == model.MarketSwap {
+						result, err = bybit.PlaceFuturesOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity, ord.Leverage, string(ord.PositionSide))
+					} else {
+						result, err = bybit.PlaceOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity)
+					}
 				}
 			case "gateio":
 				apiKey, secret, _ := adapter.GetCredential("gateio")
@@ -536,6 +613,84 @@ func (ctx *Context) wireOrderManager() {
 		ctx.Logger.Info("OrderManager pipeline wired")
 	}
 
+// wireConditionalEngine connects the conditional order engine to price feeds and order execution.
+func (ctx *Context) wireConditionalEngine() {
+	ce := order.GetConditionalEngine()
+
+	// Price feed: Binance WS → conditional engine
+	ctx.BinanceWS.SetOnPrice(func(symbol string, price float64) {
+		ce.UpdatePrice(symbol, price)
+	})
+
+	// Trigger callback: log and notify
+	ce.OnTrigger = func(co *order.ConditionalOrder) {
+		ctx.Logger.Info("Conditional order triggered",
+			"type", co.TriggerType,
+			"symbol", co.Symbol,
+			"trigger_price", co.TriggerPrice,
+			"order_id", co.OrderData.ID)
+		ctx.EventBus.Publish(event.Event{
+			Type:     event.TypeRiskAlert,
+			Symbol:   co.Symbol,
+			Data:     fmt.Sprintf("%s triggered for %s @ %.2f", co.TriggerType, co.Symbol, co.TriggerPrice),
+			Priority: event.PrioHigh,
+		})
+	}
+
+	// Order placement callback: use OrderManager
+	ce.OnPlaceOrder = func(ord *model.OrderData) (*model.OrderData, error) {
+		req := &order.Request{
+			Symbol:        ord.Symbol,
+			Side:          ord.Side,
+			OrderType:     ord.OrderType,
+			Price:         ord.Price,
+			Quantity:      ord.Quantity,
+			Exchange:      ord.Exchange,
+			MarketType:    ord.MarketType,
+			PositionSide:  ord.PositionSide,
+			Leverage:      ord.Leverage,
+			MarginMode:    ord.MarginMode,
+			ClosePosition: ord.ClosePosition,
+		}
+		return order.GetOrderManager().PlaceOrder(req)
+	}
+
+	ce.Start()
+	ctx.Logger.Info("Conditional order engine started")
+}
+
+// wireAdvancedOrderEngine connects the advanced order engine to order execution.
+func (ctx *Context) wireAdvancedOrderEngine() {
+	ae := order.GetAdvancedOrderEngine()
+
+	// Child order placement: use OrderManager
+	ae.OnPlaceChild = func(ord *model.OrderData) (*model.OrderData, error) {
+		req := &order.Request{
+			Symbol:        ord.Symbol,
+			Side:          ord.Side,
+			OrderType:     ord.OrderType,
+			Price:         ord.Price,
+			Quantity:      ord.Quantity,
+			Exchange:      ord.Exchange,
+			MarketType:    ord.MarketType,
+			PositionSide:  ord.PositionSide,
+			Leverage:      ord.Leverage,
+			MarginMode:    ord.MarginMode,
+			ClosePosition: ord.ClosePosition,
+		}
+		return order.GetOrderManager().PlaceOrder(req)
+	}
+
+	// Child order cancellation
+	ae.OnCancelChild = func(orderID string) error {
+		_, err := order.GetOrderManager().CancelOrder(orderID, "")
+		return err
+	}
+
+	ae.Start()
+	ctx.Logger.Info("Advanced order engine started")
+}
+
 // simulatePaperFill simulates immediate execution for paper trading.
 func (ctx *Context) simulatePaperFill(ord *model.OrderData) (map[string]any, error) {
 	price := ord.Price
@@ -562,8 +717,8 @@ func (ctx *Context) simulatePaperFill(ord *model.OrderData) (map[string]any, err
 }
 
 // updatePortfolioFromFill updates balances and positions after a fill.
+// Supports both spot and contract (swap) trading.
 func (ctx *Context) updatePortfolioFromFill(ord *model.OrderData) {
-	base, quote := parseSymbolPair(ord.Symbol)
 	price := ord.AvgFillPrice
 	if price <= 0 {
 		price = ord.Price
@@ -572,12 +727,41 @@ func (ctx *Context) updatePortfolioFromFill(ord *model.OrderData) {
 		price = getLastPrice(ord.Symbol)
 	}
 	qty := ord.Filled
-	cost := price * qty
+	if qty <= 0 {
+		qty = ord.Quantity
+	}
 
 	acct := ctx.PortfolioManager.GetAccount("default")
 	if acct == nil {
 		return
 	}
+
+	if ord.MarketType == model.MarketSwap {
+		// ── CONTRACT (SWAP) ──
+		ctx.updatePortfolioFromContractFill(ord, acct, price, qty)
+	} else {
+		// ── SPOT ──
+		ctx.updatePortfolioFromSpotFill(ord, acct, price, qty)
+	}
+
+	// Record snapshot
+	ctx.PortfolioManager.Snapshot()
+
+	// Notify
+	if ord.RealizedPnL != 0 {
+		ctx.EventBus.Publish(event.Event{
+			Type:     event.TypeRiskAlert,
+			Symbol:   ord.Symbol,
+			Data:     fmt.Sprintf("Fill: %s %s %.4f @ %.2f PnL=%.2f", ord.Symbol, ord.Side, qty, price, ord.RealizedPnL),
+			Priority: event.PrioNormal,
+		})
+	}
+}
+
+// updatePortfolioFromSpotFill handles spot trading fill updates.
+func (ctx *Context) updatePortfolioFromSpotFill(ord *model.OrderData, acct *model.AccountData, price, qty float64) {
+	base, quote := parseSymbolPair(ord.Symbol)
+	cost := price * qty
 
 	// Calculate realized PnL if closing an opposite position
 	var realizedPnL float64
@@ -643,18 +827,119 @@ func (ctx *Context) updatePortfolioFromFill(ord *model.OrderData) {
 		}
 		ctx.PortfolioManager.UpdatePosition(newPos)
 	}
+}
 
-	// Record snapshot
-	ctx.PortfolioManager.Snapshot()
+// updatePortfolioFromContractFill handles contract (swap) trading fill updates.
+func (ctx *Context) updatePortfolioFromContractFill(ord *model.OrderData, acct *model.AccountData, price, qty float64) {
+	notional := price * qty
+	leverage := ord.Leverage
+	if leverage <= 0 {
+		leverage = 1
+	}
+	margin := notional / leverage
 
-	// Notify
-	if realizedPnL != 0 {
-		ctx.EventBus.Publish(event.Event{
-			Type:     event.TypeRiskAlert,
-			Symbol:   ord.Symbol,
-			Data:     fmt.Sprintf("Paper fill: %s %s %.4f @ %.2f PnL=%.2f", ord.Symbol, ord.Side, qty, price, realizedPnL),
-			Priority: event.PrioNormal,
-		})
+	positionSide := ord.PositionSide
+	if positionSide == "" {
+		if ord.Side == model.SideBuy {
+			positionSide = model.PositionLong
+		} else {
+			positionSide = model.PositionShort
+		}
+	}
+
+	posID := ord.Symbol + "-" + string(positionSide)
+	existing := acct.Positions[posID]
+
+	if ord.ClosePosition || (existing != nil && existing.Quantity > 0) {
+		// ── CLOSE / REDUCE position ──
+		if existing == nil || existing.Quantity <= 0 {
+			return
+		}
+		closeQty := qty
+		if closeQty > existing.Quantity {
+			closeQty = existing.Quantity
+		}
+
+		// Realized PnL
+		var realizedPnL float64
+		if positionSide == model.PositionLong {
+			realizedPnL = (price - existing.AvgEntryPrice) * closeQty
+		} else {
+			realizedPnL = (existing.AvgEntryPrice - price) * closeQty
+		}
+		ord.RealizedPnL = realizedPnL
+
+		// Release margin proportionally
+		releasedMargin := margin
+		if closeQty < existing.Quantity {
+			releasedMargin = (existing.Margin * closeQty) / existing.Quantity
+		}
+
+		// Update balance (release margin + realized PnL)
+		ctx.adjustBalance("default", "USDT", releasedMargin+realizedPnL)
+
+		// Update position
+		existing.Quantity -= closeQty
+		existing.RealizedPnL += realizedPnL
+		existing.Margin -= releasedMargin
+		if existing.Quantity <= 0 {
+			existing.Quantity = 0
+			existing.Margin = 0
+			existing.UnrealizedPnL = 0
+			delete(acct.Positions, posID)
+			ctx.PortfolioManager.RemovePosition(posID)
+		} else {
+			existing.CurrentPrice = price
+			if positionSide == model.PositionLong {
+				existing.UnrealizedPnL = (existing.CurrentPrice - existing.AvgEntryPrice) * existing.Quantity
+			} else {
+				existing.UnrealizedPnL = (existing.AvgEntryPrice - existing.CurrentPrice) * existing.Quantity
+			}
+			ctx.PortfolioManager.UpdatePosition(*existing)
+		}
+	} else {
+		// ── OPEN / INCREASE position ──
+		// Deduct margin
+		ctx.adjustBalance("default", "USDT", -margin)
+
+		if existing != nil && existing.Quantity > 0 {
+			// Average down/up
+			totalQty := existing.Quantity + qty
+			totalCost := existing.AvgEntryPrice*existing.Quantity + price*qty
+			avgPrice := totalCost / totalQty
+			existing.Quantity = totalQty
+			existing.AvgEntryPrice = avgPrice
+			existing.CurrentPrice = price
+			existing.Margin += margin
+			existing.Leverage = leverage
+			existing.MarginMode = ord.MarginMode
+			if positionSide == model.PositionLong {
+				existing.UnrealizedPnL = (existing.CurrentPrice - existing.AvgEntryPrice) * existing.Quantity
+			} else {
+				existing.UnrealizedPnL = (existing.AvgEntryPrice - existing.CurrentPrice) * existing.Quantity
+			}
+			ctx.PortfolioManager.UpdatePosition(*existing)
+		} else {
+			// New position
+			newPos := model.PositionData{
+				ID:               posID,
+				Symbol:           ord.Symbol,
+				Side:             string(ord.Side),
+				Quantity:         qty,
+				AvgEntryPrice:    price,
+				CurrentPrice:     price,
+				UnrealizedPnL:    0,
+				RealizedPnL:      0,
+				OpenedAt:         time.Now().UnixMilli(),
+				PositionSide:     positionSide,
+				Leverage:         leverage,
+				MarginMode:       ord.MarginMode,
+				Margin:           margin,
+				MarketType:       ord.MarketType,
+				LiquidationPrice: calcLiquidationPrice(price, leverage, positionSide),
+			}
+			ctx.PortfolioManager.UpdatePosition(newPos)
+		}
 	}
 }
 
@@ -759,6 +1044,38 @@ func (ctx *Context) wireStrategyEngine() {
 			Exchange:  ctx.resolveExchange(signal.Symbol),
 		}
 
+		// ── Contract support: check if strategy config specifies leverage ──
+		configs := store.GetStrategyConfigs()
+		for _, cfg := range configs {
+			name, _ := cfg["name"].(string)
+			if name != signal.Strategy {
+				continue
+			}
+			if cj, ok := cfg["config_json"].(string); ok && cj != "" {
+				var parsed map[string]any
+				if json.Unmarshal([]byte(cj), &parsed) == nil {
+					if marketType, ok := parsed["market_type"].(string); ok && marketType == "swap" {
+						req.MarketType = model.MarketSwap
+						if lev, ok := parsed["leverage"].(float64); ok && lev > 0 {
+							req.Leverage = lev
+						} else {
+							req.Leverage = 10 // default leverage for contract
+						}
+						if marginMode, ok := parsed["margin_mode"].(string); ok && marginMode == "isolated" {
+							req.MarginMode = model.MarginIsolated
+						} else {
+							req.MarginMode = model.MarginCross
+						}
+						if signal.Direction == "SHORT" || signal.Direction == "short" || signal.Direction == "SELL" {
+							req.PositionSide = model.PositionShort
+						} else {
+							req.PositionSide = model.PositionLong
+						}
+					}
+				}
+			}
+		}
+
 		ord, err := order.GetOrderManager().PlaceOrder(req)
 		if err != nil {
 			ctx.Logger.Warn("Signal order failed",
@@ -845,25 +1162,30 @@ func (ctx *Context) closePositionFromSignal(signal model.Signal) {
 	if acct == nil {
 		return
 	}
-	// Try both BUY and SELL positions for this symbol
-	for _, side := range []string{"BUY", "SELL"} {
-		posID := signal.Symbol + "-" + side
+	// Try both LONG and SHORT positions for this symbol
+	for _, side := range []model.PositionSide{model.PositionLong, model.PositionShort} {
+		posID := signal.Symbol + "-" + string(side)
 		pos := acct.Positions[posID]
 		if pos == nil || pos.Quantity <= 0 {
 			continue
 		}
 		// Place opposite order to close
 		closeSide := model.SideSell
-		if side == "SELL" {
+		if side == model.PositionShort {
 			closeSide = model.SideBuy
 		}
 		req := &order.Request{
-			Symbol:    signal.Symbol,
-			Side:      closeSide,
-			OrderType: model.TypeMarket,
-			Price:     0,
-			Quantity:  pos.Quantity,
-			Exchange:  ctx.resolveExchange(signal.Symbol),
+			Symbol:        signal.Symbol,
+			Side:          closeSide,
+			OrderType:     model.TypeMarket,
+			Price:         0,
+			Quantity:      pos.Quantity,
+			Exchange:      ctx.resolveExchange(signal.Symbol),
+			MarketType:    pos.MarketType,
+			PositionSide:  side,
+			Leverage:      pos.Leverage,
+			MarginMode:    pos.MarginMode,
+			ClosePosition: true,
 		}
 		ord, err := order.GetOrderManager().PlaceOrder(req)
 		if err != nil {
@@ -875,25 +1197,48 @@ func (ctx *Context) closePositionFromSignal(signal model.Signal) {
 }
 
 // runFundingSettlement periodically settles funding fees for tracked positions.
+// Uses real funding rates from Binance futures API.
 func (ctx *Context) runFundingSettlement() {
 	ticker := time.NewTicker(1 * time.Hour)
 	defer ticker.Stop()
+
 	for range ticker.C {
 		if !risk.IsSettlementTime() {
 			continue
 		}
+
 		positions := ctx.PortfolioManager.GetPositions()
+		if len(positions) == 0 {
+			continue
+		}
+
+		// Try to get real funding rates from Binance
+		apiKey, secret, _ := adapter.GetCredential("binance")
+		var fundingRates map[string]float64
+		if apiKey != "" && secret != "" {
+			binance := adapter.NewBinanceAdapter(apiKey, secret, false)
+			if rates, err := binance.GetAllFundingRates(); err == nil {
+				fundingRates = rates
+			}
+		}
+
 		for _, pos := range positions {
 			if pos.Quantity <= 0 {
 				continue
 			}
-			// Fetch funding rate from Binance (simplified: use 0 for now)
-			// In production, this should call the exchange's funding rate API
 			currentPrice := getLastPrice(pos.Symbol)
 			if currentPrice <= 0 {
 				continue
 			}
-			fundingRate := 0.0001 // placeholder: 0.01% per 8h
+
+			// Use real funding rate if available, else fallback
+			fundingRate := 0.0001 // fallback: 0.01% per 8h
+			if fundingRates != nil {
+				if rate, ok := fundingRates[pos.Symbol]; ok {
+					fundingRate = rate
+				}
+			}
+
 			ctx.FundingTracker.SettleFunding(pos.Symbol, currentPrice, fundingRate)
 		}
 	}
@@ -927,6 +1272,22 @@ func (ctx *Context) initMetrics() {
 	}()
 
 	ctx.Logger.Info("Metrics initialized")
+}
+
+// calcLiquidationPrice estimates the liquidation price for a contract position.
+// Uses Binance-style formula: LiqPrice = EntryPrice * (1 ± 1/Leverage ± MMRate)
+// where MMRate is the maintenance margin rate (varies by position size).
+func calcLiquidationPrice(entryPrice, leverage float64, side model.PositionSide) float64 {
+	// Binance maintenance margin rate tiers (simplified)
+	// Tier 1 (0-50K): 0.4%
+	// Tier 2 (50K-250K): 0.5%
+	// Tier 3 (250K+): 0.65%
+	mmr := 0.004 // Tier 1 default
+
+	if side == model.PositionLong {
+		return entryPrice * (1 - 1/leverage + mmr)
+	}
+	return entryPrice * (1 + 1/leverage - mmr)
 }
 
 // WaitForShutdown blocks until SIGINT or SIGTERM is received.

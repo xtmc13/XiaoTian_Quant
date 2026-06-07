@@ -191,6 +191,38 @@ func (o *OKXAdapter) PlaceOrder(symbol, side, orderType string, price, quantity 
 	return o.request("POST", "/api/v5/trade/order", body)
 }
 
+// PlaceFuturesOrder places a futures (swap) order on OKX.
+func (o *OKXAdapter) PlaceFuturesOrder(symbol, side, orderType string, price, quantity, leverage float64, positionSide string) (map[string]any, error) {
+	instID := toOKXInstID(symbol)
+	tdMode := "cross" // default cross margin
+	if positionSide == "isolated" {
+		tdMode = "isolated"
+	}
+
+	body := map[string]any{
+		"instId":   instID,
+		"instType": "SWAP",
+		"tdMode":   tdMode,
+		"side":     strings.ToLower(side),
+		"ordType":  strings.ToLower(orderType),
+		"sz":       fmt.Sprintf("%.6f", quantity),
+		"lever":    fmt.Sprintf("%.0f", leverage),
+	}
+
+	// Position side for hedge mode
+	if positionSide != "" {
+		body["posSide"] = strings.ToLower(positionSide)
+	}
+
+	if strings.ToLower(orderType) == "limit" {
+		body["px"] = fmt.Sprintf("%.2f", price)
+	} else {
+		body["ordType"] = "market"
+	}
+
+	return o.request("POST", "/api/v5/trade/order", body)
+}
+
 func (o *OKXAdapter) CancelOrder(symbol, orderID string) (map[string]any, error) {
 	instID := toOKXInstID(symbol)
 	body := map[string]any{

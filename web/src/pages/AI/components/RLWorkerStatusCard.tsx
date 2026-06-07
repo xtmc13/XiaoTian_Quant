@@ -7,7 +7,6 @@ import {
   Play, 
   Activity, 
   Server, 
-  Clock, 
   AlertCircle,
   CheckCircle2,
   Loader2,
@@ -66,8 +65,8 @@ export function RLWorkerStatusCard() {
         const errorMsg = result.error || result.message || '未知错误';
         addToast({ type: 'error', message: `启动失败: ${errorMsg}` });
       }
-    } catch (err: any) {
-      const errorMsg = err?.message || err?.response?.data?.error?.message || err?.response?.data?.detail || '网络错误或后端不支持该功能';
+    } catch (err: unknown) {
+      const errorMsg = (err instanceof Error ? err.message : String(err)) || '网络错误或后端不支持该功能';
       addToast({ type: 'error', message: `启动请求失败: ${errorMsg}` });
     } finally {
       setStarting(false);
@@ -98,7 +97,7 @@ export function RLWorkerStatusCard() {
             </span>
           )}
           {lastUpdate && (
-            <span className="text-xs text-[#666666]">
+            <span className="text-xs text-muted-foreground">
               {lastUpdate.toLocaleTimeString()}
             </span>
           )}
@@ -109,21 +108,21 @@ export function RLWorkerStatusCard() {
         {/* Status Overview */}
         <div className="grid grid-cols-3 gap-4">
           <div className="space-y-1">
-            <div className="text-xs text-[#666666]">Worker 数量</div>
-            <div className="text-2xl font-bold text-[#eeeeee]">{(status?.workers ?? []).length}</div>
+            <div className="text-xs text-muted-foreground">Worker 数量</div>
+            <div className="text-2xl font-bold text-foreground">{(status?.workers ?? []).length}</div>
           </div>
           <div className="space-y-1">
-            <div className="text-xs text-[#666666]">队列长度</div>
-            <div className="text-2xl font-bold text-[#eeeeee]">{status?.queue_length || 0}</div>
+            <div className="text-xs text-muted-foreground">队列长度</div>
+            <div className="text-2xl font-bold text-foreground">{status?.queue_length || 0}</div>
           </div>
           <div className="space-y-1">
-            <div className="text-xs text-[#666666]">Redis 连接</div>
+            <div className="text-xs text-muted-foreground">Redis 连接</div>
             <div className="flex items-center gap-1">
               <div className={cn(
                 "h-2 w-2 rounded-full",
                 status?.redis_connected ? 'bg-green-500' : 'bg-red-500'
               )} />
-              <span className="text-sm text-[#eeeeee]">{status?.redis_connected ? '正常' : '断开'}</span>
+              <span className="text-sm text-foreground">{status?.redis_connected ? '正常' : '断开'}</span>
             </div>
           </div>
         </div>
@@ -131,11 +130,11 @@ export function RLWorkerStatusCard() {
         {/* Worker Details */}
         {status?.workers && status.workers.length > 0 && (
           <div className="space-y-2">
-            <div className="text-sm font-medium text-[#aaaaaa]">Worker 详情</div>
+            <div className="text-sm font-medium text-muted-foreground">Worker 详情</div>
             {status.workers.map((worker) => (
               <div 
                 key={worker.worker_id}
-                className="flex items-center justify-between p-2 rounded-lg border border-[#1c1c1c] bg-[#0a0a0a]"
+                className="flex items-center justify-between p-2 rounded-lg border border-quant-border bg-quant-bg"
               >
                 <div className="flex items-center gap-2">
                   <Activity className={cn(
@@ -143,13 +142,13 @@ export function RLWorkerStatusCard() {
                     worker.status === 'busy' ? 'text-yellow-500' : 'text-green-500'
                   )} />
                   <div>
-                    <div className="text-sm font-medium text-[#eeeeee]">Worker {worker.pid}</div>
-                    <div className="text-xs text-[#666666]">{worker.worker_id}</div>
+                    <div className="text-sm font-medium text-foreground">Worker {worker.pid}</div>
+                    <div className="text-xs text-muted-foreground">{worker.worker_id}</div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
                   {worker.current_job && (
-                    <span className="px-2 py-0.5 rounded text-xs border border-[#1c1c1c] text-[#888888]">
+                    <span className="px-2 py-0.5 rounded text-xs border border-quant-border text-muted-foreground">
                       Job: {worker.current_job.slice(0, 8)}...
                     </span>
                   )}
@@ -171,12 +170,12 @@ export function RLWorkerStatusCard() {
         {status?.queue_length && status.queue_length > 0 && (
           <div className="space-y-2">
             <div className="flex items-center justify-between text-sm">
-              <span className="text-[#aaaaaa]">队列积压</span>
-              <span className="text-[#eeeeee]">{status.queue_length} 个任务</span>
+              <span className="text-muted-foreground">队列积压</span>
+              <span className="text-foreground">{status.queue_length} 个任务</span>
             </div>
-            <div className="h-2 w-full rounded-full bg-[#1c1c1c] overflow-hidden">
+            <div className="h-2 w-full rounded-full bg-quant-card overflow-hidden">
               <div 
-                className="h-full bg-[#d4a574] transition-all"
+                className="h-full bg-quant-gold transition-all"
                 style={{ width: `${Math.min(status.queue_length * 10, 100)}%` }}
               />
             </div>
@@ -191,8 +190,8 @@ export function RLWorkerStatusCard() {
             className={cn(
               "flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors flex-1",
               starting || isOnline
-                ? 'bg-[#1c1c1c] text-[#666666] cursor-not-allowed'
-                : 'bg-[#d4a574] text-[#111111] hover:bg-[#d4a574]/90'
+                ? 'bg-quant-card text-muted-foreground cursor-not-allowed'
+                : 'bg-quant-gold text-quant-bg hover:bg-quant-gold/90'
             )}
           >
             {starting ? (
@@ -204,7 +203,7 @@ export function RLWorkerStatusCard() {
           </button>
           <button 
             onClick={fetchStatus}
-            className="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium bg-[#1c1c1c] text-[#aaaaaa] hover:bg-[#2a2a2a] transition-colors"
+            className="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium bg-quant-card text-muted-foreground hover:bg-quant-hover transition-colors"
           >
             <RefreshCw className="h-4 w-4" />
           </button>
@@ -219,7 +218,7 @@ export function RLWorkerStatusCard() {
                 <div className="font-medium">Worker 未运行</div>
                 <div className="mt-1 text-yellow-400/80">
                   PPO/A2C/SAC 等高级算法需要独立 Worker 进程。
-                  <div className="mt-2 p-2 bg-black/30 rounded text-xs text-[#cccccc] font-mono">
+                  <div className="mt-2 p-2 bg-black/30 rounded text-xs text-muted-foreground font-mono">
                     cd sandbox/ml_server<br/>
                     python rl_worker.py --redis-url redis://localhost:6379/0
                   </div>

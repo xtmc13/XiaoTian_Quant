@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useCallback } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { strategyApi } from '@/lib/api'
 import type { StrategyItem } from '@/types'
 import {
@@ -89,6 +89,22 @@ export const BOT_TYPES: BotTypeDef[] = [
   { key: 'ema_counter', label: 'EMA逆势策略', desc: '以EMA60为标准线，均线以上做空，振幅决定开仓节点', icon: React.createElement(BarChart3, { className: 'w-6 h-6' }), color: '#eb2f96', bg: 'rgba(235,47,150,0.10)' },
   { key: 'custom', label: '自定义', desc: '使用 Python 脚本编写完全自定义的策略逻辑', icon: React.createElement(Terminal, { className: 'w-6 h-6' }), color: '#8c8c8c', bg: 'rgba(140,140,140,0.10)' },
 ]
+
+export const BOT_TYPE_TO_STRATEGY_TYPE: Record<BotItem['bot_type'], string> = {
+  grid: 'grid_trading',
+  dca: 'martingale',
+  arbitrage: 'arbitrage',
+  market_making: 'market_making',
+  trend: 'breakout',
+  martin_trend: 'martingale',
+  wallstreet: 'wallstreet',
+  macd_golden: 'macd',
+  macd_death: 'macd',
+  dual_burn: 'martingale',
+  ema_follow: 'ema_cross',
+  ema_counter: 'ema_cross',
+  custom: 'breakout',
+}
 
 export const STATUS_META: Record<string, { label: string; dot: string; border: string; text: string; bg: string }> = {
   running: {

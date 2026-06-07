@@ -34,6 +34,13 @@ type Context struct {
 	OrderQuantity    float64
 	OrderSide        model.OrderSide
 	Blacklist        map[string]bool
+
+	// ── Contract fields ──
+	MarketType     model.MarketType
+	PositionSide   model.PositionSide
+	Leverage       float64
+	MarginMode     model.MarginMode
+	ClosePosition  bool
 }
 
 // ── Check Function ──

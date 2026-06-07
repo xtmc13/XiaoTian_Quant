@@ -467,7 +467,7 @@ func InternalCallIndicator(c *gin.Context) {
 
 	// Execute in sandbox
 	sandbox := DefaultSandboxConfig()
-	result, err := sandbox.Execute(code, req.Params)
+	result, err := sandbox.Execute(code, req.Params, nil)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 0, "msg": err.Error()})
 		return

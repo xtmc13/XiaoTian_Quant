@@ -259,6 +259,51 @@ func (b *BybitAdapter) GetBalance() ([]map[string]any, error) {
 	return balances, nil
 }
 
+// PlaceFuturesOrder places a USDT-M perpetual futures order on Bybit.
+func (b *BybitAdapter) PlaceFuturesOrder(symbol, side, orderType string, price, quantity, leverage float64, positionSide string) (map[string]any, error) {
+	body := map[string]any{
+		"category":  "linear",
+		"symbol":    symbol,
+		"side":      strings.ToUpper(side),
+		"orderType": strings.ToUpper(orderType),
+		"qty":       fmt.Sprintf("%.6f", quantity),
+	}
+
+	if strings.ToUpper(orderType) == "LIMIT" {
+		body["price"] = fmt.Sprintf("%.2f", price)
+	}
+
+	// Position index for hedge mode
+	// 0 = one-way mode, 1 = buy side of hedge mode, 2 = sell side of hedge mode
+	if positionSide != "" {
+		posIdx := 0
+		if strings.ToUpper(positionSide) == "LONG" {
+			posIdx = 1
+		} else if strings.ToUpper(positionSide) == "SHORT" {
+			posIdx = 2
+		}
+		body["positionIdx"] = posIdx
+	}
+
+	result, err := b.signedPost("/order/create", body)
+	if err != nil {
+		return nil, err
+	}
+
+	orderResult, _ := result["result"].(map[string]any)
+	if orderResult == nil {
+		return nil, fmt.Errorf("bybit futures order: empty result")
+	}
+
+	return map[string]any{
+		"orderId": orderResult["orderId"],
+		"symbol":  symbol,
+		"side":    side,
+		"type":    orderType,
+		"status":  orderResult["orderStatus"],
+	}, nil
+}
+
 func (b *BybitAdapter) GetPositions() ([]map[string]any, error) {
 	// Bybit spot doesn't have traditional positions
 	return []map[string]any{}, nil

@@ -252,7 +252,6 @@ export function BotDetailView({
 }) {
   const isRunning = bot.status === 'running'
   const totalPnl = (bot.unrealized_pnl || 0) + (bot.realized_pnl || 0)
-  const pnlColor = totalPnl >= 0 ? 'text-emerald-400' : 'text-red-400'
 
   return (
     <div className="space-y-6">

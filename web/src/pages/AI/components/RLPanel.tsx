@@ -169,13 +169,14 @@ export function RLPanel({
   }, [selectedSymbol])
 
   const actionIcon = (action: number, nAct: number) => {
+    const safeAction = action ?? 1
     if (nAct === 3) {
-      if (action === 0) return <TrendingDown className="h-5 w-5 text-quant-red" />
-      if (action === 2) return <TrendingUp className="h-5 w-5 text-quant-green" />
+      if (safeAction === 0) return <TrendingDown className="h-5 w-5 text-quant-red" />
+      if (safeAction === 2) return <TrendingUp className="h-5 w-5 text-quant-green" />
       return <Minus className="h-5 w-5 text-muted-foreground" />
     }
-    if (action <= 1) return <TrendingDown className="h-5 w-5 text-quant-red" />
-    if (action >= 3) return <TrendingUp className="h-5 w-5 text-quant-green" />
+    if (safeAction <= 1) return <TrendingDown className="h-5 w-5 text-quant-red" />
+    if (safeAction >= 3) return <TrendingUp className="h-5 w-5 text-quant-green" />
     return <Minus className="h-5 w-5 text-muted-foreground" />
   }
 
@@ -214,7 +215,7 @@ export function RLPanel({
           <div className="grid grid-cols-2 gap-2">
             <div>
               <label className="text-[10px] text-muted-foreground mb-0.5 block">算法</label>
-              <select value={algorithm} onChange={e => setAlgorithm(e.target.value as any)}
+              <select value={algorithm} onChange={e => setAlgorithm(e.target.value as 'qlearning' | 'ppo' | 'a2c' | 'sac')}
                 className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1.5 text-xs outline-none focus:border-quant-gold">
                 <option value="qlearning">Q-Learning (同步)</option>
                 <option value="ppo">PPO (异步Worker)</option>

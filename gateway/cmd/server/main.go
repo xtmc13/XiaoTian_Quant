@@ -66,6 +66,17 @@ func main() {
 	strategy.RegisterStrategyFactory("market_making", func() strategy.Strategy { return strategies.NewMarketMakingStrategy() })
 	strategy.RegisterStrategyFactory("martingale", func() strategy.Strategy { return strategies.NewMartingaleStrategy() })
 	strategy.RegisterStrategyFactory("wallstreet", func() strategy.Strategy { return strategies.NewWallstreetStrategy() })
+	// ── Aliases for frontend bot_type names ──
+	strategy.RegisterStrategyFactory("grid", func() strategy.Strategy { return strategies.NewGridTradingStrategy() })
+	strategy.RegisterStrategyFactory("dca", func() strategy.Strategy { return strategies.NewMartingaleStrategy() })
+	strategy.RegisterStrategyFactory("trend", func() strategy.Strategy { return strategies.NewBreakoutStrategy() })
+	strategy.RegisterStrategyFactory("martin_trend", func() strategy.Strategy { return strategies.NewMartingaleStrategy() })
+	strategy.RegisterStrategyFactory("macd_golden", func() strategy.Strategy { return strategies.NewMACDStrategy() })
+	strategy.RegisterStrategyFactory("macd_death", func() strategy.Strategy { return strategies.NewMACDStrategy() })
+	strategy.RegisterStrategyFactory("dual_burn", func() strategy.Strategy { return strategies.NewMartingaleStrategy() })
+	strategy.RegisterStrategyFactory("ema_follow", func() strategy.Strategy { return strategies.NewEMACrossStrategy() })
+	strategy.RegisterStrategyFactory("ema_counter", func() strategy.Strategy { return strategies.NewEMACrossStrategy() })
+	strategy.RegisterStrategyFactory("custom", func() strategy.Strategy { return strategies.NewBreakoutStrategy() })
 
 	// ── Setup Gin ──
 	if cfg.Server.Mode == "debug" {
@@ -418,6 +429,7 @@ func main() {
 			indicatorG.POST("/execute", indicator.SandboxExecute)
 			indicatorG.POST("/analyze", indicator.SandboxAnalyze)
 			indicatorG.POST("/ai-generate", indicator.IndicatorAIGenerate)
+			indicatorG.POST("/backtest", indicator.BacktestIndicator)
 			indicatorG.POST("/publish", indicator.PublishIndicator)
 		}
 

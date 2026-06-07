@@ -16,11 +16,12 @@ import (
 
 // SandboxExecute godoc
 // POST /api/indicator/execute
-// Executes indicator code in the Python sandbox.
+// Executes indicator code in the Python sandbox with optional df_json data.
 func SandboxExecute(c *gin.Context) {
 	var req struct {
 		Code   string         `json:"code" binding:"required"`
 		Params map[string]any `json:"params"`
+		DfJSON []map[string]any `json:"df_json"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 0, "msg": "code is required", "data": nil})
@@ -28,7 +29,7 @@ func SandboxExecute(c *gin.Context) {
 	}
 
 	sandbox := DefaultSandboxConfig()
-	result, err := sandbox.Execute(req.Code, req.Params)
+	result, err := sandbox.Execute(req.Code, req.Params, req.DfJSON)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code": 0,
@@ -253,7 +254,7 @@ func validateAndExec(code string) (ValidateResult, *SandboxExecuteResponse) {
 	var execResult *SandboxExecuteResponse
 	if validation.Success || len(filterErrors(validation.Hints)) == 0 {
 		sandbox := DefaultSandboxConfig()
-		res, err := sandbox.Execute(code, nil)
+		res, err := sandbox.Execute(code, nil, nil)
 		if err == nil && res != nil {
 			execResult = res
 			if !res.Success {
