@@ -1,8 +1,8 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { Zap, BrainCircuit, History, Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { aiApi } from '@/lib/api'
-import type { AIAnalysisResult, AIModelAnalysis, MLModelInfo, MLTrainResult } from '@/types'
+import { aiApi, marketApi } from '@/lib/api'
+import type { AIAnalysisResult, AIModelAnalysis, MLModelInfo, RLModelInfo } from '@/types'
 
 import { TopIndexBar } from './components/TopIndexBar'
 import { HeatmapSection } from './components/HeatmapSection'
@@ -112,7 +112,7 @@ export function AI() {
     { market: 'Crypto', symbol: 'ETH/USDT', name: 'Ethereum', price: 3521.2, change: 1.56 },
   ])
   const [watchlistPrices, setWatchlistPrices] = useState<Record<string, WatchlistPrice>>({})
-  const [positionSummaryMap, setPositionSummaryMap] = useState<Record<string, PositionSummary>>({})
+  const [positionSummaryMap, setPositionSummaryMap] = useState<Record<string, PositionSummary>>({}) // eslint-disable-line @typescript-eslint/no-unused-vars
   const [selectedSymbol, setSelectedSymbol] = useState<string | undefined>(undefined)
   const [showAddStockModal, setShowAddStockModal] = useState(false)
   const [stockSearchQuery, setStockSearchQuery] = useState('')
@@ -123,43 +123,117 @@ export function AI() {
   const [analysisResult, setAnalysisResult] = useState<AIAnalysisResult | null>(null)
   const [analysisError, setAnalysisError] = useState<string | null>(null)
   const [showHistoryModal, setShowHistoryModal] = useState(false)
-  const [analysisHistory, setAnalysisHistory] = useState<{ symbol: string; result: AIAnalysisResult; time: number }[]>([])
+  const [analysisHistory, setAnalysisHistory] = useState<{ symbol: string; result: AIAnalysisResult; time: number }[]>(() => {
+    try {
+      const raw = localStorage.getItem('ai-analysis-history')
+      if (raw) return JSON.parse(raw)
+    } catch { /* ignore corrupt data */ }
+    return []
+  })
 
   /* -- ML states -- */
   const [mlMode, setMlMode] = useState(false)
   const [mlModels, setMlModels] = useState<MLModelInfo[]>([])
-  const [rlModels, setRlModels] = useState<any[]>([])
+  const [rlModels, setRlModels] = useState<RLModelInfo[]>([])
 
   const loadRlModels = useCallback(async () => {
     try {
       const { rlApi } = await import('@/lib/api')
       const data = await rlApi.list()
       setRlModels(data || [])
-    } catch { /* ignore */ }
+    } catch (e: unknown) {
+      console.error('Failed to load RL models:', e)
+    }
   }, [])
 
   /* -- Derived -- */
   const currentHeatmap = useMemo(() => marketData.heatmap[heatmapType] || [], [marketData.heatmap, heatmapType])
 
   /* -- Actions -- */
-  const loadMarketData = useCallback(async (force = false) => {
+  const loadMarketData = useCallback(async (_force = false) => {
     setLoadingMarket(true)
     setLoadingSentiment(true)
     setLoadingIndices(true)
     setLoadingHeatmap(true)
     setLoadingCalendar(true)
-    await new Promise((r) => setTimeout(r, 300))
-    setLoadingSentiment(false)
-    await new Promise((r) => setTimeout(r, 200))
-    setLoadingIndices(false)
-    await new Promise((r) => setTimeout(r, 300))
-    setLoadingHeatmap(false)
-    await new Promise((r) => setTimeout(r, 200))
-    setLoadingCalendar(false)
-    setLoadingMarket(false)
+    try {
+      // Try to fetch real prices for major indices & crypto via market snapshot
+      const snapshotSymbols = [
+        { flag: '🇺🇸', symbol: 'BTCUSDT', name: 'BTC' },
+        { flag: '🇺🇸', symbol: 'ETHUSDT', name: 'ETH' },
+        { flag: '🇺🇸', symbol: 'SOLUSDT', name: 'SOL' },
+        { flag: '🇺🇸', symbol: 'BNBUSDT', name: 'BNB' },
+        { flag: '🇺🇸', symbol: 'XRPUSDT', name: 'XRP' },
+        { flag: '🇺🇸', symbol: 'DOGEUSDT', name: 'DOGE' },
+      ]
+      const snapshots = await Promise.allSettled(
+        snapshotSymbols.map((s) => marketApi.snapshot(s.symbol).then((d) => ({ ...s, price: d.price, change: d.change_pct_24h ?? 0 })))
+      )
+      const cryptoPrices = snapshots
+        .filter((r): r is PromiseFulfilledResult<typeof snapshotSymbols[0] & { price: number; change: number }> => r.status === 'fulfilled')
+        .map((r) => r.value)
+
+      setMarketData((prev) => {
+        const next = { ...prev }
+        // Update crypto heatmap with real prices if available
+        if (cryptoPrices.length > 0) {
+          next.heatmap = { ...prev.heatmap }
+          next.heatmap.crypto = prev.heatmap.crypto.map((item) => {
+            const real = cryptoPrices.find((p) => p.name === item.name)
+            if (real && real.price > 0) {
+              return { ...item, price: real.price, value: real.change }
+            }
+            return item
+          })
+        }
+        return next
+      })
+    } catch (e: unknown) {
+      console.error('Market data fetch failed:', e)
+    } finally {
+      setLoadingSentiment(false)
+      setLoadingIndices(false)
+      setLoadingHeatmap(false)
+      setLoadingCalendar(false)
+      setLoadingMarket(false)
+    }
   }, [])
 
   useEffect(() => { loadMarketData() }, [loadMarketData])
+
+  /* -- Watchlist price polling -- */
+  const loadWatchlistPrices = useCallback(async () => {
+    if (watchlist.length === 0) return
+    try {
+      const snapshots = await Promise.allSettled(
+        watchlist.map((stock) => {
+          const apiSymbol = stock.symbol.replace('/', '')
+          return marketApi.snapshot(apiSymbol).then((d) => ({
+            key: `${stock.market}:${stock.symbol}`,
+            price: d.price,
+            change: d.change_pct_24h ?? 0,
+          }))
+        })
+      )
+      const updates: Record<string, WatchlistPrice> = {}
+      snapshots.forEach((result) => {
+        if (result.status === 'fulfilled') {
+          updates[result.value.key] = { price: result.value.price, change: result.value.change }
+        }
+      })
+      if (Object.keys(updates).length > 0) {
+        setWatchlistPrices((prev) => ({ ...prev, ...updates }))
+      }
+    } catch (e: unknown) {
+      console.error('Watchlist price fetch failed:', e)
+    }
+  }, [watchlist])
+
+  useEffect(() => {
+    loadWatchlistPrices()
+    const interval = setInterval(loadWatchlistPrices, 30000)
+    return () => clearInterval(interval)
+  }, [loadWatchlistPrices])
 
   const handleSymbolChange = useCallback((value: string) => {
     setSelectedSymbol(value)
@@ -187,10 +261,14 @@ export function AI() {
         })),
       }
       setAnalysisResult(result)
-      setAnalysisHistory((prev) => [
-        { symbol: result.symbol, result, time: Date.now() },
-        ...prev.slice(0, 49),
-      ])
+      setAnalysisHistory((prev) => {
+        const next = [
+          { symbol: result.symbol, result, time: Date.now() },
+          ...prev.slice(0, 49),
+        ]
+        try { localStorage.setItem('ai-analysis-history', JSON.stringify(next)) } catch { /* ignore */ }
+        return next
+      })
     } catch (e: unknown) {
       const err = e instanceof Error ? e : new Error(String(e))
       setAnalysisError(err.message || '分析失败')
@@ -233,7 +311,9 @@ export function AI() {
       const { mlApi } = await import('@/lib/api')
       const data = await mlApi.list()
       setMlModels(data || [])
-    } catch { /* ignore */ }
+    } catch (e: unknown) {
+      console.error('Failed to load ML models:', e)
+    }
   }, [])
 
   const toggleMlMode = useCallback(() => {

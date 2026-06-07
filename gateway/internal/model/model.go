@@ -123,6 +123,28 @@ const (
 	SideSell OrderSide = "SELL"
 )
 
+type PositionSide string
+
+const (
+	PositionLong  PositionSide = "LONG"
+	PositionShort PositionSide = "SHORT"
+)
+
+type MarketType string
+
+const (
+	MarketSpot   MarketType = "spot"
+	MarketSwap   MarketType = "swap"
+	MarketMargin MarketType = "margin"
+)
+
+type MarginMode string
+
+const (
+	MarginCross    MarginMode = "cross"
+	MarginIsolated MarginMode = "isolated"
+)
+
 type OrderType string
 
 const (
@@ -175,21 +197,31 @@ func ValidStatusTransition(from, to OrderStatus) bool {
 }
 
 type OrderData struct {
-	ID           string      `json:"id"`
-	Symbol       string      `json:"symbol"`
-	Side         OrderSide   `json:"side"`
-	OrderType    OrderType   `json:"order_type"`
-	Price        float64     `json:"price"`
-	StopPrice    float64     `json:"stop_price,omitempty"`
-	Quantity     float64     `json:"quantity"`
-	Filled       float64     `json:"filled"`
-	Status       OrderStatus `json:"status"`
-	Exchange     string      `json:"exchange"`
-	UserID       uint64      `json:"user_id"`
-	ClientOID    string      `json:"client_oid,omitempty"`
-	AvgFillPrice float64     `json:"avg_fill_price,omitempty"`
-	CreatedAt    int64       `json:"created_at"`
-	UpdatedAt    int64       `json:"updated_at"`
+	ID            string      `json:"id"`
+	Symbol        string      `json:"symbol"`
+	Side          OrderSide   `json:"side"`
+	OrderType     OrderType   `json:"order_type"`
+	Price         float64     `json:"price"`
+	StopPrice     float64     `json:"stop_price,omitempty"`
+	Quantity      float64     `json:"quantity"`
+	Filled        float64     `json:"filled"`
+	Status        OrderStatus `json:"status"`
+	Exchange      string      `json:"exchange"`
+	UserID        uint64      `json:"user_id"`
+	ClientOID     string      `json:"client_oid,omitempty"`
+	AvgFillPrice  float64     `json:"avg_fill_price,omitempty"`
+	CreatedAt     int64       `json:"created_at"`
+	UpdatedAt     int64       `json:"updated_at"`
+
+	// ── Contract fields ──
+	MarketType    MarketType  `json:"market_type,omitempty"`    // spot | swap | margin
+	PositionSide  PositionSide `json:"position_side,omitempty"` // LONG | SHORT
+	Leverage      float64     `json:"leverage,omitempty"`
+	MarginMode    MarginMode  `json:"margin_mode,omitempty"`    // cross | isolated
+	TPPrice       float64     `json:"tp_price,omitempty"`
+	SLPrice       float64     `json:"sl_price,omitempty"`
+	ClosePosition bool        `json:"close_position,omitempty"`
+	RealizedPnL   float64     `json:"realized_pnl,omitempty"`
 }
 
 func (o *OrderData) Remaining() float64 {
@@ -227,7 +259,15 @@ type PositionData struct {
 	RealizedPnL    float64 `json:"realized_pnl"`
 	CostBasis      float64 `json:"cost_basis"`
 	OpenedAt       int64   `json:"opened_at"`
-	Exchange       string  `json:"exchange"`
+	Exchange       string       `json:"exchange"`
+
+	// ── Contract fields ──
+	PositionSide     PositionSide `json:"position_side,omitempty"` // LONG | SHORT
+	Leverage         float64      `json:"leverage,omitempty"`
+	MarginMode       MarginMode   `json:"margin_mode,omitempty"`   // cross | isolated
+	Margin           float64      `json:"margin,omitempty"`        // 占用保证金
+	LiquidationPrice float64      `json:"liquidation_price,omitempty"`
+	MarketType       MarketType   `json:"market_type,omitempty"`
 }
 
 func (p *PositionData) PnLPct() float64 {
@@ -246,6 +286,7 @@ type Signal struct {
 	Strategy  string  `json:"strategy"`
 	Reason    string  `json:"reason"`
 	Timestamp int64   `json:"timestamp"`
+	Qty       float64 `json:"qty,omitempty"`
 }
 
 // ── Risk Alert ──

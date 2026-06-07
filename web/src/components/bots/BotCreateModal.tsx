@@ -1,11 +1,11 @@
 import React, { useState, useCallback } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, X, RefreshCw, Sparkles, BrainCircuit, ChevronRight } from 'lucide-react'
+import { ArrowLeft, X, RefreshCw, Sparkles } from 'lucide-react'
 import { strategyApi, aiApi } from '@/lib/api'
 import { cn, formatCurrency } from '@/lib/utils'
 import type { StrategyItem } from '@/types'
 import type { BotItem } from '@/hooks/useBotData'
-import { BOT_TYPES } from '@/hooks/useBotData'
+import { BOT_TYPES, BOT_TYPE_TO_STRATEGY_TYPE } from '@/hooks/useBotData'
 import { WizardField, BotParamForm } from './BotParamForm'
 
 export function AiCreateDialog({
@@ -142,6 +142,7 @@ export function BotCreateModal({
     } else {
       const payload: Partial<StrategyItem> & Record<string, unknown> = {
         strategy_name: (form.name as string) || '未命名机器人',
+        strategy_type: BOT_TYPE_TO_STRATEGY_TYPE[effectiveType] || effectiveType,
         strategy_mode: 'bot' as const,
         bot_type: effectiveType,
         market_category: (form.market as string) || 'crypto',

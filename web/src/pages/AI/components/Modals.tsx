@@ -1,5 +1,5 @@
 import { memo } from 'react'
-import { X, Plus, History, ArrowUp, ArrowDown, Minus } from 'lucide-react'
+import { X, Plus } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { AIAnalysisResult } from '@/types'
 
@@ -128,8 +128,8 @@ export function HistoryModal({
             <div className="text-center py-8 text-muted-foreground text-xs">暂无历史记录</div>
           ) : (
             <div className="space-y-2">
-              {history.map((h, i) => (
-                <AnalysisHistoryItem key={i} item={h} onClick={() => onSelect(h)} />
+              {history.map((h) => (
+                <AnalysisHistoryItem key={`${h.symbol}-${h.time}`} item={h} onClick={() => onSelect(h)} />
               ))}
             </div>
           )}

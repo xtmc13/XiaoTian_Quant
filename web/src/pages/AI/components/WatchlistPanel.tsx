@@ -114,15 +114,17 @@ export function WatchlistPanel({
                 <div className="absolute top-0 right-0 bottom-0 flex items-center gap-1 pr-2 opacity-0 group-hover:opacity-100 transition-opacity bg-gradient-to-l from-quant-bg via-quant-bg/80 to-transparent rounded-r-lg">
                   <button
                     onClick={(e) => { e.stopPropagation() }}
-                    className="p-1 rounded bg-quant-card border border-quant-border text-muted-foreground hover:text-quant-gold transition-colors"
-                    title="持仓"
+                    disabled
+                    className="p-1 rounded bg-quant-card border border-quant-border text-muted-foreground/40 cursor-not-allowed transition-colors"
+                    title="持仓详情（即将上线）"
                   >
                     <Wallet className="w-3 h-3" />
                   </button>
                   <button
                     onClick={(e) => { e.stopPropagation() }}
-                    className="p-1 rounded bg-quant-card border border-quant-border text-muted-foreground hover:text-quant-gold transition-colors"
-                    title="任务"
+                    disabled
+                    className="p-1 rounded bg-quant-card border border-quant-border text-muted-foreground/40 cursor-not-allowed transition-colors"
+                    title="定时任务（即将上线）"
                   >
                     <Clock className="w-3 h-3" />
                   </button>

@@ -259,7 +259,7 @@ export function TopBar() {
             <option key={l.code} value={l.code}>{l.flag} {l.label}</option>
           ))}
         </select>
-        <span className="text-[10px] text-muted-foreground">v2.0.0</span>
+        <span className="text-[10px] text-muted-foreground">v3.0.0</span>
 
         {/* User menu */}
         <div className="relative">

@@ -1,18 +1,15 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { strategyApi, aiApi, mlApi } from '@/lib/api'
-import { cn, formatCurrency, formatPercent } from '@/lib/utils'
+import { cn, formatCurrency } from '@/lib/utils'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { SectionCard } from '@/components/ui/SectionCard'
 import type { MLModelInfo } from '@/types'
 import {
-  Play, Pause, Save, FlaskConical, Code, Bot, MessageSquare,
-  LayoutDashboard, FolderOpen, Search, Plus, ChevronRight, ChevronDown,
-  MoreVertical, Trash2, Edit3, Activity, Wallet, TrendingUp, TrendingDown,
-  Send, Cpu, Sparkles, BarChart3, X, CheckCircle2, AlertTriangle,
-  Clock, DollarSign, Zap, ArrowRight, Settings2, Layers, GripVertical,
-  FileCode2, Terminal, Copy, RotateCcw, Eye, EyeOff, SlidersHorizontal,
-  BrainCircuit, Vote, Gauge
+  Play, Pause, FlaskConical, Code, Bot, MessageSquare,
+  LayoutDashboard, FolderOpen, Plus, Trash2, Activity, TrendingUp,
+  Send, Cpu, Sparkles, BarChart3, X, Zap, Layers,
+  Copy, RotateCcw, BrainCircuit, Vote, Gauge
 } from 'lucide-react'
 import { useStrategyData } from '@/hooks/useStrategyData'
 import { StrategyList, StatusBadge, getStatusDot } from '@/components/strategy/StrategyList'
@@ -269,6 +266,7 @@ function MLStrategyTab() {
       setMlModels(models || [])
       if (models?.length > 0 && !selectedMlModel) setSelectedMlModel(models[0].model_id)
     }).catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const handleDeployMl = async () => {
@@ -389,6 +387,48 @@ function AIStrategyGeneratorTab() {
     }
   }
 
+  const [backtestResult, setBacktestResult] = useState<{winRate?:number;maxDrawdown?:number;profitFactor?:number;sharpe?:number;totalReturn?:number;trades?:number;equityCurve?:{time:number;equity:number}[]}|null>(null)
+  const [backtestLoading, setBacktestLoading] = useState(false)
+
+  const handleBacktest = async () => {
+    setBacktestLoading(true)
+    try {
+      const res = await aiApi.backtest({
+        strategy_id: codeWorkspace,
+        symbol: 'BTCUSDT',
+        start_date: new Date(Date.now() - 90 * 86400000).toISOString().split('T')[0],
+        end_date: new Date().toISOString().split('T')[0],
+        initial_capital: 10000,
+      })
+      if (res) {
+        setBacktestResult({
+          winRate: res.win_rate,
+          maxDrawdown: res.max_drawdown_pct,
+          profitFactor: res.profit_factor,
+          sharpe: res.sharpe_ratio,
+          totalReturn: res.total_return_pct,
+          trades: res.total_trades,
+          equityCurve: res.equity_curve,
+        })
+      }
+    } catch (e: unknown) {
+      alert('回测失败: ' + (e instanceof Error ? e.message : String(e)))
+    } finally {
+      setBacktestLoading(false)
+    }
+  }
+
+  const handleDeploy = async () => {
+    if (!backtestResult) {
+      alert('请先运行回测验证策略效果')
+      return
+    }
+    if ((backtestResult.maxDrawdown ?? 0) > 30) {
+      if (!confirm(`最大回撤 ${backtestResult.maxDrawdown?.toFixed(1)}% 较高，确定部署？`)) return
+    }
+    alert('部署功能：将代码保存为脚本策略')
+  }
+
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
@@ -462,9 +502,12 @@ function AIStrategyGeneratorTab() {
           <SectionCard title="策略概览" className="shrink-0">
             <div className="space-y-2 text-xs text-muted-foreground">
               <div className="flex justify-between"><span>策略类型</span><span className="text-foreground">网格策略</span></div>
-              <div className="flex justify-between"><span>预期胜率</span><span className="text-quant-green">58.2%</span></div>
-              <div className="flex justify-between"><span>最大回撤</span><span className="text-quant-red">-12.4%</span></div>
-              <div className="flex justify-between"><span>盈亏比</span><span className="text-foreground">2.1:1</span></div>
+              <div className="flex justify-between"><span>预期胜率</span><span className={cn("font-mono", (backtestResult?.winRate ?? 0) >= 50 ? "text-quant-green" : "text-quant-red")}>{backtestResult?.winRate != null ? `${backtestResult.winRate.toFixed(1)}%` : '未回测'}</span></div>
+              <div className="flex justify-between"><span>最大回撤</span><span className={cn("font-mono", (backtestResult?.maxDrawdown ?? 0) > 20 ? "text-quant-red" : "text-quant-green")}>{backtestResult?.maxDrawdown != null ? `${backtestResult.maxDrawdown.toFixed(1)}%` : '未回测'}</span></div>
+              <div className="flex justify-between"><span>盈亏比</span><span className="text-foreground font-mono">{backtestResult?.profitFactor != null ? `${backtestResult.profitFactor.toFixed(2)}:1` : '未回测'}</span></div>
+              <div className="flex justify-between"><span>夏普比率</span><span className="text-foreground font-mono">{backtestResult?.sharpe != null ? backtestResult.sharpe.toFixed(2) : '未回测'}</span></div>
+              <div className="flex justify-between"><span>总收益</span><span className={cn("font-mono", (backtestResult?.totalReturn ?? 0) >= 0 ? "text-quant-green" : "text-quant-red")}>{backtestResult?.totalReturn != null ? `${backtestResult.totalReturn >= 0 ? '+' : ''}${backtestResult.totalReturn.toFixed(1)}%` : '未回测'}</span></div>
+              <div className="flex justify-between"><span>交易次数</span><span className="text-foreground font-mono">{backtestResult?.trades ?? '未回测'}</span></div>
             </div>
           </SectionCard>
 
@@ -485,10 +528,10 @@ function AIStrategyGeneratorTab() {
           </SectionCard>
 
           <div className="flex gap-2 shrink-0">
-            <button className="flex-1 py-2.5 bg-quant-gold/10 text-quant-gold border border-quant-gold/20 rounded-lg text-xs font-medium hover:bg-quant-gold/20 flex items-center justify-center gap-1.5 transition-colors">
-              <BarChart3 className="w-3.5 h-3.5" /> 回测
+            <button onClick={handleBacktest} disabled={backtestLoading || !codeWorkspace.trim()} className={cn("flex-1 py-2.5 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5 transition-colors", backtestLoading ? "bg-quant-gold/30 text-quant-gold cursor-wait" : "bg-quant-gold/10 text-quant-gold border border-quant-gold/20 hover:bg-quant-gold/20")}>
+              <BarChart3 className="w-3.5 h-3.5" /> {backtestLoading ? '回测中...' : '回测'}
             </button>
-            <button className="flex-1 py-2.5 bg-quant-green text-white rounded-lg text-xs font-medium hover:opacity-90 flex items-center justify-center gap-1.5 transition-opacity">
+            <button onClick={handleDeploy} className="flex-1 py-2.5 bg-quant-green text-white rounded-lg text-xs font-medium hover:opacity-90 flex items-center justify-center gap-1.5 transition-opacity">
               <Play className="w-3.5 h-3.5" /> 部署
             </button>
           </div>

@@ -1,4 +1,3 @@
-import { cn } from '@/lib/utils'
 import type { CalendarEvent, HeatmapItem, HeatmapType } from './types'
 
 export function formatNum(n: number | undefined | null, digits = 2): string {
@@ -6,8 +5,8 @@ export function formatNum(n: number | undefined | null, digits = 2): string {
   return Number(n).toFixed(digits)
 }
 
-export function formatPrice(price?: number): string {
-  if (!price) return '--'
+export function formatPrice(price?: number | null): string {
+  if (price === undefined || price === null || Number.isNaN(price)) return '--'
   if (price >= 10000) return (price / 1000).toFixed(1) + 'K'
   if (price >= 1000) return price.toFixed(0)
   return price.toFixed(2)
@@ -21,8 +20,8 @@ export function formatHeatmapPrice(price: number, type: HeatmapType): string {
   return prefix + price.toFixed(4)
 }
 
-export function getFearGreedClass(val?: number): string {
-  if (!val) return ''
+export function getFearGreedClass(val?: number | null): string {
+  if (val === undefined || val === null || Number.isNaN(val)) return ''
   if (val <= 25) return 'extreme-fear'
   if (val <= 45) return 'fear'
   if (val <= 55) return 'neutral'
@@ -30,8 +29,8 @@ export function getFearGreedClass(val?: number): string {
   return 'extreme-greed'
 }
 
-export function getVixClass(val?: number): string {
-  if (!val) return ''
+export function getVixClass(val?: number | null): string {
+  if (val === undefined || val === null || Number.isNaN(val)) return ''
   if (val < 15) return 'low'
   if (val < 25) return 'medium'
   return 'high'

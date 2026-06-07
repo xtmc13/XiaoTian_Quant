@@ -46,7 +46,7 @@ func (s *IndicatorStrategy) Precompute(bars []model.Bar) error {
 		}
 	}
 
-	resp, err := s.client.Execute(s.code, s.params)
+	resp, err := s.client.Execute(s.code, s.params, dfJSON)
 	if err != nil {
 		return fmt.Errorf("sandbox execution failed: %w", err)
 	}

@@ -28,7 +28,7 @@ func HealthCheck(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"status":       "ok",
 		"uptime_secs":  int(time.Since(startTime).Seconds()),
-		"version":      "2.0.0",
+		"version":      "3.0.0",
 		"log_level":    logLevel,
 	})
 }

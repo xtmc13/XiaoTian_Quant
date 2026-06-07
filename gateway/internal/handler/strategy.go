@@ -103,6 +103,24 @@ func CreateStrategyConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid json"})
 		return
 	}
+
+	// ── Validation ──
+	name := getString(body, "name", "")
+	if strings.TrimSpace(name) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "策略名称不能为空"})
+		return
+	}
+	strategyType := getString(body, "strategy_type", "")
+	if strategyType == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "策略类型不能为空"})
+		return
+	}
+	symbol := getString(body, "symbol", "")
+	if symbol == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "交易对不能为空"})
+		return
+	}
+
 	sid := shortUUID()
 	nowTS := time.Now().UnixMilli()
 
@@ -116,9 +134,9 @@ func CreateStrategyConfig(c *gin.Context) {
 
 	item := map[string]any{
 		"id":            sid,
-		"name":          getString(body, "name", sid),
+		"name":          strings.TrimSpace(name),
 		"category":      getString(body, "category", "spot"),
-		"strategy_type": getString(body, "strategy_type", ""),
+		"strategy_type": strategyType,
 		"coin":          getString(body, "coin", ""),
 		"config_json":   configJSON,
 		"direction":     getString(body, "direction", "long"),
@@ -127,6 +145,13 @@ func CreateStrategyConfig(c *gin.Context) {
 		"pnl":           0.0,
 		"created_at":    float64(nowTS),
 		"updated_at":    float64(nowTS),
+		// ── Contract fields ──
+		"market_type":   getString(body, "market_type", "spot"),
+		"margin_mode":   getString(body, "margin_mode", "cross"),
+		"symbol":        symbol,
+		"timeframe":     getString(body, "timeframe", "15m"),
+		"initial_capital": getFloat(body, "initial_capital", 1000),
+		"execution_mode": getString(body, "execution_mode", "signal"),
 	}
 
 	mu := store.GetStrategyConfigMu()
@@ -152,7 +177,7 @@ func UpdateStrategyConfig(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"detail": "not found"})
 		return
 	}
-	for _, f := range []string{"name", "coin", "strategy_type", "direction", "leverage", "category"} {
+	for _, f := range []string{"name", "coin", "strategy_type", "direction", "leverage", "category", "market_type", "margin_mode", "symbol", "timeframe", "execution_mode", "initial_capital"} {
 		if v, ok := body[f]; ok {
 			item[f] = v
 		}
@@ -267,6 +292,10 @@ func StopStrategyConfig(c *gin.Context) {
 func startStrategyInEngine(id string, item map[string]any) error {
 	strategyType, _ := item["strategy_type"].(string)
 	if strategyType == "" {
+		// Fallback: try bot_type for frontend-created bot strategies
+		strategyType, _ = item["bot_type"].(string)
+	}
+	if strategyType == "" {
 		return fmt.Errorf("strategy_type not set")
 	}
 
@@ -319,7 +348,7 @@ func buildStrategyParams(item map[string]any) map[string]any {
 	params := make(map[string]any)
 
 	// Copy basic fields
-	for _, key := range []string{"symbol", "coin", "direction", "leverage", "category"} {
+	for _, key := range []string{"symbol", "coin", "direction", "leverage", "category", "market_type", "margin_mode", "timeframe", "execution_mode", "initial_capital"} {
 		if v, ok := item[key]; ok {
 			params[key] = v
 		}
@@ -341,6 +370,25 @@ func buildStrategyParams(item map[string]any) map[string]any {
 			params["symbol"] = coin + "USDT"
 		} else {
 			params["symbol"] = "BTCUSDT"
+		}
+	}
+
+	// ── Contract fields from config_json ──
+	if params["market_type"] == nil || params["market_type"] == "" {
+		params["market_type"] = "spot"
+	}
+	if params["margin_mode"] == nil || params["margin_mode"] == "" {
+		params["margin_mode"] = "cross"
+	}
+	// Extract position_side from direction
+	if direction, ok := params["direction"].(string); ok {
+		switch direction {
+		case "long":
+			params["position_side"] = "LONG"
+		case "short":
+			params["position_side"] = "SHORT"
+		case "dual", "both":
+			params["position_side"] = "BOTH"
 		}
 	}
 
@@ -492,13 +540,13 @@ func GetStrategyParamDefs(c *gin.Context) {
 	var defs []map[string]any
 
 	switch strategyType {
-	case "breakout":
+	case "breakout", "trend", "custom":
 		s := strategies.NewBreakoutStrategy()
 		defs = s.ParamDefs()
-	case "ema_cross":
+	case "ema_cross", "ema_follow", "ema_counter":
 		s := strategies.NewEMACrossStrategy()
 		defs = s.ParamDefs()
-	case "macd":
+	case "macd", "macd_golden", "macd_death":
 		s := strategies.NewMACDStrategy()
 		defs = s.ParamDefs()
 	case "rsi":
@@ -516,7 +564,7 @@ func GetStrategyParamDefs(c *gin.Context) {
 	case "renko":
 		s := strategies.NewRenkoStrategy()
 		defs = s.ParamDefs()
-	case "grid_trading":
+	case "grid_trading", "grid":
 		s := strategies.NewGridTradingStrategy()
 		defs = s.ParamDefs()
 	case "arbitrage":
@@ -524,6 +572,12 @@ func GetStrategyParamDefs(c *gin.Context) {
 		defs = s.ParamDefs()
 	case "market_making":
 		s := strategies.NewMarketMakingStrategy()
+		defs = s.ParamDefs()
+	case "martingale", "dca", "martin_trend", "dual_burn":
+		s := strategies.NewMartingaleStrategy()
+		defs = s.ParamDefs()
+	case "wallstreet":
+		s := strategies.NewWallstreetStrategy()
 		defs = s.ParamDefs()
 	case "ml":
 		// ML strategy requires modelID, return empty for now

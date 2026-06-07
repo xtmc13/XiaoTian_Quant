@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation } from '@tanstack/react-query'
 import type { EChartsType } from 'echarts'
 import { DataTable } from '@/components/DataTable'
-import { BacktestResult, BacktestTrade } from '@/types'
+import { BacktestResult } from '@/types'
 import {
   Play,
   Download,
@@ -13,25 +13,13 @@ import {
   Percent,
   DollarSign,
   Activity,
-  Clock,
   Loader2,
   AlertCircle,
-  CheckCircle2,
-  XCircle,
-  Zap,
-  Calendar,
   Database,
   Info,
   SlidersHorizontal,
   GitBranch,
   Beaker,
-  CheckSquare,
-  Square as SquareIcon,
-  BarChart4,
-  ArrowUp,
-  ArrowDown,
-  Maximize2,
-  Minimize2,
 } from 'lucide-react'
 import { cn, formatCurrency } from '@/lib/utils'
 import { backtestApi, indicatorApi } from '@/lib/api'
@@ -123,21 +111,21 @@ const INTERVALS = [
 ]
 
 const STRATEGIES = [
-  { value: 'sma_cross', label: '均线交叉 (SMA Cross)', desc: '快慢均线金叉做多，死叉平仓' },
-  { value: 'breakout', label: '突破策略 (Breakout)', desc: '突破N日最高/最低价入场，止损止盈出场' },
+  { value: 'sma_cross', label: '均线交叉 (SMA Cross)', desc: '快慢均线金叉做多，死叉平仓', supported: true },
+  { value: 'breakout', label: '突破策略 (Breakout)', desc: '突破N日最高/最低价入场，止损止盈出场', supported: true },
   // ── CRA 策略 ──
-  { value: 'martin_trend', label: '马丁趋势策略', desc: '倍投补仓(2,4,8,16,32,64) + 趋势指标，浮亏减半' },
-  { value: 'wallstreet', label: '华尔街策略', desc: '等比补仓(1,2,3,5,8,13,21,34,55) + 趋势指标' },
-  { value: 'macd_golden_long', label: 'MACD金叉开多', desc: 'MACD金叉开多/补多，死叉反向清仓' },
-  { value: 'macd_death_short', label: 'MACD死叉开空', desc: 'MACD死叉开空/补空，金叉反向清仓' },
-  { value: 'ema_follow_trend', label: 'EMA顺势策略', desc: 'EMA60均线以上做多，EMA10拐点开仓' },
-  { value: 'ema_counter_trend', label: 'EMA逆势策略', desc: 'EMA60标准线以上做空，振幅决定开仓' },
-  { value: 'dual_burn', label: '双向燃烧斩仓', desc: '逆势单第3仓起开启顺势单，盈利消耗浮亏' },
-  { value: 'global_burn', label: '超级全局燃烧', desc: '逆势单第5仓起跨币种燃烧，所有盈利消耗浮亏' },
-  { value: 'trend_long', label: '顺势做多', desc: 'EMA金叉做多，适合上涨行情' },
-  { value: 'trend_short', label: '顺势做空', desc: 'EMA死叉做空，适合下跌行情' },
-  { value: 'counter_stable', label: '逆势稳健', desc: 'EMA60振幅稳健开仓，低风险' },
-  { value: 'head_tail_arb', label: '首尾套利', desc: '首单尾单组合套利，降低持仓风险' },
+  { value: 'martin_trend', label: '马丁趋势策略', desc: '倍投补仓(2,4,8,16,32,64) + 趋势指标，浮亏减半', supported: true },
+  { value: 'wallstreet', label: '华尔街策略', desc: '等比补仓(1,2,3,5,8,13,21,34,55) + 趋势指标', supported: true },
+  { value: 'macd_golden_long', label: 'MACD金叉开多', desc: 'MACD金叉开多/补多，死叉反向清仓', supported: true },
+  { value: 'macd_death_short', label: 'MACD死叉开空', desc: 'MACD死叉开空/补空，金叉反向清仓', supported: true },
+  { value: 'ema_follow_trend', label: 'EMA顺势策略', desc: 'EMA60均线以上做多，EMA10拐点开仓', supported: true },
+  { value: 'ema_counter_trend', label: 'EMA逆势策略', desc: 'EMA60标准线以上做空，振幅决定开仓', supported: true },
+  { value: 'dual_burn', label: '双向燃烧斩仓', desc: '逆势单第3仓起开启顺势单，盈利消耗浮亏', supported: true },
+  { value: 'global_burn', label: '超级全局燃烧', desc: '逆势单第5仓起跨币种燃烧，所有盈利消耗浮亏', supported: true },
+  { value: 'trend_long', label: '顺势做多', desc: 'EMA金叉做多，适合上涨行情', supported: true },
+  { value: 'trend_short', label: '顺势做空', desc: 'EMA死叉做空，适合下跌行情', supported: true },
+  { value: 'counter_stable', label: '逆势稳健', desc: 'EMA60振幅稳健开仓，低风险', supported: true },
+  { value: 'head_tail_arb', label: '首尾套利', desc: '首单尾单组合套利，降低持仓风险', supported: true },
 ]
 
 const PRESET_DATES = [
@@ -408,12 +396,12 @@ export function Backtest() {
 
   // Multi-strategy comparison
   const [compareStrategies, setCompareStrategies] = useState<string[]>([])
-  const [compareResults, setCompareResults] = useState<Record<string, { report: BacktestReport; params: BacktestParams; trades: TradeRecord[] }>>({})
+  const [compareResults, setCompareResults] = useState<Record<string, { report: BacktestReport | null; params: BacktestParams | null; trades: TradeRecord[] }>>({})
   const [showCompare, setShowCompare] = useState(false)
   // Optimizer
   const [showOptimizer, setShowOptimizer] = useState(false)
   const [optimizerConfig, setOptimizerConfig] = useState({ method: 'de' as 'de' | 'tpe', generations: 10, population: 20 })
-  const [optimizerResult, setOptimizerResult] = useState<any>(null)
+  const [optimizerResult, setOptimizerResult] = useState<Record<string, unknown> | null>(null)
 
   const [report, setReport] = useState<BacktestReport | null>(null)
   const [params, setParams] = useState<BacktestParams | null>(null)
@@ -470,7 +458,7 @@ export function Backtest() {
   const handleRunCompare = async () => {
     if (compareStrategies.length < 2) return
     setCompareResults({})
-    const results: Record<string, any> = {}
+    const results: Record<string, { report: BacktestReport | null; params: BacktestParams | null; trades: TradeRecord[] }> = {}
     for (const st of compareStrategies) {
       try {
         const data = await backtestApi.run({
@@ -488,8 +476,8 @@ export function Backtest() {
           close_add_position: craCloseAdd, leverage: craLeverage, direction: craDirection,
         })
         results[st] = {
-          report: data?.report || null,
-          params: data?.params || null,
+          report: isBacktestReport(data?.report) ? (data.report as BacktestReport) : null,
+          params: isBacktestParams(data?.params) ? (data.params as BacktestParams) : null,
           trades: parseTrades(data?.trades || []),
         }
       } catch { /* skip failed */ }
@@ -501,6 +489,7 @@ export function Backtest() {
     setOptimizerResult(null)
     try {
       const data = await indicatorApi.experiment.run({
+        code: `// ${strategyType} backtest optimizer\n`,
         symbol, interval,
         strategy_type: strategyType,
         optimizer: optimizerConfig.method,
@@ -518,15 +507,15 @@ export function Backtest() {
           from: fromDate, to: toDate,
         },
       })
-      setOptimizerResult(data?.data || data)
-    } catch (e) {
+      setOptimizerResult((data as Record<string, unknown>)?.data ? (data as Record<string, unknown>).data as Record<string, unknown> : (data as Record<string, unknown>))
+    } catch {
       // 优化器错误已在 UI 中反馈
     }
   }
 
-  const applyOptimizerResult = (result: any) => {
-    if (!result?.best_params) return
-    const p = result.best_params
+  const applyOptimizerResult = (result: Record<string, unknown>) => {
+    if (!result.best_params) return
+    const p = result.best_params as Record<string, number>
     if (p.order_count !== undefined) setCraOrderCount(p.order_count)
     if (p.first_order_amount !== undefined) setCraFirstAmount(p.first_order_amount)
     if (p.add_position_spread !== undefined) setCraAddSpread(p.add_position_spread)
@@ -673,6 +662,142 @@ export function Backtest() {
               </p>
             </div>
           </div>
+
+          {/* ── Strategy Compare Selector ── */}
+          {showCompare && (
+            <div className="rounded-xl border border-quant-border bg-quant-bg-tertiary p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-quant-gold">选择要对比的策略（至少2个）</span>
+                <button
+                  onClick={handleRunCompare}
+                  disabled={compareStrategies.length < 2}
+                  className={cn(
+                    'px-3 py-1.5 rounded-lg text-xs font-medium transition-colors',
+                    compareStrategies.length < 2
+                      ? 'bg-quant-bg-secondary text-muted-foreground cursor-not-allowed'
+                      : 'bg-quant-gold text-quant-bg hover:opacity-90'
+                  )}
+                >
+                  运行对比
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {STRATEGIES.map((s) => (
+                  <label key={s.value} className={cn(
+                    'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs border cursor-pointer transition-colors',
+                    compareStrategies.includes(s.value)
+                      ? 'border-quant-gold/30 bg-quant-gold/10 text-quant-gold'
+                      : 'border-quant-border text-muted-foreground hover:text-foreground'
+                  )}>
+                    <input
+                      type="checkbox"
+                      className="hidden"
+                      checked={compareStrategies.includes(s.value)}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setCompareStrategies(prev => [...prev, s.value])
+                        } else {
+                          setCompareStrategies(prev => prev.filter(v => v !== s.value))
+                        }
+                      }}
+                    />
+                    {s.label}
+                  </label>
+                ))}
+              </div>
+              {/* Compare Results */}
+              {Object.keys(compareResults).length > 0 && (
+                <div className="grid grid-cols-1 gap-2">
+                  {Object.entries(compareResults).map(([st, r]) => (
+                    <div key={st} className="flex items-center justify-between p-2.5 rounded-lg border border-quant-border bg-quant-bg-secondary">
+                      <span className="text-xs font-medium">{STRATEGIES.find(s => s.value === st)?.label || st}</span>
+                      <div className="flex items-center gap-3 text-[11px]">
+                        {r.report && (
+                          <>
+                            <span className={r.report.total_return_pct >= 0 ? 'text-quant-green' : 'text-quant-red'}>
+                              收益: {formatPct(r.report.total_return_pct)}
+                            </span>
+                            <span className="text-muted-foreground">回撤: {r.report.max_drawdown_pct.toFixed(1)}%</span>
+                            <span className="text-muted-foreground">夏普: {r.report.sharpe_ratio.toFixed(2)}</span>
+                            <span className="text-muted-foreground">交易: {r.report.total_trades}笔</span>
+                          </>
+                        )}
+                        {!r.report && <span className="text-muted-foreground">无数据</span>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Optimizer Panel ── */}
+          {showOptimizer && (
+            <div className="rounded-xl border border-quant-border bg-quant-bg-tertiary p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-quant-gold">参数优化器</span>
+                <button
+                  onClick={handleRunOptimizer}
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium bg-quant-gold text-quant-bg hover:opacity-90 transition-opacity"
+                >
+                  开始优化
+                </button>
+              </div>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                <div>
+                  <label className="mb-1 block text-[10px] text-muted-foreground">优化算法</label>
+                  <select
+                    value={optimizerConfig.method}
+                    onChange={(e) => setOptimizerConfig(prev => ({ ...prev, method: e.target.value as 'de' | 'tpe' }))}
+                    className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1.5 text-xs outline-none focus:border-quant-gold"
+                  >
+                    <option value="de">差分进化 (DE)</option>
+                    <option value="tpe">贝叶斯优化 (TPE)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1 block text-[10px] text-muted-foreground">迭代代数</label>
+                  <input type="number" min={5} max={50} value={optimizerConfig.generations}
+                    onChange={(e) => setOptimizerConfig(prev => ({ ...prev, generations: Number(e.target.value) }))}
+                    className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1.5 text-xs outline-none focus:border-quant-gold" />
+                </div>
+                <div>
+                  <label className="mb-1 block text-[10px] text-muted-foreground">种群大小</label>
+                  <input type="number" min={10} max={100} value={optimizerConfig.population}
+                    onChange={(e) => setOptimizerConfig(prev => ({ ...prev, population: Number(e.target.value) }))}
+                    className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1.5 text-xs outline-none focus:border-quant-gold" />
+                </div>
+              </div>
+              {optimizerResult && (
+                <div className="p-3 rounded-lg border border-quant-gold/20 bg-quant-gold/5">
+                  <div className="text-xs font-medium text-quant-gold mb-2">优化结果</div>
+                  {!!optimizerResult.best_params && (
+                    <div className="space-y-1">
+                      <div className="text-[11px] text-muted-foreground">最佳参数:</div>
+                      <div className="flex flex-wrap gap-2">
+                        {Object.entries(optimizerResult.best_params as Record<string, number>).map(([k, v]) => (
+                          <span key={k} className="px-2 py-0.5 rounded bg-quant-bg-secondary text-[11px] text-foreground">
+                            {k}: {typeof v === 'number' ? v.toFixed(2) : String(v)}
+                          </span>
+                        ))}
+                      </div>
+                      <button
+                        onClick={() => applyOptimizerResult(optimizerResult)}
+                        className="mt-2 px-3 py-1.5 rounded-lg text-xs font-medium bg-quant-gold text-quant-bg hover:opacity-90 transition-opacity"
+                      >
+                        应用最佳参数
+                      </button>
+                    </div>
+                  )}
+                  {optimizerResult.best_score !== undefined && (
+                    <div className="text-[11px] text-muted-foreground mt-1">
+                      最佳得分: {typeof optimizerResult.best_score === 'number' ? optimizerResult.best_score.toFixed(4) : String(optimizerResult.best_score)}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* ── CRA 回测参数面板 ── */}
           <div className="rounded-xl border border-quant-border bg-quant-bg-tertiary p-4 space-y-4">
@@ -889,7 +1014,13 @@ export function Backtest() {
         </div>
 
         {/* ── Backtest Assumptions ── */}
-        <BacktestAssumptions />
+        <BacktestAssumptions
+          commission={0.001}
+          slippage={0.0005}
+          leverage={craLeverage}
+          initialBalance={initialBalance}
+          interval={interval}
+        />
 
         {/* ── Error state ── */}
         {runMut.isError && (
@@ -962,7 +1093,7 @@ export function Backtest() {
                       </span>
                     )},
                   ]}
-                  keyExtractor={(_, i) => String(i)}
+                  keyExtractor={(t) => `${t.side}-${t.time}-${t.bar}`}
                   emptyText="暂无交易记录"
                 />
               </div>

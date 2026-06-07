@@ -386,6 +386,32 @@ func RunBacktest(c *gin.Context) {
 	switch strategyType {
 	case "breakout":
 		strategy = &breakoutBTStrategy{symbol: symbol, lookback: 20, bufferPct: 0.002, stopLossPct: 0.02, takeProfitPct: 0.04}
+	case "sma_cross":
+		strategy = &smaCrossStrategy{symbol: symbol, fastPeriod: 12, slowPeriod: 26}
+	case "martin_trend":
+		strategy = &martinTrendStrategy{symbol: symbol}
+	case "wallstreet":
+		strategy = &wallstreetStrategy{symbol: symbol}
+	case "macd_golden_long":
+		strategy = &macdGoldenLongStrategy{symbol: symbol}
+	case "macd_death_short":
+		strategy = &macdDeathShortStrategy{symbol: symbol}
+	case "ema_follow_trend":
+		strategy = &emaFollowTrendStrategy{symbol: symbol}
+	case "ema_counter_trend":
+		strategy = &emaCounterTrendStrategy{symbol: symbol}
+	case "dual_burn":
+		strategy = &dualBurnStrategy{symbol: symbol}
+	case "global_burn":
+		strategy = &globalBurnStrategy{symbol: symbol}
+	case "trend_long":
+		strategy = &trendLongStrategy{symbol: symbol}
+	case "trend_short":
+		strategy = &trendShortStrategy{symbol: symbol}
+	case "counter_stable":
+		strategy = &counterStableStrategy{symbol: symbol}
+	case "head_tail_arb":
+		strategy = &headTailArbStrategy{symbol: symbol}
 	default:
 		strategy = &smaCrossStrategy{symbol: symbol, fastPeriod: 12, slowPeriod: 26}
 	}

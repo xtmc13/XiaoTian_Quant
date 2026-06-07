@@ -42,12 +42,21 @@ func PlaceOrder(c *gin.Context) {
 	}
 
 	req := &order.Request{
-		Symbol:    getString(body, "symbol", "BTCUSDT"),
-		Side:      model.OrderSide(getString(body, "side", "BUY")),
-		OrderType: model.OrderType(getString(body, "order_type", "LIMIT")),
-		Price:     getFloat(body, "price", 0),
-		Quantity:  getFloat(body, "quantity", 0),
-		Exchange:  getString(body, "exchange", "paper"),
+		Symbol:        getString(body, "symbol", "BTCUSDT"),
+		Side:          model.OrderSide(getString(body, "side", "BUY")),
+		OrderType:     model.OrderType(getString(body, "order_type", "LIMIT")),
+		Price:         getFloat(body, "price", 0),
+		Quantity:      getFloat(body, "quantity", 0),
+		Exchange:      getString(body, "exchange", "paper"),
+
+		// ── Contract fields ──
+		MarketType:    model.MarketType(getString(body, "market_type", "spot")),
+		PositionSide:  model.PositionSide(getString(body, "position_side", "")),
+		Leverage:      getFloat(body, "leverage", 0),
+		MarginMode:    model.MarginMode(getString(body, "margin_mode", "cross")),
+		TPPrice:       getFloat(body, "tp_price", 0),
+		SLPrice:       getFloat(body, "sl_price", 0),
+		ClosePosition: getBool(body, "close_position", false),
 	}
 
 	ord, err := order.GetOrderManager().PlaceOrder(req)
@@ -61,6 +70,7 @@ func PlaceOrder(c *gin.Context) {
 
 // fillOrderAndUpdatePortfolio simulates immediate execution for market orders
 // and updates the portfolio manager balances and positions.
+// Supports both spot and contract (swap) trading.
 func fillOrderAndUpdatePortfolio(order map[string]any) {
 	symbol := getString(order, "symbol", "BTCUSDT")
 	side := strings.ToUpper(getString(order, "side", "BUY"))
@@ -69,6 +79,15 @@ func fillOrderAndUpdatePortfolio(order map[string]any) {
 	if price <= 0 || qty <= 0 {
 		return
 	}
+
+	marketType := model.MarketType(getString(order, "market_type", "spot"))
+	leverage := getFloat(order, "leverage", 1)
+	if leverage <= 0 {
+		leverage = 1
+	}
+	marginMode := model.MarginMode(getString(order, "margin_mode", "cross"))
+	positionSide := model.PositionSide(getString(order, "position_side", ""))
+	closePosition := getBool(order, "close_position", false)
 
 	base, quote := parseSymbolPair(symbol)
 	cost := price * qty
@@ -82,103 +101,252 @@ func fillOrderAndUpdatePortfolio(order map[string]any) {
 	order["status"] = "FILLED"
 	order["filled"] = qty
 
-	// Get account for PnL calculation
+	// Get account
 	acct := mgr.GetAccount("default")
 	if acct == nil {
 		return
 	}
 
-	// Calculate realized PnL: if this trade closes or reduces an opposite position
-	var realizedPnL float64
-	oppositeSide := "SELL"
-	if side == "SELL" {
-		oppositeSide = "BUY"
-	}
-	oppositePos := acct.Positions[symbol+"-"+oppositeSide]
-	if oppositePos != nil && oppositePos.Quantity > 0 {
-		closeQty := qty
-		if closeQty > oppositePos.Quantity {
-			closeQty = oppositePos.Quantity
+	if marketType == model.MarketSwap {
+		// ── CONTRACT (SWAP) LOGIC ──
+		margin := cost / leverage
+
+		// Determine position side if not explicitly set
+		if positionSide == "" {
+			if closePosition {
+				// Closing: infer from existing position
+				if side == "SELL" {
+					positionSide = model.PositionLong // SELL closes LONG
+				} else {
+					positionSide = model.PositionShort // BUY closes SHORT
+				}
+			} else {
+				// Opening
+				if side == "BUY" {
+					positionSide = model.PositionLong
+				} else {
+					positionSide = model.PositionShort
+				}
+			}
 		}
-		if side == "SELL" {
-			realizedPnL = (price - oppositePos.AvgEntryPrice) * closeQty
+
+		posID := symbol + "-" + string(positionSide)
+		existing := acct.Positions[posID]
+
+		if closePosition || (existing != nil && existing.Quantity > 0) {
+			// ── CLOSE / REDUCE position ──
+			if existing == nil || existing.Quantity <= 0 {
+				return // Nothing to close
+			}
+			closeQty := qty
+			if closeQty > existing.Quantity {
+				closeQty = existing.Quantity
+			}
+
+			// Realized PnL
+			var realizedPnL float64
+			if positionSide == model.PositionLong {
+				realizedPnL = (price - existing.AvgEntryPrice) * closeQty
+			} else {
+				realizedPnL = (existing.AvgEntryPrice - price) * closeQty
+			}
+			order["realized_pnl"] = realizedPnL
+
+			// Release margin proportionally
+			releasedMargin := margin
+			if closeQty < existing.Quantity {
+				releasedMargin = (existing.Margin * closeQty) / existing.Quantity
+			}
+
+			// Update balance (release margin + realized PnL)
+			quoteBal := acct.Balances[quote]
+			if quoteBal == nil {
+				quoteBal = &model.Balance{Currency: quote, Total: 0, Free: 0, Used: 0}
+			}
+			quoteBal.Free += releasedMargin + realizedPnL
+			quoteBal.Total += releasedMargin + realizedPnL
+			if quoteBal.Free < 0 {
+				quoteBal.Free = 0
+			}
+			if quoteBal.Total < 0 {
+				quoteBal.Total = 0
+			}
+			mgr.UpdateBalance("default", quote, quoteBal.Total, quoteBal.Free, quoteBal.Used)
+
+			// Update position
+			existing.Quantity -= closeQty
+			existing.RealizedPnL += realizedPnL
+			existing.Margin -= releasedMargin
+			if existing.Quantity <= 0 {
+				existing.Quantity = 0
+				existing.Margin = 0
+				existing.UnrealizedPnL = 0
+			} else {
+				existing.CurrentPrice = price
+				if positionSide == model.PositionLong {
+					existing.UnrealizedPnL = (existing.CurrentPrice - existing.AvgEntryPrice) * existing.Quantity
+				} else {
+					existing.UnrealizedPnL = (existing.AvgEntryPrice - existing.CurrentPrice) * existing.Quantity
+				}
+			}
+			mgr.UpdatePosition(*existing)
 		} else {
-			realizedPnL = (oppositePos.AvgEntryPrice - price) * closeQty
-		}
-	}
-	order["realized_pnl"] = realizedPnL
+			// ── OPEN / INCREASE position ──
+			quoteBal := acct.Balances[quote]
+			if quoteBal == nil {
+				quoteBal = &model.Balance{Currency: quote, Total: 0, Free: 0, Used: 0}
+			}
+			// Deduct margin
+			quoteBal.Free -= margin
+			quoteBal.Used += margin
+			if quoteBal.Free < 0 {
+				quoteBal.Free = 0
+			}
+			mgr.UpdateBalance("default", quote, quoteBal.Total, quoteBal.Free, quoteBal.Used)
 
-	// Update balances
-	quoteBal := acct.Balances[quote]
-	if quoteBal == nil {
-		quoteBal = &model.Balance{Currency: quote, Total: 0, Free: 0, Used: 0}
-	}
-	baseBal := acct.Balances[base]
-	if baseBal == nil {
-		baseBal = &model.Balance{Currency: base, Total: 0, Free: 0, Used: 0}
-	}
-
-	if side == "BUY" {
-		// Deduct quote, add base
-		quoteBal.Free -= cost
-		quoteBal.Total -= cost
-		if quoteBal.Free < 0 {
-			quoteBal.Free = 0
+			if existing != nil && existing.Quantity > 0 {
+				// Average down/up
+				totalQty := existing.Quantity + qty
+				totalCost := existing.AvgEntryPrice*existing.Quantity + price*qty
+				avgPrice := totalCost / totalQty
+				existing.Quantity = totalQty
+				existing.AvgEntryPrice = avgPrice
+				existing.CurrentPrice = price
+				existing.Margin += margin
+				existing.Leverage = leverage
+				existing.MarginMode = marginMode
+				if positionSide == model.PositionLong {
+					existing.UnrealizedPnL = (existing.CurrentPrice - existing.AvgEntryPrice) * existing.Quantity
+				} else {
+					existing.UnrealizedPnL = (existing.AvgEntryPrice - existing.CurrentPrice) * existing.Quantity
+				}
+				mgr.UpdatePosition(*existing)
+			} else {
+				// New position
+				newPos := model.PositionData{
+					ID:               posID,
+					Symbol:           symbol,
+					Side:             string(side),
+					Quantity:         qty,
+					AvgEntryPrice:    price,
+					CurrentPrice:     price,
+					UnrealizedPnL:    0,
+					RealizedPnL:      0,
+					OpenedAt:         time.Now().UnixMilli(),
+					PositionSide:     positionSide,
+					Leverage:         leverage,
+					MarginMode:       marginMode,
+					Margin:           margin,
+					MarketType:       marketType,
+					LiquidationPrice: calcLiquidationPrice(price, leverage, positionSide),
+				}
+				mgr.UpdatePosition(newPos)
+			}
 		}
-		if quoteBal.Total < 0 {
-			quoteBal.Total = 0
-		}
-		baseBal.Free += qty
-		baseBal.Total += qty
 	} else {
-		// Deduct base, add quote
-		baseBal.Free -= qty
-		baseBal.Total -= qty
-		if baseBal.Free < 0 {
-			baseBal.Free = 0
-		}
-		if baseBal.Total < 0 {
-			baseBal.Total = 0
-		}
-		quoteBal.Free += cost
-		quoteBal.Total += cost
-	}
-
-	mgr.UpdateBalance("default", quote, quoteBal.Total, quoteBal.Free, quoteBal.Used)
-	mgr.UpdateBalance("default", base, baseBal.Total, baseBal.Free, baseBal.Used)
-
-	// Update position
-	posID := symbol + "-" + side
-	existing := acct.Positions[posID]
-	if existing != nil {
-		// Average down/up
-		totalQty := existing.Quantity + qty
-		totalCost := existing.AvgEntryPrice*existing.Quantity + price*qty
-		avgPrice := totalCost / totalQty
-		existing.Quantity = totalQty
-		existing.AvgEntryPrice = avgPrice
-		existing.CurrentPrice = price
-		existing.UnrealizedPnL = (existing.CurrentPrice - existing.AvgEntryPrice) * existing.Quantity
+		// ── SPOT LOGIC (original) ──
+		// Calculate realized PnL: if this trade closes or reduces an opposite position
+		var realizedPnL float64
+		oppositeSide := "SELL"
 		if side == "SELL" {
-			existing.UnrealizedPnL = (existing.AvgEntryPrice - existing.CurrentPrice) * existing.Quantity
+			oppositeSide = "BUY"
 		}
-		mgr.UpdatePosition(*existing)
-	} else {
-		newPos := model.PositionData{
-			ID:            posID,
-			Symbol:        symbol,
-			Side:          side,
-			Quantity:      qty,
-			AvgEntryPrice: price,
-			CurrentPrice:  price,
-			UnrealizedPnL: 0,
-			OpenedAt:      time.Now().UnixMilli(),
+		oppositePos := acct.Positions[symbol+"-"+oppositeSide]
+		if oppositePos != nil && oppositePos.Quantity > 0 {
+			closeQty := qty
+			if closeQty > oppositePos.Quantity {
+				closeQty = oppositePos.Quantity
+			}
+			if side == "SELL" {
+				realizedPnL = (price - oppositePos.AvgEntryPrice) * closeQty
+			} else {
+				realizedPnL = (oppositePos.AvgEntryPrice - price) * closeQty
+			}
 		}
-		mgr.UpdatePosition(newPos)
+		order["realized_pnl"] = realizedPnL
+
+		// Update balances
+		quoteBal := acct.Balances[quote]
+		if quoteBal == nil {
+			quoteBal = &model.Balance{Currency: quote, Total: 0, Free: 0, Used: 0}
+		}
+		baseBal := acct.Balances[base]
+		if baseBal == nil {
+			baseBal = &model.Balance{Currency: base, Total: 0, Free: 0, Used: 0}
+		}
+
+		if side == "BUY" {
+			// Deduct quote, add base
+			quoteBal.Free -= cost
+			quoteBal.Total -= cost
+			if quoteBal.Free < 0 {
+				quoteBal.Free = 0
+			}
+			if quoteBal.Total < 0 {
+				quoteBal.Total = 0
+			}
+			baseBal.Free += qty
+			baseBal.Total += qty
+		} else {
+			// Deduct base, add quote
+			baseBal.Free -= qty
+			baseBal.Total -= qty
+			if baseBal.Free < 0 {
+				baseBal.Free = 0
+			}
+			if baseBal.Total < 0 {
+				baseBal.Total = 0
+			}
+			quoteBal.Free += cost
+			quoteBal.Total += cost
+		}
+
+		mgr.UpdateBalance("default", quote, quoteBal.Total, quoteBal.Free, quoteBal.Used)
+		mgr.UpdateBalance("default", base, baseBal.Total, baseBal.Free, baseBal.Used)
+
+		// Update position
+		posID := symbol + "-" + side
+		existing := acct.Positions[posID]
+		if existing != nil {
+			// Average down/up
+			totalQty := existing.Quantity + qty
+			totalCost := existing.AvgEntryPrice*existing.Quantity + price*qty
+			avgPrice := totalCost / totalQty
+			existing.Quantity = totalQty
+			existing.AvgEntryPrice = avgPrice
+			existing.CurrentPrice = price
+			existing.UnrealizedPnL = (existing.CurrentPrice - existing.AvgEntryPrice) * existing.Quantity
+			if side == "SELL" {
+				existing.UnrealizedPnL = (existing.AvgEntryPrice - existing.CurrentPrice) * existing.Quantity
+			}
+			mgr.UpdatePosition(*existing)
+		} else {
+			newPos := model.PositionData{
+				ID:            posID,
+				Symbol:        symbol,
+				Side:          side,
+				Quantity:      qty,
+				AvgEntryPrice: price,
+				CurrentPrice:  price,
+				UnrealizedPnL: 0,
+				OpenedAt:      time.Now().UnixMilli(),
+			}
+			mgr.UpdatePosition(newPos)
+		}
 	}
 
 	// Record snapshot after trade
 	mgr.Snapshot()
+}
+
+// calcLiquidationPrice estimates the liquidation price for a contract position.
+// Simplified: assumes maintenance margin rate of 0.5%.
+func calcLiquidationPrice(entryPrice, leverage float64, side model.PositionSide) float64 {
+	mmr := 0.005 // maintenance margin rate 0.5%
+	if side == model.PositionLong {
+		return entryPrice * (1 - 1/leverage + mmr)
+	}
+	return entryPrice * (1 + 1/leverage - mmr)
 }
 
 // parseSymbolPair extracts base and quote assets from a symbol like "BTCUSDT".

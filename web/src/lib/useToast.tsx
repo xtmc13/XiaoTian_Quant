@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 
-type ToastType = 'success' | 'error' | 'info'
+type ToastType = 'success' | 'error' | 'info' | 'warning'
 
 interface ToastItem {
   id: number
@@ -52,6 +52,7 @@ export function ToastContainer() {
             t.type === 'success' && 'bg-[#0ECB81]/90 text-black',
             t.type === 'error' && 'bg-[#F6465D]/90 text-white',
             t.type === 'info' && 'bg-quant-card border border-quant-border text-foreground',
+            t.type === 'warning' && 'bg-yellow-500/90 text-black',
           )}
         >
           {t.message}

@@ -225,6 +225,23 @@ func (b *BinanceAdapter) PlaceOrder(symbol, side, orderType string, price, quant
 	return b.request("POST", "/order", params, true)
 }
 
+// PlaceFuturesOrder places a USDT-M futures order on Binance.
+func (b *BinanceAdapter) PlaceFuturesOrder(symbol, side, orderType string, price, quantity, leverage float64, positionSide string) (map[string]any, error) {
+	params := url.Values{}
+	params.Set("symbol", symbol)
+	params.Set("side", side)
+	params.Set("type", orderType)
+	params.Set("quantity", fmt.Sprintf("%.6f", quantity))
+	if positionSide != "" {
+		params.Set("positionSide", positionSide)
+	}
+	if orderType == "LIMIT" {
+		params.Set("price", fmt.Sprintf("%.2f", price))
+		params.Set("timeInForce", "GTC")
+	}
+	return b.futuresRequest("POST", "/fapi/v1/order", params)
+}
+
 func (b *BinanceAdapter) CancelOrder(symbol, orderID string) (map[string]any, error) {
 	params := url.Values{}
 	params.Set("symbol", symbol)
@@ -411,6 +428,103 @@ func (b *BinanceAdapter) GetOpenOrders(symbol string) ([]map[string]any, error) 
 		}
 	}
 	return orders, nil
+}
+
+// GetFundingRate fetches the current funding rate for a futures symbol.
+func (b *BinanceAdapter) GetFundingRate(symbol string) (float64, error) {
+	params := url.Values{}
+	params.Set("symbol", symbol)
+	result, err := b.futuresRequest("GET", "/fapi/v1/premiumIndex", params)
+	if err != nil {
+		return 0, err
+	}
+	if rate, ok := result["lastFundingRate"].(string); ok {
+		f, _ := strconv.ParseFloat(rate, 64)
+		return f, nil
+	}
+	if rate, ok := result["lastFundingRate"].(float64); ok {
+		return rate, nil
+	}
+	return 0, fmt.Errorf("funding rate not found in response")
+}
+
+// GetMarkPrice fetches the current mark price for a futures symbol.
+func (b *BinanceAdapter) GetMarkPrice(symbol string) (float64, error) {
+	params := url.Values{}
+	params.Set("symbol", symbol)
+	result, err := b.futuresRequest("GET", "/fapi/v1/premiumIndex", params)
+	if err != nil {
+		return 0, err
+	}
+	if price, ok := result["markPrice"].(string); ok {
+		f, _ := strconv.ParseFloat(price, 64)
+		return f, nil
+	}
+	if price, ok := result["markPrice"].(float64); ok {
+		return price, nil
+	}
+	return 0, fmt.Errorf("mark price not found in response")
+}
+
+// GetAllFundingRates fetches funding rates for all futures symbols.
+func (b *BinanceAdapter) GetAllFundingRates() (map[string]float64, error) {
+	u, _ := url.Parse(BinanceFuturesRestURL + "/fapi/v1/premiumIndex")
+	params := url.Values{}
+	params.Set("timestamp", fmt.Sprintf("%d", time.Now().UnixMilli()))
+	params.Set("recvWindow", "5000")
+	params.Set("signature", b.sign(params))
+	u.RawQuery = params.Encode()
+
+	req, err := http.NewRequest("GET", u.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-MBX-APIKEY", b.apiKey)
+
+	resp, err := b.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	// Try array response first (all symbols)
+	var arr []map[string]any
+	if err := json.Unmarshal(body, &arr); err == nil && len(arr) > 0 {
+		rates := make(map[string]float64, len(arr))
+		for _, m := range arr {
+			symbol, _ := m["symbol"].(string)
+			if symbol == "" {
+				continue
+			}
+			if rate, ok := m["lastFundingRate"].(string); ok {
+				f, _ := strconv.ParseFloat(rate, 64)
+				rates[symbol] = f
+			} else if rate, ok := m["lastFundingRate"].(float64); ok {
+				rates[symbol] = rate
+			}
+		}
+		return rates, nil
+	}
+
+	// Try single object response
+	var single map[string]any
+	if err := json.Unmarshal(body, &single); err == nil {
+		rates := make(map[string]float64, 1)
+		symbol, _ := single["symbol"].(string)
+		if symbol != "" {
+			if rate, ok := single["lastFundingRate"].(string); ok {
+				f, _ := strconv.ParseFloat(rate, 64)
+				rates[symbol] = f
+			} else if rate, ok := single["lastFundingRate"].(float64); ok {
+				rates[symbol] = rate
+			}
+		}
+		return rates, nil
+	}
+
+	return nil, fmt.Errorf("failed to parse funding rates response")
 }
 
 // ── WebSocket Market Streams ──

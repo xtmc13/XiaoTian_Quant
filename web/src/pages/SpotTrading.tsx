@@ -5,18 +5,17 @@ import { KLineChartPro } from '@klinecharts/pro'
 import '@klinecharts/pro/dist/klinecharts-pro.css'
 import { createBackendDatafeed, handlePriceTick, runBackfill, setChartUpdater, clearChartUpdater } from '@/lib/klineDatafeed'
 import { TRADING_INTERVALS } from '@/lib/constants'
-import type { Chart } from 'klinecharts'
-import { extractArray, extractObject, safeNumber, safeString } from '@/lib/typeHelpers'
+import { extractArray, safeNumber, safeString } from '@/lib/typeHelpers'
 import { cn } from '@/lib/utils'
 import { useWebSocket } from '@/hooks/useWebSocket'
 import { toast, ToastContainer } from '@/lib/useToast'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { Skeleton } from '@/components/ui/Skeleton'
 import {
-  parseInterval, formatPrice, formatTime, formatDateTime, formatVolume,
-  StatusTag, getChartApi, SPOT_WATCHLIST,
+  parseInterval, formatPrice, formatTime, formatDateTime,
+  StatusTag, SPOT_WATCHLIST,
 } from '@/lib/tradingHelpers'
-import type { Position, Trade, Order, PortfolioPosition } from '@/types'
+import type { Trade, Order } from '@/types'
 import type { ChartApi } from '@/lib/tradingHelpers'
 import {
   Search, TrendingUp, Clock, XCircle,
@@ -230,17 +229,18 @@ export function SpotTrading() {
         }
       }
       checkApi()
-    } catch (e) { /* KLineChartPro 初始化失败，已在 UI 中处理 */ }
+    } catch { /* KLineChartPro 初始化失败，已在 UI 中处理 */ }
     return () => { if (intervalId) window.clearTimeout(intervalId) }
   }, [datafeed, symbol, interval])
 
   // Init on mount & when interval changes (SolidJS setPeriod workaround)
   useEffect(() => {
+    const el = chartRef.current
     const cancelTimer = initChart()
     return () => {
       cancelTimer?.()
       clearChartUpdater()
-      if (chartRef.current) chartRef.current.innerHTML = ""
+      if (el) el.innerHTML = ""
       klineProRef.current = null
       chartApiRef.current = null
     }
@@ -291,8 +291,9 @@ export function SpotTrading() {
     setSubmitting(true)
     try{
       await orderApi.place({
-        symbol, side, type: orderType,
+        symbol, side, order_type: orderType,
         price: finalPrice, quantity: qty,
+        market_type: 'spot',
         tp_price: tpPrice ? parseFloat(tpPrice) : undefined,
         sl_price: slPrice ? parseFloat(slPrice) : undefined,
       })
@@ -370,7 +371,7 @@ export function SpotTrading() {
                   {(orderbook.asks||[]).slice(0,10).map((ask: [number, number],i:number)=>{
                     const p=Number(ask[0]), q=Number(ask[1])
                     return (
-                      <div key={"ask-"+i} className="relative flex px-3 py-0.5 text-[11px] font-mono cursor-pointer hover:bg-white/[0.04]">
+                      <div key={"ask-"+i} className="relative flex px-3 py-0.5 text-[11px] font-mono cursor-pointer hover:bg-white/[0.04]" onClick={() => setPrice(obFormatPrice(p, obPrecision))}>
                         <div className="absolute top-0 bottom-0 right-0 opacity-20 z-0" style={{background:'#F6465D',width:Math.min((q/obMax)*100,100)+'%'}}/>
                         <span className="flex-1 text-quant-red relative z-10">{obFormatPrice(p,obPrecision)}</span>
                         <span className="flex-1 text-right text-muted-foreground relative z-10">{q.toFixed(4)}</span>
@@ -391,7 +392,7 @@ export function SpotTrading() {
                   {(orderbook.bids||[]).slice(0,10).map((bid: [number, number],i:number)=>{
                     const p=Number(bid[0]), q=Number(bid[1])
                     return (
-                      <div key={"bid-"+i} className="relative flex px-3 py-0.5 text-[11px] font-mono cursor-pointer hover:bg-white/[0.04]">
+                      <div key={"bid-"+i} className="relative flex px-3 py-0.5 text-[11px] font-mono cursor-pointer hover:bg-white/[0.04]" onClick={() => setPrice(obFormatPrice(p, obPrecision))}>
                         <div className="absolute top-0 bottom-0 left-0 opacity-20 z-0" style={{background:'#2EBD85',width:Math.min((q/obMax)*100,100)+'%'}}/>
                         <span className="flex-1 text-quant-green relative z-10">{obFormatPrice(p,obPrecision)}</span>
                         <span className="flex-1 text-right text-muted-foreground relative z-10">{q.toFixed(4)}</span>
@@ -405,7 +406,7 @@ export function SpotTrading() {
               <div className="py-8"><EmptyState title="暂无订单簿数据" description="等待市场数据连接..."/></div>
             )}
           </div>
-          <div className="h-[150px] shrink-0 border-t border-quant-border overflow-y-auto" tabIndex={0} role="region" aria-label="最新成交">
+          <div className="h-[150px] shrink-0 border-t border-quant-border overflow-y-auto" role="region" aria-label="最新成交">
             <div className="flex items-center h-7 px-3 border-b border-quant-border bg-quant-bg-secondary">
               <span className="text-[11px] font-medium text-muted-foreground">最新成交</span>
             </div>
@@ -485,12 +486,22 @@ export function SpotTrading() {
               </div>
             </div>
             <div className="flex gap-1">
-              {[0.25,0.5,0.75,1].map(pct=>{
-                const pctLabel = Math.round(pct*100)+'%'
-                const calcPrice = orderType==='MARKET'?lastPrice:(parseFloat(price)||lastPrice)
-                const calcQty = calcPrice>0?(spotBalance*pct)/calcPrice:0
-                return <button key={pctLabel} onClick={()=>setQuantity(calcQty>0?calcQty.toFixed(6):'')} className="flex-1 py-1 text-[10px] text-muted-foreground hover:text-foreground bg-quant-bg border border-quant-border rounded hover:border-quant-gold/50 transition-colors">{pctLabel}</button>
-              })}
+              {(() => {
+                const baseAsset = symbol.replace('USDT', '')
+                const assetHolding = holdingsList.find((b: unknown) => {
+                  const bal = b as Record<string, unknown>
+                  return String(bal.asset || bal.currency) === baseAsset
+                })
+                const assetFree = assetHolding ? parseFloat(String((assetHolding as Record<string, unknown>).free ?? (assetHolding as Record<string, unknown>).available ?? 0)) : 0
+                return [0.25, 0.5, 0.75, 1].map((pct) => {
+                  const pctLabel = Math.round(pct * 100) + '%'
+                  const calcPrice = orderType === 'MARKET' ? lastPrice : (parseFloat(price) || lastPrice)
+                  const calcQty = side === 'BUY'
+                    ? (calcPrice > 0 ? (spotBalance * pct) / calcPrice : 0)
+                    : (assetFree * pct)
+                  return <button key={pctLabel} onClick={() => setQuantity(calcQty > 0 ? calcQty.toFixed(6) : '')} className="flex-1 py-1 text-[10px] text-muted-foreground hover:text-foreground bg-quant-bg border border-quant-border rounded hover:border-quant-gold/50 transition-colors">{pctLabel}</button>
+                })
+              })()}
             </div>
             <div className="flex items-center gap-2 mt-1">
               <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">

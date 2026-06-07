@@ -56,9 +56,10 @@ type SandboxAnalyzeResponse struct {
 }
 
 // Execute calls the Python sandbox to safely execute indicator code.
-func (c *SandboxConfig) Execute(code string, params map[string]any) (*SandboxExecuteResponse, error) {
+func (c *SandboxConfig) Execute(code string, params map[string]any, dfJSON []map[string]any) (*SandboxExecuteResponse, error) {
 	reqBody, err := json.Marshal(SandboxExecuteRequest{
 		Code:    code,
+		DfJSON:  dfJSON,
 		Params:  params,
 		Timeout: 20,
 	})

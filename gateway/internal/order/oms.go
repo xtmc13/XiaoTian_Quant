@@ -24,15 +24,24 @@ func ValidateTransition(from, to model.OrderStatus) error {
 
 // Request is the input payload for order placement.
 type Request struct {
-	Symbol    string          `json:"symbol"`
-	Side      model.OrderSide `json:"side"`
-	OrderType model.OrderType `json:"order_type"`
-	Price     float64         `json:"price"`
-	StopPrice float64         `json:"stop_price,omitempty"`
-	Quantity  float64         `json:"quantity"`
-	Exchange  string          `json:"exchange"`
-	UserID    uint64          `json:"user_id"`
-	ClientOID string          `json:"client_oid,omitempty"`
+	Symbol        string      `json:"symbol"`
+	Side          model.OrderSide `json:"side"`
+	OrderType     model.OrderType `json:"order_type"`
+	Price         float64     `json:"price"`
+	StopPrice     float64     `json:"stop_price,omitempty"`
+	Quantity      float64     `json:"quantity"`
+	Exchange      string      `json:"exchange"`
+	UserID        uint64      `json:"user_id"`
+	ClientOID     string      `json:"client_oid,omitempty"`
+
+	// ── Contract fields ──
+	MarketType    model.MarketType  `json:"market_type,omitempty"`
+	PositionSide  model.PositionSide `json:"position_side,omitempty"`
+	Leverage      float64           `json:"leverage,omitempty"`
+	MarginMode    model.MarginMode  `json:"margin_mode,omitempty"`
+	TPPrice       float64           `json:"tp_price,omitempty"`
+	SLPrice       float64           `json:"sl_price,omitempty"`
+	ClosePosition bool              `json:"close_position,omitempty"`
 }
 
 func (r *Request) Validate() error {
@@ -109,19 +118,28 @@ func (om *OrderManager) PlaceOrder(req *Request) (*model.OrderData, error) {
 
 	// Create order
 	order := &model.OrderData{
-		ID:        om.generateID(),
-		Symbol:    req.Symbol,
-		Side:      req.Side,
-		OrderType: req.OrderType,
-		Price:     req.Price,
-		StopPrice: req.StopPrice,
-		Quantity:  req.Quantity,
-		Status:    model.StatusCreated,
-		Exchange:  req.Exchange,
-		UserID:    req.UserID,
-		ClientOID: req.ClientOID,
-		CreatedAt: time.Now().UnixMilli(),
-		UpdatedAt: time.Now().UnixMilli(),
+		ID:            om.generateID(),
+		Symbol:        req.Symbol,
+		Side:          req.Side,
+		OrderType:     req.OrderType,
+		Price:         req.Price,
+		StopPrice:     req.StopPrice,
+		Quantity:      req.Quantity,
+		Status:        model.StatusCreated,
+		Exchange:      req.Exchange,
+		UserID:        req.UserID,
+		ClientOID:     req.ClientOID,
+		CreatedAt:     time.Now().UnixMilli(),
+		UpdatedAt:     time.Now().UnixMilli(),
+
+		// ── Contract fields ──
+		MarketType:    req.MarketType,
+		PositionSide:  req.PositionSide,
+		Leverage:      req.Leverage,
+		MarginMode:    req.MarginMode,
+		TPPrice:       req.TPPrice,
+		SLPrice:       req.SLPrice,
+		ClosePosition: req.ClosePosition,
 	}
 
 	// Risk check
@@ -173,9 +191,57 @@ func (om *OrderManager) PlaceOrder(req *Request) (*model.OrderData, error) {
 	order.UpdatedAt = time.Now().UnixMilli()
 	om.storeOrder(order)
 
+	// Register conditional orders (TP/SL/Stop-Limit) with the conditional engine
+	if order.TPPrice > 0 || order.SLPrice > 0 {
+		GetConditionalEngine().RegisterTPSL(order, order.TPPrice, order.SLPrice)
+	}
+	if order.OrderType == model.TypeStopLossLimit || order.OrderType == model.TypeTakeProfitLimit {
+		if order.StopPrice > 0 {
+			GetConditionalEngine().RegisterStopLimit(order, order.StopPrice)
+		}
+	}
+
+	// Handle advanced order types (Iceberg, TWAP, VWAP)
+	if order.OrderType == model.TypeIceberg || order.OrderType == model.TypeTWAP || order.OrderType == model.TypeVWAP {
+		return om.handleAdvancedOrder(order)
+	}
+
 	if om.OnOrderUpdate != nil {
 		om.OnOrderUpdate(order)
 	}
+
+	return order, nil
+}
+
+// handleAdvancedOrder delegates iceberg/TWAP/VWAP orders to the advanced order engine.
+func (om *OrderManager) handleAdvancedOrder(order *model.OrderData) (*model.OrderData, error) {
+	ae := GetAdvancedOrderEngine()
+	var advOrd *AdvancedOrder
+	var err error
+
+	switch order.OrderType {
+	case model.TypeIceberg:
+		// Default: 10% visible, slice = visible amount
+		visibleQty := order.Quantity * 0.1
+		sliceSize := visibleQty
+		advOrd, err = ae.SubmitIceberg(order, visibleQty, sliceSize)
+	case model.TypeTWAP:
+		advOrd, err = ae.SubmitTWAP(order, 60000, 10) // 1 min, 10 slices
+	case model.TypeVWAP:
+		advOrd, err = ae.SubmitVWAP(order, 60000, 10) // 1 min, 10 slices
+	}
+
+	if err != nil {
+		order.Status = model.StatusRejected
+		om.storeOrder(order)
+		return order, fmt.Errorf("advanced order: %w", err)
+	}
+
+	order.Status = model.StatusNew
+	om.storeOrder(order)
+
+	// Link the advanced order ID
+	order.ClientOID = advOrd.ID
 
 	return order, nil
 }

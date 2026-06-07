@@ -232,35 +232,68 @@ func (r *Runner) Run(strategy BacktestStrategy) (*RunResult, error) {
 		}
 
 		execPrice := r.applySlippage(bar.Close, signal.Direction)
-		commissionCost := execPrice * r.initialBalance * r.commission / 10000
 
 		switch signal.Direction {
 		case "LONG":
 			if position != nil && !position.IsClosed {
-				continue // already in a position
+				if position.Side == model.SideBuy && signal.Qty > 0 {
+					// Add to existing long position
+					addQty := signal.Qty
+					addNotional := addQty * execPrice
+					commissionCost := addNotional * r.commission
+					cash -= addNotional + commissionCost
+					totalCost := position.Quantity*position.EntryPrice + addQty*execPrice
+					position.Quantity += addQty
+					position.EntryPrice = totalCost / position.Quantity
+					state.TradeCount++
+				}
+				continue
+			}
+			qty := signal.Qty
+			if qty <= 0 {
+				qty = r.initialBalance * 0.02 / execPrice
 			}
 			position = &Position{
 				Symbol:     symbol,
 				Side:       model.SideBuy,
-				Quantity:   r.initialBalance * 0.02 / execPrice, // 2% risk per trade
+				Quantity:   qty,
 				EntryPrice: execPrice,
 				EntryTime:  bar.Time,
 			}
-			cash -= position.Quantity*execPrice + commissionCost
+			notional := position.Quantity * execPrice
+			commissionCost := notional * r.commission
+			cash -= notional + commissionCost
 			state.TradeCount++
 
 		case "SHORT":
 			if position != nil && !position.IsClosed {
+				if position.Side == model.SideSell && signal.Qty > 0 {
+					// Add to existing short position
+					addQty := signal.Qty
+					addNotional := addQty * execPrice
+					commissionCost := addNotional * r.commission
+					cash -= addNotional + commissionCost
+					totalCost := position.Quantity*position.EntryPrice + addQty*execPrice
+					position.Quantity += addQty
+					position.EntryPrice = totalCost / position.Quantity
+					state.TradeCount++
+				}
 				continue
+			}
+			qty := signal.Qty
+			if qty <= 0 {
+				qty = r.initialBalance * 0.02 / execPrice
 			}
 			position = &Position{
 				Symbol:     symbol,
 				Side:       model.SideSell,
-				Quantity:   r.initialBalance * 0.02 / execPrice,
+				Quantity:   qty,
 				EntryPrice: execPrice,
 				EntryTime:  bar.Time,
 			}
-			cash -= position.Quantity*execPrice + commissionCost
+			notional := position.Quantity * execPrice
+			commissionCost := notional * r.commission
+			cash -= notional + commissionCost
 			state.TradeCount++
 
 		case "CLOSE":
@@ -277,8 +310,10 @@ func (r *Runner) Run(strategy BacktestStrategy) (*RunResult, error) {
 			} else {
 				position.RealizedPnL = position.Quantity * (position.EntryPrice - execPrice)
 			}
-			position.RealizedPnL -= commissionCost * 2
-			cash += position.Quantity*execPrice + position.RealizedPnL
+			closeNotional := position.Quantity * execPrice
+			closeCommission := closeNotional * r.commission
+			position.RealizedPnL -= closeCommission
+			cash += closeNotional + position.RealizedPnL
 
 			r.mu.Lock()
 			r.positions = append(r.positions, *position)
@@ -373,12 +408,25 @@ func (r *Runner) RunWithTicks(strategy BacktestStrategy) (*RunResult, error) {
 		switch signal.Direction {
 		case "LONG":
 			if position != nil && !position.IsClosed {
+				if position.Side == model.SideBuy && signal.Qty > 0 {
+					addQty := signal.Qty
+					addNotional := addQty * execPrice
+					cash -= addNotional
+					totalCost := position.Quantity*position.EntryPrice + addQty*execPrice
+					position.Quantity += addQty
+					position.EntryPrice = totalCost / position.Quantity
+					state.TradeCount++
+				}
 				continue
+			}
+			qty := signal.Qty
+			if qty <= 0 {
+				qty = r.initialBalance * 0.02 / execPrice
 			}
 			position = &Position{
 				Symbol:     symbol,
 				Side:       model.SideBuy,
-				Quantity:   r.initialBalance * 0.02 / execPrice,
+				Quantity:   qty,
 				EntryPrice: execPrice,
 				EntryTime:  tick.Timestamp,
 			}

@@ -62,10 +62,22 @@ export function StrategyCreateModal({ editing, onClose, onSaved }: StrategyCreat
   const [stopLossAmount, setStopLossAmount] = useState(editing?.stop_loss_amount || 0), [stopLossPrice, setStopLossPrice] = useState(editing?.stop_loss_price || 0)
   const [firstOrderPrice, setFirstOrderPrice] = useState(editing?.first_order_price || 0), [closeAddPosition, setCloseAddPosition] = useState(editing?.close_add_position ?? false)
 
+  // Script mode code workspace
+  const [codeWorkspace, setCodeWorkspace] = useState(editing?.strategy_code || '')
+  useEffect(() => {
+    if (editing?.strategy_code !== undefined) setCodeWorkspace(editing.strategy_code)
+  }, [editing?.strategy_code])
+
   const createMut = useMutation({ mutationFn: (data: Record<string, unknown>) => strategyApi.create(data), onSuccess: onSaved })
   const updateMut = useMutation({ mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) => strategyApi.update(id, data), onSuccess: onSaved })
 
   const handleSubmit = () => {
+    // ── Validation ──
+    if (!name.trim()) { alert('请输入策略名称'); return }
+    if (!symbol.trim()) { alert('请输入交易对'); return }
+    if (!strategyType) { alert('请选择策略类型'); return }
+    if (market !== 'spot' && (!leverage || leverage < 1)) { alert('合约策略杠杆必须≥1'); return }
+
     const config: Record<string, unknown> = {
       order_count: orderCount, first_order_amount: firstOrderAmount, add_position_spread: addPosSpread, add_position_callback: addPosCallback,
       take_profit_ratio: takeProfitRatio, profit_callback: profitCallback, trade_count_mode: tradeCountMode, open_indicator: openIndicator,
@@ -75,12 +87,26 @@ export function StrategyCreateModal({ editing, onClose, onSaved }: StrategyCreat
       online_order_limit: onlineOrderLimit, profit_protection: profitProtection, follow_trend: followTrend, follow_trend_max: followTrendMax,
       stop_loss_ratio: stopLossRatio, stop_loss_amount: stopLossAmount, stop_loss_price: stopLossPrice, first_order_price: firstOrderPrice,
       close_add_position: closeAddPosition, ...dynamicParams,
+      // ── Contract fields ──
+      market_type: market === 'spot' ? 'spot' : 'swap',
+      position_side: direction === 'long' ? 'LONG' : direction === 'short' ? 'SHORT' : 'BOTH',
+      margin_mode: 'cross', // default cross margin
+      leverage: market === 'spot' ? 1 : leverage,
     }
-    const payload = {
-      name: name || '未命名策略', symbol, timeframe, leverage: market === 'spot' ? 1 : leverage,
+    const payload: Record<string, unknown> = {
+      name: name.trim(), symbol: symbol.trim().toUpperCase(), timeframe, leverage: market === 'spot' ? 1 : leverage,
       trade_direction: market === 'spot' ? 'long' : direction, market_type: market === 'spot' ? 'spot' : 'swap',
       initial_capital: initialCapital, execution_mode: executionMode, notification_config: { channels: notifyChannels },
       strategy_type: strategyType, status: 'stopped', config_json: JSON.stringify(config),
+      category: market === 'spot' ? 'spot' : 'contract',
+      coin: symbol.trim().toUpperCase().replace('USDT', '').replace('USD', ''),
+      direction: market === 'spot' ? 'long' : direction,
+    }
+    if (mode === 'script') {
+      payload.strategy_code = codeWorkspace
+      payload.mode = 'script'
+    } else {
+      payload.mode = 'signal'
     }
     if (editing) { updateMut.mutate({ id: editing.id, data: payload }) } else { createMut.mutate(payload) }
   }
@@ -348,7 +374,7 @@ export function StrategyCreateModal({ editing, onClose, onSaved }: StrategyCreat
 
           {mode === 'script' && step === 1 && (
             <FormField label="策略代码 (Python)">
-              <textarea defaultValue={editing?.strategy_code || DEFAULT_CODE} className="w-full h-64 bg-quant-bg border border-quant-border rounded-lg p-3 font-mono text-[11px] leading-relaxed resize-none focus:outline-none focus:border-quant-gold" spellCheck={false} />
+              <textarea value={codeWorkspace} onChange={(e) => setCodeWorkspace(e.target.value)} className="w-full h-64 bg-quant-bg border border-quant-border rounded-lg p-3 font-mono text-[11px] leading-relaxed resize-none focus:outline-none focus:border-quant-gold" spellCheck={false} />
             </FormField>
           )}
 

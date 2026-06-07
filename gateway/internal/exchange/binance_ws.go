@@ -94,6 +94,7 @@ func (s *BinanceWSStream) connect() {
 		sym = strings.ToLower(sym)
 		streams = append(streams, fmt.Sprintf("%s@trade", sym))
 		streams = append(streams, fmt.Sprintf("%s@ticker", sym))
+		streams = append(streams, fmt.Sprintf("%s@markPrice@1s", sym)) // Mark price for contract positions
 	}
 	url := fmt.Sprintf("wss://stream.binance.com:9443/stream?streams=%s", strings.Join(streams, "/"))
 
@@ -225,6 +226,8 @@ func (s *BinanceWSStream) handleMessage(msg []byte) {
 		s.handleTrade(envelope.Data, envelope.Stream)
 	case strings.HasSuffix(envelope.Stream, "@ticker"):
 		s.handleTicker(envelope.Data, envelope.Stream)
+	case strings.HasSuffix(envelope.Stream, "@markPrice@1s"):
+		s.handleMarkPrice(envelope.Data, envelope.Stream)
 	}
 }
 
@@ -327,6 +330,48 @@ func (s *BinanceWSStream) handleTicker(data json.RawMessage, stream string) {
 	}
 }
 
+func (s *BinanceWSStream) handleMarkPrice(data json.RawMessage, stream string) {
+	var mark struct {
+		Symbol       string `json:"s"`
+		MarkPrice    string `json:"p"`
+		FundingRate  string `json:"r"`
+		NextFunding  int64  `json:"T"`
+	}
+	if err := json.Unmarshal(data, &mark); err != nil {
+		return
+	}
+
+	price := parseFloat(mark.MarkPrice)
+	if price <= 0 {
+		return
+	}
+
+	// Update price cache (mark price is more accurate for contract positions)
+	s.pricesMu.Lock()
+	s.prices[mark.Symbol] = price
+	s.pricesMu.Unlock()
+
+	// Publish mark price event for contract position updates
+	if s.bus != nil {
+		s.bus.Publish(event.Event{
+			Type:   event.TypeTick,
+			Symbol: mark.Symbol,
+			Data: model.Tick{
+				Symbol:    mark.Symbol,
+				Last:      price,
+				Bid:       price * 0.9999,
+				Ask:       price * 1.0001,
+				Timestamp: time.Now().UnixMilli(),
+			},
+		})
+	}
+
+	// Feed mark price to conditional engine and frontend
+	if s.onRealPrice != nil {
+		s.onRealPrice(mark.Symbol, price)
+	}
+}
+
 func (s *BinanceWSStream) keepalive() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -375,6 +420,22 @@ func (s *BinanceWSStream) SetOnRealPrice(fn func(symbol string, price float64)) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onRealPrice = fn
+}
+
+// SetOnPrice sets a generic price callback (used by conditional order engine).
+func (s *BinanceWSStream) SetOnPrice(fn func(symbol string, price float64)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Chain with existing onRealPrice if any
+	existing := s.onRealPrice
+	if existing != nil {
+		s.onRealPrice = func(symbol string, price float64) {
+			existing(symbol, price)
+			fn(symbol, price)
+		}
+	} else {
+		s.onRealPrice = fn
+	}
 }
 
 // IsRunning returns true if the stream is active.
