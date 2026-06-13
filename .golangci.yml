@@ -1,0 +1,77 @@
+# vi: ft=yaml
+
+# ── Runners ──
+run:
+  # Maximum execution time (e.g. "30s", "5m")
+  timeout = "5m"
+  # Allow parallel runners
+  allow-parallel-runners = true
+
+# ── Output ──
+output:
+  sort-results = true
+
+# ── Linters ──
+linters:
+  enable:
+    - errcheck        # Checking for unchecked errors
+    - gofmt           # Is the code properly formatted?
+    - gosimple        # Simplify code
+    - govet           # Report suspicious code patterns
+    - staticcheck     # Advanced static analysis
+    - unused          # Check for unused constants/variables/functions
+    - bodyclose       # Check HTTP response body closing
+    - misspell        # Find misspellings
+    - goimports       # Check imports formatting
+    - ineffassign     # Detect ineffective assignments
+    - unconvert       # Remove unnecessary type conversions
+
+  disable-all = true
+
+# ── Linter settings ──
+linters-settings:
+  errcheck:
+    # Report about assignment of errors to blank identifier
+    report-no-validated-errors = false
+
+  govet:
+    enable-all = true
+    disable:
+      - fieldalignment  # Too aggressive
+
+  gofmt:
+    # Simplify: simplify code (goimports does this too)
+    simplify = true
+
+  misspell:
+    locale = "US"
+
+  staticcheck:
+    # Use all staticcheck rules
+    checks = ["all"]
+
+  unused:
+    # Consider types, fields, variables, etc.
+    export-tags = true
+
+  # ── Issues ──
+issues:
+  # Maximum count of issues with the same text (0 = unlimited)
+  max-same-issues = 0
+  max-issues-per-linter = 0
+
+  # Default excluded paths (don't lint vendor, tests with _test suffix is fine)
+  exclude-generated = "strict"
+
+  exclude:
+    - "Error return value of .((os\\.)?std(out|err)\\..*|.*Close|.*Flush|os\\.Remove(All)?|.*Print(f|ln)?|os\\.(Un)?Setenv). is not checked"
+
+  exclude-rules:
+    # Allow using fmt in tests
+    - path: _test\.go
+      linters:
+        - unused
+    # Allow _ in test functions
+    - path: _test\.go
+      linters:
+        - errcheck

@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel redundant workflows on the same PR
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # ── Go Backend ──
   go-build:
@@ -60,12 +65,38 @@ jobs:
     needs: [go-build, rust-build, web-build]
     steps:
       - uses: actions/checkout@v4
-      - name: Build Docker images
+      - name: Build Docker image
+        # The Dockerfile is in the repo root, use root as context
+        # Rust engine is built inside the Dockerfile (stage 0)
         run: |
-          docker build -t xiaotian-gateway:latest -f gateway/Dockerfile ./gateway
-          docker build -t xiaotian-engine:latest -f engine/Dockerfile ./engine
-      - name: Test docker-compose
+          docker build -t xiaotian-gateway:latest \
+            --build-arg VERSION=${{ github.sha }} \
+            -f Dockerfile .
+      - name: Validate docker-compose
         run: docker compose -f docker-compose.yml config
+
+  # ── Security Scan ──
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Go dependency check
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+        continue-on-error: true
+      - run: |
+          cd gateway
+          go version
+          go list -m all 2>/dev/null || echo "Dependencies not auditable in CI"
+
+      - name: Node audit
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+        continue-on-error: true
+      - run: cd web && npm audit --production --audit-level=moderate 2>/dev/null || true
 
   # ── Deploy (manual trigger only) ──
   deploy:

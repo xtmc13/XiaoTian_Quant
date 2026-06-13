@@ -6,6 +6,8 @@ pub mod ffi;
 mod ffi_test;
 #[cfg(test)]
 mod lib_test;
+#[cfg(test)]
+mod orderbook_test;
 
 pub use orderbook::*;
 pub use matching::*;

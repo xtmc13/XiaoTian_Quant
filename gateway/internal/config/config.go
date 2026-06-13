@@ -113,6 +113,52 @@ type CacheConfig struct {
 	RedisURL string `yaml:"redis_url"`
 }
 
+// expandEnvVars replaces ${VAR} and $VAR in all string values of the parsed config,
+// falling back to os.Getenv, then leaving the placeholder untouched.
+// This allows config.yaml to reference environment variables like:
+//   api_key: "${BINANCE_API_KEY}"
+func expandEnvVars(raw map[string]any) {
+	expandMap(raw)
+}
+
+func expandMap(m map[string]any) {
+	for k, v := range m {
+		switch val := v.(type) {
+		case string:
+			m[k] = expandString(val)
+		case map[string]any:
+			expandMap(val)
+		case []any:
+			expandSlice(val)
+		}
+	}
+}
+
+func expandSlice(s []any) {
+	for i, v := range s {
+		switch val := v.(type) {
+		case string:
+			s[i] = expandString(val)
+		case map[string]any:
+			expandMap(val)
+		case []any:
+			expandSlice(val)
+		}
+	}
+}
+
+func expandString(s string) string {
+	// Replace ${VAR_NAME} patterns
+	expanded := os.Expand(s, func(key string) string {
+		if v := os.Getenv(key); v != "" {
+			return v
+		}
+		// If env var is not set, return the original placeholder
+		return "${" + key + "}"
+	})
+	return expanded
+}
+
 var (
 	global *Config
 	mu     sync.RWMutex
@@ -240,6 +286,15 @@ func Load(path string) (*Config, error) {
 	if path != "" {
 		data, err := os.ReadFile(path)
 		if err == nil {
+			// First decode raw into map[string]any to expand ${VAR} placeholders
+			var raw map[string]any
+			if yamlErr := yaml.Unmarshal(data, &raw); yamlErr == nil {
+				expandEnvVars(raw)
+				// Re-marshal expanded map back to YAML bytes for struct decoding
+				if expandedData, yamlMarshalErr := yaml.Marshal(raw); yamlMarshalErr == nil {
+					data = expandedData
+				}
+			}
 			if err := yaml.Unmarshal(data, cfg); err != nil {
 				return nil, err
 			}
