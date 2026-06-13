@@ -1,6 +1,7 @@
 import React, { useMemo, useState, useCallback } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { strategyApi } from '@/lib/api'
+import { toast } from '@/lib/useToast'
 import type { StrategyItem } from '@/types'
 import {
   Grid3X3,
@@ -194,7 +195,7 @@ export function useBotData() {
   const handleDeleteBot = useCallback(
     async (bot: BotItem) => {
       if (bot.status === 'running') {
-        alert('请先停止机器人再删除')
+        toast('info', '请先停止机器人再删除')
         return
       }
       if (!confirm(`确定删除机器人 "${bot.name || bot.strategy_name}" 吗？`)) return
@@ -202,7 +203,7 @@ export function useBotData() {
         await strategyApi.delete(bot.id)
         queryClient.invalidateQueries({ queryKey: ['strategies'] })
       } catch {
-        alert('删除失败')
+        toast('error', '删除失败')
       }
     },
     [queryClient]
@@ -211,7 +212,7 @@ export function useBotData() {
   const handleCloneBot = useCallback(
     async (bot: BotItem) => {
       if (!bot.strategy_code) {
-        alert('该机器人没有可克隆的策略代码')
+        toast('info', '该机器人没有可克隆的策略代码')
         return
       }
       if (!confirm(`克隆机器人 "${bot.name || bot.strategy_name}" 为脚本策略？`)) return
@@ -231,7 +232,7 @@ export function useBotData() {
         })
         queryClient.invalidateQueries({ queryKey: ['strategies'] })
       } catch {
-        alert('克隆失败')
+        toast('error', '克隆失败')
       }
     },
     [queryClient]

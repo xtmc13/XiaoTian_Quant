@@ -49,13 +49,16 @@ export function AI() {
   const [heatmapType, setHeatmapType] = useState<HeatmapType>('us_stocks')
 
   /* -- Watchlist states -- */
-  const [watchlist, setWatchlist] = useState<WatchlistItem[]>([
-    { market: 'USStock', symbol: 'AAPL', name: 'Apple Inc.' },
-    { market: 'USStock', symbol: 'NVDA', name: 'NVIDIA Corp.' },
-    { market: 'USStock', symbol: 'TSLA', name: 'Tesla Inc.' },
-    { market: 'Crypto', symbol: 'BTC/USDT', name: 'Bitcoin' },
-    { market: 'Crypto', symbol: 'ETH/USDT', name: 'Ethereum' },
-  ])
+  const [watchlist, setWatchlist] = useState<WatchlistItem[]>(() => {
+    try {
+      const raw = localStorage.getItem('ai-watchlist')
+      if (raw) {
+        const parsed = JSON.parse(raw)
+        if (Array.isArray(parsed)) return parsed
+      }
+    } catch { /* ignore corrupt data */ }
+    return []
+  })
   const [watchlistPrices, setWatchlistPrices] = useState<Record<string, WatchlistPrice>>({})
   const [positionSummaryMap, setPositionSummaryMap] = useState<Record<string, PositionSummary>>({}) // eslint-disable-line @typescript-eslint/no-unused-vars
   const [selectedSymbol, setSelectedSymbol] = useState<string | undefined>(undefined)
@@ -208,6 +211,13 @@ export function AI() {
     const interval = setInterval(loadWatchlistPrices, 30000)
     return () => clearInterval(interval)
   }, [loadWatchlistPrices])
+
+  // Persist watchlist to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('ai-watchlist', JSON.stringify(watchlist))
+    } catch { /* ignore storage errors */ }
+  }, [watchlist])
 
   const handleSymbolChange = useCallback((value: string) => {
     setSelectedSymbol(value)
