@@ -248,12 +248,22 @@ function MLStatusCard({ health, models, isLoading }: { health?: { status: string
 }
 
 /* ── Setup Guide Card ── */
-function SetupGuideCard({ onDismiss }: { onDismiss: () => void }) {
+function SetupGuideCard({
+  onDismiss,
+  hasExchanges,
+  hasStrategies,
+  hasRunningStrategies,
+}: {
+  onDismiss: () => void
+  hasExchanges: boolean
+  hasStrategies: boolean
+  hasRunningStrategies: boolean
+}) {
   const navigate = useNavigate()
   const steps = [
-    { label: '连接交易所', done: false, action: '去设置' },
-    { label: '创建首个策略', done: false, action: '创建' },
-    { label: '启动自动交易', done: false, action: '启动' },
+    { label: '连接交易所', done: hasExchanges, action: '去设置' },
+    { label: '创建首个策略', done: hasStrategies, action: '创建' },
+    { label: '启动自动交易', done: hasRunningStrategies, action: '启动' },
   ]
   const completed = steps.filter((s) => s.done).length
 
@@ -821,7 +831,12 @@ export function Dashboard() {
       <div className="mx-auto max-w-[1600px] space-y-5">
         {/* ── Setup Guide (for new users) ── */}
         {showGuide && runningStrats.length === 0 && !stratLoading && (
-          <SetupGuideCard onDismiss={handleDismissGuide} />
+          <SetupGuideCard
+            onDismiss={handleDismissGuide}
+            hasExchanges={portfolio?.exchanges?.some((e) => e.connected) ?? false}
+            hasStrategies={(strategies?.length ?? 0) > 0}
+            hasRunningStrategies={runningStrats.length > 0}
+          />
         )}
 
         {/* ── KPI Grid: 6 cards in a row ── */}
@@ -1103,11 +1118,6 @@ export function Dashboard() {
               </div>
             </SectionCard>
 
-            <SectionCard title="权益曲线">
-              <div className="h-[280px]">
-                <EquityChart data={dash?.equity_curve} isLoading={dashLoading} />
-              </div>
-            </SectionCard>
           </div>
 
           {/* Right: Running Strategies + Ranking */}

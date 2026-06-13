@@ -6,22 +6,6 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/model"
 )
 
-/* ── Helpers ─────────────────────────────────────────────────── */
-
-func btAssert(t *testing.T, cond bool, msg string) {
-	t.Helper()
-	if !cond {
-		t.Fatal(msg)
-	}
-}
-
-func btAssertEq[T comparable](t *testing.T, got, want T, msg string) {
-	t.Helper()
-	if got != want {
-		t.Fatalf("%s: got %v, want %v", msg, got, want)
-	}
-}
-
 /* ── Adapter Creation Tests ──────────────────────────────────── */
 
 func TestBybitAdapterName(t *testing.T) {

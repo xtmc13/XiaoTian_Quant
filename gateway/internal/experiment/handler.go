@@ -2,6 +2,7 @@ package experiment
 
 import (
 	"net/http"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/backtest"
@@ -42,6 +43,10 @@ func RunExperimentHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
 	}
+
+	// Save result so ExperimentStatusHandler can query it
+	result.Status = "completed"
+	SetExperimentState(result.ExperimentID, result)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success":     true,
@@ -107,15 +112,40 @@ func SensitivityAnalysisHandler(c *gin.Context) {
 	})
 }
 
+// experimentStates tracks running/completed experiments with results.
+var experimentStates = make(map[string]*ExperimentResult)
+var experimentStatesMu sync.RWMutex
+
+// SetExperimentState records an experiment state for status queries.
+func SetExperimentState(id string, result *ExperimentResult) {
+	experimentStatesMu.Lock()
+	defer experimentStatesMu.Unlock()
+	experimentStates[id] = result
+}
+
 // ExperimentStatusHandler godoc
 // GET /api/experiment/status/:id
-// Returns the status of a running experiment (placeholder for async execution).
+// Returns the status of an experiment, whether still running or completed.
 func ExperimentStatusHandler(c *gin.Context) {
 	id := c.Param("id")
+
+	experimentStatesMu.RLock()
+	result, exists := experimentStates[id]
+	experimentStatesMu.RUnlock()
+
+	if !exists {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"result":  gin.H{"experiment_id": id, "status": "not_found"},
+			"data":    gin.H{"experiment_id": id, "status": "not_found"},
+		})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"result":  gin.H{"experiment_id": id, "status": "completed"},
-		"data":    gin.H{"experiment_id": id, "status": "completed"},
+		"result":  result,
+		"data":    result,
 	})
 }
 

@@ -21,6 +21,21 @@ export const TRADING_PRECISION: Record<string, TradingPrecision> = {
   BCHUSDT: { price: 2, quantity: 4 },
 }
 
+/** Dynamic precision overrides — updated at runtime from exchange info API. */
+const dynamicPrecision: Record<string, TradingPrecision> = {}
+
+/** Register precision info for a symbol, typically from exchange API response. */
+export function registerPrecision(symbol: string, price: number, quantity: number) {
+  dynamicPrecision[symbol] = { price, quantity }
+}
+
+/** Register multiple precision entries at once. */
+export function registerPrecisionMap(map: Record<string, TradingPrecision>) {
+  for (const [sym, prec] of Object.entries(map)) {
+    dynamicPrecision[sym] = prec
+  }
+}
+
 export function getPrecision(symbol: string): TradingPrecision {
-  return TRADING_PRECISION[symbol] || { price: 2, quantity: 4 }
+  return dynamicPrecision[symbol] || TRADING_PRECISION[symbol] || { price: 2, quantity: 4 }
 }

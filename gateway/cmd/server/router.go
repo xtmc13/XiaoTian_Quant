@@ -43,6 +43,7 @@ func setupRoutes(r *gin.Engine, cfg *serverConfig) *gin.Engine {
 	{
 		registerAuthRoutes(api)
 		registerOAuthRoutes(api)
+		registerHealthRoutes(api)
 		registerBillingRoutes(api)
 		registerUserRoutes(api)
 		registerAdminRoutes(api)
@@ -118,7 +119,6 @@ func registerAuthRoutes(api *gin.RouterGroup) {
 		auth.POST("/reset-password", handler.ResetPassword)
 		auth.GET("/me", middleware.AuthRequired(), handler.GetMe)
 		auth.POST("/refresh", middleware.AuthRequired(), handler.RefreshToken)
-		auth.GET("/admin/users", middleware.AdminRequired(), handler.ListUsers)
 	}
 }
 
@@ -161,6 +161,7 @@ func registerAdminRoutes(api *gin.RouterGroup) {
 		adminG.GET("/activity", handler.AdminRecentActivity)
 		adminG.POST("/users/:id/disable", handler.AdminUserDisable)
 		adminG.POST("/users/:id/enable", handler.AdminUserEnable)
+		adminG.POST("/config/reload", handler.ReloadConfig)
 	}
 }
 
@@ -342,6 +343,7 @@ func registerPairlistRoutes(api *gin.RouterGroup) {
 	private.Use(middleware.AuthRequired())
 	private.GET("/pairlist/whitelist", handler.GetPairlistWhitelist)
 	private.POST("/pairlist/refresh", handler.RefreshPairlist)
+	private.GET("/pairlist/refresh", handler.RefreshPairlist)
 	private.GET("/pairlist/config", handler.GetPairlistConfig)
 	private.POST("/pairlist/config", handler.ConfigurePairlist)
 }
@@ -350,6 +352,7 @@ func registerProtectionRoutes(api *gin.RouterGroup) {
 	private := api.Group("")
 	private.Use(middleware.AuthRequired())
 	private.GET("/protection/status", handler.GetProtectionStatus)
+	private.GET("/protection/config", handler.GetProtectionConfig)
 	private.POST("/protection/config", handler.ConfigureProtection)
 	private.POST("/protection/reset", handler.ResetProtection)
 	private.POST("/protection/trade", handler.RecordTrade)
@@ -475,6 +478,11 @@ func registerDashboardRoutes(api *gin.RouterGroup) {
 	private := api.Group("")
 	private.Use(middleware.AuthRequired())
 	private.GET("/dashboard/summary", handler.DashboardSummary)
+}
+
+func registerHealthRoutes(api *gin.RouterGroup) {
+	api.GET("/health", handler.HealthCheck)
+	api.GET("/health/components", handler.ComponentHealth)
 }
 
 func registerIndicatorRoutes(api *gin.RouterGroup) {

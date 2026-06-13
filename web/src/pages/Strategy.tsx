@@ -7,12 +7,12 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { SectionCard } from '@/components/ui/SectionCard'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { toast } from '@/lib/useToast'
-import type { MLModelInfo } from '@/types'
+import type { MLModelInfo, AIModel } from '@/types'
 import {
   Play, Pause, FlaskConical, Code, Bot, MessageSquare,
   LayoutDashboard, FolderOpen, Plus, Trash2, Activity, TrendingUp,
   Send, Cpu, Sparkles, BarChart3, X, Zap, Layers,
-  Copy, RotateCcw, BrainCircuit, Vote, Gauge,
+  Copy, RotateCcw, BrainCircuit, Vote, Gauge, Settings,
   ChevronRight as ChevronRightIcon,
 } from 'lucide-react'
 import { useStrategyData } from '@/hooks/useStrategyData'
@@ -39,12 +39,10 @@ const TABS = [
   { key: 'dinger', label: 'AI 策略生成器', icon: MessageSquare },
 ] as const
 
-const MODELS = [
+// Fallback AI models when API is unavailable
+const FALLBACK_MODELS = [
   { id: 'gpt-4o', name: 'GPT-4o', color: 'text-green-400' },
   { id: 'claude-3.5', name: 'Claude-3.5', color: 'text-orange-400' },
-  { id: 'deepseek', name: 'DeepSeek', color: 'text-blue-400' },
-  { id: 'gemini', name: 'Gemini', color: 'text-purple-400' },
-  { id: 'grok', name: 'Grok', color: 'text-red-400' },
 ]
 
 /* ─── Helpers ─── */
@@ -404,6 +402,31 @@ function AIStrategyGeneratorTab() {
   const [generating, setGenerating] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
 
+  // Backtest config state (replaces hardcoded values)
+  const [btSymbol, setBtSymbol] = useState('BTCUSDT')
+  const [btInterval, setBtInterval] = useState('1h')
+  const [btBalance, setBtBalance] = useState(10000)
+  const [showBtConfig, setShowBtConfig] = useState(false)
+
+  // Fetch available AI models from backend
+  const { data: aiModels } = useQuery({
+    queryKey: ['ai-models'],
+    queryFn: () => aiApi.models(),
+    staleTime: 300_000,
+    retry: 1,
+  })
+
+  const availableModels = useMemo(() => {
+    if (aiModels && aiModels.length > 0) {
+      return (aiModels as AIModel[]).map((m: AIModel) => ({
+        id: m.id,
+        name: m.name || m.id,
+        color: m.provider === 'openai' ? 'text-green-400' : m.provider === 'anthropic' ? 'text-orange-400' : 'text-blue-400',
+      }))
+    }
+    return FALLBACK_MODELS
+  }, [aiModels])
+
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }) }, [messages])
 
   const handleSend = async () => {
@@ -444,10 +467,11 @@ function AIStrategyGeneratorTab() {
     setBacktestLoading(true)
     try {
       const res = await backtestApi.run({
-        symbol: 'BTCUSDT',
-        interval: '1h',
-        strategy_type: 'sma_cross',
-        initial_balance: { USDT: 10000 },
+        symbol: btSymbol,
+        interval: btInterval,
+        strategy_type: 'script',
+        script_code: codeWorkspace,
+        initial_balance: { USDT: btBalance },
         from: new Date(Date.now() - 90 * 86400000).toISOString().split('T')[0],
         to: new Date().toISOString().split('T')[0],
       })
@@ -486,10 +510,10 @@ function AIStrategyGeneratorTab() {
         strategy_type: 'ScriptStrategy',
         strategy_mode: 'script',
         strategy_code: codeWorkspace,
-        symbol: 'BTCUSDT',
+        symbol: btSymbol,
         market_category: 'crypto',
         execution_mode: 'signal',
-        trading_config: { initial_capital: 10000 },
+        trading_config: { initial_capital: btBalance },
       })
       toast('success', `策略 "${strategyName}" 已创建！请前往「策略管理」标签页启动。`)
     } catch (e: unknown) {
@@ -507,7 +531,7 @@ function AIStrategyGeneratorTab() {
         </div>
         <div className="flex items-center gap-3">
           <select value={model} onChange={(e) => setModel(e.target.value)} className="bg-quant-bg border border-quant-border rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-quant-gold">
-            {MODELS.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+            {availableModels.map((m: {id: string; name: string; color: string}) => <option key={m.id} value={m.id}>{m.name}</option>)}
           </select>
           <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
             <input type="checkbox" checked={voting} onChange={(e) => setVoting(e.target.checked)} className="rounded border-quant-border" />
@@ -596,6 +620,9 @@ function AIStrategyGeneratorTab() {
           </SectionCard>
 
           <div className="flex gap-2 shrink-0">
+            <button onClick={() => setShowBtConfig(!showBtConfig)} className={cn("px-3 py-2.5 rounded-lg text-xs font-medium flex items-center gap-1.5 border transition-colors", showBtConfig ? "bg-quant-gold/10 text-quant-gold border-quant-gold/20" : "bg-quant-bg-secondary border-quant-border text-muted-foreground hover:text-foreground")}>
+              <Settings className="w-3.5 h-3.5" /> 回测配置
+            </button>
             <button onClick={handleBacktest} disabled={backtestLoading || !codeWorkspace.trim()} className={cn("flex-1 py-2.5 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5 transition-colors", backtestLoading ? "bg-quant-gold/30 text-quant-gold cursor-wait" : "bg-quant-gold/10 text-quant-gold border border-quant-gold/20 hover:bg-quant-gold/20")}>
               <BarChart3 className="w-3.5 h-3.5" /> {backtestLoading ? '回测中...' : '回测'}
             </button>
@@ -603,6 +630,24 @@ function AIStrategyGeneratorTab() {
               <Play className="w-3.5 h-3.5" /> 部署
             </button>
           </div>
+          {showBtConfig && (
+            <div className="grid grid-cols-3 gap-3 p-3 bg-quant-bg border border-quant-border rounded-lg shrink-0">
+              <div>
+                <label className="text-[10px] text-muted-foreground mb-1 block">交易对</label>
+                <input value={btSymbol} onChange={(e) => setBtSymbol(e.target.value.toUpperCase())} className="w-full bg-quant-bg-secondary border border-quant-border rounded px-2 py-1 text-xs focus:outline-none focus:border-quant-gold" placeholder="BTCUSDT" />
+              </div>
+              <div>
+                <label className="text-[10px] text-muted-foreground mb-1 block">周期</label>
+                <select value={btInterval} onChange={(e) => setBtInterval(e.target.value)} className="w-full bg-quant-bg-secondary border border-quant-border rounded px-2 py-1 text-xs focus:outline-none focus:border-quant-gold">
+                  {['1m','5m','15m','30m','1h','4h','1d'].map(i => <option key={i} value={i}>{i}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-[10px] text-muted-foreground mb-1 block">初始资金</label>
+                <input type="number" value={btBalance} onChange={(e) => setBtBalance(Number(e.target.value))} className="w-full bg-quant-bg-secondary border border-quant-border rounded px-2 py-1 text-xs focus:outline-none focus:border-quant-gold" />
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

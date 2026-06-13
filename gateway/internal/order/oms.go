@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/xiaotian-quant/gateway/internal/model"
+	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
 // ── Order Status State Machine ──
@@ -350,6 +351,38 @@ func (om *OrderManager) storeOrder(order *model.OrderData) {
 	// Make a copy
 	copy_ := *order
 	om.orders[order.ID] = &copy_
+
+	// Persist to database via OrderRepo (upsert pattern)
+	rec := &store.OrderRecord{
+		ID:            copy_.ID,
+		Symbol:        copy_.Symbol,
+		Side:          string(copy_.Side),
+		OrderType:     string(copy_.OrderType),
+		Price:         copy_.Price,
+		StopPrice:     copy_.StopPrice,
+		Quantity:      copy_.Quantity,
+		Filled:        copy_.Filled,
+		Status:        string(copy_.Status),
+		Exchange:      copy_.Exchange,
+		UserID:        copy_.UserID,
+		ClientOID:     copy_.ClientOID,
+		AvgFillPrice:  copy_.AvgFillPrice,
+		CreatedAt:     copy_.CreatedAt,
+		UpdatedAt:     copy_.UpdatedAt,
+		MarketType:    string(copy_.MarketType),
+		PositionSide:  string(copy_.PositionSide),
+		Leverage:      copy_.Leverage,
+		MarginMode:    string(copy_.MarginMode),
+		TPPrice:       copy_.TPPrice,
+		SLPrice:       copy_.SLPrice,
+		ClosePosition: copy_.ClosePosition,
+	}
+
+	// Try update first (for state transitions), fall back to create (first write)
+	if err := store.GetOrderRepo().Update(rec); err != nil {
+		// If not found, create it
+		_ = store.GetOrderRepo().Create(rec)
+	}
 }
 
 func (om *OrderManager) generateID() string {

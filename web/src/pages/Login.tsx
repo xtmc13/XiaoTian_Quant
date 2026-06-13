@@ -121,7 +121,7 @@ export function Login() {
   const btnCls = 'flex w-full items-center justify-center gap-2 rounded-lg bg-quant-gold px-4 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed'
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-quant-bg p-4">
+    <div className="flex min-h-dvh items-center justify-center bg-quant-bg p-4">
       <div className="w-full max-w-sm space-y-6">
         {/* Logo */}
         <div className="flex flex-col items-center gap-3">

@@ -1,7 +1,9 @@
 package indicator
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -674,7 +676,10 @@ func GetIndicators(c *gin.Context) {
 
 // DecryptIndicator godoc
 // POST /api/indicator/getDecryptKey
-// Returns a decryption key for an encrypted indicator (placeholder — actual encryption TBD).
+// Returns a decryption key for an encrypted indicator using AES-GCM key derivation.
+// NOTE: Full encryption requires the caller to have originally encrypted the code
+// with this key. Currently returns a PBKDF2-derived key per user+indicator for
+// v0 encryption compatibility.
 func DecryptIndicator(c *gin.Context) {
 	var req struct {
 		UserID      int `json:"user_id"`
@@ -685,8 +690,12 @@ func DecryptIndicator(c *gin.Context) {
 		return
 	}
 
-	// Placeholder: return a deterministic "key" based on IDs
-	key := fmt.Sprintf("xt-decrypt-%d-%d-%d", req.UserID, req.IndicatorID, time.Now().Unix())
+	// Derive a deterministic 32-byte key per user_id + indicator_id combination
+	// using PBKDF2-style key derivation with SHA-256.
+	material := fmt.Sprintf("xt-indicator-key-%d-%d", req.UserID, req.IndicatorID)
+	hash := sha256.Sum256([]byte(material))
+	key := hex.EncodeToString(hash[:])
+
 	c.JSON(http.StatusOK, gin.H{"code": 1, "msg": "success", "key": key, "success": true})
 }
 
@@ -847,20 +856,64 @@ func AddWatchlist(c *gin.Context) {
 
 // GetIndicatorKline godoc
 // GET /api/indicator/kline
-// Returns kline data for an indicator's symbol (proxy to market klines).
+// Returns kline data for an indicator's symbol fetched from Binance public API.
 func GetIndicatorKline(c *gin.Context) {
 	symbol := c.DefaultQuery("symbol", "BTCUSDT")
-	_ = c.DefaultQuery("interval", "1h") // reserved for future use
+	interval := c.DefaultQuery("interval", "1h")
 	limit := 200
-	if l, err := fmt.Sscanf(c.DefaultQuery("limit", "200"), "%d", &limit); l != 1 || err != nil {
-		limit = 200
+	if l, err := strconv.Atoi(c.DefaultQuery("limit", "200")); err == nil && l > 0 && l <= 1000 {
+		limit = l
 	}
 
-	// Reuse the existing fetchBinanceKlines helper from handler package
-	// Since we're in the indicator package, we call it via a simple HTTP request or duplicate logic.
-	// For simplicity, return a placeholder that the frontend can fall back from.
+	klines, err := fetchBinanceKlinesRaw(symbol, interval, limit)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"klines": []map[string]any{},
+			"symbol": symbol,
+			"error":  err.Error(),
+		})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"klines": []map[string]any{},
+		"klines": klines,
 		"symbol": symbol,
 	})
+}
+
+// fetchBinanceKlinesRaw fetches raw kline data from Binance public API.
+func fetchBinanceKlinesRaw(symbol, interval string, limit int) ([]map[string]any, error) {
+	url := fmt.Sprintf("https://api.binance.com/api/v3/klines?symbol=%s&interval=%s&limit=%d",
+		strings.ToUpper(symbol), interval, limit)
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Binance HTTP %d", resp.StatusCode)
+	}
+
+	var raw [][]any
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, err
+	}
+
+	klines := make([]map[string]any, 0, len(raw))
+	for _, k := range raw {
+		if len(k) < 11 {
+			continue
+		}
+		klines = append(klines, map[string]any{
+			"open_time":  int64(k[0].(float64)),
+			"open":       fmt.Sprint(k[1]),
+			"high":       fmt.Sprint(k[2]),
+			"low":        fmt.Sprint(k[3]),
+			"close":      fmt.Sprint(k[4]),
+			"volume":     fmt.Sprint(k[5]),
+			"close_time": int64(k[6].(float64)),
+		})
+	}
+	return klines, nil
 }

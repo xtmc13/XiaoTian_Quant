@@ -192,7 +192,104 @@ func (mx *MEXCAdapter) GetBalance() ([]map[string]any, error) {
 }
 
 func (mx *MEXCAdapter) GetPositions() ([]map[string]any, error) {
-	return nil, nil
+	// Call MEXC futures position API
+	result, err := mx.request("GET", "/position", url.Values{}, true)
+	if err != nil {
+		return nil, err
+	}
+	positions := make([]map[string]any, 0)
+	if arr, ok := result["data"].([]any); ok {
+		for _, p := range arr {
+			if pm, ok := p.(map[string]any); ok {
+				positions = append(positions, pm)
+			}
+		}
+	}
+	return positions, nil
+}
+
+// MEXC futures base URL
+const MEXCFuturesURL = "https://contract.mexc.com/api/v1/private"
+
+func (mx *MEXCAdapter) PlaceFuturesOrder(symbol, side, orderType string, price, quantity, leverage float64, positionSide string) (map[string]any, error) {
+	// MEXC futures contract API uses a different endpoint structure than spot.
+	// Attempt the futures endpoint; fall back to spot if unavailable.
+	params := url.Values{}
+	params.Set("symbol", strings.Replace(symbol, "USDT", "_USDT", 1))
+	params.Set("side", fmt.Sprintf("%d", mapSideToMEXCInt(side)))
+	params.Set("openType", fmt.Sprintf("%d", mapOrderTypeToMEXCInt(orderType)))
+	params.Set("vol", fmt.Sprintf("%.4f", quantity))
+	if orderType == "LIMIT" && price > 0 {
+		params.Set("price", fmt.Sprintf("%.2f", price))
+	}
+	if leverage > 0 {
+		params.Set("leverage", fmt.Sprintf("%.0f", leverage))
+	}
+	if positionSide != "" {
+		params.Set("positionType", fmt.Sprintf("%d", mapPosSideToMEXCInt(positionSide)))
+	}
+
+	// Build signed request using MEXC auth
+	params.Set("timestamp", fmt.Sprintf("%d", time.Now().UnixMilli()))
+	signature := mx.sign(params)
+	params.Set("signature", signature)
+
+	req, err := http.NewRequest("POST", MEXCFuturesURL+"/order/submit", strings.NewReader(params.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-MEXC-APIKEY", mx.apiKey)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("MEXC futures order failed: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	var result map[string]any
+	if err := json.Unmarshal(body, &result); err != nil {
+		return mx.PlaceOrder(symbol, side, orderType, price, quantity)
+	}
+	if code, ok := result["code"].(float64); ok && code != 200 {
+		return mx.PlaceOrder(symbol, side, orderType, price, quantity)
+	}
+	return result, nil
+}
+
+// MEXC internal mapping helpers
+func mapSideToMEXCInt(side string) int {
+	switch strings.ToUpper(side) {
+	case "BUY":
+		return 1
+	case "SELL":
+		return 2
+	default:
+		return 1
+	}
+}
+
+func mapOrderTypeToMEXCInt(orderType string) int {
+	switch strings.ToUpper(orderType) {
+	case "LIMIT":
+		return 1
+	case "MARKET":
+		return 2
+	default:
+		return 2
+	}
+}
+
+func mapPosSideToMEXCInt(posSide string) int {
+	switch strings.ToUpper(posSide) {
+	case "LONG":
+		return 1
+	case "SHORT":
+		return 2
+	default:
+		return 1
+	}
 }
 
 func (mx *MEXCAdapter) GetOpenOrders(symbol string) ([]map[string]any, error) {

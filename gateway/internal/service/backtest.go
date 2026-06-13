@@ -36,6 +36,7 @@ type BacktestResult struct {
 	TotalTrades     int                  `json:"total_trades"`
 	EquityCurve     []map[string]float64 `json:"equity_curve"`
 	Trades          []map[string]any     `json:"trades"`
+	Simulated       bool                 `json:"simulated"` // true if using generated data (no real klines)
 }
 
 var (
@@ -75,13 +76,15 @@ func (bs *BacktestService) Run(config BacktestConfig, klines []map[string]any) *
 	// Use provided klines or generate simulated prices
 	prices := make([]float64, config.NumBars)
 	times := make([]int64, config.NumBars)
+	simulated := false
 	if len(klines) >= config.NumBars {
 		for i, k := range klines[:config.NumBars] {
 			prices[i] = k["close"].(float64)
 			times[i] = int64(time.Now().UnixMilli()) - int64((config.NumBars-i)*60000)
 		}
 	} else {
-		// Generate random walk
+		// Generate linear drift as visual placeholder (results will be marked as simulated)
+		simulated = true
 		basePrice := 68000.0
 		for i := 0; i < config.NumBars; i++ {
 			drift := float64(i) * basePrice * 0.00005
@@ -225,6 +228,7 @@ func (bs *BacktestService) Run(config BacktestConfig, klines []map[string]any) *
 		TotalTrades:     sellTrades,
 		EquityCurve:     equityCurve,
 		Trades:          trades,
+		Simulated:       simulated,
 	}
 }
 

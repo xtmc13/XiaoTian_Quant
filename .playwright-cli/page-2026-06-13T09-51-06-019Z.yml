@@ -1,0 +1,413 @@
+- generic [ref=e5]:
+  - complementary [ref=e7]:
+    - link "小 小天量化" [ref=e9] [cursor=pointer]:
+      - /url: /
+      - generic [ref=e10]: 小
+      - generic [ref=e11]: 小天量化
+    - navigation [ref=e12]:
+      - link "仪表盘" [ref=e13] [cursor=pointer]:
+        - /url: /dashboard
+        - img [ref=e14]
+        - generic [ref=e16]: 仪表盘
+      - button "交易" [active] [ref=e18] [cursor=pointer]:
+        - img [ref=e19]
+        - generic [ref=e22]: 交易
+        - img [ref=e23]
+      - link "策略" [ref=e25] [cursor=pointer]:
+        - /url: /strategy
+        - img [ref=e26]
+        - generic [ref=e29]: 策略
+      - link "指标IDE" [ref=e30] [cursor=pointer]:
+        - /url: /indicator-ide
+        - img [ref=e31]
+        - generic [ref=e35]: 指标IDE
+      - link "AI研究" [ref=e36] [cursor=pointer]:
+        - /url: /ai
+        - img [ref=e37]
+        - generic [ref=e40]: AI研究
+      - link "回测" [ref=e41] [cursor=pointer]:
+        - /url: /backtest
+        - img [ref=e42]
+        - generic [ref=e44]: 回测
+      - link "机器人" [ref=e45] [cursor=pointer]:
+        - /url: /bots
+        - img [ref=e46]
+        - generic [ref=e49]: 机器人
+      - link "ML模型" [ref=e50] [cursor=pointer]:
+        - /url: /model-management
+        - img [ref=e51]
+        - generic [ref=e63]: ML模型
+      - link "风控中心" [ref=e64] [cursor=pointer]:
+        - /url: /risk-control
+        - img [ref=e65]
+        - generic [ref=e67]: 风控中心
+      - link "交易对筛选" [ref=e68] [cursor=pointer]:
+        - /url: /pairlist
+        - img [ref=e69]
+        - generic [ref=e70]: 交易对筛选
+      - link "高级订单" [ref=e71] [cursor=pointer]:
+        - /url: /advanced-orders
+        - img [ref=e72]
+        - generic [ref=e75]: 高级订单
+      - link "套利监控" [ref=e76] [cursor=pointer]:
+        - /url: /arbitrage
+        - img [ref=e77]
+        - generic [ref=e80]: 套利监控
+      - link "参数优化" [ref=e81] [cursor=pointer]:
+        - /url: /hyperopt
+        - img [ref=e82]
+        - generic [ref=e85]: 参数优化
+      - link "社交交易" [ref=e86] [cursor=pointer]:
+        - /url: /social-trading
+        - img [ref=e87]
+        - generic [ref=e93]: 社交交易
+      - link "链上数据" [ref=e94] [cursor=pointer]:
+        - /url: /onchain
+        - img [ref=e95]
+        - generic [ref=e98]: 链上数据
+      - link "账户" [ref=e99] [cursor=pointer]:
+        - /url: /exchange-account
+        - img [ref=e100]
+        - generic [ref=e103]: 账户
+      - link "指标市场" [ref=e104] [cursor=pointer]:
+        - /url: /indicator-community
+        - img [ref=e105]
+        - generic [ref=e108]: 指标市场
+      - link "作者后台" [ref=e109] [cursor=pointer]:
+        - /url: /author-dashboard
+        - img [ref=e110]
+        - generic [ref=e112]: 作者后台
+      - link "资产监测" [ref=e113] [cursor=pointer]:
+        - /url: /portfolio
+        - img [ref=e114]
+        - generic [ref=e117]: 资产监测
+      - link "会员" [ref=e118] [cursor=pointer]:
+        - /url: /billing
+        - img [ref=e119]
+        - generic [ref=e122]: 会员
+      - link "个人中心" [ref=e123] [cursor=pointer]:
+        - /url: /profile
+        - img [ref=e124]
+        - generic [ref=e127]: 个人中心
+      - link "用户管理" [ref=e128] [cursor=pointer]:
+        - /url: /users
+        - img [ref=e129]
+        - generic [ref=e134]: 用户管理
+      - link "Agent令牌" [ref=e135] [cursor=pointer]:
+        - /url: /agent-tokens
+        - img [ref=e136]
+        - generic [ref=e140]: Agent令牌
+    - link "设置" [ref=e142] [cursor=pointer]:
+      - /url: /settings
+      - img [ref=e143]
+      - generic [ref=e146]: 设置
+  - generic [ref=e147]:
+    - banner [ref=e148]:
+      - heading "仪表盘" [level=1] [ref=e149]
+      - generic [ref=e150]:
+        - generic [ref=e151]: 已连接
+        - generic [ref=e153]:
+          - text: 权益
+          - generic [ref=e154]: $100,000.00
+        - generic [ref=e155]: +$0.00
+        - generic [ref=e156]: 17:51:05
+        - button "通知" [ref=e158] [cursor=pointer]:
+          - img [ref=e159]
+        - combobox "切换语言" [ref=e162] [cursor=pointer]:
+          - option "🇨🇳 中文" [selected]
+          - option "🇺🇸 English"
+        - generic [ref=e163]: v3.0.0
+        - button "A" [ref=e165] [cursor=pointer]
+    - main [ref=e166]:
+      - generic [ref=e168]:
+        - generic [ref=e170]:
+          - generic [ref=e171]:
+            - generic [ref=e172]:
+              - generic [ref=e173]: 快速开始
+              - heading "创建您的第一个量化策略" [level=3] [ref=e174]
+              - paragraph [ref=e175]: 完成 0/3 步即可开始量化交易。选择策略类型、配置参数、一键启动实盘。
+            - generic [ref=e176]:
+              - button "策略市场" [ref=e177] [cursor=pointer]:
+                - img [ref=e178]
+                - text: 策略市场
+              - button "创建策略" [ref=e183] [cursor=pointer]:
+                - img [ref=e184]
+                - text: 创建策略
+              - button "关闭提示" [ref=e185] [cursor=pointer]:
+                - img [ref=e186]
+          - generic [ref=e190]:
+            - generic [ref=e191]:
+              - generic [ref=e192]: "1"
+              - generic [ref=e193]: 连接交易所
+              - button "去设置" [ref=e194] [cursor=pointer]
+            - generic [ref=e196]:
+              - generic [ref=e197]: "2"
+              - generic [ref=e198]: 创建首个策略
+              - button "创建" [ref=e199] [cursor=pointer]
+            - generic [ref=e201]:
+              - generic [ref=e202]: "3"
+              - generic [ref=e203]: 启动自动交易
+              - button "启动" [ref=e204] [cursor=pointer]
+        - generic [ref=e206]:
+          - generic [ref=e209]:
+            - generic [ref=e210]:
+              - img [ref=e212]
+              - generic [ref=e215]: 总资产估值
+            - generic [ref=e216]:
+              - generic [ref=e217]: $100,000.00
+              - generic [ref=e218]:
+                - img [ref=e220]
+                - generic [ref=e223]: 今日盈亏
+          - generic [ref=e225]:
+            - generic [ref=e226]:
+              - generic [ref=e227]:
+                - img [ref=e229]
+                - generic [ref=e233]: 胜率
+              - generic [ref=e234]:
+                - generic [ref=e235]: 0.0%
+                - generic [ref=e236]:
+                  - img [ref=e238]
+                  - generic [ref=e241]: 近30天
+            - generic [ref=e243]:
+              - img [ref=e244]
+              - generic [ref=e248]: 0%
+          - generic [ref=e251]:
+            - generic [ref=e252]:
+              - img [ref=e254]
+              - generic [ref=e256]: 盈亏比
+            - generic [ref=e257]:
+              - generic [ref=e258]: "0.00"
+              - generic [ref=e260]: Profit Factor
+          - generic [ref=e263]:
+            - generic [ref=e264]:
+              - img [ref=e266]
+              - generic [ref=e269]: 最大回撤
+            - generic [ref=e270]:
+              - generic [ref=e271]: 0.00%
+              - generic [ref=e272]:
+                - img [ref=e274]
+                - generic [ref=e277]: 历史最大
+          - generic [ref=e280]:
+            - generic [ref=e281]:
+              - img [ref=e283]
+              - generic [ref=e285]: 总交易数
+            - generic [ref=e286]:
+              - generic [ref=e287]: "--"
+              - generic [ref=e289]: 笔
+          - generic [ref=e291]:
+            - generic [ref=e292]:
+              - generic [ref=e293]:
+                - img [ref=e295]
+                - generic [ref=e300]: 运行策略
+              - generic [ref=e301]:
+                - generic [ref=e302]: "0"
+                - generic [ref=e303]:
+                  - generic [ref=e304]:
+                    - img [ref=e305]
+                    - text: 0 个总策略
+                  - generic [ref=e308]: 在线
+            - button "查看详情" [ref=e310] [cursor=pointer]:
+              - img [ref=e311]
+        - generic [ref=e313]:
+          - generic [ref=e315]:
+            - heading "权益曲线" [level=2] [ref=e316]
+            - generic [ref=e318]: 实时
+          - generic [ref=e324]:
+            - heading "日盈亏分布" [level=2] [ref=e325]
+            - generic [ref=e327]:
+              - generic [ref=e328]: 盈利
+              - generic [ref=e330]: 亏损
+        - generic [ref=e335]:
+          - generic [ref=e336]:
+            - generic [ref=e337]:
+              - heading "资产分布" [level=2] [ref=e339]
+              - generic [ref=e341]:
+                - generic [ref=e342]:
+                  - generic [ref=e343]:
+                    - generic [ref=e346]: binance
+                    - generic [ref=e347]: $0.00
+                  - generic [ref=e348]:
+                    - generic [ref=e349]:
+                      - generic [ref=e350]: ├ 现货
+                      - generic [ref=e351]:
+                        - text: $0.00
+                        - generic [ref=e352]: ≈ ¥0.00
+                    - generic [ref=e353]:
+                      - generic [ref=e354]: └ 合约
+                      - generic [ref=e355]:
+                        - text: $0.00
+                        - generic [ref=e356]: ≈ ¥0.00
+                - generic [ref=e358]:
+                  - generic [ref=e361]: okx
+                  - generic [ref=e362]: $0.00
+                - generic [ref=e363]:
+                  - generic [ref=e364]: 合计
+                  - generic [ref=e365]:
+                    - text: $100,000.00
+                    - generic [ref=e366]: ≈ ¥725000.00
+            - generic [ref=e367]:
+              - heading "盈亏日历" [level=2] [ref=e369]
+              - generic [ref=e371]:
+                - generic [ref=e372]:
+                  - generic [ref=e373]:
+                    - button "上个月" [ref=e374] [cursor=pointer]:
+                      - img [ref=e375]
+                    - generic [ref=e377]: 2026年6月
+                    - button "下个月" [disabled] [ref=e378]:
+                      - img [ref=e379]
+                    - button "今天" [ref=e381] [cursor=pointer]
+                  - generic [ref=e382]:
+                    - generic [ref=e383]: 赢 0天
+                    - generic [ref=e385]: 亏 0天
+                    - generic [ref=e387]: +$0.00
+                - generic [ref=e388]:
+                  - generic [ref=e389]: 日
+                  - generic [ref=e390]: 一
+                  - generic [ref=e391]: 二
+                  - generic [ref=e392]: 三
+                  - generic [ref=e393]: 四
+                  - generic [ref=e394]: 五
+                  - generic [ref=e395]: 六
+                - generic [ref=e396]:
+                  - button "1" [ref=e398] [cursor=pointer]:
+                    - generic [ref=e399]: "1"
+                  - button "2" [ref=e400] [cursor=pointer]:
+                    - generic [ref=e401]: "2"
+                  - button "3" [ref=e402] [cursor=pointer]:
+                    - generic [ref=e403]: "3"
+                  - button "4" [ref=e404] [cursor=pointer]:
+                    - generic [ref=e405]: "4"
+                  - button "5" [ref=e406] [cursor=pointer]:
+                    - generic [ref=e407]: "5"
+                  - button "6" [ref=e408] [cursor=pointer]:
+                    - generic [ref=e409]: "6"
+                  - button "7" [ref=e410] [cursor=pointer]:
+                    - generic [ref=e411]: "7"
+                  - button "8" [ref=e412] [cursor=pointer]:
+                    - generic [ref=e413]: "8"
+                  - button "9" [ref=e414] [cursor=pointer]:
+                    - generic [ref=e415]: "9"
+                  - button "10" [ref=e416] [cursor=pointer]:
+                    - generic [ref=e417]: "10"
+                  - button "11" [ref=e418] [cursor=pointer]:
+                    - generic [ref=e419]: "11"
+                  - button "12" [ref=e420] [cursor=pointer]:
+                    - generic [ref=e421]: "12"
+                  - button "13" [ref=e422] [cursor=pointer]:
+                    - generic [ref=e423]: "13"
+                  - button "14" [ref=e424] [cursor=pointer]:
+                    - generic [ref=e425]: "14"
+                  - button "15" [ref=e426] [cursor=pointer]:
+                    - generic [ref=e427]: "15"
+                  - button "16" [ref=e428] [cursor=pointer]:
+                    - generic [ref=e429]: "16"
+                  - button "17" [ref=e430] [cursor=pointer]:
+                    - generic [ref=e431]: "17"
+                  - button "18" [ref=e432] [cursor=pointer]:
+                    - generic [ref=e433]: "18"
+                  - button "19" [ref=e434] [cursor=pointer]:
+                    - generic [ref=e435]: "19"
+                  - button "20" [ref=e436] [cursor=pointer]:
+                    - generic [ref=e437]: "20"
+                  - button "21" [ref=e438] [cursor=pointer]:
+                    - generic [ref=e439]: "21"
+                  - button "22" [ref=e440] [cursor=pointer]:
+                    - generic [ref=e441]: "22"
+                  - button "23" [ref=e442] [cursor=pointer]:
+                    - generic [ref=e443]: "23"
+                  - button "24" [ref=e444] [cursor=pointer]:
+                    - generic [ref=e445]: "24"
+                  - button "25" [ref=e446] [cursor=pointer]:
+                    - generic [ref=e447]: "25"
+                  - button "26" [ref=e448] [cursor=pointer]:
+                    - generic [ref=e449]: "26"
+                  - button "27" [ref=e450] [cursor=pointer]:
+                    - generic [ref=e451]: "27"
+                  - button "28" [ref=e452] [cursor=pointer]:
+                    - generic [ref=e453]: "28"
+                  - button "29" [ref=e454] [cursor=pointer]:
+                    - generic [ref=e455]: "29"
+                  - button "30" [ref=e456] [cursor=pointer]:
+                    - generic [ref=e457]: "30"
+          - generic [ref=e458]:
+            - generic [ref=e459]:
+              - generic [ref=e460]:
+                - heading "AI 多智能体状态" [level=2] [ref=e461]
+                - generic [ref=e462]: XiaoTianQuant v3.0
+              - generic [ref=e463]:
+                - generic [ref=e464]:
+                  - generic [ref=e465]:
+                    - img [ref=e467]
+                    - generic [ref=e470]: 市场情报
+                    - generic [ref=e471]: 运行中
+                    - generic [ref=e473]: 实时监控中
+                  - generic [ref=e474]:
+                    - img [ref=e476]
+                    - generic [ref=e478]: 策略生成
+                    - generic [ref=e479]: 运行中
+                    - generic [ref=e481]: 待处理 0 个请求
+                  - generic [ref=e482]:
+                    - img [ref=e484]
+                    - generic [ref=e486]: 风控AI
+                    - generic [ref=e487]: 正常
+                    - generic [ref=e489]: 所有指标安全
+                - generic [ref=e491]: 等待AI智能体数据...
+            - heading "权益曲线" [level=2] [ref=e494]
+          - generic [ref=e498]:
+            - generic [ref=e499]:
+              - generic [ref=e500]:
+                - heading "运行中策略" [level=2] [ref=e501]
+                - generic [ref=e502]: "0"
+              - generic [ref=e504]:
+                - img [ref=e506]
+                - heading "暂无运行中的策略" [level=3] [ref=e510]
+                - paragraph [ref=e511]: 在策略页面启动您的第一个策略
+                - button "去策略页面" [ref=e512] [cursor=pointer]
+            - generic [ref=e513]:
+              - generic [ref=e514]:
+                - heading "策略排行榜" [level=2] [ref=e515]
+                - button "全部" [ref=e517] [cursor=pointer]:
+                  - text: 全部
+                  - img [ref=e518]
+              - generic [ref=e521]:
+                - img [ref=e523]
+                - heading "暂无排行数据" [level=3] [ref=e527]
+                - paragraph [ref=e528]: 运行策略后将显示排行榜
+          - generic [ref=e529]:
+            - generic [ref=e530]:
+              - generic [ref=e531]:
+                - heading "风控状态" [level=2] [ref=e532]
+                - button "查看风控中心" [ref=e534] [cursor=pointer]:
+                  - text: 查看风控中心
+                  - img [ref=e535]
+              - generic [ref=e537]:
+                - generic [ref=e538]:
+                  - generic [ref=e539]:
+                    - generic [ref=e540]: 活跃规则
+                    - generic [ref=e541]: "1"
+                  - generic [ref=e542]:
+                    - generic [ref=e543]: 阻断交易对
+                    - generic [ref=e544]: "0"
+                  - generic [ref=e545]:
+                    - generic [ref=e546]: 最近触发
+                    - generic "-" [ref=e547]
+                - generic [ref=e549]:
+                  - generic [ref=e552]: 全局交易保护
+                  - generic [ref=e553]: 正常运行
+            - heading "ML 模型状态" [level=2] [ref=e556]
+  - generic:
+    - generic [ref=e564]:
+      - img [ref=e565]
+      - paragraph [ref=e567]: "ml server unreachable: Get \"http://localhost:8001/health\": dial tcp [::1]:8001: connectex: No connection could be made because the target machine actively refused it."
+      - button [ref=e568] [cursor=pointer]:
+        - img [ref=e569]
+    - generic [ref=e572]:
+      - img [ref=e573]
+      - paragraph [ref=e575]: "ml list: Get \"http://localhost:8001/models\": dial tcp [::1]:8001: connectex: No connection could be made because the target machine actively refused it."
+      - button [ref=e576] [cursor=pointer]:
+        - img [ref=e577]
+    - generic [ref=e580]:
+      - img [ref=e581]
+      - paragraph [ref=e583]: "ml list: Get \"http://localhost:8001/models\": dial tcp [::1]:8001: connectex: No connection could be made because the target machine actively refused it."
+      - button [ref=e584] [cursor=pointer]:
+        - img [ref=e585]

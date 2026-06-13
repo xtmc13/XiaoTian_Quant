@@ -25,13 +25,16 @@ const (
 
 // TickBacktestConfig configures the tick backtest runner.
 type TickBacktestConfig struct {
-	InitialBalance float64       `json:"initial_balance"`
-	Commission     float64       `json:"commission"`
-	SlippageModel  SlippageModel `json:"slippage_model"`
-	SlippageBps    float64       `json:"slippage_bps"`    // for fixed model (e.g. 5 = 5 bps)
-	SlippageFactor float64       `json:"slippage_factor"` // for volume model
-	StartTime      int64         `json:"start_time"`
-	EndTime        int64         `json:"end_time"`
+	InitialBalance  float64       `json:"initial_balance"`
+	Commission      float64       `json:"commission"`
+	SlippageModel   SlippageModel `json:"slippage_model"`
+	SlippageBps     float64       `json:"slippage_bps"`    // for fixed model (e.g. 5 = 5 bps)
+	SlippageFactor  float64       `json:"slippage_factor"` // for volume model
+	StartTime       int64         `json:"start_time"`
+	EndTime         int64         `json:"end_time"`
+	PositionSizePct float64       `json:"position_size_pct"` // position size as % of balance, e.g. 0.02 = 2%
+	RiskFreeRate    float64       `json:"risk_free_rate"`    // annual risk-free rate, e.g. 0.02 = 2%
+	SlippageSeed    int64         `json:"slippage_seed"`     // seed for reproducible slippage; 0 = use time
 }
 
 // TickBacktestResult holds the output of a tick backtest run.
@@ -67,6 +70,7 @@ type TickBacktestRunner struct {
 	trades     []Position
 	equity     []EquityPoint
 	equityPeak float64
+	rng        *rand.Rand
 	mu         sync.Mutex
 }
 
@@ -81,10 +85,21 @@ func NewTickBacktestRunner(cfg TickBacktestConfig) *TickBacktestRunner {
 	if cfg.SlippageBps <= 0 {
 		cfg.SlippageBps = 5 // 5 bps default
 	}
+	if cfg.PositionSizePct <= 0 {
+		cfg.PositionSizePct = 0.02
+	}
+	if cfg.RiskFreeRate <= 0 {
+		cfg.RiskFreeRate = 0.02
+	}
+	seed := cfg.SlippageSeed
+	if seed == 0 {
+		seed = time.Now().UnixNano()
+	}
 	return &TickBacktestRunner{
 		cfg:        cfg,
 		ticks:      make(map[string][]model.Tick),
 		equityPeak: cfg.InitialBalance,
+		rng:        rand.New(rand.NewSource(seed)),
 	}
 }
 
@@ -175,7 +190,7 @@ func (r *TickBacktestRunner) Run(strategy BacktestStrategy) (*TickBacktestResult
 			position = &Position{
 				Symbol:     symbol,
 				Side:       model.SideBuy,
-				Quantity:   r.cfg.InitialBalance * 0.02 / execPrice,
+				Quantity:   r.cfg.InitialBalance * r.cfg.PositionSizePct / execPrice,
 				EntryPrice: execPrice,
 				EntryTime:  tick.Timestamp,
 			}
@@ -189,7 +204,7 @@ func (r *TickBacktestRunner) Run(strategy BacktestStrategy) (*TickBacktestResult
 			position = &Position{
 				Symbol:     symbol,
 				Side:       model.SideSell,
-				Quantity:   r.cfg.InitialBalance * 0.02 / execPrice,
+				Quantity:   r.cfg.InitialBalance * r.cfg.PositionSizePct / execPrice,
 				EntryPrice: execPrice,
 				EntryTime:  tick.Timestamp,
 			}
@@ -282,7 +297,7 @@ func (r *TickBacktestRunner) applySlippage(tick model.Tick, direction string) fl
 		}
 	default: // SlippageFixed
 		bps := r.cfg.SlippageBps / 10000.0
-		noise := rand.Float64() * bps // 0-1x bps random noise
+		noise := r.rng.Float64() * bps // 0-1x bps random noise (deterministic with seed)
 		if direction == "LONG" {
 			return basePrice * (1.0 + bps + noise)
 		} else if direction == "SHORT" || direction == "CLOSE" {
@@ -362,8 +377,8 @@ func (r *TickBacktestRunner) buildResult(positions []Position, equity []EquityPo
 		}
 	}
 
-	result.SharpeRatio = sharpeRatio(returns, 0.02)
-	result.SortinoRatio = sortinoRatio(returns, 0.02)
+	result.SharpeRatio = sharpeRatio(returns, r.cfg.RiskFreeRate)
+	result.SortinoRatio = sortinoRatio(returns, r.cfg.RiskFreeRate)
 	if maxDD > 0 {
 		result.CalmarRatio = result.TotalReturnPct / maxDD
 	}

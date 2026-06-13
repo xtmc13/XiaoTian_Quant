@@ -4,10 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/xiaotian-quant/gateway/internal/exchange"
+	"github.com/xiaotian-quant/gateway/internal/model"
 )
 
 const (
@@ -25,6 +29,13 @@ type AlpacaAdapter struct {
 	httpClient *http.Client
 	mu        sync.RWMutex
 
+	streamHub     *exchange.StreamHub
+	wsConnected   bool
+	onTicker      func(tick model.Tick)
+	onOrderBook   func(ob model.OrderBookData)
+	onTrade       func(trade model.TradeData)
+	onKline       func(bar model.Bar)
+
 	orders    map[string]map[string]any
 	positions map[string]map[string]any
 }
@@ -35,6 +46,7 @@ func NewAlpacaAdapter(apiKey, secretKey string, paper bool) *AlpacaAdapter {
 		secretKey:  secretKey,
 		paper:      paper,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
+		streamHub:  exchange.NewStreamHub(),
 		orders:     make(map[string]map[string]any),
 		positions:  make(map[string]map[string]any),
 	}
@@ -48,8 +60,6 @@ func (a *AlpacaAdapter) Name() string {
 }
 
 func (a *AlpacaAdapter) Start() error  { return nil }
-func (a *AlpacaAdapter) Stop() error   { return nil }
-func (a *AlpacaAdapter) IsConnected() bool { return true }
 
 func (a *AlpacaAdapter) baseURL() string {
 	if a.paper {
@@ -299,15 +309,153 @@ func (a *AlpacaAdapter) GetTicker(symbol string) (map[string]any, error) {
 }
 
 func (a *AlpacaAdapter) StartMarketStream(symbols []string) error {
-	// Alpaca WebSocket stream is handled by the frontend
-	return nil
+	if len(symbols) == 0 {
+		return nil
+	}
+
+	wsClient := exchange.NewWSClient(exchange.WSConfig{
+		URL: "wss://stream.alpaca.markets/v1/iex/market",
+		OnMessage: func(msg []byte) {
+			a.handleMarketMessage(msg)
+		},
+		OnConnected: func() {
+			a.mu.Lock()
+			a.wsConnected = true
+			a.mu.Unlock()
+			log.Printf("[Alpaca] Market stream connected, subscribing to %d symbols", len(symbols))
+			// Alpaca uses array of symbols for subscription
+			for _, sym := range symbols {
+				subMsg := []string{"L." + strings.ToUpper(sym)}
+				a.streamHub.SendJSON("market", subMsg)
+			}
+		},
+		OnDisconnected: func(err error) {
+			a.mu.Lock()
+			a.wsConnected = false
+			a.mu.Unlock()
+			if err != nil {
+				log.Printf("[Alpaca] Market stream disconnected: %v", err)
+			}
+		},
+	})
+
+	a.streamHub.Add("market", wsClient)
+	return wsClient.Connect()
 }
 
 func (a *AlpacaAdapter) StartUserStream() error {
+	wsClient := exchange.NewWSClient(exchange.WSConfig{
+		URL: "wss://stream.alpaca.markets/v1/iex/books",
+		OnMessage: func(msg []byte) {
+			var raw map[string]any
+			if err := json.Unmarshal(msg, &raw); err == nil {
+				log.Printf("[Alpaca] User stream: %s", string(msg[:min(200, len(msg))]))
+			}
+		},
+		OnConnected: func() {
+			log.Printf("[Alpaca] User stream connected")
+		},
+		OnDisconnected: func(err error) {
+			if err != nil {
+				log.Printf("[Alpaca] User stream disconnected: %v", err)
+			}
+		},
+	})
+
+	a.streamHub.Add("user", wsClient)
+	return wsClient.Connect()
+}
+
+func (a *AlpacaAdapter) handleMarketMessage(msg []byte) {
+	var raw map[string]any
+	if err := json.Unmarshal(msg, &raw); err != nil {
+		return
+	}
+
+	typ, _ := raw["T"].(string)
+	if typ == "" {
+		return
+	}
+
+	switch typ {
+	case "L":
+		// Last trade
+		if price, _ := raw["p"].(float64); price > 0 {
+			if a.onTrade != nil {
+				a.onTrade(model.TradeData{
+					Symbol:    getString(raw, "s", ""),
+					ID:        getString(raw, "i", ""),
+					Price:     price,
+					Quantity:  getFloat(raw, "s", 0),
+					Side:      "BUY",
+					Timestamp: parseTime(raw["t"]),
+				})
+			}
+		}
+	case "Q":
+		// Quote update
+		if bp, _ := raw["bp"].(float64); bp > 0 {
+			if a.onTicker != nil {
+				last := getFloat(raw, "lp", 0)
+				if last == 0 {
+					last = getFloat(raw, "ap", 0)
+				}
+				a.onTicker(model.Tick{
+					Symbol:    getString(raw, "s", ""),
+					Bid:       bp,
+					Ask:       getFloat(raw, "ap", 0),
+					Last:      last,
+					Volume:    getFloat(raw, "vp", 0),
+					Timestamp: parseTime(raw["t"]),
+				})
+			}
+		}
+	}
+}
+
+func (a *AlpacaAdapter) Stop() error {
+	a.mu.Lock()
+	a.wsConnected = false
+	hub := a.streamHub
+	a.mu.Unlock()
+	if hub != nil {
+		hub.CloseAll()
+	}
 	return nil
 }
 
+func (a *AlpacaAdapter) IsConnected() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.wsConnected
+}
+
 // ── Helpers ────────────────────────────────────────────────────
+
+func getString(m map[string]any, key, def string) string {
+	if v, ok := m[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return def
+}
+
+func getFloat(m map[string]any, key string, def float64) float64 {
+	if v, ok := m[key]; ok {
+		switch val := v.(type) {
+		case float64:
+			return val
+		case int:
+			return float64(val)
+		case string:
+			var f float64
+			fmt.Sscanf(val, "%f", &f)
+			return f
+		}
+	}
+	return def
+}
 
 func parseTime(v any) int64 {
 	switch val := v.(type) {

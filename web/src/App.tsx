@@ -1,5 +1,5 @@
-import { BrowserRouter, Routes, Route, Navigate, useLocation, Outlet } from 'react-router-dom'
-import { lazy, Suspense, ComponentType, useEffect } from 'react'
+import { BrowserRouter, Routes, Route, Navigate, useLocation, Outlet, useNavigate } from 'react-router-dom'
+import { lazy, Suspense, ComponentType, useEffect, useRef } from 'react'
 import { useAuthStore } from '@/stores/authStore'
 import { I18nProvider } from '@/i18n'
 import '@/i18n/locales/zh-CN'
@@ -9,6 +9,7 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 
 // Eager-loaded: shell + entry pages
 import { Login } from './pages/Login'
+import { NotFound } from './pages/NotFound'
 
 // ── Lazy-loading helper for named exports ──
 function lazyPage(
@@ -16,6 +17,34 @@ function lazyPage(
   name: string
 ) {
   return lazy(() => factory().then((m) => ({ default: (m as Record<string, unknown>)[name] as React.ComponentType<unknown> })))
+}
+
+// ── Route prefetch map ──
+const pageLoaders: Record<string, () => Promise<unknown>> = {
+  '/dashboard':            () => import('./pages/Dashboard'),
+  '/trading':              () => import('./pages/Trading'),
+  '/strategy':             () => import('./pages/Strategy'),
+  '/ai':                   () => import('./pages/AI'),
+  '/backtest':             () => import('./pages/Backtest'),
+  '/bots':                 () => import('./pages/Bots'),
+  '/settings':             () => import('./pages/Settings'),
+  '/exchange-account':     () => import('./pages/ExchangeAccount'),
+  '/indicator-community':  () => import('./pages/IndicatorCommunity'),
+  '/portfolio':            () => import('./pages/Portfolio'),
+  '/indicator-ide':        () => import('./pages/IndicatorIDE'),
+  '/model-management':     () => import('./pages/ModelManagement'),
+  '/risk-control':         () => import('./pages/RiskControl'),
+  '/pairlist':             () => import('./pages/PairlistManagement'),
+  '/advanced-orders':      () => import('./pages/AdvancedOrderManagement'),
+  '/arbitrage':            () => import('./pages/ArbitrageMonitor'),
+  '/hyperopt':             () => import('./pages/HyperoptManagement'),
+  '/social-trading':       () => import('./pages/SocialTrading'),
+  '/onchain':              () => import('./pages/OnChain'),
+  '/profile':              () => import('./pages/UserProfile'),
+  '/users':                () => import('./pages/UserManage'),
+  '/agent-tokens':         () => import('./pages/AgentTokens'),
+  '/billing':              () => import('./pages/Billing'),
+  '/strategy-leaderboard': () => import('./pages/StrategyLeaderboard'),
 }
 
 // Lazy-loaded: all feature pages
@@ -46,8 +75,48 @@ const HyperoptManagement = lazyPage(() => import('./pages/HyperoptManagement'), 
 const SocialTrading = lazyPage(() => import('./pages/SocialTrading'), 'SocialTrading')
 const OnChain = lazyPage(() => import('./pages/OnChain'), 'OnChain')
 
+// ── Route-level error boundary with retry ──
+function RouteErrorBoundary({ children }: { children: React.ReactNode }) {
+  const navigate = useNavigate()
+  return (
+    <ErrorBoundary
+      fallback={
+        <div className="h-full flex flex-col items-center justify-center bg-[#0a0a0a] text-center p-8">
+          <div className="text-5xl mb-4 opacity-30">⚠</div>
+          <h3 className="text-lg font-semibold text-white mb-2">页面加载异常</h3>
+          <p className="text-sm text-[#8a8a8a] mb-4 max-w-sm">
+            该页面遇到了意外错误，可能是网络问题或资源加载失败。
+          </p>
+          <div className="flex gap-3">
+            <button
+              onClick={() => window.location.reload()}
+              className="rounded-lg bg-white px-4 py-2 text-sm font-medium text-[#0a0a0a] hover:opacity-90 transition-opacity"
+            >
+              刷新页面
+            </button>
+            <button
+              onClick={() => navigate('/dashboard')}
+              className="rounded-lg border border-[#1c1c1c] bg-[#111111] px-4 py-2 text-sm text-white hover:bg-[#1c1c1c] transition-colors"
+            >
+              回到首页
+            </button>
+          </div>
+        </div>
+      }
+    >
+      {children}
+    </ErrorBoundary>
+  )
+}
+
+// Wraps a lazy component with route-level error boundary
+function PageShell({ children }: { children: React.ReactNode }) {
+  return <RouteErrorBoundary>{children}</RouteErrorBoundary>
+}
+
 function DocumentTitle() {
   const location = useLocation()
+  const prefetched = useRef<Set<string>>(new Set())
 
   const titles: Record<string, string> = {
     '/login': '登录 - 小天量化',
@@ -84,12 +153,49 @@ function DocumentTitle() {
     document.title = title
   }, [title])
 
+  // ── Prefetch adjacent routes on idle ──
+  useEffect(() => {
+    const currentPath = location.pathname
+    if (prefetched.current.has(currentPath)) return
+    prefetched.current.add(currentPath)
+
+    // Prefetch common next pages (most likely navigation targets)
+    const adjacentPaths = [
+      '/dashboard',
+      '/trading',
+      '/strategy',
+      '/backtest',
+      '/settings',
+    ]
+
+    const idleCallback = (window as Record<string, unknown>).requestIdleCallback as
+      | ((cb: () => void, opts?: { timeout: number }) => number)
+      | undefined
+
+    const schedule = (fn: () => void) => {
+      if (idleCallback) {
+        idleCallback(fn, { timeout: 2000 })
+      } else {
+        setTimeout(fn, 300)
+      }
+    }
+
+    adjacentPaths.forEach((path) => {
+      if (path !== currentPath && !prefetched.current.has(path) && pageLoaders[path]) {
+        schedule(() => {
+          prefetched.current.add(path)
+          pageLoaders[path]().catch(() => {})
+        })
+      }
+    })
+  }, [location.pathname])
+
   return null
 }
 
 function PageLoader() {
   return (
-    <div className="h-screen bg-quant-bg flex items-center justify-center">
+    <div className="h-dvh bg-quant-bg flex items-center justify-center">
       <div className="animate-spin h-8 w-8 border-2 border-quant-gold/30 border-t-quant-gold rounded-full" />
     </div>
   )
@@ -105,7 +211,7 @@ function RequireAuth() {
 
   if (!hydrated && !e2eAuth && !hasToken) {
     return (
-      <div className="h-screen bg-quant-bg flex items-center justify-center">
+      <div className="h-dvh bg-quant-bg flex items-center justify-center">
         <div className="animate-spin h-6 w-6 border-2 border-quant-gold/30 border-t-quant-gold rounded-full" />
       </div>
     )
@@ -130,32 +236,34 @@ export default function App() {
             <Route element={<RequireAuth />}>
               <Route element={<Layout />}>
                 <Route path="/" element={<Navigate to="/dashboard" replace />} />
-                <Route path="/dashboard" element={<Dashboard />} />
-                <Route path="/trading" element={<Trading />} />
-                <Route path="/strategy" element={<Strategy />} />
-                <Route path="/ai" element={<AI />} />
-                <Route path="/backtest" element={<Backtest />} />
-                <Route path="/bots" element={<Bots />} />
-                <Route path="/settings" element={<Settings />} />
-                <Route path="/exchange-account" element={<ExchangeAccount />} />
-                <Route path="/indicator-community" element={<IndicatorCommunity />} />
-                <Route path="/indicator-community/:id" element={<IndicatorDetail />} />
-                <Route path="/author-dashboard" element={<AuthorDashboard />} />
-                <Route path="/portfolio" element={<Portfolio />} />
-                <Route path="/indicator-ide" element={<IndicatorIDE />} />
-                <Route path="/model-management" element={<ModelManagement />} />
-                <Route path="/risk-control" element={<RiskControl />} />
-                <Route path="/pairlist" element={<PairlistManagement />} />
-                <Route path="/advanced-orders" element={<AdvancedOrderManagement />} />
-                <Route path="/arbitrage" element={<ArbitrageMonitor />} />
-                <Route path="/hyperopt" element={<HyperoptManagement />} />
-                <Route path="/social-trading" element={<SocialTrading />} />
-                <Route path="/onchain" element={<OnChain />} />
-                <Route path="/profile" element={<UserProfile />} />
-                <Route path="/users" element={<UserManage />} />
-                <Route path="/agent-tokens" element={<AgentTokens />} />
-                <Route path="/billing" element={<Billing />} />
-                <Route path="/strategy-leaderboard" element={<StrategyLeaderboard />} />
+                <Route path="/dashboard" element={<PageShell><Dashboard /></PageShell>} />
+                <Route path="/trading" element={<PageShell><Trading /></PageShell>} />
+                <Route path="/strategy" element={<PageShell><Strategy /></PageShell>} />
+                <Route path="/ai" element={<PageShell><AI /></PageShell>} />
+                <Route path="/backtest" element={<PageShell><Backtest /></PageShell>} />
+                <Route path="/bots" element={<PageShell><Bots /></PageShell>} />
+                <Route path="/settings" element={<PageShell><Settings /></PageShell>} />
+                <Route path="/exchange-account" element={<PageShell><ExchangeAccount /></PageShell>} />
+                <Route path="/indicator-community" element={<PageShell><IndicatorCommunity /></PageShell>} />
+                <Route path="/indicator-community/:id" element={<PageShell><IndicatorDetail /></PageShell>} />
+                <Route path="/author-dashboard" element={<PageShell><AuthorDashboard /></PageShell>} />
+                <Route path="/portfolio" element={<PageShell><Portfolio /></PageShell>} />
+                <Route path="/indicator-ide" element={<PageShell><IndicatorIDE /></PageShell>} />
+                <Route path="/model-management" element={<PageShell><ModelManagement /></PageShell>} />
+                <Route path="/risk-control" element={<PageShell><RiskControl /></PageShell>} />
+                <Route path="/pairlist" element={<PageShell><PairlistManagement /></PageShell>} />
+                <Route path="/advanced-orders" element={<PageShell><AdvancedOrderManagement /></PageShell>} />
+                <Route path="/arbitrage" element={<PageShell><ArbitrageMonitor /></PageShell>} />
+                <Route path="/hyperopt" element={<PageShell><HyperoptManagement /></PageShell>} />
+                <Route path="/social-trading" element={<PageShell><SocialTrading /></PageShell>} />
+                <Route path="/onchain" element={<PageShell><OnChain /></PageShell>} />
+                <Route path="/profile" element={<PageShell><UserProfile /></PageShell>} />
+                <Route path="/users" element={<PageShell><UserManage /></PageShell>} />
+                <Route path="/agent-tokens" element={<PageShell><AgentTokens /></PageShell>} />
+                <Route path="/billing" element={<PageShell><Billing /></PageShell>} />
+                <Route path="/strategy-leaderboard" element={<PageShell><StrategyLeaderboard /></PageShell>} />
+                {/* 404 catch-all */}
+                <Route path="*" element={<NotFound />} />
               </Route>
             </Route>
           </Routes>

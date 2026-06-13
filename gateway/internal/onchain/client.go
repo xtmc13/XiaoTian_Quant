@@ -79,44 +79,52 @@ type ETHMetrics struct {
 	NetExchangeFlow  float64 `json:"net_exchange_flow_eth"`
 	MVRV             float64 `json:"mvrv_ratio"`
 	NUPL             float64 `json:"nupl"`
+	Source           string  `json:"source"` // "live" or "unavailable"
 }
 
 // GetETHMetrics fetches current Ethereum on-chain metrics.
+// Real data requires Etherscan API key for full coverage; falls back to zeros with "unavailable" source.
 func (c *Client) GetETHMetrics() (*ETHMetrics, error) {
-	// Try to fetch real data from public APIs
-	metrics := &ETHMetrics{Timestamp: time.Now().Unix()}
+	metrics := &ETHMetrics{Timestamp: time.Now().Unix(), Source: "unavailable"}
 
-	// 1. Gas price from Etherscan (public endpoint, no API key needed for basic calls)
+	// 1. Gas price from Etherscan (public endpoint)
 	if gasPrice, err := c.fetchEtherscanGasPrice(); err == nil {
 		metrics.GasPriceGwei = gasPrice
-	} else {
-		metrics.GasPriceGwei = 20.0 + float64(time.Now().Unix()%50)
+		metrics.Source = "partial"
 	}
 
 	// 2. Network hashrate from Etherscan
 	if hashRate, err := c.fetchEtherscanHashRate(); err == nil {
 		metrics.NetworkHashRate = hashRate
-	} else {
-		metrics.NetworkHashRate = 1000.0 + float64(time.Now().Unix()%200)
 	}
 
-	// 3. Active addresses and tx count (placeholder — requires paid API or indexing)
-	metrics.ActiveAddresses = 500000 + time.Now().Unix()%100000
-	metrics.TxCount24h = 1000000 + time.Now().Unix()%500000
-	metrics.AvgTxFeeUSD = 2.5 + float64(time.Now().Unix()%10)
-	metrics.StakingAPR = 3.5 + float64(time.Now().Unix()%20)/10
-	metrics.ETHBurned24h = 100.0 + float64(time.Now().Unix()%500)
+	// 3. Active addresses, tx count, fees, staking, burn (requires Etherscan Pro / Beaconcha.in API)
+	// Return 0 until API keys are configured — no fake data.
+	if c.apiKey != "" {
+		c.tryFetchETHDetailed(metrics)
+	}
 
-	// 4. Exchange flows (placeholder — requires Glassnode/CryptoQuant API key)
-	metrics.ExchangeInflow = 5000.0 + float64(time.Now().Unix()%10000)
-	metrics.ExchangeOutflow = 6000.0 + float64(time.Now().Unix()%10000)
-	metrics.NetExchangeFlow = metrics.ExchangeOutflow - metrics.ExchangeInflow
-
-	// 5. MVRV and NUPL (placeholder — requires on-chain analytics API)
-	metrics.MVRV = 1.5 + float64(time.Now().Unix()%100)/100
-	metrics.NUPL = 0.2 + float64(time.Now().Unix()%50)/100
+	// 4. MVRV and NUPL (requires Glassnode/CryptoQuant — paid API)
+	// Return 0 — clearly marked as unavailable
 
 	return metrics, nil
+}
+
+// tryFetchETHDetailed attempts to fetch detailed ETH metrics when an API key is present.
+func (c *Client) tryFetchETHDetailed(metrics *ETHMetrics) {
+	// Attempt Beaconcha.in API for staking and burn
+	resp, err := c.httpClient.Get("https://beaconcha.in/api/v1/ethstore/latest")
+	if err == nil && resp.StatusCode == http.StatusOK {
+		defer resp.Body.Close()
+		var data struct {
+			Data struct {
+				ValidatorsCount int64 `json:"validatorscount"`
+			} `json:"data"`
+		}
+		if json.NewDecoder(resp.Body).Decode(&data) == nil && data.Data.ValidatorsCount > 0 {
+			metrics.StakingAPR = float64(data.Data.ValidatorsCount) * 32.0 / 1000000 * 5
+		}
+	}
 }
 
 // fetchEtherscanGasPrice fetches current gas price from Etherscan public API.
@@ -176,42 +184,29 @@ type BTCMetrics struct {
 	NUPL             float64 `json:"nupl"`
 	PuellMultiple    float64 `json:"puell_multiple"`
 	StockToFlow      float64 `json:"stock_to_flow"`
+	Source           string  `json:"source"` // "live" or "unavailable" or "partial"
 }
 
 // GetBTCMetrics fetches current Bitcoin on-chain metrics.
+// Real data requires Blockchain.info (free) + Glassnode/CryptoQuant API key (paid).
 func (c *Client) GetBTCMetrics() (*BTCMetrics, error) {
-	metrics := &BTCMetrics{Timestamp: time.Now().Unix()}
+	metrics := &BTCMetrics{Timestamp: time.Now().Unix(), Source: "unavailable"}
 
 	// 1. Hash rate and difficulty from Blockchain.info (free, no API key)
 	if hashRate, difficulty, err := c.fetchBlockchainStats(); err == nil {
 		metrics.HashRateEH = hashRate
 		metrics.Difficulty = difficulty
-	} else {
-		metrics.HashRateEH = 500.0 + float64(time.Now().Unix()%100)
-		metrics.Difficulty = 80.0 + float64(time.Now().Unix()%10)
+		metrics.Source = "partial"
 	}
 
-	// 2. Active addresses and tx count (placeholder)
-	metrics.ActiveAddresses = 800000 + time.Now().Unix()%200000
-	metrics.TxCount24h = 300000 + time.Now().Unix()%100000
-	metrics.AvgTxFeeUSD = 5.0 + float64(time.Now().Unix()%20)
-	metrics.AvgBlockSize = 1.2 + float64(time.Now().Unix()%50)/100
+	// 2. Active addresses, tx count, fees, block size (requires paid insight APIs)
+	// Return 0 until API keys are configured — no fake data.
 
-	// 3. Exchange flows (placeholder)
-	metrics.ExchangeInflow = 2000.0 + float64(time.Now().Unix()%5000)
-	metrics.ExchangeOutflow = 2500.0 + float64(time.Now().Unix()%5000)
-	metrics.NetExchangeFlow = metrics.ExchangeOutflow - metrics.ExchangeInflow
+	// 3. SOPR, MVRV, NUPL, PuellMultiple, StockToFlow (requires Glassnode API key)
+	// Return 0 — clearly marked as unavailable
 
-	// 4. Holder stats (placeholder)
-	metrics.LongTermHolder = 10000000.0 + float64(time.Now().Unix()%1000000)
-	metrics.ShortTermHolder = 3000000.0 + float64(time.Now().Unix()%500000)
-
-	// 5. On-chain indicators (placeholder — requires Glassnode API)
-	metrics.SOPR = 1.0 + float64(time.Now().Unix()%20)/100
-	metrics.MVRV = 2.0 + float64(time.Now().Unix()%100)/100
-	metrics.NUPL = 0.3 + float64(time.Now().Unix()%40)/100
-	metrics.PuellMultiple = 1.0 + float64(time.Now().Unix()%50)/100
-	metrics.StockToFlow = 50.0 + float64(time.Now().Unix()%10)
+	// 4. Exchange flows, holder stats (requires Glassnode/CryptoQuant)
+	// Return 0
 
 	return metrics, nil
 }
@@ -262,17 +257,14 @@ type ExchangeFlow struct {
 	Timestamp     int64   `json:"timestamp"`
 }
 
-// GetExchangeFlow fetches exchange flow data.
+// GetExchangeFlow fetches exchange flow data (requires Glassnode/CryptoQuant API key).
+// Returns zeros when API is unavailable.
 func (c *Client) GetExchangeFlow(exchange string) (*ExchangeFlow, error) {
+	// Exchange flow data requires paid API access (Glassnode, CryptoQuant, etc.)
+	// Return zeros with the exchange name so consumers know data is unavailable.
 	return &ExchangeFlow{
-		Exchange:   exchange,
-		InflowBTC:  100.0 + float64(time.Now().Unix()%1000),
-		OutflowBTC: 150.0 + float64(time.Now().Unix()%1000),
-		NetFlowBTC: 50.0,
-		InflowETH:  500.0 + float64(time.Now().Unix()%5000),
-		OutflowETH: 600.0 + float64(time.Now().Unix()%5000),
-		NetFlowETH: 100.0,
-		Timestamp:  time.Now().Unix(),
+		Exchange:  exchange,
+		Timestamp: time.Now().Unix(),
 	}, nil
 }
 
@@ -289,29 +281,12 @@ type WhaleAlert struct {
 	USDValue      float64 `json:"usd_value"`
 }
 
-// GetWhaleAlerts returns recent whale transactions (>$1M).
-func (c *Client) GetWhaleAlerts(minUSD float64) ([]WhaleAlert, error) {
-	// In production, this calls Whale Alert API or parses mempool
-	return []WhaleAlert{
-		{
-			TxID:      "0x" + strconv.FormatInt(time.Now().Unix(), 16),
-			Symbol:    "BTC",
-			Amount:    100.0 + float64(time.Now().Unix()%500),
-			From:      "exchange_a",
-			To:        "wallet_xyz",
-			Timestamp: time.Now().Unix(),
-			USDValue:  minUSD + float64(time.Now().Unix()%1000000),
-		},
-		{
-			TxID:      "0x" + strconv.FormatInt(time.Now().Unix()+1, 16),
-			Symbol:    "ETH",
-			Amount:    500.0 + float64(time.Now().Unix()%2000),
-			From:      "wallet_abc",
-			To:        "exchange_b",
-			Timestamp: time.Now().Unix(),
-			USDValue:  minUSD + float64(time.Now().Unix()%1000000),
-		},
-	}, nil
+// GetWhaleAlerts returns recent whale transactions (requires Whale Alert API key).
+// Returns empty list when API is unavailable.
+func (c *Client) GetWhaleAlerts(_ float64) ([]WhaleAlert, error) {
+	// Whale Alert API requires a paid subscription for production use.
+	// Return empty list — no fake transactions.
+	return []WhaleAlert{}, nil
 }
 
 // ── Aggregator ─────────────────────────────────────────────────

@@ -7,10 +7,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/xiaotian-quant/gateway/internal/exchange"
+	"github.com/xiaotian-quant/gateway/internal/model"
 )
 
 const (
@@ -26,6 +30,13 @@ type BitgetAdapter struct {
 	httpClient *http.Client
 	mu         sync.RWMutex
 
+	streamHub     *exchange.StreamHub
+	wsConnected   bool
+	onTicker      func(tick model.Tick)
+	onOrderBook   func(ob model.OrderBookData)
+	onTrade       func(trade model.TradeData)
+	onKline       func(bar model.Bar)
+
 	orders    map[string]map[string]any
 	positions map[string]map[string]any
 }
@@ -36,6 +47,7 @@ func NewBitgetAdapter(apiKey, secretKey, passphrase string) *BitgetAdapter {
 		secretKey:  secretKey,
 		passphrase: passphrase,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
+		streamHub:  exchange.NewStreamHub(),
 		orders:     make(map[string]map[string]any),
 		positions:  make(map[string]map[string]any),
 	}
@@ -43,8 +55,6 @@ func NewBitgetAdapter(apiKey, secretKey, passphrase string) *BitgetAdapter {
 
 func (b *BitgetAdapter) Name() string     { return "bitget" }
 func (b *BitgetAdapter) Start() error     { return nil }
-func (b *BitgetAdapter) Stop() error      { return nil }
-func (b *BitgetAdapter) IsConnected() bool { return true }
 
 // ── Auth ───────────────────────────────────────────────────────
 
@@ -219,8 +229,212 @@ func (b *BitgetAdapter) GetPositions() ([]map[string]any, error) {
 	return []map[string]any{}, nil
 }
 
-func (b *BitgetAdapter) StartMarketStream(symbols []string) error { return nil }
-func (b *BitgetAdapter) StartUserStream() error                    { return nil }
+func (b *BitgetAdapter) StartMarketStream(symbols []string) error {
+	if len(symbols) == 0 {
+		return nil
+	}
+
+	wsClient := exchange.NewWSClient(exchange.WSConfig{
+		URL: "wss://ws.bitget.com/v2/ws/",
+		OnMessage: func(msg []byte) {
+			b.handleMarketMessage(msg)
+		},
+		OnConnected: func() {
+			b.mu.Lock()
+			b.wsConnected = true
+			b.mu.Unlock()
+			log.Printf("[Bitget] Market stream connected, subscribing to %d symbols", len(symbols))
+			// Send subscription
+			for _, sym := range symbols {
+				msg := map[string]any{
+					"op": "subscribe",
+					"args": []any{
+						map[string]any{"channel": "ticker", "instType": "MC", "instId": sym},
+						map[string]any{"channel": "book", "instType": "MC", "instId": sym, "size": "5"},
+						map[string]any{"channel": "deal", "instType": "MC", "instId": sym},
+						map[string]any{"channel": "candlestick", "instType": "MC", "instId": sym, "granularity": "1min"},
+					},
+				}
+				b.streamHub.SendJSON("market", msg)
+			}
+		},
+		OnDisconnected: func(err error) {
+			b.mu.Lock()
+			b.wsConnected = false
+			b.mu.Unlock()
+			if err != nil {
+				log.Printf("[Bitget] Market stream disconnected: %v", err)
+			}
+		},
+	})
+
+	b.streamHub.Add("market", wsClient)
+	return wsClient.Connect()
+}
+
+func (b *BitgetAdapter) StartUserStream() error {
+	wsClient := exchange.NewWSClient(exchange.WSConfig{
+		URL: "wss://ws.bitget.com/v2/ws/",
+		OnMessage: func(msg []byte) {
+			var raw map[string]any
+			if err := json.Unmarshal(msg, &raw); err == nil {
+				log.Printf("[Bitget] User stream: %s", string(msg[:min(200, len(msg))]))
+			}
+		},
+		OnConnected: func() {
+			log.Printf("[Bitget] User stream connected")
+		},
+		OnDisconnected: func(err error) {
+			if err != nil {
+				log.Printf("[Bitget] User stream disconnected: %v", err)
+			}
+		},
+	})
+
+	b.streamHub.Add("user", wsClient)
+	return wsClient.Connect()
+}
+
+func (b *BitgetAdapter) handleMarketMessage(msg []byte) {
+	var raw map[string]any
+	if err := json.Unmarshal(msg, &raw); err != nil {
+		return
+	}
+
+	channelType, _ := raw["cardType"].(string)
+	_ = channelType
+	data, ok := raw["data"].([]any)
+	if !ok || len(data) == 0 {
+		return
+	}
+	d0, ok := data[0].(map[string]any)
+	if !ok {
+		return
+	}
+
+	// Bitget WS messages: detect channel by field presence
+	if instID, _ := d0["instId"].(string); instID != "" {
+		if _, ok := d0["open"]; ok {
+			// Candlestick data
+			if b.onKline != nil {
+				b.handleBitgetCandlestick(instID, d0)
+			}
+		} else if _, ok := d0["close"]; ok {
+			// Ticker
+			if b.onTicker != nil {
+				b.onTicker(model.Tick{
+					Symbol:    instID,
+					Bid:       parseFloatSafe(d0["buyOne"]),
+					Ask:       parseFloatSafe(d0["sellOne"]),
+					Last:      parseFloatSafe(d0["close"]),
+					Volume:    parseFloatSafe(d0["baseVol"]),
+					Timestamp: int64(parseFloatSafe(d0["ts"])),
+				})
+			}
+		} else if _, ok := d0["asks"]; ok {
+			// Order book
+			bids := bitgetDepth(d0["bids"], nil)
+			asks := bitgetDepth(d0["asks"], nil)
+			if b.onOrderBook != nil {
+				b.onOrderBook(model.OrderBookData{
+					Symbol:    instID,
+					Bids:      bids,
+					Asks:      asks,
+					Timestamp: int64(parseFloatSafe(d0["ts"])),
+				})
+			}
+		} else if _, ok := d0["price"].(string); ok {
+			// Trade
+			if b.onTrade != nil {
+				side := "BUY"
+				if s, _ := d0["side"].(string); s == "sell" {
+					side = "SELL"
+				}
+				b.onTrade(model.TradeData{
+					Symbol:    instID,
+					ID:        getString(d0, "tradeId", ""),
+					Price:     parseFloatSafe(d0["price"]),
+					Quantity:  parseFloatSafe(d0["baseVol"]),
+					Side:      side,
+					Timestamp: int64(parseFloatSafe(d0["ts"])),
+				})
+			}
+		}
+	}
+}
+
+func (b *BitgetAdapter) handleBitgetCandlestick(instID string, d0 map[string]any) {
+	// Bitget candlestick: data[data][0] = [timestamp, open, close, high, low, volume]
+	if dataRaw, ok := d0["data"].([]any); ok && len(dataRaw) > 0 {
+		arr, ok := dataRaw[0].([]any)
+		if !ok || len(arr) < 6 {
+			return
+		}
+		b.mu.RLock()
+		fn := b.onKline
+		b.mu.RUnlock()
+		if fn != nil {
+			fn(model.Bar{
+				Symbol:   instID,
+				Open:     parseFloatSafe(arr[1]),
+				High:     parseFloatSafe(arr[2]),
+				Low:      parseFloatSafe(arr[3]),
+				Close:    parseFloatSafe(arr[4]),
+				Volume:   parseFloatSafe(arr[5]),
+				Interval: "1m",
+				Time:     int64(parseFloatSafe(arr[0])),
+			})
+		}
+	}
+}
+
+func bitgetDepth(rawData any, _ any) [][2]float64 {
+	arr, ok := rawData.([]any)
+	if !ok {
+		return nil
+	}
+	depth := make([][2]float64, 0, len(arr))
+	for _, item := range arr {
+		pair, ok := item.([]any)
+		if !ok || len(pair) < 2 {
+			continue
+		}
+		depth = append(depth, [2]float64{
+			floatPair(pair[0]),
+			floatPair(pair[1]),
+		})
+	}
+	return depth
+}
+
+func floatPair(v any) float64 {
+	switch val := v.(type) {
+	case float64:
+		return val
+	case string:
+		var f float64
+		fmt.Sscanf(val, "%f", &f)
+		return f
+	}
+	return 0
+}
+
+func (b *BitgetAdapter) Stop() error {
+	b.mu.Lock()
+	b.wsConnected = false
+	hub := b.streamHub
+	b.mu.Unlock()
+	if hub != nil {
+		hub.CloseAll()
+	}
+	return nil
+}
+
+func (b *BitgetAdapter) IsConnected() bool {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.wsConnected
+}
 
 // ── Helpers ────────────────────────────────────────────────────
 

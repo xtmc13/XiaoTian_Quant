@@ -83,7 +83,7 @@ export function AgentTokens() {
     if (!newName.trim()) return
     setCreating(true); setError('')
     try {
-      const tokenValue = 'qd_agent_' + Math.random().toString(36).slice(2) + Date.now().toString(36)
+      const tokenValue = 'qd_agent_' + crypto.randomUUID().replace(/-/g, '')
       await agentAdminApi.createToken({ name: newName, token: tokenValue, scopes: [newScopes] })
       setRevealedToken(tokenValue)
       setShowCreate(false)

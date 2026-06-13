@@ -110,14 +110,19 @@ func BuyCrypto(c *gin.Context) {
 		req.PaymentMethod = "credit_card"
 	}
 
-	// Simulate: buy crypto at estimated market price
-	price := 1.0
+	// Fetch real market price for the currency pair
+	var price float64
 	if req.Currency != "USDT" {
-		if p := fetchBinancePrice(req.Currency + "USDT"); p > 0 {
-			price = p
-		} else {
-			price = 1.0 // fallback
+		price = fetchBinancePrice(req.Currency + "USDT")
+		if price <= 0 {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"success": false,
+				"error":   fmt.Sprintf("无法获取 %sUSDT 的实时价格，请稍后重试", req.Currency),
+			})
+			return
 		}
+	} else {
+		price = 1.0 // USDT is pegged
 	}
 
 	quantity := req.Amount / price

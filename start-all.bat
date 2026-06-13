@@ -45,7 +45,10 @@ timeout /t 3 /nobreak >nul
 :: 启动 Go Gateway
 echo [4/4] 启动 Go Gateway...
 if exist "%PROJECT_DIR%\gateway\gateway-server.exe" (
-    start "Gateway :8080" cmd /c "cd /d %PROJECT_DIR%\gateway && gateway-server.exe"
+    :: SPA_DIR 让 Gateway 直接读 web/dist 产物；
+    :: 前端改完只要 cd web ^&^& npm run build，刷新 8080 就能看到新版本，无需重新 go build
+    :: 想用二进制内嵌的旧版本（生产模式），把下面 set SPA_DIR 那行删掉即可
+    start "Gateway :8080" cmd /c "set SPA_DIR=%PROJECT_DIR%\web\dist&& cd /d %PROJECT_DIR%\gateway && gateway-server.exe"
 ) else (
     echo  ⚠️ gateway-server.exe 不存在，前端将无法通过 8080 访问
     echo  请使用 5173 端口（Vite 开发服务器）
@@ -85,6 +88,10 @@ echo  ║                                                           ║
 echo  ║  管理命令:                                                ║
 echo  ║    任务管理器 → 结束 gateway-server / python / node       ║
 echo  ║    或关闭所有 CMD 窗口                                    ║
+echo  ║                                                           ║
+echo  ║  改了前端代码后让 8080 看到新版本:                          ║
+echo  ║    cd web ^&^& npm run build        （自动同步到 web/dist）║
+echo  ║    刷新浏览器即可，无需重启 gateway                       ║
 echo  ╚══════════════════════════════════════════════════════════╝
 echo.
 echo  按任意键打开浏览器...

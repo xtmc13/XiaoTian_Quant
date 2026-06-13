@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/backtest"
+	"github.com/xiaotian-quant/gateway/internal/market"
 	"github.com/xiaotian-quant/gateway/internal/model"
 	"github.com/xiaotian-quant/gateway/internal/notify"
 	"github.com/xiaotian-quant/gateway/internal/store"
@@ -149,6 +150,18 @@ func GetKlines(c *gin.Context) {
 		toMs = v
 	}
 
+	// Only cache simple (no date-range) requests
+	useCache := fromMs == 0 && toMs == 0
+	if useCache {
+		cacheKey := market.KLinesKey(symbol, interval)
+		if cached, ok := market.GetCache().Get(cacheKey); ok {
+			if klines, ok := cached.([]map[string]any); ok {
+				c.JSON(http.StatusOK, klines)
+				return
+			}
+		}
+	}
+
 	// Fetch real Binance data only — no mock fallback
 	klines, err := fetchBinanceKlines(symbol, interval, limit, fromMs, toMs)
 	if err != nil {
@@ -158,6 +171,10 @@ func GetKlines(c *gin.Context) {
 	if len(klines) == 0 {
 		c.JSON(http.StatusOK, []map[string]any{})
 		return
+	}
+
+	if useCache {
+		market.GetCache().Set(market.KLinesKey(symbol, interval), klines, market.KLinesTTL)
 	}
 	c.JSON(http.StatusOK, klines)
 }
@@ -177,6 +194,18 @@ func MarketKlines(c *gin.Context) {
 		toMs = v
 	}
 
+	// Cache simple requests without date range
+	useCache := fromMs == 0 && toMs == 0
+	if useCache {
+		cacheKey := market.KLinesKey(symbol, interval)
+		if cached, ok := market.GetCache().Get(cacheKey); ok {
+			if klines, ok := cached.([]map[string]any); ok {
+				c.JSON(http.StatusOK, gin.H{"klines": klines, "symbol": symbol})
+				return
+			}
+		}
+	}
+
 	klines, err := fetchBinanceKlines(symbol, interval, limit, fromMs, toMs)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to fetch market data", "detail": err.Error()})
@@ -184,6 +213,10 @@ func MarketKlines(c *gin.Context) {
 	}
 	if klines == nil {
 		klines = []map[string]any{}
+	}
+
+	if useCache {
+		market.GetCache().Set(market.KLinesKey(symbol, interval), klines, market.KLinesTTL)
 	}
 	c.JSON(http.StatusOK, gin.H{"klines": klines, "symbol": symbol})
 }
@@ -195,6 +228,15 @@ func OrderBook(c *gin.Context) {
 	if d := c.Query("depth"); d != "" {
 		if v, err := strconv.Atoi(d); err == nil && v > 0 && v <= 100 {
 			depth = v
+		}
+	}
+
+	// Check cache first
+	cacheKey := market.OrderBookKey(symbol)
+	if cached, ok := market.GetCache().Get(cacheKey); ok {
+		if book, ok := cached.(gin.H); ok {
+			c.JSON(http.StatusOK, book)
+			return
 		}
 	}
 
@@ -218,11 +260,14 @@ func OrderBook(c *gin.Context) {
 		return out
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"bids":    parseLevels(data["bids"]),
-		"asks":    parseLevels(data["asks"]),
-		"symbol":  symbol,
-	})
+	result := gin.H{
+		"bids":   parseLevels(data["bids"]),
+		"asks":   parseLevels(data["asks"]),
+		"symbol": symbol,
+	}
+
+	market.GetCache().Set(cacheKey, result, market.OrderBookTTL)
+	c.JSON(http.StatusOK, result)
 }
 
 // MarketTrades returns real recent public trades from Binance.
@@ -474,6 +519,9 @@ func RunBacktest(c *gin.Context) {
 		go broadcaster.Backtest(symbol, strategyType, report, 0)
 	}
 
+	// Generate full performance report
+	perfReport := backtest.GenerateReport(result, strategyType, symbol)
+
 	c.JSON(http.StatusOK, gin.H{
 		"id":               fmt.Sprintf("bt-%d", time.Now().UnixMilli()),
 		"strategy_id":      strategyType,
@@ -485,6 +533,8 @@ func RunBacktest(c *gin.Context) {
 		"total_return_pct": store.RoundFloat(result.TotalReturnPct, 2),
 		"max_drawdown_pct": store.RoundFloat(result.MaxDrawdownPct, 2),
 		"sharpe_ratio":     store.RoundFloat(result.SharpeRatio, 2),
+		"sortino_ratio":    store.RoundFloat(result.SortinoRatio, 2),
+		"calmar_ratio":     store.RoundFloat(result.CalmarRatio, 2),
 		"win_rate":         store.RoundFloat(result.WinRate, 1),
 		"profit_factor":    store.RoundFloat(result.ProfitFactor, 2),
 		"total_trades":     result.TotalTrades,
@@ -506,14 +556,30 @@ func RunBacktest(c *gin.Context) {
 			"to":            time.UnixMilli(bars[len(bars)-1].Time).Format("2006-01-02"),
 		},
 		"report": gin.H{
-			"initial_balance":  initialBalance,
-			"final_equity":     store.RoundFloat(finalEquity, 2),
-			"total_return_pct": store.RoundFloat(result.TotalReturnPct, 2),
-			"max_drawdown_pct": store.RoundFloat(result.MaxDrawdownPct, 2),
-			"sharpe_ratio":     store.RoundFloat(result.SharpeRatio, 2),
-			"win_rate_pct":     store.RoundFloat(result.WinRate, 1),
-			"total_trades":     result.TotalTrades,
-			"profit_factor":    store.RoundFloat(result.ProfitFactor, 2),
+			"initial_balance":   initialBalance,
+			"final_equity":      store.RoundFloat(finalEquity, 2),
+			"total_return_pct":  store.RoundFloat(result.TotalReturnPct, 2),
+			"max_drawdown_pct":  store.RoundFloat(result.MaxDrawdownPct, 2),
+			"sharpe_ratio":      store.RoundFloat(result.SharpeRatio, 2),
+			"sortino_ratio":     store.RoundFloat(result.SortinoRatio, 2),
+			"calmar_ratio":      store.RoundFloat(result.CalmarRatio, 2),
+			"win_rate_pct":      store.RoundFloat(result.WinRate, 1),
+			"total_trades":      result.TotalTrades,
+			"profit_factor":     store.RoundFloat(result.ProfitFactor, 2),
+			"recovery_factor":   store.RoundFloat(perfReport.RecoveryFactor, 2),
+			"winning_trades":    perfReport.WinningTrades,
+			"losing_trades":     perfReport.LosingTrades,
+			"avg_win":           store.RoundFloat(perfReport.AvgWin, 2),
+			"avg_loss":          store.RoundFloat(perfReport.AvgLoss, 2),
+			"best_trade":        store.RoundFloat(perfReport.BestTrade, 2),
+			"worst_trade":       store.RoundFloat(perfReport.WorstTrade, 2),
+			"max_consec_wins":   perfReport.MaxConsecWins,
+			"max_consec_loss":   perfReport.MaxConsecLoss,
+			"var_95":            store.RoundFloat(perfReport.VaR95*100, 2),
+			"cvar_95":           store.RoundFloat(perfReport.CVaR95*100, 2),
+			"volatility":        store.RoundFloat(perfReport.Volatility*100, 2),
+			"monthly_returns":   perfReport.MonthlyReturns,
+			"yearly_returns":    perfReport.YearlyReturns,
 		},
 	})
 }

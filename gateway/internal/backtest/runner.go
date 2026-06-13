@@ -16,15 +16,18 @@ import (
 
 // Runner executes event-driven backtests on historical data.
 type Runner struct {
-	initialBalance float64
-	commission     float64
-	slippage       float64
-	latencyMs      int64
-	startTime      int64
-	endTime        int64
+	initialBalance  float64
+	commission      float64
+	slippage        float64
+	latencyMs       int64
+	startTime       int64
+	endTime         int64
+	positionSizePct float64
+	riskFreeRate    float64
 
-	bars       map[string][]model.Bar     // symbol -> bars
-	ticks      map[string][]model.Tick    // symbol -> ticks
+	rng        *rand.Rand
+	bars       map[string][]model.Bar  // symbol -> bars
+	ticks      map[string][]model.Tick // symbol -> ticks
 	trades     []model.TradeData
 	orders     []model.OrderData
 	positions  []Position
@@ -58,20 +61,25 @@ type EquityPoint struct {
 
 // RunnerConfig configures the backtest runner.
 type RunnerConfig struct {
-	InitialBalance float64 `json:"initial_balance"`
-	Commission     float64 `json:"commission"`      // e.g., 0.001 for 0.1%
-	Slippage       float64 `json:"slippage"`        // e.g., 0.0005 for 0.05%
-	LatencyMs      int64   `json:"latency_ms"`
-	StartTime      int64   `json:"start_time"`      // unix ms, 0 = all data
-	EndTime        int64   `json:"end_time"`
+	InitialBalance  float64 `json:"initial_balance"`
+	Commission      float64 `json:"commission"`       // e.g., 0.001 for 0.1%
+	Slippage        float64 `json:"slippage"`         // e.g., 0.0005 for 0.05%
+	LatencyMs       int64   `json:"latency_ms"`
+	StartTime       int64   `json:"start_time"`       // unix ms, 0 = all data
+	EndTime         int64   `json:"end_time"`
+	PositionSizePct float64 `json:"position_size_pct"` // position size as % of balance, e.g. 0.02 = 2%
+	RiskFreeRate    float64 `json:"risk_free_rate"`    // annual risk-free rate, e.g. 0.02 = 2%
+	SlippageSeed    int64   `json:"slippage_seed"`     // seed for reproducible slippage; 0 = use time
 }
 
 func DefaultRunnerConfig() RunnerConfig {
 	return RunnerConfig{
-		InitialBalance: 100000,
-		Commission:     0.001,
-		Slippage:       0.0005,
-		LatencyMs:      100,
+		InitialBalance:  100000,
+		Commission:      0.001,
+		Slippage:        0.0005,
+		LatencyMs:       100,
+		PositionSizePct: 0.02,
+		RiskFreeRate:    0.02,
 	}
 }
 
@@ -79,16 +87,29 @@ func NewRunner(cfg RunnerConfig) *Runner {
 	if cfg.InitialBalance <= 0 {
 		cfg.InitialBalance = 100000
 	}
+	if cfg.PositionSizePct <= 0 {
+		cfg.PositionSizePct = 0.02
+	}
+	if cfg.RiskFreeRate <= 0 {
+		cfg.RiskFreeRate = 0.02
+	}
+	seed := cfg.SlippageSeed
+	if seed == 0 {
+		seed = time.Now().UnixNano()
+	}
 	return &Runner{
-		initialBalance: cfg.InitialBalance,
-		commission:     cfg.Commission,
-		slippage:       cfg.Slippage,
-		latencyMs:      cfg.LatencyMs,
-		startTime:      cfg.StartTime,
-		endTime:        cfg.EndTime,
-		bars:           make(map[string][]model.Bar),
-		ticks:          make(map[string][]model.Tick),
-		equityPeak:     cfg.InitialBalance,
+		initialBalance:  cfg.InitialBalance,
+		commission:      cfg.Commission,
+		slippage:        cfg.Slippage,
+		latencyMs:       cfg.LatencyMs,
+		startTime:       cfg.StartTime,
+		endTime:         cfg.EndTime,
+		positionSizePct: cfg.PositionSizePct,
+		riskFreeRate:    cfg.RiskFreeRate,
+		rng:             rand.New(rand.NewSource(seed)),
+		bars:            make(map[string][]model.Bar),
+		ticks:           make(map[string][]model.Tick),
+		equityPeak:      cfg.InitialBalance,
 	}
 }
 
@@ -251,7 +272,7 @@ func (r *Runner) Run(strategy BacktestStrategy) (*RunResult, error) {
 			}
 			qty := signal.Qty
 			if qty <= 0 {
-				qty = r.initialBalance * 0.02 / execPrice
+				qty = r.initialBalance * r.positionSizePct / execPrice
 			}
 			position = &Position{
 				Symbol:     symbol,
@@ -282,7 +303,7 @@ func (r *Runner) Run(strategy BacktestStrategy) (*RunResult, error) {
 			}
 			qty := signal.Qty
 			if qty <= 0 {
-				qty = r.initialBalance * 0.02 / execPrice
+				qty = r.initialBalance * r.positionSizePct / execPrice
 			}
 			position = &Position{
 				Symbol:     symbol,
@@ -421,7 +442,7 @@ func (r *Runner) RunWithTicks(strategy BacktestStrategy) (*RunResult, error) {
 			}
 			qty := signal.Qty
 			if qty <= 0 {
-				qty = r.initialBalance * 0.02 / execPrice
+				qty = r.initialBalance * r.positionSizePct / execPrice
 			}
 			position = &Position{
 				Symbol:     symbol,
@@ -473,9 +494,9 @@ func (r *Runner) RunWithTicks(strategy BacktestStrategy) (*RunResult, error) {
 func (r *Runner) applySlippage(price float64, direction string) float64 {
 	slipFactor := 1.0
 	if direction == "LONG" {
-		slipFactor = 1.0 + r.slippage + rand.Float64()*r.slippage*2
+		slipFactor = 1.0 + r.slippage + r.rng.Float64()*r.slippage*2
 	} else if direction == "SHORT" || direction == "CLOSE" {
-		slipFactor = 1.0 - r.slippage - rand.Float64()*r.slippage*2
+		slipFactor = 1.0 - r.slippage - r.rng.Float64()*r.slippage*2
 	}
 	return price * slipFactor
 }
@@ -557,8 +578,8 @@ func (r *Runner) buildResult(positions []Position, equity []EquityPoint, duratio
 		}
 	}
 
-	result.SharpeRatio = sharpeRatio(returns, 0.02) // assume 2% risk-free
-	result.SortinoRatio = sortinoRatio(returns, 0.02)
+	result.SharpeRatio = sharpeRatio(returns, r.riskFreeRate)
+	result.SortinoRatio = sortinoRatio(returns, r.riskFreeRate)
 	if maxDD > 0 {
 		result.CalmarRatio = result.TotalReturnPct / maxDD
 	}

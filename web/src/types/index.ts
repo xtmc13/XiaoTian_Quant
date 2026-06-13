@@ -285,19 +285,49 @@ export interface BacktestResult {
   symbol: string
   start_date: string
   end_date: string
-  initial_capital: number
+  initial_balance: number
   final_equity: number
   total_return_pct: number
   max_drawdown_pct: number
   sharpe_ratio?: number
+  sortino_ratio?: number
+  calmar_ratio?: number
   win_rate?: number
   profit_factor?: number
   total_trades: number
   trades: BacktestTrade[]
   equity_curve: { time: number; equity: number }[]
-  report?: Record<string, unknown>
+  report: BacktestReport
   params?: Record<string, unknown>
+  source?: string
   [key: string]: unknown
+}
+
+export interface BacktestReport {
+  initial_balance: number
+  final_equity: number
+  total_return_pct: number
+  max_drawdown_pct: number
+  sharpe_ratio: number
+  sortino_ratio?: number
+  calmar_ratio?: number
+  win_rate_pct: number
+  total_trades: number
+  profit_factor: number
+  recovery_factor?: number
+  winning_trades?: number
+  losing_trades?: number
+  avg_win?: number
+  avg_loss?: number
+  best_trade?: number
+  worst_trade?: number
+  max_consec_wins?: number
+  max_consec_loss?: number
+  var_95?: number
+  cvar_95?: number
+  volatility?: number
+  monthly_returns?: Record<string, number>
+  yearly_returns?: Record<string, number>
 }
 
 export interface BacktestTrade {
@@ -834,20 +864,6 @@ export interface ExchangeSettings {
   [key: string]: unknown
 }
 
-/* ── Health ── */
-export interface HealthStatus {
-  status: 'healthy' | 'degraded' | 'unhealthy'
-  version?: string
-  uptime?: number
-}
-
-export interface ComponentHealth {
-  name: string
-  status: 'healthy' | 'degraded' | 'unhealthy'
-  latency_ms?: number
-  message?: string
-}
-
 /* ── Strategy Community ── */
 export interface KPIScore {
   total_score: number
@@ -988,18 +1004,6 @@ export interface IcebergOrder {
   status: string
   created_at: string
   [key: string]: unknown
-}
-
-export interface TrailingOrder {
-  id: string
-  symbol: string
-  side: 'BUY' | 'SELL' | 'buy' | 'sell'
-  quantity: number
-  entry_price: number
-  trailing_percent: number
-  current_stop_price: number
-  status: string
-  created_at: string
 }
 
 /* ── Arbitrage ── */
