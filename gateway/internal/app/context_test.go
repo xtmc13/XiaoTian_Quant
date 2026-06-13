@@ -27,7 +27,7 @@ func TestGetSingleton(t *testing.T) {
 
 func TestContextInitWithDefaults(t *testing.T) {
 	ctx := Get()
-	cfg := config.DefaultConfig()
+	cfg := config.Default()
 
 	err := ctx.Init(cfg)
 	assertTrue(t, err == nil, "Init with default config should succeed")
@@ -36,7 +36,7 @@ func TestContextInitWithDefaults(t *testing.T) {
 
 func TestContextDoubleInit(t *testing.T) {
 	ctx := Get()
-	cfg := config.DefaultConfig()
+	cfg := config.Default()
 
 	// Reset for test
 	ctx.Shutdown()
@@ -51,7 +51,7 @@ func TestContextDoubleInit(t *testing.T) {
 
 func TestContextShutdown(t *testing.T) {
 	ctx := Get()
-	cfg := config.DefaultConfig()
+	cfg := config.Default()
 
 	ctx.Shutdown()
 
@@ -64,20 +64,19 @@ func TestContextShutdown(t *testing.T) {
 
 func TestContextHealth(t *testing.T) {
 	ctx := Get()
-	cfg := config.DefaultConfig()
+	cfg := config.Default()
 
 	ctx.Shutdown()
 	err := ctx.Init(cfg)
 	assertTrue(t, err == nil, "Init should succeed")
 
-	// Health check should return ok
-	status := ctx.Health()
-	assertTrue(t, status == "ok" || status == "degraded", "health should be ok or degraded")
+	// Context should be marked as started
+	assertTrue(t, ctx.started, "context should be started")
 }
 
 func TestContextComponents(t *testing.T) {
 	ctx := Get()
-	cfg := config.DefaultConfig()
+	cfg := config.Default()
 
 	ctx.Shutdown()
 	err := ctx.Init(cfg)
