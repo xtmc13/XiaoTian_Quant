@@ -23,6 +23,7 @@ config.yaml
 /data/
 *.log
 logs/
+gateway/internal/data/data_export/
 
 # Database files
 *.db
