@@ -284,6 +284,8 @@ func main() {
 		private.GET("/strategies/spot", handler.GetStrategiesSpot)
 		private.GET("/strategies/contract", handler.GetStrategiesContract)
 		private.GET("/strategies/ranking", handler.GetStrategiesRanking)
+		// Alias: /strategies → /strategies/configs (frontend compatibility)
+		private.GET("/strategies", handler.GetStrategyConfigs)
 
 		// ── Combo ──
 		private.GET("/combos", handler.GetCombos)
@@ -301,6 +303,8 @@ func main() {
 		private.GET("/portfolio/snapshots", handler.PortfolioSnapshots)
 		private.GET("/portfolio/calendar", handler.PortfolioCalendar)
 		private.GET("/exchange/usdcny", handler.UsdCnyRate)
+		// Alias: /positions → /portfolio/positions (frontend compatibility)
+		private.GET("/positions", handler.PortfolioPositions)
 
 		// ── Pairlist ──
 		private.GET("/pairlist/whitelist", handler.GetPairlistWhitelist)
@@ -344,6 +348,7 @@ func main() {
 		settingsG := private.Group("/settings")
 		{
 			settingsG.GET("/agent/models", handler.SettingsAgentModels)
+			settingsG.GET("/agent-models", handler.SettingsAgentModels) // Alias (frontend compatibility)
 			settingsG.GET("/defaults", handler.SettingsDefaultsGet)
 			settingsG.POST("/defaults", handler.SettingsDefaultsSave)
 			settingsG.POST("/ui", handler.SettingsUISave)
@@ -444,6 +449,9 @@ func main() {
 		api.GET("/watchlist", middleware.AuthRequired(), indicator.GetWatchlist)
 		api.POST("/watchlist", middleware.AuthRequired(), indicator.AddWatchlist)
 
+		// Alias: /indicators → /indicator/list (frontend compatibility)
+		api.GET("/indicators", middleware.AuthRequired(), indicator.ListIndicators)
+
 		// Internal indicator call (for sandbox call_indicator()) — no auth, IP-restricted in production
 		api.POST("/indicator/internal-call", indicator.InternalCallIndicator)
 
@@ -458,6 +466,10 @@ func main() {
 			experimentG.POST("/structured-tune", experiment.RunExperimentHandler)
 			experimentG.GET("/status/:id", experiment.ExperimentStatusHandler)
 		}
+		// Alias: /experiments → experiment list (frontend compatibility)
+		api.GET("/experiments", middleware.AuthRequired(), func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{"items": []any{}, "total": 0})
+		})
 
 		// ── Community ──
 		comm := api.Group("/community")

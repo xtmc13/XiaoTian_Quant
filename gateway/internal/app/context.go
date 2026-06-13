@@ -527,6 +527,10 @@ func (ctx *Context) wireOrderManager() {
 	// ── Cancel on Exchange ──
 	om.CancelOnExchange = func(ord *model.OrderData) error {
 		if ord.Exchange == "paper" {
+			// For paper limit orders routed through the matching engine, cancel there too.
+			if ord.OrderType == model.TypeLimit {
+				return ctx.MatchingService.CancelOrder(ord.Symbol, ord.ID)
+			}
 			return nil
 		}
 		var err error
@@ -691,7 +695,10 @@ func (ctx *Context) wireAdvancedOrderEngine() {
 	ctx.Logger.Info("Advanced order engine started")
 }
 
-// simulatePaperFill simulates immediate execution for paper trading.
+// simulatePaperFill simulates execution for paper trading.
+// Limit orders are routed through the internal matching engine so they rest on
+// the book and can match with other paper orders; market orders fall back to
+// immediate fill at the last known price to preserve expected paper UX.
 func (ctx *Context) simulatePaperFill(ord *model.OrderData) (map[string]any, error) {
 	price := ord.Price
 	if ord.OrderType == model.TypeMarket || price <= 0 {
@@ -702,6 +709,46 @@ func (ctx *Context) simulatePaperFill(ord *model.OrderData) (map[string]any, err
 		return nil, fmt.Errorf("invalid price/qty for paper fill")
 	}
 
+	// Route limit orders through the matching engine for realistic order-book behavior.
+	if ord.OrderType == model.TypeLimit {
+		result, err := ctx.MatchingService.PlaceOrder(
+			ord.Symbol,
+			strings.ToLower(string(ord.Side)),
+			"limit",
+			ord.Price,
+			ord.Quantity,
+			uint64(ord.UserID),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("matching engine: %w", err)
+		}
+
+		engineOrderID, _ := result["order_id"].(uint64)
+		storeOrderID, _ := result["store_order_id"].(string)
+		trades, _ := result["trades"].([]interface{})
+		filled, _ := result["filled"].(float64)
+
+		status := "NEW"
+		if filled > 0 {
+			if filled >= ord.Quantity {
+				status = "FILLED"
+			} else {
+				status = "PARTIALLY_FILLED"
+			}
+		}
+
+		return map[string]any{
+			"order_id":        storeOrderID,
+			"engine_order_id": engineOrderID,
+			"status":          status,
+			"filled":          filled,
+			"price":           ord.Price,
+			"trades":          trades,
+			"exchange":        "paper",
+		}, nil
+	}
+
+	// Market orders: immediate fill at last price (preserves legacy paper behavior).
 	ord.Status = model.StatusFilled
 	ord.Filled = qty
 	ord.AvgFillPrice = price

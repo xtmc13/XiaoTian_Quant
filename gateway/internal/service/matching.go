@@ -61,13 +61,15 @@ func (ms *MatchingService) PlaceOrder(symbol, side, orderType string, price, qua
 	}
 
 	// Also record in the Go store for API access
+	engineOrderID, _ := result["order_id"].(uint64)
 	storeOrder := map[string]any{
-		"symbol":     symbol,
-		"side":       side,
-		"order_type": orderType,
-		"price":      price,
-		"quantity":   quantity,
-		"exchange":   "MATCHING",
+		"symbol":         symbol,
+		"side":           side,
+		"order_type":     orderType,
+		"price":          price,
+		"quantity":       quantity,
+		"exchange":       "MATCHING",
+		"engine_order_id": engineOrderID,
 	}
 	orderID := store.PlaceOrder(storeOrder)
 
@@ -75,13 +77,22 @@ func (ms *MatchingService) PlaceOrder(symbol, side, orderType string, price, qua
 	return result, nil
 }
 
-// CancelOrder cancels an order.
-func (ms *MatchingService) CancelOrder(symbol string, orderID uint64) error {
-	eng := ms.GetEngine(symbol)
-	if err := eng.CancelOrder(orderID); err != nil {
-		return err
+// CancelOrder cancels an order by store order ID.
+func (ms *MatchingService) CancelOrder(symbol string, storeOrderID string) error {
+	order := store.GetOrderByID(storeOrderID)
+	if order == nil {
+		return fmt.Errorf("order %s not found", storeOrderID)
 	}
-	return store.CancelOrder(fmt.Sprintf("%d", orderID))
+
+	// Cancel in matching engine first (if engine_order_id is available)
+	if engineID, ok := order["engine_order_id"].(uint64); ok && engineID > 0 {
+		eng := ms.GetEngine(symbol)
+		if err := eng.CancelOrder(engineID); err != nil {
+			return err
+		}
+	}
+
+	return store.CancelOrder(storeOrderID)
 }
 
 // GetOrderBook returns the order book snapshot for a symbol.

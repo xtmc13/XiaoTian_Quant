@@ -71,7 +71,7 @@ func NewManager() *Manager {
 		Positions: make(map[string]*model.PositionData),
 		CreatedAt: time.Now().UnixMilli(),
 	}
-	m.peak = 100000
+	m.peak = 0
 	return m
 }
 
@@ -651,7 +651,10 @@ func (m *Manager) TotalEquity() float64 {
 			accountTotal += bal.Total
 		}
 	}
-	return m.spotTotalUSDT + m.futuresTotalUSDT + m.fundingTotalUSDT + m.earnTotalUSDT + other + accountTotal
+	total := m.spotTotalUSDT + m.futuresTotalUSDT + m.fundingTotalUSDT + m.earnTotalUSDT + other + accountTotal
+	log.Printf("[Portfolio] TotalEquity debug: spot=%.2f futures=%.2f funding=%.2f earn=%.2f other=%.2f accounts=%.2f total=%.2f accounts_count=%d",
+		m.spotTotalUSDT, m.futuresTotalUSDT, m.fundingTotalUSDT, m.earnTotalUSDT, other, accountTotal, total, len(m.accounts))
+	return total
 }
 
 // AvailableBalance returns the sum of free balances.
