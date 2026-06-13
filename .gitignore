@@ -15,9 +15,19 @@ env/
 .vscode/
 .idea/
 
+# SSL/TLS certificates and keys (NEVER commit real certs)
+nginx/ssl/
+*.crt
+*.pem
+*.p12
+*.pfx
+*.key
+*.key.enc
+
 # Config (contains secrets)
 config.yaml
 .env
+.env.*
 
 # Data & logs
 /data/

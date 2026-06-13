@@ -1,0 +1,41 @@
+# https://editorconfig.org
+root = true
+
+# Default settings for all files
+[*]
+charset = utf-8
+end_of_line = lf
+indent_size = 4
+indent_style = space
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# Go files
+[*.go]
+indent_size = 8
+
+# Shell scripts
+[*.sh]
+indent_size = 2
+
+# Markdown
+[*.md]
+trim_trailing_whitespace = false
+
+# JSON/YAML
+[*.json]
+indent_size = 2
+
+[*.yml]
+indent_size = 2
+
+[*.yaml]
+indent_size = 2
+
+# HTML/CSS
+[*.{html,css,scss,less}]
+indent_size = 2
+
+# Python
+[*.py]
+indent_size = 4
