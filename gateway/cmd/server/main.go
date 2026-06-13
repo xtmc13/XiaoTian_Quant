@@ -13,6 +13,7 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/app"
 	"github.com/xiaotian-quant/gateway/internal/config"
 	"github.com/xiaotian-quant/gateway/internal/handler"
+	"github.com/xiaotian-quant/gateway/internal/market"
 	"github.com/xiaotian-quant/gateway/internal/metrics"
 	"github.com/xiaotian-quant/gateway/internal/middleware"
 	"github.com/xiaotian-quant/gateway/internal/store"
@@ -57,6 +58,15 @@ func main() {
 
 	// ── Start background tasks ──
 	go handler.StartBackgroundTasks()
+
+	// ── Market data cache purger (every 30 seconds) ──
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			market.GetCache().Purge()
+		}
+	}()
 
 	// ── Start server with graceful shutdown ──
 	port := cfg.Server.Port
@@ -131,16 +141,9 @@ func setupGinMode(cfg *config.Config) {
 func setupGinEngine(appCtx *app.Context) *gin.Engine {
 	r := gin.New()
 	r.Use(middleware.RequestLogger(appCtx.Logger), gin.Recovery())
+	r.Use(middleware.RequestID())
 	r.Use(middleware.CORS())
 	r.Use(middleware.UnifiedResponseWrapper())
-
-	// Health check routes (public)
-	api := r.Group("/api")
-	{
-		api.GET("/health", handler.HealthCheck)
-		api.GET("/health/components", handler.ComponentHealth)
-		api.POST("/admin/config/reload", middleware.AdminRequired(), handler.ReloadConfig)
-	}
 
 	return r
 }

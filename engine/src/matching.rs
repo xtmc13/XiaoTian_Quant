@@ -534,10 +534,19 @@ mod tests {
         assert!(ops_per_sec > 5_000.0, "Should exceed 5k mixed ops/sec");
     }
 
+    /// Fast PRNG for test/benchmark use only.
+    /// Uses splitmix64 variant seeded from current system time nanos.
     fn fast_rng() -> u64 {
-        std::time::SystemTime::now()
+        let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos() as u64
+            .as_nanos() as u64;
+        // SplitMix64: simple but sufficient for stress test randomness
+        let mut state = seed;
+        state = state.wrapping_add(0x9e3779b97f4a7c15);
+        let mut z = state;
+        state = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+        state = (state ^ (state >> 27)).wrapping_mul(0x94d049bb133111eb);
+        state ^ (state >> 31)
     }
 }

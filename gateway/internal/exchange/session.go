@@ -211,6 +211,7 @@ type Exchange interface {
 	IsConnected() bool
 
 	PlaceOrder(symbol, side, orderType string, price, quantity float64) (map[string]any, error)
+	PlaceFuturesOrder(symbol, side, orderType string, price, quantity, leverage float64, positionSide string) (map[string]any, error)
 	CancelOrder(symbol, orderID string) (map[string]any, error)
 	GetBalance() ([]map[string]any, error)
 	GetPositions() ([]map[string]any, error)

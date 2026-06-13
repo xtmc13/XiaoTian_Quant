@@ -147,7 +147,7 @@ func RunExperiment(req ExperimentRequest) (*ExperimentResult, error) {
 			bestScore = best.Score
 		}
 		result.Generations = captureDEGenerations(pop, space)
-		result.ParetoFront = buildParetoFront(pop)
+		result.ParetoFront = buildParetoFront(pop, req.Code, req.Symbol, bars, btCfg)
 
 	case "tpe":
 		tpeCfg := req.TPEConfig
@@ -161,7 +161,7 @@ func RunExperiment(req ExperimentRequest) (*ExperimentResult, error) {
 			bestScore = best.Score
 		}
 		result.Observations = obs
-		result.ParetoFront = buildParetoFrontFromObs(obs)
+		result.ParetoFront = buildParetoFrontFromObs(obs, req.Code, req.Symbol, bars, btCfg)
 
 	default:
 		return nil, fmt.Errorf("unknown optimizer: %s", req.Optimizer)
@@ -284,29 +284,55 @@ func captureDEGenerations(pop []Individual, space ParamSpace) []GenerationSnapsh
 	return []GenerationSnapshot{gs}
 }
 
-func buildParetoFront(pop []Individual) []ParetoPoint {
+func buildParetoFront(pop []Individual, code, symbol string, bars []model.Bar, btCfg backtest.RunnerConfig) []ParetoPoint {
 	var points []ParetoPoint
 	for _, ind := range pop {
 		if !ind.Valid {
 			continue
 		}
-		// We need actual backtest results for Pareto, but we only have scores here.
-		// For now, approximate with score as a proxy.
-		points = append(points, ParetoPoint{
+		p := ParetoPoint{
 			Params: ind.Params,
 			Score:  ind.Score,
-		})
+		}
+		// Run backtest to get actual metrics for Pareto analysis
+		if code != "" && len(bars) > 0 && len(ind.Params) > 0 {
+			strategy := NewIndicatorStrategy(code, symbol, ind.Params)
+			if err := strategy.Precompute(bars); err == nil {
+				runner := backtest.NewRunner(btCfg)
+				runner.LoadBars(symbol, bars)
+				if r, err := runner.Run(strategy); err == nil {
+					p.ReturnPct = r.TotalReturnPct
+					p.MaxDrawdownPct = r.MaxDrawdownPct
+					p.SharpeRatio = r.SharpeRatio
+				}
+			}
+		}
+		points = append(points, p)
 	}
 	return points
 }
 
-func buildParetoFrontFromObs(obs []Observation) []ParetoPoint {
+func buildParetoFrontFromObs(obs []Observation, code, symbol string, bars []model.Bar, btCfg backtest.RunnerConfig) []ParetoPoint {
 	var points []ParetoPoint
 	for _, o := range obs {
-		points = append(points, ParetoPoint{
+		p := ParetoPoint{
 			Params: o.Params,
 			Score:  o.Score,
-		})
+		}
+		// Run backtest to get actual metrics for Pareto analysis
+		if code != "" && len(bars) > 0 && len(o.Params) > 0 {
+			strategy := NewIndicatorStrategy(code, symbol, o.Params)
+			if err := strategy.Precompute(bars); err == nil {
+				runner := backtest.NewRunner(btCfg)
+				runner.LoadBars(symbol, bars)
+				if r, err := runner.Run(strategy); err == nil {
+					p.ReturnPct = r.TotalReturnPct
+					p.MaxDrawdownPct = r.MaxDrawdownPct
+					p.SharpeRatio = r.SharpeRatio
+				}
+			}
+		}
+		points = append(points, p)
 	}
 	return points
 }

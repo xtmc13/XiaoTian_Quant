@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 	"time"
 
@@ -24,6 +25,28 @@ func GetProtectionStatus(c *gin.Context) {
 
 	status := ProtectionManager.Status(time.Now())
 	c.JSON(http.StatusOK, status)
+}
+
+// GetProtectionConfig returns the current protection configuration.
+func GetProtectionConfig(c *gin.Context) {
+	if ProtectionManager == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "protection manager not initialized"})
+		return
+	}
+
+	protections := ProtectionManager.Protections()
+	result := make([]gin.H, 0, len(protections))
+	for _, p := range protections {
+		data, _ := json.Marshal(p)
+		var params map[string]any
+		json.Unmarshal(data, &params)
+		result = append(result, gin.H{
+			"name":   p.Name(),
+			"params": params,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"protections": result})
 }
 
 // ConfigureProtection sets up protections from JSON configuration.

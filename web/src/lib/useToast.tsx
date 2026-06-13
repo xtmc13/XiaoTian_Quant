@@ -16,7 +16,19 @@ function notify() {
   listeners.forEach(l => l([...toasts]))
 }
 
+// 冷却追踪：相同消息在 30 秒内不重复弹出，解决后台轮询刷屏问题
+const recentMessages = new Map<string, number>() // key → timestamp
+const COOLDOWN_MS = 30_000
+
 export function toast(type: ToastType, message: string) {
+  const key = `${type}:${message}`
+  const now = Date.now()
+  const lastShown = recentMessages.get(key)
+  if (lastShown && (now - lastShown) < COOLDOWN_MS) {
+    return // 冷却期内，跳过
+  }
+  recentMessages.set(key, now)
+
   const id = nextId++
   toasts = [...toasts, { id, type, message }]
   notify()

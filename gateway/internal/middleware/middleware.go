@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"net/http"
 	"os"
 	"strings"
@@ -105,4 +107,28 @@ func extractToken(c *gin.Context) string {
 		return auth[7:]
 	}
 	return ""
+}
+
+// ── RequestID ─────────────────────────────────────────────────────
+
+// RequestID injects a unique request ID into each Gin context.
+// It checks the X-Request-ID header first (for trace propagation),
+// otherwise generates a random 16-byte hex string.
+// The request_id is used by UnifiedResponseWrapper for the Meta.RequestID field.
+func RequestID() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		rid := c.GetHeader("X-Request-ID")
+		if rid == "" {
+			b := make([]byte, 16)
+			if _, err := rand.Read(b); err != nil {
+				// Fallback on crypto failure (extremely unlikely)
+				rid = "unknown-" + strings.ReplaceAll(c.Request.RemoteAddr, ":", "-")
+			} else {
+				rid = hex.EncodeToString(b[:8]) + "-" + hex.EncodeToString(b[8:])
+			}
+		}
+		c.Set("request_id", rid)
+		c.Header("X-Request-ID", rid)
+		c.Next()
+	}
 }

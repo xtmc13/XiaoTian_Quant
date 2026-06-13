@@ -1,6 +1,7 @@
 package data
 
 import (
+	"compress/gzip"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -94,6 +95,16 @@ func (e *Exporter) Export(cfg ExportConfig) (*ExportResult, error) {
 		return result, err
 	}
 
+	// Apply gzip compression if requested
+	if cfg.Compress {
+		var gzName string
+		gzName, err = compressToGzip(outPath)
+		if err == nil {
+			os.Remove(outPath) // remove original uncompressed file
+			outPath = gzName
+		}
+	}
+
 	// Get file size
 	info, _ := os.Stat(outPath)
 	var size int64
@@ -106,6 +117,30 @@ func (e *Exporter) Export(cfg ExportConfig) (*ExportResult, error) {
 	result.FilePath = outPath
 	result.Bytes = size
 	return result, nil
+}
+
+// compressToGzip creates a gzip-compressed copy of the source file and returns the gz path.
+func compressToGzip(srcPath string) (string, error) {
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return "", err
+	}
+	defer src.Close()
+
+	gzPath := srcPath + ".gz"
+	dst, err := os.Create(gzPath)
+	if err != nil {
+		return "", err
+	}
+	defer dst.Close()
+
+	gw := gzip.NewWriter(dst)
+	defer gw.Close()
+
+	if _, err := io.Copy(gw, src); err != nil {
+		return "", err
+	}
+	return gzPath, nil
 }
 
 // ExportToWriter writes data to an io.Writer (useful for HTTP responses).

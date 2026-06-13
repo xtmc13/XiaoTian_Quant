@@ -10,40 +10,58 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/ai"
+	"github.com/xiaotian-quant/gateway/internal/market"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
+// providerDisplayNames maps provider IDs to human-readable names.
+var providerDisplayNames = map[string]string{
+	"openai":   "GPT-4o / O1",
+	"claude":   "Claude Sonnet/Opus",
+	"gemini":   "Gemini 2.5 / Flash",
+	"deepseek": "DeepSeek V3 / R1",
+	"qwen":     "通义千问 Max/Plus",
+	"hunyuan":  "混元 Pro / Lite",
+	"doubao":   "豆包 Pro / Lite",
+	"glm":      "GLM-4 Plus / Flash",
+	"kimi":     "Kimi Moonshot",
+	"llama":    "Llama 4 Maverick",
+	"mistral":  "Mistral Large/Small",
+}
+
+// providerColors maps provider IDs to brand colors.
+var providerColors = map[string]string{
+	"openai":   "#10A37F",
+	"claude":   "#D97706",
+	"gemini":   "#4285F4",
+	"deepseek": "#4D6BFE",
+	"qwen":     "#FF6A00",
+	"hunyuan":  "#00C4A7",
+	"doubao":   "#00D4AA",
+	"glm":      "#3859FF",
+	"kimi":     "#8B5CF6",
+	"llama":    "#1877F2",
+	"mistral":  "#F59E0B",
+}
+
 // SettingsAgentModels returns available AI models for agent/CC Switch config.
+// Dynamically builds the list from registered AI providers.
 func SettingsAgentModels(c *gin.Context) {
-	models := []map[string]any{
-		// International
-		{"id": "gpt-4o", "name": "GPT-4o", "provider": "openai"},
-		{"id": "gpt-4-turbo", "name": "GPT-4 Turbo", "provider": "openai"},
-		{"id": "o1-preview", "name": "o1 Preview", "provider": "openai"},
-		{"id": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6", "provider": "anthropic"},
-		{"id": "claude-opus-4-7", "name": "Claude Opus 4.7", "provider": "anthropic"},
-		{"id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro", "provider": "google"},
-		{"id": "gemini-2.0-flash", "name": "Gemini 2.0 Flash", "provider": "google"},
-		// Chinese domestic
-		{"id": "deepseek-chat", "name": "DeepSeek Chat (V3)", "provider": "deepseek"},
-		{"id": "deepseek-coder", "name": "DeepSeek Coder", "provider": "deepseek"},
-		{"id": "deepseek-r1", "name": "DeepSeek R1", "provider": "deepseek"},
-		{"id": "qwen-max", "name": "通义千问 Max", "provider": "alibaba"},
-		{"id": "qwen-plus", "name": "通义千问 Plus", "provider": "alibaba"},
-		{"id": "qwen-turbo", "name": "通义千问 Turbo", "provider": "alibaba"},
-		{"id": "hunyuan-pro", "name": "混元 Pro", "provider": "tencent"},
-		{"id": "hunyuan-lite", "name": "混元 Lite", "provider": "tencent"},
-		{"id": "doubao-pro-32k", "name": "豆包 Pro 32K", "provider": "bytedance"},
-		{"id": "doubao-lite", "name": "豆包 Lite", "provider": "bytedance"},
-		{"id": "glm-4-plus", "name": "GLM-4 Plus", "provider": "zhipu"},
-		{"id": "glm-4-flash", "name": "GLM-4 Flash", "provider": "zhipu"},
-		{"id": "moonshot-v1-32k", "name": "Kimi Moonshot 32K", "provider": "moonshot"},
-		{"id": "moonshot-v1-128k", "name": "Kimi Moonshot 128K", "provider": "moonshot"},
-		// Open source
-		{"id": "llama-4-maverick", "name": "Llama 4 Maverick", "provider": "meta", "enabled": true},
-		{"id": "llama-3.3-70b", "name": "Llama 3.3 70B", "provider": "meta", "enabled": true},
-		{"id": "mistral-large", "name": "Mistral Large", "provider": "mistral", "enabled": true},
-		{"id": "mistral-small", "name": "Mistral Small", "provider": "mistral", "enabled": true},
+	names := ai.ListProviders()
+	// Sort for stable output
+	models := make([]map[string]any, 0, len(names))
+	for _, name := range names {
+		p := ai.GetProvider(name)
+		display := providerDisplayNames[name]
+		if display == "" {
+			display = strings.ToUpper(name[:1]) + name[1:]
+		}
+		models = append(models, map[string]any{
+			"id":       name,
+			"name":     display,
+			"provider": name,
+			"enabled":  p != nil && p.APIKey != "",
+		})
 	}
 	c.JSON(http.StatusOK, models)
 }
@@ -203,43 +221,60 @@ func MarketSnapshot(c *gin.Context) {
 	}
 
 	// ── Default: single crypto symbol from Binance ──
-	priceRaw := 68000.0
-	change24h := 2.35
+
+	// Check cache first
+	cacheKey := market.SnapshotKey(symbol)
+	if cached, ok := market.GetCache().Get(cacheKey); ok {
+		if snap, ok := cached.(gin.H); ok {
+			c.JSON(http.StatusOK, snap)
+			return
+		}
+	}
+
+	ticker, err := fetchBinance24hrTicker(symbol)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"symbol": symbol,
+			"status": "error",
+			"error":  fmt.Sprintf("failed to fetch market data: %v", err),
+		})
+		return
+	}
+
+	priceRaw := 0.0
+	change24h := 0.0
 	volumeRaw := 0.0
-	atrRaw := 850.0
 	high24h := 0.0
 	low24h := 0.0
 
-	if ticker, err := fetchBinance24hrTicker(symbol); err == nil {
-		if v, ok := ticker["lastPrice"].(string); ok {
-			fmt.Sscanf(v, "%f", &priceRaw)
-		} else if v, ok := ticker["lastPrice"].(float64); ok {
-			priceRaw = v
-		}
-		if v, ok := ticker["priceChangePercent"].(string); ok {
-			fmt.Sscanf(v, "%f", &change24h)
-		} else if v, ok := ticker["priceChangePercent"].(float64); ok {
-			change24h = v
-		}
-		if v, ok := ticker["highPrice"].(string); ok {
-			fmt.Sscanf(v, "%f", &high24h)
-		} else if v, ok := ticker["highPrice"].(float64); ok {
-			high24h = v
-		}
-		if v, ok := ticker["lowPrice"].(string); ok {
-			fmt.Sscanf(v, "%f", &low24h)
-		} else if v, ok := ticker["lowPrice"].(float64); ok {
-			low24h = v
-		}
-		if v, ok := ticker["quoteVolume"].(string); ok {
-			fmt.Sscanf(v, "%f", &volumeRaw)
-		} else if v, ok := ticker["quoteVolume"].(float64); ok {
-			volumeRaw = v
-		}
-		atrRaw = (high24h - low24h) * 0.25
+	if v, ok := ticker["lastPrice"].(string); ok {
+		fmt.Sscanf(v, "%f", &priceRaw)
+	} else if v, ok := ticker["lastPrice"].(float64); ok {
+		priceRaw = v
 	}
+	if v, ok := ticker["priceChangePercent"].(string); ok {
+		fmt.Sscanf(v, "%f", &change24h)
+	} else if v, ok := ticker["priceChangePercent"].(float64); ok {
+		change24h = v
+	}
+	if v, ok := ticker["highPrice"].(string); ok {
+		fmt.Sscanf(v, "%f", &high24h)
+	} else if v, ok := ticker["highPrice"].(float64); ok {
+		high24h = v
+	}
+	if v, ok := ticker["lowPrice"].(string); ok {
+		fmt.Sscanf(v, "%f", &low24h)
+	} else if v, ok := ticker["lowPrice"].(float64); ok {
+		low24h = v
+	}
+	if v, ok := ticker["quoteVolume"].(string); ok {
+		fmt.Sscanf(v, "%f", &volumeRaw)
+	} else if v, ok := ticker["quoteVolume"].(float64); ok {
+		volumeRaw = v
+	}
+	atrRaw := (high24h - low24h) * 0.25
 
-	c.JSON(http.StatusOK, gin.H{
+	result := gin.H{
 		"symbol":          symbol,
 		"price":           priceRaw,
 		"change_24h":      change24h,
@@ -249,7 +284,10 @@ func MarketSnapshot(c *gin.Context) {
 		"low_24h":         low24h,
 		"atr":             atrRaw,
 		"status":          "ok",
-	})
+	}
+
+	market.GetCache().Set(cacheKey, result, market.SnapshotTTL)
+	c.JSON(http.StatusOK, result)
 }
 
 // ── Sentiment ─────────────────────────────────────────────────────
@@ -397,106 +435,78 @@ func handleIndicesSnapshot(c *gin.Context, symbols string) {
 
 func handleCalendarSnapshot(c *gin.Context) {
 	events := getEconomicCalendar()
+	status := "ok"
+	source := "forexfactory" // free public API
+	if len(events) == 0 {
+		status = "empty"
+		source = "none_available"
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"events": events,
-		"status": "ok",
-		"source": "preset",
+		"status": status,
+		"source": source,
 	})
 }
 
+// getEconomicCalendar fetches this week's high-impact economic events from ForexFactory.
+// Falls back to an empty list when the free API is unreachable (no fake data).
 func getEconomicCalendar() []map[string]any {
-	now := time.Now()
-	// Return a rolling 14-day window of major economic events
-	return []map[string]any{
-		{
-			"id": "cpi-us-" + now.Format("2006-01"),
-			"date": now.AddDate(0, 0, 3).Format("2006-01-02"),
-			"time": "20:30",
-			"country": "🇺🇸 美国",
-			"name": "CPI 月率",
-			"name_en": "CPI MoM",
-			"importance": "high",
-			"forecast": "0.3%",
-			"expected_impact": "bullish",
-		},
-		{
-			"id": "ppi-us-" + now.Format("2006-01"),
-			"date": now.AddDate(0, 0, 4).Format("2006-01-02"),
-			"time": "20:30",
-			"country": "🇺🇸 美国",
-			"name": "PPI 月率",
-			"name_en": "PPI MoM",
-			"importance": "high",
-			"forecast": "0.2%",
-			"expected_impact": "neutral",
-		},
-		{
-			"id": "fed-rate-" + now.Format("2006-01"),
-			"date": now.AddDate(0, 0, 7).Format("2006-01-02"),
-			"time": "02:00",
-			"country": "🇺🇸 美国",
-			"name": "美联储利率决议",
-			"name_en": "Fed Interest Rate Decision",
-			"importance": "high",
-			"forecast": "5.50%",
-			"expected_impact": "bearish",
-		},
-		{
-			"id": "nfp-us-" + now.Format("2006-01"),
-			"date": now.AddDate(0, 0, 5).Format("2006-01-02"),
-			"time": "20:30",
-			"country": "🇺🇸 美国",
-			"name": "非农就业人口",
-			"name_en": "Non-Farm Payrolls",
-			"importance": "high",
-			"forecast": "180K",
-			"expected_impact": "bullish",
-		},
-		{
-			"id": "gdp-cn-" + now.Format("2006-01"),
-			"date": now.AddDate(0, 0, 6).Format("2006-01-02"),
-			"time": "10:00",
-			"country": "🇨🇳 中国",
-			"name": "GDP 年率",
-			"name_en": "GDP YoY",
-			"importance": "medium",
-			"forecast": "5.2%",
-			"expected_impact": "neutral",
-		},
-		{
-			"id": "ecb-rate-" + now.Format("2006-01"),
-			"date": now.AddDate(0, 0, 8).Format("2006-01-02"),
-			"time": "20:15",
-			"country": "🇪🇺 欧元区",
-			"name": "欧洲央行利率决议",
-			"name_en": "ECB Interest Rate Decision",
-			"importance": "high",
-			"forecast": "4.50%",
-			"expected_impact": "neutral",
-		},
-		{
-			"id": "cpi-eu-" + now.Format("2006-01"),
-			"date": now.AddDate(0, 0, 10).Format("2006-01-02"),
-			"time": "17:00",
-			"country": "🇪🇺 欧元区",
-			"name": "CPI 年率",
-			"name_en": "CPI YoY",
-			"importance": "medium",
-			"forecast": "2.4%",
-			"expected_impact": "neutral",
-		},
-		{
-			"id": "pmi-cn-" + now.Format("2006-01"),
-			"date": now.AddDate(0, 0, 2).Format("2006-01-02"),
-			"time": "09:30",
-			"country": "🇨🇳 中国",
-			"name": "制造业 PMI",
-			"name_en": "Manufacturing PMI",
-			"importance": "medium",
-			"forecast": "50.2",
-			"expected_impact": "neutral",
-		},
+	events, err := fetchForexFactoryCalendar()
+	if err != nil {
+		return []map[string]any{}
 	}
+	return events
+}
+
+// fetchForexFactoryCalendar fetches economic calendar from ForexFactory's free API.
+func fetchForexFactoryCalendar() ([]map[string]any, error) {
+	apiClient := &http.Client{Timeout: 10 * time.Second}
+	// ForexFactory provides a free JSON calendar endpoint
+	url := "https://cdn-nfs.forexfactory.net/ff-calendar.json"
+	resp, err := apiClient.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+
+	var raw []map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, err
+	}
+
+	// Filter for high-impact events in the next 7 days
+	now := time.Now()
+	cutoff := now.AddDate(0, 0, 7)
+	events := make([]map[string]any, 0)
+	for _, item := range raw {
+		dateStr, _ := item["date"].(string)
+		impact, _ := item["impact"].(string)
+		if impact != "High" {
+			continue
+		}
+		eventDate, err := time.Parse("2006-01-02", dateStr)
+		if err != nil {
+			continue
+		}
+		if eventDate.Before(now) || eventDate.After(cutoff) {
+			continue
+		}
+		events = append(events, map[string]any{
+			"id":              fmt.Sprintf("ff-%s-%s", dateStr, item["title"]),
+			"date":            dateStr,
+			"time":            getString(item, "time", ""),
+			"country":         getString(item, "country", ""),
+			"name":            getString(item, "title", ""),
+			"name_en":         getString(item, "title", ""),
+			"importance":      "high",
+			"forecast":        getString(item, "forecast", ""),
+			"expected_impact": "neutral",
+		})
+	}
+	return events, nil
 }
 
 func round(v float64, decimals int) float64 {
@@ -508,58 +518,105 @@ func round(v float64, decimals int) float64 {
 }
 
 // AIModels returns the list of AI models (for /api/ai/models).
+// Dynamically builds from registered AI providers with enriched metadata.
 func AIModels(c *gin.Context) {
-	models := []map[string]any{
-		// International
-		{"id": "gpt-4o", "name": "GPT-4o", "provider": "openai", "color": "#10A37F", "enabled": true, "weight": 85, "status": "ok"},
-		{"id": "o1-preview", "name": "o1 Preview", "provider": "openai", "color": "#10A37F", "enabled": false, "weight": 90, "status": "ok"},
-		{"id": "claude-opus-4-7", "name": "Claude Opus 4.7", "provider": "anthropic", "color": "#D97706", "enabled": true, "weight": 90, "status": "ok"},
-		{"id": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6", "provider": "anthropic", "color": "#D97706", "enabled": true, "weight": 80, "status": "ok"},
-		{"id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro", "provider": "google", "color": "#4285F4", "enabled": true, "weight": 82, "status": "ok"},
-		{"id": "gemini-2.0-flash", "name": "Gemini 2.0 Flash", "provider": "google", "color": "#4285F4", "enabled": false, "weight": 60, "status": "ok"},
-		// Chinese domestic
-		{"id": "deepseek-v3", "name": "DeepSeek V3", "provider": "deepseek", "color": "#4D6BFE", "enabled": true, "weight": 78, "status": "ok"},
-		{"id": "deepseek-r1", "name": "DeepSeek R1", "provider": "deepseek", "color": "#4D6BFE", "enabled": true, "weight": 75, "status": "ok"},
-		{"id": "qwen-max", "name": "通义千问 Max", "provider": "alibaba", "color": "#FF6A00", "enabled": true, "weight": 72, "status": "ok"},
-		{"id": "qwen-plus", "name": "通义千问 Plus", "provider": "alibaba", "color": "#FF6A00", "enabled": false, "weight": 55, "status": "ok"},
-		{"id": "hunyuan-pro", "name": "混元 Pro", "provider": "tencent", "color": "#00C4A7", "enabled": true, "weight": 70, "status": "ok"},
-		{"id": "hunyuan-lite", "name": "混元 Lite", "provider": "tencent", "color": "#00C4A7", "enabled": false, "weight": 48, "status": "ok"},
-		{"id": "doubao-pro", "name": "豆包 Pro", "provider": "bytedance", "color": "#00D4AA", "enabled": true, "weight": 68, "status": "ok"},
-		{"id": "doubao-lite", "name": "豆包 Lite", "provider": "bytedance", "color": "#00D4AA", "enabled": false, "weight": 45, "status": "ok"},
-		{"id": "glm-4-plus", "name": "GLM-4 Plus", "provider": "zhipu", "color": "#3859FF", "enabled": true, "weight": 70, "status": "ok"},
-		{"id": "glm-4-flash", "name": "GLM-4 Flash", "provider": "zhipu", "color": "#3859FF", "enabled": false, "weight": 50, "status": "ok"},
-		{"id": "moonshot-v1-32k", "name": "Kimi 32K", "provider": "moonshot", "color": "#8B5CF6", "enabled": true, "weight": 65, "status": "ok"},
-		{"id": "moonshot-v1-128k", "name": "Kimi 128K", "provider": "moonshot", "color": "#8B5CF6", "enabled": false, "weight": 68, "status": "ok"},
-		// Open source
-		{"id": "llama-4-maverick", "name": "Llama 4 Maverick", "provider": "meta", "color": "#1877F2", "enabled": false, "weight": 62, "status": "ok"},
-		{"id": "llama-3.3-70b", "name": "Llama 3.3 70B", "provider": "meta", "color": "#1877F2", "enabled": false, "weight": 58, "status": "ok"},
-		{"id": "mistral-large", "name": "Mistral Large", "provider": "mistral", "color": "#F59E0B", "enabled": false, "weight": 65, "status": "ok"},
-		{"id": "mistral-small", "name": "Mistral Small", "provider": "mistral", "color": "#F59E0B", "enabled": false, "weight": 50, "status": "ok"},
+	names := ai.ListProviders()
+	// Sort for stable output
+	models := make([]map[string]any, 0, len(names))
+	for _, name := range names {
+		p := ai.GetProvider(name)
+		enabled := p != nil && p.APIKey != ""
+		weight := 65 // default weight
+		if enabled {
+			weight = 75
+		}
+		display := providerDisplayNames[name]
+		if display == "" {
+			display = name
+		}
+		color := providerColors[name]
+		if color == "" {
+			color = "#6366F1"
+		}
+		models = append(models, map[string]any{
+			"id":       name,
+			"name":     display,
+			"provider": name,
+			"color":    color,
+			"enabled":  enabled,
+			"weight":   weight,
+			"status":   "ok",
+		})
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "models": models})
 }
 
-// PortfolioCalendar returns monthly PnL calendar data.
+// PortfolioCalendar returns monthly PnL calendar data computed from real trades.
 func PortfolioCalendar(c *gin.Context) {
 	now := time.Now()
 	months := make([]map[string]any, 0)
+
+	db := store.GetDB()
+	if db == nil {
+		// No database — return empty calendar
+		for i := 5; i >= 0; i-- {
+			monthStart := now.AddDate(0, -i, 0)
+			mk := monthStart.Format("2006-01")
+			months = append(months, map[string]any{
+				"month_key":     mk,
+				"year":          monthStart.Year(),
+				"month":         int(monthStart.Month()),
+				"days_in_month": 30,
+				"first_weekday": 0,
+				"days":          map[string]float64{},
+				"total":         0.0,
+				"win_days":      0,
+				"lose_days":     0,
+			})
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ok", "months": months})
+		return
+	}
+
 	for i := 5; i >= 0; i-- {
 		monthStart := now.AddDate(0, -i, 0)
 		mk := monthStart.Format("2006-01")
+		monthEnd := monthStart.AddDate(0, 1, 0).Add(-time.Second)
+
+		// Query PnL by day from trades table
+		rows, err := db.Query(
+			`SELECT date(created_at/1000, 'unixepoch') as trade_date,
+			        SUM(CASE WHEN side='SELL' THEN price*quantity ELSE -price*quantity END) as pnl
+			 FROM trades
+			 WHERE created_at BETWEEN ? AND ?
+			 GROUP BY trade_date
+			 ORDER BY trade_date`,
+			monthStart.UnixMilli(), monthEnd.UnixMilli(),
+		)
 		days := make(map[string]float64)
-		winDays, loseDays := 0, 0
 		total := 0.0
-		for d := 1; d <= 28; d++ {
-			val := float64(d%7-3) * 80.0
-			key := fmt.Sprintf("%02d", d)
-			days[key] = store.RoundFloat(val, 2)
-			total += val
-			if val > 0 {
-				winDays++
-			} else if val < 0 {
-				loseDays++
+		winDays, loseDays := 0, 0
+		if err == nil {
+			for rows.Next() {
+				var dateStr string
+				var pnl float64
+				if scanErr := rows.Scan(&dateStr, &pnl); scanErr == nil {
+					// Extract day number from date string "2026-06-13"
+					if len(dateStr) >= 10 {
+						dayKey := dateStr[8:10]
+						days[dayKey] = store.RoundFloat(pnl, 2)
+						total += pnl
+						if pnl > 0 {
+							winDays++
+						} else if pnl < 0 {
+							loseDays++
+						}
+					}
+				}
 			}
+			rows.Close()
 		}
+
 		months = append(months, map[string]any{
 			"month_key":     mk,
 			"year":          monthStart.Year(),
@@ -591,18 +648,62 @@ func SettingsExchangeTest(c *gin.Context) {
 	id := c.Param("id")
 	cfg := store.GetConfig()
 	exchanges, _ := cfg["exchanges"].(map[string]any)
+	exName := id
 	if ex, ok := exchanges[id].(map[string]any); ok {
-		name := getString(ex, "name", id)
-		// Try fetching ticker as connectivity test
-		symbol := "BTCUSDT"
-		if _, err := fetchBinanceKlines(symbol, "1m", 1, 0, 0); err != nil {
-			c.JSON(http.StatusOK, gin.H{"status": "error", "id": id, "message": fmt.Sprintf("%s 连接失败: %v", name, err)})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"status": "ok", "id": id, "message": fmt.Sprintf("%s 连接测试通过", name)})
-		return
+		exName = getString(ex, "name", id)
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "id": id, "message": "连接测试通过"})
+
+	symbol := "BTCUSDT"
+	// Try the specific adapter if available, then fall back to Binance general test
+	status := "error"
+	msg := ""
+	switch strings.ToLower(id) {
+	case "binance", "binance_spot", "binance_futures":
+		if _, err := fetchBinanceKlines(symbol, "1m", 1, 0, 0); err != nil {
+			msg = fmt.Sprintf("%s 连接失败: %v", exName, err)
+		} else {
+			status = "ok"
+			msg = fmt.Sprintf("%s 连接测试通过", exName)
+		}
+	case "bybit":
+		endpoint := "https://api.bybit.com/v5/market/tickers?category=spot&symbol=" + symbol
+		status, msg = testGenericExchange(exName, endpoint, symbol)
+	case "kraken":
+		endpoint := "https://api.kraken.com/0/public/Ticker?pair=XBTUSDT"
+		status, msg = testGenericExchange(exName, endpoint, "")
+	case "mexc":
+		endpoint := "https://api.mexc.com/api/v3/ticker/price?symbol=" + symbol
+		status, msg = testGenericExchange(exName, endpoint, symbol)
+	case "bitget":
+		endpoint := "https://api.bitget.com/api/v2/spot/market/tickers?symbol=" + symbol
+		status, msg = testGenericExchange(exName, endpoint, symbol)
+	case "alpaca":
+		endpoint := "https://paper-api.alpaca.markets/v2/assets"
+		status, msg = testGenericExchange(exName, endpoint, "")
+	case "coinbase":
+		endpoint := "https://api.coinbase.com/v2/prices/BTC-USD/spot"
+		status, msg = testGenericExchange(exName, endpoint, "")
+	default:
+		// Generic connectivity test using public API endpoint
+		endpoint := "https://api.binance.com/api/v3/ticker/price?symbol=" + symbol
+		status, msg = testGenericExchange(exName, endpoint, symbol)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": status, "id": id, "message": msg})
+}
+
+// testGenericExchange tests connectivity by hitting a public REST endpoint.
+func testGenericExchange(name, url, symbol string) (status, msg string) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return "error", fmt.Sprintf("%s 连接失败: %v", name, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return "ok", fmt.Sprintf("%s 连接测试通过", name)
+	}
+	return "error", fmt.Sprintf("%s 连接失败: HTTP %d", name, resp.StatusCode)
 }
 
 // SettingsExchangeSave saves an exchange config.
@@ -639,17 +740,57 @@ func SettingsAITest(c *gin.Context) {
 }
 
 // SettingsAISave saves an AI provider configuration.
-// Persists to config.json via the config package.
+// Persists API key to provider registry and config store.
 func SettingsAISave(c *gin.Context) {
-	_ = c.Param("id")
+	id := c.Param("id")
 	var body map[string]any
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "无效的请求数据"})
 		return
 	}
-	// TODO: persist to config.json or database
-	c.JSON(http.StatusOK, gin.H{
-		"success": false,
-		"message": "AI 提供商配置保存功能尚未实现，请在 config.go 中完成持久化逻辑",
-	})
+
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "provider id is required"})
+		return
+	}
+
+	apiKey, _ := body["api_key"].(string)
+	model, _ := body["model"].(string)
+
+	// Register/update the provider with new credentials
+	p := ai.GetProvider(id)
+	if p == nil {
+		// Create a new provider if not pre-registered
+		ai.RegisterProvider(ai.Provider{
+			Name:  id,
+			Model: model,
+		})
+		p = ai.GetProvider(id)
+	}
+	if p != nil {
+		if apiKey != "" {
+			ai.SetProviderAPIKey(id, apiKey)
+		}
+		if model != "" {
+			ai.SetProviderModel(id, model)
+		}
+	}
+
+	// Persist provider config to config store
+	cfg := store.GetConfig()
+	aiProviders, _ := cfg["ai_providers"].(map[string]any)
+	if aiProviders == nil {
+		aiProviders = make(map[string]any)
+	}
+	aiProviders[id] = map[string]any{
+		"model":   model,
+		"enabled": apiKey != "",
+	}
+	cfg["ai_providers"] = aiProviders
+	if err := store.SaveConfig(cfg); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": fmt.Sprintf("保存配置失败: %v", err)})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": fmt.Sprintf("%s 配置已保存", id)})
 }

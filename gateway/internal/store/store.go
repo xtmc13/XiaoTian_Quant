@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"strings"
+	"strconv"
 	"sync"
 	"time"
 
@@ -78,11 +80,23 @@ func InitDB() error {
 			side TEXT NOT NULL,
 			order_type TEXT NOT NULL,
 			price REAL,
+			stop_price REAL DEFAULT 0,
 			quantity REAL,
 			filled REAL DEFAULT 0,
 			status TEXT DEFAULT 'NEW',
 			exchange TEXT DEFAULT 'BINANCE',
-			created_at REAL
+			user_id INTEGER DEFAULT 0,
+			client_oid TEXT DEFAULT '',
+			avg_fill_price REAL DEFAULT 0,
+			created_at REAL,
+			updated_at REAL,
+			market_type TEXT DEFAULT 'spot',
+			position_side TEXT DEFAULT '',
+			leverage REAL DEFAULT 0,
+			margin_mode TEXT DEFAULT 'cross',
+			tp_price REAL DEFAULT 0,
+			sl_price REAL DEFAULT 0,
+			close_position INTEGER DEFAULT 0
 		);
 	`)
 	if err != nil {
@@ -140,6 +154,11 @@ func InitDB() error {
 	// Run schema migrations
 	if err := RunMigrations(); err != nil {
 		return fmt.Errorf("migration: %w", err)
+	}
+
+	// Migrate xt_orders with extra columns (for pre-existing DBs)
+	if err := migrateXTOrders(); err != nil {
+		fmt.Fprintf(os.Stderr, "WARNING: xt_orders migration failed: %v\n", err)
 	}
 
 	return nil
@@ -529,62 +548,259 @@ func AdminUpdateUser(userID int, updates map[string]any) error {
 // ── Orders ──
 
 var (
-	orders     = make(map[string]map[string]any)
-	orderMu    sync.RWMutex
-	orderCount int
+	orderRepo    *OrderRepo
+	orderRepoOnce sync.Once
+	ordersMu      sync.RWMutex
+	// In-memory order store for fast lookups (synced with DB via OrderRepo)
+	orders      = make(map[string]*OrderRecord)
+	orderCount  int
 )
 
+// getOrderRepo lazily initializes the OrderRepo.
+func getOrderRepo() *OrderRepo {
+	orderRepoOnce.Do(func() {
+		orderRepo = NewOrderRepo()
+	})
+	return orderRepo
+}
+
+// GetOrderRepo returns the global OrderRepo (exported for cross-package access).
+func GetOrderRepo() *OrderRepo {
+	return getOrderRepo()
+}
+
+// migrateXTOrders adds missing columns to xt_orders for existing databases.
+func migrateXTOrders() error {
+	// Try to add columns one by one (SQLite ALTER TABLE ignores errors for existing columns)
+	columns := []string{
+		"stop_price REAL DEFAULT 0",
+		"user_id INTEGER DEFAULT 0",
+		"client_oid TEXT DEFAULT ''",
+		"avg_fill_price REAL DEFAULT 0",
+		"updated_at REAL",
+		"market_type TEXT DEFAULT 'spot'",
+		"position_side TEXT DEFAULT ''",
+		"leverage REAL DEFAULT 0",
+		"margin_mode TEXT DEFAULT 'cross'",
+		"tp_price REAL DEFAULT 0",
+		"sl_price REAL DEFAULT 0",
+		"close_position INTEGER DEFAULT 0",
+	}
+	for _, col := range columns {
+		// Split on first space to get column name
+		parts := strings.SplitN(col, " ", 2)
+		if len(parts) == 2 {
+			db.Exec(fmt.Sprintf("ALTER TABLE xt_orders ADD COLUMN %s %s", parts[0], parts[1]))
+		}
+	}
+	return nil
+}
+
 func GetOrders(symbol string) []map[string]any {
-	orderMu.RLock()
-	defer orderMu.RUnlock()
+	ordersMu.RLock()
+	defer ordersMu.RUnlock()
 	var result []map[string]any
 	for _, o := range orders {
-		if symbol == "" || o["symbol"] == symbol {
-			result = append(result, o)
+		if symbol == "" || o.Symbol == symbol {
+			result = append(result, orderToMap(o))
 		}
+	}
+	if result == nil {
+		result = []map[string]any{}
 	}
 	return result
 }
 
 func PlaceOrder(order map[string]any) string {
-	orderMu.Lock()
-	defer orderMu.Unlock()
+	ordersMu.Lock()
+	defer ordersMu.Unlock()
 	orderCount++
-	id := fmt.Sprintf("ord-%d-%d", time.Now().UnixMilli(), orderCount)
-	order["order_id"] = id
-	order["created_at"] = float64(time.Now().Unix())
-	if _, ok := order["status"]; !ok {
-		order["status"] = "NEW"
+
+	// Build OrderRecord from the map
+	rec := &OrderRecord{
+		Symbol:       getString(order, "symbol", ""),
+		Side:         getString(order, "side", ""),
+		OrderType:    getString(order, "order_type", "LIMIT"),
+		Price:        getFloat(order, "price", 0),
+		StopPrice:    getFloat(order, "stop_price", 0),
+		Quantity:     getFloat(order, "quantity", 0),
+		Filled:       getFloat(order, "filled", 0),
+		Status:       getString(order, "status", "NEW"),
+		Exchange:     getString(order, "exchange", "BINANCE"),
+		UserID:       uint64(getFloat(order, "user_id", 0)),
+		ClientOID:    getString(order, "client_oid", ""),
+		AvgFillPrice: getFloat(order, "avg_fill_price", 0),
+		CreatedAt:    int64(getFloat(order, "created_at", 0)),
+		MarketType:   getString(order, "market_type", "spot"),
+		PositionSide: getString(order, "position_side", ""),
+		Leverage:     getFloat(order, "leverage", 0),
+		MarginMode:   getString(order, "margin_mode", "cross"),
+		TPPrice:      getFloat(order, "tp_price", 0),
+		SLPrice:      getFloat(order, "sl_price", 0),
+		ClosePosition: getBool(order, "close_position", false),
 	}
-	if _, ok := order["filled"]; !ok {
-		order["filled"] = float64(0)
+	if rec.CreatedAt == 0 {
+		rec.CreatedAt = time.Now().UnixMilli()
 	}
-	orders[id] = order
-	return id
+	rec.UpdatedAt = rec.CreatedAt
+	if rec.ID == "" {
+		rec.ID = fmt.Sprintf("ord-%d-%d", rec.CreatedAt, orderCount)
+	}
+
+	// Persist to DB immediately
+	if err := getOrderRepo().Create(rec); err != nil {
+		fmt.Fprintf(os.Stderr, "[Order] DB write error: %v (order kept in memory)\n", err)
+	}
+
+	// Keep in-memory copy too
+	orders[rec.ID] = rec
+	return rec.ID
 }
 
 func GetOrderByID(id string) map[string]any {
-	orderMu.RLock()
-	defer orderMu.RUnlock()
-	return orders[id]
-}
-
-func CancelOrder(id string) error {
-	orderMu.Lock()
-	defer orderMu.Unlock()
-	o, ok := orders[id]
-	if !ok {
-		return fmt.Errorf("not found")
+	ordersMu.RLock()
+	defer ordersMu.RUnlock()
+	if o, ok := orders[id]; ok {
+		return orderToMap(o)
 	}
-	status := o["status"].(string)
-	if status == "CANCELLED" || status == "FILLED" {
-		return fmt.Errorf("already %s", status)
-	}
-	o["status"] = "CANCELLED"
 	return nil
 }
 
+func CancelOrder(id string) error {
+	ordersMu.Lock()
+	defer ordersMu.Unlock()
+	o, ok := orders[id]
+	if !ok {
+		// Try DB as fallback
+		if db != nil {
+			row := db.QueryRow("SELECT status FROM xt_orders WHERE id=?", id)
+			var status string
+			if err := row.Scan(&status); err == nil {
+				if status == "CANCELLED" || status == "FILLED" {
+					return fmt.Errorf("already %s", status)
+				}
+				_, err := db.Exec("UPDATE xt_orders SET status='CANCELLED', updated_at=? WHERE id=?", time.Now().UnixMilli(), id)
+				return err
+			}
+		}
+		return fmt.Errorf("not found")
+	}
+	status := o.Status
+	if status == "CANCELLED" || status == "FILLED" {
+		return fmt.Errorf("already %s", status)
+	}
+	o.Status = "CANCELLED"
+	o.UpdatedAt = time.Now().UnixMilli()
+	orders[id] = o
+	// Persist cancellation to DB
+	return getOrderRepo().Update(o)
+}
+
+// PersistOrder persists an in-memory order to the database (for status updates).
+func PersistOrder(orderID string, status string, filled float64, avgFillPrice float64) error {
+	ordersMu.Lock()
+	o, ok := orders[orderID]
+	if !ok {
+		ordersMu.Unlock()
+		return fmt.Errorf("order %s not found in memory", orderID)
+	}
+	o.Status = status
+	o.Filled = filled
+	o.AvgFillPrice = avgFillPrice
+	o.UpdatedAt = time.Now().UnixMilli()
+	ordersMu.Unlock()
+	return getOrderRepo().Update(o)
+}
+
+// GetOrderCount returns the number of orders persisted in the database.
+func GetOrderCount() (int, error) {
+	if db == nil {
+		return 0, nil
+	}
+	var count int
+	err := db.QueryRow("SELECT COUNT(*) FROM xt_orders").Scan(&count)
+	return count, err
+}
+
+// GetDBOrders returns orders from the database (for recovery after restart).
+func GetDBOrders(symbol string, limit int) ([]*OrderRecord, error) {
+	return getOrderRepo().List(map[string]any{"symbol": symbol}, limit)
+}
+
 // ── Helpers ──
+
+// ── Helpers ──
+
+func getString(m map[string]any, key, def string) string {
+	if v, ok := m[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return def
+}
+
+func getFloat(m map[string]any, key string, def float64) float64 {
+	if v, ok := m[key]; ok {
+		switch val := v.(type) {
+		case float64:
+			return val
+		case int:
+			return float64(val)
+		case int64:
+			return float64(val)
+		case string:
+			if f, err := strconv.ParseFloat(val, 64); err == nil {
+				return f
+			}
+		}
+	}
+	return def
+}
+
+func getBool(m map[string]any, key string, def bool) bool {
+	if v, ok := m[key]; ok {
+		switch val := v.(type) {
+		case bool:
+			return val
+		case float64:
+			return val != 0
+		case int:
+			return val != 0
+		case string:
+			return val == "true" || val == "1"
+		}
+	}
+	return def
+}
+
+func orderToMap(o *OrderRecord) map[string]any {
+	return map[string]any{
+		"order_id":       o.ID,
+		"id":             o.ID,
+		"symbol":         o.Symbol,
+		"side":           o.Side,
+		"order_type":     o.OrderType,
+		"price":          o.Price,
+		"stop_price":     o.StopPrice,
+		"quantity":       o.Quantity,
+		"filled":         o.Filled,
+		"status":         o.Status,
+		"exchange":       o.Exchange,
+		"user_id":        o.UserID,
+		"client_oid":     o.ClientOID,
+		"avg_fill_price": o.AvgFillPrice,
+		"created_at":     o.CreatedAt,
+		"updated_at":     o.UpdatedAt,
+		"market_type":    o.MarketType,
+		"position_side":  o.PositionSide,
+		"leverage":       o.Leverage,
+		"margin_mode":    o.MarginMode,
+		"tp_price":       o.TPPrice,
+		"sl_price":       o.SLPrice,
+		"close_position": o.ClosePosition,
+	}
+}
 
 func randomHex(n int) string {
 	b := make([]byte, n)

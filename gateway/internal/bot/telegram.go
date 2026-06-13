@@ -88,6 +88,10 @@ type Commands struct {
 	OnRemoveBlacklist func(symbol string) error
 	OnForceEntry      func(symbol string) error
 	OnForceExit       func(symbol string) error
+	OnForceShort      func(symbol string) error
+	OnReloadConfig    func() error
+	OnStartStrategy   func(strategyID string) error
+	OnStopStrategy    func(strategyID string) error
 }
 
 // InlineKeyboardButton represents a single inline keyboard button.
@@ -370,9 +374,25 @@ func (b *Bot) handleCallback(callback map[string]any, chatID int64) {
 			response = "⚠️ Missing symbol"
 		}
 	case "start_strategy":
-		response = fmt.Sprintf("▶️ Start strategy requested: %s (not implemented)", param)
+		if param != "" && b.commands.OnStartStrategy != nil {
+			if err := b.commands.OnStartStrategy(param); err != nil {
+				response = fmt.Sprintf("❌ 启动策略失败: %v", err)
+			} else {
+				response = fmt.Sprintf("▶️ 策略 %s 已启动", param)
+			}
+		} else {
+			response = "▶️ 启动策略功能未配置回调"
+		}
 	case "stop_strategy":
-		response = fmt.Sprintf("⏸️ Stop strategy requested: %s (not implemented)", param)
+		if param != "" && b.commands.OnStopStrategy != nil {
+			if err := b.commands.OnStopStrategy(param); err != nil {
+				response = fmt.Sprintf("❌ 停止策略失败: %v", err)
+			} else {
+				response = fmt.Sprintf("⏸️ 策略 %s 已停止", param)
+			}
+		} else {
+			response = "⏸️ 停止策略功能未配置回调"
+		}
 	default:
 		response = fmt.Sprintf("⚠️ Unknown action: %s", action)
 	}
@@ -492,7 +512,15 @@ func (b *Bot) handleCommand(text string, chatID int64) {
 		}
 	case "/forceshort":
 		if len(args) > 0 {
-			response = fmt.Sprintf("🔴 Force short: %s (not implemented)", strings.ToUpper(args[0]))
+			if b.commands.OnForceShort != nil {
+				if err := b.commands.OnForceShort(strings.ToUpper(args[0])); err != nil {
+					response = fmt.Sprintf("🔴 Force short 失败: %v", err)
+				} else {
+					response = fmt.Sprintf("🔴 Force short: %s", strings.ToUpper(args[0]))
+				}
+			} else {
+				response = fmt.Sprintf("🔴 Force short: %s (回调未配置，请检查策略引擎)", strings.ToUpper(args[0]))
+			}
 		} else {
 			response = "Usage: /forceshort SYMBOL"
 		}
@@ -504,7 +532,15 @@ func (b *Bot) handleCommand(text string, chatID int64) {
 			response = "Usage: /forceexit SYMBOL"
 		}
 	case "/reload_config":
-		response = "🔄 Config reload requested (not implemented)"
+		if b.commands.OnReloadConfig != nil {
+			if err := b.commands.OnReloadConfig(); err != nil {
+				response = fmt.Sprintf("🔄 配置重载失败: %v", err)
+			} else {
+				response = "🔄 配置已重新加载"
+			}
+		} else {
+			response = "🔄 配置重载功能未配置回调"
+		}
 	case "/show_config":
 		response = b.cmdShowConfig()
 	case "/logs":

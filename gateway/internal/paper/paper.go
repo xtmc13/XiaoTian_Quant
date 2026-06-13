@@ -169,6 +169,9 @@ type PaperExchange struct {
 	rng       *rand.Rand
 	mu        sync.RWMutex
 
+	// Price provider for market data
+	priceProvider func(symbol string) (price float64, ok bool)
+
 	// Event callbacks
 	onOrderUpdate func(order model.OrderData)
 	onTrade       func(trade model.TradeData)
@@ -369,13 +372,66 @@ func (pe *PaperExchange) GetOpenOrders(symbol string) ([]map[string]any, error) 
 	return result, nil
 }
 
-// Klines and ticker are not applicable for paper trading
+// SetPriceProvider injects a real-time price source for paper trading market data.
+func (pe *PaperExchange) SetPriceProvider(provider func(symbol string) (price float64, ok bool)) {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+	pe.priceProvider = provider
+}
+
+// GetKlines returns synthetic OHLCV based on the current market price from the price provider.
 func (pe *PaperExchange) GetKlines(symbol, interval string, limit int) ([][]any, error) {
-	return nil, fmt.Errorf("paper exchange does not provide klines")
+	pe.mu.RLock()
+	provider := pe.priceProvider
+	pe.mu.RUnlock()
+
+	if provider == nil {
+		return nil, fmt.Errorf("paper exchange: no price provider configured")
+	}
+	price, ok := provider(symbol)
+	if !ok {
+		return nil, fmt.Errorf("paper exchange: no price available for %s", symbol)
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	nowMs := time.Now().UnixMilli()
+	klines := make([][]any, limit)
+	for i := 0; i < limit; i++ {
+		// Synthetic kline: use current price with tiny noise for realistic look
+		noise := 1.0 + (pe.rng.Float64()-0.5)*0.0002
+		o, h, l, c := price*noise, price*noise*1.0001, price*noise*0.9999, price*noise
+		klines[i] = []any{
+			float64(nowMs - int64((limit-i))*60000), // timestamp
+			o, h, l, c,
+			0.0, // volume (unavailable for paper)
+		}
+	}
+	return klines, nil
 }
+
+// GetTicker returns the current ticker from the price provider.
 func (pe *PaperExchange) GetTicker(symbol string) (map[string]any, error) {
-	return nil, fmt.Errorf("paper exchange does not provide ticker")
+	pe.mu.RLock()
+	provider := pe.priceProvider
+	pe.mu.RUnlock()
+
+	if provider == nil {
+		return nil, fmt.Errorf("paper exchange: no price provider configured")
+	}
+	price, ok := provider(symbol)
+	if !ok {
+		return nil, fmt.Errorf("paper exchange: no price available for %s", symbol)
+	}
+	return map[string]any{
+		"symbol": symbol,
+		"last":   price,
+		"bid":    price * 0.9999,
+		"ask":    price * 1.0001,
+		"source": "paper",
+	}, nil
 }
+
 func (pe *PaperExchange) StartMarketStream(symbols []string) error { return nil }
 func (pe *PaperExchange) StartUserStream() error                   { return nil }
 
@@ -706,8 +762,16 @@ func (pe *PaperExchange) unlockFunds(order *PaperOrder) {
 }
 
 func (pe *PaperExchange) getBaseCurrency(symbol string) string {
-	// Extract base from e.g. "BTCUSDT" -> "BTC"
-	if len(symbol) > 4 {
+	// Extract base from e.g. "BTCUSDT" -> "BTC", "ETHBTC" -> "ETH", "LINKDAI" -> "LINK"
+	// Try common quote currencies first (longest first)
+	quoteCurrencies := []string{"USDT", "USDC", "BUSD", "UST", "DAI", "WBTC", "BTC", "ETH"}
+	for _, q := range quoteCurrencies {
+		if len(symbol) > len(q) && symbol[len(symbol)-len(q):] == q {
+			return symbol[:len(symbol)-len(q)]
+		}
+	}
+	// Fallback: if symbol > 4 chars, trim last 4 (most quotes are 4-char)
+	if len(symbol) >= 4 {
 		return symbol[:len(symbol)-4]
 	}
 	return ""

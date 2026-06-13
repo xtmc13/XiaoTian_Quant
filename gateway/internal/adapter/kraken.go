@@ -8,12 +8,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/xiaotian-quant/gateway/internal/exchange"
+	"github.com/xiaotian-quant/gateway/internal/model"
 )
 
 const (
@@ -97,6 +101,13 @@ type KrakenAdapter struct {
 	nonce     int64
 	mu        sync.RWMutex
 
+	streamHub     *exchange.StreamHub
+	wsConnected   bool
+	onTicker      func(tick model.Tick)
+	onOrderBook   func(ob model.OrderBookData)
+	onTrade       func(trade model.TradeData)
+	onKline       func(bar model.Bar)
+
 	orders    map[string]map[string]any
 	positions map[string]map[string]any
 }
@@ -107,6 +118,7 @@ func NewKrakenAdapter(apiKey, secret string) *KrakenAdapter {
 		secretKey:  secret,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		nonce:      time.Now().UnixNano(),
+		streamHub:  exchange.NewStreamHub(),
 		orders:     make(map[string]map[string]any),
 		positions:  make(map[string]map[string]any),
 	}
@@ -114,8 +126,6 @@ func NewKrakenAdapter(apiKey, secret string) *KrakenAdapter {
 
 func (k *KrakenAdapter) Name() string  { return "kraken" }
 func (k *KrakenAdapter) Start() error  { return nil }
-func (k *KrakenAdapter) Stop() error   { return nil }
-func (k *KrakenAdapter) IsConnected() bool { return true }
 
 // ── Auth ───────────────────────────────────────────────────────
 
@@ -406,11 +416,125 @@ func (k *KrakenAdapter) GetPositions() ([]map[string]any, error) {
 }
 
 func (k *KrakenAdapter) StartMarketStream(symbols []string) error {
-	return nil
+	if len(symbols) == 0 {
+		return nil
+	}
+
+	// Convert symbols to Kraken pair format
+	var pairs []string
+	for _, sym := range symbols {
+		pairs = append(pairs, toKrakenPair(sym))
+	}
+
+	wsClient := exchange.NewWSClient(exchange.WSConfig{
+		URL: KrakenWsURL,
+		OnMessage: func(msg []byte) {
+			k.handleMarketMessage(msg)
+		},
+		OnConnected: func() {
+			k.mu.Lock()
+			k.wsConnected = true
+			k.mu.Unlock()
+			log.Printf("[Kraken] Market stream connected, subscribing to %d pairs", len(pairs))
+			// Send subscription for ticker, book, trade, ohlc
+			for _, pair := range pairs {
+				for _, channel := range []string{"ticker", "book", "trade", "ohlc"} {
+					msg := map[string]any{
+						"event": "subscribe",
+						"pair":  []string{pair},
+						"subscription": map[string]any{
+							"name": channel,
+						},
+					}
+					k.streamHub.SendJSON("market", msg)
+				}
+			}
+		},
+		OnDisconnected: func(err error) {
+			k.mu.Lock()
+			k.wsConnected = false
+			k.mu.Unlock()
+			if err != nil {
+				log.Printf("[Kraken] Market stream disconnected: %v", err)
+			}
+		},
+	})
+
+	k.streamHub.Add("market", wsClient)
+	return wsClient.Connect()
 }
 
 func (k *KrakenAdapter) StartUserStream() error {
+	return nil // Kraken private streams require auth, skip for now
+}
+
+func (k *KrakenAdapter) handleMarketMessage(msg []byte) {
+	// Kraken WS messages are:
+	// [channelID, data] for data feeds
+	// [channelID, pair, [data], event] for subscription confirmations
+	// We try to parse as an array first.
+	var arr []json.RawMessage
+	if err := json.Unmarshal(msg, &arr); err != nil {
+		return
+	}
+	if len(arr) < 2 {
+		return
+	}
+
+	// Check if first element is a string (channel name) or array (channelID)
+	var channelID string
+	if err := json.Unmarshal(arr[0], &channelID); err != nil {
+		// Not a simple channel name, could be an array
+		channelID = string(arr[0])
+	}
+
+	// Check if it's a subscription status event
+	if strings.Contains(string(arr[1]), `"event":"subscriptionStatus"`) {
+		return
+	}
+
+	dataRaw := arr[1]
+	var data any
+	if err := json.Unmarshal(dataRaw, &data); err != nil {
+		return
+	}
+
+	dataArray, ok := data.([]any)
+	if !ok || len(dataArray) == 0 {
+		return
+	}
+
+	if len(dataArray) < 5 {
+		return
+	}
+
+	// Kraken ticker format: [close, volume, high, low, open, bids, asks, ...]
+	if k.onTicker != nil {
+		k.onTicker(model.Tick{
+			Last:     dataArray[0].(float64),
+			Volume:   dataArray[1].(float64),
+			Bid:      dataArray[5].(float64),
+			Ask:      dataArray[6].(float64),
+			Timestamp: time.Now().UnixMilli(),
+		})
+	}
+}
+
+func (k *KrakenAdapter) Stop() error {
+	k.mu.Lock()
+	k.wsConnected = false
+	hub := k.streamHub
+	k.mu.Unlock()
+	if hub != nil {
+		hub.CloseAll()
+	}
 	return nil
+}
+
+func (k *KrakenAdapter) IsConnected() bool {
+	k.mu.RLock()
+	defer k.mu.RUnlock()
+	return k.wsConnected
 }
 
 // ── Helpers ────────────────────────────────────────────────────

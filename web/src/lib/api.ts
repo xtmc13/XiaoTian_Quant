@@ -52,8 +52,6 @@ import {
   type DefaultSettings,
   type UISettings,
   type ExchangeSettings,
-  type HealthStatus,
-  type ComponentHealth,
   type StrategyCommunityItem,
   type StrategyCommunityDetail,
   type CommunityComment,
@@ -65,7 +63,6 @@ import {
   type OCOOrder,
   type BracketOrder,
   type IcebergOrder,
-  type TrailingOrder,
   type ArbitrageConfig,
   type ArbitrageStatus,
   type ArbitrageOpportunity,
@@ -517,12 +514,6 @@ export const settingsApi = {
   aiSave: (id: string, data: Record<string, unknown>) => api.put<{ success: boolean }>(`/settings/ai/${id}`, data),
 }
 
-// ── Health ──
-export const healthApi = {
-  check: () => api.get<HealthStatus>('/health'),
-  components: () => api.get<ComponentHealth[]>('/health/components'),
-}
-
 // ── Strategy Community ──
 export const strategyCommunityApi = {
   list: (params?: { page?: number; page_size?: number; keyword?: string; sort_by?: string }) =>
@@ -623,11 +614,6 @@ export const advancedOrderApi = {
     list: () => api.get<IcebergOrder[]>('/orders/iceberg'),
     cancel: (id: string) => api.del<{ success: boolean }>(`/orders/iceberg/${id}`),
   },
-  trailing: {
-    place: (data: Partial<TrailingOrder>) => api.post<TrailingOrder>('/orders/trailing', data),
-    list: () => api.get<TrailingOrder[]>('/orders/trailing'),
-    cancel: (id: string) => api.del<{ success: boolean }>(`/orders/trailing/${id}`),
-  },
 }
 
 // ── Arbitrage ──
@@ -697,7 +683,7 @@ export const indicatorApi = {
   decrypt: (userId: number, indicatorId: number) =>
     api.post<{ key: string; success: boolean }>('/indicator/getDecryptKey', { user_id: userId, indicator_id: indicatorId }),
   backtest: (data: Record<string, unknown>) => api.post<IndicatorBacktestResult>('/indicator/backtest', data, { timeout: TIMEOUTS.backtest }),
-  aiGenerate: (data: Record<string, unknown>) => api.post<IndicatorAIGenerateResult>('/indicator/aiGenerate', data, { timeout: TIMEOUTS.ai }),
+  aiGenerate: (data: Record<string, unknown>) => api.post<IndicatorAIGenerateResult>('/indicator/ai-generate', data, { timeout: TIMEOUTS.ai }),
   aiGenerateStream: (
     data: { prompt: string; existingCode?: string },
     handlers: {
@@ -866,10 +852,10 @@ export const communityApi = {
 
 // ── Admin ──
 export const adminApi = {
-  users: () => api.get<AdminUser[]>('/auth/admin/users').then(d => d ?? []),
-  user: (id: number) => api.get<AdminUser>(`/auth/admin/users/${id}`),
-  updateUser: (id: number, data: Partial<AdminUser>) => api.put<{ success: boolean }>(`/auth/admin/users/${id}`, data),
-  stats: () => api.get<AdminStats>('/auth/admin/stats'),
+  users: () => api.get<AdminUser[]>('/admin/users').then(d => d ?? []),
+  user: (id: number) => api.get<AdminUser>(`/admin/users/${id}`),
+  updateUser: (id: number, data: Partial<AdminUser>) => api.put<{ success: boolean }>(`/admin/users/${id}`, data),
+  stats: () => api.get<AdminStats>('/admin/stats'),
   enhancedStats: () => api.get<AdminStats>('/admin/stats'),
   auditLog: (params?: { limit?: number; offset?: number }) => api.get<{ logs: AdminAuditLog[]; total: number }>('/admin/audit-log', { params }),
 }

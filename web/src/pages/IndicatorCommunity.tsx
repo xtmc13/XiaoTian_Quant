@@ -128,10 +128,25 @@ function scoreBadgeClass(score?: number) {
   return 'from-[#333] to-[#555]'
 }
 
-/* ── No-op localStorage helpers (replaced by API-driven is_purchased) ── */
+/* ── Purchased indicator cache (localStorage for offline/cache fallback) ── */
+const PURCHASED_KEY = 'xt-purchased-indicators'
 
-function getPurchasedIds(): number[] { return [] }
-function addPurchase(_id: number) {}
+function getPurchasedIds(): number[] {
+  try {
+    const raw = localStorage.getItem(PURCHASED_KEY)
+    return raw ? JSON.parse(raw) : []
+  } catch {
+    return []
+  }
+}
+
+function addPurchase(id: number) {
+  const ids = getPurchasedIds()
+  if (!ids.includes(id)) {
+    ids.push(id)
+    localStorage.setItem(PURCHASED_KEY, JSON.stringify(ids))
+  }
+}
 
 /* ── Indicator Card ──────────────────────────────────────────────── */
 

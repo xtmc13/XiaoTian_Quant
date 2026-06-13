@@ -2,12 +2,14 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import type { EChartsType } from 'echarts'
 import { DataTable } from '@/components/DataTable'
-import { BacktestResult } from '@/types'
+import type { BacktestResult, BacktestReport } from '@/types'
 import {
   Play, Download, TrendingUp, TrendingDown, BarChart3, Target,
   Percent, DollarSign, Activity, Loader2, AlertCircle,
   Database, SlidersHorizontal, GitBranch, Beaker,
-  ChevronRight, ChevronDown, RefreshCw,
+  ChevronRight, ChevronDown, RefreshCw, Shield, Gauge,
+  Clock, Zap, ArrowUpDown, Search, Filter, X,
+  LayoutDashboard, LineChart, ListFilter, AlertTriangle,
 } from 'lucide-react'
 import { cn, formatCurrency } from '@/lib/utils'
 import { backtestApi, indicatorApi } from '@/lib/api'
@@ -22,17 +24,6 @@ import { PageHeader } from '@/components/ui/PageHeader'
 import { BacktestAssumptions } from '@/components/BacktestAssumptions'
 
 /* ── Types ───────────────────────────────────────────────────────── */
-interface BacktestReport {
-  initial_balance: number
-  final_equity: number
-  total_return_pct: number
-  max_drawdown_pct: number
-  sharpe_ratio: number
-  win_rate_pct: number
-  total_trades: number
-  profit_factor: number
-}
-
 interface BacktestParams {
   symbol: string; interval: string; strategy_type: string; initial_balance?: Record<string, number>;
   from?: string; to?: string; order_count?: number; first_order_amount?: number;
@@ -45,21 +36,12 @@ interface BacktestParams {
 }
 
 interface BacktestHistoryItem {
-  id: string
-  symbol: string
-  interval: string
-  strategyType: string
-  date: string
-  totalReturn: number
-  maxDrawdown: number
-  sharpe: number
-  winRate: number
-  trades: number
+  id: string; symbol: string; interval: string; strategyType: string; date: string
+  totalReturn: number; maxDrawdown: number; sharpe: number; winRate: number; trades: number
   params: BacktestParams
 }
 
 /* ── Constants ───────────────────────────────────────────────────── */
-
 const STRATEGIES = [
   { value: 'sma_cross', label: '均线交叉', desc: '快慢均线金叉做多死叉平仓', supported: true },
   { value: 'breakout', label: '突破策略', desc: '突破N日最高/最低价入场，止损止盈出场', supported: true },
@@ -82,9 +64,34 @@ const PRESET_DATES = [
   { label: '最近6月', days: 180 }, { label: '最近1年', days: 365 }, { label: '最近2年', days: 730 },
 ]
 
+const RESULT_TABS = [
+  { key: 'overview', label: '概览', icon: LayoutDashboard },
+  { key: 'charts', label: '图表', icon: LineChart },
+  { key: 'trades', label: '交易记录', icon: ListFilter },
+  { key: 'risk', label: '风险分析', icon: AlertTriangle },
+] as const
+type TabKey = typeof RESULT_TABS[number]['key']
+
 function dateToISO(d: Date): string { return d.toISOString().slice(0, 10) }
 function daysAgo(n: number): string { const d = new Date(); d.setDate(d.getDate() - n); return dateToISO(d) }
 function formatPct(n: number): string { return `${n >= 0 ? '+' : ''}${n.toFixed(2)}%` }
+function formatAbsPct(n: number): string { return `${n.toFixed(2)}%` }
+function toFixed(n: number | undefined, d = 2): string { return n != null ? n.toFixed(d) : '-' }
+
+/* ── Rating badge ── */
+function getRating(report: BacktestReport) {
+  const score = (
+    (report.total_return_pct > 10 ? 20 : report.total_return_pct > 0 ? 10 : 0) +
+    ((report.sortino_ratio ?? report.sharpe_ratio) > 2 ? 25 : (report.sortino_ratio ?? report.sharpe_ratio) > 1 ? 15 : 5) +
+    (report.max_drawdown_pct < 10 ? 20 : report.max_drawdown_pct < 20 ? 12 : 4) +
+    (report.win_rate_pct > 55 ? 15 : report.win_rate_pct > 40 ? 8 : 3) +
+    (report.profit_factor > 1.5 ? 20 : report.profit_factor > 1.1 ? 10 : 5)
+  ) as number
+  if (score >= 80) return { label: '优秀', color: 'text-quant-green', bg: 'bg-quant-green/10', border: 'border-quant-green/30' }
+  if (score >= 60) return { label: '良好', color: 'text-blue-400', bg: 'bg-blue-400/10', border: 'border-blue-400/30' }
+  if (score >= 40) return { label: '一般', color: 'text-yellow-400', bg: 'bg-yellow-400/10', border: 'border-yellow-400/30' }
+  return { label: '较差', color: 'text-quant-red', bg: 'bg-quant-red/10', border: 'border-quant-red/30' }
+}
 
 /* ── Collapsible Section ── */
 function CollapsibleSection({ title, count, defaultOpen, children }: { title: string; count?: number; defaultOpen?: boolean; children: React.ReactNode }) {
@@ -103,57 +110,157 @@ function CollapsibleSection({ title, count, defaultOpen, children }: { title: st
   )
 }
 
-/* ── Monthly Heatmap Calendar ── */
-function MonthlyHeatmap({ data, isLoading }: { data?: { month: string; returnPct: number }[]; isLoading?: boolean }) {
+/* ── Monthly Heatmap ── */
+function MonthlyHeatmap({ data, isLoading }: { data?: Record<string, number>; isLoading?: boolean }) {
   if (isLoading) return <div className="h-64 animate-pulse rounded-lg bg-quant-bg-secondary" />
 
-  const months = data || []
-  if (!months.length) return <div className="h-64 flex items-center justify-center text-xs text-muted-foreground">运行回测后显示月度收益分布</div>
+  const entries = data ? Object.entries(data).sort(([a], [b]) => a.localeCompare(b)) : []
+  if (!entries.length) return <div className="h-64 flex items-center justify-center text-xs text-muted-foreground">运行回测后显示月度收益分布</div>
 
-  // Group into rows by year
   const yearGroups: Record<string, { month: string; label: string; returnPct: number }[]> = {}
-  months.forEach(m => {
-    const year = m.month.split('-')[0]
-    if (!yearGroups[year]) yearGroups[year] = []
-    const monthNum = parseInt(m.month.split('-')[1])
-    const monthLabels = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月']
-    yearGroups[year].push({ ...m, label: monthLabels[monthNum - 1] || m.month })
+  const allVal = Object.values(data!).map(Math.abs)
+  const maxAbs = Math.max(...allVal, 0.1)
+  entries.forEach(([key, val]) => {
+    const [y, m] = key.split('-')
+    if (!yearGroups[y]) yearGroups[y] = []
+    const labels = ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月']
+    yearGroups[y].push({ month: key, label: labels[parseInt(m)-1] || key, returnPct: val })
   })
 
-  const allReturns = months.map(m => m.returnPct)
-  const maxAbs = Math.max(...allReturns.map(Math.abs), 0.1)
-
   return (
-    <div className="space-y-3">
-      {Object.entries(yearGroups).sort(([a], [b]) => a.localeCompare(b)).map(([year, monthData]) => (
+    <div className="space-y-4">
+      {Object.entries(yearGroups).sort(([a],[b]) => a.localeCompare(b)).map(([year, md]) => (
         <div key={year}>
-          <div className="text-[10px] text-muted-foreground mb-1.5">{year}年</div>
-          <div className="grid grid-cols-12 gap-1">
-            {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(m => {
-              const md = monthData.find(x => parseInt(x.month.split('-')[1]) === m)
-              const r = md?.returnPct ?? 0
-              const hasData = md !== undefined
-              const intensity = hasData ? Math.min(Math.abs(r) / maxAbs, 1) : 0
-              const bgColor = !hasData ? '#0a0a0a' : r >= 0
-                ? `rgba(16,185,129,${0.08 + intensity * 0.5})`
-                : `rgba(239,68,68,${0.08 + intensity * 0.5})`
-              const textColor = !hasData ? '#333' : r >= 0 ? '#34d399' : '#f87171'
+          <div className="text-[10px] text-muted-foreground mb-2 font-medium">{year}年</div>
+          <div className="grid grid-cols-12 gap-1.5">
+            {[1,2,3,4,5,6,7,8,9,10,11,12].map(m => {
+              const d = md.find(x => parseInt(x.month.split('-')[1]) === m)
+              const r = d?.returnPct ?? 0
+              const has = d !== undefined
+              const i = has ? Math.min(Math.abs(r) / maxAbs, 1) : 0
+              const bg = !has ? '#0a0a0a' : r >= 0
+                ? `rgba(16,185,129,${0.08 + i * 0.55})`
+                : `rgba(239,68,68,${0.08 + i * 0.55})`
+              const tc = !has ? '#333' : r >= 0 ? '#34d399' : '#f87171'
               return (
-                <div key={m} className="aspect-square rounded-md flex flex-col items-center justify-center text-[10px] font-mono" style={{ backgroundColor: bgColor, color: textColor }} title={hasData ? `${md.label}: ${formatPct(r)}` : undefined}>
-                  <span className="text-[8px] opacity-70">{!hasData ? '-' : m + '月'.slice(0,1)}</span>
-                  {hasData && <span className="text-[9px] font-bold">{r >= 0 ? '+' : ''}{r.toFixed(1)}%</span>}
+                <div key={m} className="aspect-square rounded-md flex flex-col items-center justify-center font-mono" style={{ backgroundColor: bg, color: tc, fontSize: 10 }}
+                  title={has ? `${d!.label}: ${formatPct(r)}` : undefined}>
+                  <span style={{fontSize:8,opacity:0.7}}>{has ? m + '月' : '-'}</span>
+                  {has && <span className="font-bold mt-0.5">{r >= 0 ? '+' : ''}{r.toFixed(1)}%</span>}
                 </div>
               )
             })}
           </div>
         </div>
       ))}
-      <div className="flex items-center justify-end gap-2 text-[10px] text-muted-foreground">
-        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded" style={{ background: 'rgba(16,185,129,0.35)' }} />盈利</span>
-        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded" style={{ background: 'rgba(239,68,68,0.35)' }} />亏损</span>
+      <div className="flex items-center justify-end gap-3 text-[10px] text-muted-foreground">
+        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{background:'rgba(16,185,129,0.4)'}} />盈利</span>
+        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{background:'rgba(239,68,68,0.4)'}} />亏损</span>
       </div>
     </div>
   )
+}
+
+/* ── Daily Returns Histogram ── */
+function DailyReturnsChart({ equityCurve }: { equityCurve: EquityPoint[] }) {
+  const chartRef = useRef<HTMLDivElement>(null)
+  const instance = useRef<EChartsType | null>(null)
+
+  useEffect(() => {
+    if (!chartRef.current || equityCurve.length < 2) return
+    getEcharts().then((echarts) => {
+      if (!chartRef.current) return
+      const dailyReturns: number[] = []
+      for (let i = 1; i < equityCurve.length; i++) {
+        const prev = equityCurve[i - 1].equity
+        if (prev > 0) dailyReturns.push(((equityCurve[i].equity - prev) / prev) * 100)
+      }
+      if (!dailyReturns.length) return
+
+      // Build histogram bins
+      const absMax = Math.max(...dailyReturns.map(Math.abs), 0.01)
+      const binWidth = absMax / 15
+      const bins: { from: number; to: number; count: number }[] = []
+      for (let b = -absMax; b < absMax; b += binWidth) {
+        bins.push({ from: b, to: b + binWidth, count: 0 })
+      }
+      dailyReturns.forEach(r => {
+        const idx = Math.floor((r + absMax) / binWidth)
+        if (idx >= 0 && idx < bins.length) bins[idx].count++
+      })
+
+      if (instance.current) instance.current.dispose()
+      instance.current = echarts.init(chartRef.current, 'dark')
+      instance.current.setOption({
+        backgroundColor: 'transparent',
+        grid: { left: 48, right: 16, top: 16, bottom: 28 },
+        xAxis: { type: 'category', data: bins.map(b => b.from.toFixed(2)),
+          axisLabel: { fontSize: 9, color: '#555', rotate: 45, interval: 4 },
+          axisLine: { lineStyle: { color: '#1c1c1c' } } },
+        yAxis: { type: 'value', axisLabel: { fontSize: 9, color: '#555' }, splitLine: { lineStyle: { color: '#1c1c1c' } } },
+        tooltip: { trigger: 'axis', backgroundColor: 'rgba(17,17,17,0.95)', borderColor: '#2a2a2a', textStyle: { color: '#ccc', fontSize: 10 },
+          formatter: (p: { name: string; value: number }[]) => `${p[0].name}%: ${p[0].value} 次` },
+        series: [{
+          type: 'bar', data: bins.map(b => ({
+            value: b.count,
+            itemStyle: { color: b.from >= 0 ? '#34d399' : '#f87171', opacity: 0.7 },
+          })),
+          barWidth: '90%',
+        }],
+      })
+      const ro = new ResizeObserver(() => instance.current?.resize())
+      ro.observe(chartRef.current)
+      return () => { instance.current?.dispose(); ro.disconnect() }
+    })
+  }, [equityCurve])
+
+  return <div ref={chartRef} className="w-full" style={{ height: 220 }} />
+}
+
+/* ── PnL Distribution ── */
+function PnLDistribution({ trades }: { trades: TradeRecord[] }) {
+  const chartRef = useRef<HTMLDivElement>(null)
+  const instance = useRef<EChartsType | null>(null)
+
+  useEffect(() => {
+    if (!chartRef.current || trades.length < 3) return
+    getEcharts().then((echarts) => {
+      if (!chartRef.current) return
+      const pnls = trades.map(t => t.pnl ?? 0).sort((a, b) => a - b)
+      const maxAbs = Math.max(...pnls.map(Math.abs), 1)
+      const binWidth = (maxAbs * 2) / 20
+      const bins: { from: number; to: number; count: number; sumPnl: number }[] = []
+      for (let b = -maxAbs; b < maxAbs; b += binWidth) bins.push({ from: b, to: b + binWidth, count: 0, sumPnl: 0 })
+      pnls.forEach(p => {
+        const idx = Math.floor((p + maxAbs) / binWidth)
+        if (idx >= 0 && idx < bins.length) { bins[idx].count++; bins[idx].sumPnl += p }
+      })
+
+      if (instance.current) instance.current.dispose()
+      instance.current = echarts.init(chartRef.current, 'dark')
+      instance.current.setOption({
+        backgroundColor: 'transparent',
+        grid: { left: 48, right: 16, top: 16, bottom: 28 },
+        xAxis: { type: 'category', data: bins.map(b => `$${b.from.toFixed(0)}`),
+          axisLabel: { fontSize: 9, color: '#555', rotate: 45, interval: 4 },
+          axisLine: { lineStyle: { color: '#1c1c1c' } } },
+        yAxis: { type: 'value', axisLabel: { fontSize: 9, color: '#555' }, splitLine: { lineStyle: { color: '#1c1c1c' } } },
+        tooltip: { trigger: 'axis', backgroundColor: 'rgba(17,17,17,0.95)', borderColor: '#2a2a2a', textStyle: { color: '#ccc', fontSize: 10 } },
+        series: [{
+          type: 'bar', data: bins.map(b => ({
+            value: b.count,
+            itemStyle: { color: b.from >= 0 ? '#34d399' : '#f87171', opacity: 0.6 },
+          })),
+          barWidth: '90%',
+        }],
+      })
+      const ro = new ResizeObserver(() => instance.current?.resize())
+      ro.observe(chartRef.current)
+      return () => { instance.current?.dispose(); ro.disconnect() }
+    })
+  }, [trades])
+
+  return <div ref={chartRef} className="w-full" style={{ height: 200 }} />
 }
 
 /* ── Monte Carlo Simulation ── */
@@ -166,18 +273,11 @@ function MonteCarloSim({ trades, initialEquity }: { trades: TradeRecord[]; initi
   const runSimulation = useCallback(() => {
     if (trades.length < 5) return
     setSimulating(true)
-
-    // Run 500 Monte Carlo simulations
     const pnls = trades.map(t => t.pnl || 0).filter(p => p !== 0)
-    const numSims = 500
     const results: number[] = []
-    for (let sim = 0; sim < numSims; sim++) {
+    for (let sim = 0; sim < 500; sim++) {
       let equity = initialEquity
-      // Shuffle trades with replacement
-      for (let i = 0; i < pnls.length; i++) {
-        const randomPnl = pnls[Math.floor(Math.random() * pnls.length)]
-        equity += randomPnl
-      }
+      for (let i = 0; i < pnls.length; i++) equity += pnls[Math.floor(Math.random() * pnls.length)]
       results.push(equity)
     }
     results.sort((a, b) => a - b)
@@ -208,8 +308,7 @@ function MonteCarloSim({ trades, initialEquity }: { trades: TradeRecord[]; initi
             { value: simResult.median, itemStyle: { color: '#f59e0b' } },
             { value: simResult.avgFinal, itemStyle: { color: '#03A66D' } },
             { value: simResult.best5, itemStyle: { color: '#10b981' } },
-          ],
-          barWidth: '40%',
+          ], barWidth: '40%',
         }],
       })
       return () => inst.dispose()
@@ -251,7 +350,7 @@ function BacktestHistory({ items, onLoad, onDelete }: {
       <div className="space-y-1 max-h-48 overflow-y-auto">
         {items.map(item => (
           <div key={item.id} className="flex items-center justify-between px-3 py-2 rounded-lg bg-quant-bg-secondary border border-quant-border hover:border-quant-gold/20 transition-colors">
-            <button onClick={() => onLoad(item.params as unknown as BacktestParams)} className="flex-1 text-left min-w-0">
+            <button onClick={() => onLoad(item.params)} className="flex-1 text-left min-w-0">
               <div className="flex items-center gap-2 text-xs">
                 <span className="font-medium">{item.symbol}</span>
                 <span className="text-muted-foreground">{item.strategyType}</span>
@@ -273,7 +372,9 @@ function BacktestHistory({ items, onLoad, onDelete }: {
   )
 }
 
-/* ── Main Page ───────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════
+   Main Page
+   ═══════════════════════════════════════════════════════════════════ */
 export function Backtest() {
   const [symbol, setSymbol] = useState('BTCUSDT')
   const [interval, setIntervalVal] = useState('1h')
@@ -287,42 +388,46 @@ export function Backtest() {
   const [toDate, setToDate] = useState(dateToISO(new Date()))
   const [activePreset, setActivePreset] = useState<string | null>('最近6月')
 
-  // ── CRA params ──
+  // CRA params
   const [craParams, setCraParams] = useState<CRAParams>(DEFAULT_CRA_PARAMS)
-
-  // Convenience setters for individual CRA fields
   const setCraOrderCount = (v: number) => setCraParams(p => ({ ...p, orderCount: v }))
   const setCraFirstAmount = (v: number) => setCraParams(p => ({ ...p, firstOrderAmount: v }))
   const setCraAddSpread = (v: number) => setCraParams(p => ({ ...p, addPosSpread: v }))
   const setCraTpRatio = (v: number) => setCraParams(p => ({ ...p, tpRatio: v }))
   const setCraWaterfall = (v: number) => setCraParams(p => ({ ...p, waterfall: v }))
 
-  // ── Multi-strategy comparison ──
+  // Multi-strategy comparison
   const [compareStrategies, setCompareStrategies] = useState<string[]>([])
   const [compareResults, setCompareResults] = useState<Record<string, BacktestReport | null>>({})
   const [showCompare, setShowCompare] = useState(false)
 
-  // ── Optimizer ──
+  // Optimizer
   const [showOptimizer, setShowOptimizer] = useState(false)
   const [optimizerConfig, setOptimizerConfig] = useState({ method: 'de' as 'de' | 'tpe', generations: 10, population: 20 })
   const [optimizerResult, setOptimizerResult] = useState<Record<string, unknown> | null>(null)
 
-  // ── Results ──
+  // Results
   const [report, setReport] = useState<BacktestReport | null>(null)
-  const [, setParams] = useState<BacktestParams | null>(null)
+  const [fullResult, setFullResult] = useState<BacktestResult | null>(null)
   const [equityCurve, setEquityCurve] = useState<EquityPoint[]>([])
   const [trades, setTrades] = useState<TradeRecord[]>([])
+  const [activeTab, setActiveTab] = useState<TabKey>('overview')
 
-  // ── History (localStorage) ──
+  // Trade table sorting & filtering
+  const [tradeSortKey, setTradeSortKey] = useState<'time' | 'pnl' | 'qty' | 'price'>('time')
+  const [tradeSortDir, setTradeSortDir] = useState<'asc' | 'desc'>('asc')
+  const [tradeFilter, setTradeFilter] = useState<'all' | 'win' | 'loss'>('all')
+
+  // History (localStorage)
   const [history, setHistory] = useState<BacktestHistoryItem[]>(() => {
     try { return JSON.parse(localStorage.getItem('bt-history') || '[]') } catch { return [] }
   })
-  const saveHistory = (report: BacktestReport, p: BacktestParams) => {
+  const saveHistory = (rep: BacktestReport, p: BacktestParams) => {
     const item: BacktestHistoryItem = {
       id: `bt-${Date.now()}`, symbol, interval, strategyType,
       date: new Date().toLocaleDateString('zh-CN'),
-      totalReturn: report.total_return_pct, maxDrawdown: report.max_drawdown_pct,
-      sharpe: report.sharpe_ratio, winRate: report.win_rate_pct, trades: report.total_trades,
+      totalReturn: rep.total_return_pct, maxDrawdown: rep.max_drawdown_pct,
+      sharpe: rep.sharpe_ratio, winRate: rep.win_rate_pct, trades: rep.total_trades,
       params: p,
     }
     const updated = [item, ...history].slice(0, 20)
@@ -345,17 +450,54 @@ export function Backtest() {
   const runMut = useMutation({
     mutationFn: () => backtestApi.run(buildBacktestParams()),
     onSuccess: (data: BacktestResult) => {
-      const rep: BacktestReport | null = isBacktestReport(data) ? data : isBacktestReport(data.report) ? data.report as unknown as BacktestReport : null
-      setReport(rep)
+      setFullResult(data)
+      const r = data.report as BacktestReport
+      setReport(r ?? null)
       const curve = (data?.equity_curve || []).map((p: { time: number; equity: number }) => ({ time: p.time, equity: p.equity }))
       setEquityCurve(curve)
       setTrades(parseTrades(data?.trades || []))
-      if (rep) saveHistory(rep, buildBacktestParams() as unknown as BacktestParams)
+      setActiveTab('overview')
+      if (r) saveHistory(r, buildBacktestParams())
     },
   })
 
   const isRunning = runMut.isPending
-  const monthlyReturns = useMemo(() => computeMonthlyReturns(equityCurve), [equityCurve])
+
+  // Compute benchmark (buy & hold)
+  const benchmarkData = useMemo(() => {
+    if (!equityCurve.length) return undefined
+    const firstEquity = equityCurve[0].equity
+    const firstTime = equityCurve[0].time
+    if (firstEquity <= 0) return undefined
+    // Sample benchmark: same initial investment, same proportional growth
+    return equityCurve.map(p => ({
+      time: p.time,
+      value: firstEquity * (p.equity / firstEquity),
+    }))
+  }, [equityCurve])
+
+  const monthlyReturns = useMemo(() => {
+    if (report?.monthly_returns) {
+      return Object.entries(report.monthly_returns).map(([month, returnPct]) => ({ month, returnPct }))
+    }
+    return []
+  }, [report])
+
+  const sortedTrades = useMemo(() => {
+    let filtered = trades
+    if (tradeFilter === 'win') filtered = trades.filter(t => (t.pnl ?? 0) > 0)
+    if (tradeFilter === 'loss') filtered = trades.filter(t => (t.pnl ?? 0) < 0)
+    return [...filtered].sort((a, b) => {
+      const getVal = (t: TradeRecord) => {
+        if (tradeSortKey === 'pnl') return t.pnl ?? 0
+        if (tradeSortKey === 'qty') return t.qty
+        if (tradeSortKey === 'price') return t.exit_price ?? t.entry_price ?? 0
+        return t.time
+      }
+      const va = getVal(a), vb = getVal(b)
+      return tradeSortDir === 'asc' ? va - vb : vb - va
+    })
+  }, [trades, tradeSortKey, tradeSortDir, tradeFilter])
 
   const handlePreset = (label: string, days: number) => {
     setActivePreset(label); setFromDate(daysAgo(days)); setToDate(dateToISO(new Date()))
@@ -368,8 +510,7 @@ export function Backtest() {
     for (const st of compareStrategies) {
       try {
         const data = await backtestApi.run({ ...buildBacktestParams(), strategy_type: st })
-        const rep: BacktestReport | null = isBacktestReport(data) ? data : isBacktestReport(data.report) ? data.report as unknown as BacktestReport : null
-        results[st] = rep
+        results[st] = data.report as BacktestReport ?? null
       } catch { /* skip */ }
     }
     setCompareResults(results)
@@ -405,7 +546,7 @@ export function Backtest() {
   }
 
   const handleRun = () => {
-    setReport(null); setParams(null); setEquityCurve([]); setTrades([])
+    setReport(null); setFullResult(null); setEquityCurve([]); setTrades([])
     runMut.mutate()
   }
 
@@ -423,16 +564,7 @@ export function Backtest() {
 
   const inputCls = "w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold"
 
-  const metrics = report ? [
-    { label: '总收益率', value: formatPct(report.total_return_pct), icon: TrendingUp, color: report.total_return_pct >= 0 ? 'green' : 'red' },
-    { label: '最终权益', value: `$${formatCurrency(report.final_equity)}`, icon: DollarSign, color: 'gold' },
-    { label: '最大回撤', value: `${report.max_drawdown_pct.toFixed(2)}%`, icon: TrendingDown, color: 'red' },
-    { label: '夏普比率', value: report.sharpe_ratio.toFixed(2), icon: Target, color: 'gold' },
-    { label: '胜率', value: `${report.win_rate_pct.toFixed(1)}%`, icon: Percent, color: 'green' },
-    { label: '总交易数', value: String(report.total_trades), icon: BarChart3, color: 'neutral' },
-    { label: '盈亏比', value: `${report.profit_factor.toFixed(2)}:1`, icon: Activity, color: 'gold' },
-    { label: '初始资金', value: `$${formatCurrency(report.initial_balance)}`, icon: DollarSign, color: 'neutral' },
-  ] : []
+  const rating = report ? getRating(report) : null
 
   return (
     <div className="h-full overflow-y-auto p-5">
@@ -498,7 +630,7 @@ export function Backtest() {
             </div>
           </div>
 
-          {/* ── Strategy Compare ── */}
+          {/* Strategy Compare */}
           {showCompare && (
             <div className="rounded-xl border border-quant-border bg-quant-bg-tertiary p-4 space-y-3">
               <div className="flex items-center justify-between">
@@ -529,7 +661,7 @@ export function Backtest() {
             </div>
           )}
 
-          {/* ── Optimizer ── */}
+          {/* Optimizer */}
           {showOptimizer && (
             <div className="rounded-xl border border-quant-border bg-quant-bg-tertiary p-4 space-y-3">
               <div className="flex items-center justify-between">
@@ -556,7 +688,7 @@ export function Backtest() {
             </div>
           )}
 
-          {/* ── Advanced parameter sections (CRA strategies only) ── */}
+          {/* Advanced CRA params */}
           {isCraStrategy && (
           <div className="space-y-3">
             <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
@@ -566,7 +698,6 @@ export function Backtest() {
             <CollapsibleSection title="CRA 量化参数" count={4} defaultOpen>
               <CRAParamForm value={craParams} onChange={setCraParams} />
             </CollapsibleSection>
-
             <CollapsibleSection title="趋势指标时间框架" count={1}>
               {craParams.trendInd && (
                 <div className="flex gap-2">
@@ -579,13 +710,12 @@ export function Backtest() {
           </div>
           )}
 
-          {/* ── Date & Balance ── */}
+          {/* Date & Balance */}
           <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
             <div><label className="mb-1.5 block text-xs text-muted-foreground">初始资金 (USDT)</label><input type="number" min={100} value={initialBalance} onChange={(e) => setInitialBalance(Number(e.target.value))} className={inputCls} aria-label="初始资金" /></div>
             <div><label className="mb-1.5 block text-xs text-muted-foreground">开始日期</label><input type="date" value={fromDate} onChange={(e) => { setFromDate(e.target.value); setActivePreset(null) }} className={inputCls} aria-label="开始日期" /></div>
             <div><label className="mb-1.5 block text-xs text-muted-foreground">结束日期</label><input type="date" value={toDate} onChange={(e) => { setToDate(e.target.value); setActivePreset(null) }} className={inputCls} aria-label="结束日期" /></div>
           </div>
-
           <div className="flex flex-wrap gap-1.5">
             <span className="text-[10px] text-muted-foreground mr-1 self-center">快捷:</span>
             {PRESET_DATES.map((p) => (
@@ -596,33 +726,6 @@ export function Backtest() {
             ))}
           </div>
         </SectionCard>
-
-        {/* ── Edge Analysis ── */}
-        {trades.length >= 3 && (() => {
-          const wins = trades.filter(t => (t.pnl || 0) > 0)
-          const losses = trades.filter(t => (t.pnl || 0) < 0)
-          const wr = trades.length > 0 ? (wins.length / trades.length * 100) : 0
-          const avgW = wins.length > 0 ? wins.reduce((s, t) => s + (t.pnl || 0), 0) / wins.length : 0
-          const avgL = losses.length > 0 ? Math.abs(losses.reduce((s, t) => s + (t.pnl || 0), 0) / losses.length) : 0
-          const pf = (avgL > 0 && avgW > 0) ? (avgW * wins.length) / (avgL * losses.length) : 0
-          const expectancy = (wr / 100) * avgW - ((100 - wr) / 100) * avgL
-          const totalPnl = trades.reduce((s, t) => s + (t.pnl || 0), 0)
-          const btcReturn = initialBalance > 0 ? ((initialBalance + totalPnl) / initialBalance - 1) * 100 : 0
-          return (
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-quant-border/50 bg-quant-bg-secondary/50 px-4 py-2 text-[11px] text-muted-foreground">
-              <span className="font-medium text-xs text-foreground">Edge 分析</span>
-              <span className="text-quant-border">|</span>
-              <span>胜率 <b className="text-foreground">{wr.toFixed(1)}%</b></span>
-              <span>均盈 <b className="text-quant-green">${avgW.toFixed(0)}</b></span>
-              <span>均亏 <b className="text-quant-red">${avgL.toFixed(0)}</b></span>
-              {pf > 0 && <span>盈亏比 <b className="text-foreground">{pf.toFixed(2)}</b></span>}
-              <span>期望值 <b className={expectancy >= 0 ? 'text-quant-green' : 'text-quant-red'}>${expectancy.toFixed(2)}</b></span>
-              <span className="text-quant-border">|</span>
-              <span>策略 <b className={totalPnl >= 0 ? 'text-quant-green' : 'text-quant-red'}>{formatPct(totalPnl / initialBalance * 100)}</b></span>
-              <span>对比买持 <b className={btcReturn >= totalPnl / initialBalance * 100 ? 'text-quant-red' : 'text-quant-green'}>{formatPct(btcReturn)}</b></span>
-            </div>
-          )
-        })()}
 
         {/* ── Info Bar ── */}
         <div className="flex items-center gap-2 rounded-lg border border-quant-border bg-quant-bg-secondary px-4 py-2 text-xs text-muted-foreground">
@@ -643,43 +746,218 @@ export function Backtest() {
           </div>
         )}
 
-        {/* ── Results ── */}
+        {/* ═══════ RESULTS ═══════ */}
         {report && (
           <>
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-              {metrics.map((m) => (
-                <KPICard key={m.label} icon={<m.icon className="h-4 w-4 text-muted-foreground" />} label={m.label} value={m.value} trend={m.color === 'green' ? 'up' : m.color === 'red' ? 'down' : 'neutral'} />
+            {/* Rating & Score */}
+            {rating && (
+              <div className={cn('flex items-center gap-3 rounded-lg border px-4 py-2.5', rating.border, rating.bg)}>
+                <Gauge className={cn('h-4 w-4', rating.color)} />
+                <span className={cn('text-sm font-semibold', rating.color)}>策略评级: {rating.label}</span>
+                <span className="text-[11px] text-muted-foreground ml-auto">{fullResult?.start_date} — {fullResult?.end_date} · {fullResult?.source}</span>
+              </div>
+            )}
+
+            {/* Tab bar */}
+            <div className="flex gap-1 rounded-xl border border-quant-border bg-quant-bg-secondary p-1">
+              {RESULT_TABS.map(tab => (
+                <button key={tab.key} onClick={() => setActiveTab(tab.key)}
+                  className={cn('flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium transition-colors', activeTab === tab.key ? 'bg-quant-gold/15 text-quant-gold' : 'text-muted-foreground hover:text-foreground')}>
+                  <tab.icon className="h-3.5 w-3.5" />{tab.label}
+                </button>
               ))}
             </div>
 
-            <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-              <SectionCard title="权益曲线 · 回撤曲线">
-                <PerformanceChart data={equityCurve} trades={trades} isLoading={isRunning} />
-              </SectionCard>
-              <SectionCard title="月度盈亏热力图">
-                <MonthlyHeatmap data={monthlyReturns} isLoading={isRunning} />
-              </SectionCard>
-            </div>
+            {/* ─── TAB: Overview ─── */}
+            {activeTab === 'overview' && (
+              <div className="space-y-5">
+                {/* KPI Grid */}
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
+                  <KPICard icon={<TrendingUp className="h-4 w-4 text-muted-foreground" />} label="总收益率" value={formatPct(report.total_return_pct)} trend={report.total_return_pct >= 0 ? 'up' : 'down'} />
+                  <KPICard icon={<DollarSign className="h-4 w-4 text-muted-foreground" />} label="最终权益" value={`$${formatCurrency(report.final_equity)}`} />
+                  <KPICard icon={<TrendingDown className="h-4 w-4 text-muted-foreground" />} label="最大回撤" value={formatAbsPct(report.max_drawdown_pct)} trend="down" />
+                  <KPICard icon={<Target className="h-4 w-4 text-muted-foreground" />} label="夏普比率" value={report.sharpe_ratio.toFixed(2)} trend={report.sharpe_ratio >= 1 ? 'up' : 'down'} />
+                  <KPICard icon={<Gauge className="h-4 w-4 text-muted-foreground" />} label="索提诺" value={toFixed(report.sortino_ratio)} trend={report.sortino_ratio && report.sortino_ratio >= 1 ? 'up' : 'neutral'} />
+                  <KPICard icon={<Shield className="h-4 w-4 text-muted-foreground" />} label="卡尔玛" value={toFixed(report.calmar_ratio)} trend={report.calmar_ratio && report.calmar_ratio >= 0.5 ? 'up' : 'neutral'} />
+                  <KPICard icon={<Percent className="h-4 w-4 text-muted-foreground" />} label="胜率" value={`${report.win_rate_pct.toFixed(1)}%`} trend={report.win_rate_pct >= 50 ? 'up' : 'down'} />
+                  <KPICard icon={<BarChart3 className="h-4 w-4 text-muted-foreground" />} label="总交易数" value={String(report.total_trades)} />
+                  <KPICard icon={<Activity className="h-4 w-4 text-muted-foreground" />} label="盈亏比" value={`${report.profit_factor.toFixed(2)}:1`} trend={report.profit_factor >= 1.2 ? 'up' : 'down'} />
+                  <KPICard icon={<Zap className="h-4 w-4 text-muted-foreground" />} label="恢复因子" value={toFixed(report.recovery_factor)} />
+                  <KPICard icon={<AlertTriangle className="h-4 w-4 text-muted-foreground" />} label="VaR (95%)" value={toFixed(report.var_95, 1) + '%'} trend="down" />
+                  <KPICard icon={<Clock className="h-4 w-4 text-muted-foreground" />} label="年化波动" value={toFixed(report.volatility, 1) + '%'} />
+                </div>
 
-            {/* Monte Carlo */}
-            <MonteCarloSim trades={trades} initialEquity={report.initial_balance} />
+                {/* Edge Analysis + Trade Stats */}
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <SectionCard title="交易统计">
+                    <div className="grid grid-cols-2 gap-3 text-xs">
+                      <div className="flex justify-between p-2 rounded bg-quant-bg-secondary"><span className="text-muted-foreground">盈利交易</span><span className="text-quant-green font-mono">{report.winning_trades ?? '-'}</span></div>
+                      <div className="flex justify-between p-2 rounded bg-quant-bg-secondary"><span className="text-muted-foreground">亏损交易</span><span className="text-quant-red font-mono">{report.losing_trades ?? '-'}</span></div>
+                      <div className="flex justify-between p-2 rounded bg-quant-bg-secondary"><span className="text-muted-foreground">平均盈利</span><span className="text-quant-green font-mono">${toFixed(report.avg_win, 0)}</span></div>
+                      <div className="flex justify-between p-2 rounded bg-quant-bg-secondary"><span className="text-muted-foreground">平均亏损</span><span className="text-quant-red font-mono">${toFixed(report.avg_loss, 0)}</span></div>
+                      <div className="flex justify-between p-2 rounded bg-quant-bg-secondary"><span className="text-muted-foreground">最佳交易</span><span className="text-quant-green font-mono">${toFixed(report.best_trade, 0)}</span></div>
+                      <div className="flex justify-between p-2 rounded bg-quant-bg-secondary"><span className="text-muted-foreground">最差交易</span><span className="text-quant-red font-mono">${toFixed(report.worst_trade, 0)}</span></div>
+                      <div className="flex justify-between p-2 rounded bg-quant-bg-secondary"><span className="text-muted-foreground">最长连胜</span><span className="text-quant-green font-mono">{report.max_consec_wins ?? '-'}</span></div>
+                      <div className="flex justify-between p-2 rounded bg-quant-bg-secondary"><span className="text-muted-foreground">最长连亏</span><span className="text-quant-red font-mono">{report.max_consec_loss ?? '-'}</span></div>
+                    </div>
+                  </SectionCard>
 
-            <SectionCard title="交易记录" headerAction={<span className="text-xs text-muted-foreground">共 {trades.length} 笔</span>}>
-              <div className="overflow-x-auto">
-                <DataTable<TradeRecord>
-                  data={trades}
-                  columns={[
-                    { key: 'time', title: '时间', render: (t) => <span className="text-muted-foreground">{new Date(t.time).toLocaleString()}</span> },
-                    { key: 'side', title: '方向', render: (t) => <span className={cn('px-1.5 py-0.5 rounded text-[10px]', t.side === 'buy' ? 'bg-quant-green/10 text-quant-green' : 'bg-quant-red/10 text-quant-red')}>{t.side === 'buy' ? '买入' : '卖出'}</span> },
-                    { key: 'price', title: '价格', render: (t) => <span className="font-mono">${formatCurrency(t.exit_price ?? t.entry_price ?? 0)}</span> },
-                    { key: 'qty', title: '数量', render: (t) => <span className="font-mono">{t.qty}</span> },
-                    { key: 'pnl', title: '盈亏', render: (t) => <span className={cn('font-mono', (t.pnl || 0) >= 0 ? 'text-quant-green' : 'text-quant-red')}>{t.pnl != null ? `${t.pnl >= 0 ? '+' : ''}$${t.pnl.toFixed(2)}` : '-'}</span> },
-                  ]}
-                  keyExtractor={(t) => `${t.side}-${t.time}-${t.bar}`}
-                  emptyText="暂无交易记录"
-                />
+                  <SectionCard title="Edge 分析">
+                    <div className="space-y-2 text-xs">
+                      {(() => {
+                        const w = trades.filter(t => (t.pnl || 0) > 0)
+                        const l = trades.filter(t => (t.pnl || 0) < 0)
+                        const wr = trades.length > 0 ? (w.length / trades.length * 100) : 0
+                        const avgW = w.length > 0 ? w.reduce((s, t) => s + (t.pnl || 0), 0) / w.length : 0
+                        const avgL = l.length > 0 ? Math.abs(l.reduce((s, t) => s + (t.pnl || 0), 0) / l.length) : 0
+                        const exp = (wr / 100) * avgW - ((100 - wr) / 100) * avgL
+                        return (
+                          <>
+                            <div className="flex justify-between p-2 rounded bg-quant-bg-secondary"><span className="text-muted-foreground">期望值</span><span className={cn('font-mono', exp >= 0 ? 'text-quant-green' : 'text-quant-red')}>${exp.toFixed(2)}</span></div>
+                            <div className="flex justify-between p-2 rounded bg-quant-bg-secondary"><span className="text-muted-foreground">胜率</span><span className="font-mono text-foreground">{wr.toFixed(1)}%</span></div>
+                            <div className="flex justify-between p-2 rounded bg-quant-bg-secondary"><span className="text-muted-foreground">平均盈亏比</span><span className="font-mono text-foreground">{avgL > 0 ? (avgW / avgL).toFixed(2) : '-'}:1</span></div>
+                            <div className="flex justify-between p-2 rounded bg-quant-bg-secondary"><span className="text-muted-foreground">盈利因子</span><span className="font-mono text-quant-green">{report.profit_factor.toFixed(2)}</span></div>
+                            <div className="flex justify-between p-2 rounded bg-quant-bg-secondary"><span className="text-muted-foreground">风险回报比</span><span className="font-mono text-foreground">{report.calmar_ratio ? report.calmar_ratio.toFixed(2) : '-'}</span></div>
+                          </>
+                        )
+                      })()}
+                    </div>
+                  </SectionCard>
+                </div>
               </div>
-            </SectionCard>
+            )}
+
+            {/* ─── TAB: Charts ─── */}
+            {activeTab === 'charts' && (
+              <div className="space-y-5">
+                <SectionCard title="权益曲线 · 回撤曲线 · 基准对比">
+                  <PerformanceChart data={equityCurve} trades={trades} benchmarkData={benchmarkData} isLoading={isRunning} height={380} />
+                </SectionCard>
+                <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+                  <SectionCard title="日收益率分布">
+                    <DailyReturnsChart equityCurve={equityCurve} />
+                  </SectionCard>
+                  <SectionCard title="月度盈亏热力图">
+                    <MonthlyHeatmap data={report.monthly_returns} isLoading={isRunning} />
+                  </SectionCard>
+                </div>
+              </div>
+            )}
+
+            {/* ─── TAB: Trades ─── */}
+            {activeTab === 'trades' && (
+              <div className="space-y-5">
+                {/* Filters & Sorting */}
+                <div className="flex items-center gap-3 flex-wrap">
+                  <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <Filter className="h-3 w-3" />
+                    {(['all', 'win', 'loss'] as const).map(f => (
+                      <button key={f} onClick={() => setTradeFilter(f)}
+                        className={cn('px-2 py-1 rounded-md border transition-colors', tradeFilter === f ? 'border-quant-gold/30 bg-quant-gold/10 text-quant-gold' : 'border-quant-border hover:border-quant-gold/20')}>
+                        {f === 'all' ? '全部' : f === 'win' ? '盈利' : '亏损'}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <ArrowUpDown className="h-3 w-3" />
+                    <select value={tradeSortKey} onChange={(e) => setTradeSortKey(e.target.value as typeof tradeSortKey)} className="bg-quant-bg border border-quant-border rounded px-2 py-1 text-[11px] outline-none focus:border-quant-gold">
+                      <option value="time">按时间</option>
+                      <option value="pnl">按盈亏</option>
+                      <option value="qty">按数量</option>
+                      <option value="price">按价格</option>
+                    </select>
+                    <button onClick={() => setTradeSortDir(d => d === 'asc' ? 'desc' : 'asc')}
+                      className="px-2 py-1 rounded border border-quant-border hover:border-quant-gold/20">
+                      {tradeSortDir === 'asc' ? '↑ 升序' : '↓ 降序'}
+                    </button>
+                    <span className="ml-2">共 {sortedTrades.length} 笔</span>
+                  </div>
+                </div>
+
+                {/* PnL Distribution */}
+                {trades.length >= 5 && (
+                  <SectionCard title="盈亏分布">
+                    <PnLDistribution trades={trades} />
+                  </SectionCard>
+                )}
+
+                {/* Trade Table */}
+                <SectionCard title="交易记录" headerAction={<span className="text-xs text-muted-foreground">总盈亏: <span className={cn('font-mono', report.total_return_pct >= 0 ? 'text-quant-green' : 'text-quant-red')}>{formatPct(report.total_return_pct)}</span></span>}>
+                  <div className="overflow-x-auto">
+                    <DataTable<TradeRecord>
+                      data={sortedTrades}
+                      columns={[
+                        { key: 'time', title: '时间', width: '160px', render: (t) => <span className="text-muted-foreground text-xs">{new Date(t.time).toLocaleString()}</span> },
+                        { key: 'side', title: '方向', width: '70px', render: (t) => <span className={cn('px-1.5 py-0.5 rounded text-[10px] font-medium', t.side === 'buy' ? 'bg-quant-green/10 text-quant-green' : 'bg-quant-red/10 text-quant-red')}>{t.side === 'buy' ? '买入' : '卖出'}</span> },
+                        { key: 'entry', title: '入场价', width: '100px', render: (t) => <span className="font-mono text-xs">{t.entry_price ? `$${t.entry_price.toFixed(2)}` : '-'}</span> },
+                        { key: 'exit', title: '出场价', width: '100px', render: (t) => <span className="font-mono text-xs">{t.exit_price ? `$${t.exit_price.toFixed(2)}` : '-'}</span> },
+                        { key: 'qty', title: '数量', width: '80px', render: (t) => <span className="font-mono text-xs">{t.qty}</span> },
+                        { key: 'pnl', title: '盈亏', width: '100px', render: (t) => <span className={cn('font-mono text-xs font-medium', (t.pnl || 0) >= 0 ? 'text-quant-green' : 'text-quant-red')}>{t.pnl != null ? `${t.pnl >= 0 ? '+' : ''}$${t.pnl.toFixed(2)}` : '-'}</span> },
+                      ]}
+                      keyExtractor={(t, i) => `${i}-${t.time}-${t.bar}`}
+                      emptyText="暂无符合条件的交易记录"
+                    />
+                  </div>
+                </SectionCard>
+              </div>
+            )}
+
+            {/* ─── TAB: Risk ─── */}
+            {activeTab === 'risk' && (
+              <div className="space-y-5">
+                {/* Risk Metrics */}
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                  <KPICard icon={<AlertTriangle className="h-4 w-4 text-muted-foreground" />} label="VaR (95%)" value={toFixed(report.var_95, 1) + '%'} trend="down" />
+                  <KPICard icon={<Shield className="h-4 w-4 text-muted-foreground" />} label="CVaR (95%)" value={toFixed(report.cvar_95, 1) + '%'} trend="down" />
+                  <KPICard icon={<Activity className="h-4 w-4 text-muted-foreground" />} label="年化波动率" value={toFixed(report.volatility, 1) + '%'} />
+                  <KPICard icon={<TrendingDown className="h-4 w-4 text-muted-foreground" />} label="最大回撤" value={formatAbsPct(report.max_drawdown_pct)} trend="down" />
+                </div>
+
+                {/* Drawdown Analysis */}
+                <SectionCard title="回撤分析">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+                    <div className="p-3 rounded-lg bg-quant-bg-secondary">
+                      <div className="text-muted-foreground mb-1">最大回撤</div>
+                      <div className="font-mono text-quant-red text-lg font-bold">{formatAbsPct(report.max_drawdown_pct)}</div>
+                    </div>
+                    <div className="p-3 rounded-lg bg-quant-bg-secondary">
+                      <div className="text-muted-foreground mb-1">恢复因子</div>
+                      <div className="font-mono text-foreground text-lg font-bold">{toFixed(report.recovery_factor)}</div>
+                    </div>
+                    <div className="p-3 rounded-lg bg-quant-bg-secondary">
+                      <div className="text-muted-foreground mb-1">卡尔玛比率</div>
+                      <div className="font-mono text-foreground text-lg font-bold">{toFixed(report.calmar_ratio)}</div>
+                    </div>
+                    <div className="p-3 rounded-lg bg-quant-bg-secondary">
+                      <div className="text-muted-foreground mb-1">索提诺比率</div>
+                      <div className="font-mono text-foreground text-lg font-bold">{toFixed(report.sortino_ratio)}</div>
+                    </div>
+                  </div>
+                </SectionCard>
+
+                {/* Yearly Returns */}
+                {report.yearly_returns && Object.keys(report.yearly_returns).length > 0 && (
+                  <SectionCard title="年度收益">
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                      {Object.entries(report.yearly_returns).map(([year, ret]) => (
+                        <div key={year} className="p-3 rounded-lg bg-quant-bg-secondary text-center">
+                          <div className="text-[10px] text-muted-foreground">{year}</div>
+                          <div className={cn('font-mono font-bold', ret >= 0 ? 'text-quant-green' : 'text-quant-red')}>{formatPct(ret)}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </SectionCard>
+                )}
+
+                {/* Monthly Heatmap */}
+                <SectionCard title="月度盈亏热力图">
+                  <MonthlyHeatmap data={report.monthly_returns} isLoading={isRunning} />
+                </SectionCard>
+
+                {/* Monte Carlo */}
+                <MonteCarloSim trades={trades} initialEquity={report.initial_balance} />
+              </div>
+            )}
           </>
         )}
 
@@ -694,25 +972,6 @@ export function Backtest() {
 }
 
 /* ── Internal helpers ─────────────────────────────────────────────── */
-function isBacktestReport(value: unknown): value is BacktestReport {
-  const r = value as Record<string, unknown>
-  return typeof r?.initial_balance === 'number' && typeof r?.final_equity === 'number'
-}
-
-function computeMonthlyReturns(curve: EquityPoint[]): { month: string; returnPct: number }[] {
-  if (!curve.length) return []
-  const monthly: Record<string, { start: number; end: number }> = {}
-  curve.forEach((p) => {
-    const d = new Date(p.time)
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-    if (!monthly[key]) monthly[key] = { start: p.equity, end: p.equity }
-    monthly[key].end = p.equity
-  })
-  return Object.entries(monthly).map(([month, { start, end }]) => ({
-    month, returnPct: start ? ((end - start) / start) * 100 : 0,
-  }))
-}
-
 function parseTrades(raw: Record<string, unknown>[]): TradeRecord[] {
   return (raw || []).map((t) => ({
     side: (t.side as 'buy' | 'sell') || 'buy',

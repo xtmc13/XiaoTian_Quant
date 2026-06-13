@@ -119,7 +119,15 @@ func (i *IBKRAdapter) GetOpenOrders(symbol string) ([]map[string]any, error) {
 	return orders, nil
 }
 
-func (i *IBKRAdapter) GetKlines(symbol, interval string, limit int) ([][]any, error) { return nil, nil }
-func (i *IBKRAdapter) GetTicker(symbol string) (map[string]any, error) { return nil, nil }
-func (i *IBKRAdapter) StartMarketStream(symbols []string) error { return nil }
-func (i *IBKRAdapter) StartUserStream() error { return nil }
+func (i *IBKRAdapter) GetKlines(symbol, interval string, limit int) ([][]any, error) {
+	return nil, fmt.Errorf("IBKR klines: please use IB Gateway/TWS connected mode — REST API requires running IB Gateway on localhost:5000")
+}
+func (i *IBKRAdapter) GetTicker(symbol string) (map[string]any, error) {
+	return nil, fmt.Errorf("IBKR ticker: please use IB Gateway/TWS connected mode")
+}
+func (i *IBKRAdapter) StartMarketStream(symbols []string) error {
+	return fmt.Errorf("IBKR market stream: requires IB Gateway/TWS running on localhost:4001")
+}
+func (i *IBKRAdapter) StartUserStream() error {
+	return fmt.Errorf("IBKR user stream: requires IB Gateway/TWS running on localhost:4001")
+}

@@ -28,6 +28,27 @@ const currencySymbols: Record<string, string> = {
   KRW: '₩', HKD: 'HK$', TWD: 'NT$', SGD: 'S$', AUD: 'A$',
 }
 export const getConversionRate = () => conversionRate
+
+/** Update the USD→CNY conversion rate at runtime. */
+export function setConversionRate(rate: number) {
+  if (rate > 0) conversionRate = rate
+}
+
+/** Fetch live USD→CNY exchange rate from API, falling back to current value. */
+export async function fetchConversionRate(): Promise<number> {
+  try {
+    const resp = await fetch('https://api.exchangerate-api.com/v4/latest/USD', { signal: AbortSignal.timeout(5000) })
+    if (!resp.ok) return conversionRate
+    const data = await resp.json()
+    if (data?.rates?.CNY && typeof data.rates.CNY === 'number') {
+      conversionRate = data.rates.CNY
+      return conversionRate
+    }
+  } catch {
+    // Network error — keep current rate
+  }
+  return conversionRate
+}
 export const getPreferredCurrency = () => preferredCurrency
 export const getCurrencySymbol = () => currencySymbols[preferredCurrency] || preferredCurrency
 export const formatConverted = (usd: number) => {

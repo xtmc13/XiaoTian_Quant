@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
 )
 
 // ── Tree Model ─────────────────────────────────────────────────
@@ -70,9 +71,13 @@ func (p *Predictor) Load(data []byte) error {
 	return nil
 }
 
-// LoadFromFile loads a model from a JSON file.
+// LoadFromFile loads a model from a JSON file on disk.
 func (p *Predictor) LoadFromFile(path string) error {
-	return fmt.Errorf("not implemented: use Load with bytes from ML server export")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("predictor load file %s: %w", path, err)
+	}
+	return p.Load(data)
 }
 
 // IsLoaded returns true if a model is loaded.
@@ -748,4 +753,50 @@ func (fc *FeatureCalculator) vwap(bars []OHLCV) float64 {
 		return 0
 	}
 	return sumPV / sumV
+}
+
+// FeatureNames returns all feature names the calculator produces for its configured periods,
+// without requiring any input data.
+func (fc *FeatureCalculator) FeatureNames() []string {
+	var names []string
+
+	// Per-period features
+	for _, p := range fc.periods {
+		names = append(names,
+			fmt.Sprintf("return_%d", p),
+			fmt.Sprintf("log_return_%d", p),
+			fmt.Sprintf("price_vs_ma_%d", p),
+			fmt.Sprintf("volume_ratio_%d", p),
+			fmt.Sprintf("volatility_%d", p),
+			fmt.Sprintf("bb_position_%d", p),
+			fmt.Sprintf("bb_width_%d", p),
+			fmt.Sprintf("zscore_%d", p),
+			fmt.Sprintf("rsi_%d", p),
+			fmt.Sprintf("atr_%d", p),
+			fmt.Sprintf("momentum_%d", p),
+			fmt.Sprintf("roc_%d", p),
+			fmt.Sprintf("williams_r_%d", p),
+			fmt.Sprintf("stoch_k_%d", p),
+			fmt.Sprintf("stoch_d_%d", p),
+			fmt.Sprintf("cci_%d", p),
+			fmt.Sprintf("adx_%d", p),
+			fmt.Sprintf("cmf_%d", p),
+			fmt.Sprintf("price_position_%d", p),
+			fmt.Sprintf("linreg_slope_%d", p),
+			fmt.Sprintf("linreg_r2_%d", p),
+			fmt.Sprintf("skew_%d", p),
+			fmt.Sprintf("kurt_%d", p),
+			fmt.Sprintf("dist_from_high_%d", p),
+			fmt.Sprintf("dist_from_low_%d", p),
+			fmt.Sprintf("vwap_dev_%d", p),
+		)
+	}
+
+	// Bar-level features (not period-dependent)
+	names = append(names,
+		"hl_range", "oc_gap", "macd", "obv",
+		"body_pct", "upper_shadow_pct", "lower_shadow_pct", "shadow_to_body",
+	)
+
+	return names
 }

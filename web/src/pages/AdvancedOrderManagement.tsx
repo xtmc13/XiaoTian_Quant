@@ -54,16 +54,17 @@ interface IcebergForm extends OrderForm {
 export function AdvancedOrderManagement() {
   const queryClient = useQueryClient()
   const [activeTab, setActiveTab] = useState<'oco' | 'bracket' | 'iceberg' | 'trailing'>('oco')
+  const [orderSymbol, setOrderSymbol] = useState('BTCUSDT')
 
-  // Forms
+  // Forms — symbol is managed by shared orderSymbol state
   const [ocoForm, setOcoForm] = useState<OCOForm>({
-    symbol: 'BTCUSDT', side: 'buy', quantity: 0.1, stopPrice: 65000, limitPrice: 66000,
+    symbol: orderSymbol, side: 'buy', quantity: 0.1, stopPrice: 65000, limitPrice: 66000,
   })
   const [bracketForm, setBracketForm] = useState<BracketForm>({
-    symbol: 'BTCUSDT', side: 'buy', quantity: 0.1, entryPrice: 70000, stopLossPrice: 68000, takeProfitPrice: 75000,
+    symbol: orderSymbol, side: 'buy', quantity: 0.1, entryPrice: 70000, stopLossPrice: 68000, takeProfitPrice: 75000,
   })
   const [icebergForm, setIcebergForm] = useState<IcebergForm>({
-    symbol: 'BTCUSDT', side: 'buy', quantity: 0.01, totalQuantity: 1.0, sliceSize: 0.1,
+    symbol: orderSymbol, side: 'buy', quantity: 0.01, totalQuantity: 1.0, sliceSize: 0.1,
   })
 
   // Queries
@@ -147,9 +148,9 @@ export function AdvancedOrderManagement() {
           />
           <KPICard
             label="跟踪止损"
-            value="-"
+            value={0}
             icon={<TrendingUp className="w-4 h-4 text-quant-gold" />}
-            subValue="待实现"
+            subValue="开发中"
             trend="neutral"
           />
         </div>
@@ -171,6 +172,17 @@ export function AdvancedOrderManagement() {
               {tab.label}
             </button>
           ))}
+        </div>
+
+        {/* Shared symbol selector */}
+        <div className="flex items-center gap-3 px-4 py-2 bg-quant-bg-secondary rounded-lg border border-quant-border">
+          <label className="text-xs text-muted-foreground shrink-0">交易对</label>
+          <input
+            value={orderSymbol}
+            onChange={(e) => setOrderSymbol(e.target.value.toUpperCase())}
+            className="flex-1 bg-quant-bg border border-quant-border rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:border-quant-gold"
+            placeholder="BTCUSDT"
+          />
         </div>
 
         {/* OCO Tab */}
@@ -232,7 +244,7 @@ export function AdvancedOrderManagement() {
               </div>
               <div className="mt-3">
                 <button
-                  onClick={() => ocoPlace.mutate(ocoForm)}
+                  onClick={() => ocoPlace.mutate({ ...ocoForm, symbol: orderSymbol })}
                   disabled={ocoPlace.isPending}
                   className={cn(
                     'flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors',
@@ -351,7 +363,7 @@ export function AdvancedOrderManagement() {
               </div>
               <div className="mt-3">
                 <button
-                  onClick={() => bracketPlace.mutate(bracketForm)}
+                  onClick={() => bracketPlace.mutate({ ...bracketForm, symbol: orderSymbol })}
                   disabled={bracketPlace.isPending}
                   className={cn(
                     'flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors',
@@ -459,7 +471,7 @@ export function AdvancedOrderManagement() {
               </div>
               <div className="mt-3">
                 <button
-                  onClick={() => icebergPlace.mutate(icebergForm)}
+                  onClick={() => icebergPlace.mutate({ ...icebergForm, symbol: orderSymbol })}
                   disabled={icebergPlace.isPending}
                   className={cn(
                     'flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors',

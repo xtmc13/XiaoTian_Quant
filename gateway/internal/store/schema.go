@@ -119,46 +119,6 @@ func migrateV2(tx *dbTx) error {
 		`CREATE INDEX IF NOT EXISTS idx_positions_symbol ON positions(symbol)`,
 		`CREATE INDEX IF NOT EXISTS idx_positions_status ON positions(status)`,
 
-		// ── Position Snapshots ──
-		`CREATE TABLE IF NOT EXISTS position_snapshots (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			position_id TEXT NOT NULL,
-			symbol TEXT NOT NULL,
-			quantity REAL NOT NULL,
-			avg_entry_price REAL NOT NULL,
-			current_price REAL,
-			unrealized_pnl REAL,
-			realized_pnl REAL,
-			timestamp INTEGER NOT NULL
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_pos_snap_pos ON position_snapshots(position_id)`,
-
-		// ── Accounts (enhanced) ──
-		`CREATE TABLE IF NOT EXISTS accounts (
-			id TEXT PRIMARY KEY,
-			name TEXT DEFAULT '',
-			exchange TEXT NOT NULL,
-			api_key_hash TEXT DEFAULT '',
-			initial_balance REAL DEFAULT 0,
-			currency TEXT DEFAULT 'USDT',
-			is_active INTEGER DEFAULT 1,
-			created_at INTEGER NOT NULL,
-			updated_at INTEGER NOT NULL
-		)`,
-
-		// ── Account Snapshots ──
-		`CREATE TABLE IF NOT EXISTS account_snapshots (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			account_id TEXT NOT NULL,
-			total_equity REAL NOT NULL,
-			available_balance REAL NOT NULL,
-			margin_used REAL DEFAULT 0,
-			drawdown REAL DEFAULT 0,
-			net_exposure REAL DEFAULT 0,
-			timestamp INTEGER NOT NULL
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_acct_snap_acct ON account_snapshots(account_id)`,
-
 		// ── Signals ──
 		`CREATE TABLE IF NOT EXISTS xt_signals (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -216,42 +176,6 @@ func migrateV2(tx *dbTx) error {
 			is_enabled INTEGER DEFAULT 0,
 			is_running INTEGER DEFAULT 0,
 			created_at INTEGER NOT NULL,
-			updated_at INTEGER NOT NULL
-		)`,
-
-		// ── Strategy Trade Logs ──
-		`CREATE TABLE IF NOT EXISTS strategy_trade_logs (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			strategy_name TEXT NOT NULL,
-			symbol TEXT NOT NULL,
-			signal_id INTEGER,
-			order_id TEXT DEFAULT '',
-			side TEXT NOT NULL,
-			price REAL NOT NULL,
-			quantity REAL NOT NULL,
-			pnl REAL DEFAULT 0,
-			reason TEXT DEFAULT '',
-			timestamp INTEGER NOT NULL
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_strat_trades_strat ON strategy_trade_logs(strategy_name)`,
-
-		// ── Strategy Run Logs ──
-		`CREATE TABLE IF NOT EXISTS strategy_run_logs (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			strategy_name TEXT NOT NULL,
-			event_type TEXT NOT NULL,
-			status TEXT NOT NULL,
-			message TEXT DEFAULT '',
-			duration_ms INTEGER DEFAULT 0,
-			timestamp INTEGER NOT NULL
-		)`,
-
-		// ── Strategy Global Settings ──
-		`CREATE TABLE IF NOT EXISTS strategy_global_settings (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			setting_key TEXT UNIQUE NOT NULL,
-			setting_value TEXT NOT NULL,
-			description TEXT DEFAULT '',
 			updated_at INTEGER NOT NULL
 		)`,
 
@@ -530,15 +454,6 @@ func migrateV7(tx *dbTx) error {
 		`CREATE INDEX IF NOT EXISTS idx_stratcfg_symbol ON strategy_configs(symbol)`,
 		`CREATE INDEX IF NOT EXISTS idx_stratcfg_enabled ON strategy_configs(is_enabled)`,
 		`CREATE INDEX IF NOT EXISTS idx_stratcfg_running ON strategy_configs(is_running)`,
-
-		// ── strategy_run_logs: query by strategy / event / time ──
-		`CREATE INDEX IF NOT EXISTS idx_runlogs_strat ON strategy_run_logs(strategy_name)`,
-		`CREATE INDEX IF NOT EXISTS idx_runlogs_event ON strategy_run_logs(event_type)`,
-		`CREATE INDEX IF NOT EXISTS idx_runlogs_time ON strategy_run_logs(timestamp)`,
-
-		// ── accounts: filter by exchange / active status ──
-		`CREATE INDEX IF NOT EXISTS idx_accounts_exchange ON accounts(exchange)`,
-		`CREATE INDEX IF NOT EXISTS idx_accounts_active ON accounts(is_active)`,
 
 		// ── agent_tokens: list active / check expiry ──
 		`CREATE INDEX IF NOT EXISTS idx_agent_tokens_active ON agent_tokens(is_active)`,

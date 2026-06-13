@@ -608,8 +608,18 @@ func GetStrategyParamDefs(c *gin.Context) {
 		s := strategies.NewWallstreetStrategy()
 		defs = s.ParamDefs()
 	case "ml":
-		// ML strategy requires modelID, return empty for now
-		defs = []map[string]any{}
+		defs = []map[string]any{
+			{"name": "model_id", "type": "string", "required": true, "description": "已训练的ML模型ID"},
+			{"name": "symbol", "type": "symbol", "required": true, "description": "交易对"},
+			{"name": "interval", "type": "interval", "required": true, "description": "K线周期"},
+			{"name": "predict_threshold", "type": "float", "default": 0.001, "description": "预测阈值，预测值超过此绝对值时开仓"},
+			{"name": "position_size_pct", "type": "float", "default": 0.02, "min": 0.005, "max": 0.5, "description": "单次仓位比例"},
+			{"name": "max_holding_bars", "type": "int", "default": 48, "min": 1, "max": 500, "description": "最大持仓K线数"},
+			{"name": "stop_loss_pct", "type": "float", "default": 0.05, "min": 0.005, "max": 0.5, "description": "止损百分比"},
+			{"name": "take_profit_pct", "type": "float", "default": 0.10, "min": 0.005, "max": 1.0, "description": "止盈百分比"},
+			{"name": "direction", "type": "choice", "choices": []string{"long", "short", "both"}, "default": "both", "description": "交易方向"},
+			{"name": "use_ensemble", "type": "boolean", "default": false, "description": "是否使用多模型集成预测"},
+		}
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"detail": "unknown strategy type: " + strategyType})
 		return

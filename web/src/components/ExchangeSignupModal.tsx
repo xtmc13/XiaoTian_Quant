@@ -9,7 +9,7 @@ interface ExchangeInfo {
   benefits: string[]
 }
 
-const EXCHANGES: ExchangeInfo[] = [
+const FALLBACK_EXCHANGES: ExchangeInfo[] = [
   {
     name: 'Binance',
     logo: 'BN',
@@ -48,12 +48,35 @@ const EXCHANGES: ExchangeInfo[] = [
   },
 ]
 
+/** Load exchange links from localStorage overrides or use fallback defaults. */
+function getExchanges(): ExchangeInfo[] {
+  try {
+    const raw = localStorage.getItem('xt-exchange-links')
+    if (raw) {
+      const custom = JSON.parse(raw) as ExchangeInfo[]
+      // Merge: custom links override fallback ones by name
+      const merged = FALLBACK_EXCHANGES.map(fe => {
+        const c = custom.find(e => e.name === fe.name)
+        return c ? { ...fe, ...c } : fe
+      })
+      return merged
+    }
+  } catch { /* fall through */ }
+  return FALLBACK_EXCHANGES
+}
+
+function useExchanges() {
+  const [exchanges] = useState<ExchangeInfo[]>(getExchanges)
+  return exchanges
+}
+
 interface Props {
   open: boolean
   onClose: () => void
 }
 
 export function ExchangeSignupModal({ open, onClose }: Props) {
+  const exchanges = useExchanges()
   if (!open) return null
 
   return (
@@ -71,7 +94,7 @@ export function ExchangeSignupModal({ open, onClose }: Props) {
         </p>
 
         <div className="space-y-2">
-          {EXCHANGES.map((ex) => (
+          {exchanges.map((ex) => (
             <a
               key={ex.name}
               href={ex.referralUrl}

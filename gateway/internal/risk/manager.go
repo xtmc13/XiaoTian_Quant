@@ -202,9 +202,21 @@ func DailyLimit(maxOrders int) CheckFn {
 	}
 }
 
-// RateLimit is handled by the OrderManager directly.
+// RateLimit enforces minimum interval between trades to prevent rapid-fire orders.
+// Default minimum interval: 500ms between orders on the same symbol.
 func RateLimit() CheckFn {
+	const minIntervalMs = 500
+	var lastTradeTime int64
+	var mu sync.Mutex
 	return func(ctx *Context) error {
+		mu.Lock()
+		defer mu.Unlock()
+		now := time.Now().UnixMilli()
+		if lastTradeTime > 0 && (now-lastTradeTime) < minIntervalMs {
+			return fmt.Errorf("rate limit: minimum %.0fms between orders (last was %dms ago)",
+				float64(minIntervalMs), now-lastTradeTime)
+		}
+		lastTradeTime = now
 		return nil
 	}
 }
@@ -365,6 +377,7 @@ type Manager struct {
 	circuitBreaker *CircuitBreaker
 	blacklist      map[string]bool
 	mu             sync.RWMutex
+	cfg            ManagerConfig // stored running config
 
 	// Metrics
 	dailyOrderCount  int
@@ -429,6 +442,7 @@ func GetManager() *Manager {
 // NewManager creates a risk manager with the given config.
 func NewManager(cfg ManagerConfig) *Manager {
 	mgr := &Manager{
+		cfg:            cfg,
 		circuitBreaker: NewCircuitBreaker(cfg.CircuitThreshold, cfg.CircuitResetTimeout),
 		blacklist:      make(map[string]bool),
 	}
@@ -529,7 +543,9 @@ func (m *Manager) GetCircuitBreaker() *CircuitBreaker {
 
 // Config returns a copy of the manager's running config.
 func (m *Manager) Config() ManagerConfig {
-	return DefaultManagerConfig()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.cfg
 }
 
 // ── Internal ──

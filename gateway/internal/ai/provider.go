@@ -81,6 +81,24 @@ func GetProvider(name string) *Provider {
 	return providers[name]
 }
 
+// SetProviderAPIKey updates the API key for a registered provider.
+func SetProviderAPIKey(name, key string) {
+	providersMu.Lock()
+	defer providersMu.Unlock()
+	if p, ok := providers[name]; ok {
+		p.APIKey = key
+	}
+}
+
+// SetProviderModel updates the model for a registered provider.
+func SetProviderModel(name, model string) {
+	providersMu.Lock()
+	defer providersMu.Unlock()
+	if p, ok := providers[name]; ok {
+		p.Model = model
+	}
+}
+
 // ListProviders returns all registered provider names.
 func ListProviders() []string {
 	providersMu.RLock()

@@ -354,6 +354,48 @@ def predict_rl(req: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── RL evaluation metric helpers ──────────────────────────────
+
+def _compute_sharpe(rewards: List[float], risk_free: float = 0.0) -> float:
+    """Compute annualized Sharpe ratio from episode rewards."""
+    if not rewards or len(rewards) < 2:
+        return 0.0
+    import numpy as np
+    arr = np.array(rewards)
+    mean = np.mean(arr)
+    std = np.std(arr, ddof=1)
+    if std == 0:
+        return 0.0
+    return (mean - risk_free) / max(std, 1e-8)
+
+
+def _compute_max_drawdown(rewards: List[float], initial_balance: float) -> float:
+    """Compute max drawdown percentage from cumulative rewards."""
+    if not rewards or initial_balance <= 0:
+        return 0.0
+    import numpy as np
+    cumulative = initial_balance + np.cumsum(rewards)
+    peak = np.maximum.accumulate(cumulative)
+    drawdown = (peak - cumulative) / (peak + 1e-8)
+    return float(np.max(drawdown)) * 100
+
+
+def _compute_win_rate(rewards: List[float]) -> float:
+    """Compute percentage of positive-reward episodes."""
+    if not rewards:
+        return 0.0
+    wins = sum(1 for r in rewards if r > 0)
+    return wins / len(rewards) * 100
+
+
+def _compute_avg_return(rewards: List[float], initial_balance: float) -> float:
+    """Compute average episode return as percentage of initial balance."""
+    if not rewards or initial_balance <= 0:
+        return 0.0
+    import numpy as np
+    return float(np.mean(rewards)) / initial_balance * 100
+
+
 @app.post("/rl/evaluate")
 def evaluate_rl(req: Dict[str, Any]) -> Dict[str, Any]:
     """Evaluate RL agent on test data."""
@@ -374,20 +416,28 @@ def evaluate_rl(req: Dict[str, Any]) -> Dict[str, Any]:
         trainer = RLTrainer(config)
         result = trainer.train(bars)
 
-        # Compute evaluation metrics
+        # Compute realistic evaluation metrics from training result
         final_balance = result.get("final_balance", 10000)
         initial_balance = config["initial_balance"]
         total_return_pct = (final_balance - initial_balance) / initial_balance * 100
 
+        # Compute Sharpe ratio from episode rewards
+        episode_rewards = result.get("episode_rewards", [])
+        sharpe_ratio = _compute_sharpe(episode_rewards)
+        max_dd_pct = _compute_max_drawdown(episode_rewards, initial_balance)
+        win_rate = _compute_win_rate(episode_rewards)
+        avg_trade_return = _compute_avg_return(episode_rewards, initial_balance) if episode_rewards else 0.0
+        trades = len(episode_rewards)
+
         return {
             "success": True,
             "model_id": req.get("model_id", "rl_eval"),
-            "total_return_pct": total_return_pct,
-            "sharpe_ratio": 0.0,  # simplified
-            "max_drawdown_pct": 0.0,
-            "win_rate": 0.0,
-            "trades": 0,
-            "avg_trade_return": 0.0,
+            "total_return_pct": round(total_return_pct, 2),
+            "sharpe_ratio": round(sharpe_ratio, 4),
+            "max_drawdown_pct": round(max_dd_pct, 2),
+            "win_rate": round(win_rate, 2),
+            "trades": trades,
+            "avg_trade_return": round(avg_trade_return, 2),
             "metrics": result,
         }
     except Exception as e:

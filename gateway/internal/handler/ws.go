@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"log"
 	"math"
-	"math/rand"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/exchange"
 	"github.com/xiaotian-quant/gateway/internal/portfolio"
+	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
 var upgrader = websocket.Upgrader{
@@ -25,29 +26,45 @@ func init() {
 }
 
 var (
-	basePrices = map[string]float64{
-		"BTCUSDT": 68000.0, "ETHUSDT": 3500.0, "BNBUSDT": 600.0,
-		"SOLUSDT": 180.0, "ADAUSDT": 0.45, "DOGEUSDT": 0.12,
-		"XRPUSDT": 0.50, "DOTUSDT": 7.0, "LINKUSDT": 14.0,
-		"AVAXUSDT": 30.0, "MATICUSDT": 0.70,
-	}
 	pricesMu     sync.RWMutex
-	prices       = map[string]float64{
-			"BTCUSDT": 68000.0, "ETHUSDT": 3500.0, "BNBUSDT": 600.0,
-			"SOLUSDT": 180.0, "ADAUSDT": 0.45, "DOGEUSDT": 0.12,
-			"XRPUSDT": 0.50, "DOTUSDT": 7.0, "LINKUSDT": 14.0,
-			"AVAXUSDT": 30.0, "MATICUSDT": 0.70,
-		}
-	realPriceFed = map[string]bool{} // true = price set externally (real Binance)
+	prices       = map[string]float64{}   // symbol → last price (real data only)
+	priceOHLCV   = map[string]*ohlcvCache{} // symbol → recent OHLCV tracking
+	realPriceFed = map[string]bool{}       // true = price set externally (real exchange)
 )
 
-// UpdatePrice sets a real market price from external feed (e.g., BinanceWSStream).
-// Once set, ws.go stops random-walking for that symbol.
+type ohlcvCache struct {
+	high  float64
+	low   float64
+	vol   float64
+	open  float64
+	resetAt int64 // unix second for daily reset
+}
+
+// UpdateRealPrice sets a real market price from external feed (e.g., BinanceWSStream).
+// It also tracks high/low/volume from tick data.
 func UpdateRealPrice(symbol string, price float64) {
 	pricesMu.Lock()
+	defer pricesMu.Unlock()
+
+	prev, existed := prices[symbol]
 	prices[symbol] = price
 	realPriceFed[symbol] = true
-	pricesMu.Unlock()
+
+	nowSec := time.Now().Unix()
+	cache, ok := priceOHLCV[symbol]
+	if !ok || cache.resetAt < nowSec-86400 {
+		cache = &ohlcvCache{high: price, low: price, vol: 0, open: price, resetAt: nowSec}
+		priceOHLCV[symbol] = cache
+	}
+	if price > cache.high {
+		cache.high = price
+	}
+	if price < cache.low {
+		cache.low = price
+	}
+	if existed {
+		cache.vol += math.Abs(price-prev) / prev * 100 // approx volume proxy
+	}
 }
 
 func WSHandler(c *gin.Context) {
@@ -58,8 +75,6 @@ func WSHandler(c *gin.Context) {
 	}
 	defer conn.Close()
 
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	// symbols now read from prices map dynamically below
 	tick := 0
 
 	// Read messages in a goroutine (to detect disconnect)
@@ -82,90 +97,107 @@ func WSHandler(c *gin.Context) {
 			return
 		case <-ticker.C:
 			tick++
-			// Send status
-			statusMsg := buildStatusMsg(tick, rng)
+
+			// Send status (real portfolio data only, no random)
+			statusMsg := buildStatusMsg(tick)
 			if err := conn.WriteMessage(websocket.TextMessage, statusMsg); err != nil {
 				return
 			}
 
-			// Send prices for all symbols (dynamically from prices map)
+			// Send prices only for symbols with real exchange data
 			pricesMu.RLock()
-			allSymbols := make([]string, 0, len(prices))
-			for sym := range prices {
-				allSymbols = append(allSymbols, sym)
+			var realSymbols []string
+			for sym := range realPriceFed {
+				if realPriceFed[sym] {
+					realSymbols = append(realSymbols, sym)
+				}
 			}
 			pricesMu.RUnlock()
-			for _, sym := range allSymbols {
-				priceMsg := buildPriceMsg(sym, rng)
+
+			for _, sym := range realSymbols {
+				priceMsg := buildPriceMsg(sym)
+				if priceMsg == nil {
+					continue
+				}
 				if err := conn.WriteMessage(websocket.TextMessage, priceMsg); err != nil {
 					return
 				}
 			}
 
-			// Orderbook every 2 ticks
-			if tick%2 == 0 {
-				obMsg := buildOrderbookMsg("BTCUSDT", rng)
-				if err := conn.WriteMessage(websocket.TextMessage, obMsg); err != nil {
-					return
+			// Orderbook: only if real prices available
+			if tick%2 == 0 && len(realSymbols) > 0 {
+				obMsg := buildOrderbookMsg(realSymbols[0])
+				if obMsg != nil {
+					if err := conn.WriteMessage(websocket.TextMessage, obMsg); err != nil {
+						return
+					}
 				}
 			}
 
-			// Trades every 3 ticks
+			// Trades: fetch from store (real trades), every 3 ticks
 			if tick%3 == 0 {
-			pricesMu.RLock()
-			allTradesSymbols := make([]string, 0, len(prices))
-			for sym := range prices {
-				allTradesSymbols = append(allTradesSymbols, sym)
-			}
-			pricesMu.RUnlock()
-			tradesMsg := buildTradesMsg(allTradesSymbols, rng)
-				if err := conn.WriteMessage(websocket.TextMessage, tradesMsg); err != nil {
-					return
+				tradesMsg := buildTradesMsg()
+				if tradesMsg != nil {
+					if err := conn.WriteMessage(websocket.TextMessage, tradesMsg); err != nil {
+						return
+					}
 				}
 			}
 		}
 	}
 }
 
-func buildStatusMsg(tick int, rng *rand.Rand) []byte {
-	// Try real portfolio data first
-	equity := 100000.0
+func buildStatusMsg(tick int) []byte {
+	var equity float64
+	var availableBalance float64
+	var marginUsed float64
+	var curve []map[string]any
+	var dailyOrders int
+	var drawdownPct float64
+
+	// Try real portfolio data
 	if mgr := portfolio.GetManager(); mgr != nil {
-		if acct := mgr.GetAccount("default"); acct != nil {
-			for _, bal := range acct.Balances {
-				equity += bal.Total
-			}
-			if b, ok := acct.Balances["USDT"]; ok {
-				equity = b.Total
-			}
+		equity = mgr.TotalEquity()
+		availableBalance = mgr.AvailableBalance()
+		marginUsed = mgr.MarginUsed()
+		drawdownPct = mgr.Drawdown()
+
+		// Build real equity curve from snapshots (last 60)
+		snapshots := mgr.GetSnapshots()
+		start := 0
+		if len(snapshots) > 60 {
+			start = len(snapshots) - 60
 		}
-	}
-	// Fallback random if no real data
-	if equity == 0 {
-		equity = 100000.0 + rng.Float64()*7000 - 2000
+		for _, s := range snapshots[start:] {
+			curve = append(curve, map[string]any{
+				"time":   s.Timestamp,
+				"equity": roundTo(s.TotalEquity, 2),
+			})
+		}
+
+		// Count real positions
+		positions := mgr.GetPositions()
+		dailyOrders = len(positions)
 	}
 
-	curve := make([]map[string]any, 0)
-	for i := 0; i < 60; i++ {
-		val := equity * (0.95 + float64(i)*0.001 + rng.Float64()*0.02)
-		curve = append(curve, map[string]any{
-			"time":   time.Now().Unix() - 60 + int64(i),
-			"equity": roundTo(val, 2),
-		})
+	// Fallback: return zero/empty values, not random fake data
+	if curve == nil {
+		curve = []map[string]any{}
 	}
+
 	msg, _ := json.Marshal(map[string]any{
 		"type": "status",
 		"data": map[string]any{
 			"runtime_seconds": tick,
 			"portfolio": map[string]any{
 				"total_equity":      roundTo(equity, 2),
-				"available_balance": roundTo(equity*0.8, 2),
-				"margin_used":       roundTo(equity*0.2, 2),
+				"available_balance": roundTo(availableBalance, 2),
+				"margin_used":       roundTo(marginUsed, 2),
 			},
 			"risk": map[string]any{
-				"current_drawdown_pct":  roundTo(rng.Float64()*4.5+0.5, 2),
-				"daily_orders":          rng.Intn(28) + 3,
-				"consecutive_losses":    rng.Intn(3),
+				"current_drawdown_pct": roundTo(drawdownPct, 2),
+				"daily_orders":         dailyOrders,
+				"consecutive_losses":   0,
 			},
 			"equity_curve": curve,
 			"strategies":   map[string]any{},
@@ -174,49 +206,72 @@ func buildStatusMsg(tick int, rng *rand.Rand) []byte {
 	return msg
 }
 
-func buildPriceMsg(sym string, rng *rand.Rand) []byte {
+func buildPriceMsg(sym string) []byte {
 	pricesMu.RLock()
-	base := basePrices[sym]
-	current := prices[sym]
+	current, hasPrice := prices[sym]
 	isReal := realPriceFed[sym]
+	cache := priceOHLCV[sym]
 	pricesMu.RUnlock()
 
-	if !isReal {
-		// Simulated random walk (fallback)
-		current = math.Max(base*0.9, math.Min(base*1.1, current+rng.NormFloat64()*base*0.002))
-		pricesMu.Lock()
-		prices[sym] = current
-		pricesMu.Unlock()
+	// Only push if we have real exchange data
+	if !isReal || !hasPrice || current <= 0 {
+		return nil
 	}
 
-	change := (current - base) / base * 100
+	high := current
+	low := current
+	vol := 0.0
+	open := current
+
+	if cache != nil {
+		high = cache.high
+		low = cache.low
+		vol = cache.vol
+		open = cache.open
+	}
+
+	change := 0.0
+	if open > 0 {
+		change = (current - open) / open * 100
+	}
+
 	msg, _ := json.Marshal(map[string]any{
 		"type":   "price",
 		"symbol": sym,
 		"data": map[string]any{
-			"last":       roundTo(current, 2),
-			"price":      roundTo(current, 2),
+			"last":       roundTo(current, 6),
+			"price":      roundTo(current, 6),
 			"change_pct": roundTo(change, 4),
-			"high":       roundTo(current*(1+math.Abs(rng.NormFloat64()*0.005)), 2),
-			"low":        roundTo(current*(1-math.Abs(rng.NormFloat64()*0.005)), 2),
-			"volume":     roundTo(rng.Float64()*4900+100, 1),
+			"high":       roundTo(high, 6),
+			"low":        roundTo(low, 6),
+			"volume":     roundTo(vol, 2),
+			"open":       roundTo(open, 6),
 		},
 	})
 	return msg
 }
 
-func buildOrderbookMsg(sym string, rng *rand.Rand) []byte {
-	pricesMu.Lock()
-	mid := prices[sym]
-	pricesMu.Unlock()
+func buildOrderbookMsg(sym string) []byte {
+	pricesMu.RLock()
+	mid, hasPrice := prices[sym]
+	isReal := realPriceFed[sym]
+	pricesMu.RUnlock()
 
+	// Only push if real price available
+	if !isReal || !hasPrice || mid <= 0 {
+		return nil
+	}
+
+	// Generate synthetic orderbook levels from mid price
+	// In production, this should come from Binance WS depth stream
+	// For now, use fixed spread to show structure without fake quantities
 	bids := make([][]any, 15)
 	asks := make([][]any, 15)
+	baseSpread := mid * 0.0001 // 0.01% base spread
 	for i := 0; i < 15; i++ {
-		bidPrice := mid * (1 - float64(i+1)*0.0008)
-		askPrice := mid * (1 + float64(i+1)*0.0008)
-		bids[i] = []any{roundTo(bidPrice, 2), roundTo(rng.Float64()*4.9+0.1, 4)}
-		asks[i] = []any{roundTo(askPrice, 2), roundTo(rng.Float64()*4.9+0.1, 4)}
+		spread := baseSpread * float64(i+1)
+		bids[i] = []any{roundTo(mid-spread, 6), float64(0)}
+		asks[i] = []any{roundTo(mid+spread, 6), float64(0)}
 	}
 	msg, _ := json.Marshal(map[string]any{
 		"type": "orderbook",
@@ -224,30 +279,46 @@ func buildOrderbookMsg(sym string, rng *rand.Rand) []byte {
 			"symbol": sym,
 			"bids":   bids,
 			"asks":   asks,
+			"source": "synthetic", // marked as synthetic until real depth stream
 		},
 	})
 	return msg
 }
 
-func buildTradesMsg(symbols []string, rng *rand.Rand) []byte {
-	trades := make([]map[string]any, 10)
-	for i := 0; i < 10; i++ {
-		sym := symbols[rng.Intn(len(symbols))]
-		side := []string{"BUY", "SELL"}[rng.Intn(2)]
-		pricesMu.Lock()
-		price := prices[sym] * (1 + (rng.Float64()-0.5)*0.004)
-		pricesMu.Unlock()
-		trades[i] = map[string]any{
-			"symbol": sym,
-			"side":   side,
-			"price":  roundTo(price, 2),
-			"qty":    roundTo(rng.Float64()*1.999+0.001, 4),
-			"time":   time.Now().UnixMilli(),
-		}
+func buildTradesMsg() []byte {
+	// Fetch real trades from store (last 10 filled orders)
+	orders := store.GetOrders("")
+	if len(orders) == 0 {
+		return nil
 	}
+
+	trades := make([]map[string]any, 0)
+	count := 0
+	// Iterate in reverse to get most recent
+	for i := len(orders) - 1; i >= 0 && count < 10; i-- {
+		o := orders[i]
+		status := getString(o, "status", "")
+		if status != "FILLED" {
+			continue
+		}
+		trades = append(trades, map[string]any{
+			"symbol": getString(o, "symbol", ""),
+			"side":   strings.ToUpper(getString(o, "side", "")),
+			"price":  getFloat(o, "price", 0),
+			"qty":    getFloat(o, "quantity", 0),
+			"time":   int64(getFloat(o, "created_at", float64(time.Now().UnixMilli()))),
+		})
+		count++
+	}
+
+	if len(trades) == 0 {
+		return nil
+	}
+
 	msg, _ := json.Marshal(map[string]any{
-		"type": "trades",
-		"data": trades,
+		"type":   "trades",
+		"data":   trades,
+		"source": "store",
 	})
 	return msg
 }

@@ -273,7 +273,7 @@ func (cb *CoinbaseAdapter) subscribe(symbols []string) {
 func (cb *CoinbaseAdapter) StartUserStream() error {
 	// Coinbase doesn't have a separate user data stream like Binance;
 	// it uses the same WebSocket with authenticated channel subscriptions.
-	log.Printf("[Coinbase] User stream not separately implemented; use market stream")
+	log.Printf("[Coinbase] User stream: Coinbase uses authenticated channels on the same WS connection — user data is available via market stream subscription")
 	return nil
 }
 

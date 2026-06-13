@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
 // verifyWebhookSignature checks HMAC-SHA256 signature from X-Webhook-Signature header.
@@ -74,10 +75,21 @@ func TradingViewWebhook(c *gin.Context) {
 	case "sell", "short", "enter_short":
 		side = "SELL"
 	case "exit", "close", "exit_long", "exit_short", "flatten":
-		// Close position — handled by order manager via cancel-all + market exit
-		c.JSON(http.StatusOK, gin.H{"status": "ok", "action": "close", "symbol": symbol, "msg": "close signal received"})
-		log.Printf("[webhook] TV signal: CLOSE %s", symbol)
-		// TODO: call portfolio manager to close position
+		// Close position using the OMS pipeline (cancel open orders + submit exit order)
+		closeAllOrdersForSymbol(symbol)
+		closeOrder := map[string]any{
+			"symbol":   strings.ToUpper(symbol),
+			"side":     "SELL",
+			"type":     "MARKET",
+			"price":    0,
+			"quantity": quantity,
+			"source":   "tradingview",
+			"strategy": getString(body, "strategy", "TV_Strategy"),
+			"action":   "exit",
+		}
+		fillOrderAndUpdatePortfolio(closeOrder)
+		log.Printf("[webhook] TV signal: CLOSE %s (orders cancelled + exit submitted)", symbol)
+		c.JSON(http.StatusOK, gin.H{"status": "ok", "action": "close", "symbol": symbol, "msg": "close signal processed"})
 		return
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("unknown action: %s", action)})
@@ -158,4 +170,20 @@ func GenericWebhook(c *gin.Context) {
 	log.Printf("[webhook] generic: %s %s %s qty=%.4f", side, orderType, symbol, quantity)
 
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "order": order})
+}
+
+// closeAllOrdersForSymbol cancels all open orders for a given symbol.
+func closeAllOrdersForSymbol(symbol string) {
+	symbol = strings.ToUpper(symbol)
+	allOrders := store.GetOrders("")
+	for _, o := range allOrders {
+		if s, ok := o["symbol"].(string); ok && strings.ToUpper(s) == symbol {
+			status, _ := o["status"].(string)
+			if status != "CANCELLED" && status != "FILLED" && status != "REJECTED" {
+				id, _ := o["id"].(string)
+				store.CancelOrder(id)
+				log.Printf("[webhook] Cancelled order %s for %s", id, symbol)
+			}
+		}
+	}
 }

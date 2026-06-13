@@ -91,12 +91,17 @@ func (w *WSClient) Connect() error {
 }
 
 func (w *WSClient) readLoop() {
+	// Save reference to doneCh so tryReconnect can create a new one without
+	// the defer closing the newly created channel.
+	doneCh := w.doneCh
 	defer func() {
 		w.mu.Lock()
 		w.connected = false
-		w.conn.Close()
+		if w.conn != nil {
+			w.conn.Close()
+		}
 		w.mu.Unlock()
-		close(w.doneCh)
+		close(doneCh)
 	}()
 
 	for {
@@ -241,6 +246,15 @@ func (h *StreamHub) CloseAll() {
 	for name, c := range h.clients {
 		c.Close()
 		delete(h.clients, name)
+	}
+}
+
+// SendJSON sends a JSON message to a named stream client.
+func (h *StreamHub) SendJSON(name string, v any) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if c, ok := h.clients[name]; ok {
+		c.SendJSON(v)
 	}
 }
 

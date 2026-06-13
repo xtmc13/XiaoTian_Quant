@@ -92,7 +92,7 @@ export function Sidebar() {
       onMouseLeave={handleMouseLeave}
       className={cn(
         'flex flex-col bg-quant-bg border-r border-quant-border shrink-0 transition-all duration-200',
-        sidebarCollapsed ? 'w-14' : 'w-36'
+        sidebarCollapsed ? 'w-14' : 'w-40'
       )}
     >
       {/* Logo */}

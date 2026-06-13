@@ -40,6 +40,8 @@ help:
 	@echo ""
 	@echo "  开发:"
 	@echo "  make dev            — 启动开发服务器（热重载）"
+	@echo "  make dev-sandbox    — 启动 Python 沙箱"
+	@echo "  make dev-ccxt       — 启动 CCXT Bridge"
 	@echo "  make test           — 运行测试"
 	@echo "  make lint           — 代码检查"
 	@echo ""
@@ -65,11 +67,19 @@ build-go:
 	@echo "🔨 构建 Go 后端..."
 	@rm -rf gateway/spa/*
 	@cp -r web/dist/* gateway/spa/ 2>/dev/null || true
+ifeq ($(OS),windows)
 	@cd gateway && CGO_ENABLED=0 go build \
 		-ldflags="-s -w -X main.version=$(VERSION) -X main.buildTime=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)" \
 		-trimpath \
 		-o gateway-server$(shell go env GOEXE 2>/dev/null) \
 		./cmd/server
+else
+	@cd gateway && CGO_ENABLED=1 go build \
+		-ldflags="-s -w -X main.version=$(VERSION) -X main.buildTime=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)" \
+		-trimpath \
+		-o gateway-server$(shell go env GOEXE 2>/dev/null) \
+		./cmd/server
+endif
 
 # ── Start/Stop ──────────────────────────────────────────────────
 start:
@@ -145,6 +155,14 @@ dev-ml:
 
 dev-web:
 	@cd web && npm run dev
+
+dev-sandbox:
+	@echo "🐍 启动 Python 沙箱..."
+	@cd sandbox && python3 main.py
+
+dev-ccxt:
+	@echo "🌐 启动 CCXT Bridge..."
+	@cd sandbox && python3 ccxt_bridge.py
 
 # ── Test ───────────────────────────────────────────────────────
 test:

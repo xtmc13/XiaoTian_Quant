@@ -265,7 +265,48 @@ func (b *BinanceAdapter) GetBalance() ([]map[string]any, error) {
 }
 
 func (b *BinanceAdapter) GetPositions() ([]map[string]any, error) {
-	return nil, nil
+	// Try futures positions first (most relevant for a quant platform)
+	if b.apiKey != "" && b.secretKey != "" {
+		positions, err := b.GetFuturesPositions()
+		if err == nil && len(positions) > 0 {
+			return positions, nil
+		}
+	}
+
+	// Spot doesn't have "positions" in the traditional sense.
+	// Return holdings from balance as position-like data.
+	balances, err := b.GetBalance()
+	if err != nil {
+		return []map[string]any{}, nil
+	}
+
+	var positions []map[string]any
+	for _, bal := range balances {
+		asset, _ := bal["asset"].(string)
+		free := parseFloatStr(bal, "free")
+		locked := parseFloatStr(bal, "locked")
+		total := free + locked
+		if total <= 0 || asset == "USDT" || asset == "BUSD" || asset == "USDC" {
+			continue
+		}
+		// Get current price for this asset
+		symbol := asset + "USDT"
+		price := 0.0
+		if ticker, err := b.GetTicker(symbol); err == nil {
+			price = parseFloatStr(ticker, "lastPrice")
+		}
+
+		positions = append(positions, map[string]any{
+			"symbol":       symbol,
+			"positionAmt":  total,
+			"entryPrice":   float64(0), // spot: no entry price tracking
+			"markPrice":    price,
+			"positionSide": "LONG",
+			"leverage":     float64(1),
+			"marketType":   "spot",
+		})
+	}
+	return positions, nil
 }
 
 // ── Futures REST ──

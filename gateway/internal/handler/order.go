@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -17,6 +18,163 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/portfolio"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
+
+// InitOMSPipeline wires up the OrderManager's pipeline hooks:
+//   - RiskCheck: validates order against ProtectionManager
+//   - LockBalance: reserves funds from the portfolio manager
+//   - SubmitToExchange: sends the order to the real exchange adapter
+//   - CancelOnExchange: cancels the order on the real exchange
+func InitOMSPipeline() {
+	om := order.GetOrderManager()
+
+	// ── 1. Risk Check: validate order against ProtectionManager ──
+	om.RiskCheck = func(req *order.Request) error {
+		if ProtectionManager == nil {
+			return nil // no protection configured, allow all
+		}
+		now := time.Now()
+		blocked, result := ProtectionManager.IsBlocked(req.Symbol, now)
+		if blocked {
+			return fmt.Errorf("风控阻断: %s", result.Reason)
+		}
+		return nil
+	}
+
+	// ── 2. Lock Balance: reserve funds before order submission ──
+	om.LockBalance = func(req *order.Request) error {
+		mgr := portfolio.GetManager()
+		if mgr == nil {
+			return nil // paper trading, unlimited balance
+		}
+		acct := mgr.GetAccount("default")
+		if acct == nil {
+			return fmt.Errorf("account not found")
+		}
+
+		base, quote := parseSymbolPair(req.Symbol)
+		cost := req.Price * req.Quantity
+
+		if req.Side == model.SideBuy {
+			quoteBal := acct.Balances[quote]
+			if quoteBal == nil || quoteBal.Free < cost {
+				return fmt.Errorf("余额不足: 需要 %.2f %s, 可用 %.2f",
+					cost, quote,
+					func() float64 {
+						if quoteBal != nil {
+							return quoteBal.Free
+						}
+						return 0
+					}())
+			}
+		} else {
+			baseBal := acct.Balances[base]
+			if baseBal == nil || baseBal.Free < req.Quantity {
+				return fmt.Errorf("持仓不足: 需要 %.4f %s, 可用 %.4f",
+					req.Quantity, base,
+					func() float64 {
+						if baseBal != nil {
+							return baseBal.Free
+						}
+						return 0
+					}())
+			}
+		}
+		return nil
+	}
+
+	// ── 3. Submit to Exchange: actually send the order ──
+	om.SubmitToExchange = func(ord *model.OrderData) (map[string]any, error) {
+		exName := strings.ToLower(ord.Exchange)
+		if exName == "paper" || exName == "" {
+			// Paper trading: simulate instant fill
+			ord.Status = model.StatusFilled
+			ord.Filled = ord.Quantity
+			ord.AvgFillPrice = ord.Price
+			return map[string]any{
+				"order_id": ord.ID,
+				"status":   string(model.StatusFilled),
+				"filled":   ord.Quantity,
+			}, nil
+		}
+
+		apiKey, secret, _ := adapter.GetCredential(exName)
+		if apiKey == "" || secret == "" {
+			return nil, fmt.Errorf("交易所 %s 未配置 API Key，请在设置中配置", exName)
+		}
+
+		var err error
+		var result map[string]any
+		side := strings.ToUpper(string(ord.Side))
+		orderType := strings.ToUpper(string(ord.OrderType))
+
+		switch exName {
+		case "binance":
+			exch := adapter.NewBinanceAdapter(apiKey, secret, false)
+			result, err = exch.PlaceOrder(ord.Symbol, side, orderType, ord.Price, ord.Quantity)
+		case "bybit":
+			exch := adapter.NewBybitAdapter(apiKey, secret, false)
+			result, err = exch.PlaceOrder(ord.Symbol, side, orderType, ord.Price, ord.Quantity)
+		case "kraken":
+			exch := adapter.NewKrakenAdapter(apiKey, secret)
+			result, err = exch.PlaceOrder(ord.Symbol, side, orderType, ord.Price, ord.Quantity)
+		case "mexc":
+			exch := adapter.NewMEXCAdapter(apiKey, secret)
+			result, err = exch.PlaceOrder(ord.Symbol, side, orderType, ord.Price, ord.Quantity)
+		case "alpaca":
+			exch := adapter.NewAlpacaAdapter(apiKey, secret, false)
+			result, err = exch.PlaceOrder(ord.Symbol, side, orderType, ord.Price, ord.Quantity)
+		default:
+			return nil, fmt.Errorf("不支持的交易所: %s（支持: binance, bybit, kraken, mexc, alpaca）", exName)
+		}
+
+		if err != nil {
+			return nil, fmt.Errorf("交易所下单失败 [%s]: %w", exName, err)
+		}
+		return result, nil
+	}
+
+	// ── 4. Cancel on Exchange ──
+	om.CancelOnExchange = func(ord *model.OrderData) error {
+		exName := strings.ToLower(ord.Exchange)
+		if exName == "paper" || exName == "" {
+			return nil
+		}
+
+		apiKey, secret, _ := adapter.GetCredential(exName)
+		if apiKey == "" || secret == "" {
+			return fmt.Errorf("交易所 %s 未配置 API Key", exName)
+		}
+
+		var err error
+		switch exName {
+		case "binance":
+			exch := adapter.NewBinanceAdapter(apiKey, secret, false)
+			_, err = exch.CancelOrder(ord.Symbol, ord.ID)
+		case "bybit":
+			exch := adapter.NewBybitAdapter(apiKey, secret, false)
+			_, err = exch.CancelOrder(ord.Symbol, ord.ID)
+		case "kraken":
+			exch := adapter.NewKrakenAdapter(apiKey, secret)
+			_, err = exch.CancelOrder(ord.Symbol, ord.ID)
+		case "mexc":
+			exch := adapter.NewMEXCAdapter(apiKey, secret)
+			_, err = exch.CancelOrder(ord.Symbol, ord.ID)
+		case "alpaca":
+			exch := adapter.NewAlpacaAdapter(apiKey, secret, false)
+			_, err = exch.CancelOrder(ord.Symbol, ord.ID)
+		default:
+			return fmt.Errorf("不支持的交易所: %s（支持: binance, bybit, kraken, mexc, alpaca）", exName)
+		}
+		return err
+	}
+
+	log.Println("[OMS] Pipeline initialized: RiskCheck ✓ | LockBalance ✓ | SubmitToExchange ✓ | CancelOnExchange ✓")
+}
+
+// Ensure OMS pipeline is initialized when this package loads
+func init() {
+	InitOMSPipeline()
+}
 
 func GetOrders(c *gin.Context) {
 	symbol := c.Query("symbol")
@@ -67,6 +225,8 @@ func PlaceOrder(c *gin.Context) {
 
 	// Store in the shared store so GetOrders / OrderHistory can find it
 	storeOrder := map[string]any{
+		"id":             ord.ID,
+		"order_id":       ord.ID,
 		"symbol":         ord.Symbol,
 		"side":           string(ord.Side),
 		"order_type":     string(ord.OrderType),
@@ -75,6 +235,11 @@ func PlaceOrder(c *gin.Context) {
 		"filled":         ord.Filled,
 		"status":         string(ord.Status),
 		"exchange":       ord.Exchange,
+		"user_id":        ord.UserID,
+		"client_oid":     ord.ClientOID,
+		"avg_fill_price": ord.AvgFillPrice,
+		"created_at":     ord.CreatedAt,
+		"updated_at":     ord.UpdatedAt,
 		"market_type":    string(ord.MarketType),
 		"position_side":  string(ord.PositionSide),
 		"leverage":       ord.Leverage,
@@ -120,13 +285,15 @@ func normalizeOrder(o map[string]any) map[string]any {
 
 	result["status"] = getString(o, "status", "NEW")
 
-	// Time conversion: backend stores float64 Unix timestamp, frontend expects ISO string
+	// Time conversion: backend stores int64 Unix millisecond timestamp, frontend expects ISO string
 	if created, ok := o["created_at"].(float64); ok && created > 0 {
-		result["created_at"] = time.Unix(int64(created), 0).Format(time.RFC3339)
+		result["created_at"] = time.UnixMilli(int64(created)).UTC().Format(time.RFC3339)
+	} else if created, ok := o["created_at"].(int64); ok && created > 0 {
+		result["created_at"] = time.UnixMilli(created).UTC().Format(time.RFC3339)
 	} else if createdStr, ok := o["created_at"].(string); ok {
 		result["created_at"] = createdStr
 	} else {
-		result["created_at"] = time.Now().Format(time.RFC3339)
+		result["created_at"] = time.Now().UTC().Format(time.RFC3339)
 	}
 
 	// Contract fields

@@ -2,6 +2,7 @@ package social
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -88,6 +89,11 @@ type Engine struct {
 	signals    []Signal                    // recent signals (ring buffer)
 	maxSignals int
 
+	// Risk tracking
+	dailyLosses    map[int]float64 // followerID -> cumulative daily loss
+	dailyLossDay   string          // date string for daily reset
+	getMarketPrice func(symbol string) float64
+
 	// Callbacks
 	OnSignal     func(s Signal)
 	OnCopyTrade  func(followerID int, signal Signal, cfg CopyConfig)
@@ -97,10 +103,18 @@ type Engine struct {
 // NewEngine creates a signal engine.
 func NewEngine() *Engine {
 	return &Engine{
-		providers:  make(map[int]*ProviderStats),
-		followers:  make(map[int]map[int]*CopyConfig),
-		maxSignals: 10000,
+		providers:   make(map[int]*ProviderStats),
+		followers:   make(map[int]map[int]*CopyConfig),
+		maxSignals:  10000,
+		dailyLosses: make(map[int]float64),
 	}
+}
+
+// SetMarketPriceProvider sets a callback for fetching current market prices.
+func (e *Engine) SetMarketPriceProvider(fn func(symbol string) float64) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.getMarketPrice = fn
 }
 
 // RegisterProvider registers a signal provider.
@@ -211,11 +225,52 @@ func (e *Engine) riskCheck(followerID int, s Signal, cfg *CopyConfig) (bool, str
 	if cfg.MaxPosition > 0 && s.Size*cfg.Multiplier > cfg.MaxPosition {
 		return true, fmt.Sprintf("position size %.2f exceeds max %.2f", s.Size*cfg.Multiplier, cfg.MaxPosition)
 	}
-	// Check slippage
-	if cfg.SlippagePct > 0 {
-		// In production, compare with current market price
+
+	// Check slippage: compare signal price with current market price
+	if cfg.SlippagePct > 0 && s.Price > 0 {
+		e.mu.RLock()
+		getPrice := e.getMarketPrice
+		e.mu.RUnlock()
+		if getPrice != nil {
+			marketPrice := getPrice(s.Symbol)
+			if marketPrice > 0 {
+				slippage := math.Abs(s.Price-marketPrice) / marketPrice * 100
+				if slippage > cfg.SlippagePct {
+					return true, fmt.Sprintf("slippage %.2f%% exceeds limit %.2f%% (signal: %.4f, market: %.4f)",
+						slippage, cfg.SlippagePct, s.Price, marketPrice)
+				}
+			}
+		}
 	}
+
+	// Check daily loss limit
+	if cfg.MaxDailyLoss > 0 {
+		e.mu.Lock()
+		today := time.Now().Format("2006-01-02")
+		if e.dailyLossDay != today {
+			e.dailyLosses = make(map[int]float64)
+			e.dailyLossDay = today
+		}
+		loss := e.dailyLosses[followerID]
+		e.mu.Unlock()
+		if loss < -cfg.MaxDailyLoss {
+			return true, fmt.Sprintf("daily loss %.2f%% exceeds limit %.2f%%", -loss, cfg.MaxDailyLoss)
+		}
+	}
+
 	return false, ""
+}
+
+// RecordPnL records profit/loss for a follower's daily limit tracking.
+func (e *Engine) RecordPnL(followerID int, pnl float64) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	today := time.Now().Format("2006-01-02")
+	if e.dailyLossDay != today {
+		e.dailyLosses = make(map[int]float64)
+		e.dailyLossDay = today
+	}
+	e.dailyLosses[followerID] += pnl
 }
 
 // GetProviderSignals returns recent signals from a provider.

@@ -105,38 +105,173 @@ export function AI() {
     setLoadingHeatmap(true)
     setLoadingCalendar(true)
     try {
-      // Fetch real prices for major crypto via market snapshot
-      const snapshotSymbols = [
-        { flag: '🇺🇸', symbol: 'BTCUSDT', name: 'BTC' },
-        { flag: '🇺🇸', symbol: 'ETHUSDT', name: 'ETH' },
-        { flag: '🇺🇸', symbol: 'SOLUSDT', name: 'SOL' },
-        { flag: '🇺🇸', symbol: 'BNBUSDT', name: 'BNB' },
-        { flag: '🇺🇸', symbol: 'XRPUSDT', name: 'XRP' },
-        { flag: '🇺🇸', symbol: 'DOGEUSDT', name: 'DOGE' },
+      // ── Fetch heatmap data for ALL categories ──
+
+      // 1. Crypto (already using Binance snapshots)
+      const cryptoSymbols = [
+        { name: 'BTC', symbol: 'BTCUSDT' },
+        { name: 'ETH', symbol: 'ETHUSDT' },
+        { name: 'SOL', symbol: 'SOLUSDT' },
+        { name: 'BNB', symbol: 'BNBUSDT' },
+        { name: 'XRP', symbol: 'XRPUSDT' },
+        { name: 'DOGE', symbol: 'DOGEUSDT' },
+        { name: 'ADA', symbol: 'ADAUSDT' },
+        { name: 'AVAX', symbol: 'AVAXUSDT' },
+        { name: 'LINK', symbol: 'LINKUSDT' },
+        { name: 'DOT', symbol: 'DOTUSDT' },
+        { name: 'LTC', symbol: 'LTCUSDT' },
+        { name: 'MATIC', symbol: 'MATICUSDT' },
       ]
-      const snapshots = await Promise.allSettled(
-        snapshotSymbols.map((s) => marketApi.snapshot(s.symbol).then((d) => ({ ...s, price: (d as TickerSnapshot).price, change: (d as TickerSnapshot).change_pct_24h ?? 0 })))
+      const cryptoSettled = await Promise.allSettled(
+        cryptoSymbols.map((s) =>
+          marketApi.snapshot(s.symbol).then((d) => ({
+            name: s.name,
+            price: (d as TickerSnapshot).price ?? 0,
+            value: (d as TickerSnapshot).change_pct_24h ?? 0,
+          }))
+        )
       )
-      const cryptoPrices = snapshots
-        .filter((r): r is PromiseFulfilledResult<typeof snapshotSymbols[0] & { price: number; change: number }> => r.status === 'fulfilled')
+      const cryptoItems = cryptoSettled
+        .filter((r): r is PromiseFulfilledResult<{ name: string; price: number; value: number }> => r.status === 'fulfilled')
         .map((r) => r.value)
 
-      setMarketData((prev) => {
-        const next = { ...prev }
-        // Update crypto heatmap with real prices if available
-        if (cryptoPrices.length > 0) {
-          next.heatmap = { ...prev.heatmap }
-          next.heatmap.crypto = cryptoPrices.map((p) => ({
-            name: p.name,
-            price: p.price,
-            value: p.change,
-          }))
-        }
-        return next
-      })
+      // 2. US stocks (using indices snapshot for major tech stocks)
+      const usStockSymbols = ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'NFLX']
+      const usSettled = await Promise.allSettled(
+        usStockSymbols.map((s) =>
+          marketApi.snapshot(`SPX,${s}`).then((d) => {
+            // Try to get stock data from indices result, fall back to SPX index data
+            const snapshot = d as TickerSnapshot & { indices?: Array<{ symbol: string; price: number; change: number }> }
+            const stockIdx = snapshot?.indices?.find((i: { symbol: string }) => i.symbol === s)
+            return {
+              name: s,
+              price: stockIdx?.price ?? snapshot?.price ?? 0,
+              value: stockIdx?.change ?? snapshot?.change_pct_24h ?? 0,
+            }
+          })
+        )
+      )
+      const usStockItems = usSettled
+        .filter((r): r is PromiseFulfilledResult<{ name: string; price: number; value: number }> => r.status === 'fulfilled')
+        .map((r) => r.value)
+        .filter((item) => item.price > 0)
 
-      // Attempt to fetch additional market data (indices, sentiment, calendar)
-      // These APIs may not exist yet; failures are silently ignored.
+      // 3. HK stocks
+      const hkSymbols = [
+        { name: '腾讯', symbol: '00700' },
+        { name: '阿里', symbol: '09988' },
+        { name: '美团', symbol: '03690' },
+        { name: '小米', symbol: '01810' },
+        { name: '京东', symbol: '09618' },
+        { name: '友邦', symbol: '01299' },
+        { name: '港交所', symbol: '00388' },
+        { name: '快手', symbol: '01024' },
+      ]
+      const hkSettled = await Promise.allSettled(
+        hkSymbols.map((s) =>
+          marketApi.snapshot(`HSI,${s.symbol}`).then((d) => {
+            const snapshot = d as TickerSnapshot & { indices?: Array<{ symbol: string; price: number; change: number }> }
+            const stockIdx = snapshot?.indices?.find((i: { symbol: string }) => i.symbol === s.symbol)
+            return {
+              name: s.name,
+              price: stockIdx?.price ?? 0,
+              value: stockIdx?.change ?? 0,
+            }
+          })
+        )
+      )
+      const hKItems = hkSettled
+        .filter((r): r is PromiseFulfilledResult<{ name: string; price: number; value: number }> => r.status === 'fulfilled')
+        .map((r) => r.value)
+        .filter((item) => item.price > 0)
+
+      // 4. Commodities
+      const commoditySymbols = [
+        { name: '黄金', symbol: 'GC=F' },
+        { name: '白银', symbol: 'SI=F' },
+        { name: '原油', symbol: 'CL=F' },
+        { name: '天然气', symbol: 'NG=F' },
+        { name: '铜', symbol: 'HG=F' },
+        { name: '铂金', symbol: 'PL=F' },
+      ]
+      const commoditySettled = await Promise.allSettled(
+        commoditySymbols.map((s) =>
+          marketApi.snapshot(s.symbol).then((d) => ({
+            name: s.name,
+            price: (d as TickerSnapshot).price ?? 0,
+            value: (d as TickerSnapshot).change_pct_24h ?? 0,
+          }))
+        )
+      )
+      const commodityItems = commoditySettled
+        .filter((r): r is PromiseFulfilledResult<{ name: string; price: number; value: number }> => r.status === 'fulfilled')
+        .map((r) => r.value)
+        .filter((item) => item.price > 0)
+
+      // 5. Sectors (US sector ETFs)
+      const sectorSymbols = [
+        { name: '科技', symbol: 'XLK' },
+        { name: '金融', symbol: 'XLF' },
+        { name: '医疗', symbol: 'XLV' },
+        { name: '能源', symbol: 'XLE' },
+        { name: '消费', symbol: 'XLY' },
+        { name: '工业', symbol: 'XLI' },
+        { name: '房地产', symbol: 'XLRE' },
+        { name: '公用事业', symbol: 'XLU' },
+        { name: '材料', symbol: 'XLB' },
+        { name: '通信', symbol: 'XLC' },
+      ]
+      const sectorSettled = await Promise.allSettled(
+        sectorSymbols.map((s) =>
+          marketApi.snapshot(s.symbol).then((d) => ({
+            name: s.name,
+            price: (d as TickerSnapshot).price ?? 0,
+            value: (d as TickerSnapshot).change_pct_24h ?? 0,
+          }))
+        )
+      )
+      const sectorItems = sectorSettled
+        .filter((r): r is PromiseFulfilledResult<{ name: string; price: number; value: number }> => r.status === 'fulfilled')
+        .map((r) => r.value)
+        .filter((item) => item.price > 0)
+
+      // 6. Forex
+      const forexSymbols = [
+        { name: 'EUR/USD', symbol: 'EURUSD=X' },
+        { name: 'GBP/USD', symbol: 'GBPUSD=X' },
+        { name: 'USD/JPY', symbol: 'JPY=X' },
+        { name: 'USD/CNH', symbol: 'CNH=X' },
+        { name: 'AUD/USD', symbol: 'AUDUSD=X' },
+        { name: 'USD/CAD', symbol: 'CAD=X' },
+      ]
+      const forexSettled = await Promise.allSettled(
+        forexSymbols.map((s) =>
+          marketApi.snapshot(s.symbol).then((d) => ({
+            name: s.name,
+            price: (d as TickerSnapshot).price ?? 0,
+            value: (d as TickerSnapshot).change_pct_24h ?? 0,
+          }))
+        )
+      )
+      const forexItems = forexSettled
+        .filter((r): r is PromiseFulfilledResult<{ name: string; price: number; value: number }> => r.status === 'fulfilled')
+        .map((r) => r.value)
+        .filter((item) => item.price > 0)
+
+      // Update all heatmap data at once
+      setMarketData((prev) => ({
+        ...prev,
+        heatmap: {
+          us_stocks: usStockItems.length > 0 ? usStockItems : prev.heatmap.us_stocks,
+          hk_stocks: hKItems.length > 0 ? hKItems : prev.heatmap.hk_stocks,
+          crypto: cryptoItems.length > 0 ? cryptoItems : prev.heatmap.crypto,
+          commodities: commodityItems.length > 0 ? commodityItems : prev.heatmap.commodities,
+          sectors: sectorItems.length > 0 ? sectorItems : prev.heatmap.sectors,
+          forex: forexItems.length > 0 ? forexItems : prev.heatmap.forex,
+        },
+      }))
+
+      // ── Fetch market indices ──
       try {
         const indicesRes = await marketApi.snapshot('SPX,NDX,DJI,SH,HSI,N225,FTSE,DAX')
         if (indicesRes && 'indices' in indicesRes && Array.isArray(indicesRes.indices)) {
@@ -144,6 +279,7 @@ export function AI() {
         }
       } catch { /* API may not exist */ }
 
+      // ── Fetch sentiment (Fear & Greed, VIX, DXY) ──
       try {
         const sentimentRes = await marketApi.snapshot('SENTIMENT')
         if (sentimentRes && 'fear_greed' in sentimentRes && sentimentRes.fear_greed !== undefined) {
@@ -156,6 +292,7 @@ export function AI() {
         }
       } catch { /* API may not exist */ }
 
+      // ── Fetch economic calendar ──
       try {
         const calendarRes = await marketApi.snapshot('CALENDAR')
         if (calendarRes && 'events' in calendarRes && Array.isArray(calendarRes.events)) {

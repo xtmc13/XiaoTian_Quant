@@ -231,22 +231,13 @@ func (p *TrainingPipeline) generateFeaturesAndLabels(bars []data.OHLCV, periods 
 }
 
 // getFeatureNames returns the list of feature names for the given periods.
+// Uses FeatureNames() to derive names without requiring dummy data.
 func (p *TrainingPipeline) getFeatureNames(periods []int) []string {
 	if len(periods) == 0 {
 		periods = []int{5, 10, 20, 50}
 	}
 	calc := NewFeatureCalculator(periods)
-	// Use a dummy window to get feature names
-	dummy := make([]OHLCV, 100)
-	for i := range dummy {
-		dummy[i] = OHLCV{Close: 100, Open: 99, High: 101, Low: 98, Volume: 1000}
-	}
-	features := calc.Compute(dummy)
-	names := make([]string, 0, len(features))
-	for name := range features {
-		names = append(names, name)
-	}
-	return names
+	return calc.FeatureNames()
 }
 
 // ── Model Evaluator ───────────────────────────────────────────
