@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { strategyApi, backtestApi } from '@/lib/api'
 import { cn, formatCurrency } from '@/lib/utils'
+import { toast } from '@/lib/useToast'
 import type { StrategyParamDefs } from '@/types'
 import { FormField, Toggle, DynamicParamField, STRAT_TYPES, TIMEFRAMES, DEFAULT_CODE, type StrategyRow } from './StrategyFormFields'
 import { CRAParamForm, modalToCra, craToModal, DEFAULT_CRA_PARAMS, type CRAParams } from './CRAParamForm'
@@ -161,7 +162,7 @@ export function StrategyCreateModal({ editing, onClose, onSaved }: StrategyCreat
         })
       }
     } catch (e: unknown) {
-      alert('回测失败: ' + (e instanceof Error ? e.message : String(e)))
+      toast('error', '回测失败: ' + (e instanceof Error ? e.message : String(e)))
     } finally { setBtLoading(false) }
   }
 
@@ -178,10 +179,10 @@ export function StrategyCreateModal({ editing, onClose, onSaved }: StrategyCreat
   const updateMut = useMutation({ mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) => strategyApi.update(id, data), onSuccess: onSaved })
 
   const handleSubmit = () => {
-    if (!name.trim()) { alert('请输入策略名称'); return }
-    if (!symbol.trim()) { alert('请输入交易对'); return }
-    if (!strategyType) { alert('请选择策略类型'); return }
-    if (market !== 'spot' && (!leverage || leverage < 1)) { alert('合约策略杠杆必须≥1'); return }
+    if (!name.trim()) { toast('error', '请输入策略名称'); return }
+    if (!symbol.trim()) { toast('error', '请输入交易对'); return }
+    if (!strategyType) { toast('error', '请选择策略类型'); return }
+    if (market !== 'spot' && (!leverage || leverage < 1)) { toast('error', '合约策略杠杆必须≥1'); return }
 
     const config: Record<string, unknown> = {
       order_count: p.orderCount, first_order_amount: p.firstOrderAmount, add_position_spread: p.addPosSpread, add_position_callback: p.addPosCallback,

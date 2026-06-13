@@ -116,19 +116,20 @@ impl OrderedFloat {
             "price must be finite, got {}",
             price
         );
-        let fixed = (price.abs() * PRICE_PRECISION as f64).round() as u64;
-        // For bids we want descending order, so invert the key
+        let fixed = (price.abs() * PRICE_PRECISION as f64).round() as i64;
+        // For buys: negate so higher price = smaller key → iterates first (descending).
+        // For sells: keep as-is so higher price = larger key → iterates first (ascending).
         match side {
-            Side::Buy => OrderedFloat(!fixed),
-            Side::Sell => OrderedFloat(fixed),
+            Side::Buy => OrderedFloat((-fixed) as u64),
+            Side::Sell => OrderedFloat(fixed as u64),
         }
     }
 
     /// Recover the original f64 price from the fixed-point key.
     pub fn to_price(&self, side: Side) -> f64 {
         let fixed = match side {
-            Side::Buy => !self.0,
-            Side::Sell => self.0,
+            Side::Buy => -(self.0 as i64),
+            Side::Sell => self.0 as i64,
         };
         fixed as f64 / PRICE_PRECISION as f64
     }
@@ -146,17 +147,24 @@ impl OrderBook {
         }
     }
 
-    /// Add an order to the book
+    /// Add an order to the book.
+    /// If the order already has a non-zero ID (set by submit_order), that ID is used.
+    /// Otherwise, a new ID is allocated.
     pub fn add_order(&mut self, mut order: Order) -> u64 {
-        self.order_count += 1;
-        order.id = self.order_count;
+        // If order.id is 0, it was never processed by submit_order → allocate a fresh ID.
+        // If order.id > 0, submit_order already assigned it — preserve it.
+        if order.id == 0 {
+            self.order_count += 1;
+            order.id = self.order_count;
+        }
+        let assigned_id = order.id;
         order.timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos() as u64;
 
         let key = OrderedFloat::from_price(order.price, order.side);
-        self.order_index.insert(order.id, (order.side, key));
+        self.order_index.insert(assigned_id, (order.side, key));
 
         match order.side {
             Side::Buy => {
@@ -166,7 +174,7 @@ impl OrderBook {
                 self.asks.entry(key).or_default().push(order);
             }
         }
-        self.order_count
+        assigned_id
     }
 
     /// Remove an order by ID (O(log n) via index).

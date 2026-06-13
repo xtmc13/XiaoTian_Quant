@@ -114,7 +114,7 @@ export function UserProfile() {
   }
 
   const copyReferral = () => {
-    const link = `${window.location.origin}/#/login?ref=${profile?.referral_code || ''}`
+    const link = `${window.location.origin}/login?ref=${profile?.referral_code || ''}`
     navigator.clipboard.writeText(link)
     showMsg('推荐链接已复制到剪贴板')
   }
@@ -240,7 +240,7 @@ export function UserProfile() {
                 </p>
                 <div className="flex gap-2">
                   <input type="text" readOnly
-                    value={`${window.location.origin}/#/login?ref=${profile?.referral_code || ''}`}
+                    value={`${window.location.origin}/login?ref=${profile?.referral_code || ''}`}
                     className={cn(inputCls, 'text-xs')} />
                   <button onClick={copyReferral} className="shrink-0 rounded-lg bg-quant-bg px-3 py-2 text-muted-foreground hover:text-white">
                     <Copy className="h-4 w-4" />

@@ -6,13 +6,14 @@ import { BacktestResult } from '@/types'
 import {
   Play, Download, TrendingUp, TrendingDown, BarChart3, Target,
   Percent, DollarSign, Activity, Loader2, AlertCircle,
-  Database, Info, SlidersHorizontal, GitBranch, Beaker,
-  ChevronRight, ChevronDown, History, RefreshCw,
+  Database, SlidersHorizontal, GitBranch, Beaker,
+  ChevronRight, ChevronDown, RefreshCw,
 } from 'lucide-react'
 import { cn, formatCurrency } from '@/lib/utils'
 import { backtestApi, indicatorApi } from '@/lib/api'
 import { INTERVAL_OPTIONS } from '@/lib/constants'
 import { getEcharts } from '@/lib/echarts'
+import { PerformanceChart, type EquityPoint, type TradeRecord } from '@/components/charts/PerformanceChart'
 import { CRAParamForm, type CRAParams, DEFAULT_CRA_PARAMS, craParamsToApiPayload } from '@/components/strategy/CRAParamForm'
 import { KPICard } from '@/components/ui/KPICard'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -21,21 +22,6 @@ import { PageHeader } from '@/components/ui/PageHeader'
 import { BacktestAssumptions } from '@/components/BacktestAssumptions'
 
 /* ── Types ───────────────────────────────────────────────────────── */
-interface TradeRecord {
-  side: 'buy' | 'sell'
-  entry_price?: number
-  exit_price?: number
-  qty: number
-  pnl?: number
-  time: number
-  bar: number
-}
-
-interface EquityPoint {
-  time: number
-  equity: number
-}
-
 interface BacktestReport {
   initial_balance: number
   final_equity: number
@@ -54,7 +40,7 @@ interface BacktestParams {
   profit_callback?: number; take_profit_method?: string; open_indicator?: string;
   add_position_indicator?: string; waterfall_protection?: number; open_double?: boolean;
   trend_indicator?: boolean; trend_timeframe?: string; follow_trend?: boolean;
-  burn_cut?: any; close_add_position?: boolean; leverage?: number; direction?: string;
+  burn_cut?: unknown; close_add_position?: boolean; leverage?: number; direction?: string;
   [key: string]: unknown;
 }
 
@@ -115,73 +101,6 @@ function CollapsibleSection({ title, count, defaultOpen, children }: { title: st
       {open && <div className="p-4 space-y-4">{children}</div>}
     </div>
   )
-}
-
-/* ── Equity + Drawdown Chart ── */
-function EquityWithDrawdownChart({ data, trades, benchmarkData, isLoading }:
-  { data?: EquityPoint[]; trades?: TradeRecord[]; benchmarkData?: { time: number; value: number }[]; isLoading?: boolean }) {
-  const ref = useRef<HTMLDivElement>(null)
-  const chartRef = useRef<EChartsType | null>(null)
-
-  useEffect(() => {
-    let disposed = false
-    getEcharts().then((echarts) => {
-      if (disposed || !ref.current) return
-      chartRef.current = echarts.init(ref.current, 'dark')
-      chartRef.current.setOption({
-        backgroundColor: 'transparent',
-        grid: [{ left: 48, right: 16, top: 16, bottom: 60 }, { left: 48, right: 16, top: '70%', bottom: 24 }],
-        tooltip: {
-          trigger: 'axis',
-          backgroundColor: 'rgba(17,17,17,0.95)',
-          borderColor: '#2a2a2a',
-          textStyle: { color: '#cccccc', fontSize: 11 },
-          axisPointer: { type: 'cross', link: [{ xAxisIndex: 'all' }] },
-        },
-        xAxis: [
-          { type: 'time', axisLabel: { fontSize: 10, color: '#555555' }, axisLine: { lineStyle: { color: '#1c1c1c' } }, splitLine: { show: false } },
-          { type: 'time', gridIndex: 1, axisLabel: { fontSize: 9, color: '#555555' }, axisLine: { lineStyle: { color: '#1c1c1c' } }, splitLine: { show: false } },
-        ],
-        yAxis: [
-          { type: 'value', axisLabel: { fontSize: 10, color: '#555555', formatter: (v: number) => `$${formatCurrency(v)}` }, splitLine: { lineStyle: { color: '#1c1c1c' } } },
-          { type: 'value', gridIndex: 1, axisLabel: { fontSize: 9, color: '#555555', formatter: '{value}%' }, splitLine: { show: false }, min: -100, max: 0 },
-        ],
-        series: [
-          { name: '权益', type: 'line', data: [], smooth: true, symbol: 'none', lineStyle: { color: '#03A66D', width: 2 },
-            areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: 'rgba(3,166,109,0.12)' }, { offset: 1, color: 'rgba(3,166,109,0)' }] } } },
-          { name: '买入', type: 'scatter', data: [], symbol: 'pin', symbolSize: 24, itemStyle: { color: '#03A66D' }, label: { show: true, formatter: 'B', color: '#fff', fontSize: 10, fontWeight: 'bold' }, z: 10 },
-          { name: '卖出', type: 'scatter', data: [], symbol: 'pin', symbolSize: 24, itemStyle: { color: '#CF304A' }, label: { show: true, formatter: 'S', color: '#fff', fontSize: 10, fontWeight: 'bold' }, z: 10 },
-          { name: '回撤', type: 'line', data: [], smooth: true, symbol: 'none', lineStyle: { color: '#ef4444', width: 1, opacity: 0.6 }, xAxisIndex: 1, yAxisIndex: 1,
-            areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: 'rgba(239,68,68,0.15)' }, { offset: 1, color: 'rgba(239,68,68,0)' }] } } },
-        ],
-      })
-      const ro = new ResizeObserver(() => chartRef.current?.resize())
-      ro.observe(ref.current)
-    })
-    return () => { disposed = true; chartRef.current?.dispose() }
-  }, [])
-
-  useEffect(() => {
-    if (!chartRef.current || !data) return
-    const buyData = trades?.filter(t => t.side === 'buy').map(t => [t.time, t.entry_price ?? 0]) ?? []
-    const sellData = trades?.filter(t => t.side === 'sell').map(t => [t.time, t.exit_price ?? 0]) ?? []
-    // Compute drawdown from equity curve
-    let peak = data[0]?.equity ?? 0
-    const drawdownData = data.map(p => {
-      if (p.equity > peak) peak = p.equity
-      return [p.time, peak > 0 ? ((p.equity - peak) / peak) * 100 : 0]
-    })
-    chartRef.current.setOption({
-      series: [
-        { data: data.map((d) => [d.time, d.equity]) },
-        { data: buyData }, { data: sellData },
-        { data: drawdownData },
-      ],
-    })
-  }, [data, trades])
-
-  if (isLoading) return <div className="h-80 animate-pulse rounded-lg bg-quant-bg-secondary" />
-  return <div ref={ref} className="h-80 w-full" />
 }
 
 /* ── Monthly Heatmap Calendar ── */
@@ -390,7 +309,7 @@ export function Backtest() {
 
   // ── Results ──
   const [report, setReport] = useState<BacktestReport | null>(null)
-  const [params, setParams] = useState<BacktestParams | null>(null)
+  const [, setParams] = useState<BacktestParams | null>(null)
   const [equityCurve, setEquityCurve] = useState<EquityPoint[]>([])
   const [trades, setTrades] = useState<TradeRecord[]>([])
 
@@ -547,7 +466,7 @@ export function Backtest() {
         />
 
         {/* ── History ── */}
-        <BacktestHistory items={history} onLoad={(p: any) => {
+        <BacktestHistory items={history} onLoad={(p: BacktestParams) => {
           setSymbol(p.symbol || symbol); setIntervalVal(p.interval || interval)
           setStrategyType(p.strategy_type || strategyType)
           setInitialBalance(p.initial_balance?.USDT || initialBalance)
@@ -735,7 +654,7 @@ export function Backtest() {
 
             <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
               <SectionCard title="权益曲线 · 回撤曲线">
-                <EquityWithDrawdownChart data={equityCurve} trades={trades} isLoading={isRunning} />
+                <PerformanceChart data={equityCurve} trades={trades} isLoading={isRunning} />
               </SectionCard>
               <SectionCard title="月度盈亏热力图">
                 <MonthlyHeatmap data={monthlyReturns} isLoading={isRunning} />

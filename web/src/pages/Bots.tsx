@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import {
   Bot, TrendingUp, TrendingDown, Wallet, PauseCircle,
@@ -149,10 +149,10 @@ export function Bots() {
             <div className="flex items-center justify-center gap-1.5 text-xs text-[#757575]">
               <Terminal className="h-3 w-3" />
               <span>创建或编辑策略请前往</span>
-              <a href="#/strategy" className="text-[#4f6ed1] transition-colors hover:text-[#8898f3]">
+              <Link to="/strategy" className="text-[#4f6ed1] transition-colors hover:text-[#8898f3]">
                 策略管理
                 <ChevronRight className="inline h-3 w-3" />
-              </a>
+              </Link>
             </div>
           </>
         )}

@@ -16,12 +16,15 @@ impl MatchingEngine {
 
     /// Submit a limit order and match immediately
     pub fn submit_order(&mut self, mut order: Order) -> (u64, Vec<Trade>) {
+        // Always allocate an order ID first, even if the order is fully matched.
+        // This ensures filled orders have correct IDs in trade records.
+        self.book.order_count += 1;
+        order.id = self.book.order_count;
         let new_trades = self.match_order(&mut order);
-        let order_id = if !order.is_done() {
-            self.book.add_order(order)
-        } else {
-            self.book.order_count
-        };
+        let order_id = order.id;
+        if !order.is_done() {
+            self.book.add_order(order);
+        }
         (order_id, new_trades)
     }
 
