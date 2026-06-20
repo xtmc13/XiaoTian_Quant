@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -21,7 +22,7 @@ const (
 )
 
 // BitgetAdapter provides Bitget exchange integration.
-// NOTE: This is a stub adapter. Real trading is not yet implemented.
+// Bitget uses HMAC-SHA256 signature with base64 encoding.
 type BitgetAdapter struct {
 	apiKey     string
 	secretKey  string
@@ -29,12 +30,12 @@ type BitgetAdapter struct {
 	httpClient *http.Client
 	mu         sync.RWMutex
 
-	streamHub   *exchange.StreamHub
-	wsConnected bool
-	onTicker    func(tick model.Tick)
-	onOrderBook func(ob model.OrderBookData)
-	onTrade     func(trade model.TradeData)
-	onKline     func(bar model.Bar)
+	streamHub     *exchange.StreamHub
+	wsConnected   bool
+	onTicker      func(tick model.Tick)
+	onOrderBook   func(ob model.OrderBookData)
+	onTrade       func(trade model.TradeData)
+	onKline       func(bar model.Bar)
 
 	orders    map[string]map[string]any
 	positions map[string]map[string]any
@@ -52,10 +53,10 @@ func NewBitgetAdapter(apiKey, secretKey, passphrase string) *BitgetAdapter {
 	}
 }
 
-func (b *BitgetAdapter) Name() string { return "bitget" }
-func (b *BitgetAdapter) Start() error { return nil }
+func (b *BitgetAdapter) Name() string     { return "bitget" }
+func (b *BitgetAdapter) Start() error     { return nil }
 
-// -- Auth (kept for read-only market data) --
+// ── Auth ───────────────────────────────────────────────────────
 
 func (b *BitgetAdapter) signBitget(timestamp, method, path, body string) string {
 	preSign := fmt.Sprintf("%s%s%s%s", timestamp, method, path, body)
@@ -106,7 +107,7 @@ func (b *BitgetAdapter) signedRequest(method, path string, bodyMap map[string]an
 	return result, nil
 }
 
-// -- Read-only Market Data (kept for basic use) --
+// ── Market Data ────────────────────────────────────────────────
 
 func (b *BitgetAdapter) GetKlines(symbol, interval string, limit int) ([][]any, error) {
 	result, err := b.signedRequest("GET", fmt.Sprintf(
@@ -119,18 +120,18 @@ func (b *BitgetAdapter) GetKlines(symbol, interval string, limit int) ([][]any, 
 
 	data, _ := result["data"].([]any)
 	klines := make([][]any, 0, len(data))
-	for i := len(data) - 1; i >= 0; i-- {
+	for i := len(data) - 1; i >= 0; i-- { // reverse to chronological
 		arr, ok := data[i].([]any)
 		if !ok || len(arr) < 6 {
 			continue
 		}
 		klines = append(klines, []any{
-			int64(parseFloatSafe(arr[0])),
-			parseFloatSafe(arr[1]),
-			parseFloatSafe(arr[2]),
-			parseFloatSafe(arr[3]),
-			parseFloatSafe(arr[4]),
-			parseFloatSafe(arr[5]),
+			int64(parseFloatSafe(arr[0])), // timestamp
+			parseFloatSafe(arr[1]),         // open
+			parseFloatSafe(arr[2]),         // high
+			parseFloatSafe(arr[3]),         // low
+			parseFloatSafe(arr[4]),         // close
+			parseFloatSafe(arr[5]),         // volume
 		})
 	}
 	return klines, nil
@@ -157,7 +158,7 @@ func (b *BitgetAdapter) GetTicker(symbol string) (map[string]any, error) {
 	}, nil
 }
 
-// -- Read-only Account (kept for basic use) --
+// ── Account ────────────────────────────────────────────────────
 
 func (b *BitgetAdapter) GetBalance() ([]map[string]any, error) {
 	result, err := b.signedRequest("GET", "/spot/account/assets", nil)
@@ -178,48 +179,274 @@ func (b *BitgetAdapter) GetBalance() ([]map[string]any, error) {
 	return balances, nil
 }
 
-// -- Stub: Trading methods not yet implemented --
+// ── Orders ─────────────────────────────────────────────────────
 
 func (b *BitgetAdapter) PlaceOrder(symbol, side, orderType string, price, quantity float64) (map[string]any, error) {
-	return nil, stubError("bitget", "PlaceOrder")
+	body := map[string]any{
+		"symbol":    symbol,
+		"side":      strings.ToLower(side),
+		"orderType": strings.ToLower(orderType),
+		"force":     "gtc",
+		"quantity":  fmt.Sprintf("%.6f", quantity),
+	}
+	if strings.ToLower(orderType) == "limit" {
+		body["price"] = fmt.Sprintf("%.2f", price)
+	}
+
+	result, err := b.signedRequest("POST", "/spot/trade/place-order", body)
+	if err != nil {
+		return nil, err
+	}
+	data, _ := result["data"].(map[string]any)
+	return map[string]any{
+		"order_id": data["orderId"],
+		"symbol":   symbol, "side": side, "type": orderType,
+		"price": price, "quantity": quantity, "status": "open",
+	}, nil
 }
 
 func (b *BitgetAdapter) CancelOrder(symbol, orderID string) (map[string]any, error) {
-	return nil, stubError("bitget", "CancelOrder")
+	return b.signedRequest("POST", "/spot/trade/cancel-order", map[string]any{
+		"symbol":  symbol,
+		"orderId": orderID,
+	})
 }
 
 func (b *BitgetAdapter) GetOpenOrders(symbol string) ([]map[string]any, error) {
-	return nil, stubError("bitget", "GetOpenOrders")
+	result, err := b.signedRequest("GET", "/spot/trade/open-orders?symbol="+symbol, nil)
+	if err != nil {
+		return nil, err
+	}
+	data, _ := result["data"].([]any)
+	orders := make([]map[string]any, 0, len(data))
+	for _, item := range data {
+		orders = append(orders, item.(map[string]any))
+	}
+	return orders, nil
 }
 
 func (b *BitgetAdapter) GetPositions() ([]map[string]any, error) {
+	// Try futures positions first (Bitget's main quant use case)
 	result, err := b.signedRequest("GET", "/mix/position/allPosition?productType=USDT-FUTURES", nil)
 	if err != nil {
 		return nil, err
 	}
-	data, ok := result["data"].([]any)
-	if !ok {
-		return nil, fmt.Errorf("bitget positions: unexpected format")
-	}
-	out := make([]map[string]any, 0, len(data))
-	for _, item := range data {
-		if m, ok := item.(map[string]any); ok {
-			out = append(out, m)
+
+	positions := make([]map[string]any, 0)
+	if dataArr, ok := result["data"].([]any); ok {
+		for _, item := range dataArr {
+			p, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			symbol := getString(p, "symbol", "")
+			side := getString(p, "holdSide", "long")
+			if side != "" {
+				side = strings.ToUpper(side)
+			}
+			positions = append(positions, map[string]any{
+				"symbol":        symbol,
+				"positionAmt":   parseFloatStr(p, "total"),
+				"entryPrice":    parseFloatStr(p, "openPriceAvg"),
+				"markPrice":     parseFloatStr(p, "markPrice"),
+				"positionSide":  side,
+				"leverage":      parseFloatStr(p, "leverage"),
+				"unrealizedPnl": parseFloatStr(p, "unrealizedPL"),
+				"marginSize":    parseFloatStr(p, "marginSize"),
+			})
 		}
 	}
-	return out, nil
+	return positions, nil
 }
 
 func (b *BitgetAdapter) StartMarketStream(symbols []string) error {
-	return stubError("bitget", "StartMarketStream")
+	if len(symbols) == 0 {
+		return nil
+	}
+
+	wsClient := exchange.NewWSClient(exchange.WSConfig{
+		URL: "wss://ws.bitget.com/v2/ws/",
+		OnMessage: func(msg []byte) {
+			b.handleMarketMessage(msg)
+		},
+		OnConnected: func() {
+			b.mu.Lock()
+			b.wsConnected = true
+			b.mu.Unlock()
+			log.Printf("[Bitget] Market stream connected, subscribing to %d symbols", len(symbols))
+			// Send subscription
+			for _, sym := range symbols {
+				msg := map[string]any{
+					"op": "subscribe",
+					"args": []any{
+						map[string]any{"channel": "ticker", "instType": "MC", "instId": sym},
+						map[string]any{"channel": "book", "instType": "MC", "instId": sym, "size": "5"},
+						map[string]any{"channel": "deal", "instType": "MC", "instId": sym},
+						map[string]any{"channel": "candlestick", "instType": "MC", "instId": sym, "granularity": "1min"},
+					},
+				}
+				b.streamHub.SendJSON("market", msg)
+			}
+		},
+		OnDisconnected: func(err error) {
+			b.mu.Lock()
+			b.wsConnected = false
+			b.mu.Unlock()
+			if err != nil {
+				log.Printf("[Bitget] Market stream disconnected: %v", err)
+			}
+		},
+	})
+
+	b.streamHub.Add("market", wsClient)
+	return wsClient.Connect()
 }
 
 func (b *BitgetAdapter) StartUserStream() error {
-	return stubError("bitget", "StartUserStream")
+	wsClient := exchange.NewWSClient(exchange.WSConfig{
+		URL: "wss://ws.bitget.com/v2/ws/",
+		OnMessage: func(msg []byte) {
+			var raw map[string]any
+			if err := json.Unmarshal(msg, &raw); err == nil {
+				log.Printf("[Bitget] User stream: %s", string(msg[:min(200, len(msg))]))
+			}
+		},
+		OnConnected: func() {
+			log.Printf("[Bitget] User stream connected")
+		},
+		OnDisconnected: func(err error) {
+			if err != nil {
+				log.Printf("[Bitget] User stream disconnected: %v", err)
+			}
+		},
+	})
+
+	b.streamHub.Add("user", wsClient)
+	return wsClient.Connect()
 }
 
-func (b *BitgetAdapter) PlaceFuturesOrder(symbol, side, orderType string, price, quantity, leverage float64, positionSide string) (map[string]any, error) {
-	return nil, stubError("bitget", "PlaceFuturesOrder")
+func (b *BitgetAdapter) handleMarketMessage(msg []byte) {
+	var raw map[string]any
+	if err := json.Unmarshal(msg, &raw); err != nil {
+		return
+	}
+
+	channelType, _ := raw["cardType"].(string)
+	_ = channelType
+	data, ok := raw["data"].([]any)
+	if !ok || len(data) == 0 {
+		return
+	}
+	d0, ok := data[0].(map[string]any)
+	if !ok {
+		return
+	}
+
+	// Bitget WS messages: detect channel by field presence
+	if instID, _ := d0["instId"].(string); instID != "" {
+		if _, ok := d0["open"]; ok {
+			// Candlestick data
+			if b.onKline != nil {
+				b.handleBitgetCandlestick(instID, d0)
+			}
+		} else if _, ok := d0["close"]; ok {
+			// Ticker
+			if b.onTicker != nil {
+				b.onTicker(model.Tick{
+					Symbol:    instID,
+					Bid:       parseFloatSafe(d0["buyOne"]),
+					Ask:       parseFloatSafe(d0["sellOne"]),
+					Last:      parseFloatSafe(d0["close"]),
+					Volume:    parseFloatSafe(d0["baseVol"]),
+					Timestamp: int64(parseFloatSafe(d0["ts"])),
+				})
+			}
+		} else if _, ok := d0["asks"]; ok {
+			// Order book
+			bids := bitgetDepth(d0["bids"], nil)
+			asks := bitgetDepth(d0["asks"], nil)
+			if b.onOrderBook != nil {
+				b.onOrderBook(model.OrderBookData{
+					Symbol:    instID,
+					Bids:      bids,
+					Asks:      asks,
+					Timestamp: int64(parseFloatSafe(d0["ts"])),
+				})
+			}
+		} else if _, ok := d0["price"].(string); ok {
+			// Trade
+			if b.onTrade != nil {
+				side := "BUY"
+				if s, _ := d0["side"].(string); s == "sell" {
+					side = "SELL"
+				}
+				b.onTrade(model.TradeData{
+					Symbol:    instID,
+					ID:        getString(d0, "tradeId", ""),
+					Price:     parseFloatSafe(d0["price"]),
+					Quantity:  parseFloatSafe(d0["baseVol"]),
+					Side:      side,
+					Timestamp: int64(parseFloatSafe(d0["ts"])),
+				})
+			}
+		}
+	}
+}
+
+func (b *BitgetAdapter) handleBitgetCandlestick(instID string, d0 map[string]any) {
+	// Bitget candlestick: data[data][0] = [timestamp, open, close, high, low, volume]
+	if dataRaw, ok := d0["data"].([]any); ok && len(dataRaw) > 0 {
+		arr, ok := dataRaw[0].([]any)
+		if !ok || len(arr) < 6 {
+			return
+		}
+		b.mu.RLock()
+		fn := b.onKline
+		b.mu.RUnlock()
+		if fn != nil {
+			fn(model.Bar{
+				Symbol:   instID,
+				Open:     parseFloatSafe(arr[1]),
+				High:     parseFloatSafe(arr[2]),
+				Low:      parseFloatSafe(arr[3]),
+				Close:    parseFloatSafe(arr[4]),
+				Volume:   parseFloatSafe(arr[5]),
+				Interval: "1m",
+				Time:     int64(parseFloatSafe(arr[0])),
+			})
+		}
+	}
+}
+
+func bitgetDepth(rawData any, _ any) [][2]float64 {
+	arr, ok := rawData.([]any)
+	if !ok {
+		return nil
+	}
+	depth := make([][2]float64, 0, len(arr))
+	for _, item := range arr {
+		pair, ok := item.([]any)
+		if !ok || len(pair) < 2 {
+			continue
+		}
+		depth = append(depth, [2]float64{
+			floatPair(pair[0]),
+			floatPair(pair[1]),
+		})
+	}
+	return depth
+}
+
+func floatPair(v any) float64 {
+	switch val := v.(type) {
+	case float64:
+		return val
+	case string:
+		var f float64
+		fmt.Sscanf(val, "%f", &f)
+		return f
+	}
+	return 0
 }
 
 func (b *BitgetAdapter) Stop() error {
@@ -239,7 +466,7 @@ func (b *BitgetAdapter) IsConnected() bool {
 	return b.wsConnected
 }
 
-// -- Helpers --
+// ── Helpers ────────────────────────────────────────────────────
 
 func toBitgetInterval(interval string) string {
 	m := map[string]string{

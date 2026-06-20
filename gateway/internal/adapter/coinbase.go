@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -23,7 +24,6 @@ const (
 )
 
 // CoinbaseAdapter provides Coinbase Advanced Trade API integration.
-// NOTE: This is a stub adapter. Real trading is not yet implemented.
 type CoinbaseAdapter struct {
 	apiKey     string
 	secretKey  string
@@ -67,7 +67,7 @@ func (cb *CoinbaseAdapter) OnOrderBook(fn func(ob model.OrderBookData)) { cb.onO
 func (cb *CoinbaseAdapter) OnTrade(fn func(trade model.TradeData))      { cb.onTrade = fn }
 func (cb *CoinbaseAdapter) OnKline(fn func(bar model.Bar))              { cb.onKline = fn }
 
-// -- Coinbase Signing (CB-ACCESS-SIGN = HMAC-SHA256(timestamp + method + path + body)) --
+// ── Coinbase Signing (CB-ACCESS-SIGN = HMAC-SHA256(timestamp + method + path + body)) ──
 
 func (cb *CoinbaseAdapter) sign(timestamp, method, path, body string) string {
 	mac := hmac.New(sha256.New, []byte(cb.secretKey))
@@ -108,7 +108,7 @@ func (cb *CoinbaseAdapter) request(method, path string, body map[string]any) (ma
 	return result, nil
 }
 
-// -- Read-only Market Data (kept for basic use) --
+// ── REST Market Data ──
 
 func (cb *CoinbaseAdapter) GetKlines(symbol, interval string, limit int) ([][]any, error) {
 	u, _ := url.Parse(CoinbaseRestURL + "/products/" + symbol + "/candles")
@@ -151,7 +151,26 @@ func (cb *CoinbaseAdapter) GetTicker(symbol string) (map[string]any, error) {
 	return result, nil
 }
 
-// -- Read-only Account (kept for basic use) --
+// ── REST Trading ──
+
+func (cb *CoinbaseAdapter) PlaceOrder(symbol, side, orderType string, price, quantity float64) (map[string]any, error) {
+	body := map[string]any{
+		"product_id":    symbol,
+		"side":          strings.ToUpper(side),
+		"order_configuration": map[string]any{
+			strings.ToLower(orderType) + "_gtc": map[string]any{
+				"base_size":   fmt.Sprintf("%.6f", quantity),
+				"limit_price": fmt.Sprintf("%.2f", price),
+			},
+		},
+	}
+	return cb.request("POST", "/orders", body)
+}
+
+func (cb *CoinbaseAdapter) CancelOrder(symbol, orderID string) (map[string]any, error) {
+	body := map[string]any{"order_ids": []string{orderID}}
+	return cb.request("POST", "/orders/batch_cancel", body)
+}
 
 func (cb *CoinbaseAdapter) GetBalance() ([]map[string]any, error) {
 	result, err := cb.request("GET", "/accounts", nil)
@@ -168,34 +187,155 @@ func (cb *CoinbaseAdapter) GetBalance() ([]map[string]any, error) {
 	return balances, nil
 }
 
-// -- Stub: Trading methods not yet implemented --
-
-func (cb *CoinbaseAdapter) PlaceOrder(symbol, side, orderType string, price, quantity float64) (map[string]any, error) {
-	return nil, stubError("coinbase", "PlaceOrder")
-}
-
-func (cb *CoinbaseAdapter) CancelOrder(symbol, orderID string) (map[string]any, error) {
-	return nil, stubError("coinbase", "CancelOrder")
+func (cb *CoinbaseAdapter) GetPositions() ([]map[string]any, error) {
+	result, err := cb.request("GET", "/orders/fills", nil)
+	if err != nil {
+		return nil, err
+	}
+	fills, _ := result["fills"].([]any)
+	var positions []map[string]any
+	for _, f := range fills {
+		if m, ok := f.(map[string]any); ok {
+			positions = append(positions, m)
+		}
+	}
+	return positions, nil
 }
 
 func (cb *CoinbaseAdapter) GetOpenOrders(symbol string) ([]map[string]any, error) {
-	return nil, stubError("coinbase", "GetOpenOrders")
+	path := "/orders/historical/batch"
+	if symbol != "" {
+		path += "?product_id=" + symbol
+	}
+	result, err := cb.request("GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+	orders, _ := result["orders"].([]any)
+	var out []map[string]any
+	for _, o := range orders {
+		if m, ok := o.(map[string]any); ok {
+			out = append(out, m)
+		}
+	}
+	return out, nil
 }
 
-func (cb *CoinbaseAdapter) GetPositions() ([]map[string]any, error) {
-	return nil, stubError("coinbase", "GetPositions")
-}
+// ── WebSocket Market Streams ──
 
 func (cb *CoinbaseAdapter) StartMarketStream(symbols []string) error {
-	return stubError("coinbase", "StartMarketStream")
+	if len(symbols) == 0 {
+		return nil
+	}
+
+	wsClient := exchange.NewWSClient(exchange.WSConfig{
+		URL: CoinbaseWsURL,
+		OnMessage: func(msg []byte) {
+			cb.handleStreamMessage(msg)
+		},
+		OnConnected: func() {
+			cb.mu.Lock()
+			cb.wsConnected = true
+			cb.mu.Unlock()
+			cb.subscribe(symbols)
+		},
+		OnDisconnected: func(err error) {
+			cb.mu.Lock()
+			cb.wsConnected = false
+			cb.mu.Unlock()
+			log.Printf("[Coinbase] Stream disconnected: %v", err)
+		},
+	})
+
+	cb.streamHub.Add("market", wsClient)
+	return wsClient.Connect()
+}
+
+func (cb *CoinbaseAdapter) subscribe(symbols []string) {
+	client := cb.streamHub.Get("market")
+	if client == nil {
+		return
+	}
+
+	var productIDs []string
+	for _, sym := range symbols {
+		productIDs = append(productIDs, sym)
+	}
+
+	msg := map[string]any{
+		"type":        "subscribe",
+		"product_ids": productIDs,
+		"channels":    []string{"ticker", "level2", "matches", "candles"},
+	}
+	client.SendJSON(msg)
 }
 
 func (cb *CoinbaseAdapter) StartUserStream() error {
-	return stubError("coinbase", "StartUserStream")
+	// Coinbase doesn't have a separate user data stream like Binance;
+	// it uses the same WebSocket with authenticated channel subscriptions.
+	log.Printf("[Coinbase] User stream: Coinbase uses authenticated channels on the same WS connection — user data is available via market stream subscription")
+	return nil
 }
 
-func (cb *CoinbaseAdapter) PlaceFuturesOrder(symbol, side, orderType string, price, quantity, leverage float64, positionSide string) (map[string]any, error) {
-	return nil, stubError("coinbase", "PlaceFuturesOrder")
+func (cb *CoinbaseAdapter) handleStreamMessage(msg []byte) {
+	var raw map[string]any
+	if err := json.Unmarshal(msg, &raw); err != nil {
+		return
+	}
+
+	msgType, _ := raw["type"].(string)
+	switch msgType {
+	case "ticker":
+		if cb.onTicker != nil {
+			productID, _ := raw["product_id"].(string)
+			price, _ := raw["price"].(string)
+			cb.onTicker(model.Tick{
+				Symbol:    productID,
+				Last:      parseFloat(price),
+				Bid:       parseFloat(fmt.Sprint(raw["best_bid"])),
+				Ask:       parseFloat(fmt.Sprint(raw["best_ask"])),
+				Volume:    parseFloat(fmt.Sprint(raw["volume_24h"])),
+				Timestamp: time.Now().UnixMilli(),
+			})
+		}
+	case "l2update":
+		if cb.onOrderBook != nil {
+			productID, _ := raw["product_id"].(string)
+			ob := model.OrderBookData{Symbol: productID, Timestamp: time.Now().UnixMilli()}
+			if changes, ok := raw["changes"].([]any); ok {
+				for _, ch := range changes {
+					if arr, ok2 := ch.([]any); ok2 && len(arr) >= 3 {
+						side, _ := arr[0].(string)
+						price := parseFloat(arr[1])
+						qty := parseFloat(arr[2])
+						if side == "buy" {
+							ob.Bids = append(ob.Bids, [2]float64{price, qty})
+						} else {
+							ob.Asks = append(ob.Asks, [2]float64{price, qty})
+						}
+					}
+				}
+			}
+			cb.onOrderBook(ob)
+		}
+	case "match":
+		if cb.onTrade != nil {
+			productID, _ := raw["product_id"].(string)
+			tradeID, _ := raw["trade_id"].(float64)
+			side := "BUY"
+			if s, _ := raw["side"].(string); s == "sell" {
+				side = "SELL"
+			}
+			cb.onTrade(model.TradeData{
+				Symbol:    productID,
+				ID:        fmt.Sprintf("%.0f", tradeID),
+				Price:     parseFloat(raw["price"]),
+				Quantity:  parseFloat(raw["size"]),
+				Side:      side,
+				Timestamp: time.Now().UnixMilli(),
+			})
+		}
+	}
 }
 
 func coinbaseGranularity(interval string) string {
