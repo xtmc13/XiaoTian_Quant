@@ -1,0 +1,12 @@
+node_modules/
+*.log
+dist/
+build/
+.DS_Store
+*.tmp
+*.swp
+*.lock
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
