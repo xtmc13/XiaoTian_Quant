@@ -154,7 +154,10 @@ const SignalSourcesView: React.FC<SignalSourcesProps> = ({ sources, isLoading })
     return (
       <div className="text-center py-8 text-[#555]">
         <Radio className="w-8 h-8 mx-auto mb-2 opacity-50" />
-        <p className="text-sm">暂无信号来源配置</p>
+        <p className="text-sm mb-4">暂无信号来源配置</p>
+        <Button variant="outline" size="sm" onClick={() => toast({ title: '请前往设置页配置信号源' })}>
+          配置信号源
+        </Button>
       </div>
     )
   }

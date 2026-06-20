@@ -157,7 +157,7 @@ export const StrategyConfigPanel: React.FC<StrategyConfigPanelProps> = ({
             <div className={cn('text-sm font-medium', strategyType === 'martin' ? 'text-[#e0e0e0]' : 'text-[#888]')}>
               马丁策略
             </div>
-            <div className="text-[10px] text-[#666]">倍投补仓 2,4,8,16,32,64</div>
+            <div className="text-xs text-[#666]">倍投补仓 2,4,8,16,32,64</div>
           </div>
         </button>
 
@@ -176,7 +176,7 @@ export const StrategyConfigPanel: React.FC<StrategyConfigPanelProps> = ({
             <div className={cn('text-sm font-medium', strategyType === 'wallstreet' ? 'text-[#e0e0e0]' : 'text-[#888]')}>
               华尔街策略
             </div>
-            <div className="text-[10px] text-[#666]">等比补仓 1,2,3,5,8,13,21</div>
+            <div className="text-xs text-[#666]">等比补仓 1,2,3,5,8,13,21,34,55</div>
           </div>
         </button>
       </div>

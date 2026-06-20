@@ -5,7 +5,7 @@ import {
   Bot, TrendingUp, TrendingDown, Wallet, PauseCircle,
   Terminal, ChevronRight, Activity, Radio, BrainCircuit,
   BarChart3, Plus, Play, Square, Pencil, Trash2, Copy,
-  Settings2, TrendingUp as TrendingUpIcon,
+  Settings2,
 } from 'lucide-react'
 import { formatCurrency, cn } from '@/lib/utils'
 import { PageHeader } from '@/components/ui/PageHeader'
