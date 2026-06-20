@@ -114,12 +114,14 @@ func registerStrategyFactories() {
 	strategy.RegisterStrategyFactory("market_making", func() strategy.Strategy { return strategies.NewMarketMakingStrategy() })
 	strategy.RegisterStrategyFactory("martingale", func() strategy.Strategy { return strategies.NewMartingaleStrategy() })
 	strategy.RegisterStrategyFactory("wallstreet", func() strategy.Strategy { return strategies.NewWallstreetStrategy() })
+	strategy.RegisterStrategyFactory("wallstreet_v2", func() strategy.Strategy { return strategy.NewWallStreetStrategy() })
 
 	// Aliases for frontend bot_type names
 	strategy.RegisterStrategyFactory("grid", func() strategy.Strategy { return strategies.NewGridTradingStrategy() })
 	strategy.RegisterStrategyFactory("dca", func() strategy.Strategy { return strategies.NewMartingaleStrategy() })
 	strategy.RegisterStrategyFactory("trend", func() strategy.Strategy { return strategies.NewBreakoutStrategy() })
-	strategy.RegisterStrategyFactory("martin_trend", func() strategy.Strategy { return strategies.NewMartingaleStrategy() })
+	strategy.RegisterStrategyFactory("martin_trend", func() strategy.Strategy { return strategy.NewMartinStrategy() })
+	strategy.RegisterStrategyFactory("martin_trend_v2", func() strategy.Strategy { return strategy.NewMartinStrategy() })
 	strategy.RegisterStrategyFactory("macd_golden", func() strategy.Strategy { return strategies.NewMACDStrategy() })
 	strategy.RegisterStrategyFactory("macd_death", func() strategy.Strategy { return strategies.NewMACDStrategy() })
 	strategy.RegisterStrategyFactory("dual_burn", func() strategy.Strategy { return strategies.NewMartingaleStrategy() })

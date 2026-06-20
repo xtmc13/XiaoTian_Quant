@@ -91,6 +91,17 @@ import {
   type IndicesSnapshot,
   type SentimentSnapshot,
   type CalendarSnapshot,
+  type MartinConfig,
+  type WallStreetConfig,
+  type ExecutorStatus,
+  type ExecutorPosition,
+  type ExecutionRecord,
+  type SignalSource,
+  type AIRobotConfig,
+  type AISignal,
+  type ContractParams,
+  type ContractMarginInfo,
+  type LiquidationPriceResult,
 } from '@/types'
 
 
@@ -872,6 +883,49 @@ export const agentAdminApi = {
   createToken: (data: Partial<AgentToken>) => agentApi.createToken(data),
   deleteToken: (id: string) => agentApi.deleteToken(id),
   auditLog: () => api.get<AdminAuditLog[]>('/agent/audit-log').then(d => d ?? []),
+}
+
+// ── Strategy Config (Martin / WallStreet) ──
+export const strategyConfigApi = {
+  createMartin: (config: MartinConfig) => axiosInstance.post<{ id: string; success: boolean }>('/strategies/martin', config),
+  createWallStreet: (config: WallStreetConfig) => axiosInstance.post<{ id: string; success: boolean }>('/strategies/wallstreet', config),
+  getMartinConfigs: () => axiosInstance.get<MartinConfig[]>('/strategies/martin'),
+  getWallStreetConfigs: () => axiosInstance.get<WallStreetConfig[]>('/strategies/wallstreet'),
+  updateMartin: (id: string, config: MartinConfig) => axiosInstance.put<{ success: boolean }>(`/strategies/martin/${id}`, config),
+  updateWallStreet: (id: string, config: WallStreetConfig) => axiosInstance.put<{ success: boolean }>(`/strategies/wallstreet/${id}`, config),
+  deleteMartin: (id: string) => axiosInstance.delete<{ success: boolean }>(`/strategies/martin/${id}`),
+  deleteWallStreet: (id: string) => axiosInstance.delete<{ success: boolean }>(`/strategies/wallstreet/${id}`),
+}
+
+// ── Signal Executor ──
+export const executorApi = {
+  getStatus: () => axiosInstance.get<ExecutorStatus>('/executor/status'),
+  getActivePositions: () => axiosInstance.get<{ positions: ExecutorPosition[] }>('/executor/positions'),
+  getExecutionRecords: (params?: { bot_id?: string; limit?: number }) =>
+    axiosInstance.get<{ records: ExecutionRecord[] }>('/executor/records', { params }),
+  getSignalSources: () => axiosInstance.get<{ sources: SignalSource[] }>('/executor/signal-sources'),
+  updateSignalSource: (id: string, data: Partial<SignalSource>) =>
+    axiosInstance.put<{ success: boolean }>(`/executor/signal-sources/${id}`, data),
+}
+
+// ── AI Robot ──
+export const aiRobotApi = {
+  getConfig: () => axiosInstance.get<AIRobotConfig>('/ai-robot/config'),
+  saveConfig: (config: AIRobotConfig) => axiosInstance.post<AIRobotConfig>('/ai-robot/config', config),
+  getSignals: (params?: { limit?: number; symbol?: string }) =>
+    axiosInstance.get<{ signals: AISignal[] }>('/ai-robot/signals', { params }),
+  getModels: () => axiosInstance.get<{ models: string[] }>('/ai-robot/models'),
+}
+
+// ── Contract Trading ──
+export const contractApi = {
+  getLeverage: () => axiosInstance.get<{ leverage: number }>('/contract/leverage'),
+  setLeverage: (leverage: number) => axiosInstance.post<{ success: boolean }>('/contract/leverage', { leverage }),
+  getMarginInfo: () => axiosInstance.get<ContractMarginInfo>('/contract/margin'),
+  getLiquidationPrice: (params: { entry_price: number; side: string; leverage: number }) =>
+    axiosInstance.get<LiquidationPriceResult>('/contract/liquidation-price', { params }),
+  saveParams: (params: ContractParams) => axiosInstance.post<{ success: boolean }>('/contract/params', params),
+  getParams: () => axiosInstance.get<ContractParams>('/contract/params'),
 }
 
 export { ApiError }

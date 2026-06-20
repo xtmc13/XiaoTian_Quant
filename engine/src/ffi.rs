@@ -200,3 +200,122 @@ pub extern "C" fn free_string(ptr: *mut c_char) {
         let _ = CString::from_raw(ptr);
     }
 }
+
+// ═══════════════════════════════════════════ Signal Executor FFI ═══════════════════════════════════════
+
+use crate::executor::{SignalExecutor, actions_to_json};
+use crate::executor::signal::Signal;
+
+static SIGNAL_EXECUTOR: OnceLock<Mutex<SignalExecutor>> = OnceLock::new();
+
+fn get_signal_executor() -> &'static Mutex<SignalExecutor> {
+    SIGNAL_EXECUTOR.get_or_init(|| Mutex::new(SignalExecutor::new()))
+}
+
+/// Execute a trading signal.
+///
+/// # Input JSON format
+/// ```json
+/// {
+///   "signal": {
+///     "id": "sig-001",
+///     "bot_id": "bot-001",
+///     "bot_type": "strategy",
+///     "symbol": "BTCUSDT",
+///     "side": "BUY",
+///     "direction": "LONG",
+///     "entry_price": 70000.0,
+///     "market_order": false,
+///     "slippage_pct": 0.001,
+///     "tp1": 75000.0, "tp2": 80000.0, "tp3": 85000.0,
+///     "tp1_pct": 0.4, "tp2_pct": 0.3, "tp3_pct": 0.3,
+///     "stop_loss": 65000.0,
+///     "move_sl_after": 75000.0,
+///     "move_sl_to": 70000.0,
+///     "trailing_tp": 0.0,
+///     "trailing_sl": 0.0,
+///     "leverage": 10.0,
+///     "max_stake_pct": 0.1,
+///     "confidence": 0.85,
+///     "ai_reason": "breakout detected",
+///     "timestamp": 1700000000000,
+///     "expire_at": 1700003600000
+///   },
+///   "available_balance": 10000.0
+/// }
+/// ```
+///
+/// # Returns
+/// JSON string of `ExecutionRecord` or error message.
+#[no_mangle]
+pub extern "C" fn engine_execute_signal(json_ptr: *const c_char) -> *mut c_char {
+    let json = unsafe { from_c_str(json_ptr) };
+
+    let parsed: serde_json::Value = match serde_json::from_str(&json) {
+        Ok(v) => v,
+        Err(e) => return to_c_string(format!("{{\"error\":\"JSON parse: {}\"}}", e)),
+    };
+
+    // Extract signal
+    let signal: Signal = match serde_json::from_value(parsed["signal"].clone()) {
+        Ok(s) => s,
+        Err(e) => return to_c_string(format!("{{\"error\":\"Signal parse: {}\"}}", e)),
+    };
+
+    // Extract available_balance
+    let available_balance = parsed["available_balance"].as_f64().unwrap_or(0.0);
+
+    let mut executor = match get_signal_executor().lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+
+    match executor.execute_signal(signal, available_balance) {
+        Ok(record) => match serde_json::to_string(&record) {
+            Ok(json) => to_c_string(json),
+            Err(e) => to_c_string(format!("{{\"error\":\"serialize: {}\"}}", e)),
+        },
+        Err(e) => to_c_string(format!("{{\"error\":\"{}\"}}", e)),
+    }
+}
+
+/// Update price and check TP/SL for a symbol.
+///
+/// # Input JSON format
+/// ```json
+/// {
+///   "symbol": "BTCUSDT",
+///   "price": 76000.0
+/// }
+/// ```
+///
+/// # Returns
+/// JSON array of `TPAction` objects.
+#[no_mangle]
+pub extern "C" fn engine_update_price(json_ptr: *const c_char) -> *mut c_char {
+    let json = unsafe { from_c_str(json_ptr) };
+
+    let parsed: serde_json::Value = match serde_json::from_str(&json) {
+        Ok(v) => v,
+        Err(e) => return to_c_string(format!("{{\"error\":\"JSON parse: {}\"}}", e)),
+    };
+
+    let symbol = parsed["symbol"].as_str().unwrap_or("");
+    let price = parsed["price"].as_f64().unwrap_or(0.0);
+
+    if symbol.is_empty() {
+        return to_c_string("{\"error\":\"missing symbol\"}".to_string());
+    }
+
+    let mut executor = match get_signal_executor().lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+
+    let actions = executor.on_price_update(symbol, price);
+
+    match actions_to_json(&actions) {
+        Ok(json) => to_c_string(json),
+        Err(e) => to_c_string(format!("{{\"error\":\"serialize: {}\"}}", e)),
+    }
+}

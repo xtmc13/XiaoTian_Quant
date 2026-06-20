@@ -1301,3 +1301,193 @@ export interface TensorBoardQueryResult {
   run_id: string
   scalars: Record<string, TensorBoardScalar[]>
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   Strategy Config — Martin / WallStreet
+   ═══════════════════════════════════════════════════════════════════ */
+
+export interface MartinConfig {
+  id?: string
+  name: string
+  strategy_type: 'martin'
+  first_order_amount: number
+  order_count: number
+  add_position_spread: number
+  add_position_callback: number
+  take_profit_ratio: number
+  profit_callback: number
+  double_first_order: boolean
+  loop_type: 'single' | 'cycle'
+  loop_count: number
+  enable_add_position: boolean
+  flash_crash_protection: number
+  symbol?: string
+  leverage?: number
+  direction?: 'long' | 'short' | 'dual'
+  created_at?: string
+  updated_at?: string
+}
+
+export interface WallStreetConfig {
+  id?: string
+  name: string
+  strategy_type: 'wallstreet'
+  first_order_amount: number
+  order_count: number
+  add_position_spread: number
+  add_position_callback: number
+  take_profit_ratio: number
+  profit_callback: number
+  double_first_order: boolean
+  loop_type: 'single' | 'cycle'
+  loop_count: number
+  enable_add_position: boolean
+  flash_crash_protection: number
+  symbol?: string
+  leverage?: number
+  direction?: 'long' | 'short' | 'dual'
+  created_at?: string
+  updated_at?: string
+}
+
+export type StrategyConfigUnion = MartinConfig | WallStreetConfig
+
+/* ═══════════════════════════════════════════════════════════════════
+   Signal Executor
+   ═══════════════════════════════════════════════════════════════════ */
+
+export interface ExecutorStatus {
+  active_positions: number
+  pending_signals: number
+  today_executed: number
+  today_pnl: number
+  tp1_executed: number
+  tp2_executed: number
+  tp3_executed: number
+  sl_triggered: number
+  status: 'running' | 'stopped' | 'error'
+  updated_at?: string
+}
+
+export interface ExecutorPosition {
+  id: string
+  symbol: string
+  side: 'LONG' | 'SHORT'
+  entry_price: number
+  current_price: number
+  quantity: number
+  unrealized_pnl: number
+  realized_pnl: number
+  tp1_price?: number
+  tp2_price?: number
+  tp3_price?: number
+  sl_price?: number
+  tp1_hit: boolean
+  tp2_hit: boolean
+  tp3_hit: boolean
+  status: 'open' | 'partial_closed' | 'closed'
+  opened_at: string
+  updated_at?: string
+}
+
+export interface ExecutionRecord {
+  id: string
+  signal_id: string
+  bot_id?: string
+  symbol: string
+  side: 'BUY' | 'SELL'
+  type: 'entry' | 'tp1' | 'tp2' | 'tp3' | 'sl'
+  price: number
+  quantity: number
+  pnl?: number
+  pnl_pct?: number
+  executed_at: string
+  metadata?: Record<string, unknown>
+}
+
+export interface SignalSource {
+  id: string
+  name: string
+  type: 'webhook' | 'api' | 'internal'
+  webhook_url?: string
+  enabled: boolean
+  signal_count_today: number
+  signal_count_total: number
+  last_signal_at?: string
+  created_at?: string
+  tp_sl_config?: {
+    tp1_pct: number
+    tp2_pct: number
+    tp3_pct: number
+    sl_pct: number
+    position_size_pct: number
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   AI Robot Config
+   ═══════════════════════════════════════════════════════════════════ */
+
+export interface AIRobotConfig {
+  id?: string
+  model: string
+  confidence_threshold: number
+  scan_interval_seconds: number
+  market_filters: {
+    min_volume_24h: number
+    max_volatility: number
+    trend_timeframe: string
+    require_trend_alignment: boolean
+    filter_whitelist_only: boolean
+  }
+  enabled: boolean
+  created_at?: string
+  updated_at?: string
+}
+
+export interface AISignal {
+  id: string
+  symbol: string
+  side: 'buy' | 'sell'
+  confidence: number
+  model: string
+  indicators: Record<string, number>
+  executed: boolean
+  created_at: string
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Contract Trading
+   ═══════════════════════════════════════════════════════════════════ */
+
+export interface ContractParams {
+  leverage: number
+  direction: 'long' | 'short' | 'both'
+  margin_mode: 'isolated' | 'cross'
+  open_indicator: 'macd_golden' | 'macd_death' | 'ema_counter' | 'ema_follow' | 'none'
+  indicator_timeframe: '5m' | '15m' | '30m' | '1h' | '4h' | '8h'
+  enable_trend_following: boolean
+  max_positions: number
+  symbol?: string
+}
+
+export interface ContractMarginInfo {
+  wallet_balance: number
+  available_balance: number
+  margin_balance: number
+  maintenance_margin: number
+  unrealized_pnl: number
+  realized_pnl_today: number
+  liquidation_price?: number
+  leverage: number
+  margin_mode: 'isolated' | 'cross'
+}
+
+export interface LiquidationPriceResult {
+  symbol: string
+  entry_price: number
+  side: string
+  leverage: number
+  margin_mode: string
+  liquidation_price: number
+}

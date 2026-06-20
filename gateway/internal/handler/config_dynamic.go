@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xiaotian-quant/gateway/internal/strategy"
 )
 
 // ── Default data ──
@@ -202,4 +203,206 @@ func fetchUSDCNYRate() float64 {
 		return r
 	}
 	return 7.25
+}
+
+// ── Strategy Configuration Endpoints ────────────────────────────
+
+// defaultStrategyConfig holds default configuration for supported strategies.
+var defaultStrategyConfig = map[string]any{
+	"strategies": []map[string]any{
+		{
+			"key":         "martin_trend_v2",
+			"label":       "马丁趋势策略V2",
+			"description": "倍投补仓趋势策略，支持防瀑布保护和回调确认",
+			"category":    "futures",
+			"parameters": map[string]any{
+				"first_order_amount":     100.0,
+				"order_count":            7,
+				"add_position_spread":    0.03,
+				"add_position_callback":  0.003,
+				"take_profit_ratio":      0.013,
+				"profit_callback":        0.003,
+				"double_first_order":     false,
+				"loop_type":              "cycle",
+				"loop_count":             100,
+				"enable_add_position":    true,
+				"flash_crash_protection": 0.02,
+			},
+		},
+		{
+			"key":         "wallstreet_v2",
+			"label":       "华尔街策略V2",
+			"description": "斐波那契数列仓位管理策略，风险控制更优",
+			"category":    "futures",
+			"parameters": map[string]any{
+				"first_order_amount":     100.0,
+				"order_count":            7,
+				"add_position_spread":    0.03,
+				"add_position_callback":  0.003,
+				"take_profit_ratio":      0.013,
+				"profit_callback":        0.003,
+				"double_first_order":     false,
+				"loop_type":              "cycle",
+				"loop_count":             100,
+				"enable_add_position":    true,
+				"flash_crash_protection": 0.02,
+			},
+		},
+	},
+	"contract_defaults": map[string]any{
+		"leverage":                10.0,
+		"direction":               "both",
+		"margin_mode":             "cross",
+		"max_positions":           10,
+		"maintenance_margin_rate": 0.004,
+	},
+	"risk_defaults": map[string]any{
+		"warning_threshold":     0.5,
+		"danger_threshold":      0.75,
+		"critical_threshold":    0.9,
+		"flash_crash_window":    "1m",
+		"flash_crash_threshold": 0.02,
+	},
+}
+
+// GetStrategyDefaults returns default strategy configurations.
+func GetStrategyDefaults(c *gin.Context) {
+	strategyKey := c.Query("key")
+	data := defaultStrategyConfig
+
+	if strategyKey != "" {
+		if strategies, ok := data["strategies"].([]map[string]any); ok {
+			for _, s := range strategies {
+				if s["key"] == strategyKey {
+					c.JSON(http.StatusOK, s)
+					return
+				}
+			}
+			c.JSON(http.StatusNotFound, gin.H{"detail": "strategy config not found"})
+			return
+		}
+	}
+
+	c.JSON(http.StatusOK, data)
+}
+
+// GetContractDefaults returns default contract trading parameters.
+func GetContractDefaults(c *gin.Context) {
+	c.JSON(http.StatusOK, defaultStrategyConfig["contract_defaults"])
+}
+
+// CalculatePositionSizes computes position sizes for martingale or fibonacci strategies.
+func CalculatePositionSizes(c *gin.Context) {
+	var req struct {
+		StrategyType     string  `json:"strategy_type" binding:"required"`
+		FirstOrderAmount float64 `json:"first_order_amount" binding:"required,min=1"`
+		OrderCount       int     `json:"order_count" binding:"required,min=1,max=20"`
+		DoubleFirstOrder bool    `json:"double_first_order"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
+
+	var positions []float64
+	var total float64
+
+	switch req.StrategyType {
+	case "martin_trend", "martin_trend_v2", "martingale":
+		s := strategy.NewMartinStrategy()
+		s.FirstOrderAmount = req.FirstOrderAmount
+		s.OrderCount = req.OrderCount
+		s.DoubleFirstOrder = req.DoubleFirstOrder
+		positions = s.CalculatePositions()
+	case "wallstreet", "wallstreet_v2":
+		s := strategy.NewWallStreetStrategy()
+		s.FirstOrderAmount = req.FirstOrderAmount
+		s.OrderCount = req.OrderCount
+		s.DoubleFirstOrder = req.DoubleFirstOrder
+		positions = s.CalculatePositions()
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "unsupported strategy_type: " + req.StrategyType})
+		return
+	}
+
+	for _, p := range positions {
+		total += p
+	}
+
+	c.JSON(http.StatusOK, map[string]any{
+		"strategy_type":      req.StrategyType,
+		"first_order_amount": req.FirstOrderAmount,
+		"order_count":        req.OrderCount,
+		"double_first_order": req.DoubleFirstOrder,
+		"positions":          positions,
+		"total":              total,
+		"ratio":              calculatePositionRatios(positions),
+	})
+}
+
+// calculatePositionRatios computes each position as a ratio of total.
+func calculatePositionRatios(positions []float64) []float64 {
+	total := 0.0
+	for _, p := range positions {
+		total += p
+	}
+	if total <= 0 {
+		return nil
+	}
+	ratios := make([]float64, len(positions))
+	for i, p := range positions {
+		ratios[i] = p / total
+	}
+	return ratios
+}
+
+// FlashCrashCheck checks if a given price history indicates a flash crash.
+func FlashCrashCheck(c *gin.Context) {
+	var req struct {
+		Prices     []float64 `json:"prices" binding:"required"`
+		Timestamps []int64   `json:"timestamps" binding:"required"`
+		Threshold  float64   `json:"threshold"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
+
+	if len(req.Prices) != len(req.Timestamps) {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "prices and timestamps must have same length"})
+		return
+	}
+	if len(req.Prices) < 2 {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "at least 2 price points required"})
+		return
+	}
+
+	threshold := req.Threshold
+	if threshold <= 0 {
+		threshold = 0.02
+	}
+
+	detector := strategy.NewFlashCrashDetectorWithParams(0, threshold)
+	priceHistory := make([]strategy.PricePoint, len(req.Prices))
+	for i := range req.Prices {
+		priceHistory[i] = strategy.PricePoint{
+			Price:     req.Prices[i],
+			Timestamp: req.Timestamps[i],
+		}
+		detector.AddPrice(req.Prices[i], req.Timestamps[i])
+	}
+
+	isFlashCrash := detector.IsFlashCrash()
+	drop := detector.PriceDropInWindow()
+
+	c.JSON(http.StatusOK, map[string]any{
+		"is_flash_crash":     isFlashCrash,
+		"price_drop":         drop,
+		"threshold":          threshold,
+		"data_points":        len(req.Prices),
+		"window_first_price": req.Prices[0],
+		"window_last_price":  req.Prices[len(req.Prices)-1],
+	})
 }
