@@ -1,40 +1,41 @@
 # 小天量化 XiaoTianQuant v3.0
 
-> AI 驱动的多资产量化交易平台 — Go 网关 + React 前端 + Rust 撮合引擎 + Python ML，事件驱动，回测实盘一体。
+> AI 驱动的多资产量化交易平台 — Go 网关 + React 前端 + Rust 撮合引擎，事件驱动，回测实盘一体。
 >
-> **v3.0 新增**: ML 预测管线 · 纯 Go 本地推理 · RL 强化学习 · 社交交易 · 链上数据 · 高级订单(OCO/冰山/跟踪) · 套利监控 · Hyperopt 参数优化 · Protection 风控 · Pairlist 交易对筛选 · 策略社区 · Admin 面板 · Indicator IDE · Telegram/Discord Bot · CCXT Bridge · 8 交易所 · i18n 多语言 · OAuth 登录 · Billing 会员 · 凭证加密 · Edge 分析 · TensorBoard 可视化
+> **v3.0 新增**: 三机器体系(策略/信号/AI) · ML 预测管线(Go 原生推理 + Python CLI 训练) · 配置API · 纯 Go 本地推理 · 社交交易 · 链上数据 · 高级订单(OCO/冰山/跟踪) · 套利监控 · Hyperopt 参数优化 · Protection 风控 · Pairlist 交易对筛选 · 策略社区 · Admin 面板 · Indicator IDE · Telegram/Discord Bot · 8 交易所 · i18n 多语言 · OAuth 登录 · Billing 会员 · 凭证加密 · Edge 分析 · TensorBoard 可视化
 
 ## 架构概览
 
 ```
-┌─────────────────────────────────────────────────┐
-│                    Web 前端                       │
-│         React 19 + TypeScript + Vite             │
-│     TailwindCSS · ECharts · Lightweight Charts    │
-└─────────────────────┬───────────────────────────┘
-                      │ HTTP REST + WebSocket
-┌─────────────────────▼───────────────────────────┐
-│                  Go 网关 (Gin)                    │
-│  ┌──────────┬──────────┬──────────┬──────────┐  │
-│  │ 策略引擎  │ AI 服务  │ 回测引擎  │ 风控系统  │  │
-│  ├──────────┼──────────┼──────────┼──────────┤  │
-│  │ 订单管理  │ 持仓管理  │ 通知服务  │ 监控告警  │  │
-│  └──────────┴──────────┴──────────┴──────────┘  │
-│          交易所适配器 (Binance/OKX/...)           │
-│              SQLite · Redis (可选)                │
-└─────────────────────┬───────────────────────────┘
-                      │ FFI (CGo)
-┌─────────────────────▼───────────────────────────┐
-│               Rust 撮合引擎                       │
-│         价格-时间优先订单簿 · 交易匹配             │
-└─────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                    Web 前端 (React 19 + TS)                   │
+│     TailwindCSS · ECharts · Lightweight Charts · KLineCharts  │
+└───────────────────────────┬─────────────────────────────────┘
+                            │ HTTP REST + WebSocket
+┌───────────────────────────▼─────────────────────────────────┐
+│                  Go 网关 (Gin) — 244 API 端点                  │
+│  ┌──────────┬──────────┬──────────┬──────────┬──────────┐  │
+│  │ 策略引擎  │ AI 服务  │ 回测引擎  │ 风控系统  │ 配置API  │  │
+│  ├──────────┼──────────┼──────────┼──────────┼──────────┤  │
+│  │ 订单管理  │ 持仓管理  │ 通知服务  │ 监控告警  │ 三机器   │  │
+│  └──────────┴──────────┴──────────┴──────────┴──────────┘  │
+│          交易所适配器 (Binance/OKX深度 + 6家基础)             │
+│              SQLite · Redis (可选)                            │
+└───────────────────────────┬─────────────────────────────────┘
+                            │ FFI (CGo)
+┌───────────────────────────▼─────────────────────────────────┐
+│               Rust 撮合引擎                                  │
+│         价格-时间优先订单簿 · 30-50K TPS · 订单簿深度快照      │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 | 层 | 语言 | 职责 |
 |---|------|------|
-| **Web 前端** | React 19 + TypeScript + Vite | 仪表盘、K 线图表、AI 策略生成、回测面板、交易下单、资产管理 |
-| **Go 网关** | Go + Gin 框架 | REST API、策略引擎、交易所适配、回测、风控、WebSocket 推送、通知 |
+| **Web 前端** | React 19 + TypeScript + Vite | 仪表盘、K 线图表、AI 策略生成、回测面板、交易下单、资产管理、三机器管理 |
+| **Go 网关** | Go 1.25 + Gin 框架 | REST API (244端点)、策略引擎、交易所适配、回测、风控、WebSocket 推送、通知、配置API |
 | **Rust 引擎** | Rust (cdylib) | 高性能订单簿撮合，通过 FFI 被 Go 网关调用 |
+
+**辅助工具 (Python CLI)**：模型训练 (`sandbox/train.py`) 和指标沙箱执行 (`sandbox/main.py`)，非常驻服务，手动触发。
 
 ## 技术栈
 
@@ -68,13 +69,20 @@ xiaotian_quant/
 │   ├── cmd/server/main.go          # 入口 — 路由注册 + 启动
 │   ├── internal/
 │   │   ├── adapter/                # 交易所适配器
-│   │   │   ├── binance.go          #   币安 (REST + WebSocket)
-│   │   │   ├── okx.go              #   OKX
-│   │   │   ├── coinbase.go         #   Coinbase
-│   │   │   ├── gateio.go           #   Gate.io
-│   │   │   ├── mexc.go             #   MEXC
-│   │   │   ├── matching.go         #   撮合引擎 FFI 桥接
-│   │   │   └── cgo_bridge.go       #   CGo 动态库加载
+│   │   │   ├── binance.go          #   币安 (深度实现: REST + WebSocket)
+│   │   │   ├── okx.go              #   OKX (基础 REST)
+│   │   │   ├── bybit.go            #   Bybit (基础 REST)
+│   │   │   ├── coinbase.go         #   Coinbase (基础 REST)
+│   │   │   ├── kraken.go           #   Kraken (基础 REST)
+│   │   │   ├── gateio.go           #   Gate.io (基础 REST)
+│   │   │   ├── mexc.go             #   MEXC (基础 REST)
+│   │   │   ├── bitget.go           #   Bitget (基础 REST)
+│   │   │   ├── alpaca.go           #   Alpaca (基础 REST)
+│   │   │   ├── matching.go         #   撮合引擎 FFI 桥接 + 纯Go fallback
+│   │   │   ├── cgo_bridge.go       #   CGo 动态库加载
+│   │   │   └── helpers.go          #   通用辅助函数 (stubError 等)
+│   │   ├── bot/                    # 三机器管理 (策略/信号/AI)
+│   │   ├── data/                   # 配置文件 (markets.json · indices.json)
 │   │   ├── agent/                  # Agent 网关 (MCP 协议)
 │   │   ├── ai/                     # AI 策略生成 · 多模型投票
 │   │   ├── backtest/               # 事件驱动回测引擎
@@ -96,6 +104,7 @@ xiaotian_quant/
 │   │   │   ├── settings.go         #   系统设置
 │   │   │   ├── strategy.go         #   策略 CRUD
 │   │   │   ├── strategy_ai.go      #   AI 策略生成
+│   │   │   ├── config_dynamic.go   #   动态配置端点 (markets · exchanges · indices)
 │   │   │   └── ws.go               #   WebSocket 推送
 │   │   ├── logging/                # 结构化日志
 │   │   ├── metrics/                # 监控指标
@@ -308,7 +317,9 @@ REDIS_URL=redis://localhost:6379
 ## 功能特性
 
 ### 交易执行
-- **8 家交易所**: 币安 · OKX · Coinbase · Gate.io · MEXC · Bybit · KuCoin · Bitget
+- **交易所支持**:
+  - 深度实现: **币安** (REST + WebSocket, 现货/合约/资金/理财)
+  - 基础 REST: OKX · Bybit · Coinbase · Kraken · Gate.io · MEXC · Bitget · Alpaca
 - **统一接口**: REST 下单 + WebSocket 实时数据推送
 - **订单类型**: 市价单 · 限价单 · 止损单 · OCO · 冰山订单 · 跟踪止损 · 策略委托（Bracket）
 - **高级订单管理**: 条件委托、冰山委托、OCO、Bracket 一体化管理
@@ -322,10 +333,16 @@ REDIS_URL=redis://localhost:6379
 - **策略组合 (Combo)**: 多策略信号聚合，组合管理
 - **策略生命周期**: 创建 → 回测 → 模拟 → 实盘 → 监控
 
+### 三机器体系
+- **策略机器人 (Freqtrade)**: 自主扫描 K 线，内置 13 种策略，独立决策执行
+- **信号机器人 (Cryptoleks)**: 接收外部信号(Webhook/API/IDE)，阶梯止盈/止损自动执行
+- **AI 机器人 (Alpha)**: LLM 驱动市场分析，波动市场智能过滤，带置信度评估
+- **统一执行层**: Rust SignalExecutor 统一处理仓位/止盈/止损，信号生成与执行解耦
+
 ### 回测系统
 - **事件驱动**: 精准模拟交易所行为
 - **费用建模**: 手续费 + 滑点
-- **指标输出**: 夏普比率 · 最大回撤 · 胜率 · 盈亏比 · 收益率曲线
+- **指标输出**: 夏普比率 · 最大回撤 · 胜率 · 盈亏比 · 收益率曲线 · VaR · CVaR
 
 ### 风控系统 (12 维度)
 
@@ -363,7 +380,7 @@ REDIS_URL=redis://localhost:6379
 | **指标 IDE** | Python 指标在线编写 · 实时验证 · 沙箱执行 · AI 生成 |
 | **回测** | 参数配置 · 结果图表 · 交易明细 · 指标分析 · Tick 级回测 |
 | **资产** | 持仓列表 · 盈亏明细 · 历史收益 · 多账户聚合 · 收益日历 |
-| **机器人** | 自动化任务 · 网格机器人 · 状态监控 |
+| **机器人** | 三机器体系: 策略机器人(自主扫描) · 信号机器人(跟单执行) · AI 机器人(智能过滤) |
 | **风控中心** | 12 维度风控配置 · 熔断状态 · 交易对保护 |
 | **交易对筛选** | 多维度 Pairlist 过滤 · 成交量/波动率排序 |
 | **高级订单** | OCO · 冰山 · Bracket · 跟踪止损 一体化管理 |
@@ -439,6 +456,15 @@ REDIS_URL=redis://localhost:6379
 | POST | `/ai/chat` | AI 对话 |
 | POST | `/ai/analyze` | AI 市场分析 |
 | GET | `/ai/quickscan` | 快速扫描 |
+
+### 配置 `/api/config`
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/markets` | 交易对列表与精度配置 |
+| GET | `/exchanges` | 支持的交易所及状态 |
+| GET | `/indices` | 热力图标的与全球指数 |
+| GET | `/ai-models` | 可用的 AI 模型列表 |
+| GET | `/rate` | USD/CNY 汇率 |
 
 ### WebSocket
 | 路径 | 说明 |
