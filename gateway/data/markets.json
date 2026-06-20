@@ -1,0 +1,16 @@
+{
+  "symbols": [
+    {"symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "precision": {"price": 2, "quantity": 5}},
+    {"symbol": "ETHUSDT", "base": "ETH", "quote": "USDT", "precision": {"price": 2, "quantity": 4}},
+    {"symbol": "SOLUSDT", "base": "SOL", "quote": "USDT", "precision": {"price": 3, "quantity": 2}},
+    {"symbol": "BNBUSDT", "base": "BNB", "quote": "USDT", "precision": {"price": 2, "quantity": 3}},
+    {"symbol": "XRPUSDT", "base": "XRP", "quote": "USDT", "precision": {"price": 4, "quantity": 1}},
+    {"symbol": "DOGEUSDT", "base": "DOGE", "quote": "USDT", "precision": {"price": 5, "quantity": 0}},
+    {"symbol": "ADAUSDT", "base": "ADA", "quote": "USDT", "precision": {"price": 4, "quantity": 2}},
+    {"symbol": "AVAXUSDT", "base": "AVAX", "quote": "USDT", "precision": {"price": 2, "quantity": 3}},
+    {"symbol": "DOTUSDT", "base": "DOT", "quote": "USDT", "precision": {"price": 2, "quantity": 3}},
+    {"symbol": "LINKUSDT", "base": "LINK", "quote": "USDT", "precision": {"price": 2, "quantity": 3}},
+    {"symbol": "LTCUSDT", "base": "LTC", "quote": "USDT", "precision": {"price": 2, "quantity": 4}},
+    {"symbol": "MATICUSDT", "base": "MATIC", "quote": "USDT", "precision": {"price": 4, "quantity": 2}}
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "heatmap": {
+    "crypto": ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA", "AVAX", "DOT", "LINK", "LTC", "MATIC"],
+    "us_stocks": ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "NFLX"],
+    "hk_stocks": ["0700.HK", "9988.HK", "3690.HK", "1810.HK", "2318.HK", "1299.HK", "0883.HK", "0005.HK"],
+    "commodities": ["GC=F", "SI=F", "CL=F", "NG=F", "ZW=F", "ZC=F"],
+    "sectors": ["XLK", "XLF", "XLV", "XLE", "XLI", "XLP", "XLU", "XLRE", "XLB", "XLC"],
+    "forex": ["EURUSD=X", "GBPUSD=X", "USDJPY=X", "USDCHF=X", "AUDUSD=X", "USDCAD=X"]
+  },
+  "global_indices": [
+    {"symbol": "SPX", "name": "S&P 500", "region": "US"},
+    {"symbol": "NDX", "name": "NASDAQ 100", "region": "US"},
+    {"symbol": "DJI", "name": "Dow Jones", "region": "US"},
+    {"symbol": "SH", "name": "上证综指", "region": "CN"},
+    {"symbol": "HSI", "name": "恒生指数", "region": "HK"},
+    {"symbol": "N225", "name": "日经225", "region": "JP"},
+    {"symbol": "FTSE", "name": "富时100", "region": "UK"},
+    {"symbol": "DAX", "name": "DAX 40", "region": "DE"}
+  ]
+}

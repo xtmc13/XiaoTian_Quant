@@ -11,6 +11,8 @@ interface BotListProps {
   loading: boolean
   actionLoadingId: string | null
   selectedId: string | null
+  emptyTitle?: string
+  emptyDescription?: string
   onSelect: (bot: BotItem) => void
   onStart: (bot: BotItem) => void
   onStop: (bot: BotItem) => void
@@ -24,6 +26,8 @@ export function BotList({
   loading,
   actionLoadingId,
   selectedId,
+  emptyTitle,
+  emptyDescription,
   onSelect,
   onStart,
   onStop,
@@ -45,8 +49,8 @@ export function BotList({
     return (
       <EmptyState
         icon={<Bot className="h-6 w-6" />}
-        title="暂无交易机器人"
-        description="从上方选择一种策略类型创建你的第一个自动化交易机器人，或使用 AI 智能创建。"
+        title={emptyTitle || '暂无交易机器人'}
+        description={emptyDescription || '从上方选择一种策略类型创建你的第一个自动化交易机器人，或使用 AI 智能创建。'}
       />
     )
   }

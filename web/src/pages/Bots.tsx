@@ -1,9 +1,9 @@
 import { useState, useCallback } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
+import { useNavigate, Link, useLocation } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import {
   Bot, TrendingUp, TrendingDown, Wallet, PauseCircle,
-  Terminal, ChevronRight, Activity
+  Terminal, ChevronRight, Activity, Radio, BrainCircuit
 } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
 import { PageHeader } from '@/components/ui/PageHeader'
@@ -15,9 +15,43 @@ import { toast } from '@/lib/useToast'
 import { BotList } from '@/components/bots/BotList'
 import { BotDetailView } from '@/components/bots/BotCard'
 
+// 三机器类型的元数据
+const BOT_TYPE_META: Record<string, { title: string; subtitle: string; icon: React.ReactNode; emptyTitle: string; emptyDesc: string }> = {
+  strategy: {
+    title: '策略机器人',
+    subtitle: '自主扫描市场、计算指标、生成信号并自动执行',
+    icon: <Bot className="w-5 h-5" />,
+    emptyTitle: '暂无策略机器人',
+    emptyDesc: '策略机器人会自主扫描K线数据，根据内置策略自动交易。创建你的第一个策略机器人吧。',
+  },
+  signal: {
+    title: '信号机器人',
+    subtitle: '接收外部信号并按阶梯止盈/止损自动执行',
+    icon: <Radio className="w-5 h-5" />,
+    emptyTitle: '暂无信号机器人',
+    emptyDesc: '信号机器人监听外部信号（Webhook/API/IDE），自动跟单执行并管理TP/SL。创建你的第一个信号机器人吧。',
+  },
+  ai: {
+    title: 'AI 机器人',
+    subtitle: 'AI 驱动决策，智能过滤波动市场，带置信度评估',
+    icon: <BrainCircuit className="w-5 h-5" />,
+    emptyTitle: '暂无 AI 机器人',
+    emptyDesc: 'AI 机器人使用大语言模型分析市场，在波动市场中自动过滤信号。创建你的第一个 AI 机器人吧。',
+  },
+}
+
 export function Bots() {
   const navigate = useNavigate()
-  const { bots, isLoading, kpi, actionLoadingId, startBot, stopBot, deleteBot, cloneBot } = useBotData()
+  const location = useLocation()
+
+  // 从 URL 读取 type 参数
+  const searchParams = new URLSearchParams(location.search)
+  const botType = searchParams.get('type') || 'strategy'
+
+  // 传给 useBotData 做过滤
+  const { bots, isLoading, kpi, actionLoadingId, startBot, stopBot, deleteBot, cloneBot } = useBotData(botType as 'strategy' | 'signal' | 'ai')
+
+  const meta = BOT_TYPE_META[botType] || BOT_TYPE_META.strategy
 
   const [viewMode, setViewMode] = useState<'list' | 'detail'>('list')
   const [selectedBot, setSelectedBot] = useState<BotItem | null>(null)
@@ -70,7 +104,7 @@ export function Bots() {
           />
         ) : (
           <>
-            <PageHeader subtitle="实时监控所有策略的运行状态" />
+            <PageHeader title={meta.title} subtitle={meta.subtitle} icon={meta.icon} />
 
             {/* KPI Row */}
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
@@ -136,6 +170,8 @@ export function Bots() {
                 loading={isLoading}
                 actionLoadingId={actionLoadingId}
                 selectedId={selectedBot?.id || null}
+                emptyTitle={meta.emptyTitle}
+                emptyDescription={meta.emptyDesc}
                 onSelect={handleViewDetail}
                 onStart={startBot}
                 onStop={stopBot}

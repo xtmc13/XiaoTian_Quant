@@ -3,6 +3,28 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { strategyApi } from '@/lib/api'
 import { toast } from '@/lib/useToast'
 import type { StrategyItem } from '@/types'
+
+// 新的三层机器分类
+type NewBotType = 'strategy' | 'signal' | 'ai'
+
+// 旧 bot_type 映射到新分类
+const OLD_TO_NEW: Record<string, NewBotType> = {
+  grid: 'strategy',
+  dca: 'strategy',
+  arbitrage: 'strategy',
+  market_making: 'strategy',
+  trend: 'strategy',
+  martin_trend: 'strategy',
+  wallstreet: 'strategy',
+  macd_golden: 'strategy',
+  macd_death: 'strategy',
+  dual_burn: 'strategy',
+  ema_follow: 'strategy',
+  ema_counter: 'strategy',
+  custom: 'strategy',
+  signal: 'signal',
+  ai: 'ai',
+}
 import {
   Grid3X3,
   Layers,
@@ -138,7 +160,7 @@ export const STATUS_META: Record<string, { label: string; dot: string; border: s
   },
 }
 
-export function useBotData() {
+export function useBotData(filterType?: NewBotType) {
   const queryClient = useQueryClient()
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null)
 
@@ -149,14 +171,23 @@ export function useBotData() {
   })
 
   const bots: BotItem[] = useMemo(() => {
-    const all = Array.isArray(strategies) ? strategies : []
-    return all.map((s: StrategyItem) => ({
-      ...s,
-      id: String(s.id),
-      bot_type: ((s as StrategyItem & { bot_type?: string }).bot_type || ((s.trading_config as Record<string, unknown> | undefined)?.bot_type as string) || 'custom') as BotItem['bot_type'],
-      name: s.strategy_name || s.name,
-    }))
-  }, [strategies])
+    let all = Array.isArray(strategies) ? strategies : []
+    // 映射旧 bot_type 到新分类
+    const mapped = all.map((s: StrategyItem) => {
+      const oldType = ((s as StrategyItem & { bot_type?: string }).bot_type || ((s.trading_config as Record<string, unknown> | undefined)?.bot_type as string) || 'custom')
+      return {
+        ...s,
+        id: String(s.id),
+        bot_type: oldType as BotItem['bot_type'],
+        name: s.strategy_name || s.name,
+      }
+    })
+    // 按新分类过滤
+    if (filterType) {
+      return mapped.filter((b) => (OLD_TO_NEW[b.bot_type] || 'strategy') === filterType)
+    }
+    return mapped
+  }, [strategies, filterType])
 
   const kpi = useMemo(() => {
     const running = bots.filter((b) => b.status === 'running').length

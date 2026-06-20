@@ -500,6 +500,12 @@ export const configApi = {
   currencySet: (currency: string) => api.put<{ currency: string }>('/settings/currency', { currency }),
   aiTest: (data: Record<string, unknown>) => api.post<{ success: boolean }>('/ai/test', data),
   aiSave: (data: Record<string, unknown>) => api.post<{ success: boolean }>('/ai/save', data),
+  // Dynamic config endpoints (backend-driven)
+  getMarkets: () => api.get<{ symbols: Array<{ symbol: string; base: string; quote: string; precision: { price: number; quantity: number } }> }>('/config/markets'),
+  getIndices: () => api.get<{ heatmap: Record<string, string[]>; global_indices: Array<{ symbol: string; name: string; region: string }> }>('/config/indices'),
+  getExchanges: () => api.get<{ exchanges: Array<{ key: string; label: string; status: string; supports: string[] }> }>('/config/exchanges'),
+  getAIModels: () => api.get<{ providers: Array<{ key: string; label: string; models: string[]; baseUrl: string }> }>('/config/ai-models'),
+  getRate: () => api.get<{ rate: number; from: string; to: string; timestamp: number }>('/config/rate'),
 }
 
 // ── Settings ──

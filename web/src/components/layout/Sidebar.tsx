@@ -49,7 +49,14 @@ const navItems: NavItem[] = [
   { path: '/indicator-ide', label: '指标IDE', icon: Code2 },
   { path: '/ai', label: 'AI研究', icon: Cpu },
   { path: '/backtest', label: '回测', icon: FlaskConical },
-  { path: '/bots', label: '机器人', icon: Bot },
+  {
+    label: '机器人', icon: Bot,
+    children: [
+      { path: '/bots?type=strategy', label: '策略机器人' },
+      { path: '/bots?type=signal', label: '信号机器人' },
+      { path: '/bots?type=ai', label: 'AI 机器人' },
+    ],
+  },
   { path: '/model-management', label: 'ML模型', icon: BrainCircuit },
   { path: '/risk-control', label: '风控中心', icon: Shield },
   { path: '/pairlist', label: '交易对筛选', icon: ListFilter },
@@ -113,7 +120,7 @@ export function Sidebar() {
         {navItems.filter(item => !item.adminOnly || isAdmin).map((item) => {
           const active = item.path
             ? location.pathname === item.path || (item.children && item.children.some(c => location.search && location.pathname + location.search === c.path))
-            : item.children?.some(c => location.pathname === '/trading')
+            : item.children?.some(c => location.pathname + (location.search || '') === c.path || location.pathname === c.path.split('?')[0])
           const hasChildren = !!item.children
           const isExpanded = expandedItem === item.label
 

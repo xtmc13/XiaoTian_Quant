@@ -166,6 +166,13 @@ func registerAdminRoutes(api *gin.RouterGroup) {
 }
 
 func registerConfigRoutes(api *gin.RouterGroup) {
+	// Public config lookup endpoints (no auth required)
+	api.GET("/config/markets", handler.GetMarkets)
+	api.GET("/config/indices", handler.GetIndices)
+	api.GET("/config/exchanges", handler.GetExchanges)
+	api.GET("/config/ai-models", handler.GetAIModels)
+	api.GET("/config/rate", handler.GetConversionRate)
+
 	private := api.Group("")
 	private.Use(middleware.AuthRequired())
 	private.GET("/config", handler.GetConfig)

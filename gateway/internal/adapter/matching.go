@@ -1,4 +1,11 @@
 //go:build !cgo
+// +build !cgo
+
+// (dev mock) Pure-Go fallback matching engine — NOT for production.
+// Activated only when CGO_ENABLED=0 (no Rust engine).
+// JSON output format is kept strictly identical to the Rust FFI version
+// (gateway/internal/adapter/../engine/src/ffi.rs) so that upper-layer
+// handlers can treat both engines interchangeably.
 
 package adapter
 
@@ -16,17 +23,17 @@ type MatchingEngine struct {
 	symbol string
 	mu     sync.Mutex
 
-	bids      []orderLevel
-	asks      []orderLevel
-	orders    map[uint64]*order
-	nextID    uint64
-	trades    []map[string]any
-	tradeSeq  uint64
+	bids     []orderLevel
+	asks     []orderLevel
+	orders   map[uint64]*order
+	nextID   uint64
+	trades   []map[string]any
+	tradeSeq uint64
 }
 
 type orderLevel struct {
-	Price    float64
-	Orders   []*order
+	Price  float64
+	Orders []*order
 }
 
 type order struct {
@@ -59,6 +66,8 @@ func NewMatchingEngine(symbol string) *MatchingEngine {
 	return eng
 }
 
+// SubmitOrder submits an order and returns the result in Rust FFI format:
+// {"status":"ok","order_id":<id>,"trades":[...]}
 func (e *MatchingEngine) SubmitOrder(side, orderType string, price, quantity float64, userID uint64) (map[string]any, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -77,29 +86,33 @@ func (e *MatchingEngine) SubmitOrder(side, orderType string, price, quantity flo
 	}
 	e.orders[id] = ord
 
-	result := map[string]any{
-		"order_id":  id,
-		"symbol":    e.symbol,
-		"side":      side,
-		"price":     price,
-		"quantity":  quantity,
-		"status":    "NEW",
-		"filled":    0.0,
-	}
+	// Record trade sequence before matching so we can capture
+	// trades produced by this order only.
+	preTradeSeq := e.tradeSeq
 
 	if orderType == "market" {
 		e.matchMarket(ord)
-		result["status"] = "FILLED"
-		result["filled"] = ord.Filled
 	} else {
 		e.addToBook(ord)
 		e.matchLimit(ord)
-		result["filled"] = ord.Filled
-		if ord.Filled > 0 && ord.Filled < ord.Quantity {
-			result["status"] = "PARTIALLY_FILLED"
-		} else if ord.Filled >= ord.Quantity {
-			result["status"] = "FILLED"
+	}
+
+	// Collect trades produced by this order submission.
+	var orderTrades []map[string]any
+	if e.tradeSeq > preTradeSeq {
+		newCount := int(e.tradeSeq - preTradeSeq)
+		start := len(e.trades) - newCount
+		if start < 0 {
+			start = 0
 		}
+		orderTrades = make([]map[string]any, newCount)
+		copy(orderTrades, e.trades[start:])
+	}
+
+	result := map[string]any{
+		"status":   "ok",
+		"order_id": id,
+		"trades":   orderTrades,
 	}
 
 	return result, nil
@@ -211,15 +224,15 @@ func (e *MatchingEngine) matchAll() {
 	}
 }
 
+// recordTrade records a trade using Rust FFI compatible field names.
 func (e *MatchingEngine) recordTrade(buyer, seller *order, price, qty float64) {
 	e.tradeSeq++
 	trade := map[string]any{
-		"id":          e.tradeSeq,
-		"buy_order":   buyer.ID,
-		"sell_order":  seller.ID,
-		"price":       price,
-		"quantity":    qty,
-		"symbol":      e.symbol,
+		"id":            e.tradeSeq,
+		"buy_order_id":  buyer.ID,
+		"sell_order_id": seller.ID,
+		"price":         price,
+		"quantity":      qty,
 	}
 	e.trades = append(e.trades, trade)
 	if len(e.trades) > 1000 {
@@ -261,6 +274,8 @@ func (e *MatchingEngine) CancelOrder(orderID uint64) error {
 	return nil
 }
 
+// Snapshot returns the order-book snapshot in Rust FFI compatible format:
+// {"symbol":"...","best_bid":...,"best_ask":...,"spread":...,"bids":[[p,q],...],"asks":[[p,q],...]}
 func (e *MatchingEngine) Snapshot(depth int) (map[string]any, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -289,10 +304,26 @@ func (e *MatchingEngine) Snapshot(depth int) (map[string]any, error) {
 		}
 	}
 
+	// Compute best_bid, best_ask and spread exactly like the Rust engine.
+	var bestBid, bestAsk float64
+	if len(e.bids) > 0 {
+		bestBid = e.bids[0].Price
+	}
+	if len(e.asks) > 0 {
+		bestAsk = e.asks[0].Price
+	}
+	spread := bestAsk - bestBid
+	if bestAsk == 0 || bestBid == 0 {
+		spread = 0
+	}
+
 	return map[string]any{
-		"symbol": e.symbol,
-		"bids":   bids,
-		"asks":   asks,
+		"symbol":   e.symbol,
+		"best_bid": bestBid,
+		"best_ask": bestAsk,
+		"spread":   spread,
+		"bids":     bids,
+		"asks":     asks,
 	}, nil
 }
 

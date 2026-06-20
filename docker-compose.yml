@@ -45,11 +45,6 @@ services:
       # Cache (optional Redis)
       - CACHE_ENABLED=${CACHE_ENABLED:-false}
       - REDIS_URL=${REDIS_URL:-}
-      # Sandbox
-      - SANDBOX_URL=http://sandbox:9000
-      # ML Server & CCXT Bridge
-      - ML_SERVER_URL=http://ml_server:8001
-      - CCXT_BRIDGE_URL=http://ccxt_bridge:8002
       # Discord (optional)
       - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
       - DISCORD_PUBLIC_KEY=${DISCORD_PUBLIC_KEY:-}
@@ -62,15 +57,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
-    depends_on:
-      sandbox:
-        condition: service_healthy
-      ml_server:
-        condition: service_healthy
-        required: false
-      ccxt_bridge:
-        condition: service_healthy
-        required: false
     networks:
       - xiaotian
     logging:
@@ -78,91 +64,6 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-
-  sandbox:
-    build:
-      context: ./sandbox
-      dockerfile: Dockerfile
-    container_name: xiaotian-sandbox
-    ports:
-      - "9000:9000"
-    environment:
-      - SANDBOX_PORT=9000
-      - PYTHONDONTWRITEBYTECODE=1
-      - PYTHONUNBUFFERED=1
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:9000/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    deploy:
-      resources:
-        limits:
-          cpus: '2'
-          memory: 1G
-        reservations:
-          cpus: '0.5'
-          memory: 256M
-    networks:
-      - xiaotian
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-  ml_server:
-    build:
-      context: ./sandbox
-      dockerfile: Dockerfile
-    container_name: xiaotian-ml-server
-    command: python -m uvicorn ml_server.main:app --host 0.0.0.0 --port 8001
-    ports:
-      - "8001:8001"
-    environment:
-      - PYTHONDONTWRITEBYTECODE=1
-      - PYTHONUNBUFFERED=1
-    volumes:
-      - ./sandbox:/app
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8001/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
-    deploy:
-      resources:
-        limits:
-          cpus: '2'
-          memory: 2G
-    networks:
-      - xiaotian
-
-  ccxt_bridge:
-    build:
-      context: ./sandbox
-      dockerfile: Dockerfile
-    container_name: xiaotian-ccxt-bridge
-    command: python -m uvicorn ccxt_bridge.main:app --host 0.0.0.0 --port 8002
-    ports:
-      - "8002:8002"
-    environment:
-      - PYTHONDONTWRITEBYTECODE=1
-      - PYTHONUNBUFFERED=1
-    volumes:
-      - ./sandbox:/app
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8002/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
-    networks:
-      - xiaotian
 
   redis:
     image: redis:7-alpine

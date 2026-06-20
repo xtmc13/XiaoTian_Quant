@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -24,6 +23,7 @@ const (
 )
 
 // GateIOAdapter provides Gate.io REST and WebSocket integration.
+// NOTE: This is a stub adapter. Real trading is not yet implemented.
 type GateIOAdapter struct {
 	apiKey     string
 	secretKey  string
@@ -67,7 +67,7 @@ func (g *GateIOAdapter) OnOrderBook(fn func(ob model.OrderBookData)) { g.onOrder
 func (g *GateIOAdapter) OnTrade(fn func(trade model.TradeData))      { g.onTrade = fn }
 func (g *GateIOAdapter) OnKline(fn func(bar model.Bar))              { g.onKline = fn }
 
-// ── Gate.io Signing (HMAC-SHA512 of body hashed to hex) ──
+// -- Gate.io Signing (HMAC-SHA512 of body hashed to hex) --
 
 func (g *GateIOAdapter) sign(method, path, query, body string, timestamp string) string {
 	payload := strings.ToUpper(method) + "\n" + path + "\n" + query + "\n" + body + "\n" + timestamp
@@ -128,7 +128,7 @@ func sha512Hash(s string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// ── REST Market Data ──
+// -- Read-only Market Data (kept for basic use) --
 
 func (g *GateIOAdapter) GetKlines(symbol, interval string, limit int) ([][]any, error) {
 	params := url.Values{}
@@ -185,27 +185,7 @@ func (g *GateIOAdapter) GetTicker(symbol string) (map[string]any, error) {
 	return nil, fmt.Errorf("gateio ticker: empty response for %s", symbol)
 }
 
-// ── REST Trading ──
-
-func (g *GateIOAdapter) PlaceOrder(symbol, side, orderType string, price, quantity float64) (map[string]any, error) {
-	body := map[string]any{
-		"currency_pair": symbol,
-		"side":          strings.ToLower(side),
-		"type":          strings.ToLower(orderType),
-		"amount":        fmt.Sprintf("%.6f", quantity),
-	}
-	if strings.ToLower(orderType) == "limit" {
-		body["price"] = fmt.Sprintf("%.2f", price)
-		body["time_in_force"] = "gtc"
-	}
-	return g.request("POST", "/spot/orders", nil, body)
-}
-
-func (g *GateIOAdapter) CancelOrder(symbol, orderID string) (map[string]any, error) {
-	params := url.Values{}
-	params.Set("currency_pair", symbol)
-	return g.request("DELETE", "/spot/orders/"+orderID, params, nil)
-}
+// -- Read-only Account (kept for basic use) --
 
 func (g *GateIOAdapter) GetBalance() ([]map[string]any, error) {
 	result, err := g.request("GET", "/spot/accounts", nil, nil)
@@ -215,11 +195,9 @@ func (g *GateIOAdapter) GetBalance() ([]map[string]any, error) {
 
 	var accounts []map[string]any
 	if arr, ok := result["detail"]; ok {
-		// Error response
 		return nil, fmt.Errorf("balance error: %v", arr)
 	}
 
-	// Gate.io returns array directly inside result for some endpoints
 	if arr, ok := result["accounts"]; ok {
 		if list, ok2 := arr.([]any); ok2 {
 			for _, a := range list {
@@ -229,7 +207,6 @@ func (g *GateIOAdapter) GetBalance() ([]map[string]any, error) {
 			}
 		}
 	} else {
-		// Try direct array
 		raw, _ := json.Marshal(result)
 		var list []map[string]any
 		json.Unmarshal(raw, &list)
@@ -240,182 +217,32 @@ func (g *GateIOAdapter) GetBalance() ([]map[string]any, error) {
 	return accounts, nil
 }
 
-func (g *GateIOAdapter) GetPositions() ([]map[string]any, error) {
-	// Spot account doesn't have positions in the same sense
-	result, err := g.request("GET", "/futures/usdt/positions", nil, nil)
-	if err != nil {
-		return nil, err
-	}
-	var positions []map[string]any
-	if arr, ok := result["positions"]; ok {
-		if list, ok2 := arr.([]any); ok2 {
-			for _, p := range list {
-				if m, ok3 := p.(map[string]any); ok3 {
-					positions = append(positions, m)
-				}
-			}
-		}
-	}
-	return positions, nil
+// -- Stub: Trading methods not yet implemented --
+
+func (g *GateIOAdapter) PlaceOrder(symbol, side, orderType string, price, quantity float64) (map[string]any, error) {
+	return nil, stubError("gateio", "PlaceOrder")
+}
+
+func (g *GateIOAdapter) CancelOrder(symbol, orderID string) (map[string]any, error) {
+	return nil, stubError("gateio", "CancelOrder")
 }
 
 func (g *GateIOAdapter) GetOpenOrders(symbol string) ([]map[string]any, error) {
-	params := url.Values{}
-	if symbol != "" {
-		params.Set("currency_pair", symbol)
-	}
-	result, err := g.request("GET", "/spot/open_orders", params, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var orders []map[string]any
-	if arr, ok := result["orders"]; ok {
-		if list, ok2 := arr.([]any); ok2 {
-			for _, o := range list {
-				if m, ok3 := o.(map[string]any); ok3 {
-					orders = append(orders, m)
-				}
-			}
-		}
-	}
-	return orders, nil
+	return nil, stubError("gateio", "GetOpenOrders")
 }
 
-// ── WebSocket Market Streams ──
+func (g *GateIOAdapter) GetPositions() ([]map[string]any, error) {
+	return nil, stubError("gateio", "GetPositions")
+}
 
 func (g *GateIOAdapter) StartMarketStream(symbols []string) error {
-	if len(symbols) == 0 {
-		return nil
-	}
-
-	wsClient := exchange.NewWSClient(exchange.WSConfig{
-		URL: GateIOWsURL,
-		OnMessage: func(msg []byte) {
-			g.handleStreamMessage(msg)
-		},
-		OnConnected: func() {
-			g.mu.Lock()
-			g.wsConnected = true
-			g.mu.Unlock()
-			g.subscribe(symbols)
-		},
-		OnDisconnected: func(err error) {
-			g.mu.Lock()
-			g.wsConnected = false
-			g.mu.Unlock()
-			log.Printf("[GateIO] Stream disconnected: %v", err)
-		},
-	})
-
-	g.streamHub.Add("market", wsClient)
-	return wsClient.Connect()
-}
-
-func (g *GateIOAdapter) subscribe(symbols []string) {
-	client := g.streamHub.Get("market")
-	if client == nil {
-		return
-	}
-
-	var payload []string
-	for _, sym := range symbols {
-		payload = append(payload,
-			"spot.tickers:"+sym,
-			"spot.order_book_update:"+sym,
-			"spot.trades:"+sym,
-			"spot.candlesticks:"+sym+":1m",
-		)
-	}
-
-	msg := map[string]any{
-		"time":    time.Now().Unix(),
-		"channel": "spot.tickers",
-		"event":   "subscribe",
-		"payload": payload,
-	}
-	client.SendJSON(msg)
+	return stubError("gateio", "StartMarketStream")
 }
 
 func (g *GateIOAdapter) StartUserStream() error {
-	log.Printf("[GateIO] User stream not separately implemented; use private WS channel")
-	return nil
+	return stubError("gateio", "StartUserStream")
 }
 
-func (g *GateIOAdapter) handleStreamMessage(msg []byte) {
-	var raw map[string]any
-	if err := json.Unmarshal(msg, &raw); err != nil {
-		return
-	}
-
-	channel, _ := raw["channel"].(string)
-	result, _ := raw["result"].(map[string]any)
-	if result == nil {
-		return
-	}
-
-	switch {
-	case strings.HasPrefix(channel, "spot.tickers"):
-		if g.onTicker != nil {
-			currencyPair, _ := result["currency_pair"].(string)
-			g.onTicker(model.Tick{
-				Symbol:    currencyPair,
-				Last:      parseFloat(result["last"]),
-				Bid:       parseFloat(result["highest_bid"]),
-				Ask:       parseFloat(result["lowest_ask"]),
-				Volume:    parseFloat(result["quote_volume"]),
-				Timestamp: time.Now().UnixMilli(),
-			})
-		}
-	case strings.HasPrefix(channel, "spot.order_book"):
-		if g.onOrderBook != nil {
-			currencyPair, _ := result["currency_pair"].(string)
-			ob := model.OrderBookData{Symbol: currencyPair, Timestamp: time.Now().UnixMilli()}
-			if bids, ok := result["bids"].([]any); ok {
-				for _, b := range bids {
-					if arr, ok2 := b.([]any); ok2 && len(arr) >= 2 {
-						ob.Bids = append(ob.Bids, [2]float64{parseFloat(arr[0]), parseFloat(arr[1])})
-					}
-				}
-			}
-			if asks, ok := result["asks"].([]any); ok {
-				for _, a := range asks {
-					if arr, ok2 := a.([]any); ok2 && len(arr) >= 2 {
-						ob.Asks = append(ob.Asks, [2]float64{parseFloat(arr[0]), parseFloat(arr[1])})
-					}
-				}
-			}
-			g.onOrderBook(ob)
-		}
-	case strings.HasPrefix(channel, "spot.trades"):
-		if g.onTrade != nil {
-			currencyPair, _ := result["currency_pair"].(string)
-			side := "BUY"
-			if s, _ := result["side"].(string); s == "sell" {
-				side = "SELL"
-			}
-			g.onTrade(model.TradeData{
-				Symbol:    currencyPair,
-				ID:        fmt.Sprint(result["id"]),
-				Price:     parseFloat(result["price"]),
-				Quantity:  parseFloat(result["amount"]),
-				Side:      side,
-				Timestamp: time.Now().UnixMilli(),
-			})
-		}
-	case strings.Contains(channel, "candlestick"):
-		if g.onKline != nil {
-			currencyPair, _ := result["currency_pair"].(string)
-			g.onKline(model.Bar{
-				Symbol:   currencyPair,
-				Open:     parseFloat(result["o"]),
-				High:     parseFloat(result["h"]),
-				Low:      parseFloat(result["l"]),
-				Close:    parseFloat(result["c"]),
-				Volume:   parseFloat(result["v"]),
-				Interval: "1m",
-				Time:     time.Now().UnixMilli(),
-			})
-		}
-	}
+func (g *GateIOAdapter) PlaceFuturesOrder(symbol, side, orderType string, price, quantity, leverage float64, positionSide string) (map[string]any, error) {
+	return nil, stubError("gateio", "PlaceFuturesOrder")
 }
