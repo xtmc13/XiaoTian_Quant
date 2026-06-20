@@ -232,7 +232,22 @@ func (g *GateIOAdapter) GetOpenOrders(symbol string) ([]map[string]any, error) {
 }
 
 func (g *GateIOAdapter) GetPositions() ([]map[string]any, error) {
-	return nil, stubError("gateio", "GetPositions")
+	result, err := g.request("GET", "/futures/positions", nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	var positions []map[string]any
+	if arr, ok := result["positions"].([]any); ok {
+		for _, p := range arr {
+			if m, ok := p.(map[string]any); ok {
+				positions = append(positions, m)
+			}
+		}
+	} else {
+		raw, _ := json.Marshal(result)
+		json.Unmarshal(raw, &positions)
+	}
+	return positions, nil
 }
 
 func (g *GateIOAdapter) StartMarketStream(symbols []string) error {

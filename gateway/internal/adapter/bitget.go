@@ -193,7 +193,21 @@ func (b *BitgetAdapter) GetOpenOrders(symbol string) ([]map[string]any, error) {
 }
 
 func (b *BitgetAdapter) GetPositions() ([]map[string]any, error) {
-	return nil, stubError("bitget", "GetPositions")
+	result, err := b.signedRequest("GET", "/mix/position/allPosition?productType=USDT-FUTURES", nil)
+	if err != nil {
+		return nil, err
+	}
+	data, ok := result["data"].([]any)
+	if !ok {
+		return nil, fmt.Errorf("bitget positions: unexpected format")
+	}
+	out := make([]map[string]any, 0, len(data))
+	for _, item := range data {
+		if m, ok := item.(map[string]any); ok {
+			out = append(out, m)
+		}
+	}
+	return out, nil
 }
 
 func (b *BitgetAdapter) StartMarketStream(symbols []string) error {

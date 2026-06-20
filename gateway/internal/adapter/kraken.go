@@ -321,7 +321,21 @@ func (k *KrakenAdapter) GetOpenOrders(symbol string) ([]map[string]any, error) {
 }
 
 func (k *KrakenAdapter) GetPositions() ([]map[string]any, error) {
-	return nil, stubError("kraken", "GetPositions")
+	result, err := k.privateRequest("/0/private/OpenPositions", url.Values{"docalcs": []string{"true"}})
+	if err != nil {
+		return nil, err
+	}
+	positions, ok := result["result"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("kraken positions: unexpected format")
+	}
+	out := make([]map[string]any, 0, len(positions))
+	for _, p := range positions {
+		if m, ok := p.(map[string]any); ok {
+			out = append(out, m)
+		}
+	}
+	return out, nil
 }
 
 func (k *KrakenAdapter) StartMarketStream(symbols []string) error {
