@@ -17,13 +17,13 @@ import { Badge } from '@/components/ui/Badge'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { Slider } from '@/components/ui/Slider'
 import { Switch } from '@/components/ui/Switch'
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/Select'
+import Select from '@/components/ui/Select'
 import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { KPIGrid, type KPICardItem } from '@/components/ui/KPICard'
 import { AsyncDataWrapper } from '@/components/ui/AsyncDataWrapper'
 import { cn } from '@/lib/utils'
-import { executorApi } from '@/lib/api'
+import { aiRobotApi } from '@/lib/api'
 import type { AIStatus, AISignal } from '@/types'
 
 const modelOptions = [
@@ -74,13 +74,23 @@ export const AIRobotPanel: React.FC = () => {
 
   const { data: status, isLoading: statusLoading } = useQuery({
     queryKey: ['ai', 'status'],
-    queryFn: () => executorApi.getAIStatus().then((r) => r.data),
+    queryFn: () => aiRobotApi.getConfig().then((r) => {
+      const cfg = r.data;
+      return {
+        signals_today: 0,
+        avg_confidence: cfg.confidence_threshold || 60,
+        filter_rate: 0,
+        win_rate: 0,
+        model: cfg.model || 'deepseek',
+        enabled: cfg.enabled || false,
+      } as AIStatus;
+    }),
     refetchInterval: 10000,
   })
 
   const { data: signals, isLoading: signalsLoading } = useQuery({
     queryKey: ['ai', 'signals'],
-    queryFn: () => executorApi.getAISignals({ limit: 20 }).then((r) => r.data?.signals || []),
+    queryFn: () => aiRobotApi.getSignals({ limit: 20 }).then((r) => r.data?.signals || []),
     refetchInterval: 30000,
   })
 
@@ -90,22 +100,15 @@ export const AIRobotPanel: React.FC = () => {
       <SectionCard title="AI 模型配置">
         <div className="space-y-4">
           <div>
-            <label className="block text-sm text-[#aaa] mb-2">选择模型</label>
-            <Select value={selectedModel} onValueChange={setSelectedModel}>
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {modelOptions.map((opt) => (
-                  <SelectItem key={opt.value} value={opt.value}>
-                    <div>
-                      <div className="font-medium">{opt.label}</div>
-                      <div className="text-xs text-[#888]">{opt.description}</div>
-                    </div>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Select
+              label="选择模型"
+              value={selectedModel}
+              onChange={(e) => setSelectedModel(e.target.value)}
+              options={modelOptions.map((opt) => ({ value: opt.value, label: opt.label }))}
+            />
+            <p className="text-xs text-[#666] mt-1">
+              {modelOptions.find((o) => o.value === selectedModel)?.description}
+            </p>
           </div>
 
           <div>

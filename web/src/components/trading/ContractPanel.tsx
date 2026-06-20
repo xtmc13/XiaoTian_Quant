@@ -13,7 +13,7 @@ import {
 import { SectionCard } from '@/components/ui/SectionCard'
 import { Badge } from '@/components/ui/Badge'
 import { Slider } from '@/components/ui/Slider'
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/Select'
+import Select from '@/components/ui/Select'
 import { Switch } from '@/components/ui/Switch'
 import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -73,9 +73,22 @@ export const ContractPanel: React.FC = () => {
   const [trendFollowing, setTrendFollowing] = useState(false)
   const [maxPositions, setMaxPositions] = useState(10)
 
-  const { data: status, isLoading } = useQuery({
+  const { data: status, isLoading } = useQuery<ContractStatus>({
     queryKey: ['contract', 'status'],
-    queryFn: () => contractApi.getMarginInfo().then((r) => r.data),
+    queryFn: () => contractApi.getMarginInfo().then((r) => {
+      const m = r.data;
+      return {
+        leverage: m.leverage,
+        available_margin: m.available_balance,
+        margin_ratio: m.margin_balance > 0 ? m.maintenance_margin / m.margin_balance : 0,
+        liquidation_price: m.liquidation_price,
+        wallet_balance: m.wallet_balance,
+        margin_balance: m.margin_balance,
+        maintenance_margin: m.maintenance_margin,
+        unrealized_pnl: m.unrealized_pnl,
+        margin_mode: m.margin_mode,
+      };
+    }),
     refetchInterval: 10000,
   })
 
@@ -139,67 +152,55 @@ export const ContractPanel: React.FC = () => {
           </div>
 
           {/* Direction */}
-          <div>
-            <label className="block text-sm text-[#aaa] mb-2">开仓方向</label>
-            <Select value={direction} onValueChange={setDirection}>
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="long">仅做多</SelectItem>
-                <SelectItem value="short">仅做空</SelectItem>
-                <SelectItem value="both">双向</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+          <Select
+            label="开仓方向"
+            value={direction}
+            onChange={(e) => setDirection(e.target.value)}
+            options={[
+              { value: 'long', label: '仅做多' },
+              { value: 'short', label: '仅做空' },
+              { value: 'both', label: '双向' },
+            ]}
+          />
 
           {/* Margin Mode */}
-          <div>
-            <label className="block text-sm text-[#aaa] mb-2">保证金模式</label>
-            <Select value={marginMode} onValueChange={setMarginMode}>
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="isolated">逐仓</SelectItem>
-                <SelectItem value="cross">全仓</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+          <Select
+            label="保证金模式"
+            value={marginMode}
+            onChange={(e) => setMarginMode(e.target.value)}
+            options={[
+              { value: 'isolated', label: '逐仓' },
+              { value: 'cross', label: '全仓' },
+            ]}
+          />
 
           {/* Open Indicator */}
-          <div>
-            <label className="block text-sm text-[#aaa] mb-2">开仓指标</label>
-            <Select value={indicator} onValueChange={setIndicator}>
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="macd_golden">MACD 金叉死叉</SelectItem>
-                <SelectItem value="ema_counter">EMA60 逆势</SelectItem>
-                <SelectItem value="ema_follow">EMA60+10 顺势</SelectItem>
-                <SelectItem value="none">无指标</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+          <Select
+            label="开仓指标"
+            value={indicator}
+            onChange={(e) => setIndicator(e.target.value)}
+            options={[
+              { value: 'macd_golden', label: 'MACD 金叉死叉' },
+              { value: 'ema_counter', label: 'EMA60 逆势' },
+              { value: 'ema_follow', label: 'EMA60+10 顺势' },
+              { value: 'none', label: '无指标' },
+            ]}
+          />
 
           {/* Timeframe */}
-          <div>
-            <label className="block text-sm text-[#aaa] mb-2">指标时间周期</label>
-            <Select value={timeframe} onValueChange={setTimeframe}>
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="5m">5分钟</SelectItem>
-                <SelectItem value="15m">15分钟</SelectItem>
-                <SelectItem value="30m">30分钟</SelectItem>
-                <SelectItem value="1h">1小时</SelectItem>
-                <SelectItem value="4h">4小时</SelectItem>
-                <SelectItem value="8h">8小时</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+          <Select
+            label="指标时间周期"
+            value={timeframe}
+            onChange={(e) => setTimeframe(e.target.value)}
+            options={[
+              { value: '5m', label: '5分钟' },
+              { value: '15m', label: '15分钟' },
+              { value: '30m', label: '30分钟' },
+              { value: '1h', label: '1小时' },
+              { value: '4h', label: '4小时' },
+              { value: '8h', label: '8小时' },
+            ]}
+          />
 
           {/* Trend Following */}
           <div className="flex items-center justify-between">

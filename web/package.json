@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && xcopy \"dist\\*\" \"..\\gateway\\spa\\\" /E /Y /I",
+    "build": "vite build && cp -r dist/* ../gateway/spa/ 2>/dev/null || true",
     "build:analyze": "vite build --mode analyze",
     "type-check": "tsc --noEmit",
     "preview": "vite preview",

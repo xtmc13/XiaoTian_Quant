@@ -1445,6 +1445,15 @@ export interface AIRobotConfig {
   updated_at?: string
 }
 
+export interface AIStatus {
+  signals_today: number
+  avg_confidence: number
+  filter_rate: number
+  win_rate: number
+  model: string
+  enabled: boolean
+}
+
 export interface AISignal {
   id: string
   symbol: string
@@ -1452,6 +1461,10 @@ export interface AISignal {
   confidence: number
   model: string
   indicators: Record<string, number>
+  reason?: string
+  filters?: string[]
+  market_condition?: string
+  timestamp: string
   executed: boolean
   created_at: string
 }
@@ -1459,6 +1472,18 @@ export interface AISignal {
 /* ═══════════════════════════════════════════════════════════════════
    Contract Trading
    ═══════════════════════════════════════════════════════════════════ */
+
+export interface ContractStatus {
+  leverage: number
+  available_margin: number
+  margin_ratio: number
+  liquidation_price?: number
+  wallet_balance: number
+  margin_balance: number
+  maintenance_margin: number
+  unrealized_pnl: number
+  margin_mode: 'isolated' | 'cross'
+}
 
 export interface ContractParams {
   leverage: number
