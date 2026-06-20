@@ -1,360 +1,237 @@
 import React, { useState } from 'react'
-import { useForm } from 'react-hook-form'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import {
   BrainCircuit,
-  Save,
-  Signal,
+  Activity,
   BarChart3,
-  Volume2,
+  Shield,
+  Clock,
+  Gauge,
+  Sparkles,
   TrendingUp,
-  Filter,
+  TrendingDown,
   Zap,
-  ChevronRight,
-  AlertCircle,
 } from 'lucide-react'
-import { cn } from '@/lib/utils'
 import { SectionCard } from '@/components/ui/SectionCard'
-import { Input } from '@/components/ui/Input'
-import { Select } from '@/components/ui/Select'
-import { Switch } from '@/components/ui/Switch'
-import { Slider } from '@/components/ui/Slider'
-import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import { Skeleton } from '@/components/ui/Skeleton'
-import { aiRobotApi } from '@/lib/api'
-import type { AIRobotConfig, AISignal } from '@/types'
+import { Slider } from '@/components/ui/Slider'
+import { Switch } from '@/components/ui/Switch'
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/Select'
+import { Button } from '@/components/ui/Button'
+import { EmptyState } from '@/components/ui/EmptyState'
+import { KPIGrid, type KPICardItem } from '@/components/ui/KPICard'
+import { AsyncDataWrapper } from '@/components/ui/AsyncDataWrapper'
+import { cn } from '@/lib/utils'
+import { executorApi } from '@/lib/api'
+import type { AIStatus, AISignal } from '@/types'
 
-const TIMEFRAME_OPTIONS = [
-  { value: '5m', label: '5 分钟' },
-  { value: '15m', label: '15 分钟' },
-  { value: '30m', label: '30 分钟' },
-  { value: '1h', label: '1 小时' },
-  { value: '4h', label: '4 小时' },
-  { value: '1d', label: '1 天' },
+const modelOptions = [
+  { value: 'deepseek', label: 'DeepSeek V3', description: '深度思考，适合策略分析' },
+  { value: 'openai', label: 'GPT-4o', description: '通用能力强，适合多维度分析' },
+  { value: 'claude', label: 'Claude 3.5', description: '擅长长文本，适合报告生成' },
 ]
 
-interface AIConfigFormValues {
-  model: string
-  confidence_threshold: number
-  scan_interval_seconds: number
-  min_volume_24h: number
-  max_volatility: number
-  trend_timeframe: string
-  require_trend_alignment: boolean
-  filter_whitelist_only: boolean
+function buildAIKPIItems(status: AIStatus): KPICardItem[] {
+  return [
+    {
+      label: '今日信号',
+      value: status.signals_today,
+      icon: <Activity className="w-4 h-4 text-[#1890ff]" />,
+      variant: 'info',
+    },
+    {
+      label: '平均置信度',
+      value: `${status.avg_confidence}%`,
+      icon: <Gauge className="w-4 h-4 text-[#faad14]" />,
+      variant: 'warning',
+    },
+    {
+      label: '过滤率',
+      value: `${status.filter_rate}%`,
+      icon: <Shield className="w-4 h-4 text-[#52c41a]" />,
+      variant: 'success',
+    },
+    {
+      label: '胜率',
+      value: `${status.win_rate}%`,
+      icon:
+        (status.win_rate || 0) > 50 ? (
+          <TrendingUp className="w-4 h-4 text-[#52c41a]" />
+        ) : (
+          <TrendingDown className="w-4 h-4 text-[#f5222d]" />
+        ),
+      variant: (status.win_rate || 0) > 50 ? 'success' : 'error',
+    },
+  ]
 }
 
-const DEFAULT_VALUES: AIConfigFormValues = {
-  model: 'gpt-4',
-  confidence_threshold: 0.7,
-  scan_interval_seconds: 60,
-  min_volume_24h: 1000000,
-  max_volatility: 5,
-  trend_timeframe: '1h',
-  require_trend_alignment: true,
-  filter_whitelist_only: false,
-}
+export const AIRobotPanel: React.FC = () => {
+  const [selectedModel, setSelectedModel] = useState('deepseek')
+  const [confidenceThreshold, setConfidenceThreshold] = useState(60)
+  const [scanInterval, setScanInterval] = useState(300)
+  const [marketFilterEnabled, setMarketFilterEnabled] = useState(true)
 
-/* ── Recent Signals ── */
-interface RecentSignalsProps {
-  signals: AISignal[] | undefined
-  isLoading: boolean
-}
+  const { data: status, isLoading: statusLoading } = useQuery({
+    queryKey: ['ai', 'status'],
+    queryFn: () => executorApi.getAIStatus().then((r) => r.data),
+    refetchInterval: 10000,
+  })
 
-const RecentSignalsView: React.FC<RecentSignalsProps> = ({ signals, isLoading }) => {
-  if (isLoading) {
-    return (
-      <div className="space-y-2">
-        {Array.from({ length: 5 }).map((_, i) => (
-          <Skeleton key={i} className="h-12 rounded-lg" />
-        ))}
-      </div>
-    )
-  }
-
-  if (!signals || signals.length === 0) {
-    return (
-      <div className="text-center py-8 text-[#555]">
-        <Signal className="w-8 h-8 mx-auto mb-2 opacity-50" />
-        <p className="text-sm">暂无 AI 信号</p>
-      </div>
-    )
-  }
-
-  const getConfidenceColor = (c: number) => {
-    if (c >= 0.8) return 'text-[#52c41a]'
-    if (c >= 0.6) return 'text-[#faad14]'
-    return 'text-[#f5222d]'
-  }
-
-  const getConfidenceBg = (c: number) => {
-    if (c >= 0.8) return 'bg-[#52c41a]/10 border-[#52c41a]/20'
-    if (c >= 0.6) return 'bg-[#faad14]/10 border-[#faad14]/20'
-    return 'bg-[#f5222d]/10 border-[#f5222d]/20'
-  }
+  const { data: signals, isLoading: signalsLoading } = useQuery({
+    queryKey: ['ai', 'signals'],
+    queryFn: () => executorApi.getAISignals({ limit: 20 }).then((r) => r.data?.signals || []),
+    refetchInterval: 30000,
+  })
 
   return (
-    <div className="space-y-2 max-h-96 overflow-y-auto">
-      {signals.map((sig) => (
-        <div
-          key={sig.id}
-          className={cn(
-            'flex items-center justify-between rounded-xl border p-3 transition-all',
-            getConfidenceBg(sig.confidence)
-          )}
-        >
-          <div className="flex items-center gap-3">
-            <Badge variant={sig.side === 'buy' ? 'success' : 'error'}>
-              {sig.side === 'buy' ? '买入' : '卖出'}
-            </Badge>
-            <span className="text-sm font-medium text-[#e0e0e0]">{sig.symbol}</span>
-            <span className="text-xs text-[#888]">{sig.model}</span>
+    <div className="space-y-5">
+      {/* Model Selection */}
+      <SectionCard title="AI 模型配置">
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm text-[#aaa] mb-2">选择模型</label>
+            <Select value={selectedModel} onValueChange={setSelectedModel}>
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {modelOptions.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    <div>
+                      <div className="font-medium">{opt.label}</div>
+                      <div className="text-xs text-[#888]">{opt.description}</div>
+                    </div>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-1">
-              <Zap className={cn('w-3 h-3', getConfidenceColor(sig.confidence))} />
-              <span className={cn('text-sm font-semibold', getConfidenceColor(sig.confidence))}>
-                {(sig.confidence * 100).toFixed(0)}%
-              </span>
+
+          <div>
+            <label className="block text-sm text-[#aaa] mb-2">
+              置信度门限: {confidenceThreshold}%
+            </label>
+            <Slider
+              value={confidenceThreshold}
+              onChange={setConfidenceThreshold}
+              min={0}
+              max={100}
+              step={5}
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm text-[#aaa] mb-2">
+              扫描间隔: {Math.floor(scanInterval / 60)}分钟
+            </label>
+            <Slider
+              value={scanInterval}
+              onChange={setScanInterval}
+              min={60}
+              max={3600}
+              step={60}
+            />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Shield className="w-4 h-4 text-[#52c41a]" />
+              <span className="text-sm text-[#ccc]">市场条件过滤</span>
+              <Badge variant="info">Beta</Badge>
             </div>
-            <span className="text-[10px] text-[#555]">
-              {new Date(sig.created_at).toLocaleTimeString()}
-            </span>
-            {sig.executed && (
-              <Badge variant="success" className="text-[10px]">已执行</Badge>
-            )}
+            <Switch checked={marketFilterEnabled} onCheckedChange={setMarketFilterEnabled} />
           </div>
+
+          <Button variant="primary" className="w-full">
+            <Sparkles className="w-4 h-4 mr-1" />
+            保存配置
+          </Button>
         </div>
-      ))}
+      </SectionCard>
+
+      {/* KPI */}
+      <KPIGrid
+        items={status ? buildAIKPIItems(status) : Array.from({ length: 4 }, (_, i) => ({ label: '-', value: '-', icon: null, variant: 'default' as const }))}
+        isLoading={statusLoading}
+      />
+
+      {/* Recent Signals */}
+      <SectionCard title="最近信号">
+        <AsyncDataWrapper
+          isLoading={signalsLoading}
+          data={signals}
+          skeleton={<Skeleton className="h-40 rounded-xl" />}
+          empty={<EmptyState icon={<BrainCircuit className="w-8 h-8" />} title="暂无AI信号" />}
+        >
+          {(items) => (
+            <div className="space-y-2" style={{ maxHeight: '400px', overflowY: 'auto' }}>
+              {items.map((signal: AISignal) => (
+                <div
+                  key={signal.id}
+                  className="rounded-xl border border-[#1c1c1c] bg-[#0a0a0a] p-3"
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <Badge
+                        variant={
+                          signal.signal === 'buy'
+                            ? 'success'
+                            : signal.signal === 'sell'
+                              ? 'error'
+                              : 'neutral'
+                        }
+                      >
+                        {signal.signal === 'buy' ? '买入' : signal.signal === 'sell' ? '卖出' : '观望'}
+                      </Badge>
+                      <span className="text-sm font-medium text-[#e0e0e0]">
+                        {signal.symbol}
+                      </span>
+                    </div>
+                    <ConfidenceBadge value={signal.confidence} />
+                  </div>
+
+                  {signal.reason && (
+                    <p className="text-xs text-[#888] mb-2 line-clamp-2">{signal.reason}</p>
+                  )}
+
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    {signal.filters?.map((f: string) => (
+                      <Badge key={f} variant="info" className="text-[10px]">
+                        {f}
+                      </Badge>
+                    ))}
+                  </div>
+
+                  <div className="flex items-center justify-between text-xs text-[#555]">
+                    <span>
+                      <Clock className="w-3 h-3 inline mr-1" />
+                      {new Date(signal.timestamp).toLocaleTimeString('zh-CN')}
+                    </span>
+                    {signal.market_condition && (
+                      <span>
+                        <Zap className="w-3 h-3 inline mr-1" />
+                        {signal.market_condition}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </AsyncDataWrapper>
+      </SectionCard>
     </div>
   )
 }
 
-/* ── Main Panel ── */
-export const AIRobotPanel: React.FC = () => {
-  const queryClient = useQueryClient()
-  const [savedOk, setSavedOk] = useState(false)
-
-  const { data: config, isLoading: configLoading } = useQuery({
-    queryKey: ['ai-robot', 'config'],
-    queryFn: () => aiRobotApi.getConfig().then((r) => r.data),
-  })
-
-  const { data: models } = useQuery({
-    queryKey: ['ai-robot', 'models'],
-    queryFn: () => aiRobotApi.getModels().then((r) => r.data?.models || []),
-  })
-
-  const { data: signals, isLoading: signalsLoading } = useQuery({
-    queryKey: ['ai-robot', 'signals'],
-    queryFn: () => aiRobotApi.getSignals({ limit: 50 }).then((r) => r.data?.signals || []),
-    refetchInterval: 30000,
-  })
-
-  const {
-    register,
-    handleSubmit,
-    watch,
-    setValue,
-    reset,
-    formState: { errors },
-  } = useForm<AIConfigFormValues>({
-    defaultValues: DEFAULT_VALUES,
-  })
-
-  const confidenceThreshold = watch('confidence_threshold')
-  const scanInterval = watch('scan_interval_seconds')
-  const minVolume = watch('min_volume_24h')
-  const maxVolatility = watch('max_volatility')
-  const trendAlignment = watch('require_trend_alignment')
-  const whitelistOnly = watch('filter_whitelist_only')
-
-  React.useEffect(() => {
-    if (config) {
-      reset({
-        model: config.model || 'gpt-4',
-        confidence_threshold: config.confidence_threshold ?? 0.7,
-        scan_interval_seconds: config.scan_interval_seconds ?? 60,
-        min_volume_24h: config.market_filters?.min_volume_24h ?? 1000000,
-        max_volatility: config.market_filters?.max_volatility ?? 5,
-        trend_timeframe: config.market_filters?.trend_timeframe || '1h',
-        require_trend_alignment: config.market_filters?.require_trend_alignment ?? true,
-        filter_whitelist_only: config.market_filters?.filter_whitelist_only ?? false,
-      })
-    }
-  }, [config, reset])
-
-  const saveMutation = useMutation({
-    mutationFn: (data: AIRobotConfig) => aiRobotApi.saveConfig(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['ai-robot', 'config'] })
-      setSavedOk(true)
-      setTimeout(() => setSavedOk(false), 3000)
-    },
-  })
-
-  const handleFormSubmit = (values: AIConfigFormValues) => {
-    const payload: AIRobotConfig = {
-      model: values.model,
-      confidence_threshold: values.confidence_threshold,
-      scan_interval_seconds: values.scan_interval_seconds,
-      enabled: true,
-      market_filters: {
-        min_volume_24h: values.min_volume_24h,
-        max_volatility: values.max_volatility,
-        trend_timeframe: values.trend_timeframe,
-        require_trend_alignment: values.require_trend_alignment,
-        filter_whitelist_only: values.filter_whitelist_only,
-      },
-    }
-    saveMutation.mutate(payload)
-  }
-
-  const modelOptions = (models || ['gpt-4', 'gpt-4o', 'gpt-3.5-turbo', 'claude-3']).map((m) => ({
-    value: m,
-    label: m,
-  }))
-
+const ConfidenceBadge: React.FC<{ value: number }> = ({ value }) => {
+  const variant = value >= 80 ? 'success' : value >= 60 ? 'warning' : 'error'
+  const label = value >= 80 ? '高' : value >= 60 ? '中' : '低'
   return (
-    <form onSubmit={handleSubmit(handleFormSubmit)} className="space-y-5">
-      {/* Model Selection */}
-      <SectionCard title="AI 模型配置" headerAction={<BrainCircuit className="w-4 h-4 text-[#722ed1]" />}>
-        <div className="space-y-4">
-          <Select
-            label="AI 模型"
-            options={modelOptions}
-            {...register('model')}
-          />
-          <div>
-            <Slider
-              label="置信度门限"
-              min={0.1}
-              max={1.0}
-              step={0.05}
-              value={confidenceThreshold}
-              onChange={(v) => setValue('confidence_threshold', v)}
-              valueFormatter={(v) => `${(v * 100).toFixed(0)}%`}
-            />
-            <p className="text-[10px] text-[#555] mt-1">
-              低于此门限的信号将被过滤掉
-            </p>
-          </div>
-          <Input
-            label="扫描间隔 (秒)"
-            type="number"
-            min={10}
-            max={3600}
-            helperText="AI 扫描市场的间隔时间"
-            {...register('scan_interval_seconds', {
-              required: true,
-              valueAsNumber: true,
-              min: { value: 10, message: '最小10秒' },
-              max: { value: 3600, message: '最大3600秒' },
-            })}
-            error={errors.scan_interval_seconds?.message}
-          />
-        </div>
-      </SectionCard>
-
-      {/* Market Filters */}
-      <SectionCard title="市场条件过滤" headerAction={<Filter className="w-4 h-4 text-[#1890ff]" />}>
-        <div className="space-y-4">
-          <Input
-            label="最小24H成交量 (USDT)"
-            type="number"
-            min={0}
-            step={100000}
-            leftIcon={<Volume2 className="w-4 h-4" />}
-            {...register('min_volume_24h', {
-              required: true,
-              valueAsNumber: true,
-            })}
-            error={errors.min_volume_24h?.message}
-          />
-          <Input
-            label="最大波动率限制 (%)"
-            type="number"
-            min={0.1}
-            max={20}
-            step={0.1}
-            leftIcon={<AlertCircle className="w-4 h-4" />}
-            helperText="超过此波动率的市场将被忽略"
-            {...register('max_volatility', {
-              required: true,
-              valueAsNumber: true,
-              min: { value: 0.1, message: '最小0.1%' },
-              max: { value: 20, message: '最大20%' },
-            })}
-            error={errors.max_volatility?.message}
-          />
-          <Select
-            label="趋势周期"
-            options={TIMEFRAME_OPTIONS}
-            {...register('trend_timeframe')}
-          />
-          <div className="flex items-center gap-4 pt-1">
-            <Switch
-              label="要求趋势对齐"
-              checked={trendAlignment}
-              onChange={(e) => setValue('require_trend_alignment', e.target.checked)}
-            />
-            <Switch
-              label="仅白名单币种"
-              checked={whitelistOnly}
-              onChange={(e) => setValue('filter_whitelist_only', e.target.checked)}
-            />
-          </div>
-        </div>
-      </SectionCard>
-
-      {/* Config Summary */}
-      <div className="flex flex-wrap gap-2">
-        <Badge variant="info">
-          <BrainCircuit className="w-3 h-3 inline mr-1" />
-          {watch('model') || 'gpt-4'}
-        </Badge>
-        <Badge variant={confidenceThreshold >= 0.7 ? 'success' : 'warning'}>
-          置信度 {(confidenceThreshold * 100).toFixed(0)}%
-        </Badge>
-        <Badge variant="neutral">
-          扫描 {scanInterval}s
-        </Badge>
-        <Badge variant="neutral">
-          <Volume2 className="w-3 h-3 inline mr-1" />
-          最低 ${(minVolume / 1e6).toFixed(1)}M
-        </Badge>
-        {trendAlignment && (
-          <Badge variant="success">
-            <TrendingUp className="w-3 h-3 inline mr-1" />
-            趋势对齐
-          </Badge>
-        )}
-        {whitelistOnly && (
-          <Badge variant="warning">白名单</Badge>
-        )}
-      </div>
-
-      {/* Save Button */}
-      <div className="flex items-center gap-3 pt-2">
-        <Button
-          type="submit"
-          variant="primary"
-          isLoading={saveMutation.isPending}
-          leftIcon={<Save className="w-4 h-4" />}
-        >
-          保存 AI 配置
-        </Button>
-        {savedOk && (
-          <Badge variant="success">保存成功</Badge>
-        )}
-      </div>
-
-      {/* Recent Signals */}
-      <SectionCard title="最近信号" headerAction={<BarChart3 className="w-4 h-4 text-[#52c41a]" />}>
-        <RecentSignalsView signals={signals} isLoading={signalsLoading} />
-      </SectionCard>
-    </form>
+    <Badge variant={variant}>
+      {value}% {label}
+    </Badge>
   )
 }
 

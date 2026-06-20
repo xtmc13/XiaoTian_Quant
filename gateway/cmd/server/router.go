@@ -194,6 +194,36 @@ func registerConfigRoutes(api *gin.RouterGroup) {
 	private.POST("/ai/test", handler.AITest)
 	private.POST("/ai/default", handler.AIDefault)
 	private.POST("/restart", handler.Restart)
+
+	// ── SignalExecutor ──
+	private.GET("/executor/status", handler.ExecutorStatus)
+	private.GET("/executor/positions", handler.ExecutorPositions)
+	private.GET("/executor/records", handler.ExecutionRecords)
+	private.GET("/executor/signal-sources", handler.ExecutorSignalSources)
+
+	// ── Contract ──
+	private.GET("/contract/leverage", handler.ContractLeverageGet)
+	private.POST("/contract/leverage", handler.ContractLeverageSet)
+	private.GET("/contract/margin", handler.ContractMarginInfo)
+	private.GET("/contract/liquidation-price", handler.ContractLiquidationPrice)
+	private.GET("/contract/params", handler.ContractParamsGet)
+	private.POST("/contract/params", handler.ContractParamsSave)
+
+	// ── AI Robot ──
+	private.GET("/ai/status", handler.AIRobotStatus)
+	private.GET("/ai/signals", handler.AISignals)
+
+	// ── Martin / WallStreet Strategies ──
+	private.GET("/strategies/martin", handler.StrategyMartinList)
+	private.POST("/strategies/martin", handler.StrategyMartinCreate)
+	private.PUT("/strategies/martin/:id", handler.StrategyMartinUpdate)
+	private.DELETE("/strategies/martin/:id", handler.StrategyMartinDelete)
+	private.GET("/strategies/wallstreet", handler.StrategyWallStreetList)
+	private.POST("/strategies/wallstreet", handler.StrategyWallStreetCreate)
+	private.PUT("/strategies/wallstreet/:id", handler.StrategyWallStreetUpdate)
+	private.DELETE("/strategies/wallstreet/:id", handler.StrategyWallStreetDelete)
+	private.POST("/strategies/position-sizes", handler.PositionSizesCalculate)
+	private.POST("/strategies/flash-crash-check", handler.FlashCrashCheck)
 }
 
 func registerOrderRoutes(api *gin.RouterGroup) {

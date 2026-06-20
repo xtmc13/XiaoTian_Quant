@@ -1,167 +1,61 @@
-import React from "react";
-import { cn } from "@/lib/utils";
-import { ArrowUpRight, ArrowDownRight, ChevronRight } from "lucide-react";
+import React from 'react'
+import { Skeleton } from '@/components/ui/Skeleton'
+import { cn } from '@/lib/utils'
 
-export interface KPICardProps {
-  icon: React.ReactNode;
-  label: string;
-  value: string | number;
-  subValue?: string | number;
-  subLabel?: string;
-  trend?: "up" | "down" | "neutral";
-  ringProgress?: number; // 0 - 100
-  primary?: boolean;
-  onClick?: () => void;
-  onNavigate?: () => void;
-  className?: string;
+export interface KPICardItem {
+  label: string
+  value: string | number
+  icon: React.ReactNode
+  variant?: 'default' | 'success' | 'error' | 'warning' | 'info'
 }
 
-export const KPICard: React.FC<KPICardProps> = React.memo(function KPICard({
-  icon,
-  label,
-  value,
-  subValue,
-  subLabel,
-  trend = "neutral",
-  ringProgress,
-  primary = false,
-  onClick,
-  onNavigate,
-  className,
-}) {
-  const size = 56;
-  const stroke = 4;
-  const radius = (size - stroke) / 2;
-  const circumference = 2 * Math.PI * radius;
-  const offset =
-    ringProgress !== undefined
-      ? circumference - (ringProgress / 100) * circumference
-      : circumference;
+interface KPICardProps extends KPICardItem {}
+
+const variantStyles: Record<string, { label: string; value: string }> = {
+  default:  { label: 'text-[#888]', value: 'text-[#e0e0e0]' },
+  success:  { label: 'text-[#888]', value: 'text-[#52c41a]' },
+  error:    { label: 'text-[#888]', value: 'text-[#f5222d]' },
+  warning:  { label: 'text-[#888]', value: 'text-[#faad14]' },
+  info:     { label: 'text-[#888]', value: 'text-[#1890ff]' },
+}
+
+export const KPICard: React.FC<KPICardProps> = ({ label, value, icon, variant = 'default' }) => {
+  const styles = variantStyles[variant] || variantStyles.default
+  return (
+    <div className="rounded-xl border border-[#1c1c1c] bg-[#111] p-4">
+      <div className="flex items-center gap-2 mb-2">
+        {icon}
+        <span className={cn('text-xs', styles.label)}>{label}</span>
+      </div>
+      <div className={cn('text-lg font-semibold', styles.value)}>{value}</div>
+    </div>
+  )
+}
+
+interface KPIGridProps {
+  items: KPICardItem[]
+  isLoading?: boolean
+  className?: string
+}
+
+export const KPIGrid: React.FC<KPIGridProps> = ({ items, isLoading, className }) => {
+  if (isLoading) {
+    return (
+      <div className={cn('grid grid-cols-2 sm:grid-cols-4 gap-3', className)}>
+        {Array.from({ length: items.length || 4 }).map((_, i) => (
+          <Skeleton key={i} className="h-20 rounded-xl" />
+        ))}
+      </div>
+    )
+  }
 
   return (
-    <div
-      onClick={onClick}
-      className={cn(
-        "relative rounded-xl border bg-[#111111] p-5 transition-all duration-300",
-        "border-[#1c1c1c] hover:border-[#2a2a2a]",
-        primary &&
-          "border-[#2a2a2a] shadow-[0_0_20px_rgba(255,255,255,0.04)]",
-        onClick && "cursor-pointer",
-        className
-      )}
-    >
-      {/* Glow effect for primary card */}
-      {primary && (
-        <div className="pointer-events-none absolute inset-0 rounded-xl ring-1 ring-inset ring-white/5" />
-      )}
-
-      <div className="flex items-start justify-between">
-        {/* Left content */}
-        <div className="flex-1">
-          <div className="flex items-center gap-2 text-[#888888]">
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#141414]">
-              {icon}
-            </span>
-            <span className="text-xs font-medium uppercase tracking-wider">
-              {label}
-            </span>
-          </div>
-
-          <div className="mt-3">
-            <div className="text-2xl font-semibold tracking-tight text-white">
-              {value}
-            </div>
-
-            {(subValue || subLabel) && (
-              <div className="mt-1 flex items-center gap-2">
-                {trend !== "neutral" && (
-                  <span
-                    className={cn(
-                      "flex items-center text-xs font-medium",
-                      trend === "up" ? "text-emerald-400" : "text-red-400"
-                    )}
-                  >
-                    {trend === "up" ? (
-                      <ArrowUpRight className="mr-0.5 h-3 w-3" />
-                    ) : (
-                      <ArrowDownRight className="mr-0.5 h-3 w-3" />
-                    )}
-                    {subValue}
-                  </span>
-                )}
-                {trend === "neutral" && subValue && (
-                  <span className="text-xs font-medium text-[#999999]">
-                    {subValue}
-                  </span>
-                )}
-                {subLabel && (
-                  <span className="text-xs text-[#8a8a8a]">{subLabel}</span>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Right: ring progress + navigate arrow */}
-        <div className="flex flex-col items-end gap-3">
-          {ringProgress !== undefined && (
-            <div className="relative" style={{ width: size, height: size }}>
-              <svg
-                width={size}
-                height={size}
-                className="-rotate-90 transform"
-              >
-                <circle
-                  cx={size / 2}
-                  cy={size / 2}
-                  r={radius}
-                  fill="none"
-                  stroke="#1c1c1c"
-                  strokeWidth={stroke}
-                />
-                <circle
-                  cx={size / 2}
-                  cy={size / 2}
-                  r={radius}
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={stroke}
-                  strokeLinecap="round"
-                  strokeDasharray={circumference}
-                  strokeDashoffset={offset}
-                  className={cn(
-                    "transition-all duration-700 ease-out",
-                    primary ? "text-white" : "text-[#888888]"
-                  )}
-                />
-              </svg>
-              <div className="absolute inset-0 flex items-center justify-center">
-                <span
-                  className={cn(
-                    "text-xs font-semibold",
-                    primary ? "text-white" : "text-[#aaaaaa]"
-                  )}
-                >
-                  {Math.round(ringProgress)}%
-                </span>
-              </div>
-            </div>
-          )}
-
-          {onNavigate && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onNavigate();
-              }}
-              aria-label="查看详情"
-              className="flex h-7 w-7 items-center justify-center rounded-full bg-[#141414] text-[#888888] transition-colors hover:bg-[#1c1c1c] hover:text-white"
-            >
-              <ChevronRight className="h-4 w-4" />
-            </button>
-          )}
-        </div>
-      </div>
+    <div className={cn('grid grid-cols-2 sm:grid-cols-4 gap-3', className)}>
+      {items.map((item) => (
+        <KPICard key={item.label} {...item} />
+      ))}
     </div>
-  );
-});
+  )
+}
+
+export default KPICard
