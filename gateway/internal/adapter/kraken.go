@@ -412,7 +412,34 @@ func (k *KrakenAdapter) GetOpenOrders(symbol string) ([]map[string]any, error) {
 }
 
 func (k *KrakenAdapter) GetPositions() ([]map[string]any, error) {
-	return []map[string]any{}, nil
+	postData := url.Values{}
+	postData.Set("docalcs", "true")
+
+	result, err := k.privateRequest("/0/private/OpenPositions", postData)
+	if err != nil {
+		return nil, err
+	}
+
+	res, _ := result["result"].(map[string]any)
+	positions := make([]map[string]any, 0)
+	for posID, posData := range res {
+		p, _ := posData.(map[string]any)
+		if p == nil {
+			continue
+		}
+		symbol := fromKrakenPair(getString(p, "pair", ""))
+		positions = append(positions, map[string]any{
+			"symbol":       symbol,
+			"positionAmt":  parseFloatStr(p, "vol"),
+			"entryPrice":   parseFloatStr(p, "cost"),
+			"markPrice":    parseFloatStr(p, "value"),
+			"positionSide": "LONG",
+			"leverage":     parseFloatStr(p, "margin"),
+			"unrealizedPnl": parseFloatStr(p, "net"),
+			"orderId":      posID,
+		})
+	}
+	return positions, nil
 }
 
 func (k *KrakenAdapter) StartMarketStream(symbols []string) error {

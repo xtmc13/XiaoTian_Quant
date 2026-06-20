@@ -226,7 +226,37 @@ func (b *BitgetAdapter) GetOpenOrders(symbol string) ([]map[string]any, error) {
 }
 
 func (b *BitgetAdapter) GetPositions() ([]map[string]any, error) {
-	return []map[string]any{}, nil
+	// Try futures positions first (Bitget's main quant use case)
+	result, err := b.signedRequest("GET", "/mix/position/allPosition?productType=USDT-FUTURES", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	positions := make([]map[string]any, 0)
+	if dataArr, ok := result["data"].([]any); ok {
+		for _, item := range dataArr {
+			p, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			symbol := getString(p, "symbol", "")
+			side := getString(p, "holdSide", "long")
+			if side != "" {
+				side = strings.ToUpper(side)
+			}
+			positions = append(positions, map[string]any{
+				"symbol":        symbol,
+				"positionAmt":   parseFloatStr(p, "total"),
+				"entryPrice":    parseFloatStr(p, "openPriceAvg"),
+				"markPrice":     parseFloatStr(p, "markPrice"),
+				"positionSide":  side,
+				"leverage":      parseFloatStr(p, "leverage"),
+				"unrealizedPnl": parseFloatStr(p, "unrealizedPL"),
+				"marginSize":    parseFloatStr(p, "marginSize"),
+			})
+		}
+	}
+	return positions, nil
 }
 
 func (b *BitgetAdapter) StartMarketStream(symbols []string) error {

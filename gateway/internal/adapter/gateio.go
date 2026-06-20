@@ -173,14 +173,16 @@ func (g *GateIOAdapter) GetTicker(symbol string) (map[string]any, error) {
 
 	body, _ := io.ReadAll(resp.Body)
 	var raw []any
-	json.Unmarshal(body, &raw)
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("gateio ticker parse: %w", err)
+	}
 
 	if len(raw) > 0 {
 		if m, ok := raw[0].(map[string]any); ok {
 			return m, nil
 		}
 	}
-	return nil, nil
+	return nil, fmt.Errorf("gateio ticker: empty response for %s", symbol)
 }
 
 // ── REST Trading ──
@@ -242,7 +244,7 @@ func (g *GateIOAdapter) GetPositions() ([]map[string]any, error) {
 	// Spot account doesn't have positions in the same sense
 	result, err := g.request("GET", "/futures/usdt/positions", nil, nil)
 	if err != nil {
-		return nil, nil
+		return nil, err
 	}
 	var positions []map[string]any
 	if arr, ok := result["positions"]; ok {

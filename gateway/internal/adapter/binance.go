@@ -277,7 +277,7 @@ func (b *BinanceAdapter) GetPositions() ([]map[string]any, error) {
 	// Return holdings from balance as position-like data.
 	balances, err := b.GetBalance()
 	if err != nil {
-		return []map[string]any{}, nil
+		return nil, err
 	}
 
 	var positions []map[string]any

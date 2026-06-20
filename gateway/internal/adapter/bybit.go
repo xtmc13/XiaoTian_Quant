@@ -313,8 +313,46 @@ func (b *BybitAdapter) PlaceFuturesOrder(symbol, side, orderType string, price, 
 }
 
 func (b *BybitAdapter) GetPositions() ([]map[string]any, error) {
-	// Bybit spot doesn't have traditional positions
-	return []map[string]any{}, nil
+	// Try futures positions first (quant platforms primarily use derivatives)
+	params := map[string]any{
+		"category": "linear",
+	}
+	result, err := b.signedGet("/position/list", params)
+	if err != nil {
+		return nil, err
+	}
+
+	res, _ := result["result"].(map[string]any)
+	list, _ := res["list"].([]any)
+
+	positions := make([]map[string]any, 0)
+	for _, item := range list {
+		p, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		side := getString(p, "side", "")
+		if side == "" {
+			side = getString(p, "positionSide", "Buy")
+		}
+		posSide := "LONG"
+		if side == "Sell" || side == "SHORT" {
+			posSide = "SHORT"
+		}
+		positions = append(positions, map[string]any{
+			"symbol":        getString(p, "symbol", ""),
+			"positionAmt":   parseFloatStr(p, "size"),
+			"entryPrice":    parseFloatStr(p, "avgPrice"),
+			"markPrice":     parseFloatStr(p, "markPrice"),
+			"positionSide":  posSide,
+			"leverage":      parseFloatStr(p, "leverage"),
+			"unrealizedPnl": parseFloatStr(p, "unrealisedPnl"),
+			"liqPrice":      parseFloatStr(p, "liqPrice"),
+		})
+	}
+
+	// Spot doesn't have traditional positions; return futures positions (or empty if none)
+	return positions, nil
 }
 
 func (b *BybitAdapter) GetOpenOrders(symbol string) ([]map[string]any, error) {

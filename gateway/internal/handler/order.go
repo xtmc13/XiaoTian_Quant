@@ -120,11 +120,25 @@ func InitOMSPipeline() {
 		case "mexc":
 			exch := adapter.NewMEXCAdapter(apiKey, secret)
 			result, err = exch.PlaceOrder(ord.Symbol, side, orderType, ord.Price, ord.Quantity)
+		case "bitget":
+			_, secret, passphrase := adapter.GetCredential(exName)
+			exch := adapter.NewBitgetAdapter(apiKey, secret, passphrase)
+			result, err = exch.PlaceOrder(ord.Symbol, side, orderType, ord.Price, ord.Quantity)
+		case "okx":
+			_, secret, passphrase := adapter.GetCredential(exName)
+			exch := adapter.NewOKXAdapter(apiKey, secret, passphrase, false)
+			result, err = exch.PlaceOrder(ord.Symbol, side, orderType, ord.Price, ord.Quantity)
+		case "gateio":
+			exch := adapter.NewGateIOAdapter(apiKey, secret)
+			result, err = exch.PlaceOrder(ord.Symbol, side, orderType, ord.Price, ord.Quantity)
+		case "coinbase":
+			exch := adapter.NewCoinbaseAdapter(apiKey, secret)
+			result, err = exch.PlaceOrder(ord.Symbol, side, orderType, ord.Price, ord.Quantity)
 		case "alpaca":
 			exch := adapter.NewAlpacaAdapter(apiKey, secret, false)
 			result, err = exch.PlaceOrder(ord.Symbol, side, orderType, ord.Price, ord.Quantity)
 		default:
-			return nil, fmt.Errorf("不支持的交易所: %s（支持: binance, bybit, kraken, mexc, alpaca）", exName)
+			return nil, fmt.Errorf("不支持的交易所: %s（支持: binance, bybit, kraken, mexc, bitget, okx, gateio, coinbase, alpaca）", exName)
 		}
 
 		if err != nil {
@@ -159,11 +173,25 @@ func InitOMSPipeline() {
 		case "mexc":
 			exch := adapter.NewMEXCAdapter(apiKey, secret)
 			_, err = exch.CancelOrder(ord.Symbol, ord.ID)
+		case "bitget":
+			_, secret, passphrase := adapter.GetCredential(exName)
+			exch := adapter.NewBitgetAdapter(apiKey, secret, passphrase)
+			_, err = exch.CancelOrder(ord.Symbol, ord.ID)
+		case "okx":
+			_, secret, passphrase := adapter.GetCredential(exName)
+			exch := adapter.NewOKXAdapter(apiKey, secret, passphrase, false)
+			_, err = exch.CancelOrder(ord.Symbol, ord.ID)
+		case "gateio":
+			exch := adapter.NewGateIOAdapter(apiKey, secret)
+			_, err = exch.CancelOrder(ord.Symbol, ord.ID)
+		case "coinbase":
+			exch := adapter.NewCoinbaseAdapter(apiKey, secret)
+			_, err = exch.CancelOrder(ord.Symbol, ord.ID)
 		case "alpaca":
 			exch := adapter.NewAlpacaAdapter(apiKey, secret, false)
 			_, err = exch.CancelOrder(ord.Symbol, ord.ID)
 		default:
-			return fmt.Errorf("不支持的交易所: %s（支持: binance, bybit, kraken, mexc, alpaca）", exName)
+			return fmt.Errorf("不支持的交易所: %s（支持: binance, bybit, kraken, mexc, bitget, okx, gateio, coinbase, alpaca）", exName)
 		}
 		return err
 	}

@@ -1,6 +1,6 @@
 module github.com/xiaotian-quant/gateway
 
-go 1.25.0
+go 1.24.2
 
 require (
 	github.com/gin-gonic/gin v1.10.0
