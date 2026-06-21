@@ -42,12 +42,12 @@ var (
 func InitDB() error {
 	dbPath := os.Getenv("DB_PATH")
 	if dbPath == "" {
-		dbPath = "/app/data/gateway.db"
+		dbPath = "./data/gateway.db"
 	}
 	// Ensure data directory exists
 	dataDir := dbPath[:len(dbPath)-len("/gateway.db")]
 	if dataDir == dbPath {
-		dataDir = "/app/data"
+		dataDir = "./data"
 	}
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return fmt.Errorf("failed to create data directory: %w", err)
@@ -126,7 +126,7 @@ func InitDB() error {
 	// Priority: 1) SECRET_KEY env  2) /app/data/.jwt_secret file  3) generate & persist (dev only)
 	jwtSecret = os.Getenv("SECRET_KEY")
 	if jwtSecret == "" {
-		secretFile := "/app/data/.jwt_secret"
+		secretFile := "./data/.jwt_secret"
 		if data, err := os.ReadFile(secretFile); err == nil && len(data) > 0 {
 			jwtSecret = string(data)
 		} else {
@@ -145,10 +145,10 @@ func InitDB() error {
 	}
 
 	if configPath == "" {
-		configPath = "/app/data/config.yaml"
+		configPath = "./data/config.yaml"
 	}
 	if strategyConfigsPath == "" {
-		strategyConfigsPath = "/app/data/strategy_configs.json"
+		strategyConfigsPath = "./data/strategy_configs.json"
 	}
 
 	// Run schema migrations
