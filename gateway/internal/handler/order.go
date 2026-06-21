@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -220,6 +221,33 @@ func GetOrders(c *gin.Context) {
 	c.JSON(http.StatusOK, active)
 }
 
+func isLiveTradingEnabled() bool {
+	return isLiveTradingEnabledRuntime()
+}
+
+func isConfirmRequired() bool {
+	v := os.Getenv("LIVE_TRADING_CONFIRM_REQUIRED")
+	return v == "" || v == "true"
+}
+
+func isPaperExchange(exchange string) bool {
+	return exchange == "" || exchange == "paper" || strings.EqualFold(exchange, "paper")
+}
+
+// canPlaceLiveOrder checks safety gates before allowing a real-exchange order.
+func canPlaceLiveOrder(exchange string, confirmed bool) error {
+	if isPaperExchange(exchange) {
+		return nil
+	}
+	if !isLiveTradingEnabled() {
+		return fmt.Errorf("实盘交易未启用。请先在 .env 中设置 LIVE_TRADING_ENABLED=true 并重启网关")
+	}
+	if isConfirmRequired() && !confirmed {
+		return fmt.Errorf("实盘交易需要二次确认。请在请求中包含 confirmed=true")
+	}
+	return nil
+}
+
 func PlaceOrder(c *gin.Context) {
 	var body map[string]any
 	if err := c.ShouldBindJSON(&body); err != nil {
@@ -243,6 +271,11 @@ func PlaceOrder(c *gin.Context) {
 		TPPrice:       getFloat(body, "tp_price", 0),
 		SLPrice:       getFloat(body, "sl_price", 0),
 		ClosePosition: getBool(body, "close_position", false),
+	}
+
+	if err := canPlaceLiveOrder(req.Exchange, getBool(body, "confirmed", false)); err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"status": "error", "detail": err.Error()})
+		return
 	}
 
 	ord, err := order.GetOrderManager().PlaceOrder(req)

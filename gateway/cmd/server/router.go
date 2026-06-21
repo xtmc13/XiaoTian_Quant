@@ -51,6 +51,7 @@ func setupRoutes(r *gin.Engine, cfg *serverConfig) *gin.Engine {
 		registerOrderRoutes(api)
 		registerAccountRoutes(api)
 		registerTradeRoutes(api)
+		registerTradingSafetyRoutes(api)
 		registerMarketRoutes(api)
 		registerNotificationRoutes(api)
 		registerArbitrageRoutes(api)
@@ -260,6 +261,14 @@ func registerTradeRoutes(api *gin.RouterGroup) {
 	private := api.Group("")
 	private.Use(middleware.AuthRequired())
 	private.GET("/trades", handler.GetTradeHistory)
+}
+
+func registerTradingSafetyRoutes(api *gin.RouterGroup) {
+	private := api.Group("")
+	private.Use(middleware.AuthRequired())
+	private.GET("/trading/safety", handler.GetTradingSafetyStatus)
+	private.POST("/trading/unlock", handler.UnlockLiveTrading)
+	private.POST("/trading/lock", handler.LockLiveTrading)
 }
 
 func registerMarketRoutes(api *gin.RouterGroup) {
