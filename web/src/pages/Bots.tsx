@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react'
-import { useNavigate, Link, useLocation } from 'react-router-dom'
+import { useNavigate, Link, useLocation, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Bot, TrendingUp, TrendingDown, Wallet, PauseCircle,
@@ -537,15 +537,13 @@ function AIBotTab() {
 /* ── 主页面 ── */
 export function Bots() {
   const location = useLocation()
-  const searchParams = new URLSearchParams(location.search)
+  const [searchParams, setSearchParams] = useSearchParams()
   const botType = (searchParams.get('type') || 'strategy') as BotType
 
   const meta = BOT_TYPE_META[botType]
 
   const handleTabChange = (type: BotType) => {
-    const url = new URL(window.location.href)
-    url.searchParams.set('type', type)
-    window.history.replaceState({}, '', url.toString())
+    setSearchParams({ type })
   }
 
   const renderTabContent = () => {
