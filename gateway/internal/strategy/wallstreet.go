@@ -2,7 +2,6 @@ package strategy
 
 import (
 	"fmt"
-	"math"
 	"sync"
 	"time"
 

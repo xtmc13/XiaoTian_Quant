@@ -458,7 +458,7 @@ fn check_move_sl_activation(cfg: &mut TPConfig, price: f64) -> Option<TPAction> 
 fn check_take_profits(
     cfg: &mut TPConfig,
     price: f64,
-    triggered_ref: Option<&mut Vec<String>>,
+    mut triggered_ref: Option<&mut Vec<String>>,
 ) -> Vec<TPAction> {
     let mut actions = Vec::new();
     let is_long = cfg.is_long();
@@ -489,7 +489,7 @@ fn check_take_profits(
             }
 
             // 记录已触发
-            if let Some(v) = triggered_ref {
+            if let Some(ref mut v) = triggered_ref {
                 v.push(label.clone());
             }
 

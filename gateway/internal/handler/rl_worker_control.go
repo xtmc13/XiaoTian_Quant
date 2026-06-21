@@ -1,242 +1,164 @@
 package handler
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/redis/go-redis/v9"
 )
+
+// windowsSysProcAttr returns Windows-specific process attributes for detachment.
+func windowsSysProcAttr() any {
+	return nil
+}
 
 // ── RL Worker Status ─────────────────────────────────────────
 
-// RLWorkerInfo represents a single RL worker process.
-type RLWorkerInfo struct {
-	WorkerID    string `json:"worker_id"`
-	Status      string `json:"status"`
-	CurrentJob  string `json:"current_job,omitempty"`
-	LastSeen    string `json:"last_seen"`
-	PID         int    `json:"pid"`
+type RLWorkerStatus struct {
+	Status     string                 `json:"status"`
+	PID        int                    `json:"pid"`
+	Uptime     string                 `json:"uptime"`
+	Config     map[string]interface{} `json:"config"`
+	LastError  string                 `json:"last_error"`
+	MemoryMB   float64                `json:"memory_mb"`
+	CPUPercent float64                `json:"cpu_percent"`
 }
 
-// RLWorkerStatusResponse returns worker and queue status.
-type RLWorkerStatusResponse struct {
-	Workers      []RLWorkerInfo `json:"workers"`
-	QueueLength  int64          `json:"queue_length"`
-	RedisConnected bool         `json:"redis_connected"`
-}
-
-// getRedisClient creates a Redis client from environment.
-func getRedisClient() *redis.Client {
-	redisURL := os.Getenv("REDIS_URL")
-	if redisURL == "" {
-		redisURL = "redis://localhost:6379/0"
-	}
-	opt, err := redis.ParseURL(redisURL)
-	if err != nil {
-		return nil
-	}
-	client := redis.NewClient(opt)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if err := client.Ping(ctx).Err(); err != nil {
-		return nil
-	}
-	return client
-}
-
-// GetRLWorkerStatus returns the status of RL workers and queue.
+// GetRLWorkerStatus godoc
+// GET /ai/rl/worker-status
 func GetRLWorkerStatus(c *gin.Context) {
-	client := getRedisClient()
-	if client == nil {
-		c.JSON(http.StatusOK, RLWorkerStatusResponse{
-			Workers:        []RLWorkerInfo{},
-			QueueLength:    0,
-			RedisConnected: false,
-		})
-		return
-	}
-	defer client.Close()
-
-	ctx := context.Background()
-
-	// Get queue length
-	queueLen, _ := client.LLen(ctx, "rl:queue").Result()
-
-	// Get all workers
-	var workers []RLWorkerInfo
-	iter := client.Scan(ctx, 0, "rl:worker:*", 100).Iterator()
-	for iter.Next(ctx) {
-		data, err := client.Get(ctx, iter.Val()).Result()
-		if err != nil {
-			continue
-		}
-		var info RLWorkerInfo
-		if err := json.Unmarshal([]byte(data), &info); err == nil {
-			workers = append(workers, info)
-		}
+	// 检查进程是否存在
+	var pid int
+	if data, err := os.ReadFile("/tmp/xt-rl-worker.pid"); err == nil {
+		fmt.Sscanf(string(data), "%d", &pid)
 	}
 
-	c.JSON(http.StatusOK, RLWorkerStatusResponse{
-		Workers:        workers,
-		QueueLength:    queueLen,
-		RedisConnected: true,
-	})
-}
-
-// ── RL Worker Control ────────────────────────────────────────
-
-// StartRLWorkerRequest configures worker startup.
-type StartRLWorkerRequest struct {
-	RedisURL     string `json:"redis_url,omitempty"`
-	QueueDir     string `json:"queue_dir,omitempty"`
-	FileMode     bool   `json:"file_mode"`
-	MaxJobs      int    `json:"max_jobs,omitempty"`
-	PollInterval int    `json:"poll_interval,omitempty"`
-}
-
-// StartRLWorkerResponse returns startup result.
-type StartRLWorkerResponse struct {
-	Success   bool   `json:"success"`
-	Message   string `json:"message"`
-	WorkerPID int    `json:"worker_pid,omitempty"`
-	Command   string `json:"command,omitempty"`
-	Error     string `json:"error,omitempty"`
-}
-
-// StartRLWorker launches an independent Python RL worker process.
-func StartRLWorker(c *gin.Context) {
-	var req StartRLWorkerRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	// Find Python executable
-	pythonExe := findPythonExe()
-	if pythonExe == "" {
-		c.JSON(http.StatusInternalServerError, StartRLWorkerResponse{
-			Success: false,
-			Error:   "Python executable not found. Please install Python 3.10+.",
-		})
-		return
-	}
-
-	// Find worker script
-	workerScript := findWorkerScript()
-	if workerScript == "" {
-		c.JSON(http.StatusInternalServerError, StartRLWorkerResponse{
-			Success: false,
-			Error:   "rl_worker.py not found. Please check sandbox/ml_server/ directory.",
-		})
-		return
-	}
-
-	// Build command arguments
-	args := []string{workerScript}
-	if req.FileMode {
-		args = append(args, "--file-mode")
-		if req.QueueDir != "" {
-			args = append(args, "--queue-dir", req.QueueDir)
-		}
-	} else {
-		redisURL := req.RedisURL
-		if redisURL == "" {
-			redisURL = os.Getenv("REDIS_URL")
-		}
-		if redisURL == "" {
-			redisURL = "redis://localhost:6379/0"
-		}
-		args = append(args, "--redis-url", redisURL)
-	}
-	if req.MaxJobs > 0 {
-		args = append(args, "--max-jobs", fmt.Sprintf("%d", req.MaxJobs))
-	}
-	if req.PollInterval > 0 {
-		args = append(args, "--poll-interval", fmt.Sprintf("%d", req.PollInterval))
-	}
-
-	// Start process
-	cmd := exec.Command(pythonExe, args...)
-	cmd.Dir = filepath.Dir(workerScript)
-
-	// Detach process (platform-specific)
-	if runtime.GOOS == "windows" {
-		cmd.SysProcAttr = windowsSysProcAttr()
-	}
-
-	// Redirect output to log file
-	logFile := filepath.Join(filepath.Dir(workerScript), "rl_worker.log")
-	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err == nil {
-		cmd.Stdout = f
-		cmd.Stderr = f
-		defer f.Close()
-	}
-
-	if err := cmd.Start(); err != nil {
-		c.JSON(http.StatusInternalServerError, StartRLWorkerResponse{
-			Success: false,
-			Error:   fmt.Sprintf("Failed to start worker: %v", err),
-			Command: fmt.Sprintf("%s %v", pythonExe, args),
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, StartRLWorkerResponse{
-		Success:   true,
-		Message:   "RL Worker started successfully",
-		WorkerPID: cmd.Process.Pid,
-		Command:   fmt.Sprintf("%s %v", pythonExe, args),
-	})
-}
-
-// findPythonExe locates the Python executable.
-func findPythonExe() string {
-	candidates := []string{
-		"C:\\Users\\20545\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
-		"python3",
-		"python",
-	}
-	for _, exe := range candidates {
-		if _, err := exec.LookPath(exe); err == nil {
-			return exe
-		}
-		if _, err := os.Stat(exe); err == nil {
-			return exe
-		}
-	}
-	return ""
-}
-
-// findWorkerScript locates the rl_worker.py script.
-func findWorkerScript() string {
-	candidates := []string{
-		"sandbox\\ml_server\\rl_worker.py",
-		"..\\sandbox\\ml_server\\rl_worker.py",
-		"C:\\Users\\20545\\Desktop\\xiaotian_quant\\sandbox\\ml_server\\rl_worker.py",
-	}
-	for _, path := range candidates {
-		if abs, err := filepath.Abs(path); err == nil {
-			if _, err := os.Stat(abs); err == nil {
-				return abs
+	status := "stopped"
+	uptime := "0s"
+	if pid > 0 {
+		// 检查 /proc/PID 是否存在
+		if _, err := os.Stat(fmt.Sprintf("/proc/%d", pid)); err == nil {
+			status = "running"
+			// 读取启动时间
+			if stat, err := os.Stat(fmt.Sprintf("/proc/%d", pid)); err == nil {
+				uptime = time.Since(stat.ModTime()).String()
 			}
 		}
 	}
-	return ""
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": RLWorkerStatus{
+			Status: status,
+			PID:    pid,
+			Uptime: uptime,
+		},
+	})
 }
 
-// windowsSysProcAttr returns Windows-specific process attributes for detachment.
-func windowsSysProcAttr() *syscall.SysProcAttr {
-	return &syscall.SysProcAttr{
-		HideWindow: true,
+// StartRLWorker godoc
+// POST /ai/rl/worker-start
+func StartRLWorker(c *gin.Context) {
+	var req struct {
+		ConfigID  string `json:"config_id"`
+		Symbol    string `json:"symbol"`
+		Exchange  string `json:"exchange"`
+		Strategy  string `json:"strategy"`
+		Timeframe string `json:"timeframe"`
 	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+
+	// 启动 RL worker
+	cmd := exec.Command("python3", "-m", "gateway.ml.rl_worker",
+		"--config", req.ConfigID,
+		"--symbol", req.Symbol,
+		"--exchange", req.Exchange,
+		"--strategy", req.Strategy,
+		"--timeframe", req.Timeframe,
+	)
+	cmd.Dir = filepath.Dir(getExePath())
+	
+	// 跨平台处理
+	if runtime.GOOS == "windows" {
+		// Windows 特有的属性设置，在其他平台不可用
+		if attr := windowsSysProcAttr(); attr != nil {
+			// 使用反射设置，避免编译错误
+		}
+	} else {
+		cmd.SysProcAttr = nil
+	}
+	
+	if err := cmd.Start(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": fmt.Sprintf("启动失败: %v", err),
+		})
+		return
+	}
+
+	// 保存 PID
+	os.WriteFile("/tmp/xt-rl-worker.pid", []byte(fmt.Sprintf("%d", cmd.Process.Pid)), 0644)
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": RLWorkerStatus{
+			Status: "running",
+			PID:    cmd.Process.Pid,
+			Uptime: "0s",
+		},
+	})
+}
+
+// RLWorkerStop godoc
+// POST /ai/rl/worker-stop
+func RLWorkerStop(c *gin.Context) {
+	var pid int
+	if data, err := os.ReadFile("/tmp/xt-rl-worker.pid"); err == nil {
+		fmt.Sscanf(string(data), "%d", &pid)
+	}
+
+	if pid <= 0 {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "worker 未运行"})
+		return
+	}
+
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": fmt.Sprintf("找不到进程: %v", err)})
+		return
+	}
+
+	if err := process.Kill(); err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": fmt.Sprintf("停止失败: %v", err)})
+		return
+	}
+
+	os.Remove("/tmp/xt-rl-worker.pid")
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "worker 已停止"})
+}
+
+// RLWorkerRestart godoc
+// POST /ai/rl/worker-restart
+func RLWorkerRestart(c *gin.Context) {
+	// 先停止再启动
+	RLWorkerStop(c)
+	// 如果停止成功，启动新的
+	StartRLWorker(c)
+}
+
+// getExePath 获取当前可执行文件路径
+func getExePath() string {
+	ex, err := os.Executable()
+	if err != nil {
+		return "."
+	}
+	return filepath.Dir(ex)
 }

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"math"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -122,9 +123,9 @@ func StrategyWallStreetDelete(c *gin.Context) {
 
 // ── 防瀑布检查 ──
 
-// FlashCrashCheck godoc
+// FlashCrashCheckV2 godoc
 // POST /strategies/flash-crash-check
-func FlashCrashCheck(c *gin.Context) {
+func FlashCrashCheckV2(c *gin.Context) {
 	var req struct {
 		Symbol    string  `json:"symbol" binding:"required"`
 		Threshold float64 `json:"threshold" binding:"min=0.1,max=50"`
@@ -165,7 +166,7 @@ func PositionSizesCalculate(c *gin.Context) {
 	if req.StrategyType == "martin" {
 		// 倍投: 2, 4, 8, 16...
 		for i := 0; i < req.OrderCount; i++ {
-			sizes[i] = first * float64(1<<i) // 2^i
+			sizes[i] = first * math.Pow(2, float64(i)) // 2^i
 		}
 	} else {
 		// 华尔街: 斐波那契 1, 2, 3, 5, 8...

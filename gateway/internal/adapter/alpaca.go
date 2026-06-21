@@ -432,10 +432,6 @@ func (a *AlpacaAdapter) IsConnected() bool {
 
 // ── Helpers ────────────────────────────────────────────────────
 
-	}
-	return def
-}
-
 func getFloat(m map[string]any, key string, def float64) float64 {
 	if v, ok := m[key]; ok {
 		switch val := v.(type) {

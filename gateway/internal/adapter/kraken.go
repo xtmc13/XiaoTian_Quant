@@ -591,9 +591,6 @@ func krakenIntervalMinutes(interval string) int {
 	}
 }
 
-	return 0
-}
-
 func parseFloatArr(arr []any, idx int) float64 {
 	if arr == nil || idx >= len(arr) {
 		return 0

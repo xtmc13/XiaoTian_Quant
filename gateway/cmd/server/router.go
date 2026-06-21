@@ -182,8 +182,6 @@ func registerConfigRoutes(api *gin.RouterGroup) {
 	private.GET("/strategies/param-defs", handler.GetStrategyParamDefs)
 	private.PUT("/strategies/global", handler.SaveGlobalStrategy)
 	private.GET("/strategies/defaults", handler.GetStrategyDefaults)
-	private.POST("/strategies/position-sizes", handler.CalculatePositionSizes)
-	private.POST("/strategies/flash-crash-check", handler.FlashCrashCheck)
 	private.GET("/strategies/contract-defaults", handler.GetContractDefaults)
 	private.POST("/exchange/save", handler.ExchangeSave)
 	private.POST("/exchange/test", handler.ExchangeTest)
@@ -218,12 +216,6 @@ func registerConfigRoutes(api *gin.RouterGroup) {
 	private.POST("/strategies/martin", handler.StrategyMartinCreate)
 	private.PUT("/strategies/martin/:id", handler.StrategyMartinUpdate)
 	private.DELETE("/strategies/martin/:id", handler.StrategyMartinDelete)
-	private.GET("/strategies/wallstreet", handler.StrategyWallStreetList)
-	private.POST("/strategies/wallstreet", handler.StrategyWallStreetCreate)
-	private.PUT("/strategies/wallstreet/:id", handler.StrategyWallStreetUpdate)
-	private.DELETE("/strategies/wallstreet/:id", handler.StrategyWallStreetDelete)
-	private.POST("/strategies/position-sizes", handler.PositionSizesCalculate)
-	private.POST("/strategies/flash-crash-check", handler.FlashCrashCheck)
 }
 
 func registerOrderRoutes(api *gin.RouterGroup) {
