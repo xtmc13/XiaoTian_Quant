@@ -55,6 +55,7 @@ func setupRoutes(r *gin.Engine, cfg *serverConfig) *gin.Engine {
 		registerNotificationRoutes(api)
 		registerArbitrageRoutes(api)
 		registerDataRoutes(api)
+		registerPythonStrategyRoutes(api)
 		registerStrategyRoutes(api)
 		registerComboRoutes(api)
 		registerPortfolioRoutes(api)
@@ -345,6 +346,12 @@ func registerStrategyRoutes(api *gin.RouterGroup) {
 	private.GET("/strategies/contract", handler.GetStrategiesContract)
 	private.GET("/strategies/ranking", handler.GetStrategiesRanking)
 	private.GET("/strategies", handler.GetStrategyConfigs)
+}
+
+func registerPythonStrategyRoutes(api *gin.RouterGroup) {
+	private := api.Group("")
+	private.Use(middleware.AuthRequired())
+	private.POST("/strategies-python/run", handler.RunPythonStrategy)
 }
 
 func registerComboRoutes(api *gin.RouterGroup) {
