@@ -212,9 +212,11 @@ func (d *Downloader) downloadRange(client KlineClient, symbol, interval string, 
 			from = to
 			continue
 		}
-		if _, err := d.store.SaveOHLCV(bars); err != nil {
+		if saved, err := d.store.SaveOHLCV(bars); err != nil {
 			log.Printf("[data] save error %s/%s: %v", symbol, interval, err)
 			return err
+		} else {
+			log.Printf("[data] saved %s/%s %d bars", symbol, interval, saved)
 		}
 		// Advance to just after the last returned bar
 		last := bars[len(bars)-1].Time
