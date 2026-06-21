@@ -71,15 +71,17 @@ ifeq ($(OS),windows)
 	@cd gateway && CGO_ENABLED=0 go build \
 		-ldflags="-s -w -X main.version=$(VERSION) -X main.buildTime=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)" \
 		-trimpath \
-		-o gateway-server$(shell go env GOEXE 2>/dev/null) \
+		-o ../dist/gateway$(shell go env GOEXE 2>/dev/null) \
 		./cmd/server
 else
-	@cd gateway && CGO_ENABLED=1 go build \
+	@cd gateway && CGO_ENABLED=0 go build \
 		-ldflags="-s -w -X main.version=$(VERSION) -X main.buildTime=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)" \
 		-trimpath \
-		-o gateway-server$(shell go env GOEXE 2>/dev/null) \
+		-o ../dist/gateway$(shell go env GOEXE 2>/dev/null) \
 		./cmd/server
 endif
+	@mkdir -p data logs user_data
+	@echo "✅ 后端构建完成: dist/gateway"
 
 # ── Start/Stop ──────────────────────────────────────────────────
 start:
@@ -91,11 +93,14 @@ endif
 
 stop:
 ifeq ($(OS),windows)
-	@taskkill /F /IM gateway-server.exe 2>nul || true
+	@taskkill /F /IM gateway.exe 2>nul || true
 	@taskkill /F /IM python.exe 2>nul || true
 	@taskkill /F /IM node.exe 2>nul || true
 else
+	@pkill -f "./dist/gateway" 2>/dev/null || true
 	@pkill -f "gateway-server" 2>/dev/null || true
+	@pkill -f "sandbox/ccxt_bridge/main.py" 2>/dev/null || true
+	@pkill -f "sandbox/strategy_engine/main.py" 2>/dev/null || true
 	@pkill -f "uvicorn main:app" 2>/dev/null || true
 	@pkill -f "vite.js" 2>/dev/null || true
 endif
@@ -107,7 +112,7 @@ logs:
 ifeq ($(OS),windows)
 	@echo "Windows 日志请查看各 CMD 窗口"
 else
-	@tail -f gateway/*.log sandbox/ml_server/*.log web/*.log 2>/dev/null || echo "日志文件不存在"
+	@tail -f logs/*.log 2>/dev/null || echo "日志文件不存在"
 endif
 
 # ── Clean ───────────────────────────────────────────────────────
@@ -115,8 +120,10 @@ clean:
 	@echo "🧹 清理构建产物..."
 	@rm -rf web/dist
 	@rm -rf gateway/spa/*
+	@rm -f dist/gateway dist/gateway.exe
 	@rm -f gateway/gateway-server gateway/gateway-server.exe
 	@rm -rf web/node_modules/.cache
+	@rm -f logs/*.log *.log
 
 # ── Docker ─────────────────────────────────────────────────────
 docker-build:
@@ -162,7 +169,11 @@ dev-sandbox:
 
 dev-ccxt:
 	@echo "🌐 启动 CCXT Bridge..."
-	@cd sandbox && python3 ccxt_bridge.py
+	@cd sandbox/ccxt_bridge && python3 -m uvicorn main:app --host 0.0.0.0 --port 8002 --reload
+
+dev-strategy:
+	@echo "🐍 启动 Python 策略引擎..."
+	@cd sandbox/strategy_engine && python3 -m uvicorn main:app --host 0.0.0.0 --port 8003 --reload
 
 # ── Test ───────────────────────────────────────────────────────
 test:
