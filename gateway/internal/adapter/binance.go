@@ -175,10 +175,24 @@ func (b *BinanceAdapter) request(method, path string, params url.Values, signed 
 // ── Market Data REST ──
 
 func (b *BinanceAdapter) GetKlines(symbol, interval string, limit int) ([][]any, error) {
+	return b.GetKlinesRange(symbol, interval, 0, 0, limit)
+}
+
+// GetKlinesRange fetches Binance klines in a time range.
+// startMs and endMs are unix milliseconds; pass 0 to ignore the bound.
+func (b *BinanceAdapter) GetKlinesRange(symbol, interval string, startMs, endMs int64, limit int) ([][]any, error) {
 	params := url.Values{}
 	params.Set("symbol", symbol)
 	params.Set("interval", interval)
-	params.Set("limit", fmt.Sprintf("%d", limit))
+	if limit > 0 {
+		params.Set("limit", fmt.Sprintf("%d", limit))
+	}
+	if startMs > 0 {
+		params.Set("startTime", fmt.Sprintf("%d", startMs))
+	}
+	if endMs > 0 {
+		params.Set("endTime", fmt.Sprintf("%d", endMs))
+	}
 
 	u, _ := url.Parse(b.baseURL() + "/klines")
 	u.RawQuery = params.Encode()

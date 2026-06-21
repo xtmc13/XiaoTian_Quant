@@ -25,11 +25,17 @@ func NewStorage() *Storage {
 }
 
 func (s *Storage) db() *sql.DB {
-	return store.GetDB()
+	db := store.GetDB()
+	if db == nil {
+		return nil
+	}
+	// Lazy ensure tables in case storage was initialized before the database.
+	s.ensureTables()
+	return db
 }
 
 func (s *Storage) ensureTables() {
-	db := s.db()
+	db := store.GetDB()
 	if db == nil {
 		return
 	}

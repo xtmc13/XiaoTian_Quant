@@ -67,7 +67,6 @@ func StartDataDownload(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": err.Error(),
-			"note":  "network download is disabled — please import data manually via the data import API or database seeding",
 		})
 		return
 	}
