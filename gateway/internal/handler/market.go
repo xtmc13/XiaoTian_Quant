@@ -522,6 +522,9 @@ func RunBacktest(c *gin.Context) {
 	// Generate full performance report
 	perfReport := backtest.GenerateReport(result, strategyType, symbol)
 
+	// Run diagnostic checks (lookahead, recursion, overfit)
+	diagnostics := backtest.RunDiagnostics(result, perfReport, bars, 4) // 4 default params
+
 	c.JSON(http.StatusOK, gin.H{
 		"id":               fmt.Sprintf("bt-%d", time.Now().UnixMilli()),
 		"strategy_id":      strategyType,
@@ -547,13 +550,13 @@ func RunBacktest(c *gin.Context) {
 			return "Binance"
 		}(),
 		"params": gin.H{
-			"symbol":        symbol,
-			"interval":      interval,
-			"strategy_type": strategyType,
+			"symbol":          symbol,
+			"interval":        interval,
+			"strategy_type":   strategyType,
 			"initial_balance": initialBalance,
-			"bars_used":     len(bars),
-			"from":          time.UnixMilli(bars[0].Time).Format("2006-01-02"),
-			"to":            time.UnixMilli(bars[len(bars)-1].Time).Format("2006-01-02"),
+			"bars_used":       len(bars),
+			"from":            time.UnixMilli(bars[0].Time).Format("2006-01-02"),
+			"to":              time.UnixMilli(bars[len(bars)-1].Time).Format("2006-01-02"),
 		},
 		"report": gin.H{
 			"initial_balance":   initialBalance,
@@ -580,6 +583,12 @@ func RunBacktest(c *gin.Context) {
 			"volatility":        store.RoundFloat(perfReport.Volatility*100, 2),
 			"monthly_returns":   perfReport.MonthlyReturns,
 			"yearly_returns":    perfReport.YearlyReturns,
+			"diagnostics": gin.H{
+				"lookahead": diagnostics.Lookahead,
+				"recursive": diagnostics.Recursive,
+				"overfit":   diagnostics.Overfit,
+				"summary":   diagnostics.Summary,
+			},
 		},
 	})
 }
