@@ -53,11 +53,16 @@ python/
 *.dll
 *.so
 *.pyd
+*.rlib
 gateway/gateway-server
 *.exe~
 
 # Rust build artifacts
 engine/target/
+
+# Frontend build artifacts embedded into Go binary
+gateway/spa/assets/
+gateway/spa/index.html
 
 # Docker
 docker-compose.override.yml
