@@ -607,6 +607,25 @@ func GetStrategyParamDefs(c *gin.Context) {
 	case "wallstreet":
 		s := strategies.NewWallstreetStrategy()
 		defs = s.ParamDefs()
+	// AI Bot marketplace aliases (registered in cmd/server/main.go)
+	case "optimus", "mono_optimus", "noah":
+		s := strategies.NewGridTradingStrategy()
+		defs = s.ParamDefs()
+	case "cyberbot", "mono_cyberbot":
+		s := strategies.NewRSIStrategy()
+		defs = s.ParamDefs()
+	case "crypto_future", "ai_alpha_futures", "alt_volatility":
+		s := strategies.NewDualThrustStrategy()
+		defs = s.ParamDefs()
+	case "ai_alpha":
+		s := strategies.NewEMACrossStrategy()
+		defs = s.ParamDefs()
+	case "terminator_volatility":
+		s := strategies.NewATRTrailingStopStrategy()
+		defs = s.ParamDefs()
+	case "trade_holder":
+		s := strategies.NewMartingaleStrategy()
+		defs = s.ParamDefs()
 	case "ml":
 		defs = []map[string]any{
 			{"name": "model_id", "type": "string", "required": true, "description": "已训练的ML模型ID"},
