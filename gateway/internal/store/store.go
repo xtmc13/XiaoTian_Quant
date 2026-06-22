@@ -156,6 +156,10 @@ func InitDB() error {
 		return fmt.Errorf("migration: %w", err)
 	}
 
+	// Seed AI bot catalog data
+	SeedAIBotCatalog()
+	SeedAIBotSignalProviders()
+
 	// Migrate xt_orders with extra columns (for pre-existing DBs)
 	if err := migrateXTOrders(); err != nil {
 		fmt.Fprintf(os.Stderr, "WARNING: xt_orders migration failed: %v\n", err)

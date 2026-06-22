@@ -18,6 +18,7 @@ func RegisterRoutes(r *gin.RouterGroup, engine *Engine) {
 	r.GET("/signals", h.listSignals)
 	r.POST("/signals", h.publishSignal)
 	r.GET("/followers/configs", h.getFollowerConfigs)
+	r.POST("/followers/configs", h.saveFollowerConfig)
 }
 
 type handler struct {
@@ -103,6 +104,49 @@ func (h *handler) publishSignal(c *gin.Context) {
 	}
 	h.engine.PublishSignal(sig)
 	c.JSON(http.StatusOK, gin.H{"signal": sig})
+}
+
+func (h *handler) saveFollowerConfig(c *gin.Context) {
+	var req struct {
+		ProviderID   int      `json:"provider_id"`
+		FollowerID   int      `json:"follower_id"`
+		Enabled      bool     `json:"enabled"`
+		Multiplier   float64  `json:"multiplier"`
+		MaxPosition  float64  `json:"max_position"`
+		MaxDailyLoss float64  `json:"max_daily_loss"`
+		SlippagePct  float64  `json:"slippage_pct"`
+		AutoExecute  bool     `json:"auto_execute"`
+		Symbols      []string `json:"symbols"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if req.FollowerID == 0 || req.ProviderID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "follower_id and provider_id required"})
+		return
+	}
+	update := CopyConfig{
+		FollowerID:   req.FollowerID,
+		ProviderID:   req.ProviderID,
+		Enabled:      req.Enabled,
+		Multiplier:   req.Multiplier,
+		MaxPosition:  req.MaxPosition,
+		MaxDailyLoss: req.MaxDailyLoss,
+		SlippagePct:  req.SlippagePct,
+		AutoExecute:  req.AutoExecute,
+		Symbols:      req.Symbols,
+	}
+	if err := h.engine.UpdateFollowConfig(req.FollowerID, req.ProviderID, update); err != nil {
+		cfg := DefaultCopyConfig(req.FollowerID, req.ProviderID)
+		cfg.AutoExecute = req.AutoExecute
+		if err := h.engine.Follow(cfg); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		_ = h.engine.UpdateFollowConfig(req.FollowerID, req.ProviderID, update)
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
 func (h *handler) getFollowerConfigs(c *gin.Context) {

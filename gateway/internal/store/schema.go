@@ -2,20 +2,22 @@ package store
 
 // Schema migration constants and DDL for all 18 tables.
 
-const currentSchemaVersion = 8
+const currentSchemaVersion = 10
 
 // MigrationFunc is a function that upgrades the schema by one version.
 type MigrationFunc func(tx *dbTx) error
 
 var migrations = map[int]MigrationFunc{
-	1: migrateV1,
-	2: migrateV2,
-	3: migrateV3,
-	4: migrateV4,
-	5: migrateV5,
-	6: migrateV6,
-	7: migrateV7,
-	8: migrateV8,
+	1:  migrateV1,
+	2:  migrateV2,
+	3:  migrateV3,
+	4:  migrateV4,
+	5:  migrateV5,
+	6:  migrateV6,
+	7:  migrateV7,
+	8:  migrateV8,
+	9:  migrateV9,
+	10: migrateV10,
 }
 
 // dbTx wraps a database transaction for migrations.
@@ -463,6 +465,130 @@ func migrateV7(tx *dbTx) error {
 		if err := tx.exec(ddl); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// migrateV9 adds AI Bot marketplace, instance, subscription and snapshot tables.
+func migrateV9(tx *dbTx) error {
+	tables := []string{
+		// ── AI Bot Catalog (built-in bots marketplace) ──
+		`CREATE TABLE IF NOT EXISTS ai_bot_catalog (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			description TEXT DEFAULT '',
+			strategy_type TEXT NOT NULL,
+			market_type TEXT DEFAULT 'spot',
+			risk_level TEXT DEFAULT 'medium',
+			fee_model TEXT DEFAULT 'free',
+			fee_percent REAL DEFAULT 0,
+			monthly_fee REAL DEFAULT 0,
+			performance_json TEXT DEFAULT '{}',
+			config_json TEXT DEFAULT '{}',
+			is_builtin INTEGER DEFAULT 1,
+			is_active INTEGER DEFAULT 1,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_aibot_catalog_type ON ai_bot_catalog(strategy_type)`,
+		`CREATE INDEX IF NOT EXISTS idx_aibot_catalog_risk ON ai_bot_catalog(risk_level)`,
+		`CREATE INDEX IF NOT EXISTS idx_aibot_catalog_active ON ai_bot_catalog(is_active)`,
+
+		// ── AI Bot Instances (user-deployed bots) ──
+		`CREATE TABLE IF NOT EXISTS ai_bot_instances (
+			id TEXT PRIMARY KEY,
+			user_id INTEGER NOT NULL,
+			catalog_id TEXT DEFAULT '',
+			name TEXT NOT NULL,
+			strategy_type TEXT NOT NULL,
+			symbol TEXT NOT NULL,
+			market_type TEXT DEFAULT 'spot',
+			status TEXT DEFAULT 'stopped',
+			execution_mode TEXT DEFAULT 'paper',
+			config_json TEXT DEFAULT '{}',
+			exchange_id TEXT DEFAULT '',
+			unrealized_pnl REAL DEFAULT 0,
+			realized_pnl REAL DEFAULT 0,
+			total_return_pct REAL DEFAULT 0,
+			max_drawdown_pct REAL DEFAULT 0,
+			sharpe_ratio REAL DEFAULT 0,
+			win_rate REAL DEFAULT 0,
+			total_trades INTEGER DEFAULT 0,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			started_at INTEGER DEFAULT 0,
+			stopped_at INTEGER DEFAULT 0
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_aibot_inst_user ON ai_bot_instances(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_aibot_inst_status ON ai_bot_instances(status)`,
+		`CREATE INDEX IF NOT EXISTS idx_aibot_inst_symbol ON ai_bot_instances(symbol)`,
+
+		// ── AI Bot Subscriptions (profit-sharing / monthly fee) ──
+		`CREATE TABLE IF NOT EXISTS ai_bot_subscriptions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL,
+			bot_instance_id TEXT NOT NULL,
+			fee_type TEXT DEFAULT 'profit_share',
+			fee_percent REAL DEFAULT 0,
+			monthly_fee REAL DEFAULT 0,
+			next_billing_at INTEGER DEFAULT 0,
+			status TEXT DEFAULT 'active',
+			created_at INTEGER NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_aibot_sub_user ON ai_bot_subscriptions(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_aibot_sub_bot ON ai_bot_subscriptions(bot_instance_id)`,
+
+		// ── AI Bot Performance Snapshots (for analytics charts) ──
+		`CREATE TABLE IF NOT EXISTS ai_bot_snapshots (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			bot_instance_id TEXT NOT NULL,
+			total_equity REAL DEFAULT 0,
+			unrealized_pnl REAL DEFAULT 0,
+			realized_pnl REAL DEFAULT 0,
+			total_return_pct REAL DEFAULT 0,
+			timestamp INTEGER NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_aibot_snap_bot ON ai_bot_snapshots(bot_instance_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_aibot_snap_time ON ai_bot_snapshots(timestamp)`,
+	}
+	for _, ddl := range tables {
+		if err := tx.exec(ddl); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// migrateV10 adds AI bot trade history, initial balance and subscription cancel support.
+func migrateV10(tx *dbTx) error {
+	tables := []string{
+		// Track initial balance per bot instance for realistic paper trading equity.
+		`ALTER TABLE ai_bot_instances ADD COLUMN initial_balance REAL DEFAULT 10000`,
+		`ALTER TABLE ai_bot_instances ADD COLUMN error_message TEXT DEFAULT ''`,
+
+		// AI Bot trade history (entry/exit, TP/SL, PnL).
+		`CREATE TABLE IF NOT EXISTS ai_bot_trades (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			bot_instance_id TEXT NOT NULL,
+			symbol TEXT NOT NULL,
+			side TEXT NOT NULL,
+			entry_price REAL DEFAULT 0,
+			exit_price REAL DEFAULT 0,
+			quantity REAL DEFAULT 0,
+			pnl REAL DEFAULT 0,
+			pnl_pct REAL DEFAULT 0,
+			tp_price REAL DEFAULT 0,
+			sl_price REAL DEFAULT 0,
+			close_reason TEXT DEFAULT '',
+			opened_at INTEGER NOT NULL,
+			closed_at INTEGER DEFAULT 0
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_aibot_trades_bot ON ai_bot_trades(bot_instance_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_aibot_trades_time ON ai_bot_trades(closed_at)`,
+	}
+	for _, ddl := range tables {
+		// SQLite ALTER may fail if column exists; migrations run once per DB so safe.
+		_ = tx.exec(ddl)
 	}
 	return nil
 }

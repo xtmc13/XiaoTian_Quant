@@ -97,10 +97,10 @@ if command -v go &> /dev/null; then
     fail "go.mod 缺少 redis 依赖"
   fi
 
-  # 尝试编译（可能因网络下载依赖失败）
-  if go build ./cmd/server/main.go 2>/tmp/go-build.err; then
+  # 尝试编译整个 cmd/server 包（不能只编 main.go，否则同包 router.go 等会 undefined）
+  if go build ./cmd/server/ 2>/tmp/go-build.err; then
     pass "Go 后端编译成功"
-    rm -f main 2>/dev/null || true
+    rm -f server 2>/dev/null || true
   else
     warn "Go 后端编译失败（可能因网络限制无法下载依赖）"
     if [ -s /tmp/go-build.err ]; then
@@ -227,8 +227,8 @@ else
   fail "JWT Secret 缺少生产环境校验"
 fi
 
-# 检查 pprof 端点
-if grep -q "/debug/pprof" gateway/cmd/server/main.go; then
+# 检查 pprof 端点（注册在 router.go）
+if grep -q "/debug/pprof" gateway/cmd/server/router.go; then
   pass "pprof 端点已注册"
 else
   fail "pprof 端点未注册"

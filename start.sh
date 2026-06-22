@@ -51,14 +51,11 @@ if [ -f "${DIR}/sandbox/strategy_engine/main.py" ] && [ -f "$VENV_PYTHON" ]; the
   cd "${DIR}"
 fi
 
-# ── 启动 ML Server ───────────────────────────────────────────────
-if [ -d "${DIR}/sandbox/ml_server" ] && command -v python3 >/dev/null 2>&1; then
-  echo "[START] ML Server :8001"
-  cd "${DIR}/sandbox/ml_server"
-  nohup python3 -m uvicorn main:app --host 0.0.0.0 --port 8001 > "${DIR}/logs/ml_server.log" 2>&1 &
-  ML_PID=$!
-  cd "${DIR}"
-fi
+# ── ML Server 说明 ───────────────────────────────────────────────
+# sandbox/ml_server/main.py 是训练 CLI（非常驻），不通过 uvicorn 启动。
+# 需要训练模型时手动运行：
+#   cd sandbox/ml_server && ../../sandbox/.venv/bin/python main.py train --data ... --output ...
+# 因此这里不再尝试启动 ML Server。
 
 # ── 启动 Go Gateway ─────────────────────────────────────────────
 GATEWAY_BIN="${DIR}/dist/gateway"

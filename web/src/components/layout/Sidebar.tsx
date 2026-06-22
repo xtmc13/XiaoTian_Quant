@@ -57,6 +57,15 @@ const navItems: NavItem[] = [
       { path: '/bots?type=ai', label: 'AI 机器人' },
     ],
   },
+  {
+    label: 'AI Bots', icon: BrainCircuit,
+    children: [
+      { path: '/ai-bots?tab=marketplace', label: '机器人市场' },
+      { path: '/ai-bots?tab=providers', label: '信号源市场' },
+      { path: '/ai-bots?tab=mybots', label: '我的机器人' },
+      { path: '/ai-bots?tab=analytics', label: '数据分析' },
+    ],
+  },
   { path: '/model-management', label: 'ML模型', icon: BrainCircuit },
   { path: '/risk-control', label: '风控中心', icon: Shield },
   { path: '/pairlist', label: '交易对筛选', icon: ListFilter },

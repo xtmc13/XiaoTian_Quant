@@ -102,6 +102,12 @@ import {
   type ContractParams,
   type ContractMarginInfo,
   type LiquidationPriceResult,
+  type AIBotCatalogItem,
+  type AIBotInstance,
+  type AIBotSubscription,
+  type AIBotAnalytics,
+  type AIBotCreateRequest,
+  type AIBotTrade,
 } from '@/types'
 
 
@@ -840,6 +846,17 @@ export const socialApi = {
   publishSignal: (data: Record<string, unknown>) => api.post<{ signal: any }>('/social/signals', data),
   followerConfigs: (followerId: number) =>
     api.get<{ configs: any[] }>('/social/followers/configs', { params: { follower_id: followerId } }).then(d => d?.configs ?? []),
+  saveFollowerConfig: (data: {
+    provider_id: number
+    follower_id: number
+    enabled: boolean
+    multiplier: number
+    max_position: number
+    max_daily_loss: number
+    slippage_pct: number
+    auto_execute: boolean
+    symbols: string[]
+  }) => api.post<{ success: boolean }>('/social/followers/configs', data),
 }
 
 // ── On-Chain Data ──
@@ -912,8 +929,9 @@ export const executorApi = {
 export const aiRobotApi = {
   getConfig: () => axiosInstance.get<AIRobotConfig>('/ai-robot/config'),
   saveConfig: (config: AIRobotConfig) => axiosInstance.post<AIRobotConfig>('/ai-robot/config', config),
+  getStatus: () => axiosInstance.get<{ success: boolean; data: AIStatus }>('/ai/status').then((r) => r.data?.data),
   getSignals: (params?: { limit?: number; symbol?: string }) =>
-    axiosInstance.get<{ signals: AISignal[] }>('/ai-robot/signals', { params }),
+    axiosInstance.get<{ signals: AISignal[] }>('/ai/signals', { params }).then((r) => r.data?.signals || []),
   getModels: () => axiosInstance.get<{ models: string[] }>('/ai-robot/models'),
 }
 
@@ -926,6 +944,37 @@ export const contractApi = {
     axiosInstance.get<LiquidationPriceResult>('/contract/liquidation-price', { params }),
   saveParams: (params: ContractParams) => axiosInstance.post<{ success: boolean }>('/contract/params', params),
   getParams: () => axiosInstance.get<ContractParams>('/contract/params'),
+}
+
+// ── AI Bots Marketplace ──
+export const aiBotApi = {
+  // Catalog
+  catalog: () => api.get<AIBotCatalogItem[]>('/ai-bots/catalog').then(d => d ?? []),
+  catalogItem: (id: string) => api.get<AIBotCatalogItem>(`/ai-bots/catalog/${id}`),
+
+  // Instances
+  list: () => api.get<AIBotInstance[]>('/ai-bots/instances').then(d => d ?? []),
+  get: (id: string) => api.get<AIBotInstance>(`/ai-bots/instances/${id}`),
+  create: (data: AIBotCreateRequest) => api.post<AIBotInstance>('/ai-bots/instances', data),
+  update: (id: string, data: Partial<AIBotInstance>) => api.put<AIBotInstance>(`/ai-bots/instances/${id}`, data),
+  delete: (id: string) => api.del<{ id: string }>(`/ai-bots/instances/${id}`),
+  start: (id: string) => api.post<AIBotInstance>(`/ai-bots/instances/${id}/start`),
+  pause: (id: string) => api.post<AIBotInstance>(`/ai-bots/instances/${id}/pause`),
+  resume: (id: string) => api.post<AIBotInstance>(`/ai-bots/instances/${id}/resume`),
+  stop: (id: string) => api.post<AIBotInstance>(`/ai-bots/instances/${id}/stop`),
+  clone: (id: string) => api.post<AIBotInstance>(`/ai-bots/instances/${id}/clone`),
+  batchStart: (ids: string[]) => api.post<{ success: boolean; started: number }>('/ai-bots/instances/batch-start', { ids }),
+  batchStop: (ids: string[]) => api.post<{ success: boolean; stopped: number }>('/ai-bots/instances/batch-stop', { ids }),
+  batchDelete: (ids: string[]) => api.post<{ success: boolean; deleted: number }>('/ai-bots/instances/batch-delete', { ids }),
+
+  // Analytics
+  analytics: (id: string) => api.get<AIBotAnalytics>(`/ai-bots/instances/${id}/analytics`),
+  trades: (id: string, limit = 50) => api.get<{ bot: AIBotInstance; trades: AIBotTrade[] }>(`/ai-bots/instances/${id}/trades?limit=${limit}`),
+
+  // Subscriptions
+  subscriptions: () => api.get<AIBotSubscription[]>('/ai-bots/subscriptions').then(d => d ?? []),
+  subscribe: (data: Partial<AIBotSubscription>) => api.post<{ id: number }>('/ai-bots/subscriptions', data),
+  cancelSubscription: (id: number) => api.post<{ id: number }>(`/ai-bots/subscriptions/${id}/cancel`),
 }
 
 export { ApiError }

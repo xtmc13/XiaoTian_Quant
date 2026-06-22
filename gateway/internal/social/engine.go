@@ -166,6 +166,36 @@ func (e *Engine) Unfollow(followerID, providerID int) {
 	}
 }
 
+// UpdateFollowConfig updates an existing follower's copy config.
+func (e *Engine) UpdateFollowConfig(followerID, providerID int, update CopyConfig) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	followers, ok := e.followers[providerID]
+	if !ok || followers[followerID] == nil {
+		return fmt.Errorf("not following provider %d", providerID)
+	}
+	cfg := followers[followerID]
+	cfg.Enabled = update.Enabled
+	if update.Multiplier > 0 {
+		cfg.Multiplier = update.Multiplier
+	}
+	if update.MaxPosition > 0 {
+		cfg.MaxPosition = update.MaxPosition
+	}
+	if update.MaxDailyLoss > 0 {
+		cfg.MaxDailyLoss = update.MaxDailyLoss
+	}
+	if update.SlippagePct > 0 {
+		cfg.SlippagePct = update.SlippagePct
+	}
+	cfg.AutoExecute = update.AutoExecute
+	if len(update.Symbols) > 0 {
+		cfg.Symbols = update.Symbols
+	}
+	return nil
+}
+
 // PublishSignal broadcasts a signal to all followers.
 func (e *Engine) PublishSignal(s Signal) {
 	e.mu.Lock()

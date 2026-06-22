@@ -14,6 +14,7 @@ export const test = base.extend<{
     // 1. Inject auth state into localStorage before any page scripts run
     await context.addInitScript(() => {
       (window as any).__E2E_AUTH__ = true
+      localStorage.setItem('xt-token', 'e2e-test-token')
       const authData = JSON.stringify({
         state: {
           token: 'e2e-test-token',
@@ -39,7 +40,56 @@ export const test = base.extend<{
       })
     })
 
-    // 3. Initial navigation to trigger auth state hydration
+    // 3. Broad API fallback: avoid hitting a real backend that would 401 our
+    // fake token. Tests can override specific routes after this fixture runs.
+    await page.route('**/api/**', async (route) => {
+      const url = route.request().url()
+      const method = route.request().method()
+
+      // Auth already handled above; let it fall through if this route somehow
+      // matches first (Playwright matches most recently added route).
+      if (url.includes('/auth/me')) return route.fallback()
+
+      // Endpoints that the UI expects to be arrays
+      if (
+        url.includes('/strategies') ||
+        url.includes('/bots') ||
+        url.includes('/ai-bots') ||
+        url.includes('/backtests') ||
+        url.includes('/orders') ||
+        url.includes('/trades') ||
+        url.includes('/positions') ||
+        url.includes('/portfolio') ||
+        url.includes('/social') ||
+        url.includes('/config') ||
+        url.includes('/markets') ||
+        url.includes('/exchanges')
+      ) {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify([]),
+        })
+      }
+
+      // Mutating endpoints — return a generic success object
+      if (method === 'POST' || method === 'PUT' || method === 'DELETE') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ success: true }),
+        })
+      }
+
+      // Everything else
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({}),
+      })
+    })
+
+    // 4. Initial navigation to trigger auth state hydration
     await page.goto('/dashboard')
     await page.waitForLoadState('domcontentloaded')
     await page.waitForTimeout(1000)

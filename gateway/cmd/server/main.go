@@ -128,6 +128,19 @@ func registerStrategyFactories() {
 	strategy.RegisterStrategyFactory("ema_follow", func() strategy.Strategy { return strategies.NewEMACrossStrategy() })
 	strategy.RegisterStrategyFactory("ema_counter", func() strategy.Strategy { return strategies.NewEMACrossStrategy() })
 	strategy.RegisterStrategyFactory("custom", func() strategy.Strategy { return strategies.NewBreakoutStrategy() })
+
+	// AI Bots marketplace aliases
+	strategy.RegisterStrategyFactory("optimus", func() strategy.Strategy { return strategies.NewGridTradingStrategy() })
+	strategy.RegisterStrategyFactory("cyberbot", func() strategy.Strategy { return strategies.NewRSIStrategy() })
+	strategy.RegisterStrategyFactory("mono_optimus", func() strategy.Strategy { return strategies.NewGridTradingStrategy() })
+	strategy.RegisterStrategyFactory("mono_cyberbot", func() strategy.Strategy { return strategies.NewRSIStrategy() })
+	strategy.RegisterStrategyFactory("crypto_future", func() strategy.Strategy { return strategies.NewDualThrustStrategy() })
+	strategy.RegisterStrategyFactory("ai_alpha", func() strategy.Strategy { return strategies.NewEMACrossStrategy() })
+	strategy.RegisterStrategyFactory("ai_alpha_futures", func() strategy.Strategy { return strategies.NewDualThrustStrategy() })
+	strategy.RegisterStrategyFactory("terminator_volatility", func() strategy.Strategy { return strategies.NewATRTrailingStopStrategy() })
+	strategy.RegisterStrategyFactory("alt_volatility", func() strategy.Strategy { return strategies.NewDualThrustStrategy() })
+	strategy.RegisterStrategyFactory("trade_holder", func() strategy.Strategy { return strategies.NewMartingaleStrategy() })
+	strategy.RegisterStrategyFactory("noah", func() strategy.Strategy { return strategies.NewGridTradingStrategy() })
 }
 
 // setupGinMode configures Gin's mode based on server config.

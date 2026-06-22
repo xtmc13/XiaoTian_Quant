@@ -1,15 +1,22 @@
 import React from 'react'
 import { cn } from '@/lib/utils'
 
-export interface SwitchProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'type'> {
+export interface SwitchProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'type' | 'onChange'> {
   label?: string
   labelPosition?: 'left' | 'right'
+  onCheckedChange?: (checked: boolean) => void
+  onChange?: React.ChangeEventHandler<HTMLInputElement>
 }
 
 export const Switch = React.forwardRef<HTMLInputElement, SwitchProps>(function Switch(
-  { label, labelPosition = 'right', className, ...props },
+  { label, labelPosition = 'right', className, onCheckedChange, onChange, ...props },
   ref
 ) {
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    onCheckedChange?.(e.target.checked)
+    onChange?.(e)
+  }
+
   return (
     <label className={cn('inline-flex items-center gap-2 cursor-pointer', className)}>
       {label && labelPosition === 'left' && (
@@ -23,6 +30,7 @@ export const Switch = React.forwardRef<HTMLInputElement, SwitchProps>(function S
           type="checkbox"
           className="sr-only peer"
           {...props}
+          onChange={handleChange}
         />
         <div
           className={cn(

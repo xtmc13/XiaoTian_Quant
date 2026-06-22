@@ -1,4 +1,5 @@
 import React, { memo } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import {
   Bot,
   Play,
@@ -20,6 +21,9 @@ import {
 import { cn, formatCurrency } from '@/lib/utils'
 import { KPICard } from '@/components/ui/KPICard'
 import { SectionCard } from '@/components/ui/SectionCard'
+import { Skeleton } from '@/components/ui/Skeleton'
+import { PerformanceChart } from '@/components/charts/PerformanceChart'
+import { aiBotApi, strategyApi } from '@/lib/api'
 import type { BotItem } from '@/hooks/useBotData'
 import { STATUS_META } from '@/hooks/useBotData'
 
@@ -253,6 +257,25 @@ export function BotDetailView({
   const isRunning = bot.status === 'running'
   const totalPnl = (bot.unrealized_pnl || 0) + (bot.realized_pnl || 0)
 
+  const { data: analytics, isLoading: analyticsLoading } = useQuery({
+    queryKey: ['ai-bots', 'analytics', bot.id],
+    queryFn: () => aiBotApi.analytics(bot.id),
+    retry: false,
+  })
+
+  const { data: logs, isLoading: logsLoading } = useQuery({
+    queryKey: ['strategies', 'logs', bot.id],
+    queryFn: () => strategyApi.logs(bot.id),
+    retry: false,
+  })
+
+  const equityData = React.useMemo(() => {
+    if (!analytics?.snapshots) return []
+    return analytics.snapshots
+      .sort((a, b) => a.timestamp - b.timestamp)
+      .map((s) => ({ time: s.timestamp * 1000, equity: s.total_equity || 0 }))
+  }, [analytics])
+
   return (
     <div className="space-y-6">
       {/* Back */}
@@ -289,7 +312,7 @@ export function BotDetailView({
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {isRunning ? (
               <button
                 onClick={() => onStop(bot)}
@@ -359,24 +382,47 @@ export function BotDetailView({
         />
       </div>
 
-      {/* Performance chart placeholder */}
+      {/* Performance chart */}
       <SectionCard title="收益曲线">
-        <div className="flex h-48 items-center justify-center rounded-lg border border-dashed border-[#1c1c1c] bg-[#0a0a0a]">
-          <div className="text-center">
-            <LineChart className="mx-auto h-8 w-8 text-[#333333]" />
-            <p className="mt-2 text-xs text-[#8a8a8a]">收益曲线图表占位</p>
+        {analyticsLoading ? (
+          <Skeleton className="h-48 rounded-lg" />
+        ) : equityData.length > 0 ? (
+          <PerformanceChart data={equityData} height={260} />
+        ) : (
+          <div className="flex h-48 items-center justify-center rounded-lg border border-dashed border-[#1c1c1c] bg-[#0a0a0a]">
+            <div className="text-center">
+              <LineChart className="mx-auto h-8 w-8 text-[#333333]" />
+              <p className="mt-2 text-xs text-[#8a8a8a]">暂无收益曲线数据</p>
+            </div>
           </div>
-        </div>
+        )}
       </SectionCard>
 
       {/* Logs */}
       <SectionCard title="运行日志">
-        <div className="flex h-40 items-center justify-center rounded-lg border border-dashed border-[#1c1c1c] bg-[#0a0a0a]">
-          <div className="text-center">
-            <Terminal className="mx-auto h-8 w-8 text-[#333333]" />
-            <p className="mt-2 text-xs text-[#8a8a8a]">日志输出占位</p>
+        {logsLoading ? (
+          <Skeleton className="h-40 rounded-lg" />
+        ) : logs && logs.length > 0 ? (
+          <div className="h-40 overflow-y-auto rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-3 space-y-1.5 font-mono text-[11px]">
+            {logs.slice(0, 50).map((log: any, idx: number) => (
+              <div key={idx} className="flex gap-2">
+                <span className={cn(
+                  'shrink-0',
+                  log.level === 'error' ? 'text-red-400' : log.level === 'warning' ? 'text-yellow-400' : 'text-emerald-400'
+                )}>[{log.level || 'info'}]</span>
+                <span className="text-[#666]">{log.created_at ? new Date(log.created_at).toLocaleTimeString() : '-'}</span>
+                <span className="text-[#aaa]">{log.message}</span>
+              </div>
+            ))}
           </div>
-        </div>
+        ) : (
+          <div className="flex h-40 items-center justify-center rounded-lg border border-dashed border-[#1c1c1c] bg-[#0a0a0a]">
+            <div className="text-center">
+              <Terminal className="mx-auto h-8 w-8 text-[#333333]" />
+              <p className="mt-2 text-xs text-[#8a8a8a]">暂无运行日志</p>
+            </div>
+          </div>
+        )}
       </SectionCard>
 
       {/* Config summary */}

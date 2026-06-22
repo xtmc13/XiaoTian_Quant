@@ -27,6 +27,7 @@ const pageLoaders: Record<string, () => Promise<unknown>> = {
   '/ai':                   () => import('./pages/AI'),
   '/backtest':             () => import('./pages/Backtest'),
   '/bots':                 () => import('./pages/Bots'),
+  '/ai-bots':              () => import('./pages/AIBots'),
   '/settings':             () => import('./pages/Settings'),
   '/exchange-account':     () => import('./pages/ExchangeAccount'),
   '/indicator-community':  () => import('./pages/IndicatorCommunity'),
@@ -54,6 +55,7 @@ const Strategy = lazyPage(() => import('./pages/Strategy'), 'Strategy')
 const AI = lazyPage(() => import('./pages/AI'), 'AI')
 const Backtest = lazyPage(() => import('./pages/Backtest'), 'Backtest')
 const Bots = lazyPage(() => import('./pages/Bots'), 'Bots')
+const AIBots = lazyPage(() => import('./pages/AIBots'), 'default')
 const Settings = lazyPage(() => import('./pages/Settings'), 'Settings')
 const ExchangeAccount = lazyPage(() => import('./pages/ExchangeAccount'), 'ExchangeAccount')
 const IndicatorCommunity = lazyPage(() => import('./pages/IndicatorCommunity'), 'IndicatorCommunity')
@@ -126,6 +128,7 @@ function DocumentTitle() {
     '/ai': 'AI研究 - 小天量化',
     '/backtest': '回测 - 小天量化',
     '/bots': '机器人 - 小天量化',
+    '/ai-bots': 'AI Bots - 小天量化',
     '/settings': '设置 - 小天量化',
     '/exchange-account': '账户 - 小天量化',
     '/indicator-community': '指标市场 - 小天量化',
@@ -242,6 +245,7 @@ export default function App() {
                 <Route path="/ai" element={<PageShell><AI /></PageShell>} />
                 <Route path="/backtest" element={<PageShell><Backtest /></PageShell>} />
                 <Route path="/bots" element={<PageShell><Bots /></PageShell>} />
+                <Route path="/ai-bots" element={<PageShell><AIBots /></PageShell>} />
                 <Route path="/settings" element={<PageShell><Settings /></PageShell>} />
                 <Route path="/exchange-account" element={<PageShell><ExchangeAccount /></PageShell>} />
                 <Route path="/indicator-community" element={<PageShell><IndicatorCommunity /></PageShell>} />

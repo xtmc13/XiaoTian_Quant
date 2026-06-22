@@ -74,17 +74,7 @@ export const AIRobotPanel: React.FC = () => {
 
   const { data: status, isLoading: statusLoading } = useQuery({
     queryKey: ['ai', 'status'],
-    queryFn: () => aiRobotApi.getConfig().then((r) => {
-      const cfg = r.data;
-      return {
-        signals_today: 0,
-        avg_confidence: cfg.confidence_threshold || 60,
-        filter_rate: 0,
-        win_rate: 0,
-        model: cfg.model || 'deepseek',
-        enabled: cfg.enabled || false,
-      } as AIStatus;
-    }),
+    queryFn: () => aiRobotApi.getStatus(),
     refetchInterval: 10000,
   })
 

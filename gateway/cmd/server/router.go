@@ -12,6 +12,7 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/middleware"
 	"github.com/xiaotian-quant/gateway/internal/onchain"
 	"github.com/xiaotian-quant/gateway/internal/social"
+	"github.com/xiaotian-quant/gateway/internal/store"
 	"github.com/xiaotian-quant/gateway/internal/ws"
 	"github.com/xiaotian-quant/gateway/spa"
 	"os"
@@ -75,6 +76,7 @@ func setupRoutes(r *gin.Engine, cfg *serverConfig) *gin.Engine {
 		registerCommunityRoutes(api)
 		registerSocialRoutes(api)
 		registerOnChainRoutes(api)
+		registerAIBotRoutes(api)
 	}
 
 	// ── Webhooks ──
@@ -605,6 +607,20 @@ func registerSocialRoutes(api *gin.RouterGroup) {
 	socialG.Use(middleware.AuthRequired())
 	{
 		socialEngine := social.NewEngine()
+		// Seed signal providers from AI bot catalog so follow/auto-follow works.
+		// Use small sequential IDs to stay within strconv.Atoi range.
+		idx := 1
+		for _, item := range store.GetAIBotCatalog() {
+			if strategyType, _ := item["strategy_type"].(string); strategyType == "signal_provider" {
+				providerID := idx
+				idx++
+				monthlyFee := 0.0
+				if v, ok := item["monthly_fee"].(float64); ok {
+					monthlyFee = v
+				}
+				socialEngine.RegisterProvider(providerID, monthlyFee, true)
+			}
+		}
 		social.RegisterRoutes(socialG, socialEngine)
 	}
 }
@@ -615,5 +631,39 @@ func registerOnChainRoutes(api *gin.RouterGroup) {
 	{
 		onchainClient := onchain.NewClient(os.Getenv("ONCHAIN_API_KEY"))
 		onchain.RegisterRoutes(onchainG, onchainClient)
+	}
+}
+
+func registerAIBotRoutes(api *gin.RouterGroup) {
+	private := api.Group("/ai-bots")
+	private.Use(middleware.AuthRequired())
+	{
+		// Catalog
+		private.GET("/catalog", handler.AIBotCatalogList)
+		private.GET("/catalog/:id", handler.AIBotCatalogGet)
+
+		// Instances
+		private.GET("/instances", handler.AIBotInstanceList)
+		private.POST("/instances", handler.AIBotInstanceCreate)
+		private.GET("/instances/:id", handler.AIBotInstanceGet)
+		private.PUT("/instances/:id", handler.AIBotInstanceUpdate)
+		private.DELETE("/instances/:id", handler.AIBotInstanceDelete)
+		private.POST("/instances/:id/start", handler.AIBotInstanceStart)
+		private.POST("/instances/:id/pause", handler.AIBotInstancePause)
+		private.POST("/instances/:id/resume", handler.AIBotInstanceResume)
+		private.POST("/instances/:id/stop", handler.AIBotInstanceStop)
+		private.POST("/instances/:id/clone", handler.AIBotInstanceClone)
+		private.GET("/instances/:id/analytics", handler.AIBotInstanceAnalytics)
+		private.GET("/instances/:id/trades", handler.AIBotInstanceTrades)
+
+		// Batch operations
+		private.POST("/instances/batch-start", handler.AIBotBatchStart)
+		private.POST("/instances/batch-stop", handler.AIBotBatchStop)
+		private.POST("/instances/batch-delete", handler.AIBotBatchDelete)
+
+		// Subscriptions
+		private.GET("/subscriptions", handler.AIBotSubscriptionList)
+		private.POST("/subscriptions", handler.AIBotSubscriptionCreate)
+		private.POST("/subscriptions/:id/cancel", handler.AIBotSubscriptionCancel)
 	}
 }

@@ -35,6 +35,15 @@ func StartBackgroundTasks() {
 		}
 	}()
 
+	// AI Bot performance snapshot recorder (configurable, default 60s)
+	snapshotInterval := 60 * time.Second
+	if v := os.Getenv("AI_BOT_SNAPSHOT_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			snapshotInterval = d
+		}
+	}
+	go StartAIBotSnapshotWorker(snapshotInterval)
+
 	// Periodic health checks
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
