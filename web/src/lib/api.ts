@@ -264,14 +264,17 @@ axiosInstance.interceptors.response.use(
         return Promise.reject(new ApiError(msg, status, (wrappedError?.code as string) || (data?.code as string) || 'SERVER_ERROR'))
       }
 
-      const message = (data?.message as string) || (data?.error as string) || `请求失败 (${status})`
+      // Backend wraps errors as { error: { code, message } }
+      const wrappedError = data?.error as Record<string, unknown> | undefined
+      const message = (wrappedError?.message as string) || (data?.message as string) || `请求失败 (${status})`
+      const code = (wrappedError?.code as string) || (data?.code as string) || 'HTTP_ERROR'
       // Show toast for client errors (4xx except 401/403/429)
       if (status >= 400 && status !== 401 && status !== 403 && status !== 429) {
         try {
           useToastStore.getState().addToast({ type: 'error', message, duration: 5000 })
         } catch { /* ignore */ }
       }
-      return Promise.reject(new ApiError(message, status, (data?.code as string) || 'HTTP_ERROR'))
+      return Promise.reject(new ApiError(message, status, code))
     }
 
     if (error.request) {
