@@ -56,6 +56,7 @@ func setupRoutes(r *gin.Engine, cfg *serverConfig) *gin.Engine {
 		registerMarketRoutes(api)
 		registerNotificationRoutes(api)
 		registerArbitrageRoutes(api)
+		registerTriangularRoutes(api)
 		registerDataRoutes(api)
 		registerPythonStrategyRoutes(api)
 		registerStrategyRoutes(api)
@@ -312,12 +313,32 @@ func registerArbitrageRoutes(api *gin.RouterGroup) {
 	private.POST("/arbitrage/start", handler.StartArbitrage)
 	private.POST("/arbitrage/stop", handler.StopArbitrage)
 	private.GET("/arbitrage/status", handler.GetArbitrageStatus)
+	private.GET("/arbitrage/performance", handler.GetArbitragePerformance)
 	private.GET("/arbitrage/opportunity", handler.GetArbitrageOpportunity)
 	private.GET("/arbitrage/positions", handler.GetArbitragePositions)
 	private.GET("/arbitrage/history", handler.GetArbitrageHistory)
 	private.POST("/arbitrage/exchanges", handler.RegisterArbitrageExchange)
 	private.GET("/arbitrage/exchanges", handler.ListArbitrageExchanges)
 	private.POST("/arbitrage/execute", handler.ExecuteArbitrage)
+	private.POST("/arbitrage/positions/:id/close", handler.CloseArbitragePosition)
+	private.POST("/arbitrage/positions/:id/fail", handler.FailArbitragePosition)
+}
+
+func registerTriangularRoutes(api *gin.RouterGroup) {
+	private := api.Group("")
+	private.Use(middleware.AuthRequired())
+	private.GET("/triangular/config", handler.GetTriangularConfig)
+	private.POST("/triangular/config", handler.UpdateTriangularConfig)
+	private.POST("/triangular/start", handler.StartTriangular)
+	private.POST("/triangular/stop", handler.StopTriangular)
+	private.GET("/triangular/status", handler.GetTriangularStatus)
+	private.GET("/triangular/performance", handler.GetTriangularPerformance)
+	private.GET("/triangular/opportunity", handler.GetTriangularOpportunity)
+	private.GET("/triangular/positions", handler.GetTriangularPositions)
+	private.GET("/triangular/history", handler.GetTriangularHistory)
+	private.POST("/triangular/execute", handler.ExecuteTriangular)
+	private.POST("/triangular/positions/:id/close", handler.CloseTriangularPosition)
+	private.POST("/triangular/positions/:id/fail", handler.FailTriangularPosition)
 }
 
 func registerDataRoutes(api *gin.RouterGroup) {

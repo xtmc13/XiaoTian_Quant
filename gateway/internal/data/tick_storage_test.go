@@ -9,13 +9,11 @@ import (
 )
 
 func initTickTestDB(t *testing.T) {
-	if err := store.InitDB(); err != nil {
-		t.Fatalf("init db failed: %v", err)
-	}
 	db := store.GetDB()
-	if db != nil {
-		db.Exec("DELETE FROM ticks")
+	if db == nil {
+		t.Fatal("db not initialized")
 	}
+	db.Exec("DELETE FROM ticks")
 }
 
 func TestTickStorageSaveAndLoad(t *testing.T) {

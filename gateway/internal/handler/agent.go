@@ -32,6 +32,7 @@ func CreateAgentToken(c *gin.Context) {
 		"last_used":    nil,
 	}
 	*store.GetAgentTokensStore() = append(*store.GetAgentTokensStore(), token)
+	store.PersistAgentTokens()
 	c.JSON(http.StatusOK, token)
 }
 
@@ -41,6 +42,7 @@ func DeleteAgentToken(c *gin.Context) {
 	for i, t := range *tokens {
 		if getString(t, "id", "") == id {
 			*tokens = append((*tokens)[:i], (*tokens)[i+1:]...)
+			store.PersistAgentTokens()
 			c.JSON(http.StatusOK, gin.H{"success": true})
 			return
 		}

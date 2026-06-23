@@ -454,6 +454,7 @@ func ClearStrategyLogs(c *gin.Context) {
 	} else {
 		*logs = nil
 	}
+	store.PersistStrategyLogs()
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
@@ -491,6 +492,7 @@ func CreateTemplate(c *gin.Context) {
 		"created_at":    float64(time.Now().Unix()),
 	}
 	*store.GetTemplatesStore() = append(*store.GetTemplatesStore(), tpl)
+	store.PersistStrategyTemplates()
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "id": tpl["id"]})
 }
 
@@ -500,6 +502,7 @@ func DeleteTemplate(c *gin.Context) {
 	for i, t := range *templates {
 		if t["id"] == id {
 			*templates = append((*templates)[:i], (*templates)[i+1:]...)
+			store.PersistStrategyTemplates()
 			c.JSON(http.StatusOK, gin.H{"status": "ok"})
 			return
 		}

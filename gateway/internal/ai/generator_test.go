@@ -267,7 +267,7 @@ func TestValidateGeneratedCode(t *testing.T) {
 		{
 			name:     "forbidden pattern os.Exec",
 			code:     "func OnBar(bar, state) { stopLoss := 0.02 }\nfunc Stop() {}\nos.Exec(\"rm -rf /\")",
-			wantWarn: []string{"forbidden pattern detected: os\\.Exec", "missing OnBar handler", "missing Stop method", "no stop loss defined"},
+			wantWarn: []string{"forbidden pattern detected: os\\.Exec"},
 		},
 		{
 			name:     "forbidden pattern http.Get",

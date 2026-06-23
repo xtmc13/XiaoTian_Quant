@@ -2,17 +2,20 @@ package handler
 
 import (
 	"encoding/json"
+	"io"
 	"log"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
 	"github.com/xiaotian-quant/gateway/internal/exchange"
 	"github.com/xiaotian-quant/gateway/internal/portfolio"
+	"github.com/xiaotian-quant/gateway/internal/service"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
@@ -76,6 +79,13 @@ func WSHandler(c *gin.Context) {
 	defer conn.Close()
 
 	tick := 0
+
+	// Fallback price feed: if the real-time exchange WebSocket has not pushed
+	// prices for a symbol, poll Binance REST API every second to keep data real.
+	symbols := []string{"BTCUSDT", "ETHUSDT", "SOLUSDT"}
+	pricePollStop := make(chan struct{})
+	go pollRealPrices(symbols, pricePollStop)
+	defer close(pricePollStop)
 
 	// Read messages in a goroutine (to detect disconnect)
 	done := make(chan struct{})
@@ -145,6 +155,52 @@ func WSHandler(c *gin.Context) {
 			}
 		}
 	}
+}
+
+// pollRealPrices polls Binance REST API and feeds prices into UpdateRealPrice
+// when the live WebSocket feed is not active for a symbol.
+func pollRealPrices(symbols []string, stop chan struct{}) {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			for _, sym := range symbols {
+				pricesMu.RLock()
+				_, fed := realPriceFed[sym]
+				pricesMu.RUnlock()
+				if fed {
+					continue // live feed is active, don't overwrite
+				}
+				price := fetchBinancePriceWS(sym)
+				if price > 0 {
+					UpdateRealPrice(sym, price)
+				}
+			}
+		}
+	}
+}
+
+// fetchBinancePriceWS retrieves the latest price from Binance public API.
+func fetchBinancePriceWS(symbol string) float64 {
+	resp, err := http.Get("https://api.binance.com/api/v3/ticker/price?symbol=" + symbol)
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	var result map[string]any
+	if err := json.Unmarshal(body, &result); err != nil {
+		return 0
+	}
+	if priceStr, ok := result["price"].(string); ok {
+		f, _ := strconv.ParseFloat(priceStr, 64)
+		return f
+	}
+	return 0
 }
 
 func buildStatusMsg(tick int) []byte {
@@ -262,9 +318,26 @@ func buildOrderbookMsg(sym string) []byte {
 		return nil
 	}
 
-	// Generate synthetic orderbook levels from mid price
-	// In production, this should come from Binance WS depth stream
-	// For now, use fixed spread to show structure without fake quantities
+	// Try to use the matching engine order book first.
+	if snap, err := service.GetMatchingService().GetOrderBook(sym, 15); err == nil {
+		if bidsRaw, ok := snap["bids"].([][]any); ok && len(bidsRaw) > 0 {
+			asksRaw, _ := snap["asks"].([][]any)
+			msg, _ := json.Marshal(map[string]any{
+				"type":   "orderbook",
+				"symbol": sym,
+				"data": map[string]any{
+					"symbol": sym,
+					"bids":   bidsRaw,
+					"asks":   asksRaw,
+					"source": "matching_engine",
+				},
+			})
+			return msg
+		}
+	}
+
+	// No real order book available: generate a synthetic book with zero
+	// quantities and clearly mark the source so the UI can warn the user.
 	bids := make([][]any, 15)
 	asks := make([][]any, 15)
 	baseSpread := mid * 0.0001 // 0.01% base spread
@@ -279,7 +352,7 @@ func buildOrderbookMsg(sym string) []byte {
 			"symbol": sym,
 			"bids":   bids,
 			"asks":   asks,
-			"source": "synthetic", // marked as synthetic until real depth stream
+			"source": "synthetic",
 		},
 	})
 	return msg

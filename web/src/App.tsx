@@ -171,7 +171,7 @@ function DocumentTitle() {
       '/settings',
     ]
 
-    const idleCallback = (window as Record<string, unknown>).requestIdleCallback as
+    const idleCallback = (window as unknown as Record<string, unknown>).requestIdleCallback as
       | ((cb: () => void, opts?: { timeout: number }) => number)
       | undefined
 

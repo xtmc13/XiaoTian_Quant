@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -109,20 +110,20 @@ func (r *TradeRepo) Delete(id string) error {
 // ── Position Repository ──
 
 type PositionRecord struct {
-	ID             string  `json:"id"`
-	Symbol         string  `json:"symbol"`
-	Side           string  `json:"side"`
-	Quantity       float64 `json:"quantity"`
-	AvgEntryPrice  float64 `json:"avg_entry_price"`
-	CurrentPrice   float64 `json:"current_price"`
-	UnrealizedPnL  float64 `json:"unrealized_pnl"`
-	RealizedPnL    float64 `json:"realized_pnl"`
-	CostBasis      float64 `json:"cost_basis"`
-	Exchange       string  `json:"exchange"`
-	Status         string  `json:"status"`
-	OpenedAt       int64   `json:"opened_at"`
-	ClosedAt       int64   `json:"closed_at"`
-	UpdatedAt      int64   `json:"updated_at"`
+	ID            string  `json:"id"`
+	Symbol        string  `json:"symbol"`
+	Side          string  `json:"side"`
+	Quantity      float64 `json:"quantity"`
+	AvgEntryPrice float64 `json:"avg_entry_price"`
+	CurrentPrice  float64 `json:"current_price"`
+	UnrealizedPnL float64 `json:"unrealized_pnl"`
+	RealizedPnL   float64 `json:"realized_pnl"`
+	CostBasis     float64 `json:"cost_basis"`
+	Exchange      string  `json:"exchange"`
+	Status        string  `json:"status"`
+	OpenedAt      int64   `json:"opened_at"`
+	ClosedAt      int64   `json:"closed_at"`
+	UpdatedAt     int64   `json:"updated_at"`
 }
 
 type PositionRepo struct{ mu sync.RWMutex }
@@ -202,19 +203,19 @@ func (r *PositionRepo) Delete(id string) error {
 // ── Signal Repository ──
 
 type SignalRecord struct {
-	ID             int     `json:"id"`
-	Symbol         string  `json:"symbol"`
-	Direction      string  `json:"direction"`
-	Strength       float64 `json:"strength"`
-	Strategy       string  `json:"strategy"`
-	Reason         string  `json:"reason"`
-	EntryPrice     float64 `json:"entry_price"`
-	StopLoss       float64 `json:"stop_loss"`
-	TakeProfit     float64 `json:"take_profit"`
-	PositionSize   float64 `json:"position_size"`
-	Status         string  `json:"status"`
-	ExecutedOrderID string `json:"executed_order_id"`
-	CreatedAt      int64   `json:"created_at"`
+	ID              int     `json:"id"`
+	Symbol          string  `json:"symbol"`
+	Direction       string  `json:"direction"`
+	Strength        float64 `json:"strength"`
+	Strategy        string  `json:"strategy"`
+	Reason          string  `json:"reason"`
+	EntryPrice      float64 `json:"entry_price"`
+	StopLoss        float64 `json:"stop_loss"`
+	TakeProfit      float64 `json:"take_profit"`
+	PositionSize    float64 `json:"position_size"`
+	Status          string  `json:"status"`
+	ExecutedOrderID string  `json:"executed_order_id"`
+	CreatedAt       int64   `json:"created_at"`
 }
 
 type SignalRepo struct{ mu sync.RWMutex }
@@ -456,7 +457,9 @@ func (r *MarketDataRepo) GetByID(id string) (*MarketBarRecord, error) {
 	return &b, nil
 }
 
-func (r *MarketDataRepo) List(filter map[string]any, limit int) ([]*MarketBarRecord, error) { return nil, nil }
+func (r *MarketDataRepo) List(filter map[string]any, limit int) ([]*MarketBarRecord, error) {
+	return nil, nil
+}
 func (r *MarketDataRepo) Update(b *MarketBarRecord) error { return r.Create(b) }
 func (r *MarketDataRepo) Delete(id string) error {
 	_, err := db.Exec("DELETE FROM market_bars WHERE id=?", id)
@@ -588,16 +591,16 @@ func (r *PortfolioSnapshotRepo) GetRecent(limit int) ([]map[string]any, error) {
 // ── Agent Token Repository ──
 
 type AgentTokenRecord struct {
-	ID          int    `json:"id"`
-	Name        string `json:"name"`
-	TokenHash   string `json:"token_hash"`
-	TokenPrefix string `json:"token_prefix"`
-	Scopes      string `json:"scopes"`
-	RateLimitRPS int   `json:"rate_limit_rps"`
-	IsActive    int    `json:"is_active"`
-	ExpiresAt   int64  `json:"expires_at"`
-	LastUsedAt  int64  `json:"last_used_at"`
-	CreatedAt   int64  `json:"created_at"`
+	ID           int    `json:"id"`
+	Name         string `json:"name"`
+	TokenHash    string `json:"token_hash"`
+	TokenPrefix  string `json:"token_prefix"`
+	Scopes       string `json:"scopes"`
+	RateLimitRPS int    `json:"rate_limit_rps"`
+	IsActive     int    `json:"is_active"`
+	ExpiresAt    int64  `json:"expires_at"`
+	LastUsedAt   int64  `json:"last_used_at"`
+	CreatedAt    int64  `json:"created_at"`
 }
 
 type AgentTokenRepo struct{ mu sync.RWMutex }
@@ -802,13 +805,13 @@ type OrderRecord struct {
 	UpdatedAt    int64   `json:"updated_at"`
 
 	// Contract fields
-	MarketType   string  `json:"market_type,omitempty"`
-	PositionSide string  `json:"position_side,omitempty"`
-	Leverage     float64 `json:"leverage,omitempty"`
-	MarginMode   string  `json:"margin_mode,omitempty"`
-	TPPrice      float64 `json:"tp_price,omitempty"`
-	SLPrice      float64 `json:"sl_price,omitempty"`
-	ClosePosition bool   `json:"close_position,omitempty"`
+	MarketType    string  `json:"market_type,omitempty"`
+	PositionSide  string  `json:"position_side,omitempty"`
+	Leverage      float64 `json:"leverage,omitempty"`
+	MarginMode    string  `json:"margin_mode,omitempty"`
+	TPPrice       float64 `json:"tp_price,omitempty"`
+	SLPrice       float64 `json:"sl_price,omitempty"`
+	ClosePosition bool    `json:"close_position,omitempty"`
 }
 
 type OrderRepo struct {
@@ -912,4 +915,426 @@ func buildFilter(filter map[string]any) ([]any, string) {
 		args = append(args, val)
 	}
 	return args, strings.Join(clauses, " AND ")
+}
+
+// ── Arbitrage Trade Repository ──
+
+type ArbitrageTradeRecord struct {
+	ID           string  `json:"id"`
+	Symbol       string  `json:"symbol"`
+	BuyExchange  string  `json:"buy_exchange"`
+	SellExchange string  `json:"sell_exchange"`
+	BuyPrice     float64 `json:"buy_price"`
+	SellPrice    float64 `json:"sell_price"`
+	Quantity     float64 `json:"quantity"`
+	BuyOrderID   string  `json:"buy_order_id"`
+	SellOrderID  string  `json:"sell_order_id"`
+	GrossProfit  float64 `json:"gross_profit"`
+	NetProfit    float64 `json:"net_profit"`
+	Fees         float64 `json:"fees"`
+	Status       string  `json:"status"`
+	OpenedAt     int64   `json:"opened_at"`
+	ClosedAt     int64   `json:"closed_at"`
+}
+
+type ArbitrageTradeRepo struct{ mu sync.RWMutex }
+
+func NewArbitrageTradeRepo() *ArbitrageTradeRepo { return &ArbitrageTradeRepo{} }
+
+func (r *ArbitrageTradeRepo) Create(t *ArbitrageTradeRecord) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	if t.ID == "" {
+		t.ID = fmt.Sprintf("arb_%d", time.Now().UnixNano())
+	}
+	if t.OpenedAt == 0 {
+		t.OpenedAt = time.Now().UnixMilli()
+	}
+	_, err := db.Exec(
+		`INSERT INTO arbitrage_trades (id, symbol, buy_exchange, sell_exchange, buy_price, sell_price, quantity, buy_order_id, sell_order_id, gross_profit, net_profit, fees, status, opened_at, closed_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		t.ID, t.Symbol, t.BuyExchange, t.SellExchange, t.BuyPrice, t.SellPrice, t.Quantity,
+		t.BuyOrderID, t.SellOrderID, t.GrossProfit, t.NetProfit, t.Fees, t.Status, t.OpenedAt, t.ClosedAt,
+	)
+	return err
+}
+
+func (r *ArbitrageTradeRepo) GetByID(id string) (*ArbitrageTradeRecord, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	row := db.QueryRow(`SELECT id, symbol, buy_exchange, sell_exchange, buy_price, sell_price, quantity, buy_order_id, sell_order_id, gross_profit, net_profit, fees, status, opened_at, closed_at FROM arbitrage_trades WHERE id=?`, id)
+	var t ArbitrageTradeRecord
+	err := row.Scan(&t.ID, &t.Symbol, &t.BuyExchange, &t.SellExchange, &t.BuyPrice, &t.SellPrice, &t.Quantity, &t.BuyOrderID, &t.SellOrderID, &t.GrossProfit, &t.NetProfit, &t.Fees, &t.Status, &t.OpenedAt, &t.ClosedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+func (r *ArbitrageTradeRepo) Update(t *ArbitrageTradeRecord) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	_, err := db.Exec(
+		`UPDATE arbitrage_trades SET symbol=?, buy_exchange=?, sell_exchange=?, buy_price=?, sell_price=?, quantity=?, buy_order_id=?, sell_order_id=?, gross_profit=?, net_profit=?, fees=?, status=?, opened_at=?, closed_at=? WHERE id=?`,
+		t.Symbol, t.BuyExchange, t.SellExchange, t.BuyPrice, t.SellPrice, t.Quantity,
+		t.BuyOrderID, t.SellOrderID, t.GrossProfit, t.NetProfit, t.Fees, t.Status, t.OpenedAt, t.ClosedAt, t.ID,
+	)
+	return err
+}
+
+func (r *ArbitrageTradeRepo) Delete(id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	_, err := db.Exec("DELETE FROM arbitrage_trades WHERE id=?", id)
+	return err
+}
+
+func (r *ArbitrageTradeRepo) ListActive() ([]*ArbitrageTradeRecord, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	query := `SELECT id, symbol, buy_exchange, sell_exchange, buy_price, sell_price, quantity, buy_order_id, sell_order_id, gross_profit, net_profit, fees, status, opened_at, closed_at FROM arbitrage_trades WHERE status IN ('pending','open_buy','open','open_sell') ORDER BY opened_at DESC`
+	rows, err := db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanArbitrageTradeRows(rows)
+}
+
+func (r *ArbitrageTradeRepo) ListHistory(limit int) ([]*ArbitrageTradeRecord, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	query := `SELECT id, symbol, buy_exchange, sell_exchange, buy_price, sell_price, quantity, buy_order_id, sell_order_id, gross_profit, net_profit, fees, status, opened_at, closed_at FROM arbitrage_trades WHERE status IN ('completed','failed','dry_run') ORDER BY opened_at DESC`
+	var args []any
+	if limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, limit)
+	}
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanArbitrageTradeRows(rows)
+}
+
+func scanArbitrageTradeRows(rows *sql.Rows) ([]*ArbitrageTradeRecord, error) {
+	var result []*ArbitrageTradeRecord
+	for rows.Next() {
+		var t ArbitrageTradeRecord
+		if err := rows.Scan(&t.ID, &t.Symbol, &t.BuyExchange, &t.SellExchange, &t.BuyPrice, &t.SellPrice, &t.Quantity, &t.BuyOrderID, &t.SellOrderID, &t.GrossProfit, &t.NetProfit, &t.Fees, &t.Status, &t.OpenedAt, &t.ClosedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, &t)
+	}
+	return result, nil
+}
+
+// ── Triangular Trade Repository ──
+
+type TriangularTradeRecord struct {
+	ID          string  `json:"id"`
+	Exchange    string  `json:"exchange"`
+	CycleJSON   string  `json:"cycle_json"`
+	LegsJSON    string  `json:"legs_json"`
+	StartAsset  string  `json:"start_asset"`
+	StartQty    float64 `json:"start_qty"`
+	EndQty      float64 `json:"end_qty"`
+	GrossProfit float64 `json:"gross_profit"`
+	NetProfit   float64 `json:"net_profit"`
+	TotalFees   float64 `json:"total_fees"`
+	Status      string  `json:"status"`
+	OpenedAt    int64   `json:"opened_at"`
+	ClosedAt    int64   `json:"closed_at"`
+}
+
+type TriangularTradeRepo struct{ mu sync.RWMutex }
+
+func NewTriangularTradeRepo() *TriangularTradeRepo { return &TriangularTradeRepo{} }
+
+func (r *TriangularTradeRepo) Create(t *TriangularTradeRecord) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	if t.ID == "" {
+		t.ID = fmt.Sprintf("tri_%d", time.Now().UnixNano())
+	}
+	if t.OpenedAt == 0 {
+		t.OpenedAt = time.Now().UnixMilli()
+	}
+	if t.CycleJSON == "" {
+		t.CycleJSON = "[]"
+	}
+	if t.LegsJSON == "" {
+		t.LegsJSON = "[]"
+	}
+	_, err := db.Exec(
+		`INSERT INTO triangular_trades (id, exchange, cycle_json, legs_json, start_asset, start_qty, end_qty, gross_profit, net_profit, total_fees, status, opened_at, closed_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		t.ID, t.Exchange, t.CycleJSON, t.LegsJSON, t.StartAsset, t.StartQty, t.EndQty,
+		t.GrossProfit, t.NetProfit, t.TotalFees, t.Status, t.OpenedAt, t.ClosedAt,
+	)
+	return err
+}
+
+func (r *TriangularTradeRepo) GetByID(id string) (*TriangularTradeRecord, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	row := db.QueryRow(`SELECT id, exchange, cycle_json, legs_json, start_asset, start_qty, end_qty, gross_profit, net_profit, total_fees, status, opened_at, closed_at FROM triangular_trades WHERE id=?`, id)
+	var t TriangularTradeRecord
+	err := row.Scan(&t.ID, &t.Exchange, &t.CycleJSON, &t.LegsJSON, &t.StartAsset, &t.StartQty, &t.EndQty, &t.GrossProfit, &t.NetProfit, &t.TotalFees, &t.Status, &t.OpenedAt, &t.ClosedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+func (r *TriangularTradeRepo) Update(t *TriangularTradeRecord) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	_, err := db.Exec(
+		`UPDATE triangular_trades SET exchange=?, cycle_json=?, legs_json=?, start_asset=?, start_qty=?, end_qty=?, gross_profit=?, net_profit=?, total_fees=?, status=?, opened_at=?, closed_at=? WHERE id=?`,
+		t.Exchange, t.CycleJSON, t.LegsJSON, t.StartAsset, t.StartQty, t.EndQty,
+		t.GrossProfit, t.NetProfit, t.TotalFees, t.Status, t.OpenedAt, t.ClosedAt, t.ID,
+	)
+	return err
+}
+
+func (r *TriangularTradeRepo) Delete(id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	_, err := db.Exec("DELETE FROM triangular_trades WHERE id=?", id)
+	return err
+}
+
+func (r *TriangularTradeRepo) ListActive() ([]*TriangularTradeRecord, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	query := `SELECT id, exchange, cycle_json, legs_json, start_asset, start_qty, end_qty, gross_profit, net_profit, total_fees, status, opened_at, closed_at FROM triangular_trades WHERE status IN ('pending','executing') ORDER BY opened_at DESC`
+	rows, err := db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTriangularTradeRows(rows)
+}
+
+func (r *TriangularTradeRepo) ListHistory(limit int) ([]*TriangularTradeRecord, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	query := `SELECT id, exchange, cycle_json, legs_json, start_asset, start_qty, end_qty, gross_profit, net_profit, total_fees, status, opened_at, closed_at FROM triangular_trades WHERE status IN ('completed','failed','dry_run') ORDER BY opened_at DESC`
+	var args []any
+	if limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, limit)
+	}
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTriangularTradeRows(rows)
+}
+
+func scanTriangularTradeRows(rows *sql.Rows) ([]*TriangularTradeRecord, error) {
+	var result []*TriangularTradeRecord
+	for rows.Next() {
+		var t TriangularTradeRecord
+		if err := rows.Scan(&t.ID, &t.Exchange, &t.CycleJSON, &t.LegsJSON, &t.StartAsset, &t.StartQty, &t.EndQty, &t.GrossProfit, &t.NetProfit, &t.TotalFees, &t.Status, &t.OpenedAt, &t.ClosedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, &t)
+	}
+	return result, nil
+}
+
+// ── Notification Repository ──
+
+type NotificationRecord struct {
+	ID        int64  `json:"id"`
+	Title     string `json:"title"`
+	Content   string `json:"content"`
+	Level     string `json:"level"`
+	Category  string `json:"category"`
+	Read      bool   `json:"read"`
+	CreatedAt int64  `json:"created_at"`
+}
+
+func ListNotifications(limit, offset int, unreadOnly bool) ([]NotificationRecord, error) {
+	if db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	query := `SELECT id, title, content, level, category, read, created_at FROM notifications WHERE 1=1`
+	var args []any
+	if unreadOnly {
+		query += ` AND read = 0`
+	}
+	query += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
+	args = append(args, limit, offset)
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []NotificationRecord
+	for rows.Next() {
+		var n NotificationRecord
+		var readInt int
+		if err := rows.Scan(&n.ID, &n.Title, &n.Content, &n.Level, &n.Category, &readInt, &n.CreatedAt); err != nil {
+			return nil, err
+		}
+		n.Read = readInt != 0
+		result = append(result, n)
+	}
+	return result, nil
+}
+
+func AddNotification(record *NotificationRecord) error {
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	res, err := db.Exec(
+		`INSERT INTO notifications (title, content, level, category, read, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		record.Title, record.Content, record.Level, record.Category, boolToInt(record.Read), record.CreatedAt,
+	)
+	if err != nil {
+		return err
+	}
+	record.ID, _ = res.LastInsertId()
+	return nil
+}
+
+func MarkNotificationRead(id int64) error {
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	_, err := db.Exec(`UPDATE notifications SET read = 1 WHERE id = ?`, id)
+	return err
+}
+
+func MarkAllNotificationsRead() error {
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	_, err := db.Exec(`UPDATE notifications SET read = 1`)
+	return err
+}
+
+func ClearNotifications() error {
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	_, err := db.Exec(`DELETE FROM notifications`)
+	return err
+}
+
+func CountUnreadNotifications() (int, error) {
+	if db == nil {
+		return 0, fmt.Errorf("database not initialized")
+	}
+	var count int
+	err := db.QueryRow(`SELECT COUNT(*) FROM notifications WHERE read = 0`).Scan(&count)
+	return count, err
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// ── Notification Route Repository ──
+
+type NotificationRouteRecord struct {
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	Events    []string `json:"events"`
+	Levels    []string `json:"levels"`
+	Channels  []string `json:"channels"`
+	Enabled   bool     `json:"enabled"`
+	MinReturn float64  `json:"min_return_pct"`
+}
+
+func ListNotificationRoutes() ([]NotificationRouteRecord, error) {
+	if db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	rows, err := db.Query(`SELECT id, name, events, levels, channels, enabled, min_return_pct FROM notification_routes`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []NotificationRouteRecord
+	for rows.Next() {
+		var r NotificationRouteRecord
+		var events, levels, channels string
+		var enabled int
+		if err := rows.Scan(&r.ID, &r.Name, &events, &levels, &channels, &enabled, &r.MinReturn); err != nil {
+			return nil, err
+		}
+		r.Enabled = enabled != 0
+		_ = json.Unmarshal([]byte(events), &r.Events)
+		_ = json.Unmarshal([]byte(levels), &r.Levels)
+		_ = json.Unmarshal([]byte(channels), &r.Channels)
+		result = append(result, r)
+	}
+	return result, nil
+}
+
+func SaveNotificationRoute(route *NotificationRouteRecord) error {
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	events, _ := json.Marshal(route.Events)
+	levels, _ := json.Marshal(route.Levels)
+	channels, _ := json.Marshal(route.Channels)
+	_, err := db.Exec(
+		`INSERT OR REPLACE INTO notification_routes (id, name, events, levels, channels, enabled, min_return_pct) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		route.ID, route.Name, string(events), string(levels), string(channels), boolToInt(route.Enabled), route.MinReturn,
+	)
+	return err
+}
+
+func DeleteNotificationRoute(id string) error {
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	_, err := db.Exec(`DELETE FROM notification_routes WHERE id = ?`, id)
+	return err
 }

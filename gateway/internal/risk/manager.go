@@ -202,8 +202,10 @@ func DailyLimit(maxOrders int) CheckFn {
 	}
 }
 
-// RateLimit enforces minimum interval between trades to prevent rapid-fire orders.
-// Default minimum interval: 500ms between orders on the same symbol.
+// RateLimit enforces a minimum interval between trades to prevent rapid-fire orders.
+// Deprecated: the Manager now applies per-symbol rate limiting internally using
+// ManagerConfig.MinOrderIntervalMs. This standalone helper is kept for backward
+// compatibility but is no longer part of the default check chain.
 func RateLimit() CheckFn {
 	const minIntervalMs = 500
 	var lastTradeTime int64
@@ -379,11 +381,15 @@ type Manager struct {
 	mu             sync.RWMutex
 	cfg            ManagerConfig // stored running config
 
+	// Per-symbol last trade time for rate limiting.
+	lastTradeTime map[string]int64
+	ltMu          sync.Mutex
+
 	// Metrics
-	dailyOrderCount  int
+	dailyOrderCount   int
 	consecutiveLosses int
-	riskEvents       []model.RiskAlert
-	resetDay         string
+	riskEvents        []model.RiskAlert
+	resetDay          string
 
 	// Callback
 	OnRiskAlert func(alert model.RiskAlert)
@@ -391,12 +397,12 @@ type Manager struct {
 
 // ManagerConfig configures the risk manager.
 type ManagerConfig struct {
-	CircuitThreshold   int           `json:"circuit_threshold"`
+	CircuitThreshold    int           `json:"circuit_threshold"`
 	CircuitResetTimeout time.Duration `json:"circuit_reset_timeout"`
 	PriceDeviationPct   float64       `json:"price_deviation_pct"`
 	MaxOrderUSDT        float64       `json:"max_order_usdt"`
 	DailyOrderLimit     int           `json:"daily_order_limit"`
-	MaxConcurrentOrders  int           `json:"max_concurrent_orders"`
+	MaxConcurrentOrders int           `json:"max_concurrent_orders"`
 	MaxPositionPct      float64       `json:"max_position_pct"`
 	MaxExposurePct      float64       `json:"max_exposure_pct"`
 	MaxDrawdownPct      float64       `json:"max_drawdown_pct"`
@@ -405,6 +411,9 @@ type ManagerConfig struct {
 	MinMarginRatioPct   float64       `json:"min_margin_ratio_pct"`
 	MaxVolatilityPct    float64       `json:"max_volatility_pct"`
 	PriceSpikePct       float64       `json:"price_spike_pct"`
+	// MinOrderIntervalMs is the minimum time (in milliseconds) between two
+	// orders on the same symbol. A value <= 0 disables the limit.
+	MinOrderIntervalMs int `json:"min_order_interval_ms"`
 }
 
 func DefaultManagerConfig() ManagerConfig {
@@ -423,6 +432,7 @@ func DefaultManagerConfig() ManagerConfig {
 		MinMarginRatioPct:    150.0,
 		MaxVolatilityPct:     2.0,
 		PriceSpikePct:        3.0,
+		MinOrderIntervalMs:   500,
 	}
 }
 
@@ -442,17 +452,22 @@ func GetManager() *Manager {
 // NewManager creates a risk manager with the given config.
 func NewManager(cfg ManagerConfig) *Manager {
 	mgr := &Manager{
-		cfg:            cfg,
+		cfg:           cfg,
 		circuitBreaker: NewCircuitBreaker(cfg.CircuitThreshold, cfg.CircuitResetTimeout),
-		blacklist:      make(map[string]bool),
+		blacklist:     make(map[string]bool),
+		lastTradeTime: make(map[string]int64),
 	}
 
-	// Build the check chain
-	mgr.checks = []CheckFn{
+	mgr.checks = mgr.buildChecks(cfg)
+	return mgr
+}
+
+// buildChecks builds the check chain from the given config.
+func (m *Manager) buildChecks(cfg ManagerConfig) []CheckFn {
+	return []CheckFn{
 		PriceSanity(cfg.PriceDeviationPct),
 		OrderSize(cfg.MaxOrderUSDT),
 		DailyLimit(cfg.DailyOrderLimit),
-		RateLimit(),
 		ConcurrentOrders(cfg.MaxConcurrentOrders),
 		PositionLimit(cfg.MaxPositionPct),
 		NetExposure(cfg.MaxExposurePct),
@@ -460,17 +475,19 @@ func NewManager(cfg ManagerConfig) *Manager {
 		ConsecutiveLossesCheck(cfg.MaxConsecutiveLosses),
 		FundingRate(cfg.MaxFundingRatePct),
 		MarginRatio(cfg.MinMarginRatioPct),
-		Blacklist(mgr.blacklist),
+		Blacklist(m.blacklist),
 		Volatility(cfg.MaxVolatilityPct),
 		PriceSpike(cfg.PriceSpikePct),
 		// TimeWindow is not added by default
 	}
-
-	return mgr
 }
 
 // Check runs all risk checks against the given context.
 func (m *Manager) Check(ctx *Context) error {
+	if ctx == nil {
+		return fmt.Errorf("risk context is nil")
+	}
+
 	// Check circuit breaker
 	if !m.circuitBreaker.Allow() {
 		alert := model.RiskAlert{
@@ -485,6 +502,28 @@ func (m *Manager) Check(ctx *Context) error {
 
 	// Update daily counter
 	m.updateDaily()
+
+	// Populate fields managed by the manager itself so standalone check
+	// functions see the current runtime state.
+	m.mu.RLock()
+	ctx.DailyOrderCount = m.dailyOrderCount
+	ctx.ConsecutiveLosses = m.consecutiveLosses
+	m.mu.RUnlock()
+
+	// Per-symbol rate limit (not included in the generic check chain because
+	// it needs mutable manager state).
+	if err := m.checkRateLimit(ctx); err != nil {
+		alert := model.RiskAlert{
+			Level:     "WARN",
+			CheckName: "rate_limit",
+			Message:   err.Error(),
+			Symbol:    ctx.Symbol,
+			Timestamp: time.Now().UnixMilli(),
+		}
+		m.recordRiskEvent(alert)
+		m.circuitBreaker.RecordFailure()
+		return err
+	}
 
 	// Run all checks
 	for _, check := range m.checks {
@@ -504,7 +543,10 @@ func (m *Manager) Check(ctx *Context) error {
 	}
 
 	m.circuitBreaker.RecordSuccess()
+	m.recordTrade(ctx.Symbol)
+	m.mu.Lock()
 	m.dailyOrderCount++
+	m.mu.Unlock()
 	return nil
 }
 
@@ -548,6 +590,16 @@ func (m *Manager) Config() ManagerConfig {
 	return m.cfg
 }
 
+// UpdateConfig replaces the running config and rebuilds the check chain and
+// circuit breaker. It can be called at runtime to adjust risk parameters.
+func (m *Manager) UpdateConfig(cfg ManagerConfig) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cfg = cfg
+	m.circuitBreaker = NewCircuitBreaker(cfg.CircuitThreshold, cfg.CircuitResetTimeout)
+	m.checks = m.buildChecks(cfg)
+}
+
 // ── Internal ──
 
 func (m *Manager) updateDaily() {
@@ -558,6 +610,34 @@ func (m *Manager) updateDaily() {
 		m.dailyOrderCount = 0
 		m.resetDay = today
 	}
+}
+
+func (m *Manager) checkRateLimit(ctx *Context) error {
+	interval := int64(m.cfg.MinOrderIntervalMs)
+	if interval <= 0 {
+		return nil
+	}
+	now := time.Now().UnixMilli()
+	m.ltMu.Lock()
+	defer m.ltMu.Unlock()
+	if m.lastTradeTime == nil {
+		m.lastTradeTime = make(map[string]int64)
+	}
+	sym := ctx.Symbol
+	if last, ok := m.lastTradeTime[sym]; ok && (now-last) < interval {
+		return fmt.Errorf("rate limit: minimum %dms between orders for %s (last was %dms ago)",
+			interval, sym, now-last)
+	}
+	return nil
+}
+
+func (m *Manager) recordTrade(symbol string) {
+	m.ltMu.Lock()
+	defer m.ltMu.Unlock()
+	if m.lastTradeTime == nil {
+		m.lastTradeTime = make(map[string]int64)
+	}
+	m.lastTradeTime[symbol] = time.Now().UnixMilli()
 }
 
 func (m *Manager) recordRiskEvent(alert model.RiskAlert) {

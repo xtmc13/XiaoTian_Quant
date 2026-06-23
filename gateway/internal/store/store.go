@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"strings"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,10 +31,13 @@ var (
 	strategyConfigs     = make(map[string]map[string]any)
 	strategyMu          sync.RWMutex
 
-	logsStore   []map[string]any
-	templates   []map[string]any
-	agentTokens []map[string]any
-	inmemMu     sync.RWMutex
+	logsStore       []map[string]any
+	templates       []map[string]any
+	agentTokens     []map[string]any
+	logsPath        string
+	templatesPath   string
+	agentTokensPath string
+	inmemMu         sync.RWMutex
 
 	jwtSecret string
 )
@@ -150,11 +153,25 @@ func InitDB() error {
 	if strategyConfigsPath == "" {
 		strategyConfigsPath = "./data/strategy_configs.json"
 	}
+	if logsPath == "" {
+		logsPath = "./data/strategy_logs.json"
+	}
+	if templatesPath == "" {
+		templatesPath = "./data/strategy_templates.json"
+	}
+	if agentTokensPath == "" {
+		agentTokensPath = "./data/agent_tokens.json"
+	}
 
 	// Run schema migrations
 	if err := RunMigrations(); err != nil {
 		return fmt.Errorf("migration: %w", err)
 	}
+
+	// Load in-memory stores from disk
+	LoadStrategyLogs()
+	LoadStrategyTemplates()
+	LoadAgentTokens()
 
 	// Seed AI bot catalog data
 	SeedAIBotCatalog()
@@ -195,7 +212,71 @@ func LoadConfig() {
 	}
 }
 
-// SaveUIConfig saves UI preferences into the config cache.
+// SaveArbitrageConfig persists the arbitrage engine config to config.yaml.
+func SaveArbitrageConfig(cfg map[string]any) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+	if configCache == nil {
+		configCache = make(map[string]any)
+	}
+	configCache["arbitrage"] = cfg
+	data, err := yaml.Marshal(configCache)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(configPath, data, 0644)
+}
+
+// LoadArbitrageConfig returns the persisted arbitrage engine config, if any.
+func LoadArbitrageConfig() map[string]any {
+	configMu.RLock()
+	defer configMu.RUnlock()
+	if configCache == nil {
+		return nil
+	}
+	if v, ok := configCache["arbitrage"].(map[string]any); ok {
+		cp := make(map[string]any, len(v))
+		for k, val := range v {
+			cp[k] = val
+		}
+		return cp
+	}
+	return nil
+}
+
+// SaveTriangularConfig persists the triangular arbitrage engine config to config.yaml.
+func SaveTriangularConfig(cfg map[string]any) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+	if configCache == nil {
+		configCache = make(map[string]any)
+	}
+	configCache["triangular"] = cfg
+	data, err := yaml.Marshal(configCache)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(configPath, data, 0644)
+}
+
+// LoadTriangularConfig returns the persisted triangular arbitrage engine config, if any.
+func LoadTriangularConfig() map[string]any {
+	configMu.RLock()
+	defer configMu.RUnlock()
+	if configCache == nil {
+		return nil
+	}
+	if v, ok := configCache["triangular"].(map[string]any); ok {
+		cp := make(map[string]any, len(v))
+		for k, val := range v {
+			cp[k] = val
+		}
+		return cp
+	}
+	return nil
+}
+
+// SaveUIConfig saves UI preferences into config.yaml.
 func SaveUIConfig(ui map[string]any) {
 	configMu.Lock()
 	defer configMu.Unlock()
@@ -203,9 +284,10 @@ func SaveUIConfig(ui map[string]any) {
 		configCache = make(map[string]any)
 	}
 	configCache["ui"] = ui
+	_ = writeConfigCacheLocked()
 }
 
-// SaveExchangeConfig saves an exchange configuration.
+// SaveExchangeConfig saves an exchange configuration to config.yaml.
 func SaveExchangeConfig(id string, cfg map[string]any) {
 	configMu.Lock()
 	defer configMu.Unlock()
@@ -218,6 +300,20 @@ func SaveExchangeConfig(id string, cfg map[string]any) {
 	}
 	exchanges[id] = cfg
 	configCache["exchanges"] = exchanges
+	_ = writeConfigCacheLocked()
+}
+
+// writeConfigCacheLocked writes the current configCache to config.yaml.
+// Caller must hold configMu.
+func writeConfigCacheLocked() error {
+	if configPath == "" {
+		return nil
+	}
+	data, err := yaml.Marshal(configCache)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(configPath, data, 0644)
 }
 
 func GetConfig() map[string]any {
@@ -291,6 +387,63 @@ func PersistStrategyConfigs() {
 func GetLogsStore() *[]map[string]any        { return &logsStore }
 func GetTemplatesStore() *[]map[string]any   { return &templates }
 func GetAgentTokensStore() *[]map[string]any { return &agentTokens }
+
+// LoadStrategyLogs loads strategy logs from disk.
+func LoadStrategyLogs() {
+	inmemMu.Lock()
+	defer inmemMu.Unlock()
+	data, err := os.ReadFile(logsPath)
+	if err != nil {
+		return
+	}
+	_ = json.Unmarshal(data, &logsStore)
+}
+
+// PersistStrategyLogs writes strategy logs to disk.
+func PersistStrategyLogs() {
+	inmemMu.RLock()
+	defer inmemMu.RUnlock()
+	data, _ := json.MarshalIndent(logsStore, "", "  ")
+	_ = os.WriteFile(logsPath, data, 0644)
+}
+
+// LoadStrategyTemplates loads strategy templates from disk.
+func LoadStrategyTemplates() {
+	inmemMu.Lock()
+	defer inmemMu.Unlock()
+	data, err := os.ReadFile(templatesPath)
+	if err != nil {
+		return
+	}
+	_ = json.Unmarshal(data, &templates)
+}
+
+// PersistStrategyTemplates writes strategy templates to disk.
+func PersistStrategyTemplates() {
+	inmemMu.RLock()
+	defer inmemMu.RUnlock()
+	data, _ := json.MarshalIndent(templates, "", "  ")
+	_ = os.WriteFile(templatesPath, data, 0644)
+}
+
+// LoadAgentTokens loads agent tokens from disk.
+func LoadAgentTokens() {
+	inmemMu.Lock()
+	defer inmemMu.Unlock()
+	data, err := os.ReadFile(agentTokensPath)
+	if err != nil {
+		return
+	}
+	_ = json.Unmarshal(data, &agentTokens)
+}
+
+// PersistAgentTokens writes agent tokens to disk.
+func PersistAgentTokens() {
+	inmemMu.RLock()
+	defer inmemMu.RUnlock()
+	data, _ := json.MarshalIndent(agentTokens, "", "  ")
+	_ = os.WriteFile(agentTokensPath, data, 0644)
+}
 
 // ── Auth ──
 
@@ -552,12 +705,12 @@ func AdminUpdateUser(userID int, updates map[string]any) error {
 // ── Orders ──
 
 var (
-	orderRepo    *OrderRepo
+	orderRepo     *OrderRepo
 	orderRepoOnce sync.Once
 	ordersMu      sync.RWMutex
 	// In-memory order store for fast lookups (synced with DB via OrderRepo)
-	orders      = make(map[string]*OrderRecord)
-	orderCount  int
+	orders     = make(map[string]*OrderRecord)
+	orderCount int
 )
 
 // getOrderRepo lazily initializes the OrderRepo.
@@ -571,6 +724,46 @@ func getOrderRepo() *OrderRepo {
 // GetOrderRepo returns the global OrderRepo (exported for cross-package access).
 func GetOrderRepo() *OrderRepo {
 	return getOrderRepo()
+}
+
+// ── Arbitrage Trades ──
+
+var (
+	arbTradeRepo     *ArbitrageTradeRepo
+	arbTradeRepoOnce sync.Once
+)
+
+// getArbitrageTradeRepo lazily initializes the ArbitrageTradeRepo.
+func getArbitrageTradeRepo() *ArbitrageTradeRepo {
+	arbTradeRepoOnce.Do(func() {
+		arbTradeRepo = NewArbitrageTradeRepo()
+	})
+	return arbTradeRepo
+}
+
+// GetArbitrageTradeRepo returns the global ArbitrageTradeRepo (exported for cross-package access).
+func GetArbitrageTradeRepo() *ArbitrageTradeRepo {
+	return getArbitrageTradeRepo()
+}
+
+// ── Triangular Trades ──
+
+var (
+	triTradeRepo     *TriangularTradeRepo
+	triTradeRepoOnce sync.Once
+)
+
+// getTriangularTradeRepo lazily initializes the TriangularTradeRepo.
+func getTriangularTradeRepo() *TriangularTradeRepo {
+	triTradeRepoOnce.Do(func() {
+		triTradeRepo = NewTriangularTradeRepo()
+	})
+	return triTradeRepo
+}
+
+// GetTriangularTradeRepo returns the global TriangularTradeRepo (exported for cross-package access).
+func GetTriangularTradeRepo() *TriangularTradeRepo {
+	return getTriangularTradeRepo()
 }
 
 // migrateXTOrders adds missing columns to xt_orders for existing databases.
@@ -622,25 +815,25 @@ func PlaceOrder(order map[string]any) string {
 
 	// Build OrderRecord from the map
 	rec := &OrderRecord{
-		Symbol:       getString(order, "symbol", ""),
-		Side:         getString(order, "side", ""),
-		OrderType:    getString(order, "order_type", "LIMIT"),
-		Price:        getFloat(order, "price", 0),
-		StopPrice:    getFloat(order, "stop_price", 0),
-		Quantity:     getFloat(order, "quantity", 0),
-		Filled:       getFloat(order, "filled", 0),
-		Status:       getString(order, "status", "NEW"),
-		Exchange:     getString(order, "exchange", "BINANCE"),
-		UserID:       uint64(getFloat(order, "user_id", 0)),
-		ClientOID:    getString(order, "client_oid", ""),
-		AvgFillPrice: getFloat(order, "avg_fill_price", 0),
-		CreatedAt:    int64(getFloat(order, "created_at", 0)),
-		MarketType:   getString(order, "market_type", "spot"),
-		PositionSide: getString(order, "position_side", ""),
-		Leverage:     getFloat(order, "leverage", 0),
-		MarginMode:   getString(order, "margin_mode", "cross"),
-		TPPrice:      getFloat(order, "tp_price", 0),
-		SLPrice:      getFloat(order, "sl_price", 0),
+		Symbol:        getString(order, "symbol", ""),
+		Side:          getString(order, "side", ""),
+		OrderType:     getString(order, "order_type", "LIMIT"),
+		Price:         getFloat(order, "price", 0),
+		StopPrice:     getFloat(order, "stop_price", 0),
+		Quantity:      getFloat(order, "quantity", 0),
+		Filled:        getFloat(order, "filled", 0),
+		Status:        getString(order, "status", "NEW"),
+		Exchange:      getString(order, "exchange", "BINANCE"),
+		UserID:        uint64(getFloat(order, "user_id", 0)),
+		ClientOID:     getString(order, "client_oid", ""),
+		AvgFillPrice:  getFloat(order, "avg_fill_price", 0),
+		CreatedAt:     int64(getFloat(order, "created_at", 0)),
+		MarketType:    getString(order, "market_type", "spot"),
+		PositionSide:  getString(order, "position_side", ""),
+		Leverage:      getFloat(order, "leverage", 0),
+		MarginMode:    getString(order, "margin_mode", "cross"),
+		TPPrice:       getFloat(order, "tp_price", 0),
+		SLPrice:       getFloat(order, "sl_price", 0),
 		ClosePosition: getBool(order, "close_position", false),
 	}
 	if rec.CreatedAt == 0 {

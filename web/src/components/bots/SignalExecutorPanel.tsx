@@ -387,7 +387,7 @@ export const SignalExecutorPanel: React.FC = () => {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => toast({ title: '请前往设置页配置信号源' })}
+                  onClick={() => toast('info', '请前往设置页配置信号源')}
                 >
                   配置信号源
                 </Button>

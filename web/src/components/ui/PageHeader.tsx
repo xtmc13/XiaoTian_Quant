@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 export interface PageHeaderProps {
   title?: string;
   subtitle?: string;
+  icon?: React.ReactNode;
   actions?: React.ReactNode;
   className?: string;
 }
@@ -11,6 +12,7 @@ export interface PageHeaderProps {
 export const PageHeader: React.FC<PageHeaderProps> = ({
   title,
   subtitle,
+  icon,
   actions,
   className,
 }) => {
@@ -21,7 +23,9 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
         className
       )}
     >
-      <div>
+      <div className="flex items-center gap-3">
+        {icon && <div className="text-[#888888]">{icon}</div>}
+        <div>
         {title && (
           <h1 className="text-xl font-semibold tracking-tight text-white sm:text-2xl">
             {title}
@@ -30,6 +34,7 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
         {subtitle && (
           <p className="mt-1 text-sm text-[#999999]">{subtitle}</p>
         )}
+        </div>
       </div>
 
       {actions && (

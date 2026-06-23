@@ -529,6 +529,94 @@ func TestManagerGetCircuitBreaker(t *testing.T) {
 	assert(t, cb.State() == CircuitClosed, "should start closed")
 }
 
+func TestManagerRateLimitPerSymbol(t *testing.T) {
+	mgr := NewManager(ManagerConfig{
+		CircuitThreshold:     5,
+		CircuitResetTimeout:  time.Hour,
+		PriceDeviationPct:    5.0,
+		MaxOrderUSDT:         100000,
+		DailyOrderLimit:      100,
+		MaxConcurrentOrders:  5,
+		MaxPositionPct:       50.0,
+		MaxExposurePct:       80.0,
+		MaxDrawdownPct:       10.0,
+		MaxConsecutiveLosses: 5,
+		MaxFundingRatePct:    0.375,
+		MinMarginRatioPct:    150.0,
+		MaxVolatilityPct:     2.0,
+		PriceSpikePct:        3.0,
+		MinOrderIntervalMs:   100,
+	})
+
+	ctx := defaultCtx()
+	assertNoErr(t, mgr.Check(ctx), "first order should pass")
+
+	// Same symbol too soon should be rate limited
+	err := mgr.Check(ctx)
+	assertErr(t, err, "same symbol within interval should be rate limited")
+
+	// Different symbol should still pass
+	ctx2 := defaultCtx()
+	ctx2.Symbol = "ETHUSDT"
+	assertNoErr(t, mgr.Check(ctx2), "different symbol should not be rate limited")
+
+	// After sleeping, same symbol should pass again
+	time.Sleep(110 * time.Millisecond)
+	assertNoErr(t, mgr.Check(ctx), "same symbol after interval should pass")
+}
+
+func TestManagerDailyLimitUsesInternalCounter(t *testing.T) {
+	cfg := DefaultManagerConfig()
+	cfg.DailyOrderLimit = 2
+	cfg.MinOrderIntervalMs = 0 // disable rate limit for this test
+	mgr := NewManager(cfg)
+	ctx := defaultCtx()
+	// Do not set ctx.DailyOrderCount; manager should use internal counter.
+	assertNoErr(t, mgr.Check(ctx), "first order should pass")
+	assertNoErr(t, mgr.Check(ctx), "second order should pass")
+	err := mgr.Check(ctx)
+	assertErr(t, err, "third order should exceed daily limit")
+}
+
+func TestManagerConsecutiveLossesUsesInternalCounter(t *testing.T) {
+	cfg := DefaultManagerConfig()
+	cfg.MaxConsecutiveLosses = 2
+	mgr := NewManager(cfg)
+	mgr.RecordLoss()
+	mgr.RecordLoss()
+
+	ctx := defaultCtx()
+	// ctx.ConsecutiveLosses not set; manager should use internal counter.
+	err := mgr.Check(ctx)
+	assertErr(t, err, "should fail after max consecutive losses")
+}
+
+func TestManagerUpdateConfig(t *testing.T) {
+	mgr := NewManager(DefaultManagerConfig())
+	assert(t, mgr.Config().DailyOrderLimit == 100, "initial daily limit should be 100")
+
+	cfg := DefaultManagerConfig()
+	cfg.DailyOrderLimit = 10
+	cfg.MaxPositionPct = 10.0
+	mgr.UpdateConfig(cfg)
+
+	assert(t, mgr.Config().DailyOrderLimit == 10, "updated daily limit should be 10")
+	assert(t, mgr.Config().MaxPositionPct == 10.0, "updated position limit should be 10")
+
+	// New config should take effect immediately.
+	ctx := defaultCtx()
+	ctx.OrderPrice = 20000.0
+	ctx.OrderQuantity = 1.0 // 20% exposure > 10% limit
+	err := mgr.Check(ctx)
+	assertErr(t, err, "updated position limit should be enforced")
+}
+
+func TestManagerNilContext(t *testing.T) {
+	mgr := NewManager(DefaultManagerConfig())
+	err := mgr.Check(nil)
+	assertErr(t, err, "nil context should return error")
+}
+
 /* ── Benchmark ────────────────────────────────────────────────── */
 
 func BenchmarkRiskCheckAll(t *testing.B) {

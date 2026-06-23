@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
@@ -288,30 +289,7 @@ func (ctx *Context) wireOrderManager() {
 
 	// ── Risk Check ──
 	om.RiskCheck = func(req *order.Request) error {
-		price := req.Price
-		if req.OrderType == model.TypeMarket || price <= 0 {
-			price = getLastPrice(req.Symbol)
-		}
-		riskCtx := &risk.Context{
-			Symbol:           req.Symbol,
-			CurrentPrice:     price,
-			OrderPrice:       price,
-			OrderQuantity:    req.Quantity,
-			OrderSide:        req.Side,
-			TotalEquity:      ctx.PortfolioManager.TotalEquity(),
-			AvailableBalance: ctx.PortfolioManager.AvailableBalance(),
-			PositionCount:    len(ctx.PortfolioManager.GetPositions()),
-			NetExposure:      ctx.PortfolioManager.NetExposure(),
-			MaxDrawdownPct:   ctx.PortfolioManager.Drawdown(),
-			Blacklist:        make(map[string]bool),
-
-			// ── Contract fields ──
-			MarketType:    req.MarketType,
-			PositionSide:  req.PositionSide,
-			Leverage:      req.Leverage,
-			MarginMode:    req.MarginMode,
-			ClosePosition: req.ClosePosition,
-		}
+		riskCtx := ctx.buildRiskContext(req)
 		return ctx.RiskManager.Check(riskCtx)
 	}
 
@@ -1034,6 +1012,113 @@ func getLastPrice(symbol string) float64 {
 	json.Unmarshal(raw, &result)
 	if priceStr, ok := result["price"].(string); ok {
 		f, _ := strconv.ParseFloat(priceStr, 64)
+		return f
+	}
+	return 0
+}
+
+// buildRiskContext assembles a complete risk context for an order request.
+// It enriches the request with live market data (bid/ask, volatility, funding
+// rate) so that all risk checks can be evaluated.
+func (ctx *Context) buildRiskContext(req *order.Request) *risk.Context {
+	price := req.Price
+	if req.OrderType == model.TypeMarket || price <= 0 {
+		price = getLastPrice(req.Symbol)
+	}
+
+	bid, ask := getBidAsk(req.Symbol)
+	volatility := getVolatility(req.Symbol)
+
+	fundingRate := 0.0
+	if req.MarketType == model.MarketSwap {
+		fundingRate = getFundingRate(req.Symbol)
+	}
+
+	return &risk.Context{
+		Symbol:           req.Symbol,
+		CurrentPrice:     price,
+		OrderPrice:       price,
+		OrderQuantity:    req.Quantity,
+		OrderSide:        req.Side,
+		TotalEquity:      ctx.PortfolioManager.TotalEquity(),
+		AvailableBalance: ctx.PortfolioManager.AvailableBalance(),
+		PositionCount:    len(ctx.PortfolioManager.GetPositions()),
+		NetExposure:      ctx.PortfolioManager.NetExposure(),
+		MaxDrawdownPct:   ctx.PortfolioManager.Drawdown(),
+		BidPrice:         bid,
+		AskPrice:         ask,
+		Volatility:       volatility,
+		FundingRate:      fundingRate,
+		Blacklist:        make(map[string]bool),
+
+		// ── Contract fields ──
+		MarketType:    req.MarketType,
+		PositionSide:  req.PositionSide,
+		Leverage:      req.Leverage,
+		MarginMode:    req.MarginMode,
+		ClosePosition: req.ClosePosition,
+	}
+}
+
+// getBidAsk fetches the best bid/ask prices for a symbol from Binance public API.
+func getBidAsk(symbol string) (bid, ask float64) {
+	ticker, err := service.GetMarketService().GetTicker(symbol)
+	if err != nil {
+		return 0, 0
+	}
+	bid = parseAnyFloat(ticker["bidPrice"])
+	ask = parseAnyFloat(ticker["askPrice"])
+	return
+}
+
+// getVolatility estimates recent volatility from 1-minute klines.
+func getVolatility(symbol string) float64 {
+	klines, err := service.GetMarketService().FetchKlines(symbol, "1m", 20)
+	if err != nil || len(klines) < 2 {
+		return 0
+	}
+
+	returns := make([]float64, len(klines)-1)
+	for i := 1; i < len(klines); i++ {
+		prev := parseAnyFloat(klines[i-1]["close"])
+		cur := parseAnyFloat(klines[i]["close"])
+		if prev > 0 {
+			returns[i-1] = (cur - prev) / prev
+		}
+	}
+
+	mean := 0.0
+	for _, r := range returns {
+		mean += r
+	}
+	mean /= float64(len(returns))
+
+	var sumSq float64
+	for _, r := range returns {
+		diff := r - mean
+		sumSq += diff * diff
+	}
+	stddev := math.Sqrt(sumSq / float64(len(returns)))
+	return stddev * 100 // percent
+}
+
+// getFundingRate fetches the current funding rate for a swap symbol.
+func getFundingRate(symbol string) float64 {
+	binance := adapter.NewBinanceAdapter("", "", false)
+	rate, err := binance.GetFundingRate(symbol)
+	if err != nil {
+		return 0
+	}
+	return rate
+}
+
+// parseAnyFloat converts string/float64 values safely.
+func parseAnyFloat(v any) float64 {
+	switch val := v.(type) {
+	case float64:
+		return val
+	case string:
+		f, _ := strconv.ParseFloat(val, 64)
 		return f
 	}
 	return 0

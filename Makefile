@@ -178,7 +178,7 @@ dev-strategy:
 # ── Test ───────────────────────────────────────────────────────
 test:
 	@echo "🧪 运行测试..."
-	@cd gateway && go test ./...
+	@cd gateway && LD_LIBRARY_PATH=../engine/target/release:$(LD_LIBRARY_PATH) go test ./...
 	@cd web && npm test
 
 lint:

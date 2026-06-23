@@ -80,7 +80,7 @@ export const AIRobotPanel: React.FC = () => {
 
   const { data: signals, isLoading: signalsLoading } = useQuery({
     queryKey: ['ai', 'signals'],
-    queryFn: () => aiRobotApi.getSignals({ limit: 20 }).then((r) => r.data?.signals || []),
+    queryFn: () => aiRobotApi.getSignals({ limit: 20 }).then((signals) => signals || []),
     refetchInterval: 30000,
   })
 
@@ -168,14 +168,14 @@ export const AIRobotPanel: React.FC = () => {
                     <div className="flex items-center gap-2">
                       <Badge
                         variant={
-                          signal.signal === 'buy'
+                          signal.side === 'buy'
                             ? 'success'
-                            : signal.signal === 'sell'
+                            : signal.side === 'sell'
                               ? 'error'
                               : 'neutral'
                         }
                       >
-                        {signal.signal === 'buy' ? '买入' : signal.signal === 'sell' ? '卖出' : '观望'}
+                        {signal.side === 'buy' ? '买入' : signal.side === 'sell' ? '卖出' : '观望'}
                       </Badge>
                       <span className="text-sm font-medium text-[#e0e0e0]">
                         {signal.symbol}

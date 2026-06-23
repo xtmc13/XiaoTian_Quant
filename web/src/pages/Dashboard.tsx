@@ -19,9 +19,13 @@ import {
   Target,
   ChevronRight as ChevronRightIcon,
   Brain,
+  Scale,
+  TrendingUp,
+  Percent,
+  BarChart4,
 } from 'lucide-react'
 import { cn, formatCurrency, formatPercent, formatConverted, setConversion } from '@/lib/utils'
-import { dashboardApi, portfolioApi, strategyApi, protectionApi, mlApi } from '@/lib/api'
+import { dashboardApi, portfolioApi, strategyApi, protectionApi, mlApi, arbitrageApi } from '@/lib/api'
 import { getEcharts } from '@/lib/echarts'
 import { KPICard } from '@/components/ui/KPICard'
 import { Skeleton } from '@/components/ui/Skeleton'
@@ -30,7 +34,7 @@ import { SectionCard } from '@/components/ui/SectionCard'
 import { DataTable } from '@/components/DataTable'
 import type { ECharts } from 'echarts'
 import type { StrategyRanking } from '@/types'
-import type { DashboardSummary, PortfolioSummary, StrategyItem } from '@/types'
+import type { DashboardSummary, PortfolioSummary, StrategyItem, ArbitragePerformance } from '@/types'
 
 /* ── Types ── */
 interface CalendarDay {
@@ -798,6 +802,12 @@ export function Dashboard() {
     refetchInterval: 30000,
   })
 
+  const { data: arbPerf, isLoading: arbLoading } = useQuery<ArbitragePerformance>({
+    queryKey: ['arbitrage-performance'],
+    queryFn: () => arbitrageApi.performance(),
+    refetchInterval: 30000,
+  })
+
   const totalEquity = dash?.total_equity ?? portfolio?.total_equity ?? 0
   const totalPnl = dash?.total_pnl ?? portfolio?.total_pnl ?? 0
 
@@ -936,6 +946,84 @@ export function Dashboard() {
             </div>
           </SectionCard>
         </div>
+
+        {/* ── Arbitrage Performance Section ── */}
+        <SectionCard
+          title="套利绩效"
+          headerAction={
+            <button
+              onClick={() => { navigate('/arbitrage') }}
+              className="flex items-center gap-0.5 text-[10px] text-[#8a8a8a] transition-colors hover:text-white"
+            >
+              套利监控 <ChevronRightIcon className="h-3 w-3" />
+            </button>
+          }
+        >
+          <div className="space-y-4">
+            {/* KPI Cards */}
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              {arbLoading ? (
+                Array.from({ length: 4 }).map((_, i) => (
+                  <Skeleton key={i} variant="card" height="108px" />
+                ))
+              ) : (
+                <>
+                  <KPICard
+                    icon={<Scale className="h-4 w-4 text-amber-400" />}
+                    label="累计套利盈亏"
+                    value={`$${formatCurrency(arbPerf?.total_pnl ?? 0)}`}
+                    subValue={`${(arbPerf?.win_trades ?? 0)} 盈 / ${(arbPerf?.loss_trades ?? 0)} 亏`}
+                    subLabel="盈亏笔数"
+                    trend={(arbPerf?.total_pnl ?? 0) >= 0 ? 'up' : 'down'}
+                  />
+                  <KPICard
+                    icon={<BarChart4 className="h-4 w-4 text-[#888888]" />}
+                    label="套利交易笔数"
+                    value={String(arbPerf?.total_trades ?? 0)}
+                    subValue={`费 $${formatCurrency(arbPerf?.total_fees ?? 0)}`}
+                    subLabel="总手续费"
+                    trend="neutral"
+                  />
+                  <KPICard
+                    icon={<Percent className="h-4 w-4 text-[#888888]" />}
+                    label="套利胜率"
+                    value={`${(arbPerf?.win_rate ?? 0).toFixed(1)}%`}
+                    subLabel={`最佳 ${formatCurrency(arbPerf?.max_win ?? 0)} / 最差 ${formatCurrency(arbPerf?.max_loss ?? 0)}`}
+                    trend="up"
+                    ringProgress={arbPerf?.win_rate ?? undefined}
+                  />
+                  <KPICard
+                    icon={<TrendingUp className="h-4 w-4 text-emerald-400" />}
+                    label="平均单笔收益"
+                    value={`$${formatCurrency(arbPerf?.avg_pnl ?? 0)}`}
+                    subLabel="每笔平均"
+                    trend={(arbPerf?.avg_pnl ?? 0) >= 0 ? 'up' : 'down'}
+                  />
+                </>
+              )}
+            </div>
+
+            {/* Charts */}
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <SectionCard title="套利累计收益曲线">
+                <div className="h-[260px]">
+                  <EquityChart
+                    data={arbPerf?.equity_curve.map((d) => ({ time: d.time * 1000, value: d.value }))}
+                    isLoading={arbLoading}
+                  />
+                </div>
+              </SectionCard>
+              <SectionCard title="套利日收益分布">
+                <div className="h-[260px]">
+                  <PnLBarChart
+                    data={arbPerf?.daily_pnl.map((d) => ({ time: d.time, value: d.value }))}
+                    isLoading={arbLoading}
+                  />
+                </div>
+              </SectionCard>
+            </div>
+          </div>
+        </SectionCard>
 
         {/* ── Bottom Row: Calendar | AI Agents | Strategies + Ranking | Risk + ML ── */}
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-4">

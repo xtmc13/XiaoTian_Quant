@@ -309,8 +309,8 @@ func TestPipeline_ConcurrentRegister(t *testing.T) {
 	}
 
 	// Original 7 + 10 new = 17
-	if len(p.agents) != 17 {
-		t.Errorf("agents = %d, want 17", len(p.agents))
+	if p.AgentCount() != 17 {
+		t.Errorf("agents = %d, want 17", p.AgentCount())
 	}
 }
 

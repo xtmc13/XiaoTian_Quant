@@ -1,8 +1,23 @@
 package service
 
 import (
+	"os"
 	"testing"
+
+	"github.com/xiaotian-quant/gateway/internal/store"
 )
+
+func TestMain(m *testing.M) {
+	_ = os.Setenv("DB_PATH", "./data/test_service.db")
+	if err := store.InitDB(); err != nil {
+		panic(err)
+	}
+	code := m.Run()
+	_ = os.Remove("./data/test_service.db")
+	_ = os.Remove("./data/test_service.db-shm")
+	_ = os.Remove("./data/test_service.db-wal")
+	os.Exit(code)
+}
 
 func TestMatchingServicePlaceOrder(t *testing.T) {
 	ms := GetMatchingService()

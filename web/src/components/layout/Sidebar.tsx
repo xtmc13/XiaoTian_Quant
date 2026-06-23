@@ -70,7 +70,14 @@ const navItems: NavItem[] = [
   { path: '/risk-control', label: '风控中心', icon: Shield },
   { path: '/pairlist', label: '交易对筛选', icon: ListFilter },
   { path: '/advanced-orders', label: '高级订单', icon: ArrowUpDown },
-  { path: '/arbitrage', label: '套利监控', icon: ArrowLeftRight },
+  {
+    label: '套利',
+    icon: ArrowLeftRight,
+    children: [
+      { path: '/arbitrage?tab=cross', label: '跨所套利' },
+      { path: '/arbitrage?tab=triangular', label: '三角套利' },
+    ],
+  },
   { path: '/hyperopt', label: '参数优化', icon: Search },
   { path: '/social-trading', label: '社交交易', icon: Share2 },
   { path: '/onchain', label: '链上数据', icon: Link2 },

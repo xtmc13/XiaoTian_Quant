@@ -9,9 +9,25 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
-/* ── Helpers ─────────────────────────────────────────────────── */
+/* ── Test Setup ──────────────────────────────────────────────── */
+
+func TestMain(m *testing.M) {
+	gin.SetMode(gin.TestMode)
+	_ = os.Setenv("DB_PATH", "./data/test_handler.db")
+	_ = os.Setenv("CONFIG_PATH", "./data/test_handler_config.yaml")
+	if err := store.InitDB(); err != nil {
+		panic(err)
+	}
+	code := m.Run()
+	_ = os.Remove("./data/test_handler.db")
+	_ = os.Remove("./data/test_handler.db-shm")
+	_ = os.Remove("./data/test_handler.db-wal")
+	_ = os.Remove("./data/test_handler_config.yaml")
+	os.Exit(code)
+}
 
 func setupRouter() *gin.Engine {
 	gin.SetMode(gin.TestMode)
@@ -48,8 +64,8 @@ func TestHealthCheck(t *testing.T) {
 	var body map[string]any
 	err := json.Unmarshal(w.Body.Bytes(), &body)
 	assertTrue(t, err == nil, "should parse JSON")
-	assertTrue(t, body["status"] == "ok", "status should be ok")
-	assertTrue(t, body["version"] == "2.0.0", "version should be 2.0.0")
+	assertTrue(t, body["status"] == "healthy", "status should be healthy")
+	assertTrue(t, body["version"] == "3.0.0", "version should be 3.0.0")
 }
 
 /* ── Auth Request Validation Tests ───────────────────────────── */
@@ -82,7 +98,7 @@ func TestRegisterRequestValidation(t *testing.T) {
 
 	// Invalid email
 	req2 := RegisterRequest{Email: "invalid"}
-	assertTrue(t, !strings.Contains(req2.Email, "@") == false, "invalid email check")
+	assertTrue(t, !strings.Contains(req2.Email, "@"), "invalid email check")
 }
 
 func TestSendCodeRequestValidation(t *testing.T) {

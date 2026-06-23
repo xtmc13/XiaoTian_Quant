@@ -333,24 +333,24 @@ function StrategyBotTab() {
 
   const getEditInitialData = (): Partial<MartinConfig | WallStreetConfig> | undefined => {
     if (!editingBot) return undefined
-    const tc = editingBot.trading_config
+    const tc = editingBot.trading_config as Record<string, unknown> | undefined
     return {
       name: editingBot.name || editingBot.strategy_name || '',
       strategy_type: (editingBot.bot_type === 'wallstreet' ? 'wallstreet' : 'martin') as 'martin' | 'wallstreet',
-      symbol: editingBot.symbol || tc?.symbol || 'BTCUSDT',
-      leverage: editingBot.leverage || tc?.leverage || 10,
+      symbol: editingBot.symbol || (tc?.symbol as string) || 'BTCUSDT',
+      leverage: (tc?.leverage as number) || 10,
       direction: (tc?.trade_direction as 'long' | 'short' | 'dual') || 'long',
-      first_order_amount: tc?.first_order_amount || 100,
-      order_count: tc?.order_count || 7,
-      add_position_spread: tc?.add_position_spread || 3.5,
-      add_position_callback: tc?.add_position_callback || 0.1,
-      take_profit_ratio: tc?.take_profit_ratio || 1.3,
-      profit_callback: tc?.profit_callback || 0.1,
-      double_first_order: tc?.open_double || false,
-      loop_type: tc?.trade_count_mode || 'cycle',
+      first_order_amount: (tc?.first_order_amount as number) || 100,
+      order_count: (tc?.order_count as number) || 7,
+      add_position_spread: (tc?.add_position_spread as number) || 3.5,
+      add_position_callback: (tc?.add_position_callback as number) || 0.1,
+      take_profit_ratio: (tc?.take_profit_ratio as number) || 1.3,
+      profit_callback: (tc?.profit_callback as number) || 0.1,
+      double_first_order: (tc?.open_double as boolean) || false,
+      loop_type: (tc?.trade_count_mode as 'single' | 'cycle') || 'cycle',
       loop_count: 999,
       enable_add_position: tc?.close_add_position !== true,
-      flash_crash_protection: tc?.waterfall_protection || 2,
+      flash_crash_protection: (tc?.waterfall_protection as number) || 2,
     }
   }
 

@@ -45,6 +45,7 @@ type AgentResult struct {
 // Phase 3 (decision):
 //   - Trader: synthesizes all inputs, generates strategy code
 type Pipeline struct {
+	mu           sync.RWMutex
 	agents       map[string]*Agent
 	enableCache  bool
 	maxRetries   int
@@ -103,7 +104,16 @@ func NewPipeline() *Pipeline {
 
 // Register adds an agent to the pipeline.
 func (p *Pipeline) Register(a Agent) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.agents[a.Name] = &a
+}
+
+// AgentCount returns the number of registered agents.
+func (p *Pipeline) AgentCount() int {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return len(p.agents)
 }
 
 // ── Market Input ──

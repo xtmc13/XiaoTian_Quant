@@ -3,6 +3,8 @@ package notify
 import (
 	"strings"
 	"sync"
+
+	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
 // ── Routing Rules ───────────────────────────────────────────────
@@ -24,8 +26,26 @@ type Router struct {
 	mu    sync.RWMutex
 }
 
-// NewRouter creates a notification router with default rules.
+// NewRouter creates a notification router, loading persisted rules from the database.
+// Falls back to default rules when no persisted rules exist.
 func NewRouter() *Router {
+	records, err := store.ListNotificationRoutes()
+	if err == nil && len(records) > 0 {
+		rules := make([]RouteRule, 0, len(records))
+		for _, r := range records {
+			rules = append(rules, RouteRule{
+				ID:        r.ID,
+				Name:      r.Name,
+				Events:    r.Events,
+				Levels:    r.Levels,
+				Channels:  r.Channels,
+				Enabled:   r.Enabled,
+				MinReturn: r.MinReturn,
+			})
+		}
+		return &Router{rules: rules}
+	}
+
 	return &Router{
 		rules: []RouteRule{
 			{
@@ -117,10 +137,12 @@ func (r *Router) UpdateRule(rule RouteRule) {
 	for i, existing := range r.rules {
 		if existing.ID == rule.ID {
 			r.rules[i] = rule
+			go r.persistRule(rule)
 			return
 		}
 	}
 	r.rules = append(r.rules, rule)
+	go r.persistRule(rule)
 }
 
 // DeleteRule removes a routing rule.
@@ -131,10 +153,23 @@ func (r *Router) DeleteRule(id string) bool {
 	for i, rule := range r.rules {
 		if rule.ID == id {
 			r.rules = append(r.rules[:i], r.rules[i+1:]...)
+			go func() { _ = store.DeleteNotificationRoute(id) }()
 			return true
 		}
 	}
 	return false
+}
+
+func (r *Router) persistRule(rule RouteRule) {
+	_ = store.SaveNotificationRoute(&store.NotificationRouteRecord{
+		ID:        rule.ID,
+		Name:      rule.Name,
+		Events:    rule.Events,
+		Levels:    rule.Levels,
+		Channels:  rule.Channels,
+		Enabled:   rule.Enabled,
+		MinReturn: rule.MinReturn,
+	})
 }
 
 func matchEvents(patterns []string, event string) bool {

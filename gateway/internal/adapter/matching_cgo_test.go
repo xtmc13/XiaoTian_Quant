@@ -48,7 +48,9 @@ func TestCGOLimitOrderGoesToBook(t *testing.T) {
 	result, err := eng.SubmitOrder("buy", "limit", 50000.0, 1.0, 1)
 	assertCGO(t, err == nil, "SubmitOrder should not error")
 	assertEqCGO(t, result["status"].(string), "ok", "Rust engine returns ok")
-	assertEqCGO(t, result["order_id"].(uint64) > 0, true, "order_id should be positive")
+	orderID, ok := result["order_id"].(float64)
+	assertCGO(t, ok, "order_id should be a number")
+	assertEqCGO(t, orderID > 0, true, "order_id should be positive")
 
 	snap, err := eng.Snapshot(5)
 	assertCGO(t, err == nil, "Snapshot should not error")
@@ -88,9 +90,10 @@ func TestCGOCancelOrder(t *testing.T) {
 	eng := newCGOTest(t)
 
 	result, _ := eng.SubmitOrder("buy", "limit", 50000.0, 1.0, 1)
-	orderID := result["order_id"].(uint64)
+	orderID, ok := result["order_id"].(float64)
+	assertCGO(t, ok, "order_id should be a number")
 
-	err := eng.CancelOrder(orderID)
+	err := eng.CancelOrder(uint64(orderID))
 	assertCGO(t, err == nil, "cancel should succeed")
 
 	snap, _ := eng.Snapshot(5)

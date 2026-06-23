@@ -124,6 +124,9 @@ func NewKrakenAdapter(apiKey, secret string) *KrakenAdapter {
 	}
 }
 
+func (k *KrakenAdapter) OnTicker(fn func(tick model.Tick))          { k.onTicker = fn }
+func (k *KrakenAdapter) OnOrderBook(fn func(ob model.OrderBookData)) { k.onOrderBook = fn }
+
 func (k *KrakenAdapter) Name() string  { return "kraken" }
 func (k *KrakenAdapter) Start() error  { return nil }
 

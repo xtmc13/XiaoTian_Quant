@@ -60,6 +60,9 @@ func NewBybitAdapter(apiKey, secret string, testnet bool) *BybitAdapter {
 	}
 }
 
+func (b *BybitAdapter) OnTicker(fn func(tick model.Tick))          { b.onTicker = fn }
+func (b *BybitAdapter) OnOrderBook(fn func(ob model.OrderBookData)) { b.onOrderBook = fn }
+
 func (b *BybitAdapter) Name() string { return "bybit" }
 
 func (b *BybitAdapter) Start() error { return nil }

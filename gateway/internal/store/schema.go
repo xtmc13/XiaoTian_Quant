@@ -2,7 +2,7 @@ package store
 
 // Schema migration constants and DDL for all 18 tables.
 
-const currentSchemaVersion = 10
+const currentSchemaVersion = 13
 
 // MigrationFunc is a function that upgrades the schema by one version.
 type MigrationFunc func(tx *dbTx) error
@@ -18,6 +18,9 @@ var migrations = map[int]MigrationFunc{
 	8:  migrateV8,
 	9:  migrateV9,
 	10: migrateV10,
+	11: migrateV11,
+	12: migrateV12,
+	13: migrateV13,
 }
 
 // dbTx wraps a database transaction for migrations.
@@ -589,6 +592,100 @@ func migrateV10(tx *dbTx) error {
 	for _, ddl := range tables {
 		// SQLite ALTER may fail if column exists; migrations run once per DB so safe.
 		_ = tx.exec(ddl)
+	}
+	return nil
+}
+
+// migrateV11 adds persistent storage for arbitrage trade pairs.
+func migrateV11(tx *dbTx) error {
+	tables := []string{
+		`CREATE TABLE IF NOT EXISTS arbitrage_trades (
+			id TEXT PRIMARY KEY,
+			symbol TEXT NOT NULL,
+			buy_exchange TEXT NOT NULL,
+			sell_exchange TEXT NOT NULL,
+			buy_price REAL NOT NULL,
+			sell_price REAL NOT NULL,
+			quantity REAL NOT NULL,
+			buy_order_id TEXT DEFAULT '',
+			sell_order_id TEXT DEFAULT '',
+			gross_profit REAL DEFAULT 0,
+			net_profit REAL DEFAULT 0,
+			fees REAL DEFAULT 0,
+			status TEXT DEFAULT 'pending',
+			opened_at INTEGER NOT NULL,
+			closed_at INTEGER DEFAULT 0
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_arb_trades_symbol ON arbitrage_trades(symbol)`,
+		`CREATE INDEX IF NOT EXISTS idx_arb_trades_status ON arbitrage_trades(status)`,
+		`CREATE INDEX IF NOT EXISTS idx_arb_trades_opened ON arbitrage_trades(opened_at)`,
+	}
+	for _, ddl := range tables {
+		if err := tx.exec(ddl); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// migrateV12 adds persistent storage for notifications and notification routes.
+func migrateV12(tx *dbTx) error {
+	tables := []string{
+		`CREATE TABLE IF NOT EXISTS notifications (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			title TEXT NOT NULL,
+			content TEXT NOT NULL,
+			level TEXT NOT NULL,
+			category TEXT NOT NULL,
+			read INTEGER DEFAULT 0,
+			created_at INTEGER NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(read)`,
+		`CREATE TABLE IF NOT EXISTS notification_routes (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			events TEXT NOT NULL,
+			levels TEXT NOT NULL,
+			channels TEXT NOT NULL,
+			enabled INTEGER DEFAULT 1,
+			min_return_pct REAL DEFAULT 0
+		)`,
+	}
+	for _, ddl := range tables {
+		if err := tx.exec(ddl); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// migrateV13 adds persistent storage for triangular arbitrage trades.
+func migrateV13(tx *dbTx) error {
+	tables := []string{
+		`CREATE TABLE IF NOT EXISTS triangular_trades (
+			id TEXT PRIMARY KEY,
+			exchange TEXT NOT NULL,
+			cycle_json TEXT NOT NULL DEFAULT '[]',
+			legs_json TEXT NOT NULL DEFAULT '[]',
+			start_asset TEXT NOT NULL,
+			start_qty REAL NOT NULL,
+			end_qty REAL DEFAULT 0,
+			gross_profit REAL DEFAULT 0,
+			net_profit REAL DEFAULT 0,
+			total_fees REAL DEFAULT 0,
+			status TEXT DEFAULT 'pending',
+			opened_at INTEGER NOT NULL,
+			closed_at INTEGER DEFAULT 0
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_triangular_trades_exchange ON triangular_trades(exchange)`,
+		`CREATE INDEX IF NOT EXISTS idx_triangular_trades_status ON triangular_trades(status)`,
+		`CREATE INDEX IF NOT EXISTS idx_triangular_trades_opened ON triangular_trades(opened_at)`,
+	}
+	for _, ddl := range tables {
+		if err := tx.exec(ddl); err != nil {
+			return err
+		}
 	}
 	return nil
 }

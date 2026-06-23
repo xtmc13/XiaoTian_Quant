@@ -1,7 +1,9 @@
 package config
 
 import (
+	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode"
@@ -305,6 +307,11 @@ func Load(path string) (*Config, error) {
 	if v := os.Getenv("PORT"); v != "" {
 		cfg.Server.Port = v
 	}
+	if v := os.Getenv("MAX_POSITIONS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Risk.MaxPositions = n
+		}
+	}
 	if v := os.Getenv("LOG_LEVEL"); v != "" {
 		cfg.Server.LogLevel = v
 	}
@@ -427,4 +434,39 @@ func (c *Config) FirstEnabledProvider() *AIProviderCfg {
 		Model:   "deepseek-chat",
 		Enabled: true,
 	}
+}
+
+// Validate returns an error if the config is invalid.
+func (c *Config) Validate() error {
+	if c.Server.Port == "" {
+		return fmt.Errorf("server port is required")
+	}
+	if c.Server.Mode != "release" && c.Server.Mode != "debug" {
+		return fmt.Errorf("invalid server mode: %s", c.Server.Mode)
+	}
+	return nil
+}
+
+// MaskedString returns a JSON-like string with sensitive values redacted.
+func (c *Config) MaskedString() string {
+	masked := *c
+	if masked.Exchange.Binance.APIKey != "" {
+		masked.Exchange.Binance.APIKey = "***"
+	}
+	if masked.Exchange.Binance.APISecret != "" {
+		masked.Exchange.Binance.APISecret = "***"
+	}
+	if masked.Exchange.OKX.APIKey != "" {
+		masked.Exchange.OKX.APIKey = "***"
+	}
+	if masked.Exchange.OKX.APISecret != "" {
+		masked.Exchange.OKX.APISecret = "***"
+	}
+	for i := range masked.AI.Providers {
+		if masked.AI.Providers[i].APIKey != "" {
+			masked.AI.Providers[i].APIKey = "***"
+		}
+	}
+	data, _ := yaml.Marshal(&masked)
+	return string(data)
 }

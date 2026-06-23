@@ -1,8 +1,12 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -129,21 +133,53 @@ func (ms *MatchingService) SimulateTrading(symbol string, price float64) {
 }
 
 // StartDataFeed begins periodic simulated trading for configured symbols.
+// Prices are fetched from Binance public API; hard-coded fake prices are no
+// longer used. Symbols without a real price are skipped.
 func (ms *MatchingService) StartDataFeed() {
 	symbols := []string{"BTCUSDT", "ETHUSDT", "SOLUSDT"}
-	basePrices := map[string]float64{
-		"BTCUSDT": 68000.0,
-		"ETHUSDT": 3500.0,
-		"SOLUSDT": 150.0,
-	}
+	lastPrices := make(map[string]float64)
+	var priceMu sync.Mutex
 
 	ticker := time.NewTicker(3 * time.Second)
 	go func() {
 		for range ticker.C {
 			for _, sym := range symbols {
-				base := basePrices[sym]
-				ms.SimulateTrading(sym, base)
+				price := fetchLastPrice(sym)
+				if price <= 0 {
+					// Fallback to last known price if available.
+					priceMu.Lock()
+					price = lastPrices[sym]
+					priceMu.Unlock()
+					if price <= 0 {
+						log.Printf("[Matching] No price available for %s, skipping simulation", sym)
+						continue
+					}
+				}
+				priceMu.Lock()
+				lastPrices[sym] = price
+				priceMu.Unlock()
+				ms.SimulateTrading(sym, price)
 			}
 		}
 	}()
+}
+
+// fetchLastPrice retrieves the latest price from Binance public API.
+func fetchLastPrice(symbol string) float64 {
+	resp, err := http.Get("https://api.binance.com/api/v3/ticker/price?symbol=" + symbol)
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	var result map[string]any
+	if err := json.Unmarshal(body, &result); err != nil {
+		return 0
+	}
+	if priceStr, ok := result["price"].(string); ok {
+		f, _ := strconv.ParseFloat(priceStr, 64)
+		return f
+	}
+	return 0
 }

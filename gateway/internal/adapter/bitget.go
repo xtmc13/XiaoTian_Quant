@@ -53,6 +53,9 @@ func NewBitgetAdapter(apiKey, secretKey, passphrase string) *BitgetAdapter {
 	}
 }
 
+func (b *BitgetAdapter) OnTicker(fn func(tick model.Tick))          { b.onTicker = fn }
+func (b *BitgetAdapter) OnOrderBook(fn func(ob model.OrderBookData)) { b.onOrderBook = fn }
+
 func (b *BitgetAdapter) Name() string     { return "bitget" }
 func (b *BitgetAdapter) Start() error     { return nil }
 

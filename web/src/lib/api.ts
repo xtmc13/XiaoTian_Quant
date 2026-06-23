@@ -42,6 +42,7 @@ import {
   type AIQuickScan,
   type AIAutoTradeConfig,
   type AIModel,
+  type AIStatus,
   type AgentToken,
   type AgentAIConfig,
   type AgentCCSwitchStatus,
@@ -52,6 +53,7 @@ import {
   type DefaultSettings,
   type UISettings,
   type ExchangeSettings,
+  type ExchangeConfiguredStatus,
   type StrategyCommunityItem,
   type StrategyCommunityDetail,
   type CommunityComment,
@@ -68,7 +70,12 @@ import {
   type ArbitrageOpportunity,
   type ArbitragePosition,
   type ArbitrageHistoryItem,
+  type ArbitragePerformance,
   type ArbitrageExchange,
+  type TriangularConfig,
+  type TriangularOpportunity,
+  type TriangularTrade,
+  type TriangularPerformance,
   type IndicatorParseResult,
   type IndicatorValidateResult,
   type IndicatorRunResult,
@@ -523,6 +530,7 @@ export const configApi = {
   getExchanges: () => api.get<{ exchanges: Array<{ key: string; label: string; status: string; supports: string[] }> }>('/config/exchanges'),
   getAIModels: () => api.get<{ providers: Array<{ key: string; label: string; models: string[]; baseUrl: string }> }>('/config/ai-models'),
   getRate: () => api.get<{ rate: number; from: string; to: string; timestamp: number }>('/config/rate'),
+  exchangesConfigured: () => api.get<Record<string, ExchangeConfiguredStatus>>('/exchanges/configured'),
 }
 
 // ── Settings ──
@@ -639,19 +647,103 @@ export const advancedOrderApi = {
   },
 }
 
+const SEC_TO_NS = 1e9
+
 // ── Arbitrage ──
 export const arbitrageApi = {
-  config: () => api.get<ArbitrageConfig>('/arbitrage/config'),
-  updateConfig: (data: ArbitrageConfig) => api.post<ArbitrageConfig>('/arbitrage/config', data),
-  start: () => api.post<{ success: boolean }>('/arbitrage/start'),
-  stop: () => api.post<{ success: boolean }>('/arbitrage/stop'),
+  config: () =>
+    api.get<{ config: ArbitrageConfig }>('/arbitrage/config').then((r) => {
+      const cfg = r.config
+      return { ...cfg, poll_interval: cfg.poll_interval / SEC_TO_NS }
+    }),
+
+  updateConfig: (data: ArbitrageConfig) => {
+    const payload = { ...data, poll_interval: data.poll_interval * SEC_TO_NS }
+    return api.post<{ config: ArbitrageConfig }>('/arbitrage/config', payload).then((r) => ({
+      ...r.config,
+      poll_interval: r.config.poll_interval / SEC_TO_NS,
+    }))
+  },
+
+  start: () => api.post<{ status: string }>('/arbitrage/start'),
+  stop: () => api.post<{ status: string }>('/arbitrage/stop'),
   status: () => api.get<ArbitrageStatus>('/arbitrage/status'),
-  opportunity: () => api.get<ArbitrageOpportunity[]>('/arbitrage/opportunity'),
-  positions: () => api.get<ArbitragePosition[]>('/arbitrage/positions'),
-  history: (limit?: number) => api.get<ArbitrageHistoryItem[]>('/arbitrage/history', { params: { limit } }),
-  exchanges: () => api.get<ArbitrageExchange[]>('/arbitrage/exchanges'),
-  registerExchange: (data: Partial<ArbitrageExchange>) => api.post<ArbitrageExchange>('/arbitrage/exchanges', data),
-  execute: (data: { symbol: string; buy_exchange: string; sell_exchange: string; quantity: number }) => api.post<{ success: boolean; trade_id: string }>('/arbitrage/execute', data),
+  performance: () => api.get<ArbitragePerformance>('/arbitrage/performance'),
+
+  opportunity: () =>
+    api.get<{ opportunity: ArbitrageOpportunity | null }>('/arbitrage/opportunity').then((r) =>
+      r.opportunity ? [r.opportunity] : []
+    ),
+
+  positions: () =>
+    api.get<{ positions: ArbitragePosition[] }>('/arbitrage/positions').then((r) => r.positions ?? []),
+
+  history: (limit?: number) =>
+    api.get<{ history: ArbitrageHistoryItem[] }>('/arbitrage/history', { params: { limit } }).then(
+      (r) => r.history ?? []
+    ),
+
+  exchanges: () =>
+    api.get<{ registered_count: number; exchanges: string[] }>('/arbitrage/exchanges'),
+
+  registerExchange: (data: Partial<ArbitrageExchange>) =>
+    api.post<{ status: string; exchange: string }>('/arbitrage/exchanges', data),
+
+  execute: (data: {
+    symbol: string
+    buy_exchange: string
+    sell_exchange: string
+    buy_price: number
+    sell_price: number
+    quantity: number
+  }) => api.post<{ status: string; opportunity: ArbitrageOpportunity }>('/arbitrage/execute', data),
+
+  closePosition: (id: string, sell_price: number) =>
+    api.post<{ status: string }>(`/arbitrage/positions/${id}/close`, { sell_price }),
+
+  failPosition: (id: string) =>
+    api.post<{ status: string }>(`/arbitrage/positions/${id}/fail`),
+}
+
+// ── Triangular Arbitrage ──
+
+export const triangularApi = {
+  config: () =>
+    api.get<{ config: TriangularConfig }>('/triangular/config').then((r) => r.config),
+
+  updateConfig: (data: TriangularConfig) =>
+    api.post<{ config: TriangularConfig }>('/triangular/config', data).then((r) => r.config),
+
+  start: () => api.post<{ status: string }>('/triangular/start'),
+  stop: () => api.post<{ status: string }>('/triangular/stop'),
+  status: () => api.get<{ running: boolean; stats: Record<string, unknown> }>('/triangular/status'),
+  performance: () => api.get<TriangularPerformance>('/triangular/performance'),
+
+  opportunity: () =>
+    api.get<{ opportunity: TriangularOpportunity | null }>('/triangular/opportunity').then((r) =>
+      r.opportunity ? [r.opportunity] : []
+    ),
+
+  positions: () =>
+    api.get<{ positions: TriangularTrade[] }>('/triangular/positions').then((r) => r.positions ?? []),
+
+  history: (limit?: number) =>
+    api.get<{ history: TriangularTrade[] }>('/triangular/history', { params: { limit } }).then(
+      (r) => r.history ?? []
+    ),
+
+  execute: (data: {
+    exchange: string
+    cycle: string[]
+    start_qty: number
+  }) =>
+    api.post<{ status: string; opportunity: TriangularOpportunity }>('/triangular/execute', data),
+
+  closePosition: (id: string) =>
+    api.post<{ status: string }>(`/triangular/positions/${id}/close`),
+
+  failPosition: (id: string) =>
+    api.post<{ status: string }>(`/triangular/positions/${id}/fail`),
 }
 
 // ── Hyperopt ──

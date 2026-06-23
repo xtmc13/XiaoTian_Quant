@@ -6,6 +6,7 @@ import "math"
 
 type Tick struct {
 	Symbol    string  `json:"symbol"`
+	Exchange  string  `json:"exchange"`
 	Bid       float64 `json:"bid"`
 	Ask       float64 `json:"ask"`
 	BidSize   float64 `json:"bid_size"`
@@ -19,6 +20,7 @@ type Tick struct {
 
 type OrderBookData struct {
 	Symbol    string       `json:"symbol"`
+	Exchange  string       `json:"exchange"`
 	Bids      [][2]float64 `json:"bids"`
 	Asks      [][2]float64 `json:"asks"`
 	Timestamp int64        `json:"timestamp"`
