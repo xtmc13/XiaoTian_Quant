@@ -35,6 +35,19 @@ config.yaml
 logs/
 gateway/internal/data/data_export/
 
+# Runtime secrets
+**/.jwt_secret
+
+# SQLite journal files
+*.db-journal
+**/data/*.db-journal
+
+# Runtime gateway data
+gateway/data/*.json
+
+# Go binary
+gateway/server
+
 # Database files
 *.db
 *.sqlite
