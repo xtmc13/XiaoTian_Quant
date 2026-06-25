@@ -29,6 +29,8 @@ import {
   SlidersHorizontal,
   Zap,
   Route,
+  Info,
+  Terminal,
 } from 'lucide-react'
 
 /* ------------------------------------------------------------------ */
@@ -443,10 +445,35 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
     setTimeout(() => setCopied(false), 2000)
   }, [])
 
+  /* ── System info ── */
+  const [systemInfo, setSystemInfo] = useState<{ version?: string; status?: string; buildTime?: string }>({})
+  const [logs, setLogs] = useState<string>('')
+
+  useEffect(() => {
+    fetch('/api/health')
+      .then((r) => r.json())
+      .then((data) => {
+        if (data?.data) {
+          setSystemInfo({
+            version: data.data.version,
+            status: data.data.status,
+            buildTime: data.data.buildTime,
+          })
+        }
+      })
+      .catch(() => {})
+
+    fetch('/api/logs?tail=100')
+      .then((r) => (r.ok ? r.text() : ''))
+      .then((text) => setLogs(text || '暂无日志或后端未启用日志接口'))
+      .catch(() => setLogs('无法获取日志'))
+  }, [])
+
   /* ── Active tab ── */
-  const [activeTab, setActiveTab] = useState('exchange')
+  const [activeTab, setActiveTab] = useState('general')
 
   const tabs = [
+    { key: 'general', label: '通用', icon: Globe, local: true },
     { key: 'exchange', label: '交易所', icon: Globe },
     { key: 'ai', label: 'AI 模型', icon: BrainCircuit },
     { key: 'strategy', label: '全局策略', icon: SlidersHorizontal },
@@ -455,6 +482,7 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
     { key: 'appearance', label: '外观', icon: Palette, local: true },
     { key: 'data', label: '数据', icon: Database, local: true },
     { key: 'security', label: '安全', icon: Shield, local: true },
+    { key: 'system', label: '系统', icon: Info },
   ] as const
 
   const isSaving = saveMut.isPending
@@ -554,6 +582,23 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
 
           {/* Right content — scrollable */}
           <div className="flex-1 space-y-4 overflow-y-auto min-h-0">
+            {/* ── GENERAL ── */}
+            {activeTab === 'general' && (
+              <>
+                <SectionCard title="通用偏好" bodyClassName="space-y-5">
+                  <div>
+                    <label className="mb-1.5 block text-xs text-muted-foreground">界面语言</label>
+                    <SelectField value={app.language} onChange={app.setLanguage} options={['zh-CN', 'en', 'ja']} label="界面语言" />
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-xs text-muted-foreground">时区</label>
+                    <SelectField value={dataSettings.timezone || 'Asia/Shanghai'} onChange={(v) => setDataSettings((p) => ({ ...p, timezone: v }))} options={TIMEZONES} label="时区" />
+                  </div>
+                </SectionCard>
+                <CurrencySelector />
+              </>
+            )}
+
             {/* ── EXCHANGE ── */}
             {activeTab === 'exchange' && (
               <>
@@ -1091,14 +1136,6 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
                     onChange={(v) => app.setSidebarBehavior(v ? 'hover' : 'click')}
                   />
                 </label>
-                <div>
-                  <label className="mb-1.5 block text-xs text-muted-foreground">界面语言</label>
-                  <SelectField value={app.language} onChange={app.setLanguage} options={['zh-CN', 'en', 'ja']} label="界面语言" />
-                </div>
-                <div>
-                  <label className="mb-1.5 block text-xs text-muted-foreground">时区</label>
-                  <SelectField value={dataSettings.timezone || 'Asia/Shanghai'} onChange={(v) => setDataSettings((p) => ({ ...p, timezone: v }))} options={TIMEZONES} label="时区" />
-                </div>
               </SectionCard>
             )}
 
@@ -1146,6 +1183,57 @@ const [testErrors, setTestErrors] = useState<Record<string, string>>({})
                   <p className="mt-1 text-[11px] text-muted-foreground">逗号分隔，留空表示不限制</p>
                 </div>
               </SectionCard>
+            )}
+
+            {/* ── SYSTEM ── */}
+            {activeTab === 'system' && (
+              <>
+                <SectionCard title="系统状态" bodyClassName="space-y-4">
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                    <div className="rounded-lg border border-quant-border bg-quant-bg p-4">
+                      <div className="text-xs text-muted-foreground">前端版本</div>
+                      <div className="mt-1 text-sm font-medium text-foreground">{import.meta.env.VITE_APP_VERSION || '2.0.0'}</div>
+                    </div>
+                    <div className="rounded-lg border border-quant-border bg-quant-bg p-4">
+                      <div className="text-xs text-muted-foreground">后端版本</div>
+                      <div className="mt-1 text-sm font-medium text-foreground">{systemInfo.version || '-'}</div>
+                    </div>
+                    <div className="rounded-lg border border-quant-border bg-quant-bg p-4">
+                      <div className="text-xs text-muted-foreground">健康状态</div>
+                      <div className={cn('mt-1 flex items-center gap-1.5 text-sm font-medium', systemInfo.status === 'healthy' ? 'text-green-400' : 'text-red-400')}>
+                        {systemInfo.status === 'healthy' ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />}
+                        {systemInfo.status === 'healthy' ? '健康' : systemInfo.status || '未知'}
+                      </div>
+                    </div>
+                  </div>
+                  {systemInfo.buildTime && (
+                    <div className="rounded-lg border border-quant-border bg-quant-bg p-4">
+                      <div className="text-xs text-muted-foreground">构建时间</div>
+                      <div className="mt-1 text-sm font-medium text-foreground">{systemInfo.buildTime}</div>
+                    </div>
+                  )}
+                </SectionCard>
+
+                <SectionCard title="日志" bodyClassName="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="text-xs text-muted-foreground">Gateway 日志（最近 100 行）</div>
+                    <button
+                      onClick={() => {
+                        fetch('/api/logs?tail=100')
+                          .then((r) => (r.ok ? r.text() : '后端未启用日志接口'))
+                          .then(setLogs)
+                          .catch(() => setLogs('无法获取日志'))
+                      }}
+                      className="flex items-center gap-1.5 rounded-md border border-quant-border bg-quant-card px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+                    >
+                      <Terminal className="h-3.5 w-3.5" /> 刷新日志
+                    </button>
+                  </div>
+                  <pre className="max-h-96 overflow-auto rounded-lg border border-quant-border bg-black/40 p-3 text-[11px] leading-relaxed text-muted-foreground">
+                    {logs || '点击刷新日志'}
+                  </pre>
+                </SectionCard>
+              </>
             )}
 
           </div>

@@ -555,6 +555,7 @@ func registerDashboardRoutes(api *gin.RouterGroup) {
 func registerHealthRoutes(api *gin.RouterGroup) {
 	api.GET("/health", handler.HealthCheck)
 	api.GET("/health/components", handler.ComponentHealth)
+	api.GET("/logs", handler.GetLogs)
 }
 
 func registerIndicatorRoutes(api *gin.RouterGroup) {

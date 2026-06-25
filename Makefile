@@ -65,7 +65,7 @@ build-web:
 
 build-go:
 	@echo "🔨 构建 Go 后端..."
-	@rm -rf gateway/spa/*
+	@find gateway/spa -mindepth 1 -maxdepth 1 -not -name '*.go' -exec rm -rf {} + 2>/dev/null || true
 	@cp -r web/dist/* gateway/spa/ 2>/dev/null || true
 ifeq ($(OS),windows)
 	@cd gateway && CGO_ENABLED=0 go build \

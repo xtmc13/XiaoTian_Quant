@@ -228,7 +228,11 @@ axiosInstance.interceptors.response.use(
           isRedirectingToLogin = true
           localStorage.removeItem('xt-token')
           localStorage.removeItem('xt-auth')
-          window.location.href = '/login'
+          // Avoid full reload when the user is already on the login page
+          // (e.g. wrong password should only show an error toast).
+          if (window.location.pathname !== '/login') {
+            window.location.href = '/login'
+          }
           setTimeout(() => { isRedirectingToLogin = false }, 3000)
         }
         return Promise.reject(new ApiError('登录已过期，请重新登录', 401, 'UNAUTHORIZED'))

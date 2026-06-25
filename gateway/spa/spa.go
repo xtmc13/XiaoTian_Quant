@@ -1,3 +1,4 @@
+// Package spa provides the embedded frontend static assets for the Go gateway.
 package spa
 
 import (
@@ -8,50 +9,28 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-//go:embed index.html
-var indexHTML []byte
+//go:embed *
+var content embed.FS
 
-//go:embed assets/*
-var assetsFS embed.FS
+var fsContent = http.FS(content)
 
+// IndexHTML returns the embedded index.html bytes.
 func IndexHTML() ([]byte, error) {
-	return indexHTML, nil
+	return content.ReadFile("index.html")
 }
 
-func ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html")
-	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-	w.Write(indexHTML)
-}
-
+// AssetsFS returns a http.FileSystem rooted at the embedded assets/ directory.
 func AssetsFS() http.FileSystem {
-	f, err := fs.Sub(assetsFS, "assets")
+	assets, err := fs.Sub(content, "assets")
 	if err != nil {
-		return http.FS(assetsFS)
+		return http.FS(content)
 	}
-	return http.FS(f)
+	return http.FS(assets)
 }
 
+// ServeRootFile returns a Gin handler that serves a single file from the SPA root.
 func ServeRootFile(name string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		data, err := assetsFS.ReadFile(name)
-		if err != nil {
-			c.Status(http.StatusNotFound)
-			return
-		}
-		var contentType string
-		switch {
-		case name == "manifest.json":
-			contentType = "application/json"
-		case name == "sw.js":
-			contentType = "application/javascript"
-		case name == "favicon.svg":
-			contentType = "image/svg+xml"
-		default:
-			contentType = "application/octet-stream"
-		}
-		c.Header("Content-Type", contentType)
-		c.Header("Cache-Control", "public, max-age=3600")
-		c.Writer.Write(data)
+		c.FileFromFS(name, fsContent)
 	}
 }

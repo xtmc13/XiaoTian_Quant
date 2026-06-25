@@ -16,7 +16,8 @@ import {
   Code2,
   User,
   Users,
-  Key, Globe,
+  Key,
+  Globe,
   ChevronDown,
   BrainCircuit,
   Shield,
@@ -26,6 +27,7 @@ import {
   Search,
   Link2,
   Share2,
+  Layers,
 } from 'lucide-react'
 
 interface NavItem {
@@ -36,40 +38,69 @@ interface NavItem {
   children?: { path: string; label: string }[]
 }
 
+// Helper: extract base pathname without query string
+const basePath = (path: string) => path.split('?')[0]
+
+// Helper: check if a child path is active
+const isChildActive = (location: ReturnType<typeof useLocation>, childPath: string) => {
+  const childBase = basePath(childPath)
+  const childQuery = childPath.split('?')[1] || ''
+  const locSearch = location.search.replace(/^\?/, '')
+  // Exact match including query string
+  if (childQuery) {
+    return location.pathname === childBase && locSearch === childQuery
+  }
+  return location.pathname === childBase
+}
+
 const navItems: NavItem[] = [
   { path: '/dashboard', label: '仪表盘', icon: BarChart3 },
+
+  // 交易 — 保持原样
   {
-    label: '交易', icon: LineChart,
+    label: '交易',
+    icon: LineChart,
     children: [
       { path: '/trading?mode=spot', label: '现货交易' },
       { path: '/trading?mode=contract', label: '合约交易' },
     ],
   },
-  { path: '/strategy', label: '策略', icon: Wallet },
-  { path: '/indicator-ide', label: '指标IDE', icon: Code2 },
-  { path: '/ai', label: 'AI研究', icon: Cpu },
-  { path: '/backtest', label: '回测', icon: FlaskConical },
+
+  // 策略实验室
   {
-    label: '机器人', icon: Bot,
+    label: '策略实验室',
+    icon: FlaskConical,
+    children: [
+      { path: '/strategy', label: '策略管理' },
+      { path: '/backtest', label: '回测' },
+      { path: '/indicator-ide', label: '指标 IDE' },
+      { path: '/indicator-community', label: '指标市场' },
+      { path: '/strategy-leaderboard', label: '排行榜' },
+    ],
+  },
+
+  // AI 研究
+  {
+    label: 'AI 研究',
+    icon: Cpu,
+    children: [
+      { path: '/ai', label: '市场分析' },
+      { path: '/model-management', label: '模型管理' },
+    ],
+  },
+
+  // 机器人中心
+  {
+    label: '机器人中心',
+    icon: Bot,
     children: [
       { path: '/bots?type=strategy', label: '策略机器人' },
       { path: '/bots?type=signal', label: '信号机器人' },
-      { path: '/bots?type=ai', label: 'AI 机器人' },
+      { path: '/ai-bots?tab=mybots', label: 'AI 机器人' },
     ],
   },
-  {
-    label: 'AI Bots', icon: BrainCircuit,
-    children: [
-      { path: '/ai-bots?tab=marketplace', label: '机器人市场' },
-      { path: '/ai-bots?tab=providers', label: '信号源市场' },
-      { path: '/ai-bots?tab=mybots', label: '我的机器人' },
-      { path: '/ai-bots?tab=analytics', label: '数据分析' },
-    ],
-  },
-  { path: '/model-management', label: 'ML模型', icon: BrainCircuit },
-  { path: '/risk-control', label: '风控中心', icon: Shield },
-  { path: '/pairlist', label: '交易对筛选', icon: ListFilter },
-  { path: '/advanced-orders', label: '高级订单', icon: ArrowUpDown },
+
+  // 套利
   {
     label: '套利',
     icon: ArrowLeftRight,
@@ -78,15 +109,50 @@ const navItems: NavItem[] = [
       { path: '/arbitrage?tab=triangular', label: '三角套利' },
     ],
   },
-  { path: '/hyperopt', label: '参数优化', icon: Search },
-  { path: '/social-trading', label: '社交交易', icon: Share2 },
-  { path: '/onchain', label: '链上数据', icon: Link2 },
-  { path: '/exchange-account', label: '账户', icon: Wallet },
-  { path: '/indicator-community', label: '指标市场', icon: ShoppingBag },
-  { path: '/author-dashboard', label: '作者后台', icon: BarChart3 },
-  { path: '/portfolio', label: '资产监测', icon: PieChart },
-  { path: '/billing', label: '会员', icon: ShoppingBag },
-  { path: '/profile', label: '个人中心', icon: User },
+
+  // 资产与风控
+  {
+    label: '资产与风控',
+    icon: PieChart,
+    children: [
+      { path: '/portfolio', label: '资产监测' },
+      { path: '/risk-control', label: '风控中心' },
+    ],
+  },
+
+  // 账户中心
+  {
+    label: '账户中心',
+    icon: User,
+    children: [
+      { path: '/profile', label: '个人资料' },
+      { path: '/billing', label: '订阅' },
+      { path: '/exchange-account', label: '交易所账户' },
+    ],
+  },
+
+  // 社区
+  {
+    label: '社区',
+    icon: Share2,
+    children: [
+      { path: '/social-trading', label: '信号市场' },
+      { path: '/author-dashboard', label: '作者后台' },
+    ],
+  },
+
+  // 高级
+  {
+    label: '高级',
+    icon: Layers,
+    children: [
+      { path: '/pairlist', label: '交易对筛选' },
+      { path: '/advanced-orders', label: '高级订单' },
+      { path: '/hyperopt', label: '参数优化' },
+      { path: '/onchain', label: '链上数据' },
+    ],
+  },
+
   { path: '/users', label: '用户管理', icon: Users, adminOnly: true },
   { path: '/agent-tokens', label: 'Agent令牌', icon: Key, adminOnly: true },
 ]
@@ -96,7 +162,14 @@ export function Sidebar() {
   const { sidebarCollapsed, setSidebarCollapsed, sidebarBehavior, toggleSidebar } = useAppStore()
   const { user } = useAuthStore()
   const isAdmin = user?.role === 'admin'
-  const [expandedItem, setExpandedItem] = useState<string | null>(null)
+
+  // Auto-expand groups whose child is currently active
+  const initiallyExpanded = navItems
+    .filter((item) => item.children?.some((child) => isChildActive(location, child.path)))
+    .map((item) => item.label)
+    .join('|')
+
+  const [expandedItem, setExpandedItem] = useState<string | null>(initiallyExpanded || null)
   const isHover = sidebarBehavior === 'hover'
 
   const handleMouseEnter = useCallback(() => {
@@ -135,8 +208,8 @@ export function Sidebar() {
       <nav className="flex-1 overflow-y-auto py-3 px-1.5 space-y-1">
         {navItems.filter(item => !item.adminOnly || isAdmin).map((item) => {
           const active = item.path
-            ? location.pathname === item.path || (item.children && item.children.some(c => location.search && location.pathname + location.search === c.path))
-            : item.children?.some(c => location.pathname + (location.search || '') === c.path || location.pathname === c.path.split('?')[0])
+            ? location.pathname === item.path
+            : item.children?.some((child) => isChildActive(location, child.path)) ?? false
           const hasChildren = !!item.children
           const isExpanded = expandedItem === item.label
 
@@ -157,7 +230,7 @@ export function Sidebar() {
                       ? 'bg-quant-gold/10 text-quant-gold'
                       : 'text-muted-foreground hover:text-foreground hover:bg-white/5'
                   )}
-                  title="交易"
+                  title={item.label}
                 >
                   <item.icon className="w-[18px] h-[18px] shrink-0" />
                   {!sidebarCollapsed && (
@@ -172,7 +245,7 @@ export function Sidebar() {
                 {isExpanded && !sidebarCollapsed && (
                   <div className="ml-6 mt-0.5 space-y-0.5">
                     {item.children!.map((child) => {
-                      const childActive = location.pathname + location.search === child.path
+                      const childActive = isChildActive(location, child.path)
                       return (
                         <Link
                           key={child.path}

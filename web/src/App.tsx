@@ -6,6 +6,7 @@ import '@/i18n/locales/zh-CN'
 import '@/i18n/locales/en-US'
 import { Layout } from './components/layout/Layout'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { pageLoaders, prefetchRoute } from '@/lib/pageLoaders'
 
 // Eager-loaded: shell + entry pages
 import { Login } from './pages/Login'
