@@ -2,7 +2,7 @@
  * Enhanced KLineChart — wraps klinecharts with drawing tools, built-in indicators,
  * signal overlays, and theme support.  Ported from XiaoTianQuant KlineChart.vue.
  */
-import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo, memo } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useCallback, memo } from 'react'
 import { init, dispose, registerOverlay } from 'klinecharts'
 import type { Chart } from 'klinecharts'
 import { cn } from '@/lib/utils'
@@ -10,7 +10,7 @@ import type { KLineBar } from '@/lib/technicalIndicators'
 import { useDebounce } from '@/hooks/useAsyncData'
 import {
   PenLine, Minus, Columns2, Columns3, ArrowRight, GripHorizontal,
-  DollarSign, Frame, TrendingUp, Eraser, Settings, Eye, EyeOff, X,
+  DollarSign, Frame, TrendingUp, Eraser, Settings, X,
 } from 'lucide-react'
 
 /* ── Types ───────────────────────────────────────────────────────── */
@@ -184,7 +184,6 @@ export const KlineChart = memo(function KlineChart({
   error,
   theme = 'dark',
   height = 500,
-  symbol,
   onRetry,
   drawingBarVisible = true,
   activeIndicators = [],
@@ -250,7 +249,7 @@ export const KlineChart = memo(function KlineChart({
         try { dispose(chart) } catch { /* ignore */ }
         chartRef.current = null
       }
-    } catch (e) {
+    } catch {
       // 图表初始化错误，已在 UI 中处理
     }
   }, [loading])
@@ -315,7 +314,7 @@ export const KlineChart = memo(function KlineChart({
     try {
       const id = (chartRef.current as unknown as { createOverlay: (...args: unknown[]) => unknown }).createOverlay({ name: tool.overlay, lock: false })
       if (id) drawingIdsRef.current.push(String(id))
-    } catch (_) { setActiveDrawingTool(null) }
+    } catch { setActiveDrawingTool(null) }
   }, [activeDrawingTool])
 
   const clearDrawings = useCallback(() => {

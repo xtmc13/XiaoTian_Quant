@@ -171,7 +171,7 @@ export function useBotData(filterType?: NewBotType) {
   })
 
   const bots: BotItem[] = useMemo(() => {
-    let all = Array.isArray(strategies) ? strategies : []
+    const all = Array.isArray(strategies) ? strategies : []
     // 映射旧 bot_type 到新分类
     const mapped = all.map((s: StrategyItem) => {
       const oldType = ((s as StrategyItem & { bot_type?: string }).bot_type || ((s.trading_config as Record<string, unknown> | undefined)?.bot_type as string) || 'custom')

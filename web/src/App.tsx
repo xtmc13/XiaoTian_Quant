@@ -1,12 +1,12 @@
 import { BrowserRouter, Routes, Route, Navigate, useLocation, Outlet, useNavigate } from 'react-router-dom'
-import { lazy, Suspense, ComponentType, useEffect, useRef } from 'react'
+import { lazy, Suspense, useEffect, useRef } from 'react'
 import { useAuthStore } from '@/stores/authStore'
 import { I18nProvider } from '@/i18n'
 import '@/i18n/locales/zh-CN'
 import '@/i18n/locales/en-US'
 import { Layout } from './components/layout/Layout'
 import { ErrorBoundary } from './components/ErrorBoundary'
-import { pageLoaders, prefetchRoute } from '@/lib/pageLoaders'
+import { pageLoaders } from '@/lib/pageLoaders'
 
 // Eager-loaded: shell + entry pages
 import { Login } from './pages/Login'
@@ -18,35 +18,6 @@ function lazyPage(
   name: string
 ) {
   return lazy(() => factory().then((m) => ({ default: (m as Record<string, unknown>)[name] as React.ComponentType<unknown> })))
-}
-
-// ── Route prefetch map ──
-const pageLoaders: Record<string, () => Promise<unknown>> = {
-  '/dashboard':            () => import('./pages/Dashboard'),
-  '/trading':              () => import('./pages/Trading'),
-  '/strategy':             () => import('./pages/Strategy'),
-  '/ai':                   () => import('./pages/AI'),
-  '/backtest':             () => import('./pages/Backtest'),
-  '/bots':                 () => import('./pages/Bots'),
-  '/ai-bots':              () => import('./pages/AIBots'),
-  '/settings':             () => import('./pages/Settings'),
-  '/exchange-account':     () => import('./pages/ExchangeAccount'),
-  '/indicator-community':  () => import('./pages/IndicatorCommunity'),
-  '/portfolio':            () => import('./pages/Portfolio'),
-  '/indicator-ide':        () => import('./pages/IndicatorIDE'),
-  '/model-management':     () => import('./pages/ModelManagement'),
-  '/risk-control':         () => import('./pages/RiskControl'),
-  '/pairlist':             () => import('./pages/PairlistManagement'),
-  '/advanced-orders':      () => import('./pages/AdvancedOrderManagement'),
-  '/arbitrage':            () => import('./pages/ArbitrageMonitor'),
-  '/hyperopt':             () => import('./pages/HyperoptManagement'),
-  '/social-trading':       () => import('./pages/SocialTrading'),
-  '/onchain':              () => import('./pages/OnChain'),
-  '/profile':              () => import('./pages/UserProfile'),
-  '/users':                () => import('./pages/UserManage'),
-  '/agent-tokens':         () => import('./pages/AgentTokens'),
-  '/billing':              () => import('./pages/Billing'),
-  '/strategy-leaderboard': () => import('./pages/StrategyLeaderboard'),
 }
 
 // Lazy-loaded: all feature pages

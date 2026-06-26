@@ -9,8 +9,8 @@ test('debug login form', async ({ page }) => {
   const usernameInput = page.locator('input[autocomplete="username"]')
   const passwordInput = page.locator('input[autocomplete="current-password"]')
 
-  console.log('Username input count:', await usernameInput.count())
-  console.log('Password input count:', await passwordInput.count())
+  console.warn('Username input count:', await usernameInput.count())
+  console.warn('Password input count:', await passwordInput.count())
 
   // Fill inputs
   await usernameInput.first().fill('e2e_user')
@@ -22,8 +22,8 @@ test('debug login form', async ({ page }) => {
   // Check values
   const usernameValue = await usernameInput.first().inputValue()
   const passwordValue = await passwordInput.first().inputValue()
-  console.log('Username value:', usernameValue)
-  console.log('Password value:', passwordValue)
+  console.warn('Username value:', usernameValue)
+  console.warn('Password value:', passwordValue)
 
   expect(usernameValue).toBe('e2e_user')
   expect(passwordValue).toBe('e2e_password')

@@ -100,7 +100,7 @@ export const test = base.extend<{
       url: window.location.href,
       localStorage: localStorage.getItem('xt-auth'),
     }))
-    console.log('Auth debug:', debug)
+    console.warn('Auth debug:', debug)
 
     await use(page)
   },

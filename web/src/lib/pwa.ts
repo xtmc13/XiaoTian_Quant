@@ -17,7 +17,7 @@ export function registerSW() {
     navigator.serviceWorker
       .register('/sw.js')
       .then((registration) => {
-        console.log('[PWA] SW registered:', registration.scope)
+        console.warn('[PWA] SW registered:', registration.scope)
 
         // Detect updates
         registration.addEventListener('updatefound', () => {
@@ -43,7 +43,7 @@ export function listenInstallPrompt() {
   window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault()
     deferredPrompt = e as BeforeInstallPromptEvent
-    console.log('[PWA] Install prompt deferred')
+    console.warn('[PWA] Install prompt deferred')
   })
 }
 
@@ -87,5 +87,5 @@ export async function unregisterSW() {
   if (!('serviceWorker' in navigator)) return
   const registrations = await navigator.serviceWorker.getRegistrations()
   await Promise.all(registrations.map((r) => r.unregister()))
-  console.log('[PWA] All SW unregistered')
+  console.warn('[PWA] All SW unregistered')
 }

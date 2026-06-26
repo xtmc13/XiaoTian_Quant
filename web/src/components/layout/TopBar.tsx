@@ -1,9 +1,9 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
-import { cn, formatCurrency } from '@/lib/utils'
+import { cn } from '@/lib/utils'
 import { portfolioApi, notificationApi } from '@/lib/api'
-import { LogOut, User, Bell, CheckCheck, Trash2, TrendingUp, TrendingDown, AlertTriangle, Info, Zap, Globe } from 'lucide-react'
+import { LogOut, Bell, CheckCheck, Trash2, AlertTriangle, Info, Zap } from 'lucide-react'
 import { useI18n, LANGS, type Lang } from '@/i18n'
 
 const routeTitles: Record<string, string> = {
@@ -33,12 +33,6 @@ const levelIcon: Record<string, React.ReactNode> = {
   CRITICAL: <AlertTriangle className="h-3.5 w-3.5 text-quant-red" />,
   WARN: <Zap className="h-3.5 w-3.5 text-quant-orange" />,
   INFO: <Info className="h-3.5 w-3.5 text-quant-blue" />,
-}
-
-const levelBg: Record<string, string> = {
-  CRITICAL: 'bg-red-500/10 border-red-500/20',
-  WARN: 'bg-orange-500/10 border-orange-500/20',
-  INFO: 'bg-blue-500/10 border-blue-500/20',
 }
 
 export function TopBar() {

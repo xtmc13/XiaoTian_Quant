@@ -18,7 +18,7 @@ export interface KPICardItem {
   primary?: boolean
 }
 
-interface KPICardProps extends KPICardItem {}
+type KPICardProps = KPICardItem
 
 const variantStyles: Record<string, { label: string; value: string }> = {
   default:  { label: 'text-[#888]', value: 'text-[#e0e0e0]' },
