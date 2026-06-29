@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Wallet,
   TrendingDown,
@@ -26,12 +26,18 @@ import {
 } from 'lucide-react'
 import { cn, formatCurrency, formatPercent, formatConverted, setConversion } from '@/lib/utils'
 import { dashboardApi, portfolioApi, strategyApi, protectionApi, mlApi, arbitrageApi } from '@/lib/api'
+import { toast } from '@/lib/useToast'
 import { getEcharts } from '@/lib/echarts'
 import { KPICard } from '@/components/ui/KPICard'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { SectionCard } from '@/components/ui/SectionCard'
 import { DataTable } from '@/components/DataTable'
+import { Button } from '@/components/ui/Button'
+import { Badge } from '@/components/ui/Badge'
+import { LogViewer } from '@/components/system/LogViewer'
+import { RustEnginePanel } from '@/components/engine/RustEnginePanel'
+import { useFaviconIndicator } from '@/hooks/useFaviconIndicator'
 import type { ECharts } from 'echarts'
 import type { StrategyRanking } from '@/types'
 import type { DashboardSummary, PortfolioSummary, StrategyItem, ArbitragePerformance } from '@/types'
@@ -47,11 +53,14 @@ interface ProtectionStatus {
   global_blocked: boolean
   global_reason?: string
   global_resume_in?: string
-  pair_blocks: Record<string, {
-    reason: string
-    resume_in: string
-    permanent: boolean
-  }>
+  pair_blocks: Record<
+    string,
+    {
+      reason: string
+      resume_in: string
+      permanent: boolean
+    }
+  >
 }
 
 interface ModelInfo {
@@ -80,13 +89,13 @@ function RiskControlCard({ status, isLoading }: { status?: ProtectionStatus; isL
   const isGloballyBlocked = status?.global_blocked ?? false
   const pairBlocks = status?.pair_blocks ? Object.entries(status.pair_blocks) : []
   const blockedCount = pairBlocks.length + (isGloballyBlocked ? 1 : 0)
-  const lastReason = status?.global_reason || (pairBlocks[0]?.[1]?.reason) || '-'
+  const lastReason = status?.global_reason || pairBlocks[0]?.[1]?.reason || '-'
 
   const ruleItems = [
     {
       name: '全局交易保护',
       status: isGloballyBlocked ? ('blocked' as const) : ('normal' as const),
-      detail: isGloballyBlocked ? (status?.global_reason || '交易暂停') : '正常运行',
+      detail: isGloballyBlocked ? status?.global_reason || '交易暂停' : '正常运行',
     },
     ...pairBlocks.map(([pair, info]) => ({
       name: pair,
@@ -100,7 +109,9 @@ function RiskControlCard({ status, isLoading }: { status?: ProtectionStatus; isL
       title="风控状态"
       headerAction={
         <button
-          onClick={() => { navigate('/risk-control') }}
+          onClick={() => {
+            navigate('/risk-control')
+          }}
           className="flex items-center gap-0.5 text-[10px] text-[#8a8a8a] transition-colors hover:text-white"
         >
           查看风控中心 <ChevronRightIcon className="h-3 w-3" />
@@ -116,7 +127,9 @@ function RiskControlCard({ status, isLoading }: { status?: ProtectionStatus; isL
         </div>
         <div className="rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-2.5 text-center">
           <div className="text-[10px] text-[#8a8a8a]">阻断交易对</div>
-          <div className={cn('mt-1 text-sm font-semibold', pairBlocks.length > 0 ? 'text-quant-red' : 'text-quant-green')}>
+          <div
+            className={cn('mt-1 text-sm font-semibold', pairBlocks.length > 0 ? 'text-quant-red' : 'text-quant-green')}
+          >
             {pairBlocks.length}
           </div>
         </div>
@@ -143,23 +156,29 @@ function RiskControlCard({ status, isLoading }: { status?: ProtectionStatus; isL
               />
               <span className="truncate text-xs text-white">{rule.name}</span>
             </div>
-            <span className={cn('shrink-0 text-[10px]', rule.status === 'normal' ? 'text-quant-green' : 'text-quant-red')}>
+            <span
+              className={cn('shrink-0 text-[10px]', rule.status === 'normal' ? 'text-quant-green' : 'text-quant-red')}
+            >
               {rule.detail}
             </span>
           </div>
         ))}
-        {ruleItems.length === 0 && (
-          <div className="py-4 text-center text-[11px] text-[#8a8a8a]">
-            暂无风控数据
-          </div>
-        )}
+        {ruleItems.length === 0 && <div className="py-4 text-center text-[11px] text-[#8a8a8a]">暂无风控数据</div>}
       </div>
     </SectionCard>
   )
 }
 
 /* ── ML Status Card ── */
-function MLStatusCard({ health, models, isLoading }: { health?: { status: string }; models?: ModelInfo[]; isLoading: boolean }) {
+function MLStatusCard({
+  health,
+  models,
+  isLoading,
+}: {
+  health?: { status: string }
+  models?: ModelInfo[]
+  isLoading: boolean
+}) {
   const navigate = useNavigate()
   if (isLoading) {
     return (
@@ -174,15 +193,17 @@ function MLStatusCard({ health, models, isLoading }: { health?: { status: string
 
   const isHealthy = health?.status === 'healthy'
   const modelCount = models?.length ?? 0
-  const latestModel = models && models.length > 0
-    ? [...models].sort((a, b) => new Date(b.trained_at).getTime() - new Date(a.trained_at).getTime())[0]
-    : undefined
+  const latestModel =
+    models && models.length > 0
+      ? [...models].sort((a, b) => new Date(b.trained_at).getTime() - new Date(a.trained_at).getTime())[0]
+      : undefined
 
   const pipelineHealth = isHealthy ? 'normal' : 'error'
   const modelStatus = !isHealthy ? 'error' : latestModel ? 'deployed' : 'idle'
 
   const statusColor = (s: string) => {
-    if (s === 'normal' || s === 'deployed' || s === 'healthy') return 'text-quant-green bg-quant-green/10 border-quant-green/20'
+    if (s === 'normal' || s === 'deployed' || s === 'healthy')
+      return 'text-quant-green bg-quant-green/10 border-quant-green/20'
     if (s === 'warning' || s === 'idle') return 'text-quant-gold bg-quant-gold/10 border-quant-gold/20'
     return 'text-quant-red bg-quant-red/10 border-quant-red/20'
   }
@@ -192,7 +213,9 @@ function MLStatusCard({ health, models, isLoading }: { health?: { status: string
       title="ML 模型状态"
       headerAction={
         <button
-          onClick={() => { navigate('/model-management') }}
+          onClick={() => {
+            navigate('/model-management')
+          }}
           className="flex items-center gap-0.5 text-[10px] text-[#8a8a8a] transition-colors hover:text-white"
         >
           查看模型管理 <ChevronRightIcon className="h-3 w-3" />
@@ -206,13 +229,27 @@ function MLStatusCard({ health, models, isLoading }: { health?: { status: string
         </div>
         <div className="rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-2.5 text-center">
           <div className="text-[10px] text-[#8a8a8a]">最新状态</div>
-          <div className={cn('mt-1 text-sm font-semibold', modelStatus === 'deployed' ? 'text-quant-green' : modelStatus === 'idle' ? 'text-quant-gold' : 'text-quant-red')}>
+          <div
+            className={cn(
+              'mt-1 text-sm font-semibold',
+              modelStatus === 'deployed'
+                ? 'text-quant-green'
+                : modelStatus === 'idle'
+                  ? 'text-quant-gold'
+                  : 'text-quant-red'
+            )}
+          >
             {modelStatus === 'deployed' ? '已部署' : modelStatus === 'idle' ? '空闲' : '异常'}
           </div>
         </div>
         <div className="rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-2.5 text-center">
           <div className="text-[10px] text-[#8a8a8a]">特征管道</div>
-          <div className={cn('mt-1 text-sm font-semibold', pipelineHealth === 'normal' ? 'text-quant-green' : 'text-quant-red')}>
+          <div
+            className={cn(
+              'mt-1 text-sm font-semibold',
+              pipelineHealth === 'normal' ? 'text-quant-green' : 'text-quant-red'
+            )}
+          >
             {pipelineHealth === 'normal' ? '正常' : '异常'}
           </div>
         </div>
@@ -235,17 +272,11 @@ function MLStatusCard({ health, models, isLoading }: { health?: { status: string
               <Activity className="h-3.5 w-3.5 text-[#888888]" />
               <span className="truncate text-xs text-white">{latestModel.model_id}</span>
             </div>
-            <span className="shrink-0 text-[10px] text-[#8a8a8a]">
-              {latestModel.feature_count} 特征
-            </span>
+            <span className="shrink-0 text-[10px] text-[#8a8a8a]">{latestModel.feature_count} 特征</span>
           </div>
         )}
 
-        {modelCount === 0 && (
-          <div className="py-4 text-center text-[11px] text-[#8a8a8a]">
-            暂无训练好的模型
-          </div>
-        )}
+        {modelCount === 0 && <div className="py-4 text-center text-[11px] text-[#8a8a8a]">暂无训练好的模型</div>}
       </div>
     </SectionCard>
   )
@@ -275,9 +306,7 @@ function SetupGuideCard({
     <SectionCard className="overflow-hidden">
       <div className="flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between">
         <div className="flex-1">
-          <div className="mb-1 text-xs font-medium uppercase tracking-wider text-quant-gold">
-            快速开始
-          </div>
+          <div className="mb-1 text-xs font-medium uppercase tracking-wider text-quant-gold">快速开始</div>
           <h3 className="text-lg font-semibold text-white">创建您的第一个量化策略</h3>
           <p className="mt-1 text-sm text-[#999999]">
             完成 {completed}/{steps.length} 步即可开始量化交易。选择策略类型、配置参数、一键启动实盘。
@@ -285,14 +314,18 @@ function SetupGuideCard({
         </div>
         <div className="flex items-center gap-3">
           <button
-            onClick={() => { navigate('/indicator-community') }}
+            onClick={() => {
+              navigate('/indicator-community')
+            }}
             className="flex items-center gap-1.5 rounded-lg bg-[#1c1c1c] px-4 py-2 text-sm text-white transition-colors hover:bg-[#262626]"
           >
             <LayoutGrid className="inline h-4 w-4" />
             策略市场
           </button>
           <button
-            onClick={() => { navigate('/strategy') }}
+            onClick={() => {
+              navigate('/strategy')
+            }}
             className="flex items-center gap-1.5 rounded-lg bg-white px-4 py-2 text-sm font-medium text-[#0a0a0a] transition-opacity hover:opacity-90"
           >
             <Plus className="inline h-4 w-4" />
@@ -316,19 +349,12 @@ function SetupGuideCard({
               <div
                 className={cn(
                   'flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-bold',
-                  step.done
-                    ? 'bg-emerald-500/15 text-emerald-400'
-                    : 'bg-[#1c1c1c] text-[#8a8a8a]'
+                  step.done ? 'bg-emerald-500/15 text-emerald-400' : 'bg-[#1c1c1c] text-[#8a8a8a]'
                 )}
               >
                 {step.done ? <ArrowUpRight className="h-3 w-3" /> : i + 1}
               </div>
-              <span
-                className={cn(
-                  'text-xs',
-                  step.done ? 'text-[#8a8a8a] line-through' : 'text-[#aaaaaa]'
-                )}
-              >
+              <span className={cn('text-xs', step.done ? 'text-[#8a8a8a] line-through' : 'text-[#aaaaaa]')}>
                 {step.label}
               </span>
               {!step.done && (
@@ -343,9 +369,7 @@ function SetupGuideCard({
                   {step.action}
                 </button>
               )}
-              {i < steps.length - 1 && (
-                <div className="mx-1 h-px w-6 bg-[#1c1c1c]" />
-              )}
+              {i < steps.length - 1 && <div className="mx-1 h-px w-6 bg-[#1c1c1c]" />}
             </div>
           ))}
         </div>
@@ -361,13 +385,7 @@ function SetupGuideCard({
 }
 
 /* ── Profit Calendar ── */
-function ProfitCalendar({
-  calendar,
-  isLoading,
-}: {
-  calendar?: Record<string, number>
-  isLoading?: boolean
-}) {
+function ProfitCalendar({ calendar, isLoading }: { calendar?: Record<string, number>; isLoading?: boolean }) {
   const [currentOffset, setCurrentOffset] = useState(0)
 
   const now = new Date()
@@ -453,19 +471,12 @@ function ProfitCalendar({
         </div>
         <div className="flex items-center gap-3 text-[10px]">
           <span className="flex items-center gap-1 text-quant-green">
-            <span className="inline-block h-2 w-2 rounded-sm bg-quant-green/20" />
-            赢 {winDays}天
+            <span className="inline-block h-2 w-2 rounded-sm bg-quant-green/20" />赢 {winDays}天
           </span>
           <span className="flex items-center gap-1 text-quant-red">
-            <span className="inline-block h-2 w-2 rounded-sm bg-quant-red/20" />
-            亏 {lossDays}天
+            <span className="inline-block h-2 w-2 rounded-sm bg-quant-red/20" />亏 {lossDays}天
           </span>
-          <span
-            className={cn(
-              'font-mono font-semibold',
-              monthTotal >= 0 ? 'text-quant-green' : 'text-quant-red'
-            )}
-          >
+          <span className={cn('font-mono font-semibold', monthTotal >= 0 ? 'text-quant-green' : 'text-quant-red')}>
             {monthTotal >= 0 ? '+' : ''}${formatCurrency(monthTotal)}
           </span>
         </div>
@@ -500,20 +511,12 @@ function ProfitCalendar({
               style={style}
               title={`${d.date}: ${d.value >= 0 ? '+' : ''}$${formatCurrency(d.value)}`}
             >
-              <span
-                className={cn(
-                  'font-medium',
-                  !style && 'text-[#8a8a8a]',
-                  today && !style && 'text-white'
-                )}
-              >
+              <span className={cn('font-medium', !style && 'text-[#8a8a8a]', today && !style && 'text-white')}>
                 {d.day}
               </span>
               {d.value !== 0 && (
                 <span className="mt-0.5 text-[8px] opacity-70">
-                  {Math.abs(d.value) >= 1000
-                    ? `${(d.value / 1000).toFixed(1)}k`
-                    : Math.round(d.value)}
+                  {Math.abs(d.value) >= 1000 ? `${(d.value / 1000).toFixed(1)}k` : Math.round(d.value)}
                 </span>
               )}
             </button>
@@ -675,40 +678,51 @@ function StrategyRow({ s }: { s: StrategyItem }) {
   // CRA 参数展示
   const craParams = (s.trading_config || {}) as Record<string, unknown>
   const direction = s.trade_direction === 'long' ? '多' : s.trade_direction === 'short' ? '空' : '双向'
-  const tpMethod = craParams.take_profit_method === 'full' ? '全仓止盈' : craParams.take_profit_method === 'tail' ? '尾单' : craParams.take_profit_method === 'head_tail' ? '首尾' : craParams.take_profit_method === 'moving' ? '移动' : ''
+  const tpMethod =
+    craParams.take_profit_method === 'full'
+      ? '全仓止盈'
+      : craParams.take_profit_method === 'tail'
+        ? '尾单'
+        : craParams.take_profit_method === 'head_tail'
+          ? '首尾'
+          : craParams.take_profit_method === 'moving'
+            ? '移动'
+            : ''
   const stratDesc = craParams.order_count ? `${craParams.order_count}单·首${craParams.first_order_amount || '-'}U` : ''
   return (
     <div className="flex items-center gap-3 rounded-lg border border-transparent px-3 py-2.5 transition-colors hover:border-[#1c1c1c] hover:bg-white/[0.03]">
       <div
-        className={cn(
-          'h-2 w-2 shrink-0 rounded-full',
-          isRunning ? 'animate-pulse bg-quant-green' : 'bg-[#333333]'
-        )}
+        className={cn('h-2 w-2 shrink-0 rounded-full', isRunning ? 'animate-pulse bg-quant-green' : 'bg-[#333333]')}
       />
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-medium text-white">{s.name}</div>
         <div className="text-[10px] text-[#8a8a8a]">
           {s.coin} · {s.leverage}x · {s.strategy_type}
           {!!craParams.trade_direction && (
-            <span className={cn('ml-1.5 px-1 rounded text-[9px]',
-              craParams.trade_direction === 'long' ? 'bg-quant-green/10 text-quant-green' :
-              craParams.trade_direction === 'short' ? 'bg-quant-red/10 text-quant-red' :
-              'bg-quant-gold/10 text-quant-gold'
-            )}>{direction}</span>
+            <span
+              className={cn(
+                'ml-1.5 px-1 rounded text-[9px]',
+                craParams.trade_direction === 'long'
+                  ? 'bg-quant-green/10 text-quant-green'
+                  : craParams.trade_direction === 'short'
+                    ? 'bg-quant-red/10 text-quant-red'
+                    : 'bg-quant-gold/10 text-quant-gold'
+              )}
+            >
+              {direction}
+            </span>
           )}
           {tpMethod && <span className="ml-1 text-[#8a8a8a]">· {tpMethod}</span>}
         </div>
         {stratDesc && (
-          <div className="text-[9px] text-[#8a8a8a] mt-0.5">{stratDesc} · 补差{String(craParams.add_position_spread || '-')}% · 止盈{String(craParams.take_profit_ratio || '-')}%</div>
+          <div className="text-[9px] text-[#8a8a8a] mt-0.5">
+            {stratDesc} · 补差{String(craParams.add_position_spread || '-')}% · 止盈
+            {String(craParams.take_profit_ratio || '-')}%
+          </div>
         )}
       </div>
       <div className="text-right">
-        <div
-          className={cn(
-            'font-mono text-xs font-semibold',
-            pnl >= 0 ? 'text-quant-green' : 'text-quant-red'
-          )}
-        >
+        <div className={cn('font-mono text-xs font-semibold', pnl >= 0 ? 'text-quant-green' : 'text-quant-red')}>
           {pnl >= 0 ? '+' : ''}${Math.abs(pnl).toFixed(2)}
         </div>
         <span
@@ -723,9 +737,13 @@ function StrategyRow({ s }: { s: StrategyItem }) {
         </span>
         {!!craParams.open_indicator && (
           <div className="text-[9px] text-[#8a8a8a] mt-0.5">
-            {craParams.open_indicator === 'macd_golden' ? 'MACD金叉' :
-             craParams.open_indicator === 'macd_death' ? 'MACD死叉' :
-             craParams.open_indicator === 'ema' ? 'EMA拐点' : '市价'}
+            {craParams.open_indicator === 'macd_golden'
+              ? 'MACD金叉'
+              : craParams.open_indicator === 'macd_death'
+                ? 'MACD死叉'
+                : craParams.open_indicator === 'ema'
+                  ? 'EMA拐点'
+                  : '市价'}
           </div>
         )}
       </div>
@@ -766,10 +784,12 @@ export function Dashboard() {
     refetchInterval: 30000,
   })
 
-  const { data: rankingData, isLoading: rankingLoading } = useQuery<StrategyRanking[] | { ranking: StrategyRanking[] }>({
-    queryKey: ['ranking'],
-    queryFn: () => strategyApi.ranking(),
-  })
+  const { data: rankingData, isLoading: rankingLoading } = useQuery<StrategyRanking[] | { ranking: StrategyRanking[] }>(
+    {
+      queryKey: ['ranking'],
+      queryFn: () => strategyApi.ranking(),
+    }
+  )
   const ranking = Array.isArray(rankingData) ? rankingData : rankingData?.ranking || []
 
   const { data: protectionStatus, isLoading: protectionLoading } = useQuery<ProtectionStatus>({
@@ -836,9 +856,14 @@ export function Dashboard() {
     localStorage.setItem('xt-dashboard-guide-dismissed', '1')
   }, [])
 
+  useFaviconIndicator()
+
   return (
     <div className="h-full overflow-y-auto bg-[#0a0a0a] p-5">
       <div className="mx-auto max-w-[1600px] space-y-5">
+        {/* ── Global Bot Controls ── */}
+        <GlobalBotControlBar strategies={strategies || []} />
+
         {/* ── Setup Guide (for new users) ── */}
         {showGuide && runningStrats.length === 0 && !stratLoading && (
           <SetupGuideCard
@@ -852,9 +877,7 @@ export function Dashboard() {
         {/* ── KPI Grid: 6 cards in a row ── */}
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
           {isLoading ? (
-            Array.from({ length: 6 }).map((_, i) => (
-              <Skeleton key={i} variant="card" height="108px" />
-            ))
+            Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} variant="card" height="108px" />)
           ) : (
             <>
               <KPICard
@@ -952,7 +975,9 @@ export function Dashboard() {
           title="套利绩效"
           headerAction={
             <button
-              onClick={() => { navigate('/arbitrage') }}
+              onClick={() => {
+                navigate('/arbitrage')
+              }}
               className="flex items-center gap-0.5 text-[10px] text-[#8a8a8a] transition-colors hover:text-white"
             >
               套利监控 <ChevronRightIcon className="h-3 w-3" />
@@ -963,16 +988,14 @@ export function Dashboard() {
             {/* KPI Cards */}
             <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
               {arbLoading ? (
-                Array.from({ length: 4 }).map((_, i) => (
-                  <Skeleton key={i} variant="card" height="108px" />
-                ))
+                Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} variant="card" height="108px" />)
               ) : (
                 <>
                   <KPICard
                     icon={<Scale className="h-4 w-4 text-amber-400" />}
                     label="累计套利盈亏"
                     value={`$${formatCurrency(arbPerf?.total_pnl ?? 0)}`}
-                    subValue={`${(arbPerf?.win_trades ?? 0)} 盈 / ${(arbPerf?.loss_trades ?? 0)} 亏`}
+                    subValue={`${arbPerf?.win_trades ?? 0} 盈 / ${arbPerf?.loss_trades ?? 0} 亏`}
                     subLabel="盈亏笔数"
                     trend={(arbPerf?.total_pnl ?? 0) >= 0 ? 'up' : 'down'}
                   />
@@ -1034,91 +1057,134 @@ export function Dashboard() {
                 <div className="space-y-3">
                   <Skeleton variant="text" lines={4} />
                 </div>
-              ) : (portfolio?.exchanges?.filter((ex) => ex.connected || ex.balance > 0 || ex.configured) || []).length > 0 ? (
+              ) : (portfolio?.exchanges?.filter((ex) => ex.connected || ex.balance > 0 || ex.configured) || []).length >
+                0 ? (
                 <div className="space-y-3">
-                  {(portfolio?.exchanges?.filter((ex) => ex.connected || ex.balance > 0 || ex.configured) || []).map((ex) => {
-                    const isBinance = ex.name === 'binance'
-                    return (
-                    <div key={ex.name}>
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="flex items-center gap-2">
-                          <span
-                            className={cn(
-                              'h-2 w-2 rounded-full',
-                              ex.connected ? 'bg-quant-green' : ex.configured ? 'bg-yellow-400' : 'bg-quant-red'
-                            )}
-                          />
-                          <span className="text-white font-medium capitalize">{ex.name}</span>
-                        </span>
-                        <span className="font-mono text-white text-xs">
-                          ${(ex.balance || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </span>
-                      </div>
-                      {/* Binance 4-layer breakdown */}
-                      {isBinance && (() => {
-                        const hasFunding = (portfolio?.funding_balance || 0) > 0
-                        const hasEarn = (portfolio?.earn_balance || 0) > 0
-                        const lastVisible = hasEarn ? 'earn' : hasFunding ? 'funding' : 'futures'
-                        return (
-                        <div className="ml-4 mt-1 space-y-1">
-                          <div className="flex items-center justify-between text-xs">
-                            <span className="text-[#666666]">├ 现货</span>
-                            <span className="font-mono text-[#aaaaaa]">
-                              ${(portfolio?.spot_balance || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                              <span className="text-[#8a8a8a] ml-1">
-                                ≈ {formatConverted(portfolio?.spot_balance || 0)}
-                              </span>
+                  {(portfolio?.exchanges?.filter((ex) => ex.connected || ex.balance > 0 || ex.configured) || []).map(
+                    (ex) => {
+                      const isBinance = ex.name === 'binance'
+                      return (
+                        <div key={ex.name}>
+                          <div className="flex items-center justify-between text-sm">
+                            <span className="flex items-center gap-2">
+                              <span
+                                className={cn(
+                                  'h-2 w-2 rounded-full',
+                                  ex.connected ? 'bg-quant-green' : ex.configured ? 'bg-yellow-400' : 'bg-quant-red'
+                                )}
+                              />
+                              <span className="text-white font-medium capitalize">{ex.name}</span>
+                            </span>
+                            <span className="font-mono text-white text-xs">
+                              $
+                              {(ex.balance || 0).toLocaleString(undefined, {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                              })}
                             </span>
                           </div>
-                          <div className="flex items-center justify-between text-xs">
-                            <span className="text-[#666666]">{lastVisible === 'futures' ? '└' : '├'} 合约</span>
-                            <span className="font-mono text-[#aaaaaa]">
-                              ${(portfolio?.futures_balance || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
-                              {(portfolio?.futures_unrealized_pnl || 0) !== 0 && (
-                                <span className={cn('ml-1', (portfolio?.futures_unrealized_pnl || 0) >= 0 ? 'text-quant-green' : 'text-quant-red')}>
-                                  ({(portfolio?.futures_unrealized_pnl || 0) >= 0 ? '+' : ''}{portfolio?.futures_unrealized_pnl?.toFixed(4)})
+                          {/* Binance 4-layer breakdown */}
+                          {isBinance &&
+                            (() => {
+                              const hasFunding = (portfolio?.funding_balance || 0) > 0
+                              const hasEarn = (portfolio?.earn_balance || 0) > 0
+                              const lastVisible = hasEarn ? 'earn' : hasFunding ? 'funding' : 'futures'
+                              return (
+                                <div className="ml-4 mt-1 space-y-1">
+                                  <div className="flex items-center justify-between text-xs">
+                                    <span className="text-[#666666]">├ 现货</span>
+                                    <span className="font-mono text-[#aaaaaa]">
+                                      $
+                                      {(portfolio?.spot_balance || 0).toLocaleString(undefined, {
+                                        minimumFractionDigits: 2,
+                                        maximumFractionDigits: 2,
+                                      })}
+                                      <span className="text-[#8a8a8a] ml-1">
+                                        ≈ {formatConverted(portfolio?.spot_balance || 0)}
+                                      </span>
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center justify-between text-xs">
+                                    <span className="text-[#666666]">{lastVisible === 'futures' ? '└' : '├'} 合约</span>
+                                    <span className="font-mono text-[#aaaaaa]">
+                                      $
+                                      {(portfolio?.futures_balance || 0).toLocaleString(undefined, {
+                                        minimumFractionDigits: 2,
+                                        maximumFractionDigits: 4,
+                                      })}
+                                      {(portfolio?.futures_unrealized_pnl || 0) !== 0 && (
+                                        <span
+                                          className={cn(
+                                            'ml-1',
+                                            (portfolio?.futures_unrealized_pnl || 0) >= 0
+                                              ? 'text-quant-green'
+                                              : 'text-quant-red'
+                                          )}
+                                        >
+                                          ({(portfolio?.futures_unrealized_pnl || 0) >= 0 ? '+' : ''}
+                                          {portfolio?.futures_unrealized_pnl?.toFixed(4)})
+                                        </span>
+                                      )}
+                                      <span className="text-[#8a8a8a] ml-1">
+                                        ≈ {formatConverted(portfolio?.futures_balance || 0)}
+                                      </span>
+                                    </span>
+                                  </div>
+                                  {hasFunding && (
+                                    <div className="flex items-center justify-between text-xs">
+                                      <span className="text-[#666666]">
+                                        {lastVisible === 'funding' ? '└' : '├'} 资金
+                                      </span>
+                                      <span className="font-mono text-[#aaaaaa]">
+                                        $
+                                        {(portfolio?.funding_balance || 0).toLocaleString(undefined, {
+                                          minimumFractionDigits: 2,
+                                          maximumFractionDigits: 4,
+                                        })}
+                                        <span className="text-[#8a8a8a] ml-1">
+                                          ≈ {formatConverted(portfolio?.funding_balance || 0)}
+                                        </span>
+                                      </span>
+                                    </div>
+                                  )}
+                                  {hasEarn && (
+                                    <div className="flex items-center justify-between text-xs">
+                                      <span className="text-[#666666]">└ 理财</span>
+                                      <span className="font-mono text-[#aaaaaa]">
+                                        $
+                                        {(portfolio?.earn_balance || 0).toLocaleString(undefined, {
+                                          minimumFractionDigits: 2,
+                                          maximumFractionDigits: 4,
+                                        })}
+                                        <span className="text-[#8a8a8a] ml-1">
+                                          ≈ {formatConverted(portfolio?.earn_balance || 0)}
+                                        </span>
+                                      </span>
+                                    </div>
+                                  )}
+                                </div>
+                              )
+                            })()}
+                          {/* Other exchanges: simple spot row */}
+                          {!isBinance && ex.balance > 0 && (
+                            <div className="ml-4 mt-1 space-y-1">
+                              <div className="flex items-center justify-between text-xs">
+                                <span className="text-[#666666]">└ 现货</span>
+                                <span className="font-mono text-[#aaaaaa]">
+                                  $
+                                  {(ex.balance || 0).toLocaleString(undefined, {
+                                    minimumFractionDigits: 2,
+                                    maximumFractionDigits: 2,
+                                  })}
+                                  <span className="text-[#8a8a8a] ml-1">≈ {formatConverted(ex.balance || 0)}</span>
                                 </span>
-                              )}
-                              <span className="text-[#8a8a8a] ml-1">≈ {formatConverted(portfolio?.futures_balance || 0)}</span>
-                            </span>
-                          </div>
-                          {hasFunding && (
-                            <div className="flex items-center justify-between text-xs">
-                              <span className="text-[#666666]">{lastVisible === 'funding' ? '└' : '├'} 资金</span>
-                              <span className="font-mono text-[#aaaaaa]">
-                                ${(portfolio?.funding_balance || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
-                                <span className="text-[#8a8a8a] ml-1">≈ {formatConverted(portfolio?.funding_balance || 0)}</span>
-                              </span>
-                            </div>
-                          )}
-                          {hasEarn && (
-                            <div className="flex items-center justify-between text-xs">
-                              <span className="text-[#666666]">└ 理财</span>
-                              <span className="font-mono text-[#aaaaaa]">
-                                ${(portfolio?.earn_balance || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
-                                <span className="text-[#8a8a8a] ml-1">≈ {formatConverted(portfolio?.earn_balance || 0)}</span>
-                              </span>
+                              </div>
                             </div>
                           )}
                         </div>
-                        )})()
-                      }
-                      {/* Other exchanges: simple spot row */}
-                      {!isBinance && ex.balance > 0 && (
-                        <div className="ml-4 mt-1 space-y-1">
-                          <div className="flex items-center justify-between text-xs">
-                            <span className="text-[#666666]">└ 现货</span>
-                            <span className="font-mono text-[#aaaaaa]">
-                              ${(ex.balance || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                              <span className="text-[#8a8a8a] ml-1">
-                                ≈ {formatConverted(ex.balance || 0)}
-                              </span>
-                            </span>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                    )})}
+                      )
+                    }
+                  )}
                   <div className="mt-2 flex items-center justify-between border-t border-[#1c1c1c] pt-3 text-sm">
                     <span className="text-[#8a8a8a]">合计</span>
                     <span className="font-mono font-semibold text-white">
@@ -1128,10 +1194,7 @@ export function Dashboard() {
                   </div>
                 </div>
               ) : (
-                <EmptyState
-                  title="暂无交易所数据"
-                  description="在设置页面配置您的交易所 API"
-                />
+                <EmptyState title="暂无交易所数据" description="在设置页面配置您的交易所 API" />
               )}
             </SectionCard>
 
@@ -1144,16 +1207,16 @@ export function Dashboard() {
           <div className="space-y-4">
             <SectionCard
               title="AI 多智能体状态"
-              headerAction={
-                <span className="text-[10px] text-[#8a8a8a]">XiaoTianQuant v3.0</span>
-              }
+              headerAction={<span className="text-[10px] text-[#8a8a8a]">XiaoTianQuant v3.0</span>}
             >
               <div className="mb-3 grid grid-cols-3 gap-3">
-                {(dash?.ai_agents || [
-                  { name: '市场情报', status: 'running', detail: '-- 条新信号' },
-                  { name: '策略生成', status: 'running', detail: '-- 个策略待审' },
-                  { name: '风控AI', status: 'normal', detail: '所有指标安全' },
-                ]).map((agent: { name: string; status: string; detail: string }) => (
+                {(
+                  dash?.ai_agents || [
+                    { name: '市场情报', status: 'running', detail: '-- 条新信号' },
+                    { name: '策略生成', status: 'running', detail: '-- 个策略待审' },
+                    { name: '风控AI', status: 'normal', detail: '所有指标安全' },
+                  ]
+                ).map((agent: { name: string; status: string; detail: string }) => (
                   <div
                     key={agent.name}
                     className="rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-3 text-center transition-colors hover:border-[#2a2a2a]"
@@ -1167,27 +1230,17 @@ export function Dashboard() {
                         <Shield className="h-5 w-5 text-quant-green" />
                       )}
                     </div>
-                    <div className="mt-2 text-xs font-medium text-white">
-                      {agent.name}
-                    </div>
+                    <div className="mt-2 text-xs font-medium text-white">{agent.name}</div>
                     <div className="mt-1 flex items-center justify-center gap-1 text-[10px] text-[#8a8a8a]">
                       <span
                         className={cn(
                           'h-1.5 w-1.5 rounded-full',
-                          agent.status === 'running' || agent.status === 'normal'
-                            ? 'bg-quant-green'
-                            : 'bg-quant-red'
+                          agent.status === 'running' || agent.status === 'normal' ? 'bg-quant-green' : 'bg-quant-red'
                         )}
                       />
-                      {agent.status === 'running'
-                        ? '运行中'
-                        : agent.status === 'normal'
-                          ? '正常'
-                          : '异常'}
+                      {agent.status === 'running' ? '运行中' : agent.status === 'normal' ? '正常' : '异常'}
                     </div>
-                    <div className="mt-0.5 truncate text-[10px] text-[#8a8a8a]">
-                      {agent.detail}
-                    </div>
+                    <div className="mt-0.5 truncate text-[10px] text-[#8a8a8a]">{agent.detail}</div>
                   </div>
                 ))}
               </div>
@@ -1198,14 +1251,11 @@ export function Dashboard() {
                     <span className="text-[#aaaaaa]">{log.message}</span>
                   </div>
                 ))}
-                {!(dash?.ai_logs?.length) && (
-                  <div className="py-6 text-center text-[11px] text-[#8a8a8a]">
-                    等待AI智能体数据...
-                  </div>
+                {!dash?.ai_logs?.length && (
+                  <div className="py-6 text-center text-[11px] text-[#8a8a8a]">等待AI智能体数据...</div>
                 )}
               </div>
             </SectionCard>
-
           </div>
 
           {/* Right: Running Strategies + Ranking */}
@@ -1272,12 +1322,20 @@ export function Dashboard() {
                       width: '40px',
                       render: (_, i) => {
                         const badge =
-                          i === 0 ? 'bg-yellow-500/15 text-yellow-400'
-                            : i === 1 ? 'bg-slate-300/15 text-slate-300'
-                            : i === 2 ? 'bg-amber-600/15 text-amber-500'
-                            : 'bg-transparent text-[#8a8a8a]'
+                          i === 0
+                            ? 'bg-yellow-500/15 text-yellow-400'
+                            : i === 1
+                              ? 'bg-slate-300/15 text-slate-300'
+                              : i === 2
+                                ? 'bg-amber-600/15 text-amber-500'
+                                : 'bg-transparent text-[#8a8a8a]'
                         return (
-                          <div className={cn('flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold', badge)}>
+                          <div
+                            className={cn(
+                              'flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold',
+                              badge
+                            )}
+                          >
                             {i + 1}
                           </div>
                         )
@@ -1301,7 +1359,12 @@ export function Dashboard() {
                       title: '收益',
                       width: '80px',
                       render: (item) => (
-                        <div className={cn('shrink-0 font-mono text-sm font-semibold', (item.total_return || 0) >= 0 ? 'text-emerald-400' : 'text-red-400')}>
+                        <div
+                          className={cn(
+                            'shrink-0 font-mono text-sm font-semibold',
+                            (item.total_return || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'
+                          )}
+                        >
                           {formatPercent(item.total_return || 0)}
                         </div>
                       ),
@@ -1309,21 +1372,94 @@ export function Dashboard() {
                   ]}
                 />
               ) : (
-                <EmptyState
-                  title="暂无排行数据"
-                  description="运行策略后将显示排行榜"
-                />
+                <EmptyState title="暂无排行数据" description="运行策略后将显示排行榜" />
               )}
             </SectionCard>
           </div>
 
-          {/* Far Right: Risk Control + ML Status */}
+          {/* Far Right: Risk Control + ML Status + Engine + Logs */}
           <div className="space-y-4">
             <RiskControlCard status={protectionStatus} isLoading={protectionLoading} />
             <MLStatusCard health={mlHealth} models={mlModelsData} isLoading={mlHealthLoading || mlModelsLoading} />
+            <RustEnginePanel />
+            <LogPreviewCard />
           </div>
         </div>
       </div>
     </div>
+  )
+}
+
+/* ── Global Bot Control Bar ── */
+function GlobalBotControlBar({ strategies }: { strategies: StrategyItem[] }) {
+  const queryClient = useQueryClient()
+  const [loading, setLoading] = useState<string | null>(null)
+
+  const runningIds = strategies.filter((s) => s.status === 'running').map((s) => s.id)
+  const stoppedIds = strategies.filter((s) => s.status !== 'running').map((s) => s.id)
+
+  const handleBatch = async (action: 'start' | 'stop', ids: string[]) => {
+    if (ids.length === 0 || loading) return
+    setLoading(action)
+    try {
+      if (action === 'start') {
+        await strategyApi.batchStart(ids)
+      } else {
+        await strategyApi.batchStop(ids)
+      }
+      queryClient.invalidateQueries({ queryKey: ['strategies'] })
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : '操作失败')
+    } finally {
+      setLoading(null)
+    }
+  }
+
+  return (
+    <SectionCard bodyClassName="p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs text-muted-foreground mr-1">全局控制:</span>
+        <Button
+          variant="primary"
+          size="sm"
+          isLoading={loading === 'start'}
+          disabled={stoppedIds.length === 0}
+          onClick={() => handleBatch('start', stoppedIds)}
+        >
+          启动全部策略
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          isLoading={loading === 'stop'}
+          disabled={runningIds.length === 0}
+          onClick={() => handleBatch('stop', runningIds)}
+        >
+          停止全部策略
+        </Button>
+      </div>
+    </SectionCard>
+  )
+}
+
+/* ── Log Preview Card ── */
+function LogPreviewCard() {
+  const navigate = useNavigate()
+  return (
+    <SectionCard
+      title="最新日志"
+      headerAction={
+        <button
+          onClick={() => navigate('/logs')}
+          className="text-[10px] text-muted-foreground hover:text-white transition-colors"
+        >
+          查看全部
+        </button>
+      }
+    >
+      <div className="h-40">
+        <LogViewer lines={20} className="h-full text-[10px]" />
+      </div>
+    </SectionCard>
   )
 }

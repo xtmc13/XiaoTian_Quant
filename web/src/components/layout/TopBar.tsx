@@ -2,17 +2,29 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
 import { cn } from '@/lib/utils'
-import { portfolioApi, notificationApi } from '@/lib/api'
+import { portfolioApi, notificationApi, paperApi } from '@/lib/api'
 import { LogOut, Bell, CheckCheck, Trash2, AlertTriangle, Info, Zap } from 'lucide-react'
 import { useI18n, LANGS, type Lang } from '@/i18n'
+import { Switch } from '@/components/ui/Switch'
 
 const routeTitles: Record<string, string> = {
   '/dashboard': '仪表盘',
   '/trading': '交易',
+  '/trading/spot': '现货交易',
+  '/trading/contract': '合约交易',
   '/strategy': '策略工厂',
+  '/strategy/editor': '策略编辑器',
   '/ai': 'AI 研究',
+  '/ai/analysis': 'AI 分析',
+  '/ai/freqai': 'FreqAI',
+  '/ai/rl': 'RL 强化学习',
+  '/ai/tensorboard': 'TensorBoard',
+  '/market': '市场数据',
   '/backtest': '回测验证',
   '/bots': '交易机器人',
+  '/bots/strategy': '策略机器人',
+  '/bots/signal': '信号机器人',
+  '/bots/ai': 'AI 机器人',
   '/settings': '系统设置',
   '/exchange-account': '交易所账户',
   '/indicator-community': '指标社区',
@@ -25,6 +37,9 @@ const routeTitles: Record<string, string> = {
   '/bot-wizard': 'Bot 向导',
   '/social-trading': '社交交易',
   '/onchain': '链上数据',
+  '/status': '系统状态',
+  '/data': '数据下载',
+  '/logs': '系统日志',
 }
 
 import { NotificationItem } from '@/types'
@@ -46,6 +61,8 @@ export function TopBar() {
   const [notifOpen, setNotifOpen] = useState(false)
   const [notifications, setNotifications] = useState<NotificationItem[]>([])
   const [unreadCount, setUnreadCount] = useState(0)
+  const [paperMode, setPaperMode] = useState(true)
+  const [paperLoading, setPaperLoading] = useState(false)
   const notifRef = useRef<HTMLDivElement>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -56,10 +73,21 @@ export function TopBar() {
 
   useEffect(() => {
     if (!isAuthenticated) return
-    portfolioApi.summary()
+    portfolioApi
+      .summary()
       .then((data) => {
         setEquity(data.total_equity ?? null)
         setPnl(data.total_pnl ?? null)
+      })
+      .catch(() => {})
+  }, [isAuthenticated])
+
+  useEffect(() => {
+    if (!isAuthenticated) return
+    paperApi
+      .safety()
+      .then((data) => {
+        setPaperMode(data?.paper_mode ?? true)
       })
       .catch(() => {})
   }, [isAuthenticated])
@@ -71,14 +99,18 @@ export function TopBar() {
       setNotifications(items)
       const count = await notificationApi.unreadCount()
       setUnreadCount(count)
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }, [isAuthenticated])
 
   useEffect(() => {
     if (!isAuthenticated) return
     fetchNotifications()
     pollRef.current = setInterval(fetchNotifications, 15000)
-    return () => { if (pollRef.current !== null) clearInterval(pollRef.current) }
+    return () => {
+      if (pollRef.current !== null) clearInterval(pollRef.current)
+    }
   }, [fetchNotifications, isAuthenticated])
 
   // Close on outside click
@@ -94,7 +126,7 @@ export function TopBar() {
 
   const handleMarkRead = async (id: number) => {
     await notificationApi.markRead(id)
-    setNotifications((prev) => prev.map((n) => n.id === id ? { ...n, read: true } : n))
+    setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)))
     setUnreadCount((c) => Math.max(0, c - 1))
   }
 
@@ -120,29 +152,57 @@ export function TopBar() {
     return d.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
   }
 
-  const title = (() => {
-    if (location.pathname === '/trading') {
-      const mode = new URLSearchParams(location.search).get('mode')
-      if (mode === 'contract') return '合约交易'
-      return '现货交易'
-    }
-    return routeTitles[location.pathname] || '小天量化'
-  })()
+  const title = routeTitles[location.pathname] || '小天量化'
   const displayName = user?.username || 'User'
   const initial = displayName.charAt(0).toUpperCase()
+
+  const handlePaperToggle = async (checked: boolean) => {
+    if (paperLoading) return
+    setPaperLoading(true)
+    try {
+      if (checked) {
+        await paperApi.unlock()
+      } else {
+        await paperApi.lock()
+      }
+      setPaperMode(checked)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '切换失败'
+      // eslint-disable-next-line no-console
+      console.error('Paper mode toggle failed:', msg)
+    } finally {
+      setPaperLoading(false)
+    }
+  }
 
   return (
     <header className="h-14 bg-quant-bg-secondary border-b border-quant-border flex items-center justify-between px-5 shrink-0 z-50">
       <h1 className="text-base font-semibold">{title}</h1>
 
       <div className="flex items-center gap-4">
+        {/* ── Paper / Live Toggle ── */}
+        <div className="flex items-center gap-2">
+          <span className={cn('text-[10px] font-medium', paperMode ? 'text-quant-blue' : 'text-quant-green')}>
+            {paperMode ? '模拟' : '实盘'}
+          </span>
+          <Switch
+            checked={paperMode}
+            onCheckedChange={handlePaperToggle}
+            disabled={paperLoading}
+            aria-label="模拟/实盘切换"
+          />
+        </div>
+
         <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <span className="w-1.5 h-1.5 rounded-full bg-quant-green animate-pulse" />
           已连接
         </span>
         {equity !== null && (
           <span className="text-xs text-muted-foreground">
-            权益 <b className="text-foreground font-mono">${equity.toLocaleString(undefined, { minimumFractionDigits: 2 })}</b>
+            权益{' '}
+            <b className="text-foreground font-mono">
+              ${equity.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+            </b>
           </span>
         )}
         {pnl !== null && (
@@ -157,7 +217,10 @@ export function TopBar() {
         {/* ── Notification Bell ── */}
         <div className="relative" ref={notifRef}>
           <button
-            onClick={() => { setNotifOpen(!notifOpen); if (!notifOpen) fetchNotifications() }}
+            onClick={() => {
+              setNotifOpen(!notifOpen)
+              if (!notifOpen) fetchNotifications()
+            }}
             className="relative p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-white/5 transition-colors"
             aria-label="通知"
           >
@@ -214,21 +277,13 @@ export function TopBar() {
                       )}
                     >
                       <div className="flex items-start gap-2.5">
-                        <div className="mt-0.5 shrink-0">
-                          {levelIcon[n.level || 'INFO'] || levelIcon.INFO}
-                        </div>
+                        <div className="mt-0.5 shrink-0">{levelIcon[n.level || 'INFO'] || levelIcon.INFO}</div>
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2">
-                            <span className={cn('text-xs font-medium', !n.read && 'text-foreground')}>
-                              {n.title}
-                            </span>
-                            {!n.read && (
-                              <span className="w-1.5 h-1.5 rounded-full bg-quant-gold shrink-0" />
-                            )}
+                            <span className={cn('text-xs font-medium', !n.read && 'text-foreground')}>{n.title}</span>
+                            {!n.read && <span className="w-1.5 h-1.5 rounded-full bg-quant-gold shrink-0" />}
                           </div>
-                          <p className="text-[11px] text-muted-foreground mt-0.5 line-clamp-2">
-                            {n.content}
-                          </p>
+                          <p className="text-[11px] text-muted-foreground mt-0.5 line-clamp-2">{n.content}</p>
                           <span className="text-[10px] text-muted-foreground/60 mt-1 block">
                             {formatNotifTime(n.created_at)}
                           </span>
@@ -250,7 +305,9 @@ export function TopBar() {
           className="bg-quant-bg border border-quant-border rounded px-1.5 py-0.5 text-[10px] text-muted-foreground outline-none focus:border-quant-gold cursor-pointer"
         >
           {LANGS.map((l) => (
-            <option key={l.code} value={l.code}>{l.flag} {l.label}</option>
+            <option key={l.code} value={l.code}>
+              {l.flag} {l.label}
+            </option>
           ))}
         </select>
         <span className="text-[10px] text-muted-foreground">v3.0.0</span>
@@ -266,14 +323,25 @@ export function TopBar() {
           </button>
           {menuOpen && (
             <>
-              <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} onKeyDown={(e) => { if (e.key === 'Escape') setMenuOpen(false) }} tabIndex={-1} role="presentation" />
+              <div
+                className="fixed inset-0 z-40"
+                onClick={() => setMenuOpen(false)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') setMenuOpen(false)
+                }}
+                tabIndex={-1}
+                role="presentation"
+              />
               <div className="absolute right-0 top-full mt-2 w-48 rounded-xl border border-quant-border bg-quant-card shadow-xl z-50 py-1">
                 <div className="px-3 py-2 border-b border-quant-border">
                   <div className="text-sm font-medium text-foreground">{displayName}</div>
                   <div className="text-[11px] text-muted-foreground capitalize">{user?.role || 'user'}</div>
                 </div>
                 <button
-                  onClick={() => { setMenuOpen(false); logout() }}
+                  onClick={() => {
+                    setMenuOpen(false)
+                    logout()
+                  }}
                   className="w-full px-3 py-2 text-left text-xs text-muted-foreground hover:bg-quant-bg-secondary hover:text-foreground flex items-center gap-2 transition-colors"
                 >
                   <LogOut className="h-3.5 w-3.5" />

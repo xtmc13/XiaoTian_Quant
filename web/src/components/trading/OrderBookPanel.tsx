@@ -44,19 +44,13 @@ export const OrderBookPanel = React.memo(function OrderBookPanel({
 }: OrderBookPanelProps) {
   const obMax = useMemo(() => {
     if (!orderbook) return 1
-    const bidMax = Math.max(
-      ...(orderbook.bids || []).map((b: [number, number]) => Number(b[1]) || 0),
-      0
-    )
-    const askMax = Math.max(
-      ...(orderbook.asks || []).map((a: [number, number]) => Number(a[1]) || 0),
-      0
-    )
+    const bidMax = Math.max(...(orderbook.bids || []).map((b: [number, number]) => Number(b[1]) || 0), 0)
+    const askMax = Math.max(...(orderbook.asks || []).map((a: [number, number]) => Number(a[1]) || 0), 0)
     return Math.max(bidMax, askMax, 1)
   }, [orderbook])
 
   const displayTrades = useMemo(() => {
-    const src = liveTrades.length ? liveTrades : (recentTrades || [])
+    const src = liveTrades.length ? liveTrades : recentTrades || []
     return src.slice(0, 50)
   }, [liveTrades, recentTrades])
 
@@ -79,9 +73,7 @@ export const OrderBookPanel = React.memo(function OrderBookPanel({
               onClick={() => onPrecisionChange(p)}
               className={cn(
                 'text-[10px] px-1 py-0.5 rounded cursor-pointer',
-                obPrecision === p
-                  ? 'bg-quant-hover text-foreground'
-                  : 'text-muted-foreground hover:text-foreground'
+                obPrecision === p ? 'bg-quant-hover text-foreground' : 'text-muted-foreground hover:text-foreground'
               )}
             >
               {p}
@@ -109,55 +101,39 @@ export const OrderBookPanel = React.memo(function OrderBookPanel({
           <>
             {/* Asks (reversed) */}
             <div className="flex flex-col-reverse">
-              {(orderbook.asks || [])
-                .slice(0, 10)
-                .map((ask: [number, number], i: number) => {
-                  const p = Number(ask[0]),
-                    q = Number(ask[1])
-                  return (
+              {(orderbook.asks || []).slice(0, 10).map((ask: [number, number], i: number) => {
+                const p = Number(ask[0]),
+                  q = Number(ask[1])
+                return (
+                  <div
+                    key={'ask-' + i}
+                    className="relative flex px-3 py-0.5 text-[11px] font-mono cursor-pointer hover:bg-white/[0.04]"
+                    onClick={() => onPriceClick(obFormatPrice(p, obPrecision))}
+                  >
                     <div
-                      key={'ask-' + i}
-                      className="relative flex px-3 py-0.5 text-[11px] font-mono cursor-pointer hover:bg-white/[0.04]"
-                      onClick={() => onPriceClick(obFormatPrice(p, obPrecision))}
-                    >
-                      <div
-                        className="absolute top-0 bottom-0 right-0 opacity-20 z-0"
-                        style={{
-                          background: '#F6465D',
-                          width: Math.min((q / obMax) * 100, 100) + '%',
-                        }}
-                      />
-                      <span className="flex-1 text-quant-red relative z-10">
-                        {obFormatPrice(p, obPrecision)}
-                      </span>
-                      <span className="flex-1 text-right text-muted-foreground relative z-10">
-                        {q.toFixed(4)}
-                      </span>
-                      <span className="flex-1 text-right text-muted-foreground relative z-10">
-                        {(p * q).toFixed(2)}
-                      </span>
-                    </div>
-                  )
-                })}
+                      className="absolute top-0 bottom-0 right-0 opacity-20 z-0"
+                      style={{
+                        background: '#F6465D',
+                        width: Math.min((q / obMax) * 100, 100) + '%',
+                      }}
+                    />
+                    <span className="flex-1 text-quant-red relative z-10">{obFormatPrice(p, obPrecision)}</span>
+                    <span className="flex-1 text-right text-muted-foreground relative z-10">{q.toFixed(4)}</span>
+                    <span className="flex-1 text-right text-muted-foreground relative z-10">{(p * q).toFixed(2)}</span>
+                  </div>
+                )
+              })}
             </div>
 
             {/* Mid price */}
             <div className="flex items-center justify-center py-1.5 border-y border-quant-border bg-quant-bg-tertiary shrink-0">
               {midPriceContent || (
                 <>
-                  <span
-                    className={cn(
-                      'text-sm font-bold font-mono',
-                      isUp ? 'text-quant-green' : 'text-quant-red'
-                    )}
-                  >
+                  <span className={cn('text-sm font-bold font-mono', isUp ? 'text-quant-green' : 'text-quant-red')}>
                     {lastPrice ? lastPrice.toFixed(2) : '--'}
                   </span>
                   <span className="text-[10px] text-muted-foreground ml-2">
-                    spread{' '}
-                    {bestAsk && bestBid
-                      ? (parseFloat(bestAsk) - parseFloat(bestBid)).toFixed(2)
-                      : '--'}
+                    spread {bestAsk && bestBid ? (parseFloat(bestAsk) - parseFloat(bestBid)).toFixed(2) : '--'}
                   </span>
                 </>
               )}
@@ -165,36 +141,28 @@ export const OrderBookPanel = React.memo(function OrderBookPanel({
 
             {/* Bids */}
             <div>
-              {(orderbook.bids || [])
-                .slice(0, 10)
-                .map((bid: [number, number], i: number) => {
-                  const p = Number(bid[0]),
-                    q = Number(bid[1])
-                  return (
+              {(orderbook.bids || []).slice(0, 10).map((bid: [number, number], i: number) => {
+                const p = Number(bid[0]),
+                  q = Number(bid[1])
+                return (
+                  <div
+                    key={'bid-' + i}
+                    className="relative flex px-3 py-0.5 text-[11px] font-mono cursor-pointer hover:bg-white/[0.04]"
+                    onClick={() => onPriceClick(obFormatPrice(p, obPrecision))}
+                  >
                     <div
-                      key={'bid-' + i}
-                      className="relative flex px-3 py-0.5 text-[11px] font-mono cursor-pointer hover:bg-white/[0.04]"
-                      onClick={() => onPriceClick(obFormatPrice(p, obPrecision))}
-                    >
-                      <div
-                        className="absolute top-0 bottom-0 left-0 opacity-20 z-0"
-                        style={{
-                          background: '#2EBD85',
-                          width: Math.min((q / obMax) * 100, 100) + '%',
-                        }}
-                      />
-                      <span className="flex-1 text-quant-green relative z-10">
-                        {obFormatPrice(p, obPrecision)}
-                      </span>
-                      <span className="flex-1 text-right text-muted-foreground relative z-10">
-                        {q.toFixed(4)}
-                      </span>
-                      <span className="flex-1 text-right text-muted-foreground relative z-10">
-                        {(p * q).toFixed(2)}
-                      </span>
-                    </div>
-                  )
-                })}
+                      className="absolute top-0 bottom-0 left-0 opacity-20 z-0"
+                      style={{
+                        background: '#2EBD85',
+                        width: Math.min((q / obMax) * 100, 100) + '%',
+                      }}
+                    />
+                    <span className="flex-1 text-quant-green relative z-10">{obFormatPrice(p, obPrecision)}</span>
+                    <span className="flex-1 text-right text-muted-foreground relative z-10">{q.toFixed(4)}</span>
+                    <span className="flex-1 text-right text-muted-foreground relative z-10">{(p * q).toFixed(2)}</span>
+                  </div>
+                )
+              })}
             </div>
           </>
         ) : (
@@ -211,9 +179,7 @@ export const OrderBookPanel = React.memo(function OrderBookPanel({
         aria-label="最新成交"
       >
         <div className="flex items-center h-7 px-3 border-b border-quant-border bg-quant-bg-secondary gap-3">
-          {recentTradesHeader || (
-            <span className="text-[11px] font-medium text-muted-foreground">最新成交</span>
-          )}
+          {recentTradesHeader || <span className="text-[11px] font-medium text-muted-foreground">最新成交</span>}
         </div>
         <div className="flex text-[10px] text-muted-foreground px-3 py-1 border-b border-quant-border sticky top-0 bg-quant-bg-secondary">
           <span className="flex-1">时间</span>
@@ -223,17 +189,10 @@ export const OrderBookPanel = React.memo(function OrderBookPanel({
         {displayTrades.slice(0, 20).map((t, i) => (
           <div key={t.id || i} className="flex px-3 py-0.5 text-[11px] font-mono">
             <span className="flex-1 text-muted-foreground">{formatTime(t.time)}</span>
-            <span
-              className={cn(
-                'flex-1 text-right',
-                t.side === 'buy' ? 'text-quant-green' : 'text-quant-red'
-              )}
-            >
+            <span className={cn('flex-1 text-right', t.side === 'buy' ? 'text-quant-green' : 'text-quant-red')}>
               {formatPrice(t.price)}
             </span>
-            <span className="flex-1 text-right text-muted-foreground">
-              {t.quantity.toFixed(4)}
-            </span>
+            <span className="flex-1 text-right text-muted-foreground">{t.quantity.toFixed(4)}</span>
           </div>
         ))}
         {!displayTrades.length && (

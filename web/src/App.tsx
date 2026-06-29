@@ -13,11 +13,10 @@ import { Login } from './pages/Login'
 import { NotFound } from './pages/NotFound'
 
 // ── Lazy-loading helper for named exports ──
-function lazyPage(
-  factory: () => Promise<unknown>,
-  name: string
-) {
-  return lazy(() => factory().then((m) => ({ default: (m as Record<string, unknown>)[name] as React.ComponentType<unknown> })))
+function lazyPage(factory: () => Promise<unknown>, name: string) {
+  return lazy(() =>
+    factory().then((m) => ({ default: (m as Record<string, unknown>)[name] as React.ComponentType<unknown> }))
+  )
 }
 
 // Lazy-loaded: all feature pages
@@ -49,6 +48,26 @@ const HyperoptManagement = lazyPage(() => import('./pages/HyperoptManagement'), 
 const SocialTrading = lazyPage(() => import('./pages/SocialTrading'), 'SocialTrading')
 const OnChain = lazyPage(() => import('./pages/OnChain'), 'OnChain')
 
+// ── Split pages (flat navigation) ──
+const Market = lazyPage(() => import('./pages/Market'), 'Market')
+const AIAnalysis = lazyPage(() => import('./pages/ai/AIAnalysis'), 'AIAnalysis')
+const FreqAI = lazyPage(() => import('./pages/ai/FreqAI'), 'FreqAI')
+const RLTraining = lazyPage(() => import('./pages/ai/RLTraining'), 'RLTraining')
+const TensorBoard = lazyPage(() => import('./pages/ai/TensorBoard'), 'TensorBoard')
+const StrategyEditor = lazyPage(() => import('./pages/strategy/StrategyEditor'), 'StrategyEditor')
+const BotsStrategy = lazyPage(() => import('./pages/bots/BotsStrategy'), 'BotsStrategy')
+const BotsSignal = lazyPage(() => import('./pages/bots/BotsSignal'), 'BotsSignal')
+const BotsAI = lazyPage(() => import('./pages/bots/BotsAI'), 'BotsAI')
+const TradingSpot = lazyPage(() => import('./pages/trading/TradingSpot'), 'TradingSpot')
+const TradingContract = lazyPage(() => import('./pages/trading/TradingContract'), 'TradingContract')
+const ArbitrageCross = lazyPage(() => import('./pages/arbitrage/ArbitrageCross'), 'ArbitrageCross')
+const ArbitrageTriangular = lazyPage(() => import('./pages/arbitrage/ArbitrageTriangular'), 'ArbitrageTriangular')
+
+// ── New P0 pages ──
+const SystemStatus = lazyPage(() => import('./pages/SystemStatus'), 'SystemStatus')
+const DataManager = lazyPage(() => import('./pages/DataManager'), 'DataManager')
+const Logs = lazyPage(() => import('./pages/Logs'), 'Logs')
+
 // ── Route-level error boundary with retry ──
 function RouteErrorBoundary({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate()
@@ -58,9 +77,7 @@ function RouteErrorBoundary({ children }: { children: React.ReactNode }) {
         <div className="h-full flex flex-col items-center justify-center bg-[#0a0a0a] text-center p-8">
           <div className="text-5xl mb-4 opacity-30">⚠</div>
           <h3 className="text-lg font-semibold text-white mb-2">页面加载异常</h3>
-          <p className="text-sm text-[#8a8a8a] mb-4 max-w-sm">
-            该页面遇到了意外错误，可能是网络问题或资源加载失败。
-          </p>
+          <p className="text-sm text-[#8a8a8a] mb-4 max-w-sm">该页面遇到了意外错误，可能是网络问题或资源加载失败。</p>
           <div className="flex gap-3">
             <button
               onClick={() => window.location.reload()}
@@ -120,6 +137,26 @@ function DocumentTitle() {
     '/agent-tokens': 'Agent令牌 - 小天量化',
     '/billing': '会员 - 小天量化',
     '/strategy-leaderboard': '策略排行榜 - 小天量化',
+
+    // Flat navigation titles
+    '/market': '市场数据 - 小天量化',
+    '/trading/spot': '现货交易 - 小天量化',
+    '/trading/contract': '合约交易 - 小天量化',
+    '/strategy/editor': '策略编辑器 - 小天量化',
+    '/ai/analysis': 'AI分析 - 小天量化',
+    '/ai/freqai': 'FreqAI - 小天量化',
+    '/ai/rl': 'RL强化学习 - 小天量化',
+    '/ai/tensorboard': 'TensorBoard - 小天量化',
+    '/bots/strategy': '策略机器人 - 小天量化',
+    '/bots/signal': '信号机器人 - 小天量化',
+    '/bots/ai': 'AI机器人 - 小天量化',
+    '/arbitrage/cross': '跨所套利 - 小天量化',
+    '/arbitrage/triangular': '三角套利 - 小天量化',
+
+    // P0 new pages
+    '/status': '系统状态 - 小天量化',
+    '/data': '数据下载 - 小天量化',
+    '/logs': '系统日志 - 小天量化',
   }
 
   const title = titles[location.pathname] || '小天量化'
@@ -135,13 +172,7 @@ function DocumentTitle() {
     prefetched.current.add(currentPath)
 
     // Prefetch common next pages (most likely navigation targets)
-    const adjacentPaths = [
-      '/dashboard',
-      '/trading',
-      '/strategy',
-      '/backtest',
-      '/settings',
-    ]
+    const adjacentPaths = ['/dashboard', '/trading', '/strategy', '/backtest', '/settings']
 
     const idleCallback = (window as unknown as Record<string, unknown>).requestIdleCallback as
       | ((cb: () => void, opts?: { timeout: number }) => number)
@@ -204,48 +235,385 @@ export default function App() {
     <I18nProvider>
       <BrowserRouter>
         <DocumentTitle />
-        <ErrorBoundary fallback={<div className="min-h-screen flex items-center justify-center text-destructive">应用出现异常，请刷新页面</div>}>
+        <ErrorBoundary
+          fallback={
+            <div className="min-h-screen flex items-center justify-center text-destructive">
+              应用出现异常，请刷新页面
+            </div>
+          }
+        >
           <Suspense fallback={<PageLoader />}>
             <Routes>
-            <Route path="/login" element={<Login />} />
-            <Route element={<RequireAuth />}>
-              <Route element={<Layout />}>
-                <Route path="/" element={<Navigate to="/dashboard" replace />} />
-                <Route path="/dashboard" element={<PageShell><Dashboard /></PageShell>} />
-                <Route path="/trading" element={<PageShell><Trading /></PageShell>} />
-                <Route path="/strategy" element={<PageShell><Strategy /></PageShell>} />
-                <Route path="/ai" element={<PageShell><AI /></PageShell>} />
-                <Route path="/backtest" element={<PageShell><Backtest /></PageShell>} />
-                <Route path="/bots" element={<PageShell><Bots /></PageShell>} />
-                <Route path="/ai-bots" element={<PageShell><AIBots /></PageShell>} />
-                <Route path="/settings" element={<PageShell><Settings /></PageShell>} />
-                <Route path="/exchange-account" element={<PageShell><ExchangeAccount /></PageShell>} />
-                <Route path="/indicator-community" element={<PageShell><IndicatorCommunity /></PageShell>} />
-                <Route path="/indicator-community/:id" element={<PageShell><IndicatorDetail /></PageShell>} />
-                <Route path="/author-dashboard" element={<PageShell><AuthorDashboard /></PageShell>} />
-                <Route path="/portfolio" element={<PageShell><Portfolio /></PageShell>} />
-                <Route path="/indicator-ide" element={<PageShell><IndicatorIDE /></PageShell>} />
-                <Route path="/model-management" element={<PageShell><ModelManagement /></PageShell>} />
-                <Route path="/risk-control" element={<PageShell><RiskControl /></PageShell>} />
-                <Route path="/pairlist" element={<PageShell><PairlistManagement /></PageShell>} />
-                <Route path="/advanced-orders" element={<PageShell><AdvancedOrderManagement /></PageShell>} />
-                <Route path="/arbitrage" element={<PageShell><ArbitrageMonitor /></PageShell>} />
-                <Route path="/hyperopt" element={<PageShell><HyperoptManagement /></PageShell>} />
-                <Route path="/social-trading" element={<PageShell><SocialTrading /></PageShell>} />
-                <Route path="/onchain" element={<PageShell><OnChain /></PageShell>} />
-                <Route path="/profile" element={<PageShell><UserProfile /></PageShell>} />
-                <Route path="/users" element={<PageShell><UserManage /></PageShell>} />
-                <Route path="/agent-tokens" element={<PageShell><AgentTokens /></PageShell>} />
-                <Route path="/billing" element={<PageShell><Billing /></PageShell>} />
-                <Route path="/strategy-leaderboard" element={<PageShell><StrategyLeaderboard /></PageShell>} />
-                {/* 404 catch-all */}
-                <Route path="*" element={<NotFound />} />
+              <Route path="/login" element={<Login />} />
+              <Route element={<RequireAuth />}>
+                <Route element={<Layout />}>
+                  <Route path="/" element={<Navigate to="/dashboard" replace />} />
+                  <Route
+                    path="/dashboard"
+                    element={
+                      <PageShell>
+                        <Dashboard />
+                      </PageShell>
+                    }
+                  />
+
+                  {/* Trading - old routes redirect to flat routes */}
+                  <Route
+                    path="/trading"
+                    element={
+                      <PageShell>
+                        <Navigate to="/trading/spot" replace />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/trading/spot"
+                    element={
+                      <PageShell>
+                        <TradingSpot />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/trading/contract"
+                    element={
+                      <PageShell>
+                        <TradingContract />
+                      </PageShell>
+                    }
+                  />
+
+                  <Route
+                    path="/strategy"
+                    element={
+                      <PageShell>
+                        <Strategy />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/strategy/editor"
+                    element={
+                      <PageShell>
+                        <StrategyEditor />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/backtest"
+                    element={
+                      <PageShell>
+                        <Backtest />
+                      </PageShell>
+                    }
+                  />
+
+                  {/* AI - old routes redirect to flat routes */}
+                  <Route
+                    path="/ai"
+                    element={
+                      <PageShell>
+                        <Navigate to="/ai/analysis" replace />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/market"
+                    element={
+                      <PageShell>
+                        <Market />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/ai/analysis"
+                    element={
+                      <PageShell>
+                        <AIAnalysis />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/ai/freqai"
+                    element={
+                      <PageShell>
+                        <FreqAI />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/ai/rl"
+                    element={
+                      <PageShell>
+                        <RLTraining />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/ai/tensorboard"
+                    element={
+                      <PageShell>
+                        <TensorBoard />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/model-management"
+                    element={
+                      <PageShell>
+                        <ModelManagement />
+                      </PageShell>
+                    }
+                  />
+
+                  {/* Bots - old routes redirect to flat routes */}
+                  <Route
+                    path="/bots"
+                    element={
+                      <PageShell>
+                        <Navigate to="/bots/strategy" replace />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/ai-bots"
+                    element={
+                      <PageShell>
+                        <Navigate to="/bots/ai" replace />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/bots/strategy"
+                    element={
+                      <PageShell>
+                        <BotsStrategy />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/bots/signal"
+                    element={
+                      <PageShell>
+                        <BotsSignal />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/bots/ai"
+                    element={
+                      <PageShell>
+                        <BotsAI />
+                      </PageShell>
+                    }
+                  />
+
+                  <Route
+                    path="/settings"
+                    element={
+                      <PageShell>
+                        <Settings />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/exchange-account"
+                    element={
+                      <PageShell>
+                        <ExchangeAccount />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/indicator-community"
+                    element={
+                      <PageShell>
+                        <IndicatorCommunity />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/indicator-community/:id"
+                    element={
+                      <PageShell>
+                        <IndicatorDetail />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/author-dashboard"
+                    element={
+                      <PageShell>
+                        <AuthorDashboard />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/portfolio"
+                    element={
+                      <PageShell>
+                        <Portfolio />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/indicator-ide"
+                    element={
+                      <PageShell>
+                        <IndicatorIDE />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/risk-control"
+                    element={
+                      <PageShell>
+                        <RiskControl />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/pairlist"
+                    element={
+                      <PageShell>
+                        <PairlistManagement />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/advanced-orders"
+                    element={
+                      <PageShell>
+                        <AdvancedOrderManagement />
+                      </PageShell>
+                    }
+                  />
+
+                  {/* Arbitrage - old routes redirect to flat routes */}
+                  <Route
+                    path="/arbitrage"
+                    element={
+                      <PageShell>
+                        <Navigate to="/arbitrage/cross" replace />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/arbitrage/cross"
+                    element={
+                      <PageShell>
+                        <ArbitrageCross />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/arbitrage/triangular"
+                    element={
+                      <PageShell>
+                        <ArbitrageTriangular />
+                      </PageShell>
+                    }
+                  />
+
+                  <Route
+                    path="/hyperopt"
+                    element={
+                      <PageShell>
+                        <HyperoptManagement />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/social-trading"
+                    element={
+                      <PageShell>
+                        <SocialTrading />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/onchain"
+                    element={
+                      <PageShell>
+                        <OnChain />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/profile"
+                    element={
+                      <PageShell>
+                        <UserProfile />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/users"
+                    element={
+                      <PageShell>
+                        <UserManage />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/agent-tokens"
+                    element={
+                      <PageShell>
+                        <AgentTokens />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/billing"
+                    element={
+                      <PageShell>
+                        <Billing />
+                      </PageShell>
+                    }
+                  />
+
+                  {/* P0 new pages */}
+                  <Route
+                    path="/status"
+                    element={
+                      <PageShell>
+                        <SystemStatus />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/data"
+                    element={
+                      <PageShell>
+                        <DataManager />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/logs"
+                    element={
+                      <PageShell>
+                        <Logs />
+                      </PageShell>
+                    }
+                  />
+
+                  <Route
+                    path="/strategy-leaderboard"
+                    element={
+                      <PageShell>
+                        <StrategyLeaderboard />
+                      </PageShell>
+                    }
+                  />
+                  {/* 404 catch-all */}
+                  <Route path="*" element={<NotFound />} />
+                </Route>
               </Route>
-            </Route>
-          </Routes>
-        </Suspense>
-      </ErrorBoundary>
-    </BrowserRouter>
+            </Routes>
+          </Suspense>
+        </ErrorBoundary>
+      </BrowserRouter>
     </I18nProvider>
   )
 }

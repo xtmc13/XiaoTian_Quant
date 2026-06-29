@@ -28,31 +28,24 @@ interface NavItem {
   children?: { path: string; label: string }[]
 }
 
-// Helper: extract base pathname without query string
-const basePath = (path: string) => path.split('?')[0]
-
 // Helper: check if a child path is active
 const isChildActive = (location: ReturnType<typeof useLocation>, childPath: string) => {
-  const childBase = basePath(childPath)
-  const childQuery = childPath.split('?')[1] || ''
-  const locSearch = location.search.replace(/^\?/, '')
-  // Exact match including query string
-  if (childQuery) {
-    return location.pathname === childBase && locSearch === childQuery
-  }
-  return location.pathname === childBase
+  return location.pathname === childPath
 }
 
 const navItems: NavItem[] = [
   { path: '/dashboard', label: '仪表盘', icon: BarChart3 },
 
-  // 交易 — 保持原样
+  // 市场数据
+  { path: '/market', label: '市场数据', icon: BarChart3 },
+
+  // 交易
   {
     label: '交易',
     icon: LineChart,
     children: [
-      { path: '/trading?mode=spot', label: '现货交易' },
-      { path: '/trading?mode=contract', label: '合约交易' },
+      { path: '/trading/spot', label: '现货交易' },
+      { path: '/trading/contract', label: '合约交易' },
     ],
   },
 
@@ -62,6 +55,7 @@ const navItems: NavItem[] = [
     icon: FlaskConical,
     children: [
       { path: '/strategy', label: '策略管理' },
+      { path: '/strategy/editor', label: '策略编辑器' },
       { path: '/backtest', label: '回测' },
       { path: '/indicator-ide', label: '指标 IDE' },
       { path: '/indicator-community', label: '指标市场' },
@@ -74,7 +68,10 @@ const navItems: NavItem[] = [
     label: 'AI 研究',
     icon: Cpu,
     children: [
-      { path: '/ai', label: '市场分析' },
+      { path: '/ai/analysis', label: 'AI 分析' },
+      { path: '/ai/freqai', label: 'FreqAI' },
+      { path: '/ai/rl', label: 'RL 强化学习' },
+      { path: '/ai/tensorboard', label: 'TensorBoard' },
       { path: '/model-management', label: '模型管理' },
     ],
   },
@@ -84,9 +81,9 @@ const navItems: NavItem[] = [
     label: '机器人中心',
     icon: Bot,
     children: [
-      { path: '/bots?type=strategy', label: '策略机器人' },
-      { path: '/bots?type=signal', label: '信号机器人' },
-      { path: '/ai-bots?tab=mybots', label: 'AI 机器人' },
+      { path: '/bots/strategy', label: '策略机器人' },
+      { path: '/bots/signal', label: '信号机器人' },
+      { path: '/bots/ai', label: 'AI 机器人' },
     ],
   },
 
@@ -95,8 +92,8 @@ const navItems: NavItem[] = [
     label: '套利',
     icon: ArrowLeftRight,
     children: [
-      { path: '/arbitrage?tab=cross', label: '跨所套利' },
-      { path: '/arbitrage?tab=triangular', label: '三角套利' },
+      { path: '/arbitrage/cross', label: '跨所套利' },
+      { path: '/arbitrage/triangular', label: '三角套利' },
     ],
   },
 
@@ -107,6 +104,17 @@ const navItems: NavItem[] = [
     children: [
       { path: '/portfolio', label: '资产监测' },
       { path: '/risk-control', label: '风控中心' },
+    ],
+  },
+
+  // 系统与数据
+  {
+    label: '系统与数据',
+    icon: Layers,
+    children: [
+      { path: '/data', label: '数据下载' },
+      { path: '/status', label: '系统状态' },
+      { path: '/logs', label: '系统日志' },
     ],
   },
 
@@ -166,7 +174,10 @@ export function Sidebar() {
     if (isHover) setSidebarCollapsed(false)
   }, [setSidebarCollapsed, isHover])
   const handleMouseLeave = useCallback(() => {
-    if (isHover) { setSidebarCollapsed(true); setExpandedItem(null) }
+    if (isHover) {
+      setSidebarCollapsed(true)
+      setExpandedItem(null)
+    }
   }, [setSidebarCollapsed, isHover])
   const handleToggle = useCallback(() => {
     if (!isHover) toggleSidebar()
@@ -182,11 +193,12 @@ export function Sidebar() {
       )}
     >
       {/* Logo */}
-      <div
-        className="h-14 flex items-center px-3 border-b border-quant-border cursor-pointer"
-        onClick={handleToggle}
-      >
-        <Link to="/" className="flex items-center gap-2 text-quant-gold font-bold tracking-tight" onClick={e => e.stopPropagation()}>
+      <div className="h-14 flex items-center px-3 border-b border-quant-border cursor-pointer" onClick={handleToggle}>
+        <Link
+          to="/"
+          className="flex items-center gap-2 text-quant-gold font-bold tracking-tight"
+          onClick={(e) => e.stopPropagation()}
+        >
           <span className="w-7 h-7 bg-quant-gold rounded-md flex items-center justify-center text-white text-sm font-black shrink-0">
             小
           </span>
@@ -196,89 +208,100 @@ export function Sidebar() {
 
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto py-3 px-1.5 space-y-1">
-        {navItems.filter(item => !item.adminOnly || isAdmin).map((item) => {
-          const active = item.path
-            ? location.pathname === item.path
-            : item.children?.some((child) => isChildActive(location, child.path)) ?? false
-          const hasChildren = !!item.children
-          const isExpanded = expandedItem === item.label
+        {navItems
+          .filter((item) => !item.adminOnly || isAdmin)
+          .map((item) => {
+            const active = item.path
+              ? location.pathname === item.path
+              : (item.children?.some((child) => isChildActive(location, child.path)) ?? false)
+            const hasChildren = !!item.children
+            const isExpanded = expandedItem === item.label
 
-          if (hasChildren) {
+            if (hasChildren) {
+              return (
+                <div key={item.label}>
+                  {/* Parent item */}
+                  <button
+                    onClick={() => {
+                      if (sidebarCollapsed) setSidebarCollapsed(false)
+                      setExpandedItem(isExpanded ? null : item.label)
+                    }}
+                    onMouseEnter={() => {
+                      if (isHover) setExpandedItem(item.label)
+                    }}
+                    aria-expanded={isExpanded}
+                    className={cn(
+                      'w-full flex items-center gap-3 px-2 py-2.5 rounded-md text-sm font-medium transition-colors',
+                      active
+                        ? 'bg-quant-gold/10 text-quant-gold'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-white/5'
+                    )}
+                    title={item.label}
+                  >
+                    <item.icon className="w-[18px] h-[18px] shrink-0" />
+                    {!sidebarCollapsed && (
+                      <>
+                        <span className="flex-1 text-left">{item.label}</span>
+                        <ChevronDown className={cn('w-3 h-3 transition-transform', isExpanded && 'rotate-180')} />
+                      </>
+                    )}
+                  </button>
+
+                  {/* Sub items */}
+                  {isExpanded && !sidebarCollapsed && (
+                    <div className="ml-6 mt-0.5 space-y-0.5">
+                      {item.children!.map((child) => {
+                        const childActive = isChildActive(location, child.path)
+                        return (
+                          <Link
+                            key={child.path}
+                            to={child.path}
+                            onClick={() => {
+                              if (!isHover) {
+                                setSidebarCollapsed(true)
+                                setExpandedItem(null)
+                              }
+                            }}
+                            aria-current={childActive ? 'page' : undefined}
+                            className={cn(
+                              'flex items-center gap-2 px-2 py-2 rounded-md text-xs font-medium transition-colors',
+                              childActive
+                                ? 'text-quant-gold bg-quant-gold/5'
+                                : 'text-muted-foreground hover:text-foreground hover:bg-white/5'
+                            )}
+                          >
+                            <span className="w-1 h-1 rounded-full bg-current opacity-50" />
+                            {child.label}
+                          </Link>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              )
+            }
+
             return (
-              <div key={item.label}>
-                {/* Parent item */}
-                <button
-                  onClick={() => {
-                    if (sidebarCollapsed) setSidebarCollapsed(false)
-                    setExpandedItem(isExpanded ? null : item.label)
-                  }}
-                  onMouseEnter={() => { if (isHover) setExpandedItem(item.label) }}
-                  aria-expanded={isExpanded}
-                  className={cn(
-                    'w-full flex items-center gap-3 px-2 py-2.5 rounded-md text-sm font-medium transition-colors',
-                    active
-                      ? 'bg-quant-gold/10 text-quant-gold'
-                      : 'text-muted-foreground hover:text-foreground hover:bg-white/5'
-                  )}
-                  title={item.label}
-                >
-                  <item.icon className="w-[18px] h-[18px] shrink-0" />
-                  {!sidebarCollapsed && (
-                    <>
-                      <span className="flex-1 text-left">{item.label}</span>
-                      <ChevronDown className={cn('w-3 h-3 transition-transform', isExpanded && 'rotate-180')} />
-                    </>
-                  )}
-                </button>
-
-                {/* Sub items */}
-                {isExpanded && !sidebarCollapsed && (
-                  <div className="ml-6 mt-0.5 space-y-0.5">
-                    {item.children!.map((child) => {
-                      const childActive = isChildActive(location, child.path)
-                      return (
-                        <Link
-                          key={child.path}
-                          to={child.path}
-                          onClick={() => { if (!isHover) { setSidebarCollapsed(true); setExpandedItem(null) } }}
-                          aria-current={childActive ? 'page' : undefined}
-                          className={cn(
-                            'flex items-center gap-2 px-2 py-2 rounded-md text-xs font-medium transition-colors',
-                            childActive
-                              ? 'text-quant-gold bg-quant-gold/5'
-                              : 'text-muted-foreground hover:text-foreground hover:bg-white/5'
-                          )}
-                        >
-                          <span className="w-1 h-1 rounded-full bg-current opacity-50" />
-                          {child.label}
-                        </Link>
-                      )
-                    })}
-                  </div>
+              <Link
+                key={item.path}
+                to={item.path!}
+                onClick={() => {
+                  if (!isHover) setSidebarCollapsed(true)
+                }}
+                aria-current={active ? 'page' : undefined}
+                className={cn(
+                  'flex items-center gap-3 px-2 py-2.5 rounded-md text-sm font-medium transition-colors',
+                  active
+                    ? 'bg-quant-gold/10 text-quant-gold'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-white/5'
                 )}
-              </div>
+                title={sidebarCollapsed ? item.label : undefined}
+              >
+                <item.icon className="w-[18px] h-[18px] shrink-0" />
+                {!sidebarCollapsed && <span>{item.label}</span>}
+              </Link>
             )
-          }
-
-          return (
-            <Link
-              key={item.path}
-              to={item.path!}
-              onClick={() => { if (!isHover) setSidebarCollapsed(true) }}
-              aria-current={active ? 'page' : undefined}
-              className={cn(
-                'flex items-center gap-3 px-2 py-2.5 rounded-md text-sm font-medium transition-colors',
-                active
-                  ? 'bg-quant-gold/10 text-quant-gold'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-white/5'
-              )}
-              title={sidebarCollapsed ? item.label : undefined}
-            >
-              <item.icon className="w-[18px] h-[18px] shrink-0" />
-              {!sidebarCollapsed && <span>{item.label}</span>}
-            </Link>
-          )
-        })}
+          })}
       </nav>
 
       {/* Bottom: Settings */}

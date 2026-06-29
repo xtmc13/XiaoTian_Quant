@@ -390,11 +390,14 @@ export interface ProtectionStatus {
   global_blocked: boolean
   global_reason?: string
   global_resume_in?: string
-  pair_blocks: Record<string, {
-    reason: string
-    resume_in: string
-    permanent: boolean
-  }>
+  pair_blocks: Record<
+    string,
+    {
+      reason: string
+      resume_in: string
+      permanent: boolean
+    }
+  >
 }
 
 export interface ProtectionConfigItem {
@@ -1753,4 +1756,124 @@ export interface AIBotCreateRequest {
   initial_balance?: number
   leverage?: number
   risk_level?: 'low' | 'medium' | 'high'
+}
+
+/* ── Data Download ── */
+export interface DataCoverageSymbol {
+  symbol: string
+  intervals: string[]
+  from?: number
+  to?: number
+}
+
+export interface DataCoverageResponse {
+  symbols: DataCoverageSymbol[]
+  total_symbols: number
+}
+
+export interface DataInfoResponse {
+  symbol: string
+  interval: string
+  count: number
+  from?: number
+  to?: number
+  size_bytes?: number
+}
+
+export interface DownloadConfig {
+  symbol: string
+  interval: string
+  from: number
+  to: number
+  exchange?: string
+}
+
+export interface DownloadJobStatus {
+  job_id: string
+  status: 'pending' | 'running' | 'completed' | 'failed'
+  symbol: string
+  interval: string
+  progress_pct: number
+  downloaded: number
+  total: number
+  message?: string
+  created_at: number
+  completed_at?: number
+}
+
+export interface BarDataResponse {
+  symbol: string
+  interval: string
+  bars: KlineBar[]
+}
+
+/* ── Health / Status ── */
+export interface HealthResponse {
+  status: string
+  uptime: string
+  version: string
+  log_level: string
+}
+
+export interface ComponentHealthResponse {
+  name: string
+  status: 'healthy' | 'degraded' | 'unhealthy' | 'unknown'
+  message?: string
+  last_check?: string
+}
+
+export interface StatusResponse {
+  status: string
+  timestamp?: number
+  [key: string]: unknown
+}
+
+/* ── Paper / Live Trading Safety ── */
+export interface TradingSafetyResponse {
+  locked: boolean
+  paper_mode: boolean
+  reason?: string
+  unlocked_at?: number
+}
+
+/* ── Exchange Status ── */
+export interface ExchangeStatusItem {
+  id: string
+  name: string
+  connected: boolean
+  enabled: boolean
+  status: string
+  last_error?: string
+}
+
+export interface ExchangeStatusResponse {
+  exchanges: ExchangeStatusItem[]
+  default_exchange_id?: string
+}
+
+/* ── Rust Matching Engine ── */
+export interface RustOrderBookLevel {
+  price: number
+  quantity: number
+}
+
+export interface RustOrderBookSnapshot {
+  symbol: string
+  timestamp: number
+  bids: RustOrderBookLevel[]
+  asks: RustOrderBookLevel[]
+}
+
+export interface RustTradeResponse {
+  symbol: string
+  trades: Trade[]
+}
+
+export interface RustEngineStatsResponse {
+  symbol?: string
+  tps?: number
+  total_orders?: number
+  total_trades?: number
+  latency_ms?: number
+  engine_count?: number
 }
