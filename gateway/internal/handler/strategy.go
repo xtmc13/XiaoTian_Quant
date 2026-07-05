@@ -273,7 +273,48 @@ func BatchStopConfigs(c *gin.Context) {
 	}
 	mu.Unlock()
 	store.PersistStrategyConfigs()
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "stopped": len(ids)})
+}
+
+func BatchCloseConfigs(c *gin.Context) {
+	var body map[string]any
+	c.ShouldBindJSON(&body)
+	ids := getStringSlice(body, "ids")
+	nowTS := float64(time.Now().UnixMilli())
+	mu := store.GetStrategyConfigMu()
+	mu.Lock()
+	closed := 0
+	for _, sid := range ids {
+		if item, ok := store.GetStrategyConfigs()[sid]; ok {
+			stopStrategyInEngine(sid)
+			item["status"] = "stopped"
+			item["closed_at"] = nowTS
+			item["updated_at"] = nowTS
+			closed++
+		}
+	}
+	mu.Unlock()
+	store.PersistStrategyConfigs()
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "closed": closed})
+}
+
+func BatchDeleteConfigs(c *gin.Context) {
+	var body map[string]any
+	c.ShouldBindJSON(&body)
+	ids := getStringSlice(body, "ids")
+	mu := store.GetStrategyConfigMu()
+	mu.Lock()
+	deleted := 0
+	for _, sid := range ids {
+		if _, ok := store.GetStrategyConfigs()[sid]; ok {
+			stopStrategyInEngine(sid)
+			delete(store.GetStrategyConfigs(), sid)
+			deleted++
+		}
+	}
+	mu.Unlock()
+	store.PersistStrategyConfigs()
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "deleted": deleted})
 }
 
 func StartStrategyConfig(c *gin.Context) {
@@ -491,6 +532,9 @@ func CreateTemplate(c *gin.Context) {
 		"risk_level":    getString(data, "risk", "medium"),
 		"created_at":    float64(time.Now().Unix()),
 	}
+	if defaultConfig, ok := data["default_config"]; ok {
+		tpl["default_config"] = defaultConfig
+	}
 	*store.GetTemplatesStore() = append(*store.GetTemplatesStore(), tpl)
 	store.PersistStrategyTemplates()
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "id": tpl["id"]})
@@ -568,16 +612,37 @@ func GetStrategyParamDefs(c *gin.Context) {
 		return
 	}
 
+	// CRA 策略的前端表单由 CRAParamForm 统一渲染，不需要动态参数定义。
+	craTypes := map[string]bool{
+		"martin_trend":        true,
+		"wallstreet":          true,
+		"aggressive":          true,
+		"conservative":        true,
+		"high_frequency":      true,
+		"high_flat":           true,
+		"trend_long":          true,
+		"trend_short":         true,
+		"counter_stable":      true,
+		"counter_safe":        true,
+		"head_tail_arbitrage": true,
+		"dual_burn":           true,
+		"global_burn":         true,
+	}
+	if craTypes[strategyType] {
+		c.JSON(http.StatusOK, gin.H{"type": strategyType, "params": []map[string]any{}})
+		return
+	}
+
 	var defs []map[string]any
 
 	switch strategyType {
 	case "breakout", "trend", "custom":
 		s := strategies.NewBreakoutStrategy()
 		defs = s.ParamDefs()
-	case "ema_cross", "ema_follow", "ema_counter":
+	case "ema_cross", "ema_follow", "ema_counter", "ema_follow_trend", "ema_counter_trend", "ema_spot":
 		s := strategies.NewEMACrossStrategy()
 		defs = s.ParamDefs()
-	case "macd", "macd_golden", "macd_death":
+	case "macd", "macd_golden", "macd_death", "macd_spot_long":
 		s := strategies.NewMACDStrategy()
 		defs = s.ParamDefs()
 	case "rsi":
@@ -598,17 +663,14 @@ func GetStrategyParamDefs(c *gin.Context) {
 	case "grid_trading", "grid":
 		s := strategies.NewGridTradingStrategy()
 		defs = s.ParamDefs()
-	case "arbitrage":
+	case "arbitrage", "head_tail_arb":
 		s := strategies.NewArbitrageStrategy()
 		defs = s.ParamDefs()
 	case "market_making":
 		s := strategies.NewMarketMakingStrategy()
 		defs = s.ParamDefs()
-	case "martingale", "dca", "martin_trend", "dual_burn":
+	case "martingale", "dca":
 		s := strategies.NewMartingaleStrategy()
-		defs = s.ParamDefs()
-	case "wallstreet":
-		s := strategies.NewWallstreetStrategy()
 		defs = s.ParamDefs()
 	// AI Bot marketplace aliases (registered in cmd/server/main.go)
 	case "optimus", "mono_optimus", "noah":
@@ -650,7 +712,7 @@ func GetStrategyParamDefs(c *gin.Context) {
 	if defs == nil {
 		defs = []map[string]any{}
 	}
-	c.JSON(http.StatusOK, gin.H{"type": strategyType, "parameters": defs})
+	c.JSON(http.StatusOK, gin.H{"type": strategyType, "params": defs})
 }
 
 // normalizeStrategyConfig converts a raw store strategy config map into the

@@ -382,7 +382,9 @@ export function Backtest() {
   const CRA_STRATEGIES = ['martin_trend', 'wallstreet', 'macd_golden_long', 'macd_death_short',
     'ema_follow_trend', 'ema_counter_trend', 'dual_burn', 'global_burn',
     'trend_long', 'trend_short', 'counter_stable', 'head_tail_arb']
+  const CONTRACT_CRA_STRATEGIES = new Set(['trend_long', 'trend_short', 'counter_stable', 'head_tail_arb', 'dual_burn', 'global_burn', 'macd_death_short', 'ema_counter_trend'])
   const isCraStrategy = CRA_STRATEGIES.includes(strategyType)
+  const isContractStrategy = CONTRACT_CRA_STRATEGIES.has(strategyType)
   const [initialBalance, setInitialBalance] = useState(10000)
   const [fromDate, setFromDate] = useState(daysAgo(180))
   const [toDate, setToDate] = useState(dateToISO(new Date()))
@@ -390,9 +392,18 @@ export function Backtest() {
 
   // CRA params
   const [craParams, setCraParams] = useState<CRAParams>(DEFAULT_CRA_PARAMS)
+  useEffect(() => {
+    if (!isCraStrategy) return
+    setCraParams((prev) => ({
+      ...DEFAULT_CRA_PARAMS,
+      leverage: isContractStrategy ? 10 : 1,
+      direction: isContractStrategy ? 'long' : prev.direction,
+      stopLossEnabled: isContractStrategy,
+      stopLossRatio: isContractStrategy ? 40 : 0,
+    }))
+  }, [isContractStrategy, isCraStrategy])
   const setCraOrderCount = (v: number) => setCraParams(p => ({ ...p, orderCount: v }))
   const setCraFirstAmount = (v: number) => setCraParams(p => ({ ...p, firstOrderAmount: v }))
-  const setCraAddSpread = (v: number) => setCraParams(p => ({ ...p, addPosSpread: v }))
   const setCraTpRatio = (v: number) => setCraParams(p => ({ ...p, tpRatio: v }))
   const setCraWaterfall = (v: number) => setCraParams(p => ({ ...p, waterfall: v }))
 
@@ -540,7 +551,6 @@ export function Backtest() {
     const p = (result.best_params as Record<string, number>) || {}
     if (p.order_count !== undefined) setCraOrderCount(p.order_count)
     if (p.first_order_amount !== undefined) setCraFirstAmount(p.first_order_amount)
-    if (p.add_position_spread !== undefined) setCraAddSpread(p.add_position_spread)
     if (p.take_profit_ratio !== undefined) setCraTpRatio(p.take_profit_ratio)
     if (p.waterfall_protection !== undefined) setCraWaterfall(p.waterfall_protection)
   }
@@ -605,7 +615,6 @@ export function Backtest() {
           setFromDate(p.from || fromDate); setToDate(p.to || toDate)
           if (p.order_count) setCraOrderCount(p.order_count)
           if (p.first_order_amount) setCraFirstAmount(p.first_order_amount)
-          if (p.add_position_spread) setCraAddSpread(p.add_position_spread)
         }} onDelete={deleteHistory} />
 
         {/* ── Config Form ── */}
@@ -696,16 +705,7 @@ export function Backtest() {
               展开分组调整策略参数
             </div>
             <CollapsibleSection title="CRA 量化参数" count={4} defaultOpen>
-              <CRAParamForm value={craParams} onChange={setCraParams} />
-            </CollapsibleSection>
-            <CollapsibleSection title="趋势指标时间框架" count={1}>
-              {craParams.trendInd && (
-                <div className="flex gap-2">
-                  {(['5m', '15m', '30m', '60m'] as const).map((tf) => (
-                    <button key={tf} onClick={() => setCraParams(p => ({ ...p, trendTf: tf }))} className={cn('flex-1 py-2 rounded-lg text-xs border transition-colors', craParams.trendTf === tf ? 'bg-quant-gold/10 border-quant-gold/20 text-quant-gold' : 'border-quant-border text-muted-foreground hover:text-foreground')}>{tf}</button>
-                  ))}
-                </div>
-              )}
+              <CRAParamForm value={craParams} onChange={setCraParams} market={isContractStrategy ? 'contract' : 'spot'} />
             </CollapsibleSection>
           </div>
           )}

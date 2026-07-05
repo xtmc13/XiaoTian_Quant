@@ -1,5 +1,5 @@
-import type { StrategyItem } from '@/types'
-import { cn, formatCurrency, formatPercent } from '@/lib/utils'
+import type { StrategyItem, AddPositionItem, MovingTPTier } from '@/types'
+import { cn, formatCurrency } from '@/lib/utils'
 import {
   Play, Pause, Edit3, Trash2, DollarSign, Zap, ArrowRight,
   Clock, BarChart3, Wallet, TrendingUp, TrendingDown, Activity
@@ -14,27 +14,39 @@ interface StrategyDetailPanelProps {
   onDelete: () => void
 }
 
-/* ─── Extended type for CRA fields not yet in StrategyItem ─── */
-type StrategyRow = StrategyItem & {
-  add_position_multiple?: number
-  moving_take_profit?: { enabled: boolean; tier1_ratio: number; tier1_drawback: number; tier2_drawback: number }
-  reverse_take_profit?: boolean
-  reverse_stop_loss?: boolean
-  amplitude?: { '5m': number; '15m': number; '30m': number; '1h': number }
-  custom_reduce?: boolean
-  online_order_limit?: number
-  profit_protection?: boolean
-  follow_trend_max?: number
-  stop_loss_ratio?: number
-  stop_loss_amount?: number
-  stop_loss_price?: number
-  first_order_price?: number
+function safeJsonParse(json?: string | null): Record<string, unknown> {
+  if (!json) return {}
+  try {
+    return JSON.parse(json) as Record<string, unknown>
+  } catch {
+    return {}
+  }
+}
+
+function boolField(config: Record<string, unknown>, key: string): string {
+  const v = config[key]
+  if (v === true) return '已开启'
+  if (v === false) return '未开启'
+  return '-'
+}
+
+function formatAddPositions(addPositions?: AddPositionItem[]): string {
+  if (!addPositions || addPositions.length === 0) return '-'
+  return addPositions.map((p) => `${p.order}单 ${p.multiplier}x/${p.spread}%/${p.callback}%`).join(' · ')
+}
+
+function formatMovingTPTiers(tiers?: MovingTPTier[]): string {
+  if (!tiers || tiers.length === 0) return '-'
+  return tiers.map((t, i) => `档${i + 1}: ${t.ratio}%/${t.drawback}%`).join(' · ')
 }
 
 export function StrategyDetailPanel({ strategy, onStart, onStop, onEdit, onDelete }: StrategyDetailPanelProps) {
-  const s = strategy as StrategyRow
+  const s = strategy
+  const config = safeJsonParse(s.config_json)
   const pnl = s.total_pnl ?? 0
   const pnlPct = s.total_pnl_percent ?? 0
+  const isContract = s.market_type !== 'spot' && s.category !== 'spot'
+
   return (
     <div className="space-y-4 max-w-4xl mx-auto">
       <div className="rounded-xl border border-quant-border bg-quant-card p-5">
@@ -77,7 +89,7 @@ export function StrategyDetailPanel({ strategy, onStart, onStop, onEdit, onDelet
         <div className="grid grid-cols-3 gap-3 mt-5">
           <StatBox icon={Wallet} label="投入资金" value={s.initial_capital != null ? `$${formatCurrency(s.initial_capital)}` : '-'} />
           <StatBox icon={Activity} label="当前净值" value={s.current_equity != null ? `$${formatCurrency(s.current_equity)}` : '-'} />
-          <StatBox icon={pnl >= 0 ? TrendingUp : TrendingDown} label="累计盈亏" value={pnl !== 0 ? `${pnl >= 0 ? '+' : ''}$${formatCurrency(pnl)} (${formatPercent(pnlPct)})` : '-'} valueColor={pnl >= 0 ? 'text-quant-green' : pnl < 0 ? 'text-quant-red' : undefined} />
+          <StatBox icon={pnl >= 0 ? TrendingUp : TrendingDown} label="累计盈亏" value={pnl !== 0 ? `${pnl >= 0 ? '+' : ''}$${formatCurrency(pnl)} (${pnlPct.toFixed(2)}%)` : '-'} valueColor={pnl >= 0 ? 'text-quant-green' : pnl < 0 ? 'text-quant-red' : undefined} />
         </div>
       </div>
 
@@ -90,7 +102,7 @@ export function StrategyDetailPanel({ strategy, onStart, onStop, onEdit, onDelet
           <DetailRow label="K线周期" value={s.timeframe || '-'} />
           <DetailRow label="杠杆" value={`${s.leverage || 1}x`} />
           <DetailRow label="方向" value={s.trade_direction === 'long' ? '做多' : s.trade_direction === 'short' ? '做空' : '双向'} />
-          <DetailRow label="市场类型" value={s.market_type === 'spot' ? '现货' : '合约'} />
+          <DetailRow label="市场类型" value={isContract ? '合约' : '现货'} />
           <DetailRow label="创建时间" value={s.created_at ? new Date(s.created_at).toLocaleString() : '-'} />
         </div>
       </div>
@@ -98,29 +110,58 @@ export function StrategyDetailPanel({ strategy, onStart, onStop, onEdit, onDelet
       <div className="rounded-xl border border-quant-border bg-quant-card p-5">
         <div className="text-xs font-semibold mb-3">CRA 量化参数</div>
         <div className="grid grid-cols-2 gap-4 text-xs">
-          <DetailRow label="做单数量" value={`${s.order_count || '-'} 单`} />
-          <DetailRow label="首单仓位" value={s.first_order_amount ? `${s.first_order_amount} USDT` : '-'} />
-          <DetailRow label="补仓价差" value={s.add_position_spread ? `${s.add_position_spread}%` : '-'} />
-          <DetailRow label="补仓回调" value={s.add_position_callback ? `${s.add_position_callback}%` : '-'} />
-          <DetailRow label="止盈比例" value={s.take_profit_ratio ? `${s.take_profit_ratio}%` : '-'} />
-          <DetailRow label="盈利回调" value={s.profit_callback ? `${s.profit_callback}%` : '-'} />
-          <DetailRow label="止盈方式" value={s.take_profit_method === 'full' ? '全仓止盈' : s.take_profit_method === 'tail' ? '尾单止盈' : s.take_profit_method === 'head_tail' ? '首尾止盈' : s.take_profit_method === 'moving' ? '移动止盈' : '-'} />
-          <DetailRow label="开仓指标" value={s.open_indicator === 'macd_golden' ? 'MACD金叉开多' : s.open_indicator === 'macd_death' ? 'MACD死叉开空' : s.open_indicator === 'ema' ? 'EMA拐点' : s.open_indicator === 'close' ? '无脑买入' : '-'} />
-          <DetailRow label="补仓指标" value={s.add_position_indicator === 'macd' ? 'MACD' : s.add_position_indicator === 'ema' ? 'EMA4' : '仅跌幅'} />
-          <DetailRow label="防瀑布" value={s.waterfall_protection ? `${s.waterfall_protection}%` : '-'} />
-          <DetailRow label="开仓加倍" value={s.open_double ? '已开启' : '未开启'} />
-          <DetailRow label="趋势指标" value={s.trend_indicator ? `EMA4 (${s.trend_timeframe || '-'})` : '未开启'} />
-          <DetailRow label="交易次数" value={s.trade_count_mode === 'single' ? '单次循环' : s.trade_count_mode === 'cycle' ? '策略循环' : '-'} />
-          <DetailRow label="顺势而为" value={s.follow_trend ? `已开启 (最高${s.follow_trend_max || 5}倍)` : '未开启'} />
-          <DetailRow label="斩仓燃烧" value={s.burn_cut && typeof s.burn_cut === 'object' && s.burn_cut.enabled ? `双向${s.burn_cut.dual_burn_start}仓/全局${s.burn_cut.global_burn_start}仓` : '未开启'} />
-          <DetailRow label="在线单量限制" value={s.online_order_limit ? `${s.online_order_limit} 单` : '-'} />
-          <DetailRow label="盈利保护" value={s.profit_protection ? '已开启' : '未开启'} />
-          <DetailRow label="自定义减仓" value={s.custom_reduce ? '已开启' : '未开启'} />
-          <DetailRow label="反向止盈" value={s.reverse_take_profit ? '已开启' : '未开启'} />
-          <DetailRow label="反向止损" value={s.reverse_stop_loss ? '已开启' : '未开启'} />
-          <DetailRow label="关闭补仓" value={s.close_add_position ? '是（仅止盈）' : '否'} />
-          <DetailRow label="首单挂单" value={s.first_order_price ? `${s.first_order_price} USDT` : '市价'} />
+          <DetailRow label="挂单价格" value={config.first_order_price ? `${config.first_order_price} USDT` : '市价'} />
+          <DetailRow label="首单额度" value={config.first_order_amount ? `${config.first_order_amount} USDT` : '-'} />
+          <DetailRow label="首单加倍" value={config.first_order_multiplier ? `${config.first_order_multiplier}x` : '-'} />
+          <DetailRow label="循环类型" value={config.trade_count_mode === 'single' ? '单次策略' : config.trade_count_mode === 'cycle' ? '循环策略' : '-'} />
+          <DetailRow label="循环次数" value={config.loop_count ? `${config.loop_count} 次` : '-'} />
+          <DetailRow label="是否开启补仓" value={boolField(config, 'enable_add_position')} />
+          <DetailRow label="补仓次数" value={config.order_count ? `${config.order_count} 次` : '-'} />
+          <DetailRow label="止盈方式" value={config.take_profit_method === 'full' ? '全仓止盈' : config.take_profit_method === 'tail' ? '尾单止盈' : config.take_profit_method === 'head_tail' ? '首尾止盈' : '-'} />
+          <DetailRow label="止盈模式" value={config.tp_mode === 'moving' ? '移动止盈' : config.tp_mode === 'static' ? '静态止盈' : '-'} />
+          <DetailRow label="止盈比例" value={config.take_profit_ratio ? `${config.take_profit_ratio}%` : '-'} />
+          <DetailRow label="盈利回调" value={config.profit_callback ? `${config.profit_callback}%` : '-'} />
+          <DetailRow label="防瀑布" value={boolField(config, 'waterfall_enabled')} />
+          <DetailRow label="防瀑布比例" value={config.waterfall_protection ? `${config.waterfall_protection}%` : '-'} />
+          <DetailRow label="开仓加倍" value={boolField(config, 'open_double')} />
+          <DetailRow label="顺势而为" value={boolField(config, 'follow_trend')} />
         </div>
+
+        {((config.add_positions as AddPositionItem[] | undefined)?.length ?? 0) > 0 && (
+          <div className="mt-4">
+            <div className="text-[11px] text-muted-foreground mb-2">补仓计划</div>
+            <div className="text-xs font-mono text-foreground">{formatAddPositions(config.add_positions as AddPositionItem[])}</div>
+          </div>
+        )}
+
+        {((config.moving_take_profit_tiers as MovingTPTier[] | undefined)?.length ?? 0) > 0 && (
+          <div className="mt-4">
+            <div className="text-[11px] text-muted-foreground mb-2">移动止盈档位</div>
+            <div className="text-xs font-mono text-foreground">{formatMovingTPTiers(config.moving_take_profit_tiers as MovingTPTier[])}</div>
+          </div>
+        )}
+
+        {isContract && (
+          <>
+            <div className="mt-4 text-xs font-semibold text-quant-gold">合约专属参数</div>
+            <div className="grid grid-cols-2 gap-4 text-xs mt-3">
+              <DetailRow label="开仓 MACD" value={(config.open_macd_enabled ? `${config.open_macd_period}` : '关闭') as string} />
+              <DetailRow label="逆势 EMA" value={(config.open_counter_ema_enabled ? `${config.open_counter_ema_period}` : '关闭') as string} />
+              <DetailRow label="顺势 EMA" value={(config.open_trend_ema_enabled ? `${config.open_trend_ema_period}` : '关闭') as string} />
+              <DetailRow label="补仓 MACD" value={(config.add_macd_enabled ? `${config.add_macd_period}` : '关闭') as string} />
+              <DetailRow label="补仓 EMA" value={(config.add_ema_enabled ? `${config.add_ema_period}` : '关闭') as string} />
+              <DetailRow label="反向止盈" value={config.reverse_take_profit_period === 'close' ? '关闭' : `${config.reverse_take_profit_period}`} />
+              <DetailRow label="反向止损" value={boolField(config, 'reverse_stop_loss')} />
+              <DetailRow label="止损开关" value={boolField(config, 'stop_loss_enabled')} />
+              <DetailRow label="止损类型" value={config.stop_loss_type === 'ratio' ? '比例' : config.stop_loss_type === 'amount' ? '金额' : config.stop_loss_type === 'price' ? '价格' : '-'} />
+              <DetailRow label="止损比例" value={config.stop_loss_ratio ? `${config.stop_loss_ratio}%` : '-'} />
+              <DetailRow label="止损金额" value={config.stop_loss_amount ? `${config.stop_loss_amount} USDT` : '-'} />
+              <DetailRow label="止损价格" value={config.stop_loss_price ? `${config.stop_loss_price} USDT` : '-'} />
+              <DetailRow label="全局燃烧" value={config.burn_global_enabled ? `第 ${config.burn_global_threshold} 次` : '未开启'} />
+              <DetailRow label="对向燃烧" value={config.burn_dual_enabled ? `第 ${config.burn_dual_threshold} 次` : '未开启'} />
+            </div>
+          </>
+        )}
       </div>
     </div>
   )
