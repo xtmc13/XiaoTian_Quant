@@ -4,6 +4,7 @@ import type { UseMutationResult } from '@tanstack/react-query'
 
 interface CrossArbitrageControlsProps {
   isRunning: boolean
+  registeredCount: number
   startMutation: UseMutationResult<unknown, Error, void, unknown>
   stopMutation: UseMutationResult<unknown, Error, void, unknown>
   showConfig: boolean
@@ -14,6 +15,7 @@ interface CrossArbitrageControlsProps {
 
 export function CrossArbitrageControls({
   isRunning,
+  registeredCount,
   startMutation,
   stopMutation,
   showConfig,
@@ -21,15 +23,18 @@ export function CrossArbitrageControls({
   showHistory,
   setShowHistory,
 }: CrossArbitrageControlsProps) {
+  const canStart = registeredCount >= 2
+
   return (
     <div className="flex flex-wrap items-center gap-2">
       {!isRunning ? (
         <button
           onClick={() => startMutation.mutate()}
-          disabled={startMutation.isPending}
+          disabled={startMutation.isPending || !canStart}
+          title={canStart ? '启动套利引擎' : '至少需要 2 个已加入套利的交易所'}
           className={cn(
             'flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors',
-            startMutation.isPending
+            startMutation.isPending || !canStart
               ? 'bg-muted text-muted-foreground cursor-not-allowed'
               : 'bg-green-500/20 text-green-400 hover:bg-green-500/30'
           )}

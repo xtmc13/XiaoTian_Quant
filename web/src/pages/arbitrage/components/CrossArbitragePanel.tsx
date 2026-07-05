@@ -36,13 +36,16 @@ export function CrossArbitragePanel() {
     isPositionActive,
     handleClosePosition,
     handleFailPosition,
+    Dialog,
   } = useCrossArbitrage()
 
   return (
     <div className="space-y-6">
+      <Dialog />
       <CrossArbitrageKPIs isRunning={isRunning} stats={stats} />
       <CrossArbitrageControls
         isRunning={isRunning}
+        registeredCount={exchangesMeta?.registered_count ?? 0}
         startMutation={startMutation}
         stopMutation={stopMutation}
         showConfig={showConfig}
@@ -50,20 +53,20 @@ export function CrossArbitragePanel() {
         showHistory={showHistory}
         setShowHistory={setShowHistory}
       />
-      {showConfig && (
-        <CrossArbitrageConfig
-          editConfig={editConfig}
-          setEditConfig={setEditConfig}
-          symbolsInput={symbolsInput}
-          setSymbolsInput={setSymbolsInput}
-          configuredExchanges={configuredExchanges}
-          exchangesMeta={exchangesMeta}
-          onSave={handleSaveConfig}
-          onRegister={handleRegisterExchange}
-          isSaving={updateConfigMut.isPending}
-          isRegistering={registerExchangeMut.isPending}
-        />
-      )}
+      <CrossArbitrageConfig
+        open={showConfig}
+        onClose={() => setShowConfig(false)}
+        editConfig={editConfig}
+        setEditConfig={setEditConfig}
+        symbolsInput={symbolsInput}
+        setSymbolsInput={setSymbolsInput}
+        configuredExchanges={configuredExchanges}
+        exchangesMeta={exchangesMeta}
+        onSave={handleSaveConfig}
+        onRegister={handleRegisterExchange}
+        isSaving={updateConfigMut.isPending}
+        isRegistering={registerExchangeMut.isPending}
+      />
       <CrossArbitrageOpportunities
         opportunity={opportunity}
         editConfig={editConfig}

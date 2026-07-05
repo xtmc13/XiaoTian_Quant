@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xiaotian-quant/gateway/internal/store"
 	"github.com/xiaotian-quant/gateway/internal/strategy"
 )
 
@@ -144,7 +145,35 @@ func GetIndices(c *gin.Context) {
 
 // GetExchanges returns supported exchange list with status.
 func GetExchanges(c *gin.Context) {
-	c.JSON(http.StatusOK, defaultExchanges)
+	cfg := store.GetConfig()
+	exchanges, _ := cfg["exchanges"].(map[string]any)
+
+	result := make(map[string]any)
+	for _, ex := range defaultExchanges["exchanges"].([]map[string]any) {
+		key := ex["key"].(string)
+		item := map[string]any{
+			"enabled":         false,
+			"has_credentials": false,
+			"testnet":         false,
+			"futures":         false,
+		}
+		if raw, ok := exchanges[key]; ok {
+			if m, ok := raw.(map[string]any); ok {
+				if v, ok := m["enabled"].(bool); ok {
+					item["enabled"] = v
+				}
+				if v, ok := m["testnet"].(bool); ok {
+					item["testnet"] = v
+				}
+				apiKey, _ := m["api_key"].(string)
+				secret, _ := m["secret"].(string)
+				item["has_credentials"] = apiKey != "" && secret != ""
+			}
+		}
+		result[key] = item
+	}
+
+	c.JSON(http.StatusOK, result)
 }
 
 // GetAIModels returns available AI model list.

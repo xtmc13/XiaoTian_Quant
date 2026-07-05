@@ -9,16 +9,38 @@ import { Skeleton } from '@/components/ui/Skeleton'
 import { toast } from '@/lib/useToast'
 import type { MLModelInfo, AIModel } from '@/types'
 import {
-  Play, Pause, FlaskConical, Code, Bot, MessageSquare,
-  LayoutDashboard, FolderOpen, Plus, Trash2, Activity, TrendingUp,
-  Send, Cpu, Sparkles, BarChart3, X, Zap, Layers,
-  Copy, RotateCcw, BrainCircuit, Vote, Gauge, Settings,
+  Play,
+  Pause,
+  FlaskConical,
+  Code,
+  Bot,
+  MessageSquare,
+  LayoutDashboard,
+  FolderOpen,
+  Plus,
+  Trash2,
+  Activity,
+  TrendingUp,
+  Send,
+  Cpu,
+  Sparkles,
+  BarChart3,
+  X,
+  Zap,
+  Layers,
+  Copy,
+  RotateCcw,
+  BrainCircuit,
+  Vote,
+  Gauge,
+  Settings,
   ChevronRight as ChevronRightIcon,
 } from 'lucide-react'
 import { useStrategyData } from '@/hooks/useStrategyData'
 import { StrategyList, StatusBadge, getStatusDot } from '@/components/strategy/StrategyList'
 import { StrategyDetailPanel } from '@/components/strategy/StrategyDetailPanel'
 import { StrategyCreateModal } from '@/components/strategy/StrategyCreateModal'
+import { StrategyCreatePanel } from '@/components/strategy/StrategyCreatePanel'
 import { StrategyEditor } from '@/components/strategy/StrategyEditor'
 import { FormField } from '@/components/strategy/StrategyFormFields'
 import type { StrategyItem } from '@/types'
@@ -48,15 +70,21 @@ const FALLBACK_MODELS = [
 /* ─── Helpers ─── */
 function useLocalStorage<T>(key: string, initial: T): [T, (v: T) => void] {
   const [val, setVal] = useState<T>(() => {
-    try { return JSON.parse(localStorage.getItem(key) || 'null') ?? initial } catch { return initial }
+    try {
+      return JSON.parse(localStorage.getItem(key) || 'null') ?? initial
+    } catch {
+      return initial
+    }
   })
-  useEffect(() => { localStorage.setItem(key, JSON.stringify(val)) }, [key, val])
+  useEffect(() => {
+    localStorage.setItem(key, JSON.stringify(val))
+  }, [key, val])
   return [val, setVal]
 }
 
 /* ─── Main Component ─── */
 export function Strategy() {
-  const [tab, setTab] = useState<typeof TABS[number]['key']>('overview')
+  const [tab, setTab] = useState<(typeof TABS)[number]['key']>('overview')
   const [guideDismissed, setGuideDismissed] = useLocalStorage('strategy-guide-dismissed', false)
 
   return (
@@ -110,11 +138,16 @@ function GuideBar({ onDismiss, onCreate }: { onDismiss: () => void; onCreate: ()
           <Sparkles className="w-3 h-3" /> 快速入门
         </div>
         <div className="text-sm font-bold text-foreground">三步创建你的第一个量化策略</div>
-        <div className="text-xs text-muted-foreground mt-1">跟随向导完成策略配置，支持指标信号、代码脚本和AI生成三种模式</div>
+        <div className="text-xs text-muted-foreground mt-1">
+          跟随向导完成策略配置，支持指标信号、代码脚本和AI生成三种模式
+        </div>
       </div>
       <div className="flex gap-3 flex-1 min-w-[300px]">
         {steps.map((s) => (
-          <div key={s.idx} className="flex-1 flex items-start gap-2.5 rounded-xl bg-quant-bg/60 border border-quant-border/40 p-3">
+          <div
+            key={s.idx}
+            className="flex-1 flex items-start gap-2.5 rounded-xl bg-quant-bg/60 border border-quant-border/40 p-3"
+          >
             <div className="w-6 h-6 rounded-full bg-gradient-to-br from-quant-gold to-purple-500 flex items-center justify-center text-[10px] font-bold text-white shrink-0">
               {s.idx}
             </div>
@@ -126,10 +159,17 @@ function GuideBar({ onDismiss, onCreate }: { onDismiss: () => void; onCreate: ()
         ))}
       </div>
       <div className="flex items-center gap-2 shrink-0">
-        <button onClick={onCreate} className="px-3 py-2 rounded-lg bg-quant-gold/10 text-quant-gold border border-quant-gold/20 text-xs font-medium hover:bg-quant-gold/20 transition-colors flex items-center gap-1.5">
+        <button
+          onClick={onCreate}
+          className="px-3 py-2 rounded-lg bg-quant-gold/10 text-quant-gold border border-quant-gold/20 text-xs font-medium hover:bg-quant-gold/20 transition-colors flex items-center gap-1.5"
+        >
           <Plus className="w-3.5 h-3.5" /> 创建策略
         </button>
-        <button onClick={onDismiss} aria-label="关闭提示" className="w-8 h-8 rounded-lg border border-quant-border flex items-center justify-center text-muted-foreground hover:text-foreground hover:border-quant-gold/30 transition-colors">
+        <button
+          onClick={onDismiss}
+          aria-label="关闭提示"
+          className="w-8 h-8 rounded-lg border border-quant-border flex items-center justify-center text-muted-foreground hover:text-foreground hover:border-quant-gold/30 transition-colors"
+        >
           <X className="w-3.5 h-3.5" />
         </button>
       </div>
@@ -158,7 +198,12 @@ function OverviewTab() {
             <StatCard icon={Layers} label="总策略数" value={String(list.length)} />
             <StatCard icon={Activity} label="运行中" value={String(running)} color="text-quant-green" />
             <StatCard icon={Pause} label="已停止" value={String(stopped)} color="text-muted-foreground" />
-            <StatCard icon={TrendingUp} label="总盈亏" value={totalPnl >= 0 ? `+$${totalPnl.toFixed(2)}` : `-$${Math.abs(totalPnl).toFixed(2)}`} color={totalPnl >= 0 ? 'text-quant-green' : 'text-quant-red'} />
+            <StatCard
+              icon={TrendingUp}
+              label="总盈亏"
+              value={totalPnl >= 0 ? `+$${totalPnl.toFixed(2)}` : `-$${Math.abs(totalPnl).toFixed(2)}`}
+              color={totalPnl >= 0 ? 'text-quant-green' : 'text-quant-red'}
+            />
           </>
         )}
       </div>
@@ -166,27 +211,39 @@ function OverviewTab() {
         title="最近活跃策略"
         headerAction={
           list.length > 5 ? (
-            <button onClick={() => navigate('/strategy?tab=strategy')} className="flex items-center gap-0.5 text-[10px] text-muted-foreground transition-colors hover:text-foreground">
+            <button
+              onClick={() => navigate('/strategy?tab=strategy')}
+              className="flex items-center gap-0.5 text-[10px] text-muted-foreground transition-colors hover:text-foreground"
+            >
               查看全部 <ChevronRightIcon className="h-3 w-3" />
             </button>
           ) : undefined
         }
       >
         {isLoading ? (
-          <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} variant="rect" height={44} />)}</div>
+          <div className="space-y-2">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Skeleton key={i} variant="rect" height={44} />
+            ))}
+          </div>
         ) : list.length === 0 ? (
           <EmptyState title="暂无策略" description="前往策略管理页创建你的第一个策略" />
         ) : (
           <div className="space-y-2">
             {list.slice(0, 5).map((s) => (
-              <div key={s.id} className="flex items-center justify-between px-3 py-2.5 rounded-lg bg-quant-bg-tertiary border border-quant-border hover:border-quant-gold/20 transition-colors">
+              <div
+                key={s.id}
+                className="flex items-center justify-between px-3 py-2.5 rounded-lg bg-quant-bg-tertiary border border-quant-border hover:border-quant-gold/20 transition-colors"
+              >
                 <div className="flex items-center gap-3 min-w-0">
                   <span className={cn('w-2 h-2 rounded-full', getStatusDot(s.status))} />
                   <span className="text-xs font-medium truncate">{s.name}</span>
                   <span className="text-[10px] text-muted-foreground">{s.symbol}</span>
                 </div>
                 <div className="flex items-center gap-3 text-xs">
-                  <span className={cn(s.total_pnl && s.total_pnl >= 0 ? 'text-quant-green' : 'text-quant-red')}>{s.total_pnl != null ? formatCurrency(s.total_pnl) : '-'}</span>
+                  <span className={cn(s.total_pnl && s.total_pnl >= 0 ? 'text-quant-green' : 'text-quant-red')}>
+                    {s.total_pnl != null ? formatCurrency(s.total_pnl) : '-'}
+                  </span>
                   <StatusBadge status={s.status} />
                 </div>
               </div>
@@ -198,7 +255,17 @@ function OverviewTab() {
   )
 }
 
-function StatCard({ icon: Icon, label, value, color }: { icon: React.ComponentType<{ className?: string }>; label: string; value: string; color?: string }) {
+function StatCard({
+  icon: Icon,
+  label,
+  value,
+  color,
+}: {
+  icon: React.ComponentType<{ className?: string }>
+  label: string
+  value: string
+  color?: string
+}) {
   return (
     <div className="rounded-xl border border-quant-border bg-quant-card p-4 flex items-center gap-3">
       <div className="w-10 h-10 rounded-lg bg-quant-bg-tertiary flex items-center justify-center text-quant-gold">
@@ -219,9 +286,16 @@ function StrategyManagementTab() {
   const { strategies, isLoading, start, stop, delete: del } = useStrategyData()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [showCreate, setShowCreate] = useState(false)
+  const [creatingType, setCreatingType] = useState<string | null>(null)
   const [editingStrategy, setEditingStrategy] = useState<StrategyItem | null>(null)
 
   const selected = strategies.find((s) => s.id === selectedId) || null
+
+  const handleCloseCreate = () => {
+    setShowCreate(false)
+    setCreatingType(null)
+    setEditingStrategy(null)
+  }
 
   return (
     <div className="h-full flex">
@@ -232,20 +306,36 @@ function StrategyManagementTab() {
         onSelect={setSelectedId}
         onStart={start}
         onStop={stop}
-        onEdit={(s) => { setEditingStrategy(s); setShowCreate(true) }}
+        onEdit={(s) => {
+          setEditingStrategy(s)
+          setShowCreate(true)
+        }}
         onDelete={del}
-        onCreate={() => { setEditingStrategy(null); setShowCreate(true) }}
+        onCreate={() => {
+          setEditingStrategy(null)
+          setShowCreate(true)
+        }}
+        onCreateType={(type) => {
+          setEditingStrategy(null)
+          setCreatingType(type)
+          setSelectedId(null)
+        }}
       />
 
-      <div className="flex-1 overflow-y-auto p-6">
-        {!selected ? (
+      <div className={cn('flex-1', creatingType ? 'overflow-hidden' : 'overflow-y-auto p-6')}>
+        {creatingType ? (
+          <StrategyCreatePanel strategyType={creatingType} onClose={handleCloseCreate} onSaved={handleCloseCreate} />
+        ) : !selected ? (
           <div className="h-full flex items-center justify-center">
             <EmptyState
               icon={<Bot className="w-6 h-6" />}
               title="选择或创建一个策略"
               description="从左侧列表选择策略查看详情，或点击创建按钮新建策略"
               actionLabel="创建策略"
-              onAction={() => { setEditingStrategy(null); setShowCreate(true) }}
+              onAction={() => {
+                setEditingStrategy(null)
+                setShowCreate(true)
+              }}
             />
           </div>
         ) : (
@@ -253,21 +343,41 @@ function StrategyManagementTab() {
             strategy={selected}
             onStart={() => start(selected.id)}
             onStop={() => stop(selected.id)}
-            onEdit={() => { setEditingStrategy(selected); setShowCreate(true) }}
-            onDelete={() => { if (confirm(`删除策略 "${selected.name}"？`)) del(selected.id) }}
+            onEdit={() => {
+              setEditingStrategy(selected)
+              setShowCreate(true)
+            }}
+            onDelete={() => {
+              if (confirm(`删除策略 "${selected.name}"？`)) del(selected.id)
+            }}
           />
         )}
       </div>
 
       {showCreate && (
-        <StrategyCreateModal
-          editing={editingStrategy}
-          onClose={() => { setShowCreate(false); setEditingStrategy(null) }}
-          onSaved={() => { setShowCreate(false); setEditingStrategy(null) }}
-        />
+        <StrategyCreateModal editing={editingStrategy} onClose={handleCloseCreate} onSaved={handleCloseCreate} />
       )}
     </div>
   )
+}
+
+function marketTypeFromType(strategyType: string): 'spot' | 'contract' {
+  const contractTypes = [
+    'trend_long',
+    'trend_short',
+    'counter_stable',
+    'counter_safe',
+    'high_frequency',
+    'head_tail_arbitrage',
+    'high_flat',
+    'macd_golden_long',
+    'macd_death_short',
+    'ema_follow_trend',
+    'ema_counter_trend',
+    'dual_burn',
+    'global_burn',
+  ]
+  return contractTypes.includes(strategyType) ? 'contract' : 'spot'
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -284,14 +394,17 @@ function MLStrategyTab() {
   const [mlError, setMlError] = useState<string | null>(null)
 
   useEffect(() => {
-    mlApi.list().then(models => {
-      setMlModels(models || [])
-      if (models?.length > 0 && !selectedMlModel) setSelectedMlModel(models[0].model_id)
-      setMlError(null)
-    }).catch((e: unknown) => {
-      setMlError('ML 服务不可用，请检查 ML Server 是否运行')
-      console.error('ML list error:', e)
-    })
+    mlApi
+      .list()
+      .then((models) => {
+        setMlModels(models || [])
+        if (models?.length > 0 && !selectedMlModel) setSelectedMlModel(models[0].model_id)
+        setMlError(null)
+      })
+      .catch((e: unknown) => {
+        setMlError('ML 服务不可用，请检查 ML Server 是否运行')
+        console.error('ML list error:', e)
+      })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -305,25 +418,43 @@ function MLStrategyTab() {
       setMlDeployed(true)
     } catch (e: unknown) {
       toast('error', '部署失败: ' + (e instanceof Error ? e.message : String(e)))
+    } finally {
+      setMlDeploying(false)
     }
-    finally { setMlDeploying(false) }
   }
 
   return (
     <div className="h-full overflow-y-auto p-6 space-y-5 max-w-4xl mx-auto">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <input value={strategyName} onChange={(e) => setStrategyName(e.target.value)} className="bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-sm w-56 focus:outline-none focus:border-quant-gold" />
-          <span className="px-2 py-1 bg-blue-500/10 text-blue-400 rounded text-[10px] font-medium border border-blue-500/20">ML 策略</span>
+          <input
+            value={strategyName}
+            onChange={(e) => setStrategyName(e.target.value)}
+            className="bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-sm w-56 focus:outline-none focus:border-quant-gold"
+          />
+          <span className="px-2 py-1 bg-blue-500/10 text-blue-400 rounded text-[10px] font-medium border border-blue-500/20">
+            ML 策略
+          </span>
         </div>
         {mlError && (
-          <div className="px-3 py-2 rounded-lg bg-quant-red/10 border border-quant-red/20 text-xs text-quant-red mb-2">{mlError}</div>
+          <div className="px-3 py-2 rounded-lg bg-quant-red/10 border border-quant-red/20 text-xs text-quant-red mb-2">
+            {mlError}
+          </div>
         )}
-        <button onClick={handleDeployMl} disabled={mlDeploying || !selectedMlModel || mlDeployed}
-          className={cn('px-4 py-2 rounded-lg text-xs font-medium transition-opacity',
-            mlDeployed ? 'bg-quant-green/20 text-quant-green cursor-default' :
-            !selectedMlModel ? 'bg-quant-bg-tertiary text-muted-foreground cursor-not-allowed' :
-            mlDeploying ? 'bg-quant-gold/50 text-white cursor-wait' : 'bg-quant-green text-white hover:opacity-90')}>
+        <button
+          onClick={handleDeployMl}
+          disabled={mlDeploying || !selectedMlModel || mlDeployed}
+          className={cn(
+            'px-4 py-2 rounded-lg text-xs font-medium transition-opacity',
+            mlDeployed
+              ? 'bg-quant-green/20 text-quant-green cursor-default'
+              : !selectedMlModel
+                ? 'bg-quant-bg-tertiary text-muted-foreground cursor-not-allowed'
+                : mlDeploying
+                  ? 'bg-quant-gold/50 text-white cursor-wait'
+                  : 'bg-quant-green text-white hover:opacity-90'
+          )}
+        >
           {mlDeployed ? '已部署 ✓' : mlDeploying ? '部署中...' : '部署 ML 策略'}
         </button>
       </div>
@@ -332,10 +463,15 @@ function MLStrategyTab() {
         <div className="space-y-4">
           <FormField label="选择已训练模型">
             {mlModels.length > 0 ? (
-              <select value={selectedMlModel} onChange={e => setSelectedMlModel(e.target.value)}
-                className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold">
+              <select
+                value={selectedMlModel}
+                onChange={(e) => setSelectedMlModel(e.target.value)}
+                className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold"
+              >
                 {mlModels.map((m: MLModelInfo) => (
-                  <option key={m.model_id} value={m.model_id}>{m.model_id} ({m.model_type} · {m.task_type})</option>
+                  <option key={m.model_id} value={m.model_id}>
+                    {m.model_id} ({m.model_type} · {m.task_type})
+                  </option>
                 ))}
               </select>
             ) : (
@@ -346,13 +482,22 @@ function MLStrategyTab() {
           </FormField>
           <div className="grid grid-cols-2 gap-4">
             <FormField label="交易对">
-              <input value={mlSymbol} onChange={e => setMlSymbol(e.target.value.toUpperCase())}
-                className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold" />
+              <input
+                value={mlSymbol}
+                onChange={(e) => setMlSymbol(e.target.value.toUpperCase())}
+                className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold"
+              />
             </FormField>
             <FormField label="最小置信度 (0~1)">
-              <input type="number" step={0.05} min={0} max={1} value={mlMinConfidence}
-                onChange={e => setMlMinConfidence(Number(e.target.value))}
-                className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold" />
+              <input
+                type="number"
+                step={0.05}
+                min={0}
+                max={1}
+                value={mlMinConfidence}
+                onChange={(e) => setMlMinConfidence(Number(e.target.value))}
+                className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold"
+              />
             </FormField>
           </div>
         </div>
@@ -395,10 +540,15 @@ function AIStrategyGeneratorTab() {
   const [voting, setVoting] = useState(false)
   const [confidence, setConfidence] = useState(78)
   const [messages, setMessages] = useState<ChatMessage[]>([
-    { role: 'bot', content: '你好！描述你的交易思路，我来帮你生成量化策略。\n\n例如："做一个BTC的网格策略，震荡区间30000-40000"' },
+    {
+      role: 'bot',
+      content: '你好！描述你的交易思路，我来帮你生成量化策略。\n\n例如："做一个BTC的网格策略，震荡区间30000-40000"',
+    },
   ])
   const [input, setInput] = useState('')
-  const [codeWorkspace, setCodeWorkspace] = useState(`class GridStrategy:\n    def on_init(self, ctx):\n        ctx.param('upper', 40000)\n        ctx.param('lower', 30000)\n        ctx.param('grids', 20)\n\n    def on_bar(self, ctx, bar):\n        price = bar.close\n        step = (self.upper - self.lower) / (self.grids - 1)\n        level = int((price - self.lower) / step)\n        # ...`)
+  const [codeWorkspace, setCodeWorkspace] = useState(
+    `class GridStrategy:\n    def on_init(self, ctx):\n        ctx.param('upper', 40000)\n        ctx.param('lower', 30000)\n        ctx.param('grids', 20)\n\n    def on_bar(self, ctx, bar):\n        price = bar.close\n        step = (self.upper - self.lower) / (self.grids - 1)\n        level = int((price - self.lower) / step)\n        # ...`
+  )
   const [generating, setGenerating] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -421,13 +571,16 @@ function AIStrategyGeneratorTab() {
       return (aiModels as AIModel[]).map((m: AIModel) => ({
         id: m.id,
         name: m.name || m.id,
-        color: m.provider === 'openai' ? 'text-green-400' : m.provider === 'anthropic' ? 'text-orange-400' : 'text-blue-400',
+        color:
+          m.provider === 'openai' ? 'text-green-400' : m.provider === 'anthropic' ? 'text-orange-400' : 'text-blue-400',
       }))
     }
     return FALLBACK_MODELS
   }, [aiModels])
 
-  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }) }, [messages])
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
+  }, [messages])
 
   const handleSend = async () => {
     if (!input.trim()) return
@@ -437,7 +590,11 @@ function AIStrategyGeneratorTab() {
     setGenerating(true)
     try {
       const res = await aiApi.chat(input)
-      const botMsg: ChatMessage = { role: 'bot', content: res?.reply || '正在分析您的交易思路...', meta: { model, confidence } }
+      const botMsg: ChatMessage = {
+        role: 'bot',
+        content: res?.reply || '正在分析您的交易思路...',
+        meta: { model, confidence },
+      }
       setMessages((prev) => [...prev, botMsg])
     } catch {
       setMessages((prev) => [...prev, { role: 'bot', content: '服务暂时不可用，请稍后重试。' }])
@@ -446,7 +603,15 @@ function AIStrategyGeneratorTab() {
     }
   }
 
-  const [backtestResult, setBacktestResult] = useState<{winRate?:number;maxDrawdown?:number;profitFactor?:number;sharpe?:number;totalReturn?:number;trades?:number;equityCurve?:{time:number;equity:number}[]}|null>(null)
+  const [backtestResult, setBacktestResult] = useState<{
+    winRate?: number
+    maxDrawdown?: number
+    profitFactor?: number
+    sharpe?: number
+    totalReturn?: number
+    trades?: number
+    equityCurve?: { time: number; equity: number }[]
+  } | null>(null)
   const [backtestLoading, setBacktestLoading] = useState(false)
 
   // Guess strategy type from code keywords
@@ -530,17 +695,37 @@ function AIStrategyGeneratorTab() {
           <span className="font-semibold text-sm">AI 策略生成器</span>
         </div>
         <div className="flex items-center gap-3">
-          <select value={model} onChange={(e) => setModel(e.target.value)} className="bg-quant-bg border border-quant-border rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-quant-gold">
-            {availableModels.map((m: {id: string; name: string; color: string}) => <option key={m.id} value={m.id}>{m.name}</option>)}
+          <select
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            className="bg-quant-bg border border-quant-border rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-quant-gold"
+          >
+            {availableModels.map((m: { id: string; name: string; color: string }) => (
+              <option key={m.id} value={m.id}>
+                {m.name}
+              </option>
+            ))}
           </select>
           <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
-            <input type="checkbox" checked={voting} onChange={(e) => setVoting(e.target.checked)} className="rounded border-quant-border" />
+            <input
+              type="checkbox"
+              checked={voting}
+              onChange={(e) => setVoting(e.target.checked)}
+              className="rounded border-quant-border"
+            />
             <Vote className="w-3 h-3" /> 多模型投票
           </label>
           <div className="flex items-center gap-2">
             <Gauge className="w-3.5 h-3.5 text-muted-foreground" />
             <span className="text-xs text-muted-foreground">置信度</span>
-            <input type="range" min={50} max={100} value={confidence} onChange={(e) => setConfidence(Number(e.target.value))} className="w-20 accent-quant-gold" />
+            <input
+              type="range"
+              min={50}
+              max={100}
+              value={confidence}
+              onChange={(e) => setConfidence(Number(e.target.value))}
+              className="w-20 accent-quant-gold"
+            />
             <span className="text-xs font-mono w-8">{confidence}%</span>
           </div>
         </div>
@@ -554,9 +739,18 @@ function AIStrategyGeneratorTab() {
             {messages.map((msg, i) => (
               <div key={i} className={cn('flex gap-3', msg.role === 'user' ? 'justify-end' : '')}>
                 {msg.role === 'bot' && (
-                  <div className="w-8 h-8 rounded-full bg-quant-gold/20 flex items-center justify-center text-sm shrink-0">🤖</div>
+                  <div className="w-8 h-8 rounded-full bg-quant-gold/20 flex items-center justify-center text-sm shrink-0">
+                    🤖
+                  </div>
                 )}
-                <div className={cn('max-w-[75%] rounded-xl px-4 py-3 text-xs leading-relaxed whitespace-pre-wrap border', msg.role === 'user' ? 'bg-quant-gold/10 border-quant-gold/20 text-foreground' : 'bg-quant-card border-quant-border')}>
+                <div
+                  className={cn(
+                    'max-w-[75%] rounded-xl px-4 py-3 text-xs leading-relaxed whitespace-pre-wrap border',
+                    msg.role === 'user'
+                      ? 'bg-quant-gold/10 border-quant-gold/20 text-foreground'
+                      : 'bg-quant-card border-quant-border'
+                  )}
+                >
                   {msg.content}
                   {msg.meta && (
                     <div className="mt-2 pt-2 border-t border-quant-border/50 flex items-center gap-2 text-[10px] text-muted-foreground">
@@ -568,8 +762,12 @@ function AIStrategyGeneratorTab() {
             ))}
             {generating && (
               <div className="flex gap-3">
-                <div className="w-8 h-8 rounded-full bg-quant-gold/20 flex items-center justify-center text-sm shrink-0">🤖</div>
-                <div className="bg-quant-card border border-quant-border rounded-xl px-4 py-3 text-xs text-muted-foreground">思考中...</div>
+                <div className="w-8 h-8 rounded-full bg-quant-gold/20 flex items-center justify-center text-sm shrink-0">
+                  🤖
+                </div>
+                <div className="bg-quant-card border border-quant-border rounded-xl px-4 py-3 text-xs text-muted-foreground">
+                  思考中...
+                </div>
               </div>
             )}
           </div>
@@ -582,7 +780,11 @@ function AIStrategyGeneratorTab() {
                 placeholder="描述你的交易思路..."
                 className="flex-1 bg-quant-bg border border-quant-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-quant-gold"
               />
-              <button onClick={handleSend} disabled={generating} className="px-4 py-2.5 bg-quant-gold text-white rounded-lg hover:opacity-90 disabled:opacity-50 transition-opacity">
+              <button
+                onClick={handleSend}
+                disabled={generating}
+                className="px-4 py-2.5 bg-quant-gold text-white rounded-lg hover:opacity-90 disabled:opacity-50 transition-opacity"
+              >
                 <Send className="w-4 h-4" />
               </button>
             </div>
@@ -593,22 +795,86 @@ function AIStrategyGeneratorTab() {
         <div className="w-[480px] shrink-0 bg-quant-bg-secondary flex flex-col gap-4 overflow-y-auto p-4 min-h-0">
           <SectionCard title="策略概览" className="shrink-0">
             <div className="space-y-2 text-xs text-muted-foreground">
-              <div className="flex justify-between"><span>策略类型</span><span className="text-foreground">{guessedStrategyType}</span></div>
-              <div className="flex justify-between"><span>预期胜率</span><span className={cn("font-mono", (backtestResult?.winRate ?? 0) >= 50 ? "text-quant-green" : "text-quant-red")}>{backtestResult?.winRate != null ? `${backtestResult.winRate.toFixed(1)}%` : '未回测'}</span></div>
-              <div className="flex justify-between"><span>最大回撤</span><span className={cn("font-mono", (backtestResult?.maxDrawdown ?? 0) > 20 ? "text-quant-red" : "text-quant-green")}>{backtestResult?.maxDrawdown != null ? `${backtestResult.maxDrawdown.toFixed(1)}%` : '未回测'}</span></div>
-              <div className="flex justify-between"><span>盈亏比</span><span className="text-foreground font-mono">{backtestResult?.profitFactor != null ? `${backtestResult.profitFactor.toFixed(2)}:1` : '未回测'}</span></div>
-              <div className="flex justify-between"><span>夏普比率</span><span className="text-foreground font-mono">{backtestResult?.sharpe != null ? backtestResult.sharpe.toFixed(2) : '未回测'}</span></div>
-              <div className="flex justify-between"><span>总收益</span><span className={cn("font-mono", (backtestResult?.totalReturn ?? 0) >= 0 ? "text-quant-green" : "text-quant-red")}>{backtestResult?.totalReturn != null ? `${backtestResult.totalReturn >= 0 ? '+' : ''}${backtestResult.totalReturn.toFixed(1)}%` : '未回测'}</span></div>
-              <div className="flex justify-between"><span>交易次数</span><span className="text-foreground font-mono">{backtestResult?.trades ?? '未回测'}</span></div>
+              <div className="flex justify-between">
+                <span>策略类型</span>
+                <span className="text-foreground">{guessedStrategyType}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>预期胜率</span>
+                <span
+                  className={cn(
+                    'font-mono',
+                    (backtestResult?.winRate ?? 0) >= 50 ? 'text-quant-green' : 'text-quant-red'
+                  )}
+                >
+                  {backtestResult?.winRate != null ? `${backtestResult.winRate.toFixed(1)}%` : '未回测'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span>最大回撤</span>
+                <span
+                  className={cn(
+                    'font-mono',
+                    (backtestResult?.maxDrawdown ?? 0) > 20 ? 'text-quant-red' : 'text-quant-green'
+                  )}
+                >
+                  {backtestResult?.maxDrawdown != null ? `${backtestResult.maxDrawdown.toFixed(1)}%` : '未回测'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span>盈亏比</span>
+                <span className="text-foreground font-mono">
+                  {backtestResult?.profitFactor != null ? `${backtestResult.profitFactor.toFixed(2)}:1` : '未回测'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span>夏普比率</span>
+                <span className="text-foreground font-mono">
+                  {backtestResult?.sharpe != null ? backtestResult.sharpe.toFixed(2) : '未回测'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span>总收益</span>
+                <span
+                  className={cn(
+                    'font-mono',
+                    (backtestResult?.totalReturn ?? 0) >= 0 ? 'text-quant-green' : 'text-quant-red'
+                  )}
+                >
+                  {backtestResult?.totalReturn != null
+                    ? `${backtestResult.totalReturn >= 0 ? '+' : ''}${backtestResult.totalReturn.toFixed(1)}%`
+                    : '未回测'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span>交易次数</span>
+                <span className="text-foreground font-mono">{backtestResult?.trades ?? '未回测'}</span>
+              </div>
             </div>
           </SectionCard>
 
-          <SectionCard title="代码工作区" className="flex-1 flex flex-col min-h-0" bodyClassName="flex-1 flex flex-col min-h-0 p-5">
+          <SectionCard
+            title="代码工作区"
+            className="flex-1 flex flex-col min-h-0"
+            bodyClassName="flex-1 flex flex-col min-h-0 p-5"
+          >
             <div className="flex items-center justify-between mb-2">
               <span className="text-[10px] text-muted-foreground">Python</span>
               <div className="flex gap-1">
-                <button onClick={() => navigator.clipboard.writeText(codeWorkspace)} className="p-1 rounded hover:bg-quant-hover text-muted-foreground" title="复制"><Copy className="w-3 h-3" /></button>
-                <button onClick={() => setCodeWorkspace('')} className="p-1 rounded hover:bg-quant-hover text-muted-foreground" title="清空"><Trash2 className="w-3 h-3" /></button>
+                <button
+                  onClick={() => navigator.clipboard.writeText(codeWorkspace)}
+                  className="p-1 rounded hover:bg-quant-hover text-muted-foreground"
+                  title="复制"
+                >
+                  <Copy className="w-3 h-3" />
+                </button>
+                <button
+                  onClick={() => setCodeWorkspace('')}
+                  className="p-1 rounded hover:bg-quant-hover text-muted-foreground"
+                  title="清空"
+                >
+                  <Trash2 className="w-3 h-3" />
+                </button>
               </div>
             </div>
             <textarea
@@ -620,13 +886,33 @@ function AIStrategyGeneratorTab() {
           </SectionCard>
 
           <div className="flex gap-2 shrink-0">
-            <button onClick={() => setShowBtConfig(!showBtConfig)} className={cn("px-3 py-2.5 rounded-lg text-xs font-medium flex items-center gap-1.5 border transition-colors", showBtConfig ? "bg-quant-gold/10 text-quant-gold border-quant-gold/20" : "bg-quant-bg-secondary border-quant-border text-muted-foreground hover:text-foreground")}>
+            <button
+              onClick={() => setShowBtConfig(!showBtConfig)}
+              className={cn(
+                'px-3 py-2.5 rounded-lg text-xs font-medium flex items-center gap-1.5 border transition-colors',
+                showBtConfig
+                  ? 'bg-quant-gold/10 text-quant-gold border-quant-gold/20'
+                  : 'bg-quant-bg-secondary border-quant-border text-muted-foreground hover:text-foreground'
+              )}
+            >
               <Settings className="w-3.5 h-3.5" /> 回测配置
             </button>
-            <button onClick={handleBacktest} disabled={backtestLoading || !codeWorkspace.trim()} className={cn("flex-1 py-2.5 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5 transition-colors", backtestLoading ? "bg-quant-gold/30 text-quant-gold cursor-wait" : "bg-quant-gold/10 text-quant-gold border border-quant-gold/20 hover:bg-quant-gold/20")}>
+            <button
+              onClick={handleBacktest}
+              disabled={backtestLoading || !codeWorkspace.trim()}
+              className={cn(
+                'flex-1 py-2.5 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5 transition-colors',
+                backtestLoading
+                  ? 'bg-quant-gold/30 text-quant-gold cursor-wait'
+                  : 'bg-quant-gold/10 text-quant-gold border border-quant-gold/20 hover:bg-quant-gold/20'
+              )}
+            >
               <BarChart3 className="w-3.5 h-3.5" /> {backtestLoading ? '回测中...' : '回测'}
             </button>
-            <button onClick={handleDeploy} className="flex-1 py-2.5 bg-quant-green text-white rounded-lg text-xs font-medium hover:opacity-90 flex items-center justify-center gap-1.5 transition-opacity">
+            <button
+              onClick={handleDeploy}
+              className="flex-1 py-2.5 bg-quant-green text-white rounded-lg text-xs font-medium hover:opacity-90 flex items-center justify-center gap-1.5 transition-opacity"
+            >
               <Play className="w-3.5 h-3.5" /> 部署
             </button>
           </div>
@@ -634,17 +920,35 @@ function AIStrategyGeneratorTab() {
             <div className="grid grid-cols-3 gap-3 p-3 bg-quant-bg border border-quant-border rounded-lg shrink-0">
               <div>
                 <label className="text-[10px] text-muted-foreground mb-1 block">交易对</label>
-                <input value={btSymbol} onChange={(e) => setBtSymbol(e.target.value.toUpperCase())} className="w-full bg-quant-bg-secondary border border-quant-border rounded px-2 py-1 text-xs focus:outline-none focus:border-quant-gold" placeholder="BTCUSDT" />
+                <input
+                  value={btSymbol}
+                  onChange={(e) => setBtSymbol(e.target.value.toUpperCase())}
+                  className="w-full bg-quant-bg-secondary border border-quant-border rounded px-2 py-1 text-xs focus:outline-none focus:border-quant-gold"
+                  placeholder="BTCUSDT"
+                />
               </div>
               <div>
                 <label className="text-[10px] text-muted-foreground mb-1 block">周期</label>
-                <select value={btInterval} onChange={(e) => setBtInterval(e.target.value)} className="w-full bg-quant-bg-secondary border border-quant-border rounded px-2 py-1 text-xs focus:outline-none focus:border-quant-gold">
-                  {['1m','5m','15m','30m','1h','4h','1d'].map(i => <option key={i} value={i}>{i}</option>)}
+                <select
+                  value={btInterval}
+                  onChange={(e) => setBtInterval(e.target.value)}
+                  className="w-full bg-quant-bg-secondary border border-quant-border rounded px-2 py-1 text-xs focus:outline-none focus:border-quant-gold"
+                >
+                  {['1m', '5m', '15m', '30m', '1h', '4h', '1d'].map((i) => (
+                    <option key={i} value={i}>
+                      {i}
+                    </option>
+                  ))}
                 </select>
               </div>
               <div>
                 <label className="text-[10px] text-muted-foreground mb-1 block">初始资金</label>
-                <input type="number" value={btBalance} onChange={(e) => setBtBalance(Number(e.target.value))} className="w-full bg-quant-bg-secondary border border-quant-border rounded px-2 py-1 text-xs focus:outline-none focus:border-quant-gold" />
+                <input
+                  type="number"
+                  value={btBalance}
+                  onChange={(e) => setBtBalance(Number(e.target.value))}
+                  className="w-full bg-quant-bg-secondary border border-quant-border rounded px-2 py-1 text-xs focus:outline-none focus:border-quant-gold"
+                />
               </div>
             </div>
           )}

@@ -18,28 +18,20 @@ export type StrategyRow = StrategyItem & {
 }
 
 export const STRAT_TYPES: Record<string, { value: string; label: string }[]> = {
-  contract: [
-    { value: 'trend_long', label: '顺势做多（EMA金叉）' },
-    { value: 'trend_short', label: '顺势做空（EMA死叉）' },
-    { value: 'counter_stable', label: '逆势稳健（EMA60振幅）' },
-    { value: 'counter_safe', label: '逆势保守' },
-    { value: 'high_flat', label: '高平策略' },
-    { value: 'head_tail_arb', label: '首尾套利' },
-    { value: 'macd_golden_long', label: 'MACD金叉开多' },
-    { value: 'macd_death_short', label: 'MACD死叉开空' },
-    { value: 'ema_follow_trend', label: 'EMA顺势（拐点开仓）' },
-    { value: 'ema_counter_trend', label: 'EMA逆势（振幅开仓）' },
-    { value: 'dual_burn', label: '双向燃烧斩仓' },
-    { value: 'global_burn', label: '超级全局燃烧斩仓' },
-  ],
   spot: [
-    { value: 'martin_trend', label: '马丁趋势策略（倍投2,4,8,16,32,64）' },
-    { value: 'wallstreet', label: '华尔街策略（等比1,2,3,5,8,13,21,34,55）' },
-    { value: 'aggressive', label: '激进策略' },
-    { value: 'conservative', label: '保守策略' },
-    { value: 'high_flat', label: '高平策略' },
-    { value: 'macd_spot_long', label: 'MACD金叉开多' },
-    { value: 'ema_spot', label: 'EMA拐点策略' },
+    { value: 'martin_trend', label: '马丁趋势' },
+    { value: 'wallstreet', label: '华尔街' },
+    { value: 'aggressive', label: '激进' },
+    { value: 'conservative', label: '保守' },
+    { value: 'high_frequency', label: '高频' },
+  ],
+  contract: [
+    { value: 'trend_long', label: '顺势多' },
+    { value: 'trend_short', label: '顺势空' },
+    { value: 'counter_stable', label: '逆势稳健' },
+    { value: 'counter_safe', label: '逆势保守' },
+    { value: 'high_frequency', label: '高频策略' },
+    { value: 'head_tail_arbitrage', label: '首尾套利' },
   ],
 }
 
@@ -81,49 +73,95 @@ export function Toggle({ value, onChange }: { value: boolean; onChange: (v: bool
       onClick={() => onChange(!value)}
       className={cn('w-10 h-5 rounded-full relative transition-colors', value ? 'bg-quant-gold' : 'bg-quant-border')}
     >
-      <span className={cn('absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform', value ? 'left-5' : 'left-0.5')} />
+      <span
+        className={cn(
+          'absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform',
+          value ? 'left-5' : 'left-0.5'
+        )}
+      />
     </button>
   )
 }
 
-export function DynamicParamField({ def, value, onChange }: { def: StrategyParamDef; value: unknown; onChange: (val: unknown) => void }) {
+export function DynamicParamField({
+  def,
+  value,
+  onChange,
+}: {
+  def: StrategyParamDef
+  value: unknown
+  onChange: (val: unknown) => void
+}) {
   const label = def.label || def.name
   const desc = def.description
-  const inputCls = "w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold"
+  const inputCls =
+    'w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold'
   switch (def.type) {
     case 'int':
       return (
         <FormField label={label}>
-          <input type="number" min={def.min} max={def.max} step={def.step || 1} value={Number(value ?? (def.default as number) ?? 0)} onChange={(e) => onChange(Number(e.target.value))} className={inputCls} />
+          <input
+            type="number"
+            min={def.min}
+            max={def.max}
+            step={def.step || 1}
+            value={Number(value ?? (def.default as number) ?? 0)}
+            onChange={(e) => onChange(Number(e.target.value))}
+            className={inputCls}
+          />
           {desc && <p className="text-[10px] text-muted-foreground mt-1">{desc}</p>}
         </FormField>
       )
     case 'float':
       return (
         <FormField label={label}>
-          <input type="number" min={def.min} max={def.max} step={def.step || 0.01} value={Number(value ?? (def.default as number) ?? 0)} onChange={(e) => onChange(Number(e.target.value))} className={inputCls} />
+          <input
+            type="number"
+            min={def.min}
+            max={def.max}
+            step={def.step || 0.01}
+            value={Number(value ?? (def.default as number) ?? 0)}
+            onChange={(e) => onChange(Number(e.target.value))}
+            className={inputCls}
+          />
           {desc && <p className="text-[10px] text-muted-foreground mt-1">{desc}</p>}
         </FormField>
       )
     case 'string':
       return (
         <FormField label={label}>
-          <input type="text" value={String(value ?? (def.default as string) ?? '')} onChange={(e) => onChange(e.target.value)} className={inputCls} />
+          <input
+            type="text"
+            value={String(value ?? (def.default as string) ?? '')}
+            onChange={(e) => onChange(e.target.value)}
+            className={inputCls}
+          />
           {desc && <p className="text-[10px] text-muted-foreground mt-1">{desc}</p>}
         </FormField>
       )
     case 'bool':
       return (
         <label className="flex items-center justify-between rounded-lg border border-quant-border bg-quant-bg p-3">
-          <div><div className="text-xs font-medium">{label}</div>{desc && <div className="text-[10px] text-muted-foreground">{desc}</div>}</div>
+          <div>
+            <div className="text-xs font-medium">{label}</div>
+            {desc && <div className="text-[10px] text-muted-foreground">{desc}</div>}
+          </div>
           <Toggle value={Boolean(value ?? (def.default as boolean) ?? false)} onChange={onChange} />
         </label>
       )
     case 'enum':
       return (
         <FormField label={label}>
-          <select value={String(value ?? (def.default as string) ?? '')} onChange={(e) => onChange(e.target.value)} className={inputCls}>
-            {(def.options || []).map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+          <select
+            value={String(value ?? (def.default as string) ?? '')}
+            onChange={(e) => onChange(e.target.value)}
+            className={inputCls}
+          >
+            {(def.options || []).map((opt) => (
+              <option key={opt} value={opt}>
+                {opt}
+              </option>
+            ))}
           </select>
           {desc && <p className="text-[10px] text-muted-foreground mt-1">{desc}</p>}
         </FormField>
@@ -131,7 +169,12 @@ export function DynamicParamField({ def, value, onChange }: { def: StrategyParam
     default:
       return (
         <FormField label={label}>
-          <input type="text" value={String(value ?? def.default ?? '')} onChange={(e) => onChange(e.target.value)} className={inputCls} />
+          <input
+            type="text"
+            value={String(value ?? def.default ?? '')}
+            onChange={(e) => onChange(e.target.value)}
+            className={inputCls}
+          />
         </FormField>
       )
   }

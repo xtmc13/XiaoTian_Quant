@@ -138,7 +138,7 @@ export function ExchangeAccount() {
 
   const balances: BalanceItem[] = useMemo(() => {
     const raw = balanceData?.balances || balanceData?.currencies || []
-    return (raw || []).map((b: Record<string, unknown>) => ({
+    return (raw || []).map((b: any) => ({
       asset: (b.asset || b.currency || '') as string,
       free: Number(b.free ?? b.available ?? 0),
       total: Number(b.total ?? 0),
@@ -147,44 +147,44 @@ export function ExchangeAccount() {
 
   const positions: PositionItem[] = useMemo(() => {
     const raw = positionsData?.positions || positionsData || []
-    return (Array.isArray(raw) ? raw : []).map((p: Record<string, unknown>) => ({
-      symbol: (p.symbol || '') as string,
+    return (Array.isArray(raw) ? raw : []).map((p) => ({
+      symbol: p.symbol || '',
       quantity: Number(p.quantity ?? 0),
       avg_entry_price: Number(p.avg_entry_price ?? p.entry_price ?? 0),
       current_price: p.current_price != null ? Number(p.current_price) : prices[(p.symbol as string) || '']?.price,
       unrealized_pnl: Number(p.unrealized_pnl ?? 0),
       realized_pnl: Number(p.realized_pnl ?? 0),
-    } as PositionItem))
+    }))
   }, [positionsData, prices])
 
   const orders: OrderItem[] = useMemo(() => {
     const raw = ordersData || []
-    return (Array.isArray(raw) ? raw : []).map((o: Record<string, unknown>) => ({
+    return (Array.isArray(raw) ? raw : []).map((o) => ({
       id: (o.id || o.order_id || '') as string,
-      symbol: (o.symbol || '') as string,
+      symbol: o.symbol || '',
       side: (o.side || 'BUY') as 'BUY' | 'SELL',
       type: (o.type || o.order_type || 'LIMIT') as string,
       price: Number(o.price ?? 0),
       quantity: Number(o.quantity ?? 0),
       filled_quantity: Number(o.filled_quantity ?? 0),
       status: (o.status || 'PENDING') as string,
-      created_at: o.created_at as string | undefined,
-    } as OrderItem))
+      created_at: o.created_at,
+    }))
   }, [ordersData])
 
   const history: OrderItem[] = useMemo(() => {
     const raw = historyData || []
-    return (Array.isArray(raw) ? raw : []).map((o: Record<string, unknown>) => ({
+    return (Array.isArray(raw) ? raw : []).map((o) => ({
       id: (o.id || o.order_id || '') as string,
-      symbol: (o.symbol || '') as string,
+      symbol: o.symbol || '',
       side: (o.side || 'BUY') as 'BUY' | 'SELL',
       type: (o.type || o.order_type || 'LIMIT') as string,
       price: Number(o.avg_price ?? o.price ?? 0),
       quantity: Number(o.filled_quantity ?? o.quantity ?? 0),
       filled_quantity: Number(o.filled_quantity ?? 0),
       status: (o.status || 'FILLED') as string,
-      created_at: (o.created_at || o.updated_at) as string | undefined,
-    } as OrderItem))
+      created_at: o.created_at || o.updated_at,
+    }))
   }, [historyData])
 
   /* ── Computed KPIs ── */
@@ -205,7 +205,9 @@ export function ExchangeAccount() {
             <button
               onClick={() => setShowSignupModal(true)}
               className="px-3 py-1.5 rounded-lg bg-quant-gold/10 text-quant-gold border border-quant-gold/20 text-xs hover:bg-quant-gold/20 transition-colors"
-            >注册交易所</button>
+            >
+              注册交易所
+            </button>
             {isConnected ? (
               <span className="flex items-center gap-1.5 rounded-full border border-quant-green/20 bg-quant-green/10 px-2.5 py-1 text-[10px] font-medium text-quant-green">
                 <Wifi className="h-3 w-3" />
@@ -242,7 +244,13 @@ export function ExchangeAccount() {
                 trend="neutral"
               />
               <KPICard
-                icon={totalUnrealizedPnl >= 0 ? <TrendingUp className="h-4 w-4 text-emerald-400" /> : <TrendingDown className="h-4 w-4 text-red-400" />}
+                icon={
+                  totalUnrealizedPnl >= 0 ? (
+                    <TrendingUp className="h-4 w-4 text-emerald-400" />
+                  ) : (
+                    <TrendingDown className="h-4 w-4 text-red-400" />
+                  )
+                }
                 label="未实现盈亏"
                 value={`${totalUnrealizedPnl >= 0 ? '+' : ''}$${formatCurrency(totalUnrealizedPnl)}`}
                 trend={totalUnrealizedPnl >= 0 ? 'up' : 'down'}
@@ -324,7 +332,12 @@ export function ExchangeAccount() {
             title="实时行情"
             headerAction={
               <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
-                <span className={cn('inline-block h-1.5 w-1.5 rounded-full', isConnected ? 'bg-quant-green animate-pulse' : 'bg-quant-red')} />
+                <span
+                  className={cn(
+                    'inline-block h-1.5 w-1.5 rounded-full',
+                    isConnected ? 'bg-quant-green animate-pulse' : 'bg-quant-red'
+                  )}
+                />
                 {isConnected ? '实时' : '断开'}
               </span>
             }
@@ -360,11 +373,13 @@ export function ExchangeAccount() {
           title="交易明细"
           headerAction={
             <div className="flex items-center gap-1">
-              {([
-                { key: 'positions', label: '持仓', icon: Layers, count: positions.length },
-                { key: 'orders', label: '当前委托', icon: List, count: orders.length },
-                { key: 'history', label: '历史成交', icon: CheckCircle2, count: history.length },
-              ] as const).map((t) => (
+              {(
+                [
+                  { key: 'positions', label: '持仓', icon: Layers, count: positions.length },
+                  { key: 'orders', label: '当前委托', icon: List, count: orders.length },
+                  { key: 'history', label: '历史成交', icon: CheckCircle2, count: history.length },
+                ] as const
+              ).map((t) => (
                 <button
                   key={t.key}
                   onClick={() => setActiveTab(t.key)}
@@ -381,7 +396,9 @@ export function ExchangeAccount() {
                     <span
                       className={cn(
                         'ml-0.5 rounded-full px-1 py-0 text-[9px] font-bold',
-                        activeTab === t.key ? 'bg-quant-gold/20 text-quant-gold' : 'bg-quant-bg-tertiary text-muted-foreground'
+                        activeTab === t.key
+                          ? 'bg-quant-gold/20 text-quant-gold'
+                          : 'bg-quant-bg-tertiary text-muted-foreground'
                       )}
                     >
                       {t.count}
@@ -405,27 +422,66 @@ export function ExchangeAccount() {
                 <DataTable<PositionItem>
                   data={positions}
                   columns={[
-                    { key: 'symbol', title: '币种', render: (p) => <span className="font-semibold text-white">{p.symbol}</span> },
-                    { key: 'quantity', title: '持仓量', render: (p) => <span className="font-mono">{p.quantity.toFixed(4)}</span> },
-                    { key: 'entry', title: '开仓价', render: (p) => <span className="font-mono text-muted-foreground">${formatCurrency(p.avg_entry_price)}</span> },
-                    { key: 'current', title: '当前价', render: (p) => <span className="font-mono text-white">${formatCurrency(p.current_price || prices[p.symbol]?.price || 0)}</span> },
-                    { key: 'unrealized', title: '未实现盈亏', render: (p) => {
-                      const pnl = p.unrealized_pnl || 0
-                      const pnlPct = p.avg_entry_price && p.avg_entry_price > 0 ? (pnl / (p.avg_entry_price * p.quantity)) * 100 : 0
-                      return (
-                        <span className={cn('font-mono font-bold', pnl >= 0 ? 'text-quant-green' : 'text-quant-red')}>
-                          <span className="flex items-center gap-1">
-                            {pnl >= 0 ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
-                            {pnl >= 0 ? '+' : ''}${formatCurrency(pnl)} ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)
-                          </span>
+                    {
+                      key: 'symbol',
+                      title: '币种',
+                      render: (p) => <span className="font-semibold text-white">{p.symbol}</span>,
+                    },
+                    {
+                      key: 'quantity',
+                      title: '持仓量',
+                      render: (p) => <span className="font-mono">{p.quantity.toFixed(4)}</span>,
+                    },
+                    {
+                      key: 'entry',
+                      title: '开仓价',
+                      render: (p) => (
+                        <span className="font-mono text-muted-foreground">${formatCurrency(p.avg_entry_price)}</span>
+                      ),
+                    },
+                    {
+                      key: 'current',
+                      title: '当前价',
+                      render: (p) => (
+                        <span className="font-mono text-white">
+                          ${formatCurrency(p.current_price || prices[p.symbol]?.price || 0)}
                         </span>
-                      )
-                    }},
-                    { key: 'realized', title: '已实现盈亏', render: (p) => (
-                      <span className={cn('font-mono', (p.realized_pnl || 0) >= 0 ? 'text-quant-green' : 'text-quant-red')}>
-                        {(p.realized_pnl || 0) >= 0 ? '+' : ''}${formatCurrency(p.realized_pnl || 0)}
-                      </span>
-                    )},
+                      ),
+                    },
+                    {
+                      key: 'unrealized',
+                      title: '未实现盈亏',
+                      render: (p) => {
+                        const pnl = p.unrealized_pnl || 0
+                        const pnlPct =
+                          p.avg_entry_price && p.avg_entry_price > 0
+                            ? (pnl / (p.avg_entry_price * p.quantity)) * 100
+                            : 0
+                        return (
+                          <span className={cn('font-mono font-bold', pnl >= 0 ? 'text-quant-green' : 'text-quant-red')}>
+                            <span className="flex items-center gap-1">
+                              {pnl >= 0 ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
+                              {pnl >= 0 ? '+' : ''}${formatCurrency(pnl)} ({pnlPct >= 0 ? '+' : ''}
+                              {pnlPct.toFixed(2)}%)
+                            </span>
+                          </span>
+                        )
+                      },
+                    },
+                    {
+                      key: 'realized',
+                      title: '已实现盈亏',
+                      render: (p) => (
+                        <span
+                          className={cn(
+                            'font-mono',
+                            (p.realized_pnl || 0) >= 0 ? 'text-quant-green' : 'text-quant-red'
+                          )}
+                        >
+                          {(p.realized_pnl || 0) >= 0 ? '+' : ''}${formatCurrency(p.realized_pnl || 0)}
+                        </span>
+                      ),
+                    },
                   ]}
                   keyExtractor={(p) => p.symbol}
                 />
@@ -448,17 +504,58 @@ export function ExchangeAccount() {
                 <DataTable<OrderItem>
                   data={orders}
                   columns={[
-                    { key: 'time', title: '时间', render: (o) => <span className="text-muted-foreground">{o.created_at ? new Date(o.created_at).toLocaleString() : '-'}</span> },
-                    { key: 'symbol', title: '币种', render: (o) => <span className="font-semibold text-white">{o.symbol}</span> },
-                    { key: 'side', title: '方向', render: (o) => (
-                      <span className={cn('px-1.5 py-0.5 rounded text-[10px] font-bold', o.side === 'BUY' ? 'bg-quant-green/10 text-quant-green' : 'bg-quant-red/10 text-quant-red')}>
-                        {o.side === 'BUY' ? '买入' : '卖出'}
-                      </span>
-                    )},
-                    { key: 'type', title: '类型', render: (o) => <span className="text-muted-foreground">{o.type}</span> },
-                    { key: 'price', title: '价格', render: (o) => <span className="font-mono">${formatCurrency(o.price)}</span> },
-                    { key: 'quantity', title: '数量', render: (o) => <span className="font-mono">{o.quantity.toFixed(4)}</span> },
-                    { key: 'filled', title: '已成交', render: (o) => <span className="font-mono text-muted-foreground">{o.filled_quantity ? o.filled_quantity.toFixed(4) : '0.0000'}</span> },
+                    {
+                      key: 'time',
+                      title: '时间',
+                      render: (o) => (
+                        <span className="text-muted-foreground">
+                          {o.created_at ? new Date(o.created_at).toLocaleString() : '-'}
+                        </span>
+                      ),
+                    },
+                    {
+                      key: 'symbol',
+                      title: '币种',
+                      render: (o) => <span className="font-semibold text-white">{o.symbol}</span>,
+                    },
+                    {
+                      key: 'side',
+                      title: '方向',
+                      render: (o) => (
+                        <span
+                          className={cn(
+                            'px-1.5 py-0.5 rounded text-[10px] font-bold',
+                            o.side === 'BUY' ? 'bg-quant-green/10 text-quant-green' : 'bg-quant-red/10 text-quant-red'
+                          )}
+                        >
+                          {o.side === 'BUY' ? '买入' : '卖出'}
+                        </span>
+                      ),
+                    },
+                    {
+                      key: 'type',
+                      title: '类型',
+                      render: (o) => <span className="text-muted-foreground">{o.type}</span>,
+                    },
+                    {
+                      key: 'price',
+                      title: '价格',
+                      render: (o) => <span className="font-mono">${formatCurrency(o.price)}</span>,
+                    },
+                    {
+                      key: 'quantity',
+                      title: '数量',
+                      render: (o) => <span className="font-mono">{o.quantity.toFixed(4)}</span>,
+                    },
+                    {
+                      key: 'filled',
+                      title: '已成交',
+                      render: (o) => (
+                        <span className="font-mono text-muted-foreground">
+                          {o.filled_quantity ? o.filled_quantity.toFixed(4) : '0.0000'}
+                        </span>
+                      ),
+                    },
                     { key: 'status', title: '状态', render: (o) => <StatusTag status={o.status} /> },
                   ]}
                   keyExtractor={(o) => o.id}
@@ -482,15 +579,44 @@ export function ExchangeAccount() {
                 <DataTable<OrderItem>
                   data={history}
                   columns={[
-                    { key: 'time', title: '时间', render: (o) => <span className="text-muted-foreground">{o.created_at ? new Date(o.created_at).toLocaleString() : '-'}</span> },
-                    { key: 'symbol', title: '币种', render: (o) => <span className="font-semibold text-white">{o.symbol}</span> },
-                    { key: 'side', title: '方向', render: (o) => (
-                      <span className={cn('px-1.5 py-0.5 rounded text-[10px] font-bold', o.side === 'BUY' ? 'bg-quant-green/10 text-quant-green' : 'bg-quant-red/10 text-quant-red')}>
-                        {o.side === 'BUY' ? '买入' : '卖出'}
-                      </span>
-                    )},
-                    { key: 'price', title: '成交价格', render: (o) => <span className="font-mono">${formatCurrency(o.price)}</span> },
-                    { key: 'quantity', title: '成交数量', render: (o) => <span className="font-mono">{o.quantity.toFixed(4)}</span> },
+                    {
+                      key: 'time',
+                      title: '时间',
+                      render: (o) => (
+                        <span className="text-muted-foreground">
+                          {o.created_at ? new Date(o.created_at).toLocaleString() : '-'}
+                        </span>
+                      ),
+                    },
+                    {
+                      key: 'symbol',
+                      title: '币种',
+                      render: (o) => <span className="font-semibold text-white">{o.symbol}</span>,
+                    },
+                    {
+                      key: 'side',
+                      title: '方向',
+                      render: (o) => (
+                        <span
+                          className={cn(
+                            'px-1.5 py-0.5 rounded text-[10px] font-bold',
+                            o.side === 'BUY' ? 'bg-quant-green/10 text-quant-green' : 'bg-quant-red/10 text-quant-red'
+                          )}
+                        >
+                          {o.side === 'BUY' ? '买入' : '卖出'}
+                        </span>
+                      ),
+                    },
+                    {
+                      key: 'price',
+                      title: '成交价格',
+                      render: (o) => <span className="font-mono">${formatCurrency(o.price)}</span>,
+                    },
+                    {
+                      key: 'quantity',
+                      title: '成交数量',
+                      render: (o) => <span className="font-mono">{o.quantity.toFixed(4)}</span>,
+                    },
                     { key: 'status', title: '状态', render: (o) => <StatusTag status={o.status} /> },
                   ]}
                   keyExtractor={(o) => o.id}

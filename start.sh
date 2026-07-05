@@ -6,7 +6,12 @@ set -e
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # 确保标准目录存在
-mkdir -p "${DIR}/data" "${DIR}/logs" "${DIR}/user_data"
+mkdir -p "${DIR}/config" "${DIR}/runtime" "${DIR}/logs" "${DIR}/user_data"
+
+# 如果不存在本地配置文件，从示例复制
+if [ ! -f "${DIR}/config/config.yaml" ] && [ -f "${DIR}/config/config.example.yaml" ]; then
+  cp "${DIR}/config/config.example.yaml" "${DIR}/config/config.yaml"
+fi
 
 echo -e "\033[0;36m"
 cat <<'BANNER'
@@ -57,11 +62,22 @@ fi
 #   cd sandbox/ml_server && ../../sandbox/.venv/bin/python main.py train --data ... --output ...
 # 因此这里不再尝试启动 ML Server。
 
+# ── 启动前端 Dev Server ───────────────────────────────────────────
+if [ -f "${DIR}/web/package.json" ] && command -v npm >/dev/null 2>&1; then
+  echo "[START] Frontend dev server :5173"
+  cd "${DIR}/web"
+  nohup npm run dev > "${DIR}/logs/frontend.log" 2>&1 &
+  FRONTEND_PID=$!
+  cd "${DIR}"
+fi
+
 # ── 启动 Go Gateway ─────────────────────────────────────────────
 GATEWAY_BIN="${DIR}/dist/gateway"
 if [ -f "$GATEWAY_BIN" ]; then
   echo "[START] Gateway :8080"
   cd "${DIR}"
+  export LD_LIBRARY_PATH="${DIR}/engine/target/release:${LD_LIBRARY_PATH}"
+  export RUST_ENGINE_PATH="${DIR}/engine/target/release/libxt_matching.so"
   nohup "$GATEWAY_BIN" > "${DIR}/logs/gateway.log" 2>&1 &
   GW_PID=$!
 else
@@ -72,13 +88,15 @@ fi
 echo ""
 echo "╔══════════════════════════════════════════════════════════╗"
 echo "║  All services started!                                    ║"
-echo "║  Frontend: http://localhost:8080                        ║"
+echo "║  Frontend: http://localhost:5173                        ║"
 echo "║  Gateway:  http://localhost:8080/api                    ║"
 echo "║  Logs:     ${DIR}/logs/                                 ║"
-echo "║  Data:     ${DIR}/data/                                 ║"
+echo "║  Config:   ${DIR}/config/                               ║"
+echo "║  Runtime:  ${DIR}/runtime/                              ║"
+echo "║  User:     ${DIR}/user_data/                            ║"
 echo "╚══════════════════════════════════════════════════════════╝"
 echo ""
 echo "Press Ctrl+C to stop all services"
 
-trap 'kill ${CCXT_PID} ${STRATEGY_PID} ${ML_PID} ${GW_PID} 2>/dev/null; exit' INT TERM
+trap 'kill ${CCXT_PID} ${STRATEGY_PID} ${ML_PID} ${GW_PID} ${FRONTEND_PID} 2>/dev/null; exit' INT TERM
 wait

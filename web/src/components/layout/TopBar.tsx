@@ -14,12 +14,11 @@ const routeTitles: Record<string, string> = {
   '/trading/contract': '合约交易',
   '/strategy': '策略工厂',
   '/strategy/editor': '策略编辑器',
-  '/ai': 'AI 研究',
-  '/ai/analysis': 'AI 分析',
+  '/ai': 'AI分析',
   '/ai/freqai': 'FreqAI',
   '/ai/rl': 'RL 强化学习',
   '/ai/tensorboard': 'TensorBoard',
-  '/market': '市场数据',
+  '/market': 'AI分析',
   '/backtest': '回测验证',
   '/bots': '交易机器人',
   '/bots/strategy': '策略机器人',
@@ -168,7 +167,6 @@ export function TopBar() {
       setPaperMode(checked)
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : '切换失败'
-      // eslint-disable-next-line no-console
       console.error('Paper mode toggle failed:', msg)
     } finally {
       setPaperLoading(false)

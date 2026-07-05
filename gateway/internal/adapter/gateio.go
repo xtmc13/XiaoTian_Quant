@@ -53,6 +53,23 @@ func NewGateIOAdapter(apiKey, secret string) *GateIOAdapter {
 	}
 }
 
+// toGateIOPair converts "BTCUSDT" style symbols to Gate.io "BTC_USDT" currency pair format.
+func toGateIOPair(symbol string) string {
+	s := strings.ToUpper(symbol)
+	// If already contains underscore or slash, normalize to underscore.
+	s = strings.ReplaceAll(s, "/", "_")
+	if strings.Contains(s, "_") {
+		return s
+	}
+	// Common quote assets; try to split at the rightmost known quote.
+	for _, quote := range []string{"USDT", "BTC", "ETH", "USD", "EUR", "GBP", "JPY", "KRW"} {
+		if strings.HasSuffix(s, quote) && len(s) > len(quote) {
+			return s[:len(s)-len(quote)] + "_" + quote
+		}
+	}
+	return s
+}
+
 func (g *GateIOAdapter) Name() string    { return "gateio" }
 func (g *GateIOAdapter) Start() error     { return nil }
 func (g *GateIOAdapter) Stop() error      { g.streamHub.CloseAll(); return nil }
@@ -132,7 +149,7 @@ func sha512Hash(s string) string {
 
 func (g *GateIOAdapter) GetKlines(symbol, interval string, limit int) ([][]any, error) {
 	params := url.Values{}
-	params.Set("currency_pair", symbol)
+	params.Set("currency_pair", toGateIOPair(symbol))
 	params.Set("interval", interval)
 	params.Set("limit", fmt.Sprintf("%d", limit))
 
@@ -160,7 +177,7 @@ func (g *GateIOAdapter) GetKlines(symbol, interval string, limit int) ([][]any, 
 
 func (g *GateIOAdapter) GetTicker(symbol string) (map[string]any, error) {
 	params := url.Values{}
-	params.Set("currency_pair", symbol)
+	params.Set("currency_pair", toGateIOPair(symbol))
 
 	u, _ := url.Parse(GateIORestURL + "/spot/tickers")
 	u.RawQuery = params.Encode()
@@ -189,7 +206,7 @@ func (g *GateIOAdapter) GetTicker(symbol string) (map[string]any, error) {
 
 func (g *GateIOAdapter) PlaceOrder(symbol, side, orderType string, price, quantity float64) (map[string]any, error) {
 	body := map[string]any{
-		"currency_pair": symbol,
+		"currency_pair": toGateIOPair(symbol),
 		"side":          strings.ToLower(side),
 		"type":          strings.ToLower(orderType),
 		"amount":        fmt.Sprintf("%.6f", quantity),
@@ -203,7 +220,7 @@ func (g *GateIOAdapter) PlaceOrder(symbol, side, orderType string, price, quanti
 
 func (g *GateIOAdapter) CancelOrder(symbol, orderID string) (map[string]any, error) {
 	params := url.Values{}
-	params.Set("currency_pair", symbol)
+	params.Set("currency_pair", toGateIOPair(symbol))
 	return g.request("DELETE", "/spot/orders/"+orderID, params, nil)
 }
 
@@ -262,7 +279,7 @@ func (g *GateIOAdapter) GetPositions() ([]map[string]any, error) {
 func (g *GateIOAdapter) GetOpenOrders(symbol string) ([]map[string]any, error) {
 	params := url.Values{}
 	if symbol != "" {
-		params.Set("currency_pair", symbol)
+		params.Set("currency_pair", toGateIOPair(symbol))
 	}
 	result, err := g.request("GET", "/spot/open_orders", params, nil)
 	if err != nil {
@@ -298,6 +315,7 @@ func (g *GateIOAdapter) StartMarketStream(symbols []string) error {
 			g.mu.Lock()
 			g.wsConnected = true
 			g.mu.Unlock()
+			log.Printf("[GateIO] Market stream connected")
 			g.subscribe(symbols)
 		},
 		OnDisconnected: func(err error) {
@@ -318,23 +336,29 @@ func (g *GateIOAdapter) subscribe(symbols []string) {
 		return
 	}
 
-	var payload []string
+	pairs := make([]string, 0, len(symbols))
 	for _, sym := range symbols {
-		payload = append(payload,
-			"spot.tickers:"+sym,
-			"spot.order_book_update:"+sym,
-			"spot.trades:"+sym,
-			"spot.candlesticks:"+sym+":1m",
-		)
+		pairs = append(pairs, toGateIOPair(sym))
 	}
 
-	msg := map[string]any{
-		"time":    time.Now().Unix(),
-		"channel": "spot.tickers",
-		"event":   "subscribe",
-		"payload": payload,
+	channels := []string{
+		"spot.tickers",
+		"spot.order_book_update",
+		"spot.trades",
+		"spot.candlesticks",
 	}
-	client.SendJSON(msg)
+	for _, channel := range channels {
+		msg := map[string]any{
+			"time":    time.Now().Unix(),
+			"channel": channel,
+			"event":   "subscribe",
+			"payload": pairs,
+		}
+		log.Printf("[GateIO] Subscribing %s: %v", channel, pairs)
+		if err := client.SendJSON(msg); err != nil {
+			log.Printf("[GateIO] Subscribe failed for %s: %v", channel, err)
+		}
+	}
 }
 
 func (g *GateIOAdapter) StartUserStream() error {
@@ -343,6 +367,7 @@ func (g *GateIOAdapter) StartUserStream() error {
 }
 
 func (g *GateIOAdapter) handleStreamMessage(msg []byte) {
+	log.Printf("[GateIO] Raw message: %s", string(msg))
 	var raw map[string]any
 	if err := json.Unmarshal(msg, &raw); err != nil {
 		return

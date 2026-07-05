@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { arbitrageApi, configApi } from '@/lib/api'
 import { toast } from '@/lib/useToast'
+import { useConfirmDialog } from '@/components/ui/ConfirmDialog'
 import type { ArbitrageConfig, ArbitrageOpportunity, ArbitragePosition, ArbitrageHistoryItem } from '@/types'
 
 export const DEFAULT_CONFIG: ArbitrageConfig = {
@@ -22,6 +23,7 @@ export const DEFAULT_CONFIG: ArbitrageConfig = {
 
 export function useCrossArbitrage() {
   const queryClient = useQueryClient()
+  const { confirm, prompt, Dialog } = useConfirmDialog()
   const [showHistory, setShowHistory] = useState(false)
   const [showConfig, setShowConfig] = useState(false)
   const [editConfig, setEditConfig] = useState<ArbitrageConfig | null>(null)
@@ -83,12 +85,24 @@ export function useCrossArbitrage() {
   /* ── Mutations ── */
   const startMutation = useMutation({
     mutationFn: arbitrageApi.start,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['arbitrage-status'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['arbitrage-status'] })
+      toast('success', '套利引擎已启动')
+    },
+    onError: (err: Error) => {
+      toast('error', err.message || '启动失败')
+    },
   })
 
   const stopMutation = useMutation({
     mutationFn: arbitrageApi.stop,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['arbitrage-status'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['arbitrage-status'] })
+      toast('success', '套利引擎已停止')
+    },
+    onError: (err: Error) => {
+      toast('error', err.message || '停止失败')
+    },
   })
 
   const updateConfigMut = useMutation({
@@ -189,9 +203,17 @@ export function useCrossArbitrage() {
   )
 
   const handleExecute = useCallback(
-    (opp: ArbitrageOpportunity) => {
+    async (opp: ArbitrageOpportunity) => {
       if (!editConfig) return
-      if (!editConfig.dry_run && !window.confirm('确认执行真实套利交易？')) return
+      if (!editConfig.dry_run) {
+        const ok = await confirm({
+          title: '确认执行真实套利交易？',
+          message: `${opp.symbol}：在 ${opp.buy_exchange} 买入，在 ${opp.sell_exchange} 卖出，预计价差 ${opp.spread_pct.toFixed(4)}%`,
+          confirmText: '执行',
+          cancelText: '取消',
+        })
+        if (!ok) return
+      }
       const targetQty = editConfig.order_size / opp.buy_price
       const quantity = opp.adjusted_qty ?? Math.floor(targetQty * 1e6) / 1e6
       executeMut.mutate({
@@ -203,14 +225,22 @@ export function useCrossArbitrage() {
         quantity,
       })
     },
-    [editConfig, executeMut]
+    [editConfig, executeMut, confirm]
   )
 
   const isPositionActive = useCallback((s: string) => ['pending', 'open_buy', 'open', 'open_sell'].includes(s), [])
 
   const handleClosePosition = useCallback(
-    (pos: ArbitragePosition) => {
-      const input = window.prompt('请输入实际卖出价（USD）', pos.sell_price?.toFixed(2) ?? '')
+    async (pos: ArbitragePosition) => {
+      const input = await prompt({
+        title: '平仓',
+        message: `确认将持仓 ${pos.symbol} 平仓？`,
+        inputLabel: '实际卖出价（USD）',
+        defaultValue: pos.sell_price?.toFixed(2) ?? '',
+        inputType: 'number',
+        confirmText: '平仓',
+        cancelText: '取消',
+      })
       if (input === null) return
       const sellPrice = Number(input)
       if (Number.isNaN(sellPrice) || sellPrice <= 0) {
@@ -219,15 +249,22 @@ export function useCrossArbitrage() {
       }
       closePositionMut.mutate({ id: pos.id, sell_price: sellPrice })
     },
-    [closePositionMut]
+    [closePositionMut, prompt]
   )
 
   const handleFailPosition = useCallback(
-    (pos: ArbitragePosition) => {
-      if (!window.confirm(`确认将持仓 ${pos.symbol} 标记为失败？`)) return
+    async (pos: ArbitragePosition) => {
+      const ok = await confirm({
+        title: '标记为失败',
+        message: `确认将持仓 ${pos.symbol} 标记为失败？`,
+        variant: 'danger',
+        confirmText: '标记失败',
+        cancelText: '取消',
+      })
+      if (!ok) return
       failPositionMut.mutate(pos.id)
     },
-    [failPositionMut]
+    [failPositionMut, confirm]
   )
 
   return {
@@ -259,5 +296,6 @@ export function useCrossArbitrage() {
     isPositionActive,
     handleClosePosition,
     handleFailPosition,
+    Dialog,
   }
 }

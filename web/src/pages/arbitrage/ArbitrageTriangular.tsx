@@ -1,6 +1,6 @@
 import { PageHeader } from '@/components/ui/PageHeader'
 import { Triangle } from 'lucide-react'
-import { TriangularArbitragePanel } from '@/pages/TriangularArbitragePanel'
+import { TriangularArbitragePanel } from './components/TriangularArbitragePanel'
 
 export function ArbitrageTriangular() {
   return (

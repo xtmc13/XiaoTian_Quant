@@ -4,14 +4,11 @@ import { triangularApi, configApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { useToastStore } from '@/stores/toastStore'
 import { SectionCard } from '@/components/ui/SectionCard'
+import { useConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { KPICard } from '@/components/ui/KPICard'
 import { EmptyState } from '@/components/ui/EmptyState'
-import type {
-  TriangularConfig,
-  TriangularOpportunity,
-  TriangularTrade,
-} from '@/types'
+import type { TriangularConfig, TriangularOpportunity, TriangularTrade } from '@/types'
 import {
   Triangle,
   Play,
@@ -57,7 +54,15 @@ function Toggle({ value, onChange, disabled }: { value: boolean; onChange: (v: b
   )
 }
 
-function TextInput({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
+function TextInput({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string
+  onChange: (v: string) => void
+  placeholder?: string
+}) {
   return (
     <input
       type="text"
@@ -104,7 +109,7 @@ const SUPPORTED_EXCHANGES = [
   { key: 'binance', label: 'Binance' },
   { key: 'okx', label: 'OKX' },
   { key: 'mexc', label: 'MEXC' },
-  { key: 'gateio', label: 'Gate.io' },
+  { key: 'gate', label: 'Gate.io' },
   { key: 'bybit', label: 'Bybit' },
   { key: 'coinbase', label: 'Coinbase' },
   { key: 'kraken', label: 'Kraken' },
@@ -132,6 +137,7 @@ const DEFAULT_TRIANGULAR_CONFIG: TriangularConfig = {
 
 export function TriangularArbitragePanel() {
   const queryClient = useQueryClient()
+  const { confirm, Dialog } = useConfirmDialog()
   const [showHistory, setShowHistory] = useState(false)
   const [showConfig, setShowConfig] = useState(false)
 
@@ -208,8 +214,7 @@ export function TriangularArbitragePanel() {
   })
 
   const executeMut = useMutation({
-    mutationFn: (data: { exchange: string; cycle: string[]; start_qty: number }) =>
-      triangularApi.execute(data),
+    mutationFn: (data: { exchange: string; cycle: string[]; start_qty: number }) => triangularApi.execute(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['triangular-positions'] })
       queryClient.invalidateQueries({ queryKey: ['triangular-history'] })
@@ -265,9 +270,17 @@ export function TriangularArbitragePanel() {
     updateConfigMut.mutate(payload)
   }
 
-  const handleExecute = (opp: TriangularOpportunity) => {
+  const handleExecute = async (opp: TriangularOpportunity) => {
     if (!editConfig) return
-    if (!editConfig.dry_run && !window.confirm('确认执行真实三角套利交易？')) return
+    if (!editConfig.dry_run) {
+      const ok = await confirm({
+        title: '确认执行真实三角套利交易？',
+        message: `${opp.cycle.join(' → ')}，预计净利润 ${opp.net_profit_pct.toFixed(4)}%`,
+        confirmText: '执行',
+        cancelText: '取消',
+      })
+      if (!ok) return
+    }
     executeMut.mutate({
       exchange: opp.exchange,
       cycle: opp.cycle,
@@ -277,22 +290,31 @@ export function TriangularArbitragePanel() {
 
   const isPositionActive = (status: string) => ['pending', 'executing'].includes(status)
 
-  const handleClosePosition = (pos: TriangularTrade) => {
-    if (!window.confirm(`确认将持仓 ${pos.cycle.join(' → ')} 平仓？`)) return
+  const handleClosePosition = async (pos: TriangularTrade) => {
+    const ok = await confirm({
+      title: '平仓',
+      message: `确认将持仓 ${pos.cycle.join(' → ')} 平仓？`,
+      confirmText: '平仓',
+      cancelText: '取消',
+    })
+    if (!ok) return
     closePositionMut.mutate(pos.id)
   }
 
-  const handleFailPosition = (pos: TriangularTrade) => {
-    if (!window.confirm(`确认将持仓 ${pos.cycle.join(' → ')} 标记为失败？`)) return
+  const handleFailPosition = async (pos: TriangularTrade) => {
+    const ok = await confirm({
+      title: '标记为失败',
+      message: `确认将持仓 ${pos.cycle.join(' → ')} 标记为失败？`,
+      variant: 'danger',
+      confirmText: '标记失败',
+      cancelText: '取消',
+    })
+    if (!ok) return
     failPositionMut.mutate(pos.id)
   }
 
   /* ── Render helpers ── */
-  const renderConfigField = (
-    label: string,
-    input: React.ReactNode,
-    key?: string
-  ) => (
+  const renderConfigField = (label: string, input: React.ReactNode, key?: string) => (
     <div key={key}>
       <label className="mb-1.5 block text-xs text-muted-foreground">{label}</label>
       {input}
@@ -301,6 +323,7 @@ export function TriangularArbitragePanel() {
 
   return (
     <div className="space-y-6">
+      <Dialog />
       {/* Status & Controls */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <KPICard
@@ -352,11 +375,7 @@ export function TriangularArbitragePanel() {
                 : 'bg-green-500/20 text-green-400 hover:bg-green-500/30'
             )}
           >
-            {startMutation.isPending ? (
-              <RefreshCw className="w-4 h-4 animate-spin" />
-            ) : (
-              <Play className="w-4 h-4" />
-            )}
+            {startMutation.isPending ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
             启动引擎
           </button>
         ) : (
@@ -370,11 +389,7 @@ export function TriangularArbitragePanel() {
                 : 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
             )}
           >
-            {stopMutation.isPending ? (
-              <RefreshCw className="w-4 h-4 animate-spin" />
-            ) : (
-              <Square className="w-4 h-4" />
-            )}
+            {stopMutation.isPending ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Square className="w-4 h-4" />}
             停止引擎
           </button>
         )}
@@ -382,7 +397,9 @@ export function TriangularArbitragePanel() {
           onClick={() => setShowConfig(!showConfig)}
           className={cn(
             'flex items-center gap-2 px-3 py-2 rounded-md text-xs font-medium transition-colors',
-            showConfig ? 'bg-quant-gold/10 text-quant-gold' : 'bg-quant-bg-secondary text-muted-foreground hover:text-foreground'
+            showConfig
+              ? 'bg-quant-gold/10 text-quant-gold'
+              : 'bg-quant-bg-secondary text-muted-foreground hover:text-foreground'
           )}
         >
           <Layers className="w-3.5 h-3.5" />
@@ -392,7 +409,9 @@ export function TriangularArbitragePanel() {
           onClick={() => setShowHistory(!showHistory)}
           className={cn(
             'flex items-center gap-2 px-3 py-2 rounded-md text-xs font-medium transition-colors',
-            showHistory ? 'bg-quant-gold/10 text-quant-gold' : 'bg-quant-bg-secondary text-muted-foreground hover:text-foreground'
+            showHistory
+              ? 'bg-quant-gold/10 text-quant-gold'
+              : 'bg-quant-bg-secondary text-muted-foreground hover:text-foreground'
           )}
         >
           <Clock className="w-3.5 h-3.5" />
@@ -611,11 +630,7 @@ export function TriangularArbitragePanel() {
       {/* Opportunities Table */}
       <SectionCard
         title="三角套利机会"
-        headerAction={
-          opportunity ? (
-            <span className="text-xs text-muted-foreground">最新扫描结果</span>
-          ) : null
-        }
+        headerAction={opportunity ? <span className="text-xs text-muted-foreground">最新扫描结果</span> : null}
       >
         {opportunity ? (
           <div className="overflow-x-auto">
@@ -633,10 +648,13 @@ export function TriangularArbitragePanel() {
                 </tr>
               </thead>
               <tbody>
-                <tr className={cn('border-b border-quant-border transition-colors', opportunity.viable ? 'bg-green-500/5' : 'hover:bg-quant-bg-secondary/50')}>
-                  <td className="py-3 px-3 font-medium">
-                    {opportunity.cycle.join(' → ')}
-                  </td>
+                <tr
+                  className={cn(
+                    'border-b border-quant-border transition-colors',
+                    opportunity.viable ? 'bg-green-500/5' : 'hover:bg-quant-bg-secondary/50'
+                  )}
+                >
+                  <td className="py-3 px-3 font-medium">{opportunity.cycle.join(' → ')}</td>
                   <td className="py-3 px-3">{opportunity.exchange}</td>
                   <td className="py-3 px-3 text-right">
                     {opportunity.start_qty.toFixed(4)} {opportunity.start_asset}
@@ -645,7 +663,9 @@ export function TriangularArbitragePanel() {
                     {opportunity.end_qty.toFixed(4)} {opportunity.start_asset}
                   </td>
                   <td className="py-3 px-3 text-right">
-                    <span className={cn('font-medium', opportunity.net_profit_pct >= 0 ? 'text-green-400' : 'text-red-400')}>
+                    <span
+                      className={cn('font-medium', opportunity.net_profit_pct >= 0 ? 'text-green-400' : 'text-red-400')}
+                    >
                       {opportunity.net_profit_pct.toFixed(4)}%
                     </span>
                   </td>
@@ -654,7 +674,10 @@ export function TriangularArbitragePanel() {
                   </td>
                   <td className="py-3 px-3 text-right text-xs text-muted-foreground">
                     {opportunity.legs.map((leg, i) => (
-                      <div key={i} className={leg.slippage_pct > (editConfig?.max_slippage_pct ?? 0.5) ? 'text-red-400' : ''}>
+                      <div
+                        key={i}
+                        className={leg.slippage_pct > (editConfig?.max_slippage_pct ?? 0.5) ? 'text-red-400' : ''}
+                      >
                         {leg.symbol} {leg.slippage_pct.toFixed(4)}%
                       </div>
                     ))}
@@ -698,10 +721,7 @@ export function TriangularArbitragePanel() {
             <div className="text-sm text-muted-foreground text-center py-4">无活跃持仓</div>
           ) : (
             positions.map((pos: TriangularTrade, i: number) => (
-              <div
-                key={pos.id || i}
-                className="flex items-center justify-between p-3 rounded-md bg-quant-bg-secondary"
-              >
+              <div key={pos.id || i} className="flex items-center justify-between p-3 rounded-md bg-quant-bg-secondary">
                 <div className="flex items-center gap-3">
                   <Triangle className="w-4 h-4 text-quant-gold" />
                   <div>
@@ -716,8 +736,8 @@ export function TriangularArbitragePanel() {
                             leg.status === 'filled'
                               ? 'bg-green-500/10 text-green-400 border-green-500/20'
                               : leg.status === 'failed'
-                              ? 'bg-red-500/10 text-red-400 border-red-500/20'
-                              : 'bg-quant-bg text-muted-foreground border-quant-border'
+                                ? 'bg-red-500/10 text-red-400 border-red-500/20'
+                                : 'bg-quant-bg text-muted-foreground border-quant-border'
                           )}
                         >
                           {leg.symbol} {leg.side}
@@ -727,12 +747,7 @@ export function TriangularArbitragePanel() {
                   </div>
                 </div>
                 <div className="text-right space-y-1">
-                  <div
-                    className={cn(
-                      'text-sm font-semibold',
-                      pos.net_profit > 0 ? 'text-green-400' : 'text-red-400'
-                    )}
-                  >
+                  <div className={cn('text-sm font-semibold', pos.net_profit > 0 ? 'text-green-400' : 'text-red-400')}>
                     {pos.net_profit > 0 ? '+' : ''}${pos.net_profit.toFixed(2)}
                   </div>
                   {isPositionActive(pos.status) && (
@@ -779,23 +794,17 @@ export function TriangularArbitragePanel() {
                   className="flex items-center justify-between p-3 rounded-md bg-quant-bg-secondary"
                 >
                   <div className="flex items-center gap-3">
-                    <CheckCircle2
-                      className={cn(
-                        'w-4 h-4',
-                        trade.net_profit > 0 ? 'text-green-400' : 'text-red-400'
-                      )}
-                    />
+                    <CheckCircle2 className={cn('w-4 h-4', trade.net_profit > 0 ? 'text-green-400' : 'text-red-400')} />
                     <div>
                       <div className="text-sm font-medium">{trade.cycle.join(' → ')}</div>
-                      <div className="text-xs text-muted-foreground">{trade.exchange} · {trade.status}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {trade.exchange} · {trade.status}
+                      </div>
                     </div>
                   </div>
                   <div className="text-right">
                     <div
-                      className={cn(
-                        'text-sm font-semibold',
-                        trade.net_profit > 0 ? 'text-green-400' : 'text-red-400'
-                      )}
+                      className={cn('text-sm font-semibold', trade.net_profit > 0 ? 'text-green-400' : 'text-red-400')}
                     >
                       {trade.net_profit > 0 ? '+' : ''}${trade.net_profit.toFixed(2)}
                     </div>

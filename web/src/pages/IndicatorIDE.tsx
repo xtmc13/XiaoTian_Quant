@@ -983,7 +983,7 @@ export function IndicatorIDE() {
             </div>
 
             {/* CRA 参数 */}
-            <CRAParamForm value={stratCra} onChange={setStratCra} showTradeCountMode />
+            <CRAParamForm value={stratCra} onChange={setStratCra} market="contract" />
           </div>
           <div className="flex items-center justify-end gap-2 px-6 py-4 border-t border-quant-border shrink-0">
             <button onClick={() => setShowCreateStrategy(false)} className="px-4 py-2 rounded-lg border border-quant-border text-xs hover:bg-quant-hover transition-colors">取消</button>

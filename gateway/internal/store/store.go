@@ -1,12 +1,16 @@
 package store
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"strconv"
@@ -45,12 +49,12 @@ var (
 func InitDB() error {
 	dbPath := os.Getenv("DB_PATH")
 	if dbPath == "" {
-		dbPath = "./data/gateway.db"
+		dbPath = "./runtime/gateway.db"
 	}
-	// Ensure data directory exists
+	// Ensure runtime directory exists
 	dataDir := dbPath[:len(dbPath)-len("/gateway.db")]
 	if dataDir == dbPath {
-		dataDir = "./data"
+		dataDir = "./runtime"
 	}
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return fmt.Errorf("failed to create data directory: %w", err)
@@ -126,41 +130,27 @@ func InitDB() error {
 	}
 
 	// ── JWT Secret ──
-	// Priority: 1) SECRET_KEY env  2) /app/data/.jwt_secret file  3) generate & persist (dev only)
+	// SECURITY: JWT secret must be supplied via the SECRET_KEY environment variable.
+	// Reading from or persisting to disk is disallowed to prevent secret leakage.
 	jwtSecret = os.Getenv("SECRET_KEY")
 	if jwtSecret == "" {
-		secretFile := "./data/.jwt_secret"
-		if data, err := os.ReadFile(secretFile); err == nil && len(data) > 0 {
-			jwtSecret = string(data)
-		} else {
-			// Production safety: refuse to start without an explicit secret.
-			if os.Getenv("APP_ENV") == "production" || os.Getenv("GIN_MODE") == "release" {
-				return fmt.Errorf("SECRET_KEY environment variable is required in production; set it or mount a persistent %s", secretFile)
-			}
-			jwtSecret = randomHex(32)
-			if err := os.WriteFile(secretFile, []byte(jwtSecret), 0600); err != nil {
-				fmt.Fprintf(os.Stderr, "\n⚠  WARNING: Failed to persist JWT secret to %s: %v\n", secretFile, err)
-			}
-			fmt.Fprintf(os.Stderr, "\n⚠  WARNING: SECRET_KEY not set in environment.\n")
-			fmt.Fprintf(os.Stderr, "   A random key was generated and persisted to %s.\n", secretFile)
-			fmt.Fprintf(os.Stderr, "   Set SECRET_KEY in .env to override.\n\n")
-		}
+		return fmt.Errorf("SECRET_KEY environment variable is required; set it in .env and never commit it")
 	}
 
 	if configPath == "" {
-		configPath = "./data/config.yaml"
+		configPath = "./config/config.yaml"
 	}
 	if strategyConfigsPath == "" {
-		strategyConfigsPath = "./data/strategy_configs.json"
+		strategyConfigsPath = "./runtime/strategy_configs.json"
 	}
 	if logsPath == "" {
-		logsPath = "./data/strategy_logs.json"
+		logsPath = "./runtime/strategy_logs.json"
 	}
 	if templatesPath == "" {
-		templatesPath = "./data/strategy_templates.json"
+		templatesPath = "./runtime/strategy_templates.json"
 	}
 	if agentTokensPath == "" {
-		agentTokensPath = "./data/agent_tokens.json"
+		agentTokensPath = "./runtime/agent_tokens.json"
 	}
 
 	// Run schema migrations
@@ -196,6 +186,178 @@ func GetDB() *sql.DB {
 	return db
 }
 
+// ── Config Secret Encryption ────────────────────────────────────
+
+// configEncryptionKey returns a 32-byte AES key derived from XIAOTIAN_CONFIG_KEY.
+// If the env var is unset, nil is returned and secrets are stored in plaintext.
+func configEncryptionKey() []byte {
+	key := os.Getenv("XIAOTIAN_CONFIG_KEY")
+	if key == "" {
+		return nil
+	}
+	h := sha256.Sum256([]byte(key))
+	return h[:]
+}
+
+// encryptConfigSecrets deep-copies cfg and encrypts sensitive fields under exchanges.*.
+func encryptConfigSecrets(cfg map[string]any) map[string]any {
+	key := configEncryptionKey()
+	if key == nil {
+		return cfg
+	}
+	out := deepCopyMap(cfg)
+	if exchanges, ok := out["exchanges"].(map[string]any); ok {
+		out["exchanges"] = encryptExchanges(exchanges, key)
+	}
+	return out
+}
+
+func encryptExchanges(exchanges map[string]any, key []byte) map[string]any {
+	out := make(map[string]any, len(exchanges))
+	for name, val := range exchanges {
+		ex, ok := val.(map[string]any)
+		if !ok {
+			out[name] = val
+			continue
+		}
+		cp := make(map[string]any, len(ex))
+		for k, v := range ex {
+			if isSecretKey(k) {
+				if s, ok := v.(string); ok && s != "" && !isEncrypted(s) {
+					cp[k] = encryptString(s, key)
+					continue
+				}
+			}
+			cp[k] = v
+		}
+		out[name] = cp
+	}
+	return out
+}
+
+func decryptConfigSecrets(cfg map[string]any) map[string]any {
+	key := configEncryptionKey()
+	if key == nil {
+		return cfg
+	}
+	out := deepCopyMap(cfg)
+	if exchanges, ok := out["exchanges"].(map[string]any); ok {
+		out["exchanges"] = decryptExchanges(exchanges, key)
+	}
+	return out
+}
+
+func decryptExchanges(exchanges map[string]any, key []byte) map[string]any {
+	out := make(map[string]any, len(exchanges))
+	for name, val := range exchanges {
+		ex, ok := val.(map[string]any)
+		if !ok {
+			out[name] = val
+			continue
+		}
+		cp := make(map[string]any, len(ex))
+		for k, v := range ex {
+			if isSecretKey(k) {
+				if s, ok := v.(string); ok && s != "" && isEncrypted(s) {
+					cp[k] = decryptString(s, key)
+					continue
+				}
+			}
+			cp[k] = v
+		}
+		out[name] = cp
+	}
+	return out
+}
+
+func isSecretKey(key string) bool {
+	switch strings.ToLower(key) {
+	case "api_key", "secret", "passphrase", "api_secret":
+		return true
+	}
+	return false
+}
+
+// encrypted values are base64 and start with "enc:" prefix.
+func isEncrypted(s string) bool {
+	return strings.HasPrefix(s, "enc:")
+}
+
+func encryptString(plaintext string, key []byte) string {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return plaintext
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return plaintext
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return plaintext
+	}
+	ciphertext := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
+	return "enc:" + base64.StdEncoding.EncodeToString(ciphertext)
+}
+
+func decryptString(ciphertext string, key []byte) string {
+	if !isEncrypted(ciphertext) {
+		return ciphertext
+	}
+	data, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(ciphertext, "enc:"))
+	if err != nil {
+		return ciphertext
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return ciphertext
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return ciphertext
+	}
+	nonceSize := gcm.NonceSize()
+	if len(data) < nonceSize {
+		return ciphertext
+	}
+	nonce, cipherData := data[:nonceSize], data[nonceSize:]
+	plain, err := gcm.Open(nil, nonce, cipherData, nil)
+	if err != nil {
+		return ciphertext
+	}
+	return string(plain)
+}
+
+func deepCopyMap(m map[string]any) map[string]any {
+	cp := make(map[string]any, len(m))
+	for k, v := range m {
+		switch val := v.(type) {
+		case map[string]any:
+			cp[k] = deepCopyMap(val)
+		case []any:
+			cp[k] = deepCopySlice(val)
+		default:
+			cp[k] = v
+		}
+	}
+	return cp
+}
+
+func deepCopySlice(s []any) []any {
+	cp := make([]any, len(s))
+	for i, v := range s {
+		switch val := v.(type) {
+		case map[string]any:
+			cp[i] = deepCopyMap(val)
+		case []any:
+			cp[i] = deepCopySlice(val)
+		default:
+			cp[i] = v
+		}
+	}
+	return cp
+}
+
 // ── Config ──
 
 func LoadConfig() {
@@ -206,10 +368,13 @@ func LoadConfig() {
 		configCache = make(map[string]any)
 		return
 	}
-	if err := yaml.Unmarshal(data, &configCache); err != nil {
+	var raw map[string]any
+	if err := yaml.Unmarshal(data, &raw); err != nil {
 		fmt.Fprintf(os.Stderr, "WARNING: Failed to parse config.yaml: %v\n", err)
 		configCache = make(map[string]any)
+		return
 	}
+	configCache = decryptConfigSecrets(raw)
 }
 
 // SaveArbitrageConfig persists the arbitrage engine config to config.yaml.
@@ -220,7 +385,8 @@ func SaveArbitrageConfig(cfg map[string]any) error {
 		configCache = make(map[string]any)
 	}
 	configCache["arbitrage"] = cfg
-	data, err := yaml.Marshal(configCache)
+	encrypted := encryptConfigSecrets(configCache)
+	data, err := yaml.Marshal(encrypted)
 	if err != nil {
 		return err
 	}
@@ -252,7 +418,8 @@ func SaveTriangularConfig(cfg map[string]any) error {
 		configCache = make(map[string]any)
 	}
 	configCache["triangular"] = cfg
-	data, err := yaml.Marshal(configCache)
+	encrypted := encryptConfigSecrets(configCache)
+	data, err := yaml.Marshal(encrypted)
 	if err != nil {
 		return err
 	}
@@ -288,6 +455,7 @@ func SaveUIConfig(ui map[string]any) {
 }
 
 // SaveExchangeConfig saves an exchange configuration to config.yaml.
+// Secret fields are stripped before persistence; credentials must be provided via environment variables.
 func SaveExchangeConfig(id string, cfg map[string]any) {
 	configMu.Lock()
 	defer configMu.Unlock()
@@ -298,7 +466,16 @@ func SaveExchangeConfig(id string, cfg map[string]any) {
 	if exchanges == nil {
 		exchanges = make(map[string]any)
 	}
-	exchanges[id] = cfg
+
+	// Defense in depth: never persist secrets, even if a caller accidentally passes them.
+	safe := make(map[string]any, len(cfg))
+	for k, v := range cfg {
+		if !isSecretKey(k) {
+			safe[k] = v
+		}
+	}
+
+	exchanges[id] = safe
 	configCache["exchanges"] = exchanges
 	_ = writeConfigCacheLocked()
 }
@@ -329,8 +506,9 @@ func GetConfig() map[string]any {
 func SaveConfig(cfg map[string]any) error {
 	configMu.Lock()
 	configCache = cfg
-	data, err := yaml.Marshal(cfg)
+	encrypted := encryptConfigSecrets(cfg)
 	configMu.Unlock()
+	data, err := yaml.Marshal(encrypted)
 	if err != nil {
 		return err
 	}

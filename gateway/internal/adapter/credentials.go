@@ -3,41 +3,23 @@ package adapter
 import (
 	"os"
 	"strings"
-
-	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
-// GetCredential returns API credentials for an exchange.
-// First checks the saved config (from Settings page), then falls back to environment variables.
+// GetCredential returns API credentials for an exchange from environment variables only.
+// Credentials are never read from persisted config files to prevent plaintext secret storage.
+// Expected env vars: <EXCHANGE>_API_KEY, <EXCHANGE>_API_SECRET, <EXCHANGE>_PASSPHRASE.
 func GetCredential(exchangeName string) (apiKey, secret, passphrase string) {
-	name := strings.ToLower(exchangeName)
+	name := strings.ToUpper(exchangeName)
 
-	// 1. Try saved config from Settings page
-	cfg := store.GetConfig()
-	if exchanges, ok := cfg["exchanges"].(map[string]any); ok {
-		if ex, ok := exchanges[name].(map[string]any); ok {
-			if k, ok := ex["api_key"].(string); ok && k != "" {
-				apiKey = k
-			}
-			if s, ok := ex["secret"].(string); ok && s != "" {
-				secret = s
-			}
-			if p, ok := ex["passphrase"].(string); ok && p != "" {
-				passphrase = p
-			}
-		}
-	}
-
-	// 2. Fallback to environment variables
-	if apiKey == "" {
-		apiKey = os.Getenv(strings.ToUpper(name) + "_API_KEY")
-	}
-	if secret == "" {
-		secret = os.Getenv(strings.ToUpper(name) + "_API_SECRET")
-	}
-	if passphrase == "" {
-		passphrase = os.Getenv(strings.ToUpper(name) + "_PASSPHRASE")
-	}
+	apiKey = os.Getenv(name + "_API_KEY")
+	secret = os.Getenv(name + "_API_SECRET")
+	passphrase = os.Getenv(name + "_PASSPHRASE")
 
 	return
+}
+
+// HasCredential reports whether an exchange has non-empty credentials in the environment.
+func HasCredential(exchangeName string) bool {
+	name := strings.ToUpper(exchangeName)
+	return os.Getenv(name+"_API_KEY") != "" && os.Getenv(name+"_API_SECRET") != ""
 }

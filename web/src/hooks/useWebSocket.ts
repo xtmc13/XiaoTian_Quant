@@ -9,13 +9,7 @@ interface WSOptions {
 }
 
 export function useWebSocket(url: string, options: WSOptions = {}) {
-  const {
-    reconnect = true,
-    maxRetries = 20,
-    heartbeatInterval = 30000,
-    heartbeatMsg,
-    onReconnect,
-  } = options
+  const { reconnect = true, maxRetries = 20, heartbeatInterval = 30000, heartbeatMsg, onReconnect } = options
 
   const ws = useRef<WebSocket | null>(null)
   const handlers = useRef<Map<string, ((data: unknown) => void)[]>>(new Map())
@@ -54,7 +48,8 @@ export function useWebSocket(url: string, options: WSOptions = {}) {
     const connect = () => {
       if (disposed) return
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const fullUrl = url.startsWith('ws') ? url : `${protocol}//${window.location.host}${url}`
+      const wsHost = import.meta.env.VITE_WS_HOST || window.location.host
+      const fullUrl = url.startsWith('ws') ? url : `${protocol}//${wsHost}${url}`
 
       try {
         const socket = new WebSocket(fullUrl)

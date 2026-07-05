@@ -1,8 +1,10 @@
 package store
 
+import "strings"
+
 // Schema migration constants and DDL for all 18 tables.
 
-const currentSchemaVersion = 13
+const currentSchemaVersion = 14
 
 // MigrationFunc is a function that upgrades the schema by one version.
 type MigrationFunc func(tx *dbTx) error
@@ -21,6 +23,7 @@ var migrations = map[int]MigrationFunc{
 	11: migrateV11,
 	12: migrateV12,
 	13: migrateV13,
+	14: migrateV14,
 }
 
 // dbTx wraps a database transaction for migrations.
@@ -685,6 +688,27 @@ func migrateV13(tx *dbTx) error {
 	for _, ddl := range tables {
 		if err := tx.exec(ddl); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// migrateV14 adds realized fill columns to arbitrage_trades.
+func migrateV14(tx *dbTx) error {
+	columns := []string{
+		`ALTER TABLE arbitrage_trades ADD COLUMN buy_filled_qty REAL DEFAULT 0`,
+		`ALTER TABLE arbitrage_trades ADD COLUMN buy_avg_price REAL DEFAULT 0`,
+		`ALTER TABLE arbitrage_trades ADD COLUMN buy_fee REAL DEFAULT 0`,
+		`ALTER TABLE arbitrage_trades ADD COLUMN sell_filled_qty REAL DEFAULT 0`,
+		`ALTER TABLE arbitrage_trades ADD COLUMN sell_avg_price REAL DEFAULT 0`,
+		`ALTER TABLE arbitrage_trades ADD COLUMN sell_fee REAL DEFAULT 0`,
+	}
+	for _, ddl := range columns {
+		if err := tx.exec(ddl); err != nil {
+			// SQLite does not support IF NOT EXISTS for ADD COLUMN; ignore duplicate column errors.
+			if !strings.Contains(err.Error(), "duplicate column") {
+				return err
+			}
 		}
 	}
 	return nil

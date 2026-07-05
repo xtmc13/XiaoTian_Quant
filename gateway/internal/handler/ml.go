@@ -258,7 +258,7 @@ func EvaluateModel(c *gin.Context) {
 func ListModels(c *gin.Context) {
 	models, err := MLClient.ListModels()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(http.StatusOK, gin.H{"models": []any{}})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"models": models})
@@ -444,7 +444,7 @@ func GenerateFeatures(c *gin.Context) {
 // MLHealth checks if the ML server is reachable.
 func MLHealth(c *gin.Context) {
 	if err := MLClient.Health(); err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "unhealthy", "error": err.Error()})
+		c.JSON(http.StatusOK, gin.H{"status": "unhealthy", "error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "healthy"})

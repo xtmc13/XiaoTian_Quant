@@ -1,0 +1,63 @@
+# ═══════════════════════════════════════════════════════════════════
+# XiaoTianQuant Runtime Configuration (NON-SECRET ONLY)
+# ═══════════════════════════════════════════════════════════════════
+#
+# This file contains non-sensitive application configuration.
+# NEVER put API keys, secrets, passphrases, or JWT secrets here.
+# All credentials must be provided via environment variables / .env only.
+
+# Default exchange and exchange-specific non-secret settings.
+exchanges:
+  binance:
+    enabled: false
+    testnet: true
+    futures: false
+  okx:
+    enabled: false
+    testnet: true
+    futures: false
+  bybit:
+    enabled: false
+    testnet: true
+    futures: false
+  gate:
+    enabled: false
+    testnet: true
+    futures: false
+
+# AI / LLM provider non-secret settings.
+ai_providers:
+  deepseek:
+    enabled: false
+    model: deepseek-chat
+    base_url: https://api.deepseek.com/v1
+  openai:
+    enabled: false
+    model: gpt-4o
+    base_url: https://api.openai.com/v1
+  claude:
+    enabled: false
+    model: claude-opus-4-7
+    base_url: https://api.anthropic.com/v1
+
+# Arbitrage engine settings.
+arbitrage:
+  enabled: false
+  dry_run: true
+  min_spread_pct: 0.05
+  max_position_usdt: 1000
+
+# Triangular arbitrage engine settings.
+triangular:
+  enabled: false
+  dry_run: true
+  min_profit_pct: 0.03
+
+# UI preferences (non-sensitive).
+ui:
+  theme: dark
+  language: zh-CN
+
+# Default selections.
+default_exchange: binance
+default_ai_provider: deepseek

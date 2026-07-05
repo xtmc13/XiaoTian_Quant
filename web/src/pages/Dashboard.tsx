@@ -816,8 +816,12 @@ export function Dashboard() {
   const { data: mlModelsData, isLoading: mlModelsLoading } = useQuery<ModelInfo[]>({
     queryKey: ['ml-models'],
     queryFn: async () => {
-      const res = await mlApi.list()
-      return res || []
+      try {
+        const res = await mlApi.list()
+        return res || []
+      } catch {
+        return []
+      }
     },
     refetchInterval: 30000,
   })

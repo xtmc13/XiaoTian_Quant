@@ -7,6 +7,7 @@ import {
   BarChart3,
   LineChart,
   Cpu,
+  Brain,
   FlaskConical,
   Bot,
   Settings,
@@ -36,8 +37,8 @@ const isChildActive = (location: ReturnType<typeof useLocation>, childPath: stri
 const navItems: NavItem[] = [
   { path: '/dashboard', label: '仪表盘', icon: BarChart3 },
 
-  // 市场数据
-  { path: '/market', label: '市场数据', icon: BarChart3 },
+  // AI 分析
+  { path: '/ai', label: 'AI分析', icon: Brain },
 
   // 交易
   {
@@ -68,7 +69,6 @@ const navItems: NavItem[] = [
     label: 'AI 研究',
     icon: Cpu,
     children: [
-      { path: '/ai/analysis', label: 'AI 分析' },
       { path: '/ai/freqai', label: 'FreqAI' },
       { path: '/ai/rl', label: 'RL 强化学习' },
       { path: '/ai/tensorboard', label: 'TensorBoard' },

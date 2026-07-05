@@ -23,7 +23,7 @@ import (
 
 func main() {
 	// ── Load configuration ──
-	cfg, err := config.Load("config.yaml")
+	cfg, err := config.Load("config/config.yaml")
 	if err != nil {
 		log.Printf("WARNING: Config load failed, using defaults: %v", err)
 		cfg = config.Default()
@@ -141,6 +141,23 @@ func registerStrategyFactories() {
 	strategy.RegisterStrategyFactory("alt_volatility", func() strategy.Strategy { return strategies.NewDualThrustStrategy() })
 	strategy.RegisterStrategyFactory("trade_holder", func() strategy.Strategy { return strategies.NewMartingaleStrategy() })
 	strategy.RegisterStrategyFactory("noah", func() strategy.Strategy { return strategies.NewGridTradingStrategy() })
+
+	// CRA-style frontend aliases
+	strategy.RegisterStrategyFactory("aggressive", func() strategy.Strategy { return strategy.NewMartinStrategy() })
+	strategy.RegisterStrategyFactory("conservative", func() strategy.Strategy { return strategy.NewMartinStrategy() })
+	strategy.RegisterStrategyFactory("high_flat", func() strategy.Strategy { return strategies.NewMartingaleStrategy() })
+	strategy.RegisterStrategyFactory("macd_golden_long", func() strategy.Strategy { return strategies.NewMACDStrategy() })
+	strategy.RegisterStrategyFactory("macd_death_short", func() strategy.Strategy { return strategies.NewMACDStrategy() })
+	strategy.RegisterStrategyFactory("ema_follow_trend", func() strategy.Strategy { return strategies.NewEMACrossStrategy() })
+	strategy.RegisterStrategyFactory("ema_counter_trend", func() strategy.Strategy { return strategies.NewEMACrossStrategy() })
+	strategy.RegisterStrategyFactory("macd_spot_long", func() strategy.Strategy { return strategies.NewMACDStrategy() })
+	strategy.RegisterStrategyFactory("ema_spot", func() strategy.Strategy { return strategies.NewEMACrossStrategy() })
+	strategy.RegisterStrategyFactory("trend_long", func() strategy.Strategy { return strategies.NewEMACrossStrategy() })
+	strategy.RegisterStrategyFactory("trend_short", func() strategy.Strategy { return strategies.NewEMACrossStrategy() })
+	strategy.RegisterStrategyFactory("counter_stable", func() strategy.Strategy { return strategies.NewEMACrossStrategy() })
+	strategy.RegisterStrategyFactory("counter_safe", func() strategy.Strategy { return strategies.NewEMACrossStrategy() })
+	strategy.RegisterStrategyFactory("head_tail_arb", func() strategy.Strategy { return strategies.NewArbitrageStrategy() })
+	strategy.RegisterStrategyFactory("global_burn", func() strategy.Strategy { return strategies.NewMartingaleStrategy() })
 }
 
 // setupGinMode configures Gin's mode based on server config.

@@ -14,7 +14,11 @@ const DEFAULT_SYMBOL = 'BTCUSDT'
 export function RustEnginePanel() {
   const [symbol] = useState(DEFAULT_SYMBOL)
 
-  const { data: snapshot, isLoading: snapshotLoading, error: snapshotError } = useQuery({
+  const {
+    data: snapshot,
+    isLoading: snapshotLoading,
+    error: snapshotError,
+  } = useQuery({
     queryKey: ['rust-engine-snapshot', symbol],
     queryFn: () => rustEngineApi.snapshot(symbol, 10),
     refetchInterval: 2000,
@@ -57,9 +61,21 @@ export function RustEnginePanel() {
               data={marketTrades.slice(0, 5)}
               keyExtractor={(_, i) => String(i)}
               columns={[
-                { key: 'price', title: '价格', render: (item) => <span className="text-sm font-mono">{item.price}</span> },
-                { key: 'quantity', title: '数量', render: (item) => <span className="text-sm font-mono">{item.quantity}</span> },
-                { key: 'side', title: '方向', render: (item) => <Badge variant={item.side === 'BUY' ? 'success' : 'error'}>{item.side}</Badge> },
+                {
+                  key: 'price',
+                  title: '价格',
+                  render: (item) => <span className="text-sm font-mono">{item.price}</span>,
+                },
+                {
+                  key: 'quantity',
+                  title: '数量',
+                  render: (item) => <span className="text-sm font-mono">{item.quantity}</span>,
+                },
+                {
+                  key: 'side',
+                  title: '方向',
+                  render: (item) => <Badge variant={item.side === 'BUY' ? 'success' : 'error'}>{item.side}</Badge>,
+                },
               ]}
             />
           </div>
@@ -73,8 +89,12 @@ export function RustEnginePanel() {
       title="Rust 撮合引擎"
       headerAction={
         <div className="flex items-center gap-2">
-          <Badge variant={stats?.tps ? 'success' : 'neutral'} className="font-mono">{stats?.tps || 0} TPS</Badge>
-          <Badge variant="info" className="font-mono">{symbol}</Badge>
+          <Badge variant={stats?.tps ? 'success' : 'neutral'} className="font-mono">
+            {stats?.tps || 0} TPS
+          </Badge>
+          <Badge variant="info" className="font-mono">
+            {symbol}
+          </Badge>
         </div>
       }
     >
@@ -101,7 +121,7 @@ export function RustEnginePanel() {
         <div className="rounded-lg border border-quant-border bg-quant-bg-secondary p-3">
           <div className="text-xs text-muted-foreground mb-2">买十档</div>
           <div className="space-y-1">
-            {snapshot?.bids.map((level, i) => (
+            {snapshot?.bids?.map((level, i) => (
               <div key={`bid-${i}`} className="flex justify-between text-xs">
                 <span className="text-quant-green font-mono">{level.price}</span>
                 <span className="text-muted-foreground font-mono">{level.quantity}</span>
@@ -112,7 +132,7 @@ export function RustEnginePanel() {
         <div className="rounded-lg border border-quant-border bg-quant-bg-secondary p-3">
           <div className="text-xs text-muted-foreground mb-2">卖十档</div>
           <div className="space-y-1">
-            {snapshot?.asks.map((level, i) => (
+            {snapshot?.asks?.map((level, i) => (
               <div key={`ask-${i}`} className="flex justify-between text-xs">
                 <span className="text-quant-red font-mono">{level.price}</span>
                 <span className="text-muted-foreground font-mono">{level.quantity}</span>
