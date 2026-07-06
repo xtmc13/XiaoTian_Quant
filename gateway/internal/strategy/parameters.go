@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strings"
 )
 
 // ParamType defines the type of a strategy parameter.
@@ -327,9 +328,14 @@ func (r *ParamRegistry) ToMap() map[string]any {
 }
 
 // FromMap imports parameter values from a map, validating each.
+// Unknown keys are ignored so that CRA-style configs can safely include
+// frontend fields that a strategy does not declare.
 func (r *ParamRegistry) FromMap(m map[string]any) error {
 	for name, val := range m {
 		if err := r.Set(name, val); err != nil {
+			if strings.Contains(err.Error(), "not found") {
+				continue
+			}
 			return err
 		}
 	}

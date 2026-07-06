@@ -525,9 +525,7 @@ func MLDeployStrategy(c *gin.Context) {
 	}
 
 	// Update or create strategy config in store
-	mu := store.GetStrategyConfigMu()
-	mu.Lock()
-	item := store.GetStrategyConfigs()[req.StrategyID]
+	item := store.GetStrategyConfig(req.StrategyID)
 	if item == nil {
 		// Create new strategy config for this ML model
 		item = map[string]any{
@@ -541,7 +539,6 @@ func MLDeployStrategy(c *gin.Context) {
 			"created_at":    float64(time.Now().UnixMilli()),
 			"updated_at":    float64(time.Now().UnixMilli()),
 		}
-		store.GetStrategyConfigs()[req.StrategyID] = item
 	}
 	item["strategy_type"] = "ml"
 	item["symbol"] = req.Symbol
@@ -550,7 +547,7 @@ func MLDeployStrategy(c *gin.Context) {
 		return string(b)
 	}()
 	item["updated_at"] = float64(time.Now().UnixMilli())
-	mu.Unlock()
+	store.SetStrategyConfig(req.StrategyID, item)
 	store.PersistStrategyConfigs()
 
 	// Register in strategy engine if available and auto_start requested

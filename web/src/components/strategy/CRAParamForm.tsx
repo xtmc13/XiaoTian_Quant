@@ -1,8 +1,9 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { cn } from '@/lib/utils'
+import { Settings2, TrendingUp } from 'lucide-react'
 import type { AddPositionItem, MovingTPTier } from '@/types'
-import { AddPositionTable } from './AddPositionTable'
-import { MovingTPTiersTable } from './MovingTPTiersTable'
+import { AddPositionModal } from './AddPositionModal'
+import { MovingTPModal } from './MovingTPModal'
 
 export type MarketType = 'spot' | 'contract'
 
@@ -142,53 +143,33 @@ export function useCRAConfig() {
 const inputCls =
   'w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold'
 
-interface CRAParamFormProps {
-  value: CRAParams
-  onChange: (next: CRAParams) => void
-  market: MarketType
-  className?: string
+interface SectionProps {
+  title: string
+  children: React.ReactNode
 }
 
-export function CRAParamForm({ value, onChange, market, className }: CRAParamFormProps) {
-  const update = <K extends keyof CRAParams>(key: K, val: CRAParams[K]) => {
-    onChange({ ...value, [key]: val })
-  }
-
-  const totalAddPosition = useMemo(() => {
-    const first = value.firstOrderAmount * value.firstOrderMultiplier
-    return value.addPositions.reduce((sum, pos) => sum + first * pos.multiplier, first)
-  }, [value.firstOrderAmount, value.firstOrderMultiplier, value.addPositions])
-
-  const isContract = market === 'contract'
-
-  const Section = ({ title, children }: { title: string; children: React.ReactNode }) => (
+function Section({ title, children }: SectionProps) {
+  return (
     <div className="rounded-xl border border-quant-border bg-quant-card p-4 space-y-4">
       <div className="text-xs font-semibold text-quant-gold">{title}</div>
       {children}
     </div>
   )
+}
 
-  const PeriodSelect = ({
-    label,
-    enabled,
-    period,
-    onToggle,
-    onPeriodChange,
-  }: {
-    label: string
-    enabled: boolean
-    period: 'close' | '5m' | '15m'
-    onToggle: (v: boolean) => void
-    onPeriodChange: (v: 'close' | '5m' | '15m') => void
-  }) => (
+interface PeriodSelectProps {
+  label: string
+  enabled: boolean
+  period: 'close' | '5m' | '15m'
+  onToggle: (v: boolean) => void
+  onPeriodChange: (v: 'close' | '5m' | '15m') => void
+}
+
+function PeriodSelect({ label, enabled, period, onToggle, onPeriodChange }: PeriodSelectProps) {
+  return (
     <div className="flex items-center gap-3">
       <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
-        <input
-          type="checkbox"
-          checked={enabled}
-          onChange={(e) => onToggle(e.target.checked)}
-          className="rounded"
-        />
+        <input type="checkbox" checked={enabled} onChange={(e) => onToggle(e.target.checked)} className="rounded" />
         <span className={enabled ? 'text-foreground' : ''}>{label}</span>
       </label>
       {enabled && (
@@ -204,25 +185,35 @@ export function CRAParamForm({ value, onChange, market, className }: CRAParamFor
       )}
     </div>
   )
+}
+
+interface CRAParamFormProps {
+  value: CRAParams
+  onChange: (next: CRAParams) => void
+  market: MarketType
+  className?: string
+}
+
+export function CRAParamForm({ value, onChange, market, className }: CRAParamFormProps) {
+  const [showAddPositionModal, setShowAddPositionModal] = useState(false)
+  const [showMovingTPModal, setShowMovingTPModal] = useState(false)
+
+  const update = <K extends keyof CRAParams>(key: K, val: CRAParams[K]) => {
+    onChange({ ...value, [key]: val })
+  }
+
+  const totalAddPosition = useMemo(() => {
+    const first = value.firstOrderAmount * value.firstOrderMultiplier
+    return value.addPositions.reduce((sum, pos) => sum + first * pos.multiplier, first)
+  }, [value.firstOrderAmount, value.firstOrderMultiplier, value.addPositions])
+
+  const isContract = market === 'contract'
 
   return (
     <div className={cn('space-y-4', className)}>
       {/* ── 开仓设置 ── */}
       <Section title="开仓设置">
         <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="text-[11px] text-muted-foreground mb-1.5 block">挂单价格 (USDT)</label>
-            <input
-              type="number"
-              min={0}
-              step={1}
-              value={value.firstOrderPrice}
-              onChange={(e) => update('firstOrderPrice', Number(e.target.value))}
-              className={inputCls}
-              placeholder="0 = 市价"
-            />
-            <p className="text-[10px] text-muted-foreground mt-1">0 表示实时市价买入</p>
-          </div>
           <div>
             <label className="text-[11px] text-muted-foreground mb-1.5 block">首单额度 (USDT)</label>
             <input
@@ -235,7 +226,43 @@ export function CRAParamForm({ value, onChange, market, className }: CRAParamFor
               className={inputCls}
             />
           </div>
+          {isContract && (
+            <div>
+              <label className="text-[11px] text-muted-foreground mb-1.5 block">杠杆倍数</label>
+              <input
+                type="number"
+                min={1}
+                max={125}
+                value={value.leverage}
+                onChange={(e) => update('leverage', Number(e.target.value))}
+                className={inputCls}
+              />
+            </div>
+          )}
         </div>
+
+        {isContract && (
+          <div>
+            <label className="text-[11px] text-muted-foreground mb-1.5 block">交易方向</label>
+            <div className="flex gap-1 rounded-lg border border-quant-border overflow-hidden">
+              {(['long', 'short', 'dual'] as const).map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => update('direction', d)}
+                  className={cn(
+                    'flex-1 py-2 text-xs font-medium transition-colors',
+                    value.direction === d
+                      ? 'bg-quant-gold/10 text-quant-gold'
+                      : 'text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  {d === 'long' ? '多' : d === 'short' ? '空' : '双向'}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="grid grid-cols-2 gap-4">
           <div>
@@ -273,6 +300,7 @@ export function CRAParamForm({ value, onChange, market, className }: CRAParamFor
             ).map((m) => (
               <button
                 key={m.key}
+                type="button"
                 onClick={() => update('tradeCountMode', m.key)}
                 className={cn(
                   'flex-1 py-2 rounded-lg text-xs border transition-colors',
@@ -340,44 +368,6 @@ export function CRAParamForm({ value, onChange, market, className }: CRAParamFor
         </div>
       </Section>
 
-      {/* ── 仓位设置 (合约) ── */}
-      {isContract && (
-        <Section title="仓位设置">
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="text-[11px] text-muted-foreground mb-1.5 block">杠杆倍数</label>
-              <input
-                type="number"
-                min={1}
-                max={125}
-                value={value.leverage}
-                onChange={(e) => update('leverage', Number(e.target.value))}
-                className={inputCls}
-              />
-            </div>
-            <div>
-              <label className="text-[11px] text-muted-foreground mb-1.5 block">交易方向</label>
-              <div className="flex gap-1 rounded-lg border border-quant-border overflow-hidden">
-                {(['long', 'short', 'dual'] as const).map((d) => (
-                  <button
-                    key={d}
-                    onClick={() => update('direction', d)}
-                    className={cn(
-                      'flex-1 py-2 text-xs font-medium transition-colors',
-                      value.direction === d
-                        ? 'bg-quant-gold/10 text-quant-gold'
-                        : 'text-muted-foreground hover:text-foreground'
-                    )}
-                  >
-                    {d === 'long' ? '多' : d === 'short' ? '空' : '双向'}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        </Section>
-      )}
-
       {/* ── 补仓设置 ── */}
       <Section title="补仓设置">
         <div className="flex items-center gap-4">
@@ -405,11 +395,41 @@ export function CRAParamForm({ value, onChange, market, className }: CRAParamFor
             </div>
             <div>
               <label className="text-[11px] text-muted-foreground mb-1.5 block">补仓总金额 (USDT)</label>
-              <div className={cn('w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs', !value.enableAddPosition && 'opacity-40')}>
+              <div
+                className={cn(
+                  'w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs',
+                  !value.enableAddPosition && 'opacity-40'
+                )}
+              >
                 {totalAddPosition.toFixed(2)}
               </div>
             </div>
           </div>
+        </div>
+
+        <div>
+          <button
+            type="button"
+            disabled={!value.enableAddPosition}
+            onClick={() => setShowAddPositionModal(true)}
+            className={cn(
+              'w-full flex items-center justify-center gap-2 py-2.5 rounded-lg border text-xs transition-colors',
+              value.enableAddPosition
+                ? 'border-quant-gold/30 text-quant-gold hover:bg-quant-gold/5'
+                : 'border-quant-border text-muted-foreground opacity-40 cursor-not-allowed'
+            )}
+          >
+            <Settings2 className="w-3.5 h-3.5" />
+            配置补仓参数
+          </button>
+          <AddPositionModal
+            open={showAddPositionModal}
+            onClose={() => setShowAddPositionModal(false)}
+            value={value.addPositions}
+            onChange={(next) => update('addPositions', next)}
+            showEma={isContract}
+            disabled={!value.enableAddPosition}
+          />
         </div>
 
         {isContract && (
@@ -433,15 +453,6 @@ export function CRAParamForm({ value, onChange, market, className }: CRAParamFor
             </div>
           </div>
         )}
-
-        <div>
-          <AddPositionTable
-            value={value.addPositions}
-            onChange={(next) => update('addPositions', next)}
-            showEma={isContract}
-            disabled={!value.enableAddPosition}
-          />
-        </div>
       </Section>
 
       {/* ── 风控设置 ── */}
@@ -486,6 +497,7 @@ export function CRAParamForm({ value, onChange, market, className }: CRAParamFor
             ).map((m) => (
               <button
                 key={m.key}
+                type="button"
                 onClick={() => update('tpMethod', m.key)}
                 className={cn(
                   'flex-1 py-2 rounded-lg text-xs border transition-colors',
@@ -511,6 +523,7 @@ export function CRAParamForm({ value, onChange, market, className }: CRAParamFor
             ).map((m) => (
               <button
                 key={m.key}
+                type="button"
                 onClick={() => update('tpMode', m.key)}
                 className={cn(
                   'flex-1 py-2 rounded-lg text-xs border transition-colors',
@@ -555,7 +568,22 @@ export function CRAParamForm({ value, onChange, market, className }: CRAParamFor
         )}
 
         {value.tpMode === 'moving' && (
-          <MovingTPTiersTable value={value.movingTPTiers} onChange={(next) => update('movingTPTiers', next)} />
+          <div>
+            <button
+              type="button"
+              onClick={() => setShowMovingTPModal(true)}
+              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg border border-quant-gold/30 text-quant-gold text-xs hover:bg-quant-gold/5 transition-colors"
+            >
+              <TrendingUp className="w-3.5 h-3.5" />
+              配置移动止盈止损参数
+            </button>
+            <MovingTPModal
+              open={showMovingTPModal}
+              onClose={() => setShowMovingTPModal(false)}
+              value={value.movingTPTiers}
+              onChange={(next) => update('movingTPTiers', next)}
+            />
+          </div>
         )}
 
         {isContract && (
@@ -605,6 +633,7 @@ export function CRAParamForm({ value, onChange, market, className }: CRAParamFor
                 {(['ratio', 'amount', 'price'] as const).map((t) => (
                   <button
                     key={t}
+                    type="button"
                     onClick={() => update('stopLossType', t)}
                     disabled={!value.stopLossEnabled}
                     className={cn(
@@ -726,8 +755,52 @@ export function CRAParamForm({ value, onChange, market, className }: CRAParamFor
   )
 }
 
+interface ApiPayload {
+  first_order_price: number
+  first_order_amount: number
+  first_order_multiplier: number
+  trade_count_mode: 'single' | 'cycle'
+  loop_count: number
+  enable_add_position: boolean
+  order_count: number
+  add_positions: AddPositionItem[]
+  take_profit_method: 'full' | 'tail' | 'head_tail'
+  tp_mode: 'static' | 'moving'
+  take_profit_ratio: number
+  profit_callback: number
+  moving_take_profit_tiers: MovingTPTier[]
+  open_macd_enabled: boolean
+  open_macd_period: 'close' | '5m' | '15m'
+  open_counter_ema_enabled: boolean
+  open_counter_ema_period: 'close' | '5m' | '15m'
+  open_trend_ema_enabled: boolean
+  open_trend_ema_period: 'close' | '5m' | '15m'
+  add_macd_enabled: boolean
+  add_macd_period: 'close' | '5m' | '15m'
+  add_ema_enabled: boolean
+  add_ema_period: 'close' | '5m' | '15m'
+  waterfall_enabled: boolean
+  waterfall_protection: number
+  stop_loss_enabled: boolean
+  stop_loss_type: 'ratio' | 'amount' | 'price'
+  stop_loss_ratio: number
+  stop_loss_amount: number
+  stop_loss_price: number
+  reverse_take_profit_period: 'close' | '5m' | '15m'
+  reverse_stop_loss: boolean
+  burn_global_enabled: boolean
+  burn_global_threshold: number
+  burn_dual_enabled: boolean
+  burn_dual_threshold: number
+  open_double: boolean
+  follow_trend: boolean
+  online_order_limit: number
+  leverage: number
+  direction: 'long' | 'short' | 'dual'
+}
+
 /** 将 CRAParams 转换为后端 API 所需的 snake_case 参数对象 */
-export function craParamsToApiPayload(p: CRAParams) {
+export function craParamsToApiPayload(p: CRAParams): ApiPayload {
   return {
     first_order_price: p.firstOrderPrice,
     first_order_amount: p.firstOrderAmount,

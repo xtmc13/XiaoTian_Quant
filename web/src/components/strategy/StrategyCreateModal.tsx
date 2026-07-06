@@ -1,21 +1,14 @@
-import { useState, useEffect, useMemo } from 'react'
-import { useMutation } from '@tanstack/react-query'
-import { strategyApi, backtestApi } from '@/lib/api'
-import { cn, formatCurrency } from '@/lib/utils'
+import { useState, useEffect } from 'react'
+import { useMutation, useQuery } from '@tanstack/react-query'
+import { strategyApi, backtestApi, configApi } from '@/lib/api'
+import { cn } from '@/lib/utils'
 import { toast } from '@/lib/useToast'
 import type { StrategyParamDefs } from '@/types'
 import type { StrategyTemplate } from '@/types/strategies'
-import {
-  FormField,
-  Toggle,
-  DynamicParamField,
-  STRAT_TYPES,
-  TIMEFRAMES,
-  DEFAULT_CODE,
-  type StrategyRow,
-} from './StrategyFormFields'
+import { FormField, DynamicParamField, STRAT_TYPES, TIMEFRAMES, type StrategyRow } from './StrategyFormFields'
 import { CRAParamForm, craParamsToApiPayload, type CRAParams } from './CRAParamForm'
 import { STRATEGY_PRESETS, type Preset, type PresetKey } from './StrategyPresets'
+import { ExchangeSelectModal } from './ExchangeSelectModal'
 import { createDefaultCRAParams, migrateLegacyConfigToCRAParams } from '@/lib/strategyUtils'
 import {
   X,
@@ -27,10 +20,7 @@ import {
   SlidersHorizontal,
   Zap,
   BarChart3,
-  TrendingUp,
-  TrendingDown,
-  Target,
-  Percent,
+  Globe,
 } from 'lucide-react'
 
 /* ─── Collapsible Section ─── */
@@ -155,6 +145,9 @@ export function StrategyCreateModal({
         const parsed = JSON.parse(editing.config_json)
         setDynamicParams((prev) => ({ ...prev, ...parsed }))
         setCraParams(migrateLegacyConfigToCRAParams(parsed, market))
+        if (Array.isArray(parsed.selected_exchanges)) {
+          setSelectedExchanges(parsed.selected_exchanges)
+        }
       } catch {
         /* ignore */
       }
@@ -162,10 +155,31 @@ export function StrategyCreateModal({
   }, [editing, defaultStrategyType, market])
 
   const [timeframe, setTimeframe] = useState(editing?.timeframe || '15m')
-  const [initialCapital, setInitialCapital] = useState(editing?.initial_capital || 1000)
   const [executionMode, setExecutionMode] = useState<'live' | 'signal'>('signal')
   const [notifyChannels, setNotifyChannels] = useState<string[]>(['browser'])
   const [saveAsDefault, setSaveAsDefault] = useState(false)
+  const [selectedExchanges, setSelectedExchanges] = useState<string[]>([])
+  const [showExchangeModal, setShowExchangeModal] = useState(false)
+  const [backtestCapital, setBacktestCapital] = useState(10000)
+
+  const {
+    data: configuredExchanges,
+    isError: isExchangesError,
+    error: exchangesError,
+  } = useQuery({
+    queryKey: ['configured-exchanges'],
+    queryFn: () => configApi.exchangesConfigured(),
+    staleTime: 30000,
+  })
+
+  useEffect(() => {
+    if (isExchangesError && exchangesError) {
+      toast(
+        'error',
+        '交易所配置加载失败: ' + (exchangesError instanceof Error ? exchangesError.message : String(exchangesError))
+      )
+    }
+  }, [isExchangesError, exchangesError])
 
   // CRA params (initialized from market-specific defaults)
   const [craParams, setCraParams] = useState<CRAParams>(() => createDefaultCRAParams(market))
@@ -200,8 +214,8 @@ export function StrategyCreateModal({
     if (config.leverage && typeof config.leverage === 'number') {
       setCraParams((prev) => ({ ...prev, leverage: config.leverage as number }))
     }
-    if (config.initial_capital && typeof config.initial_capital === 'number') {
-      setInitialCapital(config.initial_capital)
+    if (config.selected_exchanges && Array.isArray(config.selected_exchanges)) {
+      setSelectedExchanges(config.selected_exchanges)
     }
     if (config.trade_direction) {
       const d = String(config.trade_direction)
@@ -249,7 +263,7 @@ export function StrategyCreateModal({
         symbol,
         interval: timeframe,
         strategy_type: strategyType,
-        initial_balance: { USDT: initialCapital },
+        initial_balance: { USDT: backtestCapital },
         from: new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0],
         to: new Date().toISOString().split('T')[0],
       })
@@ -269,27 +283,6 @@ export function StrategyCreateModal({
       setBtLoading(false)
     }
   }
-
-  // ── Risk preview ──
-  const riskPreview = useMemo(() => {
-    const marginPerOrder = initialCapital / (market === 'spot' ? 1 : Math.max(craParams.leverage, 1))
-    const totalExposure = marginPerOrder * craParams.orderCount * (craParams.openDouble ? 2 : 1)
-    const maxLoss =
-      craParams.stopLossRatio > 0
-        ? (initialCapital * craParams.stopLossRatio) / 100
-        : craParams.stopLossAmount > 0
-          ? craParams.stopLossAmount
-          : 0
-    return { marginPerOrder, totalExposure, maxLoss }
-  }, [
-    initialCapital,
-    market,
-    craParams.leverage,
-    craParams.orderCount,
-    craParams.openDouble,
-    craParams.stopLossRatio,
-    craParams.stopLossAmount,
-  ])
 
   // ── Create / Update ──
   const createMut = useMutation({
@@ -319,9 +312,12 @@ export function StrategyCreateModal({
           symbol: symbol.trim().toUpperCase(),
           timeframe,
           leverage: market === 'spot' ? 1 : craParams.leverage,
-          initial_capital: initialCapital,
           trade_direction: market === 'spot' ? 'long' : craParams.direction,
-          config_json: JSON.stringify({ ...craParamsToApiPayload(craParams), ...dynamicParams }),
+          config_json: JSON.stringify({
+            ...craParamsToApiPayload(craParams),
+            ...dynamicParams,
+            selected_exchanges: selectedExchanges,
+          }),
         },
       })
       .catch(() => {
@@ -346,6 +342,10 @@ export function StrategyCreateModal({
       toast('error', '合约策略杠杆必须≥1')
       return
     }
+    if (selectedExchanges.length === 0) {
+      toast('error', '请至少选择一个交易所')
+      return
+    }
 
     const config: Record<string, unknown> = {
       ...craParamsToApiPayload(craParams),
@@ -353,6 +353,7 @@ export function StrategyCreateModal({
       market_type: market === 'spot' ? 'spot' : 'swap',
       position_side: craParams.direction === 'long' ? 'LONG' : craParams.direction === 'short' ? 'SHORT' : 'BOTH',
       margin_mode: 'cross',
+      selected_exchanges: selectedExchanges,
     }
     const payload: Record<string, unknown> = {
       name: name.trim(),
@@ -361,7 +362,6 @@ export function StrategyCreateModal({
       leverage: market === 'spot' ? 1 : craParams.leverage,
       trade_direction: market === 'spot' ? 'long' : craParams.direction,
       market_type: market === 'spot' ? 'spot' : 'swap',
-      initial_capital: initialCapital,
       execution_mode: executionMode,
       notification_config: { channels: notifyChannels },
       strategy_type: strategyType,
@@ -582,13 +582,25 @@ export function StrategyCreateModal({
               </div>
 
               <div className="grid grid-cols-3 gap-4">
-                <FormField label="初始资金 (USDT)">
-                  <input
-                    type="number"
-                    value={initialCapital}
-                    onChange={(e) => setInitialCapital(Number(e.target.value))}
-                    className={inputCls}
-                  />
+                <FormField label="选择交易所">
+                  <button
+                    type="button"
+                    onClick={() => setShowExchangeModal(true)}
+                    className={cn(
+                      'w-full flex items-center justify-between border rounded-lg px-3 py-2 text-xs transition-colors',
+                      selectedExchanges.length > 0
+                        ? 'border-quant-gold/30 bg-quant-gold/5 text-foreground'
+                        : 'border-quant-border text-muted-foreground hover:text-foreground'
+                    )}
+                  >
+                    <span className="flex items-center gap-2">
+                      <Globe className="w-3.5 h-3.5" />
+                      {selectedExchanges.length > 0 ? `已选择 ${selectedExchanges.length} 个交易所` : '点击选择交易所'}
+                    </span>
+                    <span className="text-[10px] text-muted-foreground">
+                      {selectedExchanges.length > 0 ? selectedExchanges.join(', ') : '未选择'}
+                    </span>
+                  </button>
                 </FormField>
                 <FormField label="杠杆">
                   <input
@@ -596,9 +608,7 @@ export function StrategyCreateModal({
                     min={1}
                     max={125}
                     value={craParams.leverage}
-                    onChange={(e) =>
-                      setCraParams((prev) => ({ ...prev, leverage: Number(e.target.value) }))
-                    }
+                    onChange={(e) => setCraParams((prev) => ({ ...prev, leverage: Number(e.target.value) }))}
                     disabled={market === 'spot'}
                     className={cn(inputCls, 'disabled:opacity-40')}
                   />
@@ -623,40 +633,13 @@ export function StrategyCreateModal({
                 </FormField>
               </div>
 
-              {/* Risk preview */}
-              {!editing && mode === 'signal' && (
-                <div className="rounded-xl border border-quant-border bg-quant-bg-secondary p-4">
-                  <div className="text-[10px] text-muted-foreground mb-2 flex items-center gap-1">
-                    <Target className="w-3 h-3" />
-                    风险预算预览
-                  </div>
-                  <div className="grid grid-cols-4 gap-3 text-[11px]">
-                    <div>
-                      <span className="text-muted-foreground">单笔保证金</span>
-                      <div className="font-mono text-foreground">${riskPreview.marginPerOrder.toFixed(2)}</div>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground">最大总敞口</span>
-                      <div className="font-mono text-foreground">${riskPreview.totalExposure.toFixed(2)}</div>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground">最大亏损</span>
-                      <div
-                        className={cn(
-                          'font-mono',
-                          riskPreview.maxLoss > 0 ? 'text-quant-red' : 'text-muted-foreground'
-                        )}
-                      >
-                        {riskPreview.maxLoss > 0 ? `$${riskPreview.maxLoss.toFixed(2)}` : '未设置'}
-                      </div>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground">杠杆倍数</span>
-                      <div className="font-mono text-foreground">{market === 'spot' ? '1x' : `${craParams.leverage}x`}</div>
-                    </div>
-                  </div>
-                </div>
-              )}
+              <ExchangeSelectModal
+                open={showExchangeModal}
+                onClose={() => setShowExchangeModal(false)}
+                value={selectedExchanges}
+                onChange={setSelectedExchanges}
+                configuredExchanges={configuredExchanges}
+              />
 
               {/* Dynamic strategy params */}
               {paramDefsLoading && <div className="text-xs text-muted-foreground py-2">加载参数定义...</div>}
@@ -699,11 +682,20 @@ export function StrategyCreateModal({
                 <BarChart3 className="w-8 h-8 text-quant-gold mx-auto mb-3" />
                 <div className="text-sm font-semibold mb-1">回测预览</div>
                 <div className="text-xs text-muted-foreground mb-4">基于最近30天数据快速回测，验证策略效果</div>
+                <FormField label="回测初始资金 (USDT)">
+                  <input
+                    type="number"
+                    min={0}
+                    value={backtestCapital}
+                    onChange={(e) => setBacktestCapital(Number(e.target.value))}
+                    className={cn(inputCls, 'max-w-[200px] mx-auto')}
+                  />
+                </FormField>
                 <button
                   onClick={handleRunBacktest}
                   disabled={btLoading}
                   className={cn(
-                    'px-6 py-2.5 rounded-lg text-xs font-medium transition-all',
+                    'mt-4 px-6 py-2.5 rounded-lg text-xs font-medium transition-all',
                     btLoading
                       ? 'bg-quant-gold/30 text-quant-gold cursor-wait'
                       : 'bg-quant-gold text-black hover:opacity-90'

@@ -534,10 +534,12 @@ func LoadStrategyConfigs() {
 }
 
 func saveStrategyConfigs() {
+	strategyMu.RLock()
 	items := make([]map[string]any, 0, len(strategyConfigs))
 	for _, v := range strategyConfigs {
 		items = append(items, v)
 	}
+	strategyMu.RUnlock()
 	data, _ := json.MarshalIndent(items, "", "  ")
 	os.WriteFile(strategyConfigsPath, data, 0644)
 }
@@ -552,12 +554,49 @@ func GetStrategyConfigs() map[string]map[string]any {
 	return cp
 }
 
+// GetStrategyConfig returns a single strategy config by id.
+func GetStrategyConfig(id string) map[string]any {
+	strategyMu.RLock()
+	defer strategyMu.RUnlock()
+	item := strategyConfigs[id]
+	if item == nil {
+		return nil
+	}
+	return copyMap(item)
+}
+
+// SetStrategyConfig creates or updates a strategy config under the store lock.
+func SetStrategyConfig(id string, item map[string]any) {
+	strategyMu.Lock()
+	strategyConfigs[id] = item
+	strategyMu.Unlock()
+}
+
+// DeleteStrategyConfig removes a strategy config under the store lock.
+// Returns true if the entry existed.
+func DeleteStrategyConfig(id string) bool {
+	strategyMu.Lock()
+	_, existed := strategyConfigs[id]
+	delete(strategyConfigs, id)
+	strategyMu.Unlock()
+	return existed
+}
+
 func GetStrategyConfigMu() *sync.RWMutex {
 	return &strategyMu
 }
 
 func PersistStrategyConfigs() {
 	saveStrategyConfigs()
+}
+
+// copyMap returns a shallow copy of a string-keyed map.
+func copyMap(m map[string]any) map[string]any {
+	cp := make(map[string]any, len(m))
+	for k, v := range m {
+		cp[k] = v
+	}
+	return cp
 }
 
 // ── In-Memory Stores ──

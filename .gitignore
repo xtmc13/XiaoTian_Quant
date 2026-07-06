@@ -79,6 +79,16 @@ gateway/gateway-server
 # Rust build artifacts
 engine/target/
 
+# Local TA-Lib build artifacts
+.build/
+.ta-lib/
+
+# Local sandbox venv symlink
+sandbox/.venv
+
+# Test artifacts
+test-results/
+
 # Frontend build artifacts embedded into Go binary
 gateway/spa/assets/
 gateway/spa/index.html

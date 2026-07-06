@@ -79,6 +79,9 @@ func (s *EMACrossStrategy) Start(params map[string]any) error {
 	if err := s.ApplyParams(params); err != nil {
 		return fmt.Errorf("ema_cross apply params: %w", err)
 	}
+	if sym, ok := params["symbol"].(string); ok && sym != "" {
+		s.symbol = sym
+	}
 	if s.fastPeriod >= s.slowPeriod {
 		s.fastPeriod = 12
 		s.slowPeriod = 26

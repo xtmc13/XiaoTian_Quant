@@ -3,15 +3,7 @@ import { cn } from '@/lib/utils'
 import { CRAParamForm, DEFAULT_CRA_PARAMS, type CRAParams } from '@/components/strategy/CRAParamForm'
 import type { AddPositionItem, MovingTPTier } from '@/types'
 
-export function WizardField({
-  label,
-  hint,
-  children,
-}: {
-  label: string
-  hint?: string
-  children: React.ReactNode
-}) {
+export function WizardField({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <div>
       <div className="mb-1.5 flex items-center gap-2">

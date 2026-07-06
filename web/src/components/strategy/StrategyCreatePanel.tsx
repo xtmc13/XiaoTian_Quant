@@ -1,15 +1,17 @@
 import { useState, useEffect, useMemo } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { toast } from '@/lib/useToast'
-import { strategyApi } from '@/lib/api'
+import { strategyApi, configApi } from '@/lib/api'
 import { useStrategyData } from '@/hooks/useStrategyData'
 import { SectionCard } from '@/components/ui/SectionCard'
 import { CRAParamForm, craParamsToApiPayload, type CRAParams } from './CRAParamForm'
+import { ExchangeSelectModal } from './ExchangeSelectModal'
 import { FormField, DynamicParamField, STRAT_TYPES, TIMEFRAMES } from './StrategyFormFields'
 import { STRATEGY_PRESETS, type Preset } from './StrategyPresets'
 import { createDefaultCRAParams } from '@/lib/strategyUtils'
 import type { StrategyParamDefs } from '@/types'
-import { X, CheckCircle2, Activity, Zap } from 'lucide-react'
+import { X, CheckCircle2, Activity, Zap, Globe } from 'lucide-react'
 
 const inputCls =
   'w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold'
@@ -42,13 +44,34 @@ export function StrategyCreatePanel({ strategyType, onClose, onSaved }: Strategy
   const { create } = useStrategyData()
   const [isSubmitting, setIsSubmitting] = useState(false)
 
+  const {
+    data: configuredExchanges,
+    isError: isExchangesError,
+    error: exchangesError,
+  } = useQuery({
+    queryKey: ['configured-exchanges'],
+    queryFn: () => configApi.exchangesConfigured(),
+    staleTime: 30000,
+  })
+
+  useEffect(() => {
+    if (isExchangesError && exchangesError) {
+      toast(
+        'error',
+        '交易所配置加载失败: ' + (exchangesError instanceof Error ? exchangesError.message : String(exchangesError))
+      )
+    }
+  }, [isExchangesError, exchangesError])
+
   // Basic fields
   const [name, setName] = useState('')
   const [symbol, setSymbol] = useState('BTCUSDT')
   const [timeframe, setTimeframe] = useState('15m')
-  const [initialCapital, setInitialCapital] = useState(1000)
+  const [selectedExchanges, setSelectedExchanges] = useState<string[]>([])
+  const [showExchangeModal, setShowExchangeModal] = useState(false)
   const [executionMode, setExecutionMode] = useState<'live' | 'signal'>('signal')
   const [notifyChannels, setNotifyChannels] = useState<string[]>(['browser'])
+  const [saveAsDefault, setSaveAsDefault] = useState(false)
 
   // CRA params
   const [craParams, setCraParams] = useState<CRAParams>(() => createDefaultCRAParams(market))
@@ -62,7 +85,7 @@ export function StrategyCreatePanel({ strategyType, onClose, onSaved }: Strategy
   const totalAddPosition = useMemo(() => {
     const first = craParams.firstOrderAmount * craParams.firstOrderMultiplier
     return craParams.addPositions.reduce((sum, pos) => sum + first * pos.multiplier, first)
-  }, [craParams])
+  }, [craParams.firstOrderAmount, craParams.firstOrderMultiplier, craParams.addPositions])
 
   useEffect(() => {
     if (!strategyType) return
@@ -90,7 +113,7 @@ export function StrategyCreatePanel({ strategyType, onClose, onSaved }: Strategy
     setName('')
     setSymbol('BTCUSDT')
     setTimeframe('15m')
-    setInitialCapital(1000)
+    setSelectedExchanges([])
     setExecutionMode('signal')
     setNotifyChannels(['browser'])
     setCraParams(createDefaultCRAParams(market))
@@ -100,6 +123,31 @@ export function StrategyCreatePanel({ strategyType, onClose, onSaved }: Strategy
   const applyPreset = (preset: Preset) => {
     setPresetKey(preset.key)
     setCraParams((prev) => ({ ...prev, ...preset.params(market) }))
+  }
+
+  const handleSaveAsDefault = () => {
+    if (!saveAsDefault) return
+    strategyApi
+      .createTemplate({
+        name: name.trim(),
+        category: market === 'spot' ? 'spot' : 'contract',
+        description: `默认策略模板: ${name.trim()}`,
+        default_config: {
+          strategy_type: strategyType,
+          symbol: symbol.trim().toUpperCase(),
+          timeframe,
+          leverage: market === 'spot' ? 1 : craParams.leverage,
+          trade_direction: market === 'spot' ? 'long' : craParams.direction,
+          config_json: JSON.stringify({
+            ...craParamsToApiPayload(craParams),
+            ...dynamicParams,
+            selected_exchanges: selectedExchanges,
+          }),
+        },
+      })
+      .catch(() => {
+        toast('error', '策略已保存，但默认模板保存失败')
+      })
   }
 
   const handleSubmit = async () => {
@@ -115,6 +163,10 @@ export function StrategyCreatePanel({ strategyType, onClose, onSaved }: Strategy
       toast('error', '合约策略杠杆必须≥1')
       return
     }
+    if (selectedExchanges.length === 0) {
+      toast('error', '请至少选择一个交易所')
+      return
+    }
 
     setIsSubmitting(true)
     try {
@@ -124,6 +176,7 @@ export function StrategyCreatePanel({ strategyType, onClose, onSaved }: Strategy
         market_type: market === 'spot' ? 'spot' : 'swap',
         position_side: craParams.direction === 'long' ? 'LONG' : craParams.direction === 'short' ? 'SHORT' : 'BOTH',
         margin_mode: 'cross',
+        selected_exchanges: selectedExchanges,
       }
       const payload: Record<string, unknown> = {
         name: name.trim(),
@@ -132,7 +185,6 @@ export function StrategyCreatePanel({ strategyType, onClose, onSaved }: Strategy
         leverage: market === 'spot' ? 1 : craParams.leverage,
         trade_direction: market === 'spot' ? 'long' : craParams.direction,
         market_type: market === 'spot' ? 'spot' : 'swap',
-        initial_capital: initialCapital,
         execution_mode: executionMode,
         notification_config: { channels: notifyChannels },
         strategy_type: strategyType,
@@ -144,6 +196,7 @@ export function StrategyCreatePanel({ strategyType, onClose, onSaved }: Strategy
         mode: 'signal',
       }
       await create(payload)
+      handleSaveAsDefault()
       toast('success', `策略 "${name.trim()}" 已创建`)
       onSaved()
     } catch (e: unknown) {
@@ -237,18 +290,37 @@ export function StrategyCreatePanel({ strategyType, onClose, onSaved }: Strategy
                   ))}
                 </select>
               </FormField>
-              <FormField label="初始资金 (USDT)">
-                <input
-                  type="number"
-                  min={10}
-                  value={initialCapital}
-                  onChange={(e) => setInitialCapital(Number(e.target.value))}
-                  className={inputCls}
-                />
+              <FormField label="选择交易所">
+                <button
+                  type="button"
+                  onClick={() => setShowExchangeModal(true)}
+                  className={cn(
+                    'w-full flex items-center justify-between border rounded-lg px-3 py-2 text-xs transition-colors',
+                    selectedExchanges.length > 0
+                      ? 'border-quant-gold/30 bg-quant-gold/5 text-foreground'
+                      : 'border-quant-border text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  <span className="flex items-center gap-2">
+                    <Globe className="w-3.5 h-3.5" />
+                    {selectedExchanges.length > 0 ? `已选择 ${selectedExchanges.length} 个交易所` : '点击选择交易所'}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground">
+                    {selectedExchanges.length > 0 ? selectedExchanges.join(', ') : '未选择'}
+                  </span>
+                </button>
               </FormField>
             </div>
           </div>
         </SectionCard>
+
+        <ExchangeSelectModal
+          open={showExchangeModal}
+          onClose={() => setShowExchangeModal(false)}
+          value={selectedExchanges}
+          onChange={setSelectedExchanges}
+          configuredExchanges={configuredExchanges}
+        />
 
         {/* CRA params */}
         <CRAParamForm value={craParams} onChange={setCraParams} market={market} />
@@ -362,8 +434,19 @@ export function StrategyCreatePanel({ strategyType, onClose, onSaved }: Strategy
 
       {/* Footer */}
       <div className="flex items-center justify-between px-6 py-4 border-t border-quant-border shrink-0">
-        <div className="text-[11px] text-muted-foreground">
-          预估总投入: <span className="text-foreground font-mono">${totalAddPosition.toFixed(2)}</span>
+        <div className="flex items-center gap-4">
+          <div className="text-[11px] text-muted-foreground">
+            预估总投入: <span className="text-foreground font-mono">${totalAddPosition.toFixed(2)}</span>
+          </div>
+          <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer hover:text-foreground">
+            <input
+              type="checkbox"
+              checked={saveAsDefault}
+              onChange={(e) => setSaveAsDefault(e.target.checked)}
+              className="rounded border-quant-border"
+            />
+            保存为默认策略模板
+          </label>
         </div>
         <div className="flex items-center gap-2">
           <button

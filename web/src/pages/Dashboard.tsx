@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import {
   Wallet,
   TrendingDown,
@@ -26,7 +26,6 @@ import {
 } from 'lucide-react'
 import { cn, formatCurrency, formatPercent, formatConverted, setConversion } from '@/lib/utils'
 import { dashboardApi, portfolioApi, strategyApi, protectionApi, mlApi, arbitrageApi } from '@/lib/api'
-import { toast } from '@/lib/useToast'
 import { getEcharts } from '@/lib/echarts'
 import { KPICard } from '@/components/ui/KPICard'
 import { Skeleton } from '@/components/ui/Skeleton'
@@ -866,7 +865,6 @@ export function Dashboard() {
     <div className="h-full overflow-y-auto bg-[#0a0a0a] p-5">
       <div className="mx-auto max-w-[1600px] space-y-5">
         {/* ── Global Bot Controls ── */}
-        <GlobalBotControlBar strategies={strategies || []} />
 
         {/* ── Setup Guide (for new users) ── */}
         {showGuide && runningStrats.length === 0 && !stratLoading && (
@@ -1394,59 +1392,6 @@ export function Dashboard() {
   )
 }
 
-/* ── Global Bot Control Bar ── */
-function GlobalBotControlBar({ strategies }: { strategies: StrategyItem[] }) {
-  const queryClient = useQueryClient()
-  const [loading, setLoading] = useState<string | null>(null)
-
-  const runningIds = strategies.filter((s) => s.status === 'running').map((s) => s.id)
-  const stoppedIds = strategies.filter((s) => s.status !== 'running').map((s) => s.id)
-
-  const handleBatch = async (action: 'start' | 'stop', ids: string[]) => {
-    if (ids.length === 0 || loading) return
-    setLoading(action)
-    try {
-      if (action === 'start') {
-        await strategyApi.batchStart(ids)
-      } else {
-        await strategyApi.batchStop(ids)
-      }
-      queryClient.invalidateQueries({ queryKey: ['strategies'] })
-    } catch (err: unknown) {
-      toast('error', err instanceof Error ? err.message : '操作失败')
-    } finally {
-      setLoading(null)
-    }
-  }
-
-  return (
-    <SectionCard bodyClassName="p-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs text-muted-foreground mr-1">全局控制:</span>
-        <Button
-          variant="primary"
-          size="sm"
-          isLoading={loading === 'start'}
-          disabled={stoppedIds.length === 0}
-          onClick={() => handleBatch('start', stoppedIds)}
-        >
-          启动全部策略
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          isLoading={loading === 'stop'}
-          disabled={runningIds.length === 0}
-          onClick={() => handleBatch('stop', runningIds)}
-        >
-          停止全部策略
-        </Button>
-      </div>
-    </SectionCard>
-  )
-}
-
-/* ── Log Preview Card ── */
 function LogPreviewCard() {
   const navigate = useNavigate()
   return (

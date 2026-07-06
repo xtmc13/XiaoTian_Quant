@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import type { ExchangeTestResult } from '@/types'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { SectionCard } from '@/components/ui/SectionCard'
+import { DataDownloadSection } from './settings/DataDownloadSection'
 import {
   Globe,
   KeyRound,
@@ -1398,6 +1399,8 @@ export function Settings() {
           {/* ── SYSTEM ── */}
           {activeTab === 'system' && (
             <>
+              <DataDownloadSection />
+
               <SectionCard title="系统状态" bodyClassName="space-y-4">
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                   <div className="rounded-lg border border-quant-border bg-quant-bg p-4">

@@ -12,7 +12,6 @@ import {
   Bot,
   Settings,
   PieChart,
-  User,
   Users,
   Key,
   ChevronDown,
@@ -107,36 +106,11 @@ const navItems: NavItem[] = [
     ],
   },
 
-  // 系统与数据
-  {
-    label: '系统与数据',
-    icon: Layers,
-    children: [
-      { path: '/data', label: '数据下载' },
-      { path: '/status', label: '系统状态' },
-      { path: '/logs', label: '系统日志' },
-    ],
-  },
-
-  // 账户中心
-  {
-    label: '账户中心',
-    icon: User,
-    children: [
-      { path: '/profile', label: '个人资料' },
-      { path: '/billing', label: '订阅' },
-      { path: '/exchange-account', label: '交易所账户' },
-    ],
-  },
-
   // 社区
   {
     label: '社区',
     icon: Share2,
-    children: [
-      { path: '/social-trading', label: '信号市场' },
-      { path: '/author-dashboard', label: '作者后台' },
-    ],
+    children: [{ path: '/social-trading', label: '信号市场' }],
   },
 
   // 高级
@@ -148,6 +122,7 @@ const navItems: NavItem[] = [
       { path: '/advanced-orders', label: '高级订单' },
       { path: '/hyperopt', label: '参数优化' },
       { path: '/onchain', label: '链上数据' },
+      { path: '/author-dashboard', label: '作者后台' },
     ],
   },
 
