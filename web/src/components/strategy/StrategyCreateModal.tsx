@@ -314,8 +314,8 @@ export function StrategyCreateModal({
           leverage: market === 'spot' ? 1 : craParams.leverage,
           trade_direction: market === 'spot' ? 'long' : craParams.direction,
           config_json: JSON.stringify({
-            ...craParamsToApiPayload(craParams),
             ...dynamicParams,
+            ...craParamsToApiPayload(craParams),
             selected_exchanges: selectedExchanges,
           }),
         },
@@ -348,8 +348,8 @@ export function StrategyCreateModal({
     }
 
     const config: Record<string, unknown> = {
-      ...craParamsToApiPayload(craParams),
       ...dynamicParams,
+      ...craParamsToApiPayload(craParams),
       market_type: market === 'spot' ? 'spot' : 'swap',
       position_side: craParams.direction === 'long' ? 'LONG' : craParams.direction === 'short' ? 'SHORT' : 'BOTH',
       margin_mode: 'cross',
@@ -581,57 +581,26 @@ export function StrategyCreateModal({
                 </FormField>
               </div>
 
-              <div className="grid grid-cols-3 gap-4">
-                <FormField label="选择交易所">
-                  <button
-                    type="button"
-                    onClick={() => setShowExchangeModal(true)}
-                    className={cn(
-                      'w-full flex items-center justify-between border rounded-lg px-3 py-2 text-xs transition-colors',
-                      selectedExchanges.length > 0
-                        ? 'border-quant-gold/30 bg-quant-gold/5 text-foreground'
-                        : 'border-quant-border text-muted-foreground hover:text-foreground'
-                    )}
-                  >
-                    <span className="flex items-center gap-2">
-                      <Globe className="w-3.5 h-3.5" />
-                      {selectedExchanges.length > 0 ? `已选择 ${selectedExchanges.length} 个交易所` : '点击选择交易所'}
-                    </span>
-                    <span className="text-[10px] text-muted-foreground">
-                      {selectedExchanges.length > 0 ? selectedExchanges.join(', ') : '未选择'}
-                    </span>
-                  </button>
-                </FormField>
-                <FormField label="杠杆">
-                  <input
-                    type="number"
-                    min={1}
-                    max={125}
-                    value={craParams.leverage}
-                    onChange={(e) => setCraParams((prev) => ({ ...prev, leverage: Number(e.target.value) }))}
-                    disabled={market === 'spot'}
-                    className={cn(inputCls, 'disabled:opacity-40')}
-                  />
-                </FormField>
-                <FormField label="交易方向">
-                  <div className="flex gap-1 rounded-lg border border-quant-border overflow-hidden">
-                    {(['long', 'short', 'dual'] as const).map((d) => (
-                      <button
-                        key={d}
-                        onClick={() => setCraParams((prev) => ({ ...prev, direction: d }))}
-                        className={cn(
-                          'flex-1 py-2 text-xs font-medium transition-colors',
-                          craParams.direction === d
-                            ? 'bg-quant-gold/10 text-quant-gold'
-                            : 'text-muted-foreground hover:text-foreground'
-                        )}
-                      >
-                        {d === 'long' ? '做多' : d === 'short' ? '做空' : '双向'}
-                      </button>
-                    ))}
-                  </div>
-                </FormField>
-              </div>
+              <FormField label="选择交易所">
+                <button
+                  type="button"
+                  onClick={() => setShowExchangeModal(true)}
+                  className={cn(
+                    'w-full flex items-center justify-between border rounded-lg px-3 py-2 text-xs transition-colors',
+                    selectedExchanges.length > 0
+                      ? 'border-quant-gold/30 bg-quant-gold/5 text-foreground'
+                      : 'border-quant-border text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  <span className="flex items-center gap-2">
+                    <Globe className="w-3.5 h-3.5" />
+                    {selectedExchanges.length > 0 ? `已选择 ${selectedExchanges.length} 个交易所` : '点击选择交易所'}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground">
+                    {selectedExchanges.length > 0 ? selectedExchanges.join(', ') : '未选择'}
+                  </span>
+                </button>
+              </FormField>
 
               <ExchangeSelectModal
                 open={showExchangeModal}

@@ -1,5 +1,4 @@
 import React from 'react'
-import { cn } from '@/lib/utils'
 import { CRAParamForm, DEFAULT_CRA_PARAMS, type CRAParams } from '@/components/strategy/CRAParamForm'
 import type { AddPositionItem, MovingTPTier } from '@/types'
 
@@ -196,54 +195,20 @@ export function BotParamForm({ form, setForm, effectiveType }: BotParamFormProps
       {/* -- 基础策略参数 -- */}
       <div className="rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-4 space-y-4">
         <div className="text-xs font-semibold text-white">基础策略参数</div>
-        <div className="grid grid-cols-2 gap-3">
-          <WizardField label="K线周期">
-            <select
-              value={(form.timeframe as string) || '1h'}
-              onChange={(e) => setForm((f) => ({ ...f, timeframe: e.target.value }))}
-              className="w-full rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] px-3 py-2 text-sm text-white outline-none focus:border-[#4f6ed1]/40"
-            >
-              <option value="1m">1分钟</option>
-              <option value="5m">5分钟</option>
-              <option value="15m">15分钟</option>
-              <option value="30m">30分钟</option>
-              <option value="1h">1小时</option>
-              <option value="4h">4小时</option>
-              <option value="1d">1天</option>
-            </select>
-          </WizardField>
-          <WizardField label="杠杆">
-            <input
-              type="number"
-              min={1}
-              max={125}
-              value={(form.leverage as number) || 10}
-              onChange={(e) => setForm((f) => ({ ...f, leverage: Number(e.target.value) }))}
-              className="w-full rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] px-3 py-2 text-sm text-white outline-none focus:border-[#4f6ed1]/40"
-            />
-          </WizardField>
-        </div>
-        <WizardField label="方向">
-          <div className="flex gap-2">
-            {[
-              { key: 'long', label: '做多' },
-              { key: 'short', label: '做空' },
-              { key: 'dual', label: '双向' },
-            ].map((d) => (
-              <button
-                key={d.key}
-                onClick={() => setForm((f) => ({ ...f, direction: d.key }))}
-                className={cn(
-                  'flex-1 rounded-lg border px-3 py-2 text-xs font-medium transition-colors',
-                  (form.direction as string) === d.key
-                    ? 'border-white/20 bg-white/10 text-white'
-                    : 'border-[#1c1c1c] bg-[#141414] text-[#999999] hover:text-[#888888]'
-                )}
-              >
-                {d.label}
-              </button>
-            ))}
-          </div>
+        <WizardField label="K线周期">
+          <select
+            value={(form.timeframe as string) || '1h'}
+            onChange={(e) => setForm((f) => ({ ...f, timeframe: e.target.value }))}
+            className="w-full rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] px-3 py-2 text-sm text-white outline-none focus:border-[#4f6ed1]/40"
+          >
+            <option value="1m">1分钟</option>
+            <option value="5m">5分钟</option>
+            <option value="15m">15分钟</option>
+            <option value="30m">30分钟</option>
+            <option value="1h">1小时</option>
+            <option value="4h">4小时</option>
+            <option value="1d">1天</option>
+          </select>
         </WizardField>
       </div>
 
