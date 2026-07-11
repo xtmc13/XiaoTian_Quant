@@ -129,7 +129,7 @@ func InitOMSPipeline() {
 			_, secret, passphrase := adapter.GetCredential(exName)
 			exch := adapter.NewOKXAdapter(apiKey, secret, passphrase, false)
 			result, err = exch.PlaceOrder(ord.Symbol, side, orderType, ord.Price, ord.Quantity)
-		case "gateio":
+		case "gate", "gateio":
 			exch := adapter.NewGateIOAdapter(apiKey, secret)
 			result, err = exch.PlaceOrder(ord.Symbol, side, orderType, ord.Price, ord.Quantity)
 		case "coinbase":
@@ -182,7 +182,7 @@ func InitOMSPipeline() {
 			_, secret, passphrase := adapter.GetCredential(exName)
 			exch := adapter.NewOKXAdapter(apiKey, secret, passphrase, false)
 			_, err = exch.CancelOrder(ord.Symbol, ord.ID)
-		case "gateio":
+		case "gate", "gateio":
 			exch := adapter.NewGateIOAdapter(apiKey, secret)
 			_, err = exch.CancelOrder(ord.Symbol, ord.ID)
 		case "coinbase":

@@ -13,6 +13,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,6 +36,11 @@ var (
 	strategyConfigs     = make(map[string]map[string]any)
 	strategyMu          sync.RWMutex
 
+	strategyConfigRepo        = NewStrategyConfigRepo()
+	strategyTemplateRepo      = NewStrategyTemplateRepo()
+	strategyConfigsMigrated   sync.Once
+	strategyTemplatesMigrated sync.Once
+
 	logsStore       []map[string]any
 	templates       []map[string]any
 	agentTokens     []map[string]any
@@ -45,6 +51,8 @@ var (
 
 	jwtSecret string
 )
+
+func GetStrategyTemplateRepo() *StrategyTemplateRepo { return strategyTemplateRepo }
 
 func InitDB() error {
 	dbPath := os.Getenv("DB_PATH")
@@ -390,7 +398,7 @@ func SaveArbitrageConfig(cfg map[string]any) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(configPath, data, 0644)
+	return writeConfigFile(data)
 }
 
 // LoadArbitrageConfig returns the persisted arbitrage engine config, if any.
@@ -423,7 +431,7 @@ func SaveTriangularConfig(cfg map[string]any) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(configPath, data, 0644)
+	return writeConfigFile(data)
 }
 
 // LoadTriangularConfig returns the persisted triangular arbitrage engine config, if any.
@@ -480,17 +488,48 @@ func SaveExchangeConfig(id string, cfg map[string]any) {
 	_ = writeConfigCacheLocked()
 }
 
-// writeConfigCacheLocked writes the current configCache to config.yaml.
-// Caller must hold configMu.
-func writeConfigCacheLocked() error {
+// writeConfigFile persists data to configPath, creating the parent directory if needed.
+func writeConfigFile(data []byte) error {
 	if configPath == "" {
 		return nil
 	}
+	if err := ensureConfigDir(); err != nil {
+		return err
+	}
+	return os.WriteFile(configPath, data, 0644)
+}
+
+// ensureConfigDir creates the parent directory of configPath if it does not exist.
+func ensureConfigDir() error {
+	dir := filepath.Dir(configPath)
+	if dir == "" || dir == "." {
+		return nil
+	}
+	return os.MkdirAll(dir, 0755)
+}
+
+// writeConfigCacheLocked writes the current configCache to config.yaml.
+// Caller must hold configMu.
+func writeConfigCacheLocked() error {
 	data, err := yaml.Marshal(configCache)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(configPath, data, 0644)
+	return writeConfigFile(data)
+}
+
+// GetConfigPath returns the current config file path.
+func GetConfigPath() string {
+	configMu.RLock()
+	defer configMu.RUnlock()
+	return configPath
+}
+
+// SetConfigPath sets the config file path. Used by tests.
+func SetConfigPath(path string) {
+	configMu.Lock()
+	configPath = path
+	configMu.Unlock()
 }
 
 func GetConfig() map[string]any {
@@ -505,14 +544,14 @@ func GetConfig() map[string]any {
 
 func SaveConfig(cfg map[string]any) error {
 	configMu.Lock()
-	configCache = cfg
-	encrypted := encryptConfigSecrets(cfg)
-	configMu.Unlock()
+	defer configMu.Unlock()
+	configCache = deepCopyMap(cfg)
+	encrypted := encryptConfigSecrets(configCache)
 	data, err := yaml.Marshal(encrypted)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(configPath, data, 0644)
+	return writeConfigFile(data)
 }
 
 // ── Strategy Configs ──
@@ -520,15 +559,30 @@ func SaveConfig(cfg map[string]any) error {
 func LoadStrategyConfigs() {
 	strategyMu.Lock()
 	defer strategyMu.Unlock()
+
+	// Always load legacy JSON into memory as a fallback.
 	data, err := os.ReadFile(strategyConfigsPath)
-	if err != nil {
-		return
+	if err == nil {
+		var items []map[string]any
+		_ = json.Unmarshal(data, &items)
+		for _, item := range items {
+			if id, ok := item["id"].(string); ok {
+				strategyConfigs[id] = item
+			}
+		}
 	}
-	var items []map[string]any
-	json.Unmarshal(data, &items)
-	for _, item := range items {
-		if id, ok := item["id"].(string); ok {
-			strategyConfigs[id] = item
+
+	// If DB is available, migrate once and use DB as the source of truth.
+	if db != nil {
+		strategyConfigsMigrated.Do(func() {
+			_ = strategyConfigRepo.MigrateFromJSON(strategyConfigsPath, 0)
+		})
+		items, err := strategyConfigRepo.List(nil, 0)
+		if err == nil {
+			strategyConfigs = make(map[string]map[string]any, len(items))
+			for _, rec := range items {
+				strategyConfigs[rec.ID] = rec.ToMap()
+			}
 		}
 	}
 }
@@ -545,17 +599,28 @@ func saveStrategyConfigs() {
 }
 
 func GetStrategyConfigs() map[string]map[string]any {
+	if db != nil {
+		LoadStrategyConfigs()
+	}
 	strategyMu.RLock()
 	defer strategyMu.RUnlock()
 	cp := make(map[string]map[string]any)
 	for k, v := range strategyConfigs {
-		cp[k] = v
+		cp[k] = copyMap(v)
 	}
 	return cp
 }
 
 // GetStrategyConfig returns a single strategy config by id.
 func GetStrategyConfig(id string) map[string]any {
+	if db != nil {
+		rec, err := strategyConfigRepo.GetByID(id)
+		if err == nil && rec != nil {
+			strategyMu.Lock()
+			strategyConfigs[id] = rec.ToMap()
+			strategyMu.Unlock()
+		}
+	}
 	strategyMu.RLock()
 	defer strategyMu.RUnlock()
 	item := strategyConfigs[id]
@@ -567,14 +632,26 @@ func GetStrategyConfig(id string) map[string]any {
 
 // SetStrategyConfig creates or updates a strategy config under the store lock.
 func SetStrategyConfig(id string, item map[string]any) {
+	item["id"] = id
+	if db != nil {
+		rec := StrategyConfigRecordFromMap(item)
+		if existing, _ := strategyConfigRepo.GetByID(id); existing != nil {
+			_ = strategyConfigRepo.Update(rec)
+		} else {
+			_ = strategyConfigRepo.Create(rec)
+		}
+	}
 	strategyMu.Lock()
-	strategyConfigs[id] = item
+	strategyConfigs[id] = copyMap(item)
 	strategyMu.Unlock()
 }
 
 // DeleteStrategyConfig removes a strategy config under the store lock.
 // Returns true if the entry existed.
 func DeleteStrategyConfig(id string) bool {
+	if db != nil {
+		_ = strategyConfigRepo.Delete(id)
+	}
 	strategyMu.Lock()
 	_, existed := strategyConfigs[id]
 	delete(strategyConfigs, id)
@@ -587,6 +664,15 @@ func GetStrategyConfigMu() *sync.RWMutex {
 }
 
 func PersistStrategyConfigs() {
+	if db != nil {
+		strategyMu.RLock()
+		items := make([]*StrategyConfigRecord, 0, len(strategyConfigs))
+		for _, m := range strategyConfigs {
+			items = append(items, StrategyConfigRecordFromMap(m))
+		}
+		strategyMu.RUnlock()
+		_ = strategyConfigRepo.UpsertAll(items)
+	}
 	saveStrategyConfigs()
 }
 
@@ -624,15 +710,26 @@ func PersistStrategyLogs() {
 	_ = os.WriteFile(logsPath, data, 0644)
 }
 
-// LoadStrategyTemplates loads strategy templates from disk.
+// LoadStrategyTemplates loads strategy templates from disk or DB.
 func LoadStrategyTemplates() {
 	inmemMu.Lock()
 	defer inmemMu.Unlock()
 	data, err := os.ReadFile(templatesPath)
-	if err != nil {
-		return
+	if err == nil {
+		_ = json.Unmarshal(data, &templates)
 	}
-	_ = json.Unmarshal(data, &templates)
+	if db != nil {
+		strategyTemplatesMigrated.Do(func() {
+			_ = strategyTemplateRepo.MigrateFromJSON(templatesPath, 0)
+		})
+		items, err := strategyTemplateRepo.List(0, "", 0)
+		if err == nil {
+			templates = make([]map[string]any, 0, len(items))
+			for _, rec := range items {
+				templates = append(templates, rec.ToMap())
+			}
+		}
+	}
 }
 
 // PersistStrategyTemplates writes strategy templates to disk.
@@ -1186,6 +1283,39 @@ func getBool(m map[string]any, key string, def bool) bool {
 		}
 	}
 	return def
+}
+
+func getTimestampMillis(m map[string]any, key string) int64 {
+	if v, ok := m[key]; ok {
+		switch val := v.(type) {
+		case float64:
+			return int64(val)
+		case int64:
+			return val
+		case int:
+			return int64(val)
+		case string:
+			if i, err := strconv.ParseInt(val, 10, 64); err == nil {
+				return i
+			}
+		}
+	}
+	return time.Now().UnixMilli()
+}
+
+func normalizeConfigJSON(v any) string {
+	switch val := v.(type) {
+	case string:
+		if val == "" {
+			return "{}"
+		}
+		return val
+	case map[string]any:
+		b, _ := json.Marshal(val)
+		return string(b)
+	default:
+		return "{}"
+	}
 }
 
 func orderToMap(o *OrderRecord) map[string]any {

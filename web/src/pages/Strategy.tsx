@@ -942,7 +942,7 @@ function AIStrategyGeneratorTab() {
                 </select>
               </div>
               <div>
-                <label className="text-[10px] text-muted-foreground mb-1 block">初始资金</label>
+                <label className="text-[10px] text-muted-foreground mb-1 block">回测初始资金</label>
                 <input
                   type="number"
                   value={btBalance}

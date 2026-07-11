@@ -1,5 +1,6 @@
 import type { StrategyItem, AddPositionItem, MovingTPTier } from '@/types'
 import { cn, formatCurrency } from '@/lib/utils'
+import { decimalToPercent, PERCENTAGE_FIELD_THRESHOLDS } from '@/lib/craPercentUtils'
 import {
   Play,
   Pause,
@@ -41,14 +42,31 @@ function boolField(config: Record<string, unknown>, key: string): string {
   return '-'
 }
 
+function formatPercent(value: unknown, threshold: number): string {
+  if (value == null || value === '') return '-'
+  const n = Number(value)
+  if (!Number.isFinite(n)) return '-'
+  return `${decimalToPercent(n, threshold)}%`
+}
+
 function formatAddPositions(addPositions?: AddPositionItem[]): string {
   if (!addPositions || addPositions.length === 0) return '-'
-  return addPositions.map((p) => `${p.order}单 ${p.multiplier}x/${p.spread}%/${p.callback}%`).join(' · ')
+  return addPositions
+    .map(
+      (p) =>
+        `${p.order}单 ${p.multiplier}x/${formatPercent(p.spread, PERCENTAGE_FIELD_THRESHOLDS.addPositionSpread)}/${formatPercent(p.callback, PERCENTAGE_FIELD_THRESHOLDS.addPositionCallback)}`
+    )
+    .join(' · ')
 }
 
 function formatMovingTPTiers(tiers?: MovingTPTier[]): string {
   if (!tiers || tiers.length === 0) return '-'
-  return tiers.map((t, i) => `档${i + 1}: ${t.ratio}%/${t.drawback}%`).join(' · ')
+  return tiers
+    .map(
+      (t, i) =>
+        `档${i + 1}: ${formatPercent(t.ratio, PERCENTAGE_FIELD_THRESHOLDS.movingTPRatio)}/${formatPercent(t.drawback, PERCENTAGE_FIELD_THRESHOLDS.movingTPDrawback)}`
+    )
+    .join(' · ')
 }
 
 export function StrategyDetailPanel({ strategy, onStart, onStop, onEdit, onDelete }: StrategyDetailPanelProps) {
@@ -194,10 +212,19 @@ export function StrategyDetailPanel({ strategy, onStart, onStop, onEdit, onDelet
             label="止盈模式"
             value={config.tp_mode === 'moving' ? '移动止盈' : config.tp_mode === 'static' ? '静态止盈' : '-'}
           />
-          <DetailRow label="止盈比例" value={config.take_profit_ratio ? `${config.take_profit_ratio}%` : '-'} />
-          <DetailRow label="盈利回调" value={config.profit_callback ? `${config.profit_callback}%` : '-'} />
+          <DetailRow
+            label="止盈比例"
+            value={formatPercent(config.take_profit_ratio, PERCENTAGE_FIELD_THRESHOLDS.tpRatio)}
+          />
+          <DetailRow
+            label="盈利回调"
+            value={formatPercent(config.profit_callback, PERCENTAGE_FIELD_THRESHOLDS.profitCallback)}
+          />
           <DetailRow label="防瀑布" value={boolField(config, 'waterfall_enabled')} />
-          <DetailRow label="防瀑布比例" value={config.waterfall_protection ? `${config.waterfall_protection}%` : '-'} />
+          <DetailRow
+            label="防瀑布比例"
+            value={formatPercent(config.waterfall_protection, PERCENTAGE_FIELD_THRESHOLDS.waterfall)}
+          />
           <DetailRow label="开仓加倍" value={boolField(config, 'open_double')} />
           <DetailRow label="顺势而为" value={boolField(config, 'follow_trend')} />
         </div>
@@ -262,7 +289,10 @@ export function StrategyDetailPanel({ strategy, onStart, onStop, onEdit, onDelet
                         : '-'
                 }
               />
-              <DetailRow label="止损比例" value={config.stop_loss_ratio ? `${config.stop_loss_ratio}%` : '-'} />
+              <DetailRow
+                label="止损比例"
+                value={formatPercent(config.stop_loss_ratio, PERCENTAGE_FIELD_THRESHOLDS.stopLossRatio)}
+              />
               <DetailRow label="止损金额" value={config.stop_loss_amount ? `${config.stop_loss_amount} USDT` : '-'} />
               <DetailRow label="止损价格" value={config.stop_loss_price ? `${config.stop_loss_price} USDT` : '-'} />
               <DetailRow

@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { Settings2, TrendingUp } from 'lucide-react'
 import type { AddPositionItem, MovingTPTier } from '@/types'
+import { percentToDecimal, decimalToPercent, PERCENTAGE_FIELD_THRESHOLDS } from '@/lib/craPercentUtils'
 import { AddPositionModal } from './AddPositionModal'
 import { MovingTPModal } from './MovingTPModal'
 
@@ -428,6 +429,7 @@ export function CRAParamForm({ value, onChange, market, className }: CRAParamFor
             value={value.addPositions}
             onChange={(next) => update('addPositions', next)}
             showEma={isContract}
+            emaDisabled={isContract && !value.addEmaEnabled}
             disabled={!value.enableAddPosition}
           />
         </div>
@@ -755,6 +757,21 @@ export function CRAParamForm({ value, onChange, market, className }: CRAParamFor
   )
 }
 
+// Backend expects decimal ratios; the UI stores user-friendly percentages.
+
+interface ApiAddPositionItem {
+  order: number
+  multiplier: number
+  spread: number
+  callback: number
+  ema_enabled: boolean
+}
+
+interface ApiMovingTPTier {
+  ratio: number
+  drawback: number
+}
+
 interface ApiPayload {
   first_order_price: number
   first_order_amount: number
@@ -763,12 +780,12 @@ interface ApiPayload {
   loop_count: number
   enable_add_position: boolean
   order_count: number
-  add_positions: AddPositionItem[]
+  add_positions: ApiAddPositionItem[]
   take_profit_method: 'full' | 'tail' | 'head_tail'
   tp_mode: 'static' | 'moving'
   take_profit_ratio: number
   profit_callback: number
-  moving_take_profit_tiers: MovingTPTier[]
+  moving_take_profit_tiers: ApiMovingTPTier[]
   open_macd_enabled: boolean
   open_macd_period: 'close' | '5m' | '15m'
   open_counter_ema_enabled: boolean
@@ -799,7 +816,7 @@ interface ApiPayload {
   direction: 'long' | 'short' | 'dual'
 }
 
-/** 将 CRAParams 转换为后端 API 所需的 snake_case 参数对象 */
+/** 将 CRAParams 转换为后端 API 所需的 snake_case 参数对象（百分比转小数） */
 export function craParamsToApiPayload(p: CRAParams): ApiPayload {
   return {
     first_order_price: p.firstOrderPrice,
@@ -809,12 +826,21 @@ export function craParamsToApiPayload(p: CRAParams): ApiPayload {
     loop_count: p.loopCount,
     enable_add_position: p.enableAddPosition,
     order_count: p.orderCount,
-    add_positions: p.addPositions,
+    add_positions: p.addPositions.map((ap) => ({
+      order: ap.order,
+      multiplier: ap.multiplier,
+      spread: percentToDecimal(ap.spread),
+      callback: percentToDecimal(ap.callback),
+      ema_enabled: ap.emaEnabled ?? false,
+    })),
     take_profit_method: p.tpMethod,
     tp_mode: p.tpMode,
-    take_profit_ratio: p.tpRatio,
-    profit_callback: p.profitCallback,
-    moving_take_profit_tiers: p.movingTPTiers,
+    take_profit_ratio: percentToDecimal(p.tpRatio),
+    profit_callback: percentToDecimal(p.profitCallback),
+    moving_take_profit_tiers: p.movingTPTiers.map((t) => ({
+      ratio: percentToDecimal(t.ratio),
+      drawback: percentToDecimal(t.drawback),
+    })),
     open_macd_enabled: p.openMacdEnabled,
     open_macd_period: p.openMacdPeriod,
     open_counter_ema_enabled: p.openCounterEmaEnabled,
@@ -826,10 +852,10 @@ export function craParamsToApiPayload(p: CRAParams): ApiPayload {
     add_ema_enabled: p.addEmaEnabled,
     add_ema_period: p.addEmaPeriod,
     waterfall_enabled: p.waterfallEnabled,
-    waterfall_protection: p.waterfall,
+    waterfall_protection: percentToDecimal(p.waterfall),
     stop_loss_enabled: p.stopLossEnabled,
     stop_loss_type: p.stopLossType,
-    stop_loss_ratio: p.stopLossRatio,
+    stop_loss_ratio: percentToDecimal(p.stopLossRatio),
     stop_loss_amount: p.stopLossAmount,
     stop_loss_price: p.stopLossPrice,
     reverse_take_profit_period: p.reverseTP,
@@ -843,5 +869,73 @@ export function craParamsToApiPayload(p: CRAParams): ApiPayload {
     online_order_limit: p.onlineOrderLimit,
     leverage: p.leverage,
     direction: p.direction,
+  }
+}
+
+/** 将后端 API 返回的 snake_case 参数对象转换为 CRAParams（小数转百分比） */
+export function apiPayloadToCraParams(payload: Partial<ApiPayload>): CRAParams {
+  const base = DEFAULT_CRA_PARAMS
+  return {
+    firstOrderPrice: payload.first_order_price ?? base.firstOrderPrice,
+    firstOrderAmount: payload.first_order_amount ?? base.firstOrderAmount,
+    firstOrderMultiplier: payload.first_order_multiplier ?? base.firstOrderMultiplier,
+    tradeCountMode: payload.trade_count_mode ?? base.tradeCountMode,
+    loopCount: payload.loop_count ?? base.loopCount,
+    enableAddPosition: payload.enable_add_position ?? base.enableAddPosition,
+    orderCount: payload.order_count ?? base.orderCount,
+    addPositions: (payload.add_positions ?? base.addPositions).map((ap) => {
+      // Support both the legacy `ema` key and the backend `ema_enabled` key.
+      const rawItem = ap as AddPositionItem & { ema_enabled?: boolean }
+      const emaEnabled = rawItem.ema_enabled ?? rawItem.emaEnabled ?? false
+      return {
+        order: ap.order,
+        multiplier: ap.multiplier,
+        spread: decimalToPercent(ap.spread, PERCENTAGE_FIELD_THRESHOLDS.addPositionSpread),
+        callback: decimalToPercent(ap.callback, PERCENTAGE_FIELD_THRESHOLDS.addPositionCallback),
+        emaEnabled,
+      }
+    }),
+    tpMethod: payload.take_profit_method ?? base.tpMethod,
+    tpMode: payload.tp_mode ?? base.tpMode,
+    tpRatio: decimalToPercent(payload.take_profit_ratio ?? base.tpRatio, PERCENTAGE_FIELD_THRESHOLDS.tpRatio),
+    profitCallback: decimalToPercent(
+      payload.profit_callback ?? base.profitCallback,
+      PERCENTAGE_FIELD_THRESHOLDS.profitCallback
+    ),
+    movingTPTiers: (payload.moving_take_profit_tiers ?? base.movingTPTiers).map((t) => ({
+      ratio: decimalToPercent(t.ratio, PERCENTAGE_FIELD_THRESHOLDS.movingTPRatio),
+      drawback: decimalToPercent(t.drawback, PERCENTAGE_FIELD_THRESHOLDS.movingTPDrawback),
+    })),
+    openMacdEnabled: payload.open_macd_enabled ?? base.openMacdEnabled,
+    openMacdPeriod: payload.open_macd_period ?? base.openMacdPeriod,
+    openCounterEmaEnabled: payload.open_counter_ema_enabled ?? base.openCounterEmaEnabled,
+    openCounterEmaPeriod: payload.open_counter_ema_period ?? base.openCounterEmaPeriod,
+    openTrendEmaEnabled: payload.open_trend_ema_enabled ?? base.openTrendEmaEnabled,
+    openTrendEmaPeriod: payload.open_trend_ema_period ?? base.openTrendEmaPeriod,
+    addMacdEnabled: payload.add_macd_enabled ?? base.addMacdEnabled,
+    addMacdPeriod: payload.add_macd_period ?? base.addMacdPeriod,
+    addEmaEnabled: payload.add_ema_enabled ?? base.addEmaEnabled,
+    addEmaPeriod: payload.add_ema_period ?? base.addEmaPeriod,
+    waterfallEnabled: payload.waterfall_enabled ?? base.waterfallEnabled,
+    waterfall: decimalToPercent(payload.waterfall_protection ?? base.waterfall, PERCENTAGE_FIELD_THRESHOLDS.waterfall),
+    stopLossEnabled: payload.stop_loss_enabled ?? base.stopLossEnabled,
+    stopLossType: payload.stop_loss_type ?? base.stopLossType,
+    stopLossRatio: decimalToPercent(
+      payload.stop_loss_ratio ?? base.stopLossRatio,
+      PERCENTAGE_FIELD_THRESHOLDS.stopLossRatio
+    ),
+    stopLossAmount: payload.stop_loss_amount ?? base.stopLossAmount,
+    stopLossPrice: payload.stop_loss_price ?? base.stopLossPrice,
+    reverseTP: payload.reverse_take_profit_period ?? base.reverseTP,
+    reverseSL: payload.reverse_stop_loss ?? base.reverseSL,
+    burnGlobalEnabled: payload.burn_global_enabled ?? base.burnGlobalEnabled,
+    burnGlobalThreshold: payload.burn_global_threshold ?? base.burnGlobalThreshold,
+    burnDualEnabled: payload.burn_dual_enabled ?? base.burnDualEnabled,
+    burnDualThreshold: payload.burn_dual_threshold ?? base.burnDualThreshold,
+    openDouble: payload.open_double ?? base.openDouble,
+    followTrend: payload.follow_trend ?? base.followTrend,
+    onlineOrderLimit: payload.online_order_limit ?? base.onlineOrderLimit,
+    leverage: payload.leverage ?? base.leverage,
+    direction: payload.direction ?? base.direction,
   }
 }

@@ -24,9 +24,6 @@ type TrendLongStrategy struct {
 	running bool
 	mu      sync.RWMutex
 
-	fastPeriod int
-	slowPeriod int
-
 	bars       []model.Bar
 	inPosition bool
 
@@ -36,14 +33,12 @@ type TrendLongStrategy struct {
 // NewTrendLongStrategy creates a default trend-long strategy instance.
 func NewTrendLongStrategy() *TrendLongStrategy {
 	s := &TrendLongStrategy{
-		name:       "trend_long",
-		symbol:     "BTCUSDT",
-		fastPeriod: 12,
-		slowPeriod: 26,
+		name:   "trend_long",
+		symbol: "BTCUSDT",
 	}
 	s.params = strategy.NewParamRegistry()
-	s.params.Register(strategy.IntParameter("fast_period", 12, 5, 50, "buy"))
-	s.params.Register(strategy.IntParameter("slow_period", 26, 10, 100, "buy"))
+	// Dynamic parameters are intentionally not exposed for trend_long.
+	// Entry/add-position indicators are configured via CRA params instead.
 	return s
 }
 
@@ -59,9 +54,7 @@ func (s *TrendLongStrategy) Params() map[string]any {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return map[string]any{
-		"symbol":      s.symbol,
-		"fast_period": s.fastPeriod,
-		"slow_period": s.slowPeriod,
+		"symbol": s.symbol,
 	}
 }
 
@@ -79,9 +72,6 @@ func (s *TrendLongStrategy) Start(params map[string]any) error {
 	}
 	if sym, ok := params["symbol"].(string); ok && sym != "" {
 		s.symbol = sym
-	}
-	if s.fastPeriod >= s.slowPeriod {
-		return fmt.Errorf("fast_period (%d) must be less than slow_period (%d)", s.fastPeriod, s.slowPeriod)
 	}
 	s.running = true
 	return nil
@@ -130,16 +120,9 @@ func (s *TrendLongStrategy) applyParamsLocked(m map[string]any) error {
 	if s.params == nil {
 		return nil
 	}
-	if err := s.params.FromMap(m); err != nil {
-		return err
-	}
-	if p := s.params.Get("fast_period"); p != nil {
-		s.fastPeriod = p.GetInt()
-	}
-	if p := s.params.Get("slow_period"); p != nil {
-		s.slowPeriod = p.GetInt()
-	}
-	return nil
+	// Unknown keys are ignored so CRA-style configs can safely include
+	// frontend fields that this strategy does not declare.
+	return s.params.FromMap(m)
 }
 
 // OnTick delegates to bar-based logic.
@@ -169,7 +152,7 @@ func (s *TrendLongStrategy) OnBar(bar model.Bar, _ *event.EventBus) (*model.Sign
 	if len(s.bars) > maxBarsHistory {
 		s.bars = s.bars[len(s.bars)-maxBarsHistory:]
 	}
-	if len(s.bars) < s.slowPeriod+1 {
+	if len(s.bars) < trendSlowPeriod+1 {
 		return nil, nil
 	}
 
@@ -178,10 +161,10 @@ func (s *TrendLongStrategy) OnBar(bar model.Bar, _ *event.EventBus) (*model.Sign
 		closes[i] = b.Close
 	}
 
-	fastEMA := ema(closes, s.fastPeriod)
-	slowEMA := ema(closes, s.slowPeriod)
-	prevFast := ema(closes[:len(closes)-1], s.fastPeriod)
-	prevSlow := ema(closes[:len(closes)-1], s.slowPeriod)
+	fastEMA := ema(closes, trendFastPeriod)
+	slowEMA := ema(closes, trendSlowPeriod)
+	prevFast := ema(closes[:len(closes)-1], trendFastPeriod)
+	prevSlow := ema(closes[:len(closes)-1], trendSlowPeriod)
 
 	goldenCross := prevFast <= prevSlow && fastEMA > slowEMA
 	deathCross := prevFast >= prevSlow && fastEMA < slowEMA

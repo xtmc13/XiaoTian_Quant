@@ -37,7 +37,7 @@ export const STRAT_TYPES: Record<string, { value: string; label: string }[]> = {
 
 export const TIMEFRAMES = ['1m', '5m', '15m', '30m', '1h', '4h', '8h', '1D']
 
-export const DEFAULT_CODE = `from freqtrade.strategy import IStrategy
+const BASE_CODE = `from freqtrade.strategy import IStrategy
 import talib.abstract as ta
 
 class MyStrategy(IStrategy):
@@ -46,17 +46,75 @@ class MyStrategy(IStrategy):
     stoploss = -0.40
 
     def populate_indicators(self, dataframe, metadata):
-        dataframe['ema_short'] = ta.EMA(dataframe, timeperiod=12)
-        dataframe['ema_long'] = ta.EMA(dataframe, timeperiod=26)
+        {{indicators}}
         return dataframe
 
     def populate_entry_trend(self, dataframe, metadata):
-        dataframe.loc[dataframe['ema_short'] > dataframe['ema_long'], 'enter_long'] = 1
+        {{entry}}
         return dataframe
 
     def populate_exit_trend(self, dataframe, metadata):
-        dataframe.loc[dataframe['ema_short'] < dataframe['ema_long'], 'exit_long'] = 1
+        {{exit}}
         return dataframe`
+
+const INDICATOR_TEMPLATES: Record<string, { indicators: string; entry: string; exit: string }> = {
+  ema: {
+    indicators: `dataframe['ema_short'] = ta.EMA(dataframe, timeperiod=12)
+        dataframe['ema_long'] = ta.EMA(dataframe, timeperiod=26)`,
+    entry: `dataframe.loc[dataframe['ema_short'] > dataframe['ema_long'], 'enter_long'] = 1`,
+    exit: `dataframe.loc[dataframe['ema_short'] < dataframe['ema_long'], 'exit_long'] = 1`,
+  },
+  macd: {
+    indicators: `macd = ta.MACD(dataframe, fastperiod=12, slowperiod=26, signalperiod=9)
+        dataframe['macd'] = macd['macd']
+        dataframe['macdsignal'] = macd['macdsignal']`,
+    entry: `dataframe.loc[dataframe['macd'] > dataframe['macdsignal'], 'enter_long'] = 1`,
+    exit: `dataframe.loc[dataframe['macd'] < dataframe['macdsignal'], 'exit_long'] = 1`,
+  },
+  rsi: {
+    indicators: `dataframe['rsi'] = ta.RSI(dataframe, timeperiod=14)`,
+    entry: `dataframe.loc[dataframe['rsi'] < 30, 'enter_long'] = 1`,
+    exit: `dataframe.loc[dataframe['rsi'] > 70, 'exit_long'] = 1`,
+  },
+  bollinger: {
+    indicators: `bbands = ta.BBANDS(dataframe, timeperiod=20)
+        dataframe['bb_upper'] = bbands['upperband']
+        dataframe['bb_lower'] = bbands['lowerband']`,
+    entry: `dataframe.loc[dataframe['close'] < dataframe['bb_lower'], 'enter_long'] = 1`,
+    exit: `dataframe.loc[dataframe['close'] > dataframe['bb_upper'], 'exit_long'] = 1`,
+  },
+  breakout: {
+    indicators: `dataframe['high_20'] = dataframe['high'].rolling(window=20).max()
+        dataframe['low_20'] = dataframe['low'].rolling(window=20).min()`,
+    entry: `dataframe.loc[dataframe['close'] > dataframe['high_20'].shift(1), 'enter_long'] = 1`,
+    exit: `dataframe.loc[dataframe['close'] < dataframe['low_20'].shift(1), 'exit_long'] = 1`,
+  },
+}
+
+function strategyTypeToTemplateKey(strategyType: string): keyof typeof INDICATOR_TEMPLATES | 'generic' {
+  if (strategyType.startsWith('ema')) return 'ema'
+  if (strategyType.startsWith('macd')) return 'macd'
+  if (strategyType.startsWith('rsi')) return 'rsi'
+  if (strategyType.startsWith('bollinger')) return 'bollinger'
+  if (['breakout', 'trend', 'custom'].includes(strategyType)) return 'breakout'
+  return 'generic'
+}
+
+/** Return a starter Python strategy template for the selected strategy type. */
+export function getDefaultStrategyCode(strategyType: string): string {
+  const key = strategyTypeToTemplateKey(strategyType)
+  if (key === 'generic') {
+    return BASE_CODE.replace(
+      '{{indicators}}',
+      `# 在这里添加你的指标，例如：
+        # dataframe['rsi'] = ta.RSI(dataframe, timeperiod=14)`
+    )
+      .replace('{{entry}}', `# 在这里添加入场逻辑`)
+      .replace('{{exit}}', `# 在这里添加出场逻辑`)
+  }
+  const t = INDICATOR_TEMPLATES[key]
+  return BASE_CODE.replace('{{indicators}}', t.indicators).replace('{{entry}}', t.entry).replace('{{exit}}', t.exit)
+}
 
 export function FormField({ label, children }: { label: string; children: React.ReactNode }) {
   return (

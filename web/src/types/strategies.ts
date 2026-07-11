@@ -215,7 +215,7 @@ export interface AddPositionItem {
   multiplier: number
   spread: number
   callback: number
-  ema?: boolean
+  emaEnabled?: boolean
 }
 
 export interface MovingTPTier {

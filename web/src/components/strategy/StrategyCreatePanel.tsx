@@ -7,7 +7,7 @@ import { useStrategyData } from '@/hooks/useStrategyData'
 import { SectionCard } from '@/components/ui/SectionCard'
 import { CRAParamForm, craParamsToApiPayload, type CRAParams } from './CRAParamForm'
 import { ExchangeSelectModal } from './ExchangeSelectModal'
-import { FormField, DynamicParamField, STRAT_TYPES, TIMEFRAMES } from './StrategyFormFields'
+import { FormField, DynamicParamField, STRAT_TYPES } from './StrategyFormFields'
 import { STRATEGY_PRESETS, type Preset } from './StrategyPresets'
 import { createDefaultCRAParams } from '@/lib/strategyUtils'
 import type { StrategyParamDefs } from '@/types'
@@ -34,10 +34,38 @@ function marketTypeFromType(strategyType: string): 'spot' | 'contract' {
   return contractTypes.includes(strategyType) ? 'contract' : 'spot'
 }
 
+// Derive the strategy bar timeframe from enabled indicator periods.
+// The main timeframe follows the fastest active indicator so it is never hardcoded.
+const PERIOD_ORDER: Record<string, number> = {
+  '1m': 1,
+  '5m': 2,
+  '15m': 3,
+  '30m': 4,
+  '1h': 5,
+  '4h': 6,
+  '1d': 7,
+  close: 99,
+}
+function deriveTimeframeFromCRA(params: CRAParams): string {
+  const candidates: string[] = []
+  if (params.openMacdEnabled && params.openMacdPeriod !== 'close') candidates.push(params.openMacdPeriod)
+  if (params.openCounterEmaEnabled && params.openCounterEmaPeriod !== 'close')
+    candidates.push(params.openCounterEmaPeriod)
+  if (params.openTrendEmaEnabled && params.openTrendEmaPeriod !== 'close') candidates.push(params.openTrendEmaPeriod)
+  if (params.addMacdEnabled && params.addMacdPeriod !== 'close') candidates.push(params.addMacdPeriod)
+  if (params.addEmaEnabled && params.addEmaPeriod !== 'close') candidates.push(params.addEmaPeriod)
+
+  if (candidates.length === 0) return '15m'
+  return candidates.sort((a, b) => PERIOD_ORDER[a] - PERIOD_ORDER[b])[0]
+}
+
 function strategyTypeLabel(strategyType: string, market: 'spot' | 'contract'): string {
   const option = STRAT_TYPES[market].find((t) => t.value === strategyType)
   return option?.label || strategyType
 }
+
+// Strategy types rendered entirely by CRAParamForm; no dynamic params needed.
+const CRA_ONLY_TYPES = new Set(['trend_long', 'trend_short'])
 
 export function StrategyCreatePanel({ strategyType, onClose, onSaved }: StrategyCreatePanelProps) {
   const market = useMemo(() => marketTypeFromType(strategyType), [strategyType])
@@ -89,6 +117,11 @@ export function StrategyCreatePanel({ strategyType, onClose, onSaved }: Strategy
 
   useEffect(() => {
     if (!strategyType) return
+    if (CRA_ONLY_TYPES.has(strategyType)) {
+      setParamDefs([])
+      setDynamicParams({})
+      return
+    }
     setParamDefsLoading(true)
     strategyApi
       .paramDefs(strategyType)
@@ -110,15 +143,21 @@ export function StrategyCreatePanel({ strategyType, onClose, onSaved }: Strategy
 
   // Reset fields when strategyType changes
   useEffect(() => {
+    const defaults = createDefaultCRAParams(market)
     setName('')
     setSymbol('BTCUSDT')
-    setTimeframe('15m')
+    setTimeframe(deriveTimeframeFromCRA(defaults))
     setSelectedExchanges([])
     setExecutionMode('signal')
     setNotifyChannels(['browser'])
-    setCraParams(createDefaultCRAParams(market))
+    setCraParams(defaults)
     setPresetKey(null)
   }, [strategyType, market])
+
+  // Keep the main timeframe in sync with active indicator periods (no hardcoding).
+  useEffect(() => {
+    setTimeframe(deriveTimeframeFromCRA(craParams))
+  }, [craParams])
 
   const applyPreset = (preset: Preset) => {
     setPresetKey(preset.key)
@@ -194,6 +233,7 @@ export function StrategyCreatePanel({ strategyType, onClose, onSaved }: Strategy
         coin: symbol.trim().toUpperCase().replace('USDT', '').replace('USD', ''),
         direction: market === 'spot' ? 'long' : craParams.direction,
         mode: 'signal',
+        initial_capital: 0,
       }
       await create(payload)
       handleSaveAsDefault()
@@ -281,15 +321,6 @@ export function StrategyCreatePanel({ strategyType, onClose, onSaved }: Strategy
             </div>
 
             <div className="grid grid-cols-2 gap-4">
-              <FormField label="K线周期">
-                <select value={timeframe} onChange={(e) => setTimeframe(e.target.value)} className={inputCls}>
-                  {TIMEFRAMES.map((tf) => (
-                    <option key={tf} value={tf}>
-                      {tf}
-                    </option>
-                  ))}
-                </select>
-              </FormField>
               <FormField label="选择交易所">
                 <button
                   type="button"
@@ -326,7 +357,7 @@ export function StrategyCreatePanel({ strategyType, onClose, onSaved }: Strategy
         <CRAParamForm value={craParams} onChange={setCraParams} market={market} />
 
         {/* Dynamic params */}
-        {(paramDefsLoading || paramDefs.length > 0) && (
+        {!CRA_ONLY_TYPES.has(strategyType) && (paramDefsLoading || paramDefs.length > 0) && (
           <SectionCard title="动态策略参数">
             {paramDefsLoading && <div className="text-xs text-muted-foreground py-2">加载参数定义...</div>}
             {paramDefs.length > 0 && (

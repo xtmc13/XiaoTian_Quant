@@ -1,4 +1,5 @@
 import type { AddPositionItem, MovingTPTier } from '@/types'
+import { apiPayloadToCraParams } from '@/components/strategy/CRAParamForm'
 import type { CRAParams } from '@/components/strategy/CRAParamForm'
 
 export type StrategyMultiplierPreset =
@@ -108,7 +109,7 @@ export function createDefaultAddPositions(
       multiplier: multipliers[i] ?? 1,
       spread,
       callback: i === 0 ? baseCallback : 0.5,
-      ema: false,
+      emaEnabled: false,
     }
   })
 }
@@ -216,48 +217,6 @@ export function createDefaultCRAParams(market: 'spot' | 'contract'): CRAParams {
 
 /* ─── Legacy config migration ───────────────────────────────────────── */
 
-type LegacyMovingTP =
-  | {
-      enabled?: boolean
-      tier1_ratio?: number
-      tier1_drawback?: number
-      tier2_drawback?: number
-    }
-  | undefined
-
-function legacyMovingTpToTiers(legacy: LegacyMovingTP, market: 'spot' | 'contract'): MovingTPTier[] {
-  if (!legacy || typeof legacy !== 'object') {
-    return createDefaultMovingTPTiers(market)
-  }
-  const defaults = createDefaultMovingTPTiers(market)
-  return [
-    {
-      ratio: legacy.tier1_ratio ?? defaults[0]?.ratio ?? 2,
-      drawback: legacy.tier1_drawback ?? defaults[0]?.drawback ?? 20,
-    },
-    { ratio: defaults[1]?.ratio ?? 3, drawback: defaults[1]?.drawback ?? 20 },
-    { ratio: defaults[2]?.ratio ?? 4, drawback: legacy.tier2_drawback ?? defaults[2]?.drawback ?? 10 },
-    { ratio: defaults[3]?.ratio ?? 5, drawback: defaults[3]?.drawback ?? 10 },
-  ]
-}
-
-function asBool(v: unknown, fallback: boolean): boolean {
-  if (typeof v === 'boolean') return v
-  if (typeof v === 'number') return v !== 0
-  if (typeof v === 'string') return v === 'true' || v === '1'
-  return fallback
-}
-
-function asNumber(v: unknown, fallback: number): number {
-  const n = Number(v)
-  return Number.isFinite(n) ? n : fallback
-}
-
-function asEnum<T extends string>(v: unknown, options: readonly T[], fallback: T): T {
-  if (typeof v === 'string' && options.includes(v as T)) return v as T
-  return fallback
-}
-
 /**
  * Migrate legacy config_json / localStorage / template data into the current
  * CRAParams shape. Unknown/deprecated fields are ignored.
@@ -269,212 +228,31 @@ export function migrateLegacyConfigToCRAParams(
   const base = createDefaultCRAParams(market)
   if (!parsed || typeof parsed !== 'object') return base
 
-  const p = parsed
-
-  // Helper to read both snake_case and camelCase keys
-  const get = <T>(keys: string[], transform: (v: unknown) => T, fallback: T): T => {
-    for (const key of keys) {
-      if (key in p) {
-        return transform(p[key])
-      }
-    }
-    return fallback
-  }
-
-  const orderCount = get(['order_count', 'orderCount'], (v) => asNumber(v, base.orderCount), base.orderCount)
+  // Convert known backend decimal fields to UI percentages and map snake_case keys.
+  const migrated = apiPayloadToCraParams(parsed as Partial<Parameters<typeof apiPayloadToCraParams>[0]>)
 
   // Determine multiplier preset from strategy_type if present
-  const strategyTypeHint = typeof p.strategy_type === 'string' ? p.strategy_type : undefined
+  const strategyTypeHint = typeof parsed.strategy_type === 'string' ? parsed.strategy_type : undefined
   const multiplierPreset = strategyTypeToMultiplierPreset(strategyTypeHint ?? '', market)
 
-  // Build addPositions: prefer explicit array, otherwise generate from defaults
-  let addPositions: AddPositionItem[] = base.addPositions
-  if (Array.isArray(p.add_positions)) {
-    addPositions = p.add_positions
-      .filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null)
-      .map((item, index) => {
-        const defaults = createDefaultAddPositions(multiplierPreset, orderCount)
-        const defaultRow = defaults[index] ?? defaults[defaults.length - 1]
-        return {
-          order: typeof item.order === 'number' ? item.order : index + 1,
-          multiplier: asNumber(item.multiplier, defaultRow?.multiplier ?? 1),
-          spread: asNumber(item.spread, defaultRow?.spread ?? 3.5),
-          callback: asNumber(item.callback, defaultRow?.callback ?? 0.5),
-          ema: asBool(item.ema, defaultRow?.ema ?? false),
-        }
-      })
-  }
-
-  // Moving take-profit: support old object shape and new array shape
-  let movingTPTiers = base.movingTPTiers
-  if (Array.isArray(p.moving_take_profit_tiers)) {
-    movingTPTiers = p.moving_take_profit_tiers
-      .filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null)
-      .map((item, index) => {
-        const defaults = createDefaultMovingTPTiers(market)
-        const defaultTier = defaults[index]
-        return {
-          ratio: asNumber(item.ratio, defaultTier?.ratio ?? 2),
-          drawback: asNumber(item.drawback, defaultTier?.drawback ?? 20),
-        }
-      })
-  } else if (p.moving_take_profit !== undefined) {
-    movingTPTiers = legacyMovingTpToTiers(p.moving_take_profit as LegacyMovingTP, market)
+  // Reconcile addPositions: use correct multipliers for the strategy type,
+  // but preserve spread/callback/ema from the migrated data.
+  let addPositions = migrated.addPositions
+  if (Array.isArray(parsed.add_positions)) {
+    const defaults = createDefaultAddPositions(multiplierPreset, migrated.orderCount)
+    addPositions = defaults.map((defaultRow, index) => {
+      const migratedRow = migrated.addPositions[index]
+      return {
+        ...defaultRow,
+        spread: migratedRow?.spread ?? defaultRow.spread,
+        callback: migratedRow?.callback ?? defaultRow.callback,
+        emaEnabled: migratedRow?.emaEnabled ?? defaultRow.emaEnabled,
+      }
+    })
   }
 
   return {
-    firstOrderPrice: get(
-      ['first_order_price', 'firstOrderPrice'],
-      (v) => asNumber(v, base.firstOrderPrice),
-      base.firstOrderPrice
-    ),
-    firstOrderAmount: get(
-      ['first_order_amount', 'firstOrderAmount'],
-      (v) => asNumber(v, base.firstOrderAmount),
-      base.firstOrderAmount
-    ),
-    firstOrderMultiplier: get(
-      ['first_order_multiplier', 'firstOrderMultiplier'],
-      (v) => asNumber(v, base.firstOrderMultiplier),
-      base.firstOrderMultiplier
-    ),
-    tradeCountMode: get(
-      ['trade_count_mode', 'tradeCountMode'],
-      (v) => asEnum(v, ['single', 'cycle'] as const, base.tradeCountMode),
-      base.tradeCountMode
-    ),
-    loopCount: get(['loop_count', 'loopCount'], (v) => asNumber(v, base.loopCount), base.loopCount),
-    enableAddPosition: get(
-      ['enable_add_position', 'enableAddPosition'],
-      (v) => asBool(v, base.enableAddPosition),
-      base.enableAddPosition
-    ),
-    orderCount,
+    ...migrated,
     addPositions,
-    tpMethod: get(
-      ['take_profit_method', 'tpMethod'],
-      (v) => asEnum(v, ['full', 'tail', 'head_tail'] as const, base.tpMethod),
-      base.tpMethod
-    ),
-    tpMode: get(['tp_mode', 'tpMode'], (v) => asEnum(v, ['static', 'moving'] as const, base.tpMode), base.tpMode),
-    tpRatio: get(['take_profit_ratio', 'tpRatio'], (v) => asNumber(v, base.tpRatio), base.tpRatio),
-    profitCallback: get(
-      ['profit_callback', 'profitCallback'],
-      (v) => asNumber(v, base.profitCallback),
-      base.profitCallback
-    ),
-    movingTPTiers,
-    openMacdEnabled: get(
-      ['open_macd_enabled', 'openMacdEnabled'],
-      (v) => asBool(v, base.openMacdEnabled),
-      base.openMacdEnabled
-    ),
-    openMacdPeriod: get(
-      ['open_macd_period', 'openMacdPeriod'],
-      (v) => asEnum(v, ['close', '5m', '15m'] as const, base.openMacdPeriod),
-      base.openMacdPeriod
-    ),
-    openCounterEmaEnabled: get(
-      ['open_counter_ema_enabled', 'openCounterEmaEnabled'],
-      (v) => asBool(v, base.openCounterEmaEnabled),
-      base.openCounterEmaEnabled
-    ),
-    openCounterEmaPeriod: get(
-      ['open_counter_ema_period', 'openCounterEmaPeriod'],
-      (v) => asEnum(v, ['close', '5m', '15m'] as const, base.openCounterEmaPeriod),
-      base.openCounterEmaPeriod
-    ),
-    openTrendEmaEnabled: get(
-      ['open_trend_ema_enabled', 'openTrendEmaEnabled'],
-      (v) => asBool(v, base.openTrendEmaEnabled),
-      base.openTrendEmaEnabled
-    ),
-    openTrendEmaPeriod: get(
-      ['open_trend_ema_period', 'openTrendEmaPeriod'],
-      (v) => asEnum(v, ['close', '5m', '15m'] as const, base.openTrendEmaPeriod),
-      base.openTrendEmaPeriod
-    ),
-    addMacdEnabled: get(
-      ['add_macd_enabled', 'addMacdEnabled'],
-      (v) => asBool(v, base.addMacdEnabled),
-      base.addMacdEnabled
-    ),
-    addMacdPeriod: get(
-      ['add_macd_period', 'addMacdPeriod'],
-      (v) => asEnum(v, ['close', '5m', '15m'] as const, base.addMacdPeriod),
-      base.addMacdPeriod
-    ),
-    addEmaEnabled: get(['add_ema_enabled', 'addEmaEnabled'], (v) => asBool(v, base.addEmaEnabled), base.addEmaEnabled),
-    addEmaPeriod: get(
-      ['add_ema_period', 'addEmaPeriod'],
-      (v) => asEnum(v, ['close', '5m', '15m'] as const, base.addEmaPeriod),
-      base.addEmaPeriod
-    ),
-    waterfallEnabled: get(
-      ['waterfall_enabled', 'waterfallEnabled'],
-      (v) => asBool(v, base.waterfallEnabled),
-      base.waterfallEnabled
-    ),
-    waterfall: get(['waterfall_protection', 'waterfall'], (v) => asNumber(v, base.waterfall), base.waterfall),
-    stopLossEnabled: get(
-      ['stop_loss_enabled', 'stopLossEnabled'],
-      (v) => asBool(v, base.stopLossEnabled),
-      base.stopLossEnabled
-    ),
-    stopLossType: get(
-      ['stop_loss_type', 'stopLossType'],
-      (v) => asEnum(v, ['ratio', 'amount', 'price'] as const, base.stopLossType),
-      base.stopLossType
-    ),
-    stopLossRatio: get(
-      ['stop_loss_ratio', 'stopLossRatio'],
-      (v) => asNumber(v, base.stopLossRatio),
-      base.stopLossRatio
-    ),
-    stopLossAmount: get(
-      ['stop_loss_amount', 'stopLossAmount'],
-      (v) => asNumber(v, base.stopLossAmount),
-      base.stopLossAmount
-    ),
-    stopLossPrice: get(
-      ['stop_loss_price', 'stopLossPrice'],
-      (v) => asNumber(v, base.stopLossPrice),
-      base.stopLossPrice
-    ),
-    reverseTP: get(
-      ['reverse_take_profit_period', 'reverseTP'],
-      (v) => asEnum(v, ['close', '5m', '15m'] as const, base.reverseTP),
-      base.reverseTP
-    ),
-    reverseSL: get(['reverse_stop_loss', 'reverseSL'], (v) => asBool(v, base.reverseSL), base.reverseSL),
-    burnGlobalEnabled: get(
-      ['burn_global_enabled', 'burnGlobalEnabled'],
-      (v) => asBool(v, base.burnGlobalEnabled),
-      base.burnGlobalEnabled
-    ),
-    burnGlobalThreshold: get(
-      ['burn_global_threshold', 'burnGlobalThreshold'],
-      (v) => asNumber(v, base.burnGlobalThreshold),
-      base.burnGlobalThreshold
-    ),
-    burnDualEnabled: get(
-      ['burn_dual_enabled', 'burnDualEnabled'],
-      (v) => asBool(v, base.burnDualEnabled),
-      base.burnDualEnabled
-    ),
-    burnDualThreshold: get(
-      ['burn_dual_threshold', 'burnDualThreshold'],
-      (v) => asNumber(v, base.burnDualThreshold),
-      base.burnDualThreshold
-    ),
-    openDouble: get(['open_double', 'openDouble'], (v) => asBool(v, base.openDouble), base.openDouble),
-    followTrend: get(['follow_trend', 'followTrend'], (v) => asBool(v, base.followTrend), base.followTrend),
-    onlineOrderLimit: get(
-      ['online_order_limit', 'onlineOrderLimit'],
-      (v) => asNumber(v, base.onlineOrderLimit),
-      base.onlineOrderLimit
-    ),
-    leverage: get(['leverage'], (v) => asNumber(v, base.leverage), base.leverage),
-    direction: get(['direction'], (v) => asEnum(v, ['long', 'short', 'dual'] as const, base.direction), base.direction),
   }
 }

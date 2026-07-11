@@ -3,6 +3,7 @@ import { X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { toast } from '@/lib/useToast'
 import { strategyApi } from '@/lib/api'
+import { percentToDecimal } from '@/lib/craPercentUtils'
 import { createDefaultAddPositions, strategyTypeToMultiplierPreset } from '@/lib/strategyUtils'
 
 interface StrategyBatchEditModalProps {
@@ -55,13 +56,13 @@ export function StrategyBatchEditModal({ ids, market, onClose, onSaved }: Strate
           updates.order_count = v.value
           break
         case 'takeProfitRatio':
-          updates.take_profit_ratio = v.value
+          updates.take_profit_ratio = percentToDecimal(v.value)
           break
         case 'stopLossRatio':
-          updates.stop_loss_ratio = v.value
+          updates.stop_loss_ratio = percentToDecimal(v.value)
           break
         case 'waterfallProtection':
-          updates.waterfall_protection = v.value
+          updates.waterfall_protection = percentToDecimal(v.value)
           break
       }
     })
@@ -75,7 +76,12 @@ export function StrategyBatchEditModal({ ids, market, onClose, onSaved }: Strate
           const strategyType = (current.strategy_type || parsed.strategy_type || 'martin_trend') as string
           const isSpot = current.market_type === 'spot' || current.category === 'spot' || parsed.market_type === 'spot'
           const preset = strategyTypeToMultiplierPreset(strategyType, isSpot ? 'spot' : 'contract')
-          nextConfig.add_positions = createDefaultAddPositions(preset, updates.order_count as number)
+          nextConfig.add_positions = createDefaultAddPositions(preset, updates.order_count as number).map((p) => ({
+            ...p,
+            spread: percentToDecimal(p.spread),
+            callback: percentToDecimal(p.callback),
+            ema_enabled: p.emaEnabled ?? false,
+          }))
         }
         await strategyApi.update(id, { config_json: JSON.stringify(nextConfig) })
       })

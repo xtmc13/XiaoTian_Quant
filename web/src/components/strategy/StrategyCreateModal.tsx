@@ -3,25 +3,26 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { strategyApi, backtestApi, configApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { toast } from '@/lib/useToast'
-import type { StrategyParamDefs } from '@/types'
 import type { StrategyTemplate } from '@/types/strategies'
-import { FormField, DynamicParamField, STRAT_TYPES, TIMEFRAMES, type StrategyRow } from './StrategyFormFields'
+import { FormField, STRAT_TYPES, getDefaultStrategyCode, type StrategyRow } from './StrategyFormFields'
 import { CRAParamForm, craParamsToApiPayload, type CRAParams } from './CRAParamForm'
 import { STRATEGY_PRESETS, type Preset, type PresetKey } from './StrategyPresets'
 import { ExchangeSelectModal } from './ExchangeSelectModal'
 import { createDefaultCRAParams, migrateLegacyConfigToCRAParams } from '@/lib/strategyUtils'
-import {
-  X,
-  CheckCircle2,
-  ChevronRight,
-  ChevronDown,
-  Activity,
-  FileCode2,
-  SlidersHorizontal,
-  Zap,
-  BarChart3,
-  Globe,
-} from 'lucide-react'
+import { X, CheckCircle2, ChevronRight, ChevronDown, Activity, FileCode2, Zap, BarChart3, Globe } from 'lucide-react'
+
+/* ─── helpers ───────────────────────────────────────────────────────── */
+function inferTimeframeFromCRAParams(cra: CRAParams): string {
+  const candidates: (string | null)[] = [
+    cra.openMacdEnabled && cra.openMacdPeriod !== 'close' ? cra.openMacdPeriod : null,
+    cra.openCounterEmaEnabled && cra.openCounterEmaPeriod !== 'close' ? cra.openCounterEmaPeriod : null,
+    cra.openTrendEmaEnabled && cra.openTrendEmaPeriod !== 'close' ? cra.openTrendEmaPeriod : null,
+    cra.addMacdEnabled && cra.addMacdPeriod !== 'close' ? cra.addMacdPeriod : null,
+    cra.addEmaEnabled && cra.addEmaPeriod !== 'close' ? cra.addEmaPeriod : null,
+  ]
+  const periods = candidates.filter((p): p is string => p !== null)
+  return periods[0] || '15m'
+}
 
 /* ─── Collapsible Section ─── */
 function CollapsibleSection({
@@ -89,34 +90,13 @@ export function StrategyCreateModal({
   const [presetKey, setPresetKey] = useState<PresetKey | null>(null)
   const [name, setName] = useState(editing?.name || '')
   const [symbol, setSymbol] = useState(editing?.symbol || 'BTCUSDT')
-  const [strategyType, setStrategyType] = useState(() => STRAT_TYPES[market][0]?.value ?? 'breakout')
-  const [dynamicParams, setDynamicParams] = useState<Record<string, unknown>>({})
-  const [paramDefs, setParamDefs] = useState<StrategyParamDefs['params']>([])
-  const [paramDefsLoading, setParamDefsLoading] = useState(false)
+  const [strategyType, setStrategyType] = useState(() => editing?.strategy_type || defaultStrategyType || '')
 
   useEffect(() => {
-    if (!strategyType) return
-    setParamDefsLoading(true)
-    strategyApi
-      .paramDefs(strategyType)
-      .then((res: StrategyParamDefs) => {
-        const defs = res?.params || []
-        setParamDefs(defs)
-        const defaults: Record<string, unknown> = {}
-        defs.forEach((d) => {
-          defaults[d.name] = d.default
-        })
-        setDynamicParams(defaults)
-      })
-      .catch(() => {
-        setParamDefs([])
-        setDynamicParams({})
-      })
-      .finally(() => setParamDefsLoading(false))
-  }, [strategyType])
-
-  useEffect(() => {
-    setStrategyType(STRAT_TYPES[market][0]?.value ?? 'breakout')
+    setStrategyType((prev) => {
+      const valid = STRAT_TYPES[market].some((t) => t.value === prev)
+      return valid ? prev : ''
+    })
   }, [market])
 
   useEffect(() => {
@@ -143,7 +123,6 @@ export function StrategyCreateModal({
     if (editing?.config_json) {
       try {
         const parsed = JSON.parse(editing.config_json)
-        setDynamicParams((prev) => ({ ...prev, ...parsed }))
         setCraParams(migrateLegacyConfigToCRAParams(parsed, market))
         if (Array.isArray(parsed.selected_exchanges)) {
           setSelectedExchanges(parsed.selected_exchanges)
@@ -154,7 +133,6 @@ export function StrategyCreateModal({
     }
   }, [editing, defaultStrategyType, market])
 
-  const [timeframe, setTimeframe] = useState(editing?.timeframe || '15m')
   const [executionMode, setExecutionMode] = useState<'live' | 'signal'>('signal')
   const [notifyChannels, setNotifyChannels] = useState<string[]>(['browser'])
   const [saveAsDefault, setSaveAsDefault] = useState(false)
@@ -208,9 +186,6 @@ export function StrategyCreateModal({
     if (config.symbol && typeof config.symbol === 'string') {
       setSymbol(config.symbol.toUpperCase())
     }
-    if (config.timeframe && typeof config.timeframe === 'string') {
-      setTimeframe(config.timeframe)
-    }
     if (config.leverage && typeof config.leverage === 'number') {
       setCraParams((prev) => ({ ...prev, leverage: config.leverage as number }))
     }
@@ -225,7 +200,6 @@ export function StrategyCreateModal({
     if (config.config_json && typeof config.config_json === 'string') {
       try {
         const parsed = JSON.parse(config.config_json)
-        setDynamicParams((prev) => ({ ...prev, ...parsed }))
         setCraParams(migrateLegacyConfigToCRAParams(parsed, market))
       } catch {
         /* ignore */
@@ -244,6 +218,13 @@ export function StrategyCreateModal({
     if (editing?.strategy_code !== undefined) setCodeWorkspace(editing.strategy_code)
   }, [editing?.strategy_code])
 
+  // Seed a type-specific starter template when entering script mode for a new strategy.
+  useEffect(() => {
+    if (editing) return
+    if (mode !== 'script') return
+    setCodeWorkspace((prev) => (prev.trim() === '' ? getDefaultStrategyCode(strategyType) : prev))
+  }, [mode, strategyType, editing])
+
   // ── Quick backtest ──
   const [btResult, setBtResult] = useState<{
     winRate: number
@@ -261,7 +242,7 @@ export function StrategyCreateModal({
     try {
       const res = await backtestApi.run({
         symbol,
-        interval: timeframe,
+        interval: inferTimeframeFromCRAParams(craParams),
         strategy_type: strategyType,
         initial_balance: { USDT: backtestCapital },
         from: new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0],
@@ -310,11 +291,9 @@ export function StrategyCreateModal({
         default_config: {
           strategy_type: strategyType,
           symbol: symbol.trim().toUpperCase(),
-          timeframe,
           leverage: market === 'spot' ? 1 : craParams.leverage,
           trade_direction: market === 'spot' ? 'long' : craParams.direction,
           config_json: JSON.stringify({
-            ...dynamicParams,
             ...craParamsToApiPayload(craParams),
             selected_exchanges: selectedExchanges,
           }),
@@ -348,7 +327,6 @@ export function StrategyCreateModal({
     }
 
     const config: Record<string, unknown> = {
-      ...dynamicParams,
       ...craParamsToApiPayload(craParams),
       market_type: market === 'spot' ? 'spot' : 'swap',
       position_side: craParams.direction === 'long' ? 'LONG' : craParams.direction === 'short' ? 'SHORT' : 'BOTH',
@@ -358,7 +336,6 @@ export function StrategyCreateModal({
     const payload: Record<string, unknown> = {
       name: name.trim(),
       symbol: symbol.trim().toUpperCase(),
-      timeframe,
       leverage: market === 'spot' ? 1 : craParams.leverage,
       trade_direction: market === 'spot' ? 'long' : craParams.direction,
       market_type: market === 'spot' ? 'spot' : 'swap',
@@ -560,26 +537,16 @@ export function StrategyCreateModal({
                 </FormField>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <FormField label="策略类型">
-                  <select value={strategyType} onChange={(e) => setStrategyType(e.target.value)} className={inputCls}>
-                    {STRAT_TYPES[market].map((t) => (
-                      <option key={t.value} value={t.value}>
-                        {t.label}
-                      </option>
-                    ))}
-                  </select>
-                </FormField>
-                <FormField label="K线周期">
-                  <select value={timeframe} onChange={(e) => setTimeframe(e.target.value)} className={inputCls}>
-                    {TIMEFRAMES.map((tf) => (
-                      <option key={tf} value={tf}>
-                        {tf}
-                      </option>
-                    ))}
-                  </select>
-                </FormField>
-              </div>
+              <FormField label="策略类型">
+                <select value={strategyType} onChange={(e) => setStrategyType(e.target.value)} className={inputCls}>
+                  <option value="">请选择策略类型</option>
+                  {STRAT_TYPES[market].map((t) => (
+                    <option key={t.value} value={t.value}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+              </FormField>
 
               <FormField label="选择交易所">
                 <button
@@ -609,27 +576,6 @@ export function StrategyCreateModal({
                 onChange={setSelectedExchanges}
                 configuredExchanges={configuredExchanges}
               />
-
-              {/* Dynamic strategy params */}
-              {paramDefsLoading && <div className="text-xs text-muted-foreground py-2">加载参数定义...</div>}
-              {paramDefs.length > 0 && (
-                <div className="rounded-xl border border-quant-border bg-quant-bg-tertiary p-4 space-y-4">
-                  <div className="flex items-center gap-2 text-xs font-semibold text-quant-gold">
-                    <SlidersHorizontal className="w-3.5 h-3.5" />
-                    策略参数
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    {paramDefs.map((def) => (
-                      <DynamicParamField
-                        key={def.name}
-                        def={def}
-                        value={dynamicParams[def.name]}
-                        onChange={(val) => setDynamicParams((prev) => ({ ...prev, [def.name]: val }))}
-                      />
-                    ))}
-                  </div>
-                </div>
-              )}
             </>
           )}
 

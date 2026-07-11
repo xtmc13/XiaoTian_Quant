@@ -18,6 +18,7 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/middleware"
 	"github.com/xiaotian-quant/gateway/internal/store"
 	"github.com/xiaotian-quant/gateway/internal/strategy"
+	"github.com/xiaotian-quant/gateway/internal/strategy/cra"
 	"github.com/xiaotian-quant/gateway/internal/strategy/strategies"
 )
 
@@ -157,7 +158,9 @@ func registerStrategyFactories() {
 	strategy.RegisterStrategyFactory("counter_stable", func() strategy.Strategy { return strategies.NewEMACrossStrategy() })
 	strategy.RegisterStrategyFactory("counter_safe", func() strategy.Strategy { return strategies.NewEMACrossStrategy() })
 	strategy.RegisterStrategyFactory("head_tail_arb", func() strategy.Strategy { return strategies.NewArbitrageStrategy() })
-	strategy.RegisterStrategyFactory("global_burn", func() strategy.Strategy { return strategies.NewMartingaleStrategy() })
+	// CRA unified factories (frontend types are mapped to these in handler/strategy.go).
+	strategy.RegisterStrategyFactory("cra_spot", func() strategy.Strategy { return cra.NewCRASpotStrategy("cra_spot", "BTCUSDT") })
+	strategy.RegisterStrategyFactory("cra_contract", func() strategy.Strategy { return cra.NewCRAContractStrategy("cra_contract", "BTCUSDT") })
 }
 
 // setupGinMode configures Gin's mode based on server config.

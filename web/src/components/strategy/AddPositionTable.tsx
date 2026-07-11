@@ -6,13 +6,20 @@ interface AddPositionTableProps {
   value: AddPositionItem[]
   onChange: (next: AddPositionItem[]) => void
   showEma?: boolean
+  emaDisabled?: boolean
   disabled?: boolean
 }
 
 const inputCls =
   'w-full bg-quant-bg border border-quant-border rounded px-2 py-1 text-xs focus:outline-none focus:border-quant-gold'
 
-export function AddPositionTable({ value, onChange, showEma = false, disabled = false }: AddPositionTableProps) {
+export function AddPositionTable({
+  value,
+  onChange,
+  showEma = false,
+  emaDisabled = false,
+  disabled = false,
+}: AddPositionTableProps) {
   const updateRow = (index: number, patch: Partial<AddPositionItem>) => {
     const next = value.map((row, i) => (i === index ? { ...row, ...patch } : row))
     onChange(next)
@@ -83,14 +90,14 @@ export function AddPositionTable({ value, onChange, showEma = false, disabled = 
         ...(showEma
           ? [
               {
-                key: 'ema',
+                key: 'emaEnabled',
                 title: 'EMA',
                 width: '70px',
                 render: (item: AddPositionItem, index: number) => (
                   <Switch
-                    disabled={disabled}
-                    checked={item.ema ?? false}
-                    onCheckedChange={(checked) => updateRow(index, { ema: checked })}
+                    disabled={disabled || emaDisabled}
+                    checked={item.emaEnabled ?? false}
+                    onCheckedChange={(checked) => updateRow(index, { emaEnabled: checked })}
                     className="scale-75 origin-left"
                   />
                 ),

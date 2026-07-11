@@ -42,7 +42,7 @@ describe('strategyUtils', () => {
       const positions = createDefaultAddPositions('martin', 7)
       expect(positions).toHaveLength(7)
       expect(positions.map((p) => p.multiplier)).toEqual([1, 2, 4, 8, 16, 32, 64])
-      expect(positions[0]).toMatchObject({ order: 1, multiplier: 1, spread: 3.5, callback: 0.3, ema: false })
+      expect(positions[0]).toMatchObject({ order: 1, multiplier: 1, spread: 3.5, callback: 0.3, emaEnabled: false })
     })
 
     it('uses CRA实拍 spot spread sequence 3.5/5/7/9/11/13/15', () => {

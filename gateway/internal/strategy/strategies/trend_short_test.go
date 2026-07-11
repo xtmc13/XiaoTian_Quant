@@ -162,36 +162,3 @@ func TestTrendShortStrategy_OnBar_NoDoubleEntry(t *testing.T) {
 		t.Fatalf("expected exactly one SHORT signal, got %d", shortCount)
 	}
 }
-
-func TestTrendShortStrategy_ApplyParams(t *testing.T) {
-	s := NewTrendShortStrategy()
-	if err := s.Start(map[string]any{
-		"symbol":      "ETHUSDT",
-		"fast_period": 10,
-		"slow_period": 30,
-	}); err != nil {
-		t.Fatalf("start: %v", err)
-	}
-
-	if s.Symbol() != "ETHUSDT" {
-		t.Errorf("expected symbol ETHUSDT, got %s", s.Symbol())
-	}
-	if s.fastPeriod != 10 {
-		t.Errorf("expected fast_period 10, got %d", s.fastPeriod)
-	}
-	if s.slowPeriod != 30 {
-		t.Errorf("expected slow_period 30, got %d", s.slowPeriod)
-	}
-}
-
-func TestTrendShortStrategy_InvalidParamsRejected(t *testing.T) {
-	s := NewTrendShortStrategy()
-	err := s.Start(map[string]any{
-		"symbol":      "BTCUSDT",
-		"fast_period": 50,
-		"slow_period": 20,
-	})
-	if err == nil {
-		t.Fatal("expected error when fast_period >= slow_period")
-	}
-}
