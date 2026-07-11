@@ -161,19 +161,20 @@ func wsDialer() *websocket.Dialer {
 		}
 	}
 
-	dialer := websocket.DefaultDialer
+	dialer := *websocket.DefaultDialer
+	d := &dialer
 	if proxyURL != "" {
 		proxy, err := url.Parse(proxyURL)
 		if err == nil {
-			dialer = &websocket.Dialer{
+			d = &websocket.Dialer{
 				Proxy:            http.ProxyURL(proxy),
 				HandshakeTimeout: 10 * time.Second,
 			}
 			log.Printf("[binance_ws] using proxy: %s", proxyURL)
 		}
 	}
-	dialer.HandshakeTimeout = 10 * time.Second
-	return dialer
+	d.HandshakeTimeout = 10 * time.Second
+	return d
 }
 
 // testProxy checks if a proxy is reachable.

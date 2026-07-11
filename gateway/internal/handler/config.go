@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xiaotian-quant/gateway/internal/adapter"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
@@ -81,6 +82,20 @@ func ExchangeSave(c *gin.Context) {
 	var data map[string]any
 	c.ShouldBindJSON(&data)
 	name := getString(data, "name", "")
+
+	// SECURITY: never persist API secrets to disk. Only non-secret fields are stored.
+	allowed := map[string]bool{"testnet": true, "futures": true, "enabled": true, "name": true, "label": true}
+	safe := make(map[string]any, len(data))
+	for k, v := range data {
+		if allowed[k] {
+			safe[k] = v
+		}
+	}
+	if len(safe) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "no allowed fields provided"})
+		return
+	}
+
 	cfg := store.GetConfig()
 	exchanges, _ := cfg["exchanges"].(map[string]any)
 	if exchanges == nil {
@@ -92,10 +107,8 @@ func ExchangeSave(c *gin.Context) {
 		ex = make(map[string]any)
 		exchanges[name] = ex
 	}
-	for _, k := range []string{"api_key", "secret", "passphrase", "testnet", "futures"} {
-		if v, ok := data[k]; ok {
-			ex[k] = v
-		}
+	for k, v := range safe {
+		ex[k] = v
 	}
 	if _, ok := ex["enabled"]; !ok {
 		ex["enabled"] = true
@@ -328,10 +341,11 @@ func ExchangeStatus(c *gin.Context) {
 	result := make(map[string]any)
 	for name, v := range exchanges {
 		ex, _ := v.(map[string]any)
+		hasCreds := adapter.HasCredential(name)
 		result[name] = gin.H{
-			"connected":       hasCredentials(ex, "api_key", "secret"),
+			"connected":       hasCreds,
 			"testnet":         getBool(ex, "testnet", true),
-			"has_credentials": hasCredentials(ex, "api_key", "secret"),
+			"has_credentials": hasCreds,
 		}
 	}
 	c.JSON(http.StatusOK, result)
@@ -347,9 +361,10 @@ func ExchangesConfigured(c *gin.Context) {
 	result := make(map[string]any)
 	for _, name := range allExchanges {
 		ex, _ := exchangesCfg[name].(map[string]any)
+		hasCreds := adapter.HasCredential(name)
 		result[name] = gin.H{
 			"enabled":         getBool(ex, "enabled", false),
-			"has_credentials": hasCredentials(ex, "api_key", "secret"),
+			"has_credentials": hasCreds,
 			"testnet":         getBool(ex, "testnet", true),
 			"futures":         getBool(ex, "futures", false),
 		}
@@ -372,7 +387,8 @@ func AISave(c *gin.Context) {
 		prov = make(map[string]any)
 		ai[provider] = prov
 	}
-	for _, k := range []string{"api_key", "base_url", "model"} {
+	// SECURITY: API keys are never persisted to disk. Only non-secret settings are stored.
+	for _, k := range []string{"base_url", "model", "enabled"} {
 		if v, ok := data[k]; ok {
 			prov[k] = v
 		}

@@ -1,8 +1,10 @@
 package store
 
+import "strings"
+
 // Schema migration constants and DDL for all 18 tables.
 
-const currentSchemaVersion = 13
+const currentSchemaVersion = 15
 
 // MigrationFunc is a function that upgrades the schema by one version.
 type MigrationFunc func(tx *dbTx) error
@@ -21,6 +23,8 @@ var migrations = map[int]MigrationFunc{
 	11: migrateV11,
 	12: migrateV12,
 	13: migrateV13,
+	14: migrateV14,
+	15: migrateV15,
 }
 
 // dbTx wraps a database transaction for migrations.
@@ -687,5 +691,97 @@ func migrateV13(tx *dbTx) error {
 			return err
 		}
 	}
+	return nil
+}
+
+// migrateV14 adds realized fill columns to arbitrage_trades.
+func migrateV14(tx *dbTx) error {
+	columns := []string{
+		`ALTER TABLE arbitrage_trades ADD COLUMN buy_filled_qty REAL DEFAULT 0`,
+		`ALTER TABLE arbitrage_trades ADD COLUMN buy_avg_price REAL DEFAULT 0`,
+		`ALTER TABLE arbitrage_trades ADD COLUMN buy_fee REAL DEFAULT 0`,
+		`ALTER TABLE arbitrage_trades ADD COLUMN sell_filled_qty REAL DEFAULT 0`,
+		`ALTER TABLE arbitrage_trades ADD COLUMN sell_avg_price REAL DEFAULT 0`,
+		`ALTER TABLE arbitrage_trades ADD COLUMN sell_fee REAL DEFAULT 0`,
+	}
+	for _, ddl := range columns {
+		if err := tx.exec(ddl); err != nil {
+			// SQLite does not support IF NOT EXISTS for ADD COLUMN; ignore duplicate column errors.
+			if !strings.Contains(err.Error(), "duplicate column") {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// migrateV15 expands strategy_configs for CRA parameters and adds strategy_templates.
+func migrateV15(tx *dbTx) error {
+	addColumn := func(ddl string) error {
+		if err := tx.exec(ddl); err != nil {
+			if strings.Contains(err.Error(), "duplicate column") {
+				return nil
+			}
+			return err
+		}
+		return nil
+	}
+
+	columns := []string{
+		`ALTER TABLE strategy_configs ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE strategy_configs ADD COLUMN category TEXT NOT NULL DEFAULT 'spot'`,
+		`ALTER TABLE strategy_configs ADD COLUMN strategy_type TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE strategy_configs ADD COLUMN coin TEXT DEFAULT ''`,
+		`ALTER TABLE strategy_configs ADD COLUMN direction TEXT DEFAULT 'long'`,
+		`ALTER TABLE strategy_configs ADD COLUMN leverage REAL DEFAULT 1`,
+		`ALTER TABLE strategy_configs ADD COLUMN market_type TEXT DEFAULT 'spot'`,
+		`ALTER TABLE strategy_configs ADD COLUMN margin_mode TEXT DEFAULT 'cross'`,
+		`ALTER TABLE strategy_configs ADD COLUMN timeframe TEXT DEFAULT '15m'`,
+		`ALTER TABLE strategy_configs ADD COLUMN execution_mode TEXT DEFAULT 'signal'`,
+		`ALTER TABLE strategy_configs ADD COLUMN initial_capital REAL DEFAULT 0`,
+		`ALTER TABLE strategy_configs ADD COLUMN current_equity REAL DEFAULT 0`,
+		`ALTER TABLE strategy_configs ADD COLUMN total_pnl REAL DEFAULT 0`,
+		`ALTER TABLE strategy_configs ADD COLUMN total_pnl_percent REAL DEFAULT 0`,
+		`ALTER TABLE strategy_configs ADD COLUMN status TEXT DEFAULT 'stopped'`,
+		`ALTER TABLE strategy_configs ADD COLUMN notification_config TEXT DEFAULT '{}'`,
+	}
+	for _, ddl := range columns {
+		if err := addColumn(ddl); err != nil {
+			return err
+		}
+	}
+
+	indexes := []string{
+		`CREATE INDEX IF NOT EXISTS idx_stratcfg_user_category ON strategy_configs(user_id, category)`,
+		`CREATE INDEX IF NOT EXISTS idx_stratcfg_user_status ON strategy_configs(user_id, status)`,
+		`CREATE INDEX IF NOT EXISTS idx_stratcfg_user_symbol ON strategy_configs(user_id, symbol)`,
+		`CREATE INDEX IF NOT EXISTS idx_stratcfg_user_type ON strategy_configs(user_id, strategy_type)`,
+	}
+	for _, ddl := range indexes {
+		if err := tx.exec(ddl); err != nil {
+			return err
+		}
+	}
+
+	tables := []string{
+		`CREATE TABLE IF NOT EXISTS strategy_templates (
+			id TEXT PRIMARY KEY,
+			user_id INTEGER NOT NULL,
+			name TEXT NOT NULL,
+			category TEXT NOT NULL,
+			strategy_type TEXT DEFAULT '',
+			description TEXT DEFAULT '',
+			default_config_json TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_strattpl_user_category ON strategy_templates(user_id, category)`,
+	}
+	for _, ddl := range tables {
+		if err := tx.exec(ddl); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }

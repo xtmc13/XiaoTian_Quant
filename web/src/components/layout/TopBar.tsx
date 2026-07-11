@@ -1,11 +1,22 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
-import { useLocation } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
 import { cn } from '@/lib/utils'
-import { portfolioApi, notificationApi, paperApi } from '@/lib/api'
-import { LogOut, Bell, CheckCheck, Trash2, AlertTriangle, Info, Zap } from 'lucide-react'
+import { portfolioApi, notificationApi } from '@/lib/api'
+import {
+  LogOut,
+  Bell,
+  CheckCheck,
+  Trash2,
+  AlertTriangle,
+  Info,
+  Zap,
+  Globe,
+  User,
+  CreditCard,
+  Building2,
+} from 'lucide-react'
 import { useI18n, LANGS, type Lang } from '@/i18n'
-import { Switch } from '@/components/ui/Switch'
 
 const routeTitles: Record<string, string> = {
   '/dashboard': '仪表盘',
@@ -14,12 +25,11 @@ const routeTitles: Record<string, string> = {
   '/trading/contract': '合约交易',
   '/strategy': '策略工厂',
   '/strategy/editor': '策略编辑器',
-  '/ai': 'AI 研究',
-  '/ai/analysis': 'AI 分析',
+  '/ai': 'AI分析',
   '/ai/freqai': 'FreqAI',
   '/ai/rl': 'RL 强化学习',
   '/ai/tensorboard': 'TensorBoard',
-  '/market': '市场数据',
+  '/market': 'AI分析',
   '/backtest': '回测验证',
   '/bots': '交易机器人',
   '/bots/strategy': '策略机器人',
@@ -52,6 +62,7 @@ const levelIcon: Record<string, React.ReactNode> = {
 
 export function TopBar() {
   const location = useLocation()
+  const navigate = useNavigate()
   const { user, logout, isAuthenticated } = useAuthStore()
   const { lang, setLang } = useI18n()
   const [time, setTime] = useState(new Date())
@@ -61,8 +72,6 @@ export function TopBar() {
   const [notifOpen, setNotifOpen] = useState(false)
   const [notifications, setNotifications] = useState<NotificationItem[]>([])
   const [unreadCount, setUnreadCount] = useState(0)
-  const [paperMode, setPaperMode] = useState(true)
-  const [paperLoading, setPaperLoading] = useState(false)
   const notifRef = useRef<HTMLDivElement>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -78,16 +87,6 @@ export function TopBar() {
       .then((data) => {
         setEquity(data.total_equity ?? null)
         setPnl(data.total_pnl ?? null)
-      })
-      .catch(() => {})
-  }, [isAuthenticated])
-
-  useEffect(() => {
-    if (!isAuthenticated) return
-    paperApi
-      .safety()
-      .then((data) => {
-        setPaperMode(data?.paper_mode ?? true)
       })
       .catch(() => {})
   }, [isAuthenticated])
@@ -156,43 +155,11 @@ export function TopBar() {
   const displayName = user?.username || 'User'
   const initial = displayName.charAt(0).toUpperCase()
 
-  const handlePaperToggle = async (checked: boolean) => {
-    if (paperLoading) return
-    setPaperLoading(true)
-    try {
-      if (checked) {
-        await paperApi.unlock()
-      } else {
-        await paperApi.lock()
-      }
-      setPaperMode(checked)
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : '切换失败'
-      // eslint-disable-next-line no-console
-      console.error('Paper mode toggle failed:', msg)
-    } finally {
-      setPaperLoading(false)
-    }
-  }
-
   return (
     <header className="h-14 bg-quant-bg-secondary border-b border-quant-border flex items-center justify-between px-5 shrink-0 z-50">
       <h1 className="text-base font-semibold">{title}</h1>
 
       <div className="flex items-center gap-4">
-        {/* ── Paper / Live Toggle ── */}
-        <div className="flex items-center gap-2">
-          <span className={cn('text-[10px] font-medium', paperMode ? 'text-quant-blue' : 'text-quant-green')}>
-            {paperMode ? '模拟' : '实盘'}
-          </span>
-          <Switch
-            checked={paperMode}
-            onCheckedChange={handlePaperToggle}
-            disabled={paperLoading}
-            aria-label="模拟/实盘切换"
-          />
-        </div>
-
         <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <span className="w-1.5 h-1.5 rounded-full bg-quant-green animate-pulse" />
           已连接
@@ -297,21 +264,6 @@ export function TopBar() {
           )}
         </div>
 
-        {/* Language Switcher */}
-        <select
-          value={lang}
-          onChange={(e) => setLang(e.target.value as Lang)}
-          aria-label="切换语言"
-          className="bg-quant-bg border border-quant-border rounded px-1.5 py-0.5 text-[10px] text-muted-foreground outline-none focus:border-quant-gold cursor-pointer"
-        >
-          {LANGS.map((l) => (
-            <option key={l.code} value={l.code}>
-              {l.flag} {l.label}
-            </option>
-          ))}
-        </select>
-        <span className="text-[10px] text-muted-foreground">v3.0.0</span>
-
         {/* User menu */}
         <div className="relative">
           <button
@@ -332,11 +284,70 @@ export function TopBar() {
                 tabIndex={-1}
                 role="presentation"
               />
-              <div className="absolute right-0 top-full mt-2 w-48 rounded-xl border border-quant-border bg-quant-card shadow-xl z-50 py-1">
+              <div className="absolute right-0 top-full mt-2 w-52 rounded-xl border border-quant-border bg-quant-card shadow-xl z-50 py-1">
                 <div className="px-3 py-2 border-b border-quant-border">
                   <div className="text-sm font-medium text-foreground">{displayName}</div>
                   <div className="text-[11px] text-muted-foreground capitalize">{user?.role || 'user'}</div>
                 </div>
+
+                <div className="py-1 border-b border-quant-border">
+                  <button
+                    onClick={() => {
+                      setMenuOpen(false)
+                      navigate('/profile')
+                    }}
+                    className="w-full px-3 py-2 text-left text-xs text-muted-foreground hover:bg-quant-bg-secondary hover:text-foreground flex items-center gap-2 transition-colors"
+                  >
+                    <User className="h-3.5 w-3.5" />
+                    个人资料
+                  </button>
+                  <button
+                    onClick={() => {
+                      setMenuOpen(false)
+                      navigate('/billing')
+                    }}
+                    className="w-full px-3 py-2 text-left text-xs text-muted-foreground hover:bg-quant-bg-secondary hover:text-foreground flex items-center gap-2 transition-colors"
+                  >
+                    <CreditCard className="h-3.5 w-3.5" />
+                    订阅
+                  </button>
+                  <button
+                    onClick={() => {
+                      setMenuOpen(false)
+                      navigate('/exchange-account')
+                    }}
+                    className="w-full px-3 py-2 text-left text-xs text-muted-foreground hover:bg-quant-bg-secondary hover:text-foreground flex items-center gap-2 transition-colors"
+                  >
+                    <Building2 className="h-3.5 w-3.5" />
+                    交易所账户
+                  </button>
+                </div>
+
+                <div className="px-3 py-2 border-b border-quant-border">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-muted-foreground flex items-center gap-1.5">
+                      <Globe className="h-3.5 w-3.5" />
+                      语言
+                    </span>
+                    <select
+                      value={lang}
+                      onChange={(e) => setLang(e.target.value as Lang)}
+                      aria-label="切换语言"
+                      className="bg-quant-bg border border-quant-border rounded px-1.5 py-0.5 text-[10px] text-muted-foreground outline-none focus:border-quant-gold cursor-pointer"
+                    >
+                      {LANGS.map((l) => (
+                        <option key={l.code} value={l.code}>
+                          {l.flag} {l.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="px-3 py-1.5 border-b border-quant-border">
+                  <span className="text-[10px] text-muted-foreground">版本 v3.0.0</span>
+                </div>
+
                 <button
                   onClick={() => {
                     setMenuOpen(false)

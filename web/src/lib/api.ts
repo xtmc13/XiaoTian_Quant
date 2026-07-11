@@ -176,8 +176,10 @@ const MAX_RETRIES = 2
 const RETRY_DELAY = 1000
 
 // ── Create axios instance ──
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
+
 const axiosInstance: AxiosInstance = axios.create({
-  baseURL: '/api',
+  baseURL: API_BASE_URL,
   headers: { 'Content-Type': 'application/json' },
 })
 
@@ -526,6 +528,10 @@ export const strategyApi = {
     api.post<{ success: boolean; started: number }>('/strategies/configs/batch-start', { ids }),
   batchStop: (ids: string[]) =>
     api.post<{ success: boolean; stopped: number }>('/strategies/configs/batch-stop', { ids }),
+  batchClose: (ids: string[]) =>
+    api.post<{ success: boolean; closed: number }>('/strategies/configs/batch-close', { ids }),
+  batchDelete: (ids: string[]) =>
+    api.post<{ success: boolean; deleted: number }>('/strategies/configs/batch-delete', { ids }),
   logs: (strategyId?: string) =>
     api.get<StrategyLog[]>(`/strategies/logs${strategyId ? '?strategy_id=' + strategyId : ''}`),
   clearLogs: (strategyId?: string) =>
@@ -1123,8 +1129,8 @@ export const communityApi = {
 // ── Admin ──
 export const adminApi = {
   users: () => api.get<AdminUser[]>('/admin/users').then((d) => d ?? []),
-  user: (id: number) => api.get<AdminUser>(`/admin/users/${id}`),
-  updateUser: (id: number, data: Partial<AdminUser>) => api.put<{ success: boolean }>(`/admin/users/${id}`, data),
+  user: (id: string) => api.get<AdminUser>(`/admin/users/${id}`),
+  updateUser: (id: string, data: Partial<AdminUser>) => api.put<{ success: boolean }>(`/admin/users/${id}`, data),
   stats: () => api.get<AdminStats>('/admin/stats'),
   enhancedStats: () => api.get<AdminStats>('/admin/stats'),
   auditLog: (params?: { limit?: number; offset?: number }) =>

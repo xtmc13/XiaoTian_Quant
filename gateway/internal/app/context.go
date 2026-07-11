@@ -33,6 +33,7 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/service"
 	"github.com/xiaotian-quant/gateway/internal/store"
 	"github.com/xiaotian-quant/gateway/internal/strategy"
+	"github.com/xiaotian-quant/gateway/internal/strategy/cra"
 	"github.com/xiaotian-quant/gateway/internal/watchdog"
 	"github.com/xiaotian-quant/gateway/internal/ws"
 )
@@ -445,8 +446,8 @@ func (ctx *Context) wireOrderManager() {
 						result, err = bybit.PlaceOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity)
 					}
 				}
-			case "gateio":
-				apiKey, secret, _ := adapter.GetCredential("gateio")
+			case "gate", "gateio":
+				apiKey, secret, _ := adapter.GetCredential("gate")
 				if apiKey != "" && secret != "" {
 					gateio := adapter.NewGateIOAdapter(apiKey, secret)
 					result, err = gateio.PlaceOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity)
@@ -531,8 +532,8 @@ func (ctx *Context) wireOrderManager() {
 				bybit := adapter.NewBybitAdapter(apiKey, secret, false)
 				_, err = bybit.CancelOrder(ord.Symbol, ord.ID)
 			}
-		case "gateio":
-			apiKey, secret, _ := adapter.GetCredential("gateio")
+		case "gate", "gateio":
+			apiKey, secret, _ := adapter.GetCredential("gate")
 			if apiKey != "" && secret != "" {
 				gateio := adapter.NewGateIOAdapter(apiKey, secret)
 				_, err = gateio.CancelOrder(ord.Symbol, ord.ID)
@@ -1176,32 +1177,55 @@ func (ctx *Context) wireStrategyEngine() {
 			Exchange:  ctx.resolveExchange(signal.Symbol),
 		}
 
-		// ── Contract support: check if strategy config specifies leverage ──
-		configs := store.GetStrategyConfigs()
-		for _, cfg := range configs {
-			name, _ := cfg["name"].(string)
-			if name != signal.Strategy {
-				continue
-			}
+		// ── Contract support: load strategy config for leverage/TP/SL ──
+		if cfg := store.GetStrategyConfig(signal.Strategy); cfg != nil {
 			if cj, ok := cfg["config_json"].(string); ok && cj != "" {
-				var parsed map[string]any
-				if json.Unmarshal([]byte(cj), &parsed) == nil {
-					if marketType, ok := parsed["market_type"].(string); ok && marketType == "swap" {
-						req.MarketType = model.MarketSwap
-						if lev, ok := parsed["leverage"].(float64); ok && lev > 0 {
-							req.Leverage = lev
-						} else {
-							req.Leverage = 10 // default leverage for contract
-						}
-						if marginMode, ok := parsed["margin_mode"].(string); ok && marginMode == "isolated" {
-							req.MarginMode = model.MarginIsolated
-						} else {
-							req.MarginMode = model.MarginCross
-						}
+				if craParams, err := cra.ParseCRAParams(cj); err == nil && craParams.IsContract() {
+					req.MarketType = model.MarketSwap
+					if craParams.Leverage > 0 {
+						req.Leverage = craParams.Leverage
+					} else {
+						req.Leverage = 10
+					}
+					if craParams.MarginMode == "isolated" {
+						req.MarginMode = model.MarginIsolated
+					} else {
+						req.MarginMode = model.MarginCross
+					}
+					switch craParams.PositionSide {
+					case "SHORT":
+						req.PositionSide = model.PositionShort
+					case "BOTH":
 						if signal.Direction == "SHORT" || signal.Direction == "short" || signal.Direction == "SELL" {
 							req.PositionSide = model.PositionShort
 						} else {
 							req.PositionSide = model.PositionLong
+						}
+					default:
+						req.PositionSide = model.PositionLong
+					}
+					// Static TP/SL: pass to order manager for conditional order tracking.
+					if craParams.TPMode == "static" {
+						if craParams.TakeProfitRatio > 0 {
+							if req.PositionSide == model.PositionShort {
+								req.TPPrice = req.Price * (1 - craParams.TakeProfitRatio)
+							} else {
+								req.TPPrice = req.Price * (1 + craParams.TakeProfitRatio)
+							}
+						}
+						if craParams.StopLossEnabled {
+							switch craParams.StopLossType {
+							case "ratio":
+								if craParams.StopLossRatio > 0 {
+									if req.PositionSide == model.PositionShort {
+										req.SLPrice = req.Price * (1 + craParams.StopLossRatio)
+									} else {
+										req.SLPrice = req.Price * (1 - craParams.StopLossRatio)
+									}
+								}
+							case "price":
+								req.SLPrice = craParams.StopLossPrice
+							}
 						}
 					}
 				}
@@ -1226,6 +1250,9 @@ func (ctx *Context) wireStrategyEngine() {
 			"order_id", ord.ID,
 			"status", ord.Status)
 
+		// Track capital allocated by this strategy for display.
+		ctx.updateStrategyCapitalFromOrder(signal.Strategy, req)
+
 		// Publish signal to event bus for other subscribers
 		ctx.EventBus.Publish(event.Event{
 			Type:     event.TypeSignal,
@@ -1240,11 +1267,14 @@ func (ctx *Context) wireStrategyEngine() {
 
 // resolveSignalQuantity determines the order quantity from strategy config or defaults.
 func (ctx *Context) resolveSignalQuantity(signal model.Signal) float64 {
-	// Try to find strategy config
+	if signal.Qty > 0 {
+		return signal.Qty
+	}
+	// Try to find strategy config by id (signal.Strategy is the wrapped strategy id)
 	configs := store.GetStrategyConfigs()
 	for _, cfg := range configs {
-		name, _ := cfg["name"].(string)
-		if name != signal.Strategy {
+		id, _ := cfg["id"].(string)
+		if id != signal.Strategy {
 			continue
 		}
 		// Check config_json for quantity/stake_amount
@@ -1255,6 +1285,9 @@ func (ctx *Context) resolveSignalQuantity(signal model.Signal) float64 {
 					return v
 				}
 				if v, ok := parsed["quantity"].(float64); ok && v > 0 {
+					return v
+				}
+				if v, ok := parsed["first_order_amount"].(float64); ok && v > 0 {
 					return v
 				}
 			}
@@ -1325,7 +1358,67 @@ func (ctx *Context) closePositionFromSignal(signal model.Signal) {
 			continue
 		}
 		ctx.Logger.Info("Position closed from signal", "symbol", signal.Symbol, "side", side, "qty", pos.Quantity, "order_id", ord.ID)
+
+		// Release displayed capital for this strategy since position is closed.
+		ctx.releaseStrategyCapital(signal.Strategy)
 	}
+}
+
+// updateStrategyCapitalFromOrder adds the estimated margin/cost of an opening order
+// to the strategy's displayed initial_capital. This reflects real capital exposure
+// once a position is opened.
+func (ctx *Context) updateStrategyCapitalFromOrder(strategyID string, req *order.Request) {
+	if strategyID == "" {
+		return
+	}
+	cfg := store.GetStrategyConfig(strategyID)
+	if cfg == nil {
+		return
+	}
+
+	price := req.Price
+	if price <= 0 {
+		price = getLastPrice(req.Symbol)
+	}
+	if price <= 0 {
+		return
+	}
+
+	notional := price * req.Quantity
+	var margin float64
+	if req.MarketType == model.MarketSwap {
+		leverage := req.Leverage
+		if leverage <= 0 {
+			leverage = 1
+		}
+		margin = notional / leverage
+	} else {
+		margin = notional
+	}
+
+	initialCapital, _ := cfg["initial_capital"].(float64)
+	currentEquity, _ := cfg["current_equity"].(float64)
+	cfg["initial_capital"] = initialCapital + margin
+	cfg["current_equity"] = currentEquity + margin
+	cfg["updated_at"] = float64(time.Now().UnixMilli())
+	store.SetStrategyConfig(strategyID, cfg)
+	store.PersistStrategyConfigs()
+}
+
+// releaseStrategyCapital resets displayed capital to zero when a strategy closes its position.
+func (ctx *Context) releaseStrategyCapital(strategyID string) {
+	if strategyID == "" {
+		return
+	}
+	cfg := store.GetStrategyConfig(strategyID)
+	if cfg == nil {
+		return
+	}
+	cfg["initial_capital"] = 0.0
+	cfg["current_equity"] = 0.0
+	cfg["updated_at"] = float64(time.Now().UnixMilli())
+	store.SetStrategyConfig(strategyID, cfg)
+	store.PersistStrategyConfigs()
 }
 
 // runFundingSettlement periodically settles funding fees for tracked positions.

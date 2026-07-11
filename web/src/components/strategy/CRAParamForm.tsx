@@ -1,392 +1,307 @@
-import { useState, useCallback } from 'react'
+import { useMemo, useState } from 'react'
 import { cn } from '@/lib/utils'
-import { TRADING_INTERVALS } from '@/lib/constants'
+import { Settings2, TrendingUp } from 'lucide-react'
+import type { AddPositionItem, MovingTPTier } from '@/types'
+import { percentToDecimal, decimalToPercent, PERCENTAGE_FIELD_THRESHOLDS } from '@/lib/craPercentUtils'
+import { AddPositionModal } from './AddPositionModal'
+import { MovingTPModal } from './MovingTPModal'
 
-/**
- * Extended CRA params — superset used by StrategyCreateModal.
- * Includes all fields from the modal's defaultCraParams.
- */
+export type MarketType = 'spot' | 'contract'
+
 export interface CRAParams {
-  // Core CRA (matches CRAParamForm)
-  orderCount: number
+  // ── 开仓设置 ──
+  firstOrderPrice: number
   firstOrderAmount: number
-  addPosSpread: number
-  addPosCallback: number
+  firstOrderMultiplier: number
+  tradeCountMode: 'single' | 'cycle'
+  loopCount: number
+
+  // ── 补仓设置 ──
+  enableAddPosition: boolean
+  orderCount: number
+  addPositions: AddPositionItem[]
+
+  // ── 止盈设置 ──
+  tpMethod: 'full' | 'tail' | 'head_tail'
+  tpMode: 'static' | 'moving'
   tpRatio: number
   profitCallback: number
-  tpMethod: 'full' | 'tail' | 'head_tail' | 'moving'
-  openInd: string
-  addInd: string
+  movingTPTiers: MovingTPTier[]
+
+  // ── 合约开仓指标 ──
+  openMacdEnabled: boolean
+  openMacdPeriod: 'close' | '5m' | '15m'
+  openCounterEmaEnabled: boolean
+  openCounterEmaPeriod: 'close' | '5m' | '15m'
+  openTrendEmaEnabled: boolean
+  openTrendEmaPeriod: 'close' | '5m' | '15m'
+
+  // ── 合约补仓指标 ──
+  addMacdEnabled: boolean
+  addMacdPeriod: 'close' | '5m' | '15m'
+  addEmaEnabled: boolean
+  addEmaPeriod: 'close' | '5m' | '15m'
+
+  // ── 风控 ──
+  waterfallEnabled: boolean
   waterfall: number
+
+  // ── 合约止损 ──
+  stopLossEnabled: boolean
+  stopLossType: 'ratio' | 'amount' | 'price'
+  stopLossRatio: number
+  stopLossAmount: number
+  stopLossPrice: number
+
+  // ── 合约反向止盈/止损 ──
+  reverseTP: 'close' | '5m' | '15m'
+  reverseSL: boolean
+
+  // ── 合约燃烧 ──
+  burnGlobalEnabled: boolean
+  burnGlobalThreshold: number
+  burnDualEnabled: boolean
+  burnDualThreshold: number
+
+  // ── 其他 ──
   openDouble: boolean
-  trendInd: boolean
-  trendTf: string
   followTrend: boolean
-  followTrendMax?: number
-  burnCut: boolean
-  closeAddPos: boolean
+  onlineOrderLimit: number
   leverage: number
   direction: 'long' | 'short' | 'dual'
-  tradeCountMode?: 'single' | 'cycle'
-  // Extended fields (StrategyCreateModal)
-  addPosMultiple?: number
-  movingTP?: { enabled: boolean; tier1_ratio: number; tier1_drawback: number; tier2_drawback: number }
-  reverseTP?: boolean
-  reverseSL?: boolean
-  amplitude?: Record<string, number>
-  burnCutExtra?: { enabled: boolean; dual_burn_start: number; global_burn_start: number }
-  customReduce?: boolean
-  onlineOrderLimit?: number
-  profitProtection?: boolean
-  stopLossRatio?: number
-  stopLossAmount?: number
-  stopLossPrice?: number
-  firstOrderPrice?: number
 }
 
 export const DEFAULT_CRA_PARAMS: CRAParams = {
+  firstOrderPrice: 0,
+  firstOrderAmount: 10,
+  firstOrderMultiplier: 1,
+  tradeCountMode: 'single',
+  loopCount: 100,
+  enableAddPosition: true,
   orderCount: 7,
-  firstOrderAmount: 100,
-  addPosSpread: 3,
-  addPosCallback: 0.1,
+  addPositions: [],
+  tpMethod: 'full',
+  tpMode: 'static',
   tpRatio: 1.3,
   profitCallback: 0.1,
-  tpMethod: 'full',
-  openInd: 'macd_golden',
-  addInd: 'macd',
+  movingTPTiers: [
+    { ratio: 2, drawback: 20 },
+    { ratio: 3, drawback: 20 },
+    { ratio: 4, drawback: 10 },
+    { ratio: 5, drawback: 10 },
+  ],
+  openMacdEnabled: false,
+  openMacdPeriod: 'close',
+  openCounterEmaEnabled: false,
+  openCounterEmaPeriod: '15m',
+  openTrendEmaEnabled: false,
+  openTrendEmaPeriod: '15m',
+  addMacdEnabled: false,
+  addMacdPeriod: 'close',
+  addEmaEnabled: false,
+  addEmaPeriod: '15m',
+  waterfallEnabled: true,
   waterfall: 2,
-  openDouble: false,
-  trendInd: false,
-  trendTf: '15m',
-  followTrend: false,
-  burnCut: false,
-  closeAddPos: false,
-  leverage: 5,
-  direction: 'long',
-  tradeCountMode: 'single',
-  addPosMultiple: 1,
-  movingTP: { enabled: false, tier1_ratio: 1.5, tier1_drawback: 30, tier2_drawback: 20 },
-  reverseTP: false,
-  reverseSL: false,
-  amplitude: { '5m': 2, '15m': 4, '30m': 7, '1h': 10 },
-  burnCutExtra: { enabled: false, dual_burn_start: 3, global_burn_start: 5 },
-  customReduce: false,
-  onlineOrderLimit: 10,
-  profitProtection: false,
+  stopLossEnabled: false,
+  stopLossType: 'ratio',
   stopLossRatio: 0,
   stopLossAmount: 0,
   stopLossPrice: 0,
-  firstOrderPrice: 0,
+  reverseTP: 'close',
+  reverseSL: false,
+  burnGlobalEnabled: false,
+  burnGlobalThreshold: 5,
+  burnDualEnabled: false,
+  burnDualThreshold: 3,
+  openDouble: false,
+  followTrend: false,
+  onlineOrderLimit: 10,
+  leverage: 1,
+  direction: 'long',
 }
 
-/** Default for Settings page (simplified CRA) */
+/** 为 Settings 页面提供的简化默认参数 */
 export const DEFAULT_CRA_SETTINGS: CRAParams = { ...DEFAULT_CRA_PARAMS }
 
 /* ─── useCRAConfig hook ─────────────────────────────────────────────── */
 export function useCRAConfig() {
-  const [config, setConfig] = useState<CRAParams>(() => {
+  const getStored = (): CRAParams | null => {
     try {
       const raw = localStorage.getItem('xt-cra-config')
-      return raw ? { ...DEFAULT_CRA_PARAMS, ...JSON.parse(raw) } : DEFAULT_CRA_PARAMS
+      return raw ? JSON.parse(raw) : null
     } catch {
-      return DEFAULT_CRA_PARAMS
+      return null
     }
-  })
-  const update = useCallback((key: keyof CRAParams, val: CRAParams[keyof CRAParams]) => {
-    setConfig((prev) => {
-      const next = { ...prev, [key]: val }
-      localStorage.setItem('xt-cra-config', JSON.stringify(next))
-      return next
-    })
-  }, [])
-  const setAll = useCallback((next: CRAParams) => {
+  }
+
+  const setStored = (next: CRAParams) => {
     localStorage.setItem('xt-cra-config', JSON.stringify(next))
-    setConfig(next)
-  }, [])
-  return { config, update, setAll }
-}
-
-/* ─── CRA↔ StrategyCreateModal conversion ────────────────────────────── */
-/** StrategyCreateModal uses snake_case field names and nested burnCut object */
-export interface ModalCraParams {
-  orderCount: number; firstOrderAmount: number; addPosSpread: number; addPosCallback: number
-  takeProfitRatio: number; profitCallback: number; tradeCountMode: 'single' | 'cycle'
-  openIndicator: string; addPosIndicator: string; addPosMultiple: number; waterfallProtection: number
-  openDouble: boolean; trendIndicator: boolean; trendTimeframe: string
-  takeProfitMethod: 'full' | 'tail' | 'head_tail' | 'moving'
-  movingTP: { enabled: boolean; tier1_ratio: number; tier1_drawback: number; tier2_drawback: number }
-  reverseTP: boolean; reverseSL: boolean; amplitude: Record<string, number>
-  burnCut: { enabled: boolean; dual_burn_start: number; global_burn_start: number }
-  customReduce: boolean; onlineOrderLimit: number; profitProtection: boolean
-  followTrend: boolean; followTrendMax: number
-  stopLossRatio: number; stopLossAmount: number; stopLossPrice: number; firstOrderPrice: number
-  closeAddPosition: boolean
-  leverage?: number
-  direction?: 'long' | 'short' | 'dual'
-}
-
-/** Convert from CRAParams (camelCase) to ModalCraParams (snake_case) */
-export function craToModal(p: CRAParams): ModalCraParams {
-  return {
-    orderCount: p.orderCount, firstOrderAmount: p.firstOrderAmount,
-    addPosSpread: p.addPosSpread, addPosCallback: p.addPosCallback,
-    takeProfitRatio: p.tpRatio, profitCallback: p.profitCallback,
-    tradeCountMode: p.tradeCountMode ?? 'cycle',
-    openIndicator: p.openInd, addPosIndicator: p.addInd,
-    addPosMultiple: p.addPosMultiple ?? 1, waterfallProtection: p.waterfall,
-    openDouble: p.openDouble, trendIndicator: p.trendInd, trendTimeframe: p.trendTf,
-    takeProfitMethod: p.tpMethod,
-    movingTP: p.movingTP ?? { enabled: false, tier1_ratio: 1.5, tier1_drawback: 30, tier2_drawback: 20 },
-    reverseTP: p.reverseTP ?? false, reverseSL: p.reverseSL ?? false,
-    amplitude: p.amplitude ?? { '5m': 2, '15m': 4, '30m': 7, '1h': 10 },
-    burnCut: p.burnCutExtra ?? { enabled: false, dual_burn_start: 3, global_burn_start: 5 },
-    customReduce: p.customReduce ?? false, onlineOrderLimit: p.onlineOrderLimit ?? 10,
-    profitProtection: p.profitProtection ?? false,
-    followTrend: p.followTrend, followTrendMax: 5,
-    stopLossRatio: p.stopLossRatio ?? 0, stopLossAmount: p.stopLossAmount ?? 0,
-    stopLossPrice: p.stopLossPrice ?? 0, firstOrderPrice: p.firstOrderPrice ?? 0,
-    closeAddPosition: p.closeAddPos,
   }
-}
 
-/** Convert from ModalCraParams (snake_case) to CRAParams (camelCase) */
-export function modalToCra(m: ModalCraParams): CRAParams {
-  return {
-    orderCount: m.orderCount, firstOrderAmount: m.firstOrderAmount,
-    addPosSpread: m.addPosSpread, addPosCallback: m.addPosCallback,
-    tpRatio: m.takeProfitRatio, profitCallback: m.profitCallback,
-    tradeCountMode: m.tradeCountMode,
-    openInd: m.openIndicator, addInd: m.addPosIndicator,
-    addPosMultiple: m.addPosMultiple, waterfall: m.waterfallProtection,
-    openDouble: m.openDouble, trendInd: m.trendIndicator, trendTf: m.trendTimeframe,
-    tpMethod: m.takeProfitMethod,
-    movingTP: m.movingTP,
-    reverseTP: m.reverseTP, reverseSL: m.reverseSL,
-    amplitude: m.amplitude,
-    burnCut: m.burnCut.enabled,
-    burnCutExtra: m.burnCut,
-    customReduce: m.customReduce, onlineOrderLimit: m.onlineOrderLimit,
-    profitProtection: m.profitProtection,
-    followTrend: m.followTrend,
-    stopLossRatio: m.stopLossRatio, stopLossAmount: m.stopLossAmount,
-    stopLossPrice: m.stopLossPrice, firstOrderPrice: m.firstOrderPrice,
-    closeAddPos: m.closeAddPosition,
-    leverage: m.leverage ?? 5,
-    direction: m.direction ?? 'long',
-  }
+  return { getStored, setStored }
 }
 
 const inputCls =
   'w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold'
 
+interface SectionProps {
+  title: string
+  children: React.ReactNode
+}
+
+function Section({ title, children }: SectionProps) {
+  return (
+    <div className="rounded-xl border border-quant-border bg-quant-card p-4 space-y-4">
+      <div className="text-xs font-semibold text-quant-gold">{title}</div>
+      {children}
+    </div>
+  )
+}
+
+interface PeriodSelectProps {
+  label: string
+  enabled: boolean
+  period: 'close' | '5m' | '15m'
+  onToggle: (v: boolean) => void
+  onPeriodChange: (v: 'close' | '5m' | '15m') => void
+}
+
+function PeriodSelect({ label, enabled, period, onToggle, onPeriodChange }: PeriodSelectProps) {
+  return (
+    <div className="flex items-center gap-3">
+      <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+        <input type="checkbox" checked={enabled} onChange={(e) => onToggle(e.target.checked)} className="rounded" />
+        <span className={enabled ? 'text-foreground' : ''}>{label}</span>
+      </label>
+      {enabled && (
+        <select
+          value={period}
+          onChange={(e) => onPeriodChange(e.target.value as 'close' | '5m' | '15m')}
+          className="bg-quant-bg border border-quant-border rounded px-2 py-1 text-xs focus:outline-none focus:border-quant-gold"
+        >
+          <option value="close">关闭</option>
+          <option value="5m">5 分钟</option>
+          <option value="15m">15 分钟</option>
+        </select>
+      )}
+    </div>
+  )
+}
+
 interface CRAParamFormProps {
   value: CRAParams
   onChange: (next: CRAParams) => void
-  showTradeCountMode?: boolean
-  /** Show extended fields for StrategyCreateModal (reverseTP/SL, stop loss, etc.) */
-  showExtended?: boolean
+  market: MarketType
   className?: string
 }
 
-export function CRAParamForm({ value, onChange, showTradeCountMode = false, showExtended = false, className }: CRAParamFormProps) {
+export function CRAParamForm({ value, onChange, market, className }: CRAParamFormProps) {
+  const [showAddPositionModal, setShowAddPositionModal] = useState(false)
+  const [showMovingTPModal, setShowMovingTPModal] = useState(false)
+
   const update = <K extends keyof CRAParams>(key: K, val: CRAParams[K]) => {
     onChange({ ...value, [key]: val })
   }
 
+  const totalAddPosition = useMemo(() => {
+    const first = value.firstOrderAmount * value.firstOrderMultiplier
+    return value.addPositions.reduce((sum, pos) => sum + first * pos.multiplier, first)
+  }, [value.firstOrderAmount, value.firstOrderMultiplier, value.addPositions])
+
+  const isContract = market === 'contract'
+
   return (
-    <div className={cn('rounded-xl border border-quant-border bg-quant-bg-tertiary p-4 space-y-4', className)}>
-      <div className="text-xs font-semibold text-quant-gold">CRA 量化参数</div>
+    <div className={cn('space-y-4', className)}>
+      {/* ── 开仓设置 ── */}
+      <Section title="开仓设置">
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="text-[11px] text-muted-foreground mb-1.5 block">首单额度 (USDT)</label>
+            <input
+              type="number"
+              min={10}
+              max={10000}
+              step={10}
+              value={value.firstOrderAmount}
+              onChange={(e) => update('firstOrderAmount', Number(e.target.value))}
+              className={inputCls}
+            />
+          </div>
+          {isContract && (
+            <div>
+              <label className="text-[11px] text-muted-foreground mb-1.5 block">杠杆倍数</label>
+              <input
+                type="number"
+                min={1}
+                max={125}
+                value={value.leverage}
+                onChange={(e) => update('leverage', Number(e.target.value))}
+                className={inputCls}
+              />
+            </div>
+          )}
+        </div>
 
-      {/* 基础参数 */}
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label className="text-[11px] text-muted-foreground mb-1.5 block">做单数量</label>
-          <input
-            type="number" min={1} max={20}
-            value={value.orderCount}
-            onChange={(e) => update('orderCount', Number(e.target.value))}
-            className={inputCls}
-          />
-        </div>
-        <div>
-          <label className="text-[11px] text-muted-foreground mb-1.5 block">首单仓位 (USDT)</label>
-          <input
-            type="number" min={10} max={10000} step={10}
-            value={value.firstOrderAmount}
-            onChange={(e) => update('firstOrderAmount', Number(e.target.value))}
-            className={inputCls}
-          />
-        </div>
-      </div>
+        {isContract && (
+          <div>
+            <label className="text-[11px] text-muted-foreground mb-1.5 block">交易方向</label>
+            <div className="flex gap-1 rounded-lg border border-quant-border overflow-hidden">
+              {(['long', 'short', 'dual'] as const).map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => update('direction', d)}
+                  className={cn(
+                    'flex-1 py-2 text-xs font-medium transition-colors',
+                    value.direction === d
+                      ? 'bg-quant-gold/10 text-quant-gold'
+                      : 'text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  {d === 'long' ? '多' : d === 'short' ? '空' : '双向'}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label className="text-[11px] text-muted-foreground mb-1.5 block">补仓价差 (%)</label>
-          <input
-            type="number" min={0.5} max={50} step={0.5}
-            value={value.addPosSpread}
-            onChange={(e) => update('addPosSpread', Number(e.target.value))}
-            className={inputCls}
-          />
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="text-[11px] text-muted-foreground mb-1.5 block">首单加倍</label>
+            <input
+              type="number"
+              min={1}
+              max={10}
+              step={0.1}
+              value={value.firstOrderMultiplier}
+              onChange={(e) => update('firstOrderMultiplier', Number(e.target.value))}
+              className={inputCls}
+            />
+          </div>
+          <div>
+            <label className="text-[11px] text-muted-foreground mb-1.5 block">循环次数</label>
+            <input
+              type="number"
+              min={1}
+              value={value.loopCount}
+              onChange={(e) => update('loopCount', Number(e.target.value))}
+              className={inputCls}
+            />
+          </div>
         </div>
-        <div>
-          <label className="text-[11px] text-muted-foreground mb-1.5 block">补仓回调 (%)</label>
-          <input
-            type="number" min={0.01} max={0.5} step={0.01}
-            value={value.addPosCallback}
-            onChange={(e) => update('addPosCallback', Number(e.target.value))}
-            className={inputCls}
-          />
-        </div>
-      </div>
 
-      {/* 止盈设置 */}
-      <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="text-[11px] text-muted-foreground mb-1.5 block">止盈比例 (%)</label>
-          <input
-            type="number" min={0.1} max={50} step={0.1}
-            value={value.tpRatio}
-            onChange={(e) => update('tpRatio', Number(e.target.value))}
-            className={inputCls}
-          />
-        </div>
-        <div>
-          <label className="text-[11px] text-muted-foreground mb-1.5 block">盈利回调 (%)</label>
-          <input
-            type="number" min={0.01} max={0.5} step={0.01}
-            value={value.profitCallback}
-            onChange={(e) => update('profitCallback', Number(e.target.value))}
-            className={inputCls}
-          />
-        </div>
-      </div>
-
-      <div>
-        <label className="text-[11px] text-muted-foreground mb-1.5 block">止盈方式</label>
-        <div className="flex gap-2">
-          {([
-            { key: 'full', label: '全仓止盈' },
-            { key: 'tail', label: '尾单止盈' },
-            { key: 'head_tail', label: '首尾止盈' },
-            { key: 'moving', label: '移动止盈' },
-          ] as const).map((m) => (
-            <button
-              key={m.key}
-              onClick={() => update('tpMethod', m.key)}
-              className={cn(
-                'flex-1 py-2 rounded-lg text-xs border transition-colors',
-                value.tpMethod === m.key
-                  ? 'bg-quant-gold/10 border-quant-gold/20 text-quant-gold'
-                  : 'border-quant-border text-muted-foreground hover:text-foreground'
-              )}
-            >
-              {m.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* 指标策略 */}
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label className="text-[11px] text-muted-foreground mb-1.5 block">开仓指标</label>
-          <select
-            value={value.openInd}
-            onChange={(e) => update('openInd', e.target.value)}
-            className={inputCls}
-          >
-            <option value="macd_golden">MACD金叉开多</option>
-            <option value="macd_death">MACD死叉开空</option>
-            <option value="ema">EMA拐点开仓</option>
-            <option value="close">关闭（无脑买入）</option>
-          </select>
-        </div>
-        <div>
-          <label className="text-[11px] text-muted-foreground mb-1.5 block">补仓指标</label>
-          <select
-            value={value.addInd}
-            onChange={(e) => update('addInd', e.target.value)}
-            className={inputCls}
-          >
-            <option value="macd">MACD补仓</option>
-            <option value="ema">EMA4补仓</option>
-            <option value="close">仅按跌幅</option>
-          </select>
-        </div>
-      </div>
-
-      {/* 防瀑布 */}
-      <div>
-        <label className="text-[11px] text-muted-foreground mb-1.5 block">防瀑布 (%)</label>
-        <input
-          type="number" min={0.5} max={20} step={0.5}
-          value={value.waterfall}
-          onChange={(e) => update('waterfall', Number(e.target.value))}
-          className={inputCls}
-        />
-      </div>
-
-      {/* 开关选项 */}
-      <div className="flex flex-wrap gap-3">
-        <label className="flex items-center gap-2 text-xs text-muted-foreground">
-          <input
-            type="checkbox"
-            checked={value.openDouble}
-            onChange={(e) => update('openDouble', e.target.checked)}
-            className="rounded"
-          />
-          开仓加倍
-        </label>
-        <label className="flex items-center gap-2 text-xs text-muted-foreground">
-          <input
-            type="checkbox"
-            checked={value.trendInd}
-            onChange={(e) => update('trendInd', e.target.checked)}
-            className="rounded"
-          />
-          趋势指标(EMA4)
-        </label>
-        <label className="flex items-center gap-2 text-xs text-muted-foreground">
-          <input
-            type="checkbox"
-            checked={value.followTrend}
-            onChange={(e) => update('followTrend', e.target.checked)}
-            className="rounded"
-          />
-          顺势而为
-        </label>
-        <label className="flex items-center gap-2 text-xs text-muted-foreground">
-          <input
-            type="checkbox"
-            checked={value.burnCut}
-            onChange={(e) => update('burnCut', e.target.checked)}
-            className="rounded"
-          />
-          斩仓燃烧
-        </label>
-        <label className="flex items-center gap-2 text-xs text-muted-foreground">
-          <input
-            type="checkbox"
-            checked={value.closeAddPos}
-            onChange={(e) => update('closeAddPos', e.target.checked)}
-            className="rounded"
-          />
-          关闭补仓
-        </label>
-     </div>
-
-      {/* 交易次数模式 */}
-      {showTradeCountMode && (
-        <div>
-          <label className="text-[11px] text-muted-foreground mb-1.5 block">交易次数</label>
+          <label className="text-[11px] text-muted-foreground mb-1.5 block">循环类型</label>
           <div className="flex gap-2">
-            {([
-              { key: 'single', label: '单次循环' },
-              { key: 'cycle', label: '策略循环' },
-            ] as const).map((m) => (
+            {(
+              [
+                { key: 'single', label: '单次策略' },
+                { key: 'cycle', label: '循环策略' },
+              ] as const
+            ).map((m) => (
               <button
                 key={m.key}
+                type="button"
                 onClick={() => update('tradeCountMode', m.key)}
                 className={cn(
                   'flex-1 py-2 rounded-lg text-xs border transition-colors',
@@ -400,103 +315,627 @@ export function CRAParamForm({ value, onChange, showTradeCountMode = false, show
             ))}
           </div>
         </div>
-      )}
 
-      {/* ── Extended fields (StrategyCreateModal) ── */}
-      {showExtended && (
-        <>
-          <div className="border-t border-quant-border/50 pt-4 space-y-4">
-            <div className="text-[11px] font-semibold text-quant-gold">扩展风控参数</div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="text-[11px] text-muted-foreground mb-1.5 block">止损比例 (%)</label>
-                <input
-                  type="number" min={0} max={100} step={0.1}
-                  value={value.stopLossRatio ?? 0}
-                  onChange={(e) => update('stopLossRatio', Number(e.target.value))}
-                  className={inputCls}
-                />
-              </div>
-              <div>
-                <label className="text-[11px] text-muted-foreground mb-1.5 block">止损金额 (USDT)</label>
-                <input
-                  type="number" min={0}
-                  value={value.stopLossAmount ?? 0}
-                  onChange={(e) => update('stopLossAmount', Number(e.target.value))}
-                  className={inputCls}
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="text-[11px] text-muted-foreground mb-1.5 block">在线单量限制</label>
-                <input
-                  type="number" min={1} max={50}
-                  value={value.onlineOrderLimit ?? 10}
-                  onChange={(e) => update('onlineOrderLimit', Number(e.target.value))}
-                  className={inputCls}
-                />
-              </div>
-           </div>
-            <div className="flex flex-wrap gap-3">
-              <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                <input type="checkbox" checked={value.reverseTP ?? false} onChange={(e) => update('reverseTP', e.target.checked)} className="rounded" />
-                反向止盈
-              </label>
-              <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                <input type="checkbox" checked={value.reverseSL ?? false} onChange={(e) => update('reverseSL', e.target.checked)} className="rounded" />
-                反向止损
-              </label>
-              <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                <input type="checkbox" checked={value.profitProtection ?? false} onChange={(e) => update('profitProtection', e.target.checked)} className="rounded" />
-                盈利保护
-              </label>
-              <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                <input type="checkbox" checked={value.customReduce ?? false} onChange={(e) => update('customReduce', e.target.checked)} className="rounded" />
-                自定义减仓
-              </label>
+        {isContract && (
+          <div className="space-y-2">
+            <div className="text-[11px] text-muted-foreground">开仓指标</div>
+            <div className="space-y-2">
+              <PeriodSelect
+                label="开仓 MACD 监测"
+                enabled={value.openMacdEnabled}
+                period={value.openMacdPeriod}
+                onToggle={(v) => update('openMacdEnabled', v)}
+                onPeriodChange={(v) => update('openMacdPeriod', v)}
+              />
+              <PeriodSelect
+                label="逆势 EMA 监测"
+                enabled={value.openCounterEmaEnabled}
+                period={value.openCounterEmaPeriod}
+                onToggle={(v) => update('openCounterEmaEnabled', v)}
+                onPeriodChange={(v) => update('openCounterEmaPeriod', v)}
+              />
+              <PeriodSelect
+                label="顺势 EMA 监测"
+                enabled={value.openTrendEmaEnabled}
+                period={value.openTrendEmaPeriod}
+                onToggle={(v) => update('openTrendEmaEnabled', v)}
+                onPeriodChange={(v) => update('openTrendEmaPeriod', v)}
+              />
             </div>
           </div>
-        </>
+        )}
+
+        <div className="flex flex-wrap gap-3">
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={value.openDouble}
+              onChange={(e) => update('openDouble', e.target.checked)}
+              className="rounded"
+            />
+            开仓加倍
+          </label>
+          {isContract && (
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={value.followTrend}
+                onChange={(e) => update('followTrend', e.target.checked)}
+                className="rounded"
+              />
+              顺势而为
+            </label>
+          )}
+        </div>
+      </Section>
+
+      {/* ── 补仓设置 ── */}
+      <Section title="补仓设置">
+        <div className="flex items-center gap-4">
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={value.enableAddPosition}
+              onChange={(e) => update('enableAddPosition', e.target.checked)}
+              className="rounded"
+            />
+            开启补仓
+          </label>
+          <div className="flex-1 grid grid-cols-2 gap-4">
+            <div>
+              <label className="text-[11px] text-muted-foreground mb-1.5 block">补仓次数</label>
+              <input
+                type="number"
+                min={0}
+                max={20}
+                value={value.orderCount}
+                onChange={(e) => update('orderCount', Number(e.target.value))}
+                disabled={!value.enableAddPosition}
+                className={cn(inputCls, !value.enableAddPosition && 'opacity-40')}
+              />
+            </div>
+            <div>
+              <label className="text-[11px] text-muted-foreground mb-1.5 block">补仓总金额 (USDT)</label>
+              <div
+                className={cn(
+                  'w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs',
+                  !value.enableAddPosition && 'opacity-40'
+                )}
+              >
+                {totalAddPosition.toFixed(2)}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <button
+            type="button"
+            disabled={!value.enableAddPosition}
+            onClick={() => setShowAddPositionModal(true)}
+            className={cn(
+              'w-full flex items-center justify-center gap-2 py-2.5 rounded-lg border text-xs transition-colors',
+              value.enableAddPosition
+                ? 'border-quant-gold/30 text-quant-gold hover:bg-quant-gold/5'
+                : 'border-quant-border text-muted-foreground opacity-40 cursor-not-allowed'
+            )}
+          >
+            <Settings2 className="w-3.5 h-3.5" />
+            配置补仓参数
+          </button>
+          <AddPositionModal
+            open={showAddPositionModal}
+            onClose={() => setShowAddPositionModal(false)}
+            value={value.addPositions}
+            onChange={(next) => update('addPositions', next)}
+            showEma={isContract}
+            emaDisabled={isContract && !value.addEmaEnabled}
+            disabled={!value.enableAddPosition}
+          />
+        </div>
+
+        {isContract && (
+          <div className="space-y-2">
+            <div className="text-[11px] text-muted-foreground">补仓指标</div>
+            <div className="space-y-2">
+              <PeriodSelect
+                label="补仓 MACD 监测"
+                enabled={value.addMacdEnabled}
+                period={value.addMacdPeriod}
+                onToggle={(v) => update('addMacdEnabled', v)}
+                onPeriodChange={(v) => update('addMacdPeriod', v)}
+              />
+              <PeriodSelect
+                label="补仓 EMA 监测"
+                enabled={value.addEmaEnabled}
+                period={value.addEmaPeriod}
+                onToggle={(v) => update('addEmaEnabled', v)}
+                onPeriodChange={(v) => update('addEmaPeriod', v)}
+              />
+            </div>
+          </div>
+        )}
+      </Section>
+
+      {/* ── 风控设置 ── */}
+      <Section title="风控设置">
+        <div className="flex items-center gap-4">
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={value.waterfallEnabled}
+              onChange={(e) => update('waterfallEnabled', e.target.checked)}
+              className="rounded"
+            />
+            开启防瀑布
+          </label>
+          <div className="flex-1">
+            <label className="text-[11px] text-muted-foreground mb-1.5 block">防瀑布比例 (%)</label>
+            <input
+              type="number"
+              min={0.5}
+              max={20}
+              step={0.5}
+              value={value.waterfall}
+              onChange={(e) => update('waterfall', Number(e.target.value))}
+              disabled={!value.waterfallEnabled}
+              className={cn(inputCls, !value.waterfallEnabled && 'opacity-40')}
+            />
+          </div>
+        </div>
+      </Section>
+
+      {/* ── 止盈设置 ── */}
+      <Section title="止盈设置">
+        <div>
+          <label className="text-[11px] text-muted-foreground mb-1.5 block">止盈方式</label>
+          <div className="flex gap-2">
+            {(
+              [
+                { key: 'full', label: '全仓止盈' },
+                { key: 'tail', label: '尾单止盈' },
+                { key: 'head_tail', label: '首尾止盈' },
+              ] as const
+            ).map((m) => (
+              <button
+                key={m.key}
+                type="button"
+                onClick={() => update('tpMethod', m.key)}
+                className={cn(
+                  'flex-1 py-2 rounded-lg text-xs border transition-colors',
+                  value.tpMethod === m.key
+                    ? 'bg-quant-gold/10 border-quant-gold/20 text-quant-gold'
+                    : 'border-quant-border text-muted-foreground hover:text-foreground'
+                )}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <label className="text-[11px] text-muted-foreground mb-1.5 block">止盈模式</label>
+          <div className="flex gap-2">
+            {(
+              [
+                { key: 'static', label: '静态止盈' },
+                { key: 'moving', label: '移动止盈' },
+              ] as const
+            ).map((m) => (
+              <button
+                key={m.key}
+                type="button"
+                onClick={() => update('tpMode', m.key)}
+                className={cn(
+                  'flex-1 py-2 rounded-lg text-xs border transition-colors',
+                  value.tpMode === m.key
+                    ? 'bg-quant-gold/10 border-quant-gold/20 text-quant-gold'
+                    : 'border-quant-border text-muted-foreground hover:text-foreground'
+                )}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {value.tpMode === 'static' && (
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="text-[11px] text-muted-foreground mb-1.5 block">止盈比例 (%)</label>
+              <input
+                type="number"
+                min={0.1}
+                max={50}
+                step={0.1}
+                value={value.tpRatio}
+                onChange={(e) => update('tpRatio', Number(e.target.value))}
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className="text-[11px] text-muted-foreground mb-1.5 block">盈利回调 (%)</label>
+              <input
+                type="number"
+                min={0.01}
+                max={0.5}
+                step={0.01}
+                value={value.profitCallback}
+                onChange={(e) => update('profitCallback', Number(e.target.value))}
+                className={inputCls}
+              />
+            </div>
+          </div>
+        )}
+
+        {value.tpMode === 'moving' && (
+          <div>
+            <button
+              type="button"
+              onClick={() => setShowMovingTPModal(true)}
+              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg border border-quant-gold/30 text-quant-gold text-xs hover:bg-quant-gold/5 transition-colors"
+            >
+              <TrendingUp className="w-3.5 h-3.5" />
+              配置移动止盈止损参数
+            </button>
+            <MovingTPModal
+              open={showMovingTPModal}
+              onClose={() => setShowMovingTPModal(false)}
+              value={value.movingTPTiers}
+              onChange={(next) => update('movingTPTiers', next)}
+            />
+          </div>
+        )}
+
+        {isContract && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-3">
+              <label className="text-[11px] text-muted-foreground">反向止盈</label>
+              <select
+                value={value.reverseTP}
+                onChange={(e) => update('reverseTP', e.target.value as 'close' | '5m' | '15m')}
+                className="bg-quant-bg border border-quant-border rounded px-2 py-1 text-xs focus:outline-none focus:border-quant-gold"
+              >
+                <option value="close">关闭</option>
+                <option value="5m">5 分钟</option>
+                <option value="15m">15 分钟</option>
+              </select>
+            </div>
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={value.reverseSL}
+                onChange={(e) => update('reverseSL', e.target.checked)}
+                className="rounded"
+              />
+              反向止损
+            </label>
+          </div>
+        )}
+      </Section>
+
+      {/* ── 止损设置 (合约) ── */}
+      {isContract && (
+        <Section title="止损设置">
+          <label className="flex items-center gap-2 text-xs text-muted-foreground mb-3">
+            <input
+              type="checkbox"
+              checked={value.stopLossEnabled}
+              onChange={(e) => update('stopLossEnabled', e.target.checked)}
+              className="rounded"
+            />
+            开启止损
+          </label>
+
+          <div className="space-y-4">
+            <div>
+              <label className="text-[11px] text-muted-foreground mb-1.5 block">止损类型</label>
+              <div className="flex gap-1 rounded-lg border border-quant-border overflow-hidden">
+                {(['ratio', 'amount', 'price'] as const).map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => update('stopLossType', t)}
+                    disabled={!value.stopLossEnabled}
+                    className={cn(
+                      'flex-1 py-2 text-xs font-medium transition-colors',
+                      value.stopLossType === t
+                        ? 'bg-quant-gold/10 text-quant-gold'
+                        : 'text-muted-foreground hover:text-foreground',
+                      !value.stopLossEnabled && 'opacity-40'
+                    )}
+                  >
+                    {t === 'ratio' ? '比例止损' : t === 'amount' ? '金额止损' : '价格止损'}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              {value.stopLossType === 'ratio' && (
+                <div>
+                  <label className="text-[11px] text-muted-foreground mb-1.5 block">止损比例 (%)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    step={0.1}
+                    value={value.stopLossRatio}
+                    onChange={(e) => update('stopLossRatio', Number(e.target.value))}
+                    disabled={!value.stopLossEnabled}
+                    className={cn(inputCls, !value.stopLossEnabled && 'opacity-40')}
+                  />
+                </div>
+              )}
+              {value.stopLossType === 'amount' && (
+                <div>
+                  <label className="text-[11px] text-muted-foreground mb-1.5 block">止损金额 (USDT)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={value.stopLossAmount}
+                    onChange={(e) => update('stopLossAmount', Number(e.target.value))}
+                    disabled={!value.stopLossEnabled}
+                    className={cn(inputCls, !value.stopLossEnabled && 'opacity-40')}
+                  />
+                </div>
+              )}
+              {value.stopLossType === 'price' && (
+                <div>
+                  <label className="text-[11px] text-muted-foreground mb-1.5 block">止损价格 (USDT)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={value.stopLossPrice}
+                    onChange={(e) => update('stopLossPrice', Number(e.target.value))}
+                    disabled={!value.stopLossEnabled}
+                    className={cn(inputCls, !value.stopLossEnabled && 'opacity-40')}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        </Section>
+      )}
+
+      {/* ── 燃烧设置 (合约) ── */}
+      {isContract && (
+        <Section title="燃烧设置">
+          <div className="space-y-4">
+            <div className="flex items-center gap-4">
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={value.burnGlobalEnabled}
+                  onChange={(e) => update('burnGlobalEnabled', e.target.checked)}
+                  className="rounded"
+                />
+                全局燃烧
+              </label>
+              <div className="flex-1">
+                <label className="text-[11px] text-muted-foreground mb-1.5 block">触发补仓次数</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={value.burnGlobalThreshold}
+                  onChange={(e) => update('burnGlobalThreshold', Number(e.target.value))}
+                  disabled={!value.burnGlobalEnabled}
+                  className={cn(inputCls, !value.burnGlobalEnabled && 'opacity-40')}
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-4">
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={value.burnDualEnabled}
+                  onChange={(e) => update('burnDualEnabled', e.target.checked)}
+                  className="rounded"
+                />
+                对向燃烧
+              </label>
+              <div className="flex-1">
+                <label className="text-[11px] text-muted-foreground mb-1.5 block">触发补仓次数</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={value.burnDualThreshold}
+                  onChange={(e) => update('burnDualThreshold', Number(e.target.value))}
+                  disabled={!value.burnDualEnabled}
+                  className={cn(inputCls, !value.burnDualEnabled && 'opacity-40')}
+                />
+              </div>
+            </div>
+          </div>
+        </Section>
       )}
     </div>
   )
 }
 
-/** 将 CRAParams 转换为后端 API 所需的 snake_case 参数对象 */
-export function craParamsToApiPayload(p: CRAParams) {
+// Backend expects decimal ratios; the UI stores user-friendly percentages.
+
+interface ApiAddPositionItem {
+  order: number
+  multiplier: number
+  spread: number
+  callback: number
+  ema_enabled: boolean
+}
+
+interface ApiMovingTPTier {
+  ratio: number
+  drawback: number
+}
+
+interface ApiPayload {
+  first_order_price: number
+  first_order_amount: number
+  first_order_multiplier: number
+  trade_count_mode: 'single' | 'cycle'
+  loop_count: number
+  enable_add_position: boolean
+  order_count: number
+  add_positions: ApiAddPositionItem[]
+  take_profit_method: 'full' | 'tail' | 'head_tail'
+  tp_mode: 'static' | 'moving'
+  take_profit_ratio: number
+  profit_callback: number
+  moving_take_profit_tiers: ApiMovingTPTier[]
+  open_macd_enabled: boolean
+  open_macd_period: 'close' | '5m' | '15m'
+  open_counter_ema_enabled: boolean
+  open_counter_ema_period: 'close' | '5m' | '15m'
+  open_trend_ema_enabled: boolean
+  open_trend_ema_period: 'close' | '5m' | '15m'
+  add_macd_enabled: boolean
+  add_macd_period: 'close' | '5m' | '15m'
+  add_ema_enabled: boolean
+  add_ema_period: 'close' | '5m' | '15m'
+  waterfall_enabled: boolean
+  waterfall_protection: number
+  stop_loss_enabled: boolean
+  stop_loss_type: 'ratio' | 'amount' | 'price'
+  stop_loss_ratio: number
+  stop_loss_amount: number
+  stop_loss_price: number
+  reverse_take_profit_period: 'close' | '5m' | '15m'
+  reverse_stop_loss: boolean
+  burn_global_enabled: boolean
+  burn_global_threshold: number
+  burn_dual_enabled: boolean
+  burn_dual_threshold: number
+  open_double: boolean
+  follow_trend: boolean
+  online_order_limit: number
+  leverage: number
+  direction: 'long' | 'short' | 'dual'
+}
+
+/** 将 CRAParams 转换为后端 API 所需的 snake_case 参数对象（百分比转小数） */
+export function craParamsToApiPayload(p: CRAParams): ApiPayload {
   return {
-    order_count: p.orderCount,
+    first_order_price: p.firstOrderPrice,
     first_order_amount: p.firstOrderAmount,
-    add_position_spread: p.addPosSpread,
-    add_position_callback: p.addPosCallback,
-    add_position_multiple: p.addPosMultiple ?? 1,
-    take_profit_ratio: p.tpRatio,
-    profit_callback: p.profitCallback,
+    first_order_multiplier: p.firstOrderMultiplier,
+    trade_count_mode: p.tradeCountMode,
+    loop_count: p.loopCount,
+    enable_add_position: p.enableAddPosition,
+    order_count: p.orderCount,
+    add_positions: p.addPositions.map((ap) => ({
+      order: ap.order,
+      multiplier: ap.multiplier,
+      spread: percentToDecimal(ap.spread),
+      callback: percentToDecimal(ap.callback),
+      ema_enabled: ap.emaEnabled ?? false,
+    })),
     take_profit_method: p.tpMethod,
-    moving_take_profit: p.movingTP,
-    open_indicator: p.openInd,
-    add_position_indicator: p.addInd,
-    waterfall_protection: p.waterfall,
+    tp_mode: p.tpMode,
+    take_profit_ratio: percentToDecimal(p.tpRatio),
+    profit_callback: percentToDecimal(p.profitCallback),
+    moving_take_profit_tiers: p.movingTPTiers.map((t) => ({
+      ratio: percentToDecimal(t.ratio),
+      drawback: percentToDecimal(t.drawback),
+    })),
+    open_macd_enabled: p.openMacdEnabled,
+    open_macd_period: p.openMacdPeriod,
+    open_counter_ema_enabled: p.openCounterEmaEnabled,
+    open_counter_ema_period: p.openCounterEmaPeriod,
+    open_trend_ema_enabled: p.openTrendEmaEnabled,
+    open_trend_ema_period: p.openTrendEmaPeriod,
+    add_macd_enabled: p.addMacdEnabled,
+    add_macd_period: p.addMacdPeriod,
+    add_ema_enabled: p.addEmaEnabled,
+    add_ema_period: p.addEmaPeriod,
+    waterfall_enabled: p.waterfallEnabled,
+    waterfall_protection: percentToDecimal(p.waterfall),
+    stop_loss_enabled: p.stopLossEnabled,
+    stop_loss_type: p.stopLossType,
+    stop_loss_ratio: percentToDecimal(p.stopLossRatio),
+    stop_loss_amount: p.stopLossAmount,
+    stop_loss_price: p.stopLossPrice,
+    reverse_take_profit_period: p.reverseTP,
+    reverse_stop_loss: p.reverseSL,
+    burn_global_enabled: p.burnGlobalEnabled,
+    burn_global_threshold: p.burnGlobalThreshold,
+    burn_dual_enabled: p.burnDualEnabled,
+    burn_dual_threshold: p.burnDualThreshold,
     open_double: p.openDouble,
-    trend_indicator: p.trendInd,
-    trend_timeframe: p.trendTf,
     follow_trend: p.followTrend,
-    follow_trend_max: 5,
-    reverse_take_profit: p.reverseTP ?? false,
-    reverse_stop_loss: p.reverseSL ?? false,
-    amplitude: p.amplitude,
-    burn_cut: p.burnCutExtra ?? { enabled: p.burnCut, dual_burn_start: 3, global_burn_start: 5 },
-    custom_reduce: p.customReduce ?? false,
-    online_order_limit: p.onlineOrderLimit ?? 10,
-    profit_protection: p.profitProtection ?? false,
-    stop_loss_ratio: p.stopLossRatio ?? 0,
-    stop_loss_amount: p.stopLossAmount ?? 0,
-    stop_loss_price: p.stopLossPrice ?? 0,
-    first_order_price: p.firstOrderPrice ?? 0,
-    close_add_position: p.closeAddPos,
+    online_order_limit: p.onlineOrderLimit,
     leverage: p.leverage,
     direction: p.direction,
-    trade_count_mode: p.tradeCountMode,
+  }
+}
+
+/** 将后端 API 返回的 snake_case 参数对象转换为 CRAParams（小数转百分比） */
+export function apiPayloadToCraParams(payload: Partial<ApiPayload>): CRAParams {
+  const base = DEFAULT_CRA_PARAMS
+  return {
+    firstOrderPrice: payload.first_order_price ?? base.firstOrderPrice,
+    firstOrderAmount: payload.first_order_amount ?? base.firstOrderAmount,
+    firstOrderMultiplier: payload.first_order_multiplier ?? base.firstOrderMultiplier,
+    tradeCountMode: payload.trade_count_mode ?? base.tradeCountMode,
+    loopCount: payload.loop_count ?? base.loopCount,
+    enableAddPosition: payload.enable_add_position ?? base.enableAddPosition,
+    orderCount: payload.order_count ?? base.orderCount,
+    addPositions: (payload.add_positions ?? base.addPositions).map((ap) => {
+      // Support both the legacy `ema` key and the backend `ema_enabled` key.
+      const rawItem = ap as AddPositionItem & { ema_enabled?: boolean }
+      const emaEnabled = rawItem.ema_enabled ?? rawItem.emaEnabled ?? false
+      return {
+        order: ap.order,
+        multiplier: ap.multiplier,
+        spread: decimalToPercent(ap.spread, PERCENTAGE_FIELD_THRESHOLDS.addPositionSpread),
+        callback: decimalToPercent(ap.callback, PERCENTAGE_FIELD_THRESHOLDS.addPositionCallback),
+        emaEnabled,
+      }
+    }),
+    tpMethod: payload.take_profit_method ?? base.tpMethod,
+    tpMode: payload.tp_mode ?? base.tpMode,
+    tpRatio: decimalToPercent(payload.take_profit_ratio ?? base.tpRatio, PERCENTAGE_FIELD_THRESHOLDS.tpRatio),
+    profitCallback: decimalToPercent(
+      payload.profit_callback ?? base.profitCallback,
+      PERCENTAGE_FIELD_THRESHOLDS.profitCallback
+    ),
+    movingTPTiers: (payload.moving_take_profit_tiers ?? base.movingTPTiers).map((t) => ({
+      ratio: decimalToPercent(t.ratio, PERCENTAGE_FIELD_THRESHOLDS.movingTPRatio),
+      drawback: decimalToPercent(t.drawback, PERCENTAGE_FIELD_THRESHOLDS.movingTPDrawback),
+    })),
+    openMacdEnabled: payload.open_macd_enabled ?? base.openMacdEnabled,
+    openMacdPeriod: payload.open_macd_period ?? base.openMacdPeriod,
+    openCounterEmaEnabled: payload.open_counter_ema_enabled ?? base.openCounterEmaEnabled,
+    openCounterEmaPeriod: payload.open_counter_ema_period ?? base.openCounterEmaPeriod,
+    openTrendEmaEnabled: payload.open_trend_ema_enabled ?? base.openTrendEmaEnabled,
+    openTrendEmaPeriod: payload.open_trend_ema_period ?? base.openTrendEmaPeriod,
+    addMacdEnabled: payload.add_macd_enabled ?? base.addMacdEnabled,
+    addMacdPeriod: payload.add_macd_period ?? base.addMacdPeriod,
+    addEmaEnabled: payload.add_ema_enabled ?? base.addEmaEnabled,
+    addEmaPeriod: payload.add_ema_period ?? base.addEmaPeriod,
+    waterfallEnabled: payload.waterfall_enabled ?? base.waterfallEnabled,
+    waterfall: decimalToPercent(payload.waterfall_protection ?? base.waterfall, PERCENTAGE_FIELD_THRESHOLDS.waterfall),
+    stopLossEnabled: payload.stop_loss_enabled ?? base.stopLossEnabled,
+    stopLossType: payload.stop_loss_type ?? base.stopLossType,
+    stopLossRatio: decimalToPercent(
+      payload.stop_loss_ratio ?? base.stopLossRatio,
+      PERCENTAGE_FIELD_THRESHOLDS.stopLossRatio
+    ),
+    stopLossAmount: payload.stop_loss_amount ?? base.stopLossAmount,
+    stopLossPrice: payload.stop_loss_price ?? base.stopLossPrice,
+    reverseTP: payload.reverse_take_profit_period ?? base.reverseTP,
+    reverseSL: payload.reverse_stop_loss ?? base.reverseSL,
+    burnGlobalEnabled: payload.burn_global_enabled ?? base.burnGlobalEnabled,
+    burnGlobalThreshold: payload.burn_global_threshold ?? base.burnGlobalThreshold,
+    burnDualEnabled: payload.burn_dual_enabled ?? base.burnDualEnabled,
+    burnDualThreshold: payload.burn_dual_threshold ?? base.burnDualThreshold,
+    openDouble: payload.open_double ?? base.openDouble,
+    followTrend: payload.follow_trend ?? base.followTrend,
+    onlineOrderLimit: payload.online_order_limit ?? base.onlineOrderLimit,
+    leverage: payload.leverage ?? base.leverage,
+    direction: payload.direction ?? base.direction,
   }
 }

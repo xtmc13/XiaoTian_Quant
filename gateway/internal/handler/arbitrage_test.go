@@ -3,23 +3,30 @@ package handler
 import (
 	"testing"
 
+	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/adapter"
 	"github.com/xiaotian-quant/gateway/internal/arbitrage"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
-func TestGetExchangeCredentialsReadsUnifiedConfig(t *testing.T) {
+func init() {
+	gin.SetMode(gin.TestMode)
+}
+
+func TestGetExchangeCredentialsReadsConfigFlags(t *testing.T) {
+	// Credentials now come from environment variables only.
+	t.Setenv("BINANCE_API_KEY", "key1")
+	t.Setenv("BINANCE_API_SECRET", "secret1")
+	t.Setenv("BINANCE_PASSPHRASE", "pass1")
+
 	cfg := store.GetConfig()
 	if cfg == nil {
 		cfg = make(map[string]any)
 	}
 	cfg["exchanges"] = map[string]any{
 		"binance": map[string]any{
-			"api_key":    "key1",
-			"secret":     "secret1",
-			"passphrase": "pass1",
-			"testnet":    true,
-			"enabled":    true,
+			"testnet": true,
+			"enabled": true,
 		},
 	}
 	store.SaveConfig(cfg)
@@ -38,7 +45,7 @@ func TestGetExchangeCredentialsReadsUnifiedConfig(t *testing.T) {
 		t.Error("expected testnet true")
 	}
 
-	// Also verify fallback through adapter.GetCredential (env vars may affect this).
+	// Also verify case-insensitive lookup through adapter.GetCredential.
 	apiKey2, _, _, _ := getExchangeCredentials("BINANCE")
 	if apiKey2 != "key1" {
 		t.Errorf("expected case-insensitive lookup to find key1, got %s", apiKey2)
@@ -66,19 +73,18 @@ func TestCreateArbitrageClientSupported(t *testing.T) {
 }
 
 func TestAutoRegisterExchangesRegistersEnabled(t *testing.T) {
+	t.Setenv("BINANCE_API_KEY", "k")
+	t.Setenv("BINANCE_API_SECRET", "s")
+
 	cfg := store.GetConfig()
 	if cfg == nil {
 		cfg = make(map[string]any)
 	}
 	cfg["exchanges"] = map[string]any{
 		"binance": map[string]any{
-			"api_key": "k",
-			"secret":  "s",
 			"enabled": true,
 		},
 		"okx": map[string]any{
-			"api_key": "k",
-			"secret":  "s",
 			"enabled": false,
 		},
 		"mexc": map[string]any{
@@ -95,18 +101,9 @@ func TestAutoRegisterExchangesRegistersEnabled(t *testing.T) {
 	}
 }
 
-func TestAdapterGetCredentialReadsUnifiedConfig(t *testing.T) {
-	cfg := store.GetConfig()
-	if cfg == nil {
-		cfg = make(map[string]any)
-	}
-	cfg["exchanges"] = map[string]any{
-		"bybit": map[string]any{
-			"api_key": "bybit_key",
-			"secret":  "bybit_secret",
-		},
-	}
-	store.SaveConfig(cfg)
+func TestAdapterGetCredentialReadsEnv(t *testing.T) {
+	t.Setenv("BYBIT_API_KEY", "bybit_key")
+	t.Setenv("BYBIT_API_SECRET", "bybit_secret")
 
 	apiKey, secret, _ := adapter.GetCredential("bybit")
 	if apiKey != "bybit_key" {

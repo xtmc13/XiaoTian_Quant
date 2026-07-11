@@ -35,6 +35,30 @@ export function useStrategyData() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['strategies'] }),
   })
 
+  const batchStartMut = useMutation({
+    mutationFn: (ids: string[]) => strategyApi.batchStart(ids),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['strategies'] })
+      return res
+    },
+  })
+
+  const batchStopMut = useMutation({
+    mutationFn: (ids: string[]) => strategyApi.batchStop(ids),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['strategies'] })
+      return res
+    },
+  })
+
+  const batchDeleteMut = useMutation({
+    mutationFn: (ids: string[]) => strategyApi.batchDelete(ids),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['strategies'] })
+      return res
+    },
+  })
+
   const list = (strategies || []) as StrategyItem[]
 
   return {
@@ -45,6 +69,9 @@ export function useStrategyData() {
     delete: deleteMut.mutate,
     create: createMut.mutate,
     update: updateMut.mutate,
+    batchStart: batchStartMut.mutateAsync,
+    batchStop: batchStopMut.mutateAsync,
+    batchDelete: batchDeleteMut.mutateAsync,
     invalidate: () => queryClient.invalidateQueries({ queryKey: ['strategies'] }),
   }
 }

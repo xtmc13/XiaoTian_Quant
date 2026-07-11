@@ -168,7 +168,7 @@ services:
       --appendonly yes
       --maxmemory 512mb
       --maxmemory-policy allkeys-lru
-      --requirepass ${REDIS_PASSWORD:-xiaotianquant}
+      --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
     networks:
       - xiaotian
     logging:

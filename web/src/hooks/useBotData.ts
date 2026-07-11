@@ -42,8 +42,21 @@ export interface BotItem {
   id: string
   name: string
   strategy_name?: string
-  status: 'running' | 'stopped' | 'paused' | 'error'
-  bot_type: 'grid' | 'dca' | 'arbitrage' | 'market_making' | 'trend' | 'custom' | 'martin_trend' | 'wallstreet' | 'dual_burn' | 'macd_golden' | 'macd_death' | 'ema_follow' | 'ema_counter'
+  status: 'running' | 'stopped' | 'paused' | 'error' | 'detecting'
+  bot_type:
+    | 'grid'
+    | 'dca'
+    | 'arbitrage'
+    | 'market_making'
+    | 'trend'
+    | 'custom'
+    | 'martin_trend'
+    | 'wallstreet'
+    | 'dual_burn'
+    | 'macd_golden'
+    | 'macd_death'
+    | 'ema_follow'
+    | 'ema_counter'
   coin?: string
   symbol?: string
   leverage?: number
@@ -98,19 +111,110 @@ export interface BotTypeDef {
 }
 
 export const BOT_TYPES: BotTypeDef[] = [
-  { key: 'grid', label: '网格交易', desc: '在价格区间内自动低买高卖，适合震荡行情', icon: React.createElement(Grid3X3, { className: 'w-6 h-6' }), color: '#52c41a', bg: 'rgba(82,196,26,0.10)' },
-  { key: 'dca', label: '定投策略', desc: '定时定额分批买入，平滑持仓成本', icon: React.createElement(Layers, { className: 'w-6 h-6' }), color: '#1890ff', bg: 'rgba(24,144,255,0.10)' },
-  { key: 'arbitrage', label: '套利策略', desc: '跨市场或跨品种价差套利，低风险收益', icon: React.createElement(ArrowLeftRight, { className: 'w-6 h-6' }), color: '#722ed1', bg: 'rgba(114,46,209,0.10)' },
-  { key: 'market_making', label: '做市策略', desc: '双边挂单赚取买卖价差，提供流动性', icon: React.createElement(Activity, { className: 'w-6 h-6' }), color: '#fa8c16', bg: 'rgba(250,140,22,0.10)' },
-  { key: 'trend', label: '趋势跟踪', desc: '跟随市场趋势方向交易，适合趋势行情', icon: React.createElement(LineChart, { className: 'w-6 h-6' }), color: '#eb2f96', bg: 'rgba(235,47,150,0.10)' },
-  { key: 'martin_trend', label: '马丁趋势', desc: '倍投补仓原理(2,4,8,16,32,64) + 趋势指标，浮亏减半', icon: React.createElement(TrendingUp, { className: 'w-6 h-6' }), color: '#f5222d', bg: 'rgba(245,34,45,0.10)' },
-  { key: 'wallstreet', label: '华尔街策略', desc: '等比数量补仓(1,2,3,5,8,13,21,34,55) + 趋势指标', icon: React.createElement(BarChart3, { className: 'w-6 h-6' }), color: '#faad14', bg: 'rgba(250,173,20,0.10)' },
-  { key: 'macd_golden', label: 'MACD金叉策略', desc: 'MACD金叉开多/补多，死叉反向信号清仓，适合合约和现货', icon: React.createElement(Activity, { className: 'w-6 h-6' }), color: '#52c41a', bg: 'rgba(82,196,26,0.10)' },
-  { key: 'macd_death', label: 'MACD死叉策略', desc: 'MACD死叉开空/补空，金叉反向信号清仓，适合合约做空', icon: React.createElement(TrendingDown, { className: 'w-6 h-6' }), color: '#ff4d4f', bg: 'rgba(255,77,79,0.10)' },
-  { key: 'dual_burn', label: '双向燃烧斩仓', desc: '逆势单补仓到第3仓自动开启顺势单，用盈利消耗浮亏', icon: React.createElement(Zap, { className: 'w-6 h-6' }), color: '#722ed1', bg: 'rgba(114,46,209,0.10)' },
-  { key: 'ema_follow', label: 'EMA顺势策略', desc: 'EMA60均线以上做多，EMA10拐点决定开仓时机', icon: React.createElement(LineChart, { className: 'w-6 h-6' }), color: '#13c2c2', bg: 'rgba(19,194,194,0.10)' },
-  { key: 'ema_counter', label: 'EMA逆势策略', desc: '以EMA60为标准线，均线以上做空，振幅决定开仓节点', icon: React.createElement(BarChart3, { className: 'w-6 h-6' }), color: '#eb2f96', bg: 'rgba(235,47,150,0.10)' },
-  { key: 'custom', label: '自定义', desc: '使用 Python 脚本编写完全自定义的策略逻辑', icon: React.createElement(Terminal, { className: 'w-6 h-6' }), color: '#8c8c8c', bg: 'rgba(140,140,140,0.10)' },
+  {
+    key: 'grid',
+    label: '网格交易',
+    desc: '在价格区间内自动低买高卖，适合震荡行情',
+    icon: React.createElement(Grid3X3, { className: 'w-6 h-6' }),
+    color: '#52c41a',
+    bg: 'rgba(82,196,26,0.10)',
+  },
+  {
+    key: 'dca',
+    label: '定投策略',
+    desc: '定时定额分批买入，平滑持仓成本',
+    icon: React.createElement(Layers, { className: 'w-6 h-6' }),
+    color: '#1890ff',
+    bg: 'rgba(24,144,255,0.10)',
+  },
+  {
+    key: 'arbitrage',
+    label: '套利策略',
+    desc: '跨市场或跨品种价差套利，低风险收益',
+    icon: React.createElement(ArrowLeftRight, { className: 'w-6 h-6' }),
+    color: '#722ed1',
+    bg: 'rgba(114,46,209,0.10)',
+  },
+  {
+    key: 'market_making',
+    label: '做市策略',
+    desc: '双边挂单赚取买卖价差，提供流动性',
+    icon: React.createElement(Activity, { className: 'w-6 h-6' }),
+    color: '#fa8c16',
+    bg: 'rgba(250,140,22,0.10)',
+  },
+  {
+    key: 'trend',
+    label: '趋势跟踪',
+    desc: '跟随市场趋势方向交易，适合趋势行情',
+    icon: React.createElement(LineChart, { className: 'w-6 h-6' }),
+    color: '#eb2f96',
+    bg: 'rgba(235,47,150,0.10)',
+  },
+  {
+    key: 'martin_trend',
+    label: '马丁趋势',
+    desc: '倍投补仓原理(2,4,8,16,32,64) + 趋势指标，浮亏减半',
+    icon: React.createElement(TrendingUp, { className: 'w-6 h-6' }),
+    color: '#f5222d',
+    bg: 'rgba(245,34,45,0.10)',
+  },
+  {
+    key: 'wallstreet',
+    label: '华尔街策略',
+    desc: '等比数量补仓(1,2,3,5,8,13,21,34,55) + 趋势指标',
+    icon: React.createElement(BarChart3, { className: 'w-6 h-6' }),
+    color: '#faad14',
+    bg: 'rgba(250,173,20,0.10)',
+  },
+  {
+    key: 'macd_golden',
+    label: 'MACD金叉策略',
+    desc: 'MACD金叉开多/补多，死叉反向信号清仓，适合合约和现货',
+    icon: React.createElement(Activity, { className: 'w-6 h-6' }),
+    color: '#52c41a',
+    bg: 'rgba(82,196,26,0.10)',
+  },
+  {
+    key: 'macd_death',
+    label: 'MACD死叉策略',
+    desc: 'MACD死叉开空/补空，金叉反向信号清仓，适合合约做空',
+    icon: React.createElement(TrendingDown, { className: 'w-6 h-6' }),
+    color: '#ff4d4f',
+    bg: 'rgba(255,77,79,0.10)',
+  },
+  {
+    key: 'dual_burn',
+    label: '双向燃烧斩仓',
+    desc: '逆势单补仓到第3仓自动开启顺势单，用盈利消耗浮亏',
+    icon: React.createElement(Zap, { className: 'w-6 h-6' }),
+    color: '#722ed1',
+    bg: 'rgba(114,46,209,0.10)',
+  },
+  {
+    key: 'ema_follow',
+    label: 'EMA顺势策略',
+    desc: 'EMA60均线以上做多，EMA10拐点决定开仓时机',
+    icon: React.createElement(LineChart, { className: 'w-6 h-6' }),
+    color: '#13c2c2',
+    bg: 'rgba(19,194,194,0.10)',
+  },
+  {
+    key: 'ema_counter',
+    label: 'EMA逆势策略',
+    desc: '以EMA60为标准线，均线以上做空，振幅决定开仓节点',
+    icon: React.createElement(BarChart3, { className: 'w-6 h-6' }),
+    color: '#eb2f96',
+    bg: 'rgba(235,47,150,0.10)',
+  },
+  {
+    key: 'custom',
+    label: '自定义',
+    desc: '使用 Python 脚本编写完全自定义的策略逻辑',
+    icon: React.createElement(Terminal, { className: 'w-6 h-6' }),
+    color: '#8c8c8c',
+    bg: 'rgba(140,140,140,0.10)',
+  },
 ]
 
 export const BOT_TYPE_TO_STRATEGY_TYPE: Record<BotItem['bot_type'], string> = {
@@ -174,7 +278,10 @@ export function useBotData(filterType?: NewBotType) {
     const all = Array.isArray(strategies) ? strategies : []
     // 映射旧 bot_type 到新分类
     const mapped = all.map((s: StrategyItem) => {
-      const oldType = ((s as StrategyItem & { bot_type?: string }).bot_type || ((s.trading_config as Record<string, unknown> | undefined)?.bot_type as string) || 'custom')
+      const oldType =
+        (s as StrategyItem & { bot_type?: string }).bot_type ||
+        ((s.trading_config as Record<string, unknown> | undefined)?.bot_type as string) ||
+        'custom'
       return {
         ...s,
         id: String(s.id),

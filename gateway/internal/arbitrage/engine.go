@@ -4,14 +4,17 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/xiaotian-quant/gateway/internal/adapter"
 	"github.com/xiaotian-quant/gateway/internal/app"
 	"github.com/xiaotian-quant/gateway/internal/event"
 	"github.com/xiaotian-quant/gateway/internal/model"
+	"github.com/xiaotian-quant/gateway/internal/notify"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
@@ -72,21 +75,27 @@ func (o *Opportunity) NetSpreadPct(feeA, feeB float64) float64 {
 
 // TradePair tracks an arbitrage round-trip through its lifecycle.
 type TradePair struct {
-	ID           string  `json:"id"`
-	Symbol       string  `json:"symbol"`
-	BuyExchange  string  `json:"buy_exchange"`
-	SellExchange string  `json:"sell_exchange"`
-	BuyPrice     float64 `json:"buy_price"`
-	SellPrice    float64 `json:"sell_price"`
-	Quantity     float64 `json:"quantity"`
-	BuyOrderID   string  `json:"buy_order_id"`
-	SellOrderID  string  `json:"sell_order_id"`
-	GrossProfit  float64 `json:"gross_profit"`
-	NetProfit    float64 `json:"net_profit"`
-	Fees         float64 `json:"fees"`
-	Status       string  `json:"status"` // pending, open_buy, open, completed, failed, dry_run
-	OpenedAt     int64   `json:"opened_at"`
-	ClosedAt     int64   `json:"closed_at"`
+	ID            string  `json:"id"`
+	Symbol        string  `json:"symbol"`
+	BuyExchange   string  `json:"buy_exchange"`
+	SellExchange  string  `json:"sell_exchange"`
+	BuyPrice      float64 `json:"buy_price"`
+	SellPrice     float64 `json:"sell_price"`
+	Quantity      float64 `json:"quantity"`
+	BuyOrderID    string  `json:"buy_order_id"`
+	SellOrderID   string  `json:"sell_order_id"`
+	BuyFilledQty  float64 `json:"buy_filled_qty"`
+	BuyAvgPrice   float64 `json:"buy_avg_price"`
+	BuyFee        float64 `json:"buy_fee"`
+	SellFilledQty float64 `json:"sell_filled_qty"`
+	SellAvgPrice  float64 `json:"sell_avg_price"`
+	SellFee       float64 `json:"sell_fee"`
+	GrossProfit   float64 `json:"gross_profit"`
+	NetProfit     float64 `json:"net_profit"`
+	Fees          float64 `json:"fees"`
+	Status        string  `json:"status"` // pending, open_buy, open, completed, failed, dry_run
+	OpenedAt      int64   `json:"opened_at"`
+	ClosedAt      int64   `json:"closed_at"`
 }
 
 // IsActive returns true if the pair is not yet closed.
@@ -153,6 +162,8 @@ func (c EngineConfig) SymbolsList() []string {
 	return []string{"BTCUSDT"}
 }
 
+const maxArbitrageHistorySize = 1000
+
 func DefaultEngineConfig() EngineConfig {
 	return EngineConfig{
 		Symbol:       "BTCUSDT",
@@ -204,6 +215,11 @@ type Engine struct {
 
 	// Persistence
 	repo *store.ArbitrageTradeRepo
+
+	// Statistics
+	scanCount      atomic.Int64
+	executionCount atomic.Int64
+	activeCount    atomic.Int64
 
 	// Callbacks
 	OnOpportunity func(opp Opportunity)
@@ -288,9 +304,14 @@ func (e *Engine) SetConfig(cfg EngineConfig) {
 	e.config = cfg
 }
 
-// Execute manually triggers execution of an opportunity.
+// Execute manually triggers execution of an opportunity respecting the engine's DryRun config.
 func (e *Engine) Execute(opp Opportunity) {
-	e.execute(opp)
+	e.execute(opp, e.GetConfig().DryRun)
+}
+
+// ExecuteLive manually triggers a live execution regardless of the engine's DryRun config.
+func (e *Engine) ExecuteLive(opp Opportunity) {
+	e.execute(opp, false)
 }
 
 // SetDryRun sets the dry-run mode.
@@ -323,15 +344,17 @@ func (e *Engine) Start() error {
 	e.tickSubID = bus.Subscribe("", event.PrioNormal, e.handleTick, event.TypeTick)
 	e.obSubID = bus.Subscribe("", event.PrioNormal, e.handleOrderBook, event.TypeOrderBook)
 
-	// Start market streams for each registered exchange.
+	// Start market streams for each registered exchange asynchronously.
 	symbols := e.GetConfig().SymbolsList()
 	e.IterateClients(func(name string, client ExchangeClient) {
 		client.WireToEventBus(bus)
-		if err := client.StartMarketStream(symbols); err != nil {
-			if e.OnError != nil {
-				e.OnError(fmt.Errorf("%s stream start failed: %w", name, err))
+		go func(n string, c ExchangeClient) {
+			if err := c.StartMarketStream(symbols); err != nil {
+				if e.OnError != nil {
+					e.OnError(fmt.Errorf("%s stream start failed: %w", n, err))
+				}
 			}
-		}
+		}(name, client)
 	})
 
 	return nil
@@ -437,6 +460,8 @@ func (e *Engine) GetStats() map[string]any {
 		"win_count":       wins,
 		"loss_count":      losses,
 		"win_rate":        winRate(wins, losses),
+		"checks":          e.scanCount.Load(),
+		"executions":      e.executionCount.Load(),
 		"last_spread_pct": func() float64 {
 			if e.lastOpp != nil {
 				return e.lastOpp.SpreadPct
@@ -535,6 +560,8 @@ func (e *Engine) GetPerformance() ArbitragePerformance {
 }
 
 // ClosePosition manually closes an active arbitrage position.
+// ClosePosition closes an active arbitrage position by placing a sell order on the sell exchange.
+// If the sell order succeeds, the position is marked completed using actual fill metrics.
 func (e *Engine) ClosePosition(id string, sellPrice float64) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -560,10 +587,66 @@ func (e *Engine) ClosePosition(id string, sellPrice float64) error {
 		return fmt.Errorf("position %s has no sell price", id)
 	}
 
+	// If a sell order was already recorded, just book-close using the provided price.
+	if pair.SellOrderID != "" {
+		pair.Status = "completed"
+		pair.ClosedAt = time.Now().UnixMilli()
+		pair.GrossProfit = (pair.SellPrice - pair.BuyPrice) * pair.Quantity
+		pair.Fees = (pair.BuyPrice*pair.Quantity*e.config.FeeA) + (pair.SellPrice*pair.Quantity*e.config.FeeB)
+		pair.NetProfit = pair.GrossProfit - pair.Fees
+		e.recordPairLocked(pair)
+		if e.OnTrade != nil {
+			e.OnTrade(*pair)
+		}
+		return nil
+	}
+
+	// Otherwise attempt to place a real sell order on the sell exchange.
+	sellClient := e.clients[pair.SellExchange]
+	if sellClient == nil {
+		return fmt.Errorf("sell exchange client missing for position %s", id)
+	}
+
+	qty := pair.BuyFilledQty
+	if qty <= 0 {
+		qty = pair.Quantity
+	}
+
+	// Unlock while calling the exchange to avoid holding the engine lock during network I/O.
+	e.mu.Unlock()
+	sellResult, err := sellClient.PlaceOrder(pair.Symbol, "SELL", "MARKET", 0, qty)
+	e.mu.Lock()
+
+	if err != nil {
+		if e.OnError != nil {
+			e.OnError(fmt.Errorf("close position %s sell order failed: %w", id, err))
+		}
+		return fmt.Errorf("sell order failed for position %s: %w", id, err)
+	}
+
+	if oid, ok := sellResult["order_id"].(string); ok {
+		pair.SellOrderID = oid
+	} else if oid, ok := sellResult["id"].(string); ok {
+		pair.SellOrderID = oid
+	}
+	pair.SellFilledQty, pair.SellAvgPrice, pair.SellFee, _ = parseFillMetrics(sellResult, "SELL")
+	if pair.SellFilledQty <= 0 {
+		pair.SellFilledQty = qty
+	}
+	if pair.SellAvgPrice <= 0 {
+		pair.SellAvgPrice = pair.SellPrice
+	}
+
 	pair.Status = "completed"
 	pair.ClosedAt = time.Now().UnixMilli()
-	pair.GrossProfit = (pair.SellPrice - pair.BuyPrice) * pair.Quantity
-	pair.Fees = (pair.BuyPrice*pair.Quantity*e.config.FeeA) + (pair.SellPrice*pair.Quantity*e.config.FeeB)
+	pair.GrossProfit = pair.SellAvgPrice*pair.SellFilledQty - pair.BuyAvgPrice*pair.BuyFilledQty
+	if pair.GrossProfit == 0 && pair.BuyPrice > 0 && pair.SellPrice > 0 {
+		pair.GrossProfit = (pair.SellPrice - pair.BuyPrice) * pair.Quantity
+	}
+	pair.Fees = pair.BuyFee + pair.SellFee
+	if pair.Fees <= 0 {
+		pair.Fees = (pair.BuyPrice*pair.Quantity*e.config.FeeA) + (pair.SellPrice*pair.Quantity*e.config.FeeB)
+	}
 	pair.NetProfit = pair.GrossProfit - pair.Fees
 
 	e.recordPairLocked(pair)
@@ -682,7 +765,8 @@ func (e *Engine) evaluate() {
 
 	if e.config.AutoExecute && opp.IsProfitable(e.config.MinSpreadPct, e.config.FeeA, e.config.FeeB) {
 		if len(e.positions) < e.config.MaxPositions {
-			go e.execute(*opp)
+			e.scanCount.Add(1)
+			go e.execute(*opp, e.config.DryRun)
 		}
 	}
 }
@@ -933,8 +1017,104 @@ func resolveQuantity(buyOB, sellOB model.OrderBookData, targetQty, buyPrice floa
 	return execQty, m.execBuy, m.execSell, m.buyDepth, m.sellDepth, m.slippageBuy, m.slippageSell, maxQty, true
 }
 
+// parseFillMetrics extracts realized fill quantity, average price, fee and order status
+// from an exchange PlaceOrder response. It returns fallback values when fields are missing.
+func parseFillMetrics(result map[string]any, side string) (qty, avgPrice, fee float64, status string) {
+	if result == nil {
+		return
+	}
+
+	if s, ok := result["status"].(string); ok {
+		status = s
+	}
+
+	// Quantity: try executed/filled fields first, then amount/qty.
+	qty = coalesceFloat(result, "executedQty", "executed_qty", "filled_qty", "filled_quantity", "amount", "qty", "quantity")
+
+	// Average price.
+	avgPrice = coalesceFloat(result, "avgPrice", "avg_price", "fill_price", "price")
+
+	// Fee.
+	fee = coalesceFloat(result, "fee", "commission", "total_commission")
+
+	// Binance specific: parse fills array for weighted avg price and total fee.
+	if fills, ok := result["fills"].([]any); ok && len(fills) > 0 {
+		var totalCost, totalQty, totalFee float64
+		for _, f := range fills {
+			fill, ok := f.(map[string]any)
+			if !ok {
+				continue
+			}
+			fq := coalesceFloat(fill, "qty", "quantity")
+			fp := coalesceFloat(fill, "price")
+			fc := coalesceFloat(fill, "commission")
+			if fq > 0 && fp > 0 {
+				totalQty += fq
+				totalCost += fp * fq
+				totalFee += fc
+			}
+		}
+		if totalQty > 0 {
+			avgPrice = totalCost / totalQty
+		}
+		if totalFee > 0 {
+			fee = totalFee
+		}
+		if qty <= 0 && totalQty > 0 {
+			qty = totalQty
+		}
+	}
+
+	// Gate.io style: filled_total is quote value, fill_price is avg price.
+	if filledTotal := coalesceFloat(result, "filled_total"); filledTotal > 0 && qty > 0 && avgPrice <= 0 {
+		avgPrice = filledTotal / qty
+	}
+
+	return
+}
+
+// coalesceFloat returns the first positive float64 found under the supplied keys.
+func coalesceFloat(m map[string]any, keys ...string) float64 {
+	for _, k := range keys {
+		if v, ok := m[k]; ok {
+			switch n := v.(type) {
+			case float64:
+				if n > 0 {
+					return n
+				}
+			case float32:
+				if n > 0 {
+					return float64(n)
+				}
+			case int:
+				if n > 0 {
+					return float64(n)
+				}
+			case int64:
+				if n > 0 {
+					return float64(n)
+				}
+			case string:
+				if f, err := strconv.ParseFloat(n, 64); err == nil && f > 0 {
+					return f
+				}
+			}
+		}
+	}
+	return 0
+}
+
 // execute places the buy and sell orders for an arbitrage opportunity.
-func (e *Engine) execute(opp Opportunity) {
+// dryRun controls whether this specific execution is simulated; it does not mutate the engine config.
+func (e *Engine) execute(opp Opportunity, dryRun bool) {
+	// Atomically reserve an execution slot to enforce MaxPositions across goroutines.
+	if e.activeCount.Add(1) > int64(e.config.MaxPositions) {
+		e.activeCount.Add(-1)
+		return
+	}
+	defer e.activeCount.Add(-1)
+
+	// Capture config and clients under lock to avoid races with RegisterExchange/SetConfig.
 	e.mu.Lock()
 	if len(e.positions) >= e.config.MaxPositions {
 		e.mu.Unlock()
@@ -942,6 +1122,9 @@ func (e *Engine) execute(opp Opportunity) {
 	}
 	e.seq++
 	pairID := fmt.Sprintf("arb-%d-%d", time.Now().UnixMilli(), e.seq)
+	cfg := e.config
+	buyClient := e.clients[opp.BuyExchange]
+	sellClient := e.clients[opp.SellExchange]
 	e.mu.Unlock()
 
 	pair := &TradePair{
@@ -956,7 +1139,7 @@ func (e *Engine) execute(opp Opportunity) {
 	}
 
 	// Balance check before calculating quantity.
-	if err := e.checkBalance(opp); err != nil {
+	if err := e.checkBalance(opp, cfg, buyClient, sellClient); err != nil {
 		pair.Status = "failed"
 		pair.ClosedAt = time.Now().UnixMilli()
 		e.recordPair(pair)
@@ -977,7 +1160,7 @@ func (e *Engine) execute(opp Opportunity) {
 
 	qty := opp.AdjustedQty
 	if qty <= 0 {
-		qty = e.config.OrderSize / buyPrice
+		qty = cfg.OrderSize / buyPrice
 	}
 	qty = math.Floor(qty*1e6) / 1e6
 	pair.Quantity = qty
@@ -985,10 +1168,16 @@ func (e *Engine) execute(opp Opportunity) {
 	// Persist pending state.
 	e.recordPair(pair)
 
-	if e.config.DryRun {
+	if dryRun {
 		pair.Status = "dry_run"
+		pair.BuyFilledQty = qty
+		pair.SellFilledQty = qty
+		pair.BuyAvgPrice = buyPrice
+		pair.SellAvgPrice = sellPrice
 		pair.GrossProfit = (sellPrice - buyPrice) * qty
-		pair.Fees = (buyPrice*qty*e.config.FeeA) + (sellPrice*qty*e.config.FeeB)
+		pair.BuyFee = buyPrice * qty * cfg.FeeA
+		pair.SellFee = sellPrice * qty * cfg.FeeB
+		pair.Fees = pair.BuyFee + pair.SellFee
 		pair.NetProfit = pair.GrossProfit - pair.Fees
 		pair.ClosedAt = time.Now().UnixMilli()
 		e.recordPair(pair)
@@ -997,9 +1186,6 @@ func (e *Engine) execute(opp Opportunity) {
 		}
 		return
 	}
-
-	buyClient := e.clients[opp.BuyExchange]
-	sellClient := e.clients[opp.SellExchange]
 
 	if buyClient == nil || sellClient == nil {
 		pair.Status = "failed"
@@ -1027,18 +1213,31 @@ func (e *Engine) execute(opp Opportunity) {
 	} else if id, ok := buyResult["id"].(string); ok {
 		pair.BuyOrderID = id
 	}
+	pair.BuyFilledQty, pair.BuyAvgPrice, pair.BuyFee, _ = parseFillMetrics(buyResult, "BUY")
+	if pair.BuyFilledQty <= 0 {
+		pair.BuyFilledQty = qty
+	}
+	if pair.BuyAvgPrice <= 0 {
+		pair.BuyAvgPrice = buyPrice
+	}
 	pair.Status = "open_buy"
 	e.recordPair(pair)
 
 	// Sell on expensive exchange.
 	sellResult, err := sellClient.PlaceOrder(opp.Symbol, "SELL", "MARKET", 0, qty)
 	if err != nil {
+		// Retry once to cover transient errors.
+		sellResult, err = sellClient.PlaceOrder(opp.Symbol, "SELL", "MARKET", 0, qty)
+	}
+	if err != nil {
 		// Buy is filled but sell failed; position stays open for manual resolution.
 		pair.Status = "open"
 		e.recordPair(pair)
 		if e.OnError != nil {
-			e.OnError(fmt.Errorf("sell order failed (position %s now open): %w", pairID, err))
+			e.OnError(fmt.Errorf("sell order failed after retry (position %s now open): %w", pairID, err))
 		}
+		notify.NewBroadcaster().System("arbitrage_sell_failed",
+			fmt.Sprintf("套利 %s 买入成功但卖出失败，已持仓 %.6f", pair.Symbol, pair.Quantity))
 		return
 	}
 	if id, ok := sellResult["order_id"].(string); ok {
@@ -1046,23 +1245,33 @@ func (e *Engine) execute(opp Opportunity) {
 	} else if id, ok := sellResult["id"].(string); ok {
 		pair.SellOrderID = id
 	}
+	pair.SellFilledQty, pair.SellAvgPrice, pair.SellFee, _ = parseFillMetrics(sellResult, "SELL")
+	if pair.SellFilledQty <= 0 {
+		pair.SellFilledQty = qty
+	}
+	if pair.SellAvgPrice <= 0 {
+		pair.SellAvgPrice = sellPrice
+	}
 
 	pair.Status = "completed"
 	pair.ClosedAt = time.Now().UnixMilli()
-	pair.GrossProfit = (sellPrice - buyPrice) * qty
-	pair.Fees = (buyPrice*qty*e.config.FeeA) + (sellPrice*qty*e.config.FeeB)
+	pair.GrossProfit = pair.SellAvgPrice*pair.SellFilledQty - pair.BuyAvgPrice*pair.BuyFilledQty
+	pair.Fees = pair.BuyFee + pair.SellFee
+	if pair.Fees <= 0 {
+		pair.Fees = pair.BuyAvgPrice*pair.BuyFilledQty*e.config.FeeA +
+			pair.SellAvgPrice*pair.SellFilledQty*e.config.FeeB
+	}
 	pair.NetProfit = pair.GrossProfit - pair.Fees
 
 	e.recordPair(pair)
+	e.executionCount.Add(1)
 	if e.OnTrade != nil {
 		e.OnTrade(*pair)
 	}
 }
 
 // checkBalance verifies that both exchanges hold sufficient funds.
-func (e *Engine) checkBalance(opp Opportunity) error {
-	buyClient := e.clients[opp.BuyExchange]
-	sellClient := e.clients[opp.SellExchange]
+func (e *Engine) checkBalance(opp Opportunity, cfg EngineConfig, buyClient, sellClient ExchangeClient) error {
 	if buyClient == nil || sellClient == nil {
 		return fmt.Errorf("missing exchange client")
 	}
@@ -1078,7 +1287,7 @@ func (e *Engine) checkBalance(opp Opportunity) error {
 	}
 	qty := opp.AdjustedQty
 	if qty <= 0 {
-		qty = e.config.OrderSize / buyPrice
+		qty = cfg.OrderSize / buyPrice
 	}
 	qty = math.Floor(qty*1e6) / 1e6
 	requiredQuote := buyPrice * qty
@@ -1126,6 +1335,9 @@ func (e *Engine) recordPairLocked(pair *TradePair) {
 
 	if pair.Status == "completed" || pair.Status == "failed" || pair.Status == "dry_run" {
 		e.history = append(e.history, pair)
+		if len(e.history) > maxArbitrageHistorySize {
+			e.history = e.history[len(e.history)-maxArbitrageHistorySize:]
+		}
 		var active []*TradePair
 		for _, p := range e.positions {
 			if p.ID != pair.ID {
@@ -1228,41 +1440,53 @@ func extractFreeBalance(balances []map[string]any, asset string) float64 {
 
 func pairToRecord(pair *TradePair) *store.ArbitrageTradeRecord {
 	return &store.ArbitrageTradeRecord{
-		ID:           pair.ID,
-		Symbol:       pair.Symbol,
-		BuyExchange:  pair.BuyExchange,
-		SellExchange: pair.SellExchange,
-		BuyPrice:     pair.BuyPrice,
-		SellPrice:    pair.SellPrice,
-		Quantity:     pair.Quantity,
-		BuyOrderID:   pair.BuyOrderID,
-		SellOrderID:  pair.SellOrderID,
-		GrossProfit:  pair.GrossProfit,
-		NetProfit:    pair.NetProfit,
-		Fees:         pair.Fees,
-		Status:       pair.Status,
-		OpenedAt:     pair.OpenedAt,
-		ClosedAt:     pair.ClosedAt,
+		ID:            pair.ID,
+		Symbol:        pair.Symbol,
+		BuyExchange:   pair.BuyExchange,
+		SellExchange:  pair.SellExchange,
+		BuyPrice:      pair.BuyPrice,
+		SellPrice:     pair.SellPrice,
+		Quantity:      pair.Quantity,
+		BuyOrderID:    pair.BuyOrderID,
+		SellOrderID:   pair.SellOrderID,
+		BuyFilledQty:  pair.BuyFilledQty,
+		BuyAvgPrice:   pair.BuyAvgPrice,
+		BuyFee:        pair.BuyFee,
+		SellFilledQty: pair.SellFilledQty,
+		SellAvgPrice:  pair.SellAvgPrice,
+		SellFee:       pair.SellFee,
+		GrossProfit:   pair.GrossProfit,
+		NetProfit:     pair.NetProfit,
+		Fees:          pair.Fees,
+		Status:        pair.Status,
+		OpenedAt:      pair.OpenedAt,
+		ClosedAt:      pair.ClosedAt,
 	}
 }
 
 func recordToPair(r *store.ArbitrageTradeRecord) *TradePair {
 	return &TradePair{
-		ID:           r.ID,
-		Symbol:       r.Symbol,
-		BuyExchange:  r.BuyExchange,
-		SellExchange: r.SellExchange,
-		BuyPrice:     r.BuyPrice,
-		SellPrice:    r.SellPrice,
-		Quantity:     r.Quantity,
-		BuyOrderID:   r.BuyOrderID,
-		SellOrderID:  r.SellOrderID,
-		GrossProfit:  r.GrossProfit,
-		NetProfit:    r.NetProfit,
-		Fees:         r.Fees,
-		Status:       r.Status,
-		OpenedAt:     r.OpenedAt,
-		ClosedAt:     r.ClosedAt,
+		ID:            r.ID,
+		Symbol:        r.Symbol,
+		BuyExchange:   r.BuyExchange,
+		SellExchange:  r.SellExchange,
+		BuyPrice:      r.BuyPrice,
+		SellPrice:     r.SellPrice,
+		Quantity:      r.Quantity,
+		BuyOrderID:    r.BuyOrderID,
+		SellOrderID:   r.SellOrderID,
+		BuyFilledQty:  r.BuyFilledQty,
+		BuyAvgPrice:   r.BuyAvgPrice,
+		BuyFee:        r.BuyFee,
+		SellFilledQty: r.SellFilledQty,
+		SellAvgPrice:  r.SellAvgPrice,
+		SellFee:       r.SellFee,
+		GrossProfit:   r.GrossProfit,
+		NetProfit:     r.NetProfit,
+		Fees:          r.Fees,
+		Status:        r.Status,
+		OpenedAt:      r.OpenedAt,
+		ClosedAt:      r.ClosedAt,
 	}
 }
 

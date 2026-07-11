@@ -7,37 +7,65 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
-// GetCredential returns API credentials for an exchange.
-// First checks the saved config (from Settings page), then falls back to environment variables.
-func GetCredential(exchangeName string) (apiKey, secret, passphrase string) {
-	name := strings.ToLower(exchangeName)
+// exchangeAliases maps common exchange name variants to the canonical name
+// used in config and environment variables.
+var exchangeAliases = map[string]string{
+	"gateio": "gate",
+}
 
-	// 1. Try saved config from Settings page
+// normalizeExchangeName returns the canonical exchange name.
+func normalizeExchangeName(name string) string {
+	lower := strings.ToLower(name)
+	if canonical, ok := exchangeAliases[lower]; ok {
+		return canonical
+	}
+	return lower
+}
+
+// GetCredential returns API credentials for an exchange.
+// Credentials are read from environment variables first to allow secret managers
+// and deployment tooling to override persisted values. If environment variables
+// are absent, credentials are read from the encrypted in-memory config store
+// (populated from config.yaml).
+// Expected env vars: <EXCHANGE>_API_KEY, <EXCHANGE>_API_SECRET, <EXCHANGE>_PASSPHRASE.
+func GetCredential(exchangeName string) (apiKey, secret, passphrase string) {
+	name := strings.ToUpper(normalizeExchangeName(exchangeName))
+
+	apiKey = os.Getenv(name + "_API_KEY")
+	secret = os.Getenv(name + "_API_SECRET")
+	passphrase = os.Getenv(name + "_PASSPHRASE")
+
+	if apiKey != "" && secret != "" {
+		return
+	}
+
+	// Fallback: read from persisted config (decrypted in-memory cache).
 	cfg := store.GetConfig()
-	if exchanges, ok := cfg["exchanges"].(map[string]any); ok {
-		if ex, ok := exchanges[name].(map[string]any); ok {
-			if k, ok := ex["api_key"].(string); ok && k != "" {
-				apiKey = k
-			}
-			if s, ok := ex["secret"].(string); ok && s != "" {
-				secret = s
-			}
-			if p, ok := ex["passphrase"].(string); ok && p != "" {
-				passphrase = p
-			}
+	if cfg == nil {
+		return
+	}
+	exchanges, _ := cfg["exchanges"].(map[string]any)
+	if exchanges == nil {
+		return
+	}
+
+	canonical := normalizeExchangeName(exchangeName)
+	if ex, ok := exchanges[canonical].(map[string]any); ok {
+		if v := getString(ex, "api_key", ""); v != "" && apiKey == "" {
+			apiKey = v
+		}
+		if v := getString(ex, "secret", ""); v != "" && secret == "" {
+			secret = v
+		}
+		if v := getString(ex, "passphrase", ""); v != "" && passphrase == "" {
+			passphrase = v
 		}
 	}
-
-	// 2. Fallback to environment variables
-	if apiKey == "" {
-		apiKey = os.Getenv(strings.ToUpper(name) + "_API_KEY")
-	}
-	if secret == "" {
-		secret = os.Getenv(strings.ToUpper(name) + "_API_SECRET")
-	}
-	if passphrase == "" {
-		passphrase = os.Getenv(strings.ToUpper(name) + "_PASSPHRASE")
-	}
-
 	return
+}
+
+// HasCredential reports whether an exchange has non-empty API key and secret.
+func HasCredential(exchangeName string) bool {
+	apiKey, secret, _ := GetCredential(exchangeName)
+	return apiKey != "" && secret != ""
 }

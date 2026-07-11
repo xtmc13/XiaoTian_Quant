@@ -24,13 +24,16 @@ nginx/ssl/
 *.key
 *.key.enc
 
-# Config (contains secrets)
+# Config (contains secrets and local runtime config)
 config.yaml
+config/config.yaml
 .env
 .env.*
+!config/config.example.yaml
 
 # Data & logs
 /data/
+/runtime/
 *.log
 logs/
 gateway/internal/data/data_export/
@@ -41,12 +44,15 @@ gateway/internal/data/data_export/
 # SQLite journal files
 *.db-journal
 **/data/*.db-journal
+**/runtime/*.db-journal
 
 # Runtime gateway data
 gateway/data/*.json
 
 # Go binary
 gateway/server
+gateway/gateway-server
+gateway/bin/gateway
 
 # Database files
 *.db
@@ -72,6 +78,16 @@ gateway/gateway-server
 
 # Rust build artifacts
 engine/target/
+
+# Local TA-Lib build artifacts
+.build/
+.ta-lib/
+
+# Local sandbox venv symlink
+sandbox/.venv
+
+# Test artifacts
+test-results/
 
 # Frontend build artifacts embedded into Go binary
 gateway/spa/assets/

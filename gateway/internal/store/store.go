@@ -1,14 +1,19 @@
 package store
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,6 +36,11 @@ var (
 	strategyConfigs     = make(map[string]map[string]any)
 	strategyMu          sync.RWMutex
 
+	strategyConfigRepo        = NewStrategyConfigRepo()
+	strategyTemplateRepo      = NewStrategyTemplateRepo()
+	strategyConfigsMigrated   sync.Once
+	strategyTemplatesMigrated sync.Once
+
 	logsStore       []map[string]any
 	templates       []map[string]any
 	agentTokens     []map[string]any
@@ -42,15 +52,17 @@ var (
 	jwtSecret string
 )
 
+func GetStrategyTemplateRepo() *StrategyTemplateRepo { return strategyTemplateRepo }
+
 func InitDB() error {
 	dbPath := os.Getenv("DB_PATH")
 	if dbPath == "" {
-		dbPath = "./data/gateway.db"
+		dbPath = "./runtime/gateway.db"
 	}
-	// Ensure data directory exists
+	// Ensure runtime directory exists
 	dataDir := dbPath[:len(dbPath)-len("/gateway.db")]
 	if dataDir == dbPath {
-		dataDir = "./data"
+		dataDir = "./runtime"
 	}
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return fmt.Errorf("failed to create data directory: %w", err)
@@ -126,41 +138,27 @@ func InitDB() error {
 	}
 
 	// ── JWT Secret ──
-	// Priority: 1) SECRET_KEY env  2) /app/data/.jwt_secret file  3) generate & persist (dev only)
+	// SECURITY: JWT secret must be supplied via the SECRET_KEY environment variable.
+	// Reading from or persisting to disk is disallowed to prevent secret leakage.
 	jwtSecret = os.Getenv("SECRET_KEY")
 	if jwtSecret == "" {
-		secretFile := "./data/.jwt_secret"
-		if data, err := os.ReadFile(secretFile); err == nil && len(data) > 0 {
-			jwtSecret = string(data)
-		} else {
-			// Production safety: refuse to start without an explicit secret.
-			if os.Getenv("APP_ENV") == "production" || os.Getenv("GIN_MODE") == "release" {
-				return fmt.Errorf("SECRET_KEY environment variable is required in production; set it or mount a persistent %s", secretFile)
-			}
-			jwtSecret = randomHex(32)
-			if err := os.WriteFile(secretFile, []byte(jwtSecret), 0600); err != nil {
-				fmt.Fprintf(os.Stderr, "\n⚠  WARNING: Failed to persist JWT secret to %s: %v\n", secretFile, err)
-			}
-			fmt.Fprintf(os.Stderr, "\n⚠  WARNING: SECRET_KEY not set in environment.\n")
-			fmt.Fprintf(os.Stderr, "   A random key was generated and persisted to %s.\n", secretFile)
-			fmt.Fprintf(os.Stderr, "   Set SECRET_KEY in .env to override.\n\n")
-		}
+		return fmt.Errorf("SECRET_KEY environment variable is required; set it in .env and never commit it")
 	}
 
 	if configPath == "" {
-		configPath = "./data/config.yaml"
+		configPath = "./config/config.yaml"
 	}
 	if strategyConfigsPath == "" {
-		strategyConfigsPath = "./data/strategy_configs.json"
+		strategyConfigsPath = "./runtime/strategy_configs.json"
 	}
 	if logsPath == "" {
-		logsPath = "./data/strategy_logs.json"
+		logsPath = "./runtime/strategy_logs.json"
 	}
 	if templatesPath == "" {
-		templatesPath = "./data/strategy_templates.json"
+		templatesPath = "./runtime/strategy_templates.json"
 	}
 	if agentTokensPath == "" {
-		agentTokensPath = "./data/agent_tokens.json"
+		agentTokensPath = "./runtime/agent_tokens.json"
 	}
 
 	// Run schema migrations
@@ -196,6 +194,178 @@ func GetDB() *sql.DB {
 	return db
 }
 
+// ── Config Secret Encryption ────────────────────────────────────
+
+// configEncryptionKey returns a 32-byte AES key derived from XIAOTIAN_CONFIG_KEY.
+// If the env var is unset, nil is returned and secrets are stored in plaintext.
+func configEncryptionKey() []byte {
+	key := os.Getenv("XIAOTIAN_CONFIG_KEY")
+	if key == "" {
+		return nil
+	}
+	h := sha256.Sum256([]byte(key))
+	return h[:]
+}
+
+// encryptConfigSecrets deep-copies cfg and encrypts sensitive fields under exchanges.*.
+func encryptConfigSecrets(cfg map[string]any) map[string]any {
+	key := configEncryptionKey()
+	if key == nil {
+		return cfg
+	}
+	out := deepCopyMap(cfg)
+	if exchanges, ok := out["exchanges"].(map[string]any); ok {
+		out["exchanges"] = encryptExchanges(exchanges, key)
+	}
+	return out
+}
+
+func encryptExchanges(exchanges map[string]any, key []byte) map[string]any {
+	out := make(map[string]any, len(exchanges))
+	for name, val := range exchanges {
+		ex, ok := val.(map[string]any)
+		if !ok {
+			out[name] = val
+			continue
+		}
+		cp := make(map[string]any, len(ex))
+		for k, v := range ex {
+			if isSecretKey(k) {
+				if s, ok := v.(string); ok && s != "" && !isEncrypted(s) {
+					cp[k] = encryptString(s, key)
+					continue
+				}
+			}
+			cp[k] = v
+		}
+		out[name] = cp
+	}
+	return out
+}
+
+func decryptConfigSecrets(cfg map[string]any) map[string]any {
+	key := configEncryptionKey()
+	if key == nil {
+		return cfg
+	}
+	out := deepCopyMap(cfg)
+	if exchanges, ok := out["exchanges"].(map[string]any); ok {
+		out["exchanges"] = decryptExchanges(exchanges, key)
+	}
+	return out
+}
+
+func decryptExchanges(exchanges map[string]any, key []byte) map[string]any {
+	out := make(map[string]any, len(exchanges))
+	for name, val := range exchanges {
+		ex, ok := val.(map[string]any)
+		if !ok {
+			out[name] = val
+			continue
+		}
+		cp := make(map[string]any, len(ex))
+		for k, v := range ex {
+			if isSecretKey(k) {
+				if s, ok := v.(string); ok && s != "" && isEncrypted(s) {
+					cp[k] = decryptString(s, key)
+					continue
+				}
+			}
+			cp[k] = v
+		}
+		out[name] = cp
+	}
+	return out
+}
+
+func isSecretKey(key string) bool {
+	switch strings.ToLower(key) {
+	case "api_key", "secret", "passphrase", "api_secret":
+		return true
+	}
+	return false
+}
+
+// encrypted values are base64 and start with "enc:" prefix.
+func isEncrypted(s string) bool {
+	return strings.HasPrefix(s, "enc:")
+}
+
+func encryptString(plaintext string, key []byte) string {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return plaintext
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return plaintext
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return plaintext
+	}
+	ciphertext := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
+	return "enc:" + base64.StdEncoding.EncodeToString(ciphertext)
+}
+
+func decryptString(ciphertext string, key []byte) string {
+	if !isEncrypted(ciphertext) {
+		return ciphertext
+	}
+	data, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(ciphertext, "enc:"))
+	if err != nil {
+		return ciphertext
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return ciphertext
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return ciphertext
+	}
+	nonceSize := gcm.NonceSize()
+	if len(data) < nonceSize {
+		return ciphertext
+	}
+	nonce, cipherData := data[:nonceSize], data[nonceSize:]
+	plain, err := gcm.Open(nil, nonce, cipherData, nil)
+	if err != nil {
+		return ciphertext
+	}
+	return string(plain)
+}
+
+func deepCopyMap(m map[string]any) map[string]any {
+	cp := make(map[string]any, len(m))
+	for k, v := range m {
+		switch val := v.(type) {
+		case map[string]any:
+			cp[k] = deepCopyMap(val)
+		case []any:
+			cp[k] = deepCopySlice(val)
+		default:
+			cp[k] = v
+		}
+	}
+	return cp
+}
+
+func deepCopySlice(s []any) []any {
+	cp := make([]any, len(s))
+	for i, v := range s {
+		switch val := v.(type) {
+		case map[string]any:
+			cp[i] = deepCopyMap(val)
+		case []any:
+			cp[i] = deepCopySlice(val)
+		default:
+			cp[i] = v
+		}
+	}
+	return cp
+}
+
 // ── Config ──
 
 func LoadConfig() {
@@ -206,10 +376,13 @@ func LoadConfig() {
 		configCache = make(map[string]any)
 		return
 	}
-	if err := yaml.Unmarshal(data, &configCache); err != nil {
+	var raw map[string]any
+	if err := yaml.Unmarshal(data, &raw); err != nil {
 		fmt.Fprintf(os.Stderr, "WARNING: Failed to parse config.yaml: %v\n", err)
 		configCache = make(map[string]any)
+		return
 	}
+	configCache = decryptConfigSecrets(raw)
 }
 
 // SaveArbitrageConfig persists the arbitrage engine config to config.yaml.
@@ -220,11 +393,12 @@ func SaveArbitrageConfig(cfg map[string]any) error {
 		configCache = make(map[string]any)
 	}
 	configCache["arbitrage"] = cfg
-	data, err := yaml.Marshal(configCache)
+	encrypted := encryptConfigSecrets(configCache)
+	data, err := yaml.Marshal(encrypted)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(configPath, data, 0644)
+	return writeConfigFile(data)
 }
 
 // LoadArbitrageConfig returns the persisted arbitrage engine config, if any.
@@ -252,11 +426,12 @@ func SaveTriangularConfig(cfg map[string]any) error {
 		configCache = make(map[string]any)
 	}
 	configCache["triangular"] = cfg
-	data, err := yaml.Marshal(configCache)
+	encrypted := encryptConfigSecrets(configCache)
+	data, err := yaml.Marshal(encrypted)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(configPath, data, 0644)
+	return writeConfigFile(data)
 }
 
 // LoadTriangularConfig returns the persisted triangular arbitrage engine config, if any.
@@ -288,6 +463,7 @@ func SaveUIConfig(ui map[string]any) {
 }
 
 // SaveExchangeConfig saves an exchange configuration to config.yaml.
+// Secret fields are stripped before persistence; credentials must be provided via environment variables.
 func SaveExchangeConfig(id string, cfg map[string]any) {
 	configMu.Lock()
 	defer configMu.Unlock()
@@ -298,22 +474,62 @@ func SaveExchangeConfig(id string, cfg map[string]any) {
 	if exchanges == nil {
 		exchanges = make(map[string]any)
 	}
-	exchanges[id] = cfg
+
+	// Defense in depth: never persist secrets, even if a caller accidentally passes them.
+	safe := make(map[string]any, len(cfg))
+	for k, v := range cfg {
+		if !isSecretKey(k) {
+			safe[k] = v
+		}
+	}
+
+	exchanges[id] = safe
 	configCache["exchanges"] = exchanges
 	_ = writeConfigCacheLocked()
+}
+
+// writeConfigFile persists data to configPath, creating the parent directory if needed.
+func writeConfigFile(data []byte) error {
+	if configPath == "" {
+		return nil
+	}
+	if err := ensureConfigDir(); err != nil {
+		return err
+	}
+	return os.WriteFile(configPath, data, 0644)
+}
+
+// ensureConfigDir creates the parent directory of configPath if it does not exist.
+func ensureConfigDir() error {
+	dir := filepath.Dir(configPath)
+	if dir == "" || dir == "." {
+		return nil
+	}
+	return os.MkdirAll(dir, 0755)
 }
 
 // writeConfigCacheLocked writes the current configCache to config.yaml.
 // Caller must hold configMu.
 func writeConfigCacheLocked() error {
-	if configPath == "" {
-		return nil
-	}
 	data, err := yaml.Marshal(configCache)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(configPath, data, 0644)
+	return writeConfigFile(data)
+}
+
+// GetConfigPath returns the current config file path.
+func GetConfigPath() string {
+	configMu.RLock()
+	defer configMu.RUnlock()
+	return configPath
+}
+
+// SetConfigPath sets the config file path. Used by tests.
+func SetConfigPath(path string) {
+	configMu.Lock()
+	configPath = path
+	configMu.Unlock()
 }
 
 func GetConfig() map[string]any {
@@ -328,13 +544,14 @@ func GetConfig() map[string]any {
 
 func SaveConfig(cfg map[string]any) error {
 	configMu.Lock()
-	configCache = cfg
-	data, err := yaml.Marshal(cfg)
-	configMu.Unlock()
+	defer configMu.Unlock()
+	configCache = deepCopyMap(cfg)
+	encrypted := encryptConfigSecrets(configCache)
+	data, err := yaml.Marshal(encrypted)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(configPath, data, 0644)
+	return writeConfigFile(data)
 }
 
 // ── Strategy Configs ──
@@ -342,36 +559,104 @@ func SaveConfig(cfg map[string]any) error {
 func LoadStrategyConfigs() {
 	strategyMu.Lock()
 	defer strategyMu.Unlock()
+
+	// Always load legacy JSON into memory as a fallback.
 	data, err := os.ReadFile(strategyConfigsPath)
-	if err != nil {
-		return
+	if err == nil {
+		var items []map[string]any
+		_ = json.Unmarshal(data, &items)
+		for _, item := range items {
+			if id, ok := item["id"].(string); ok {
+				strategyConfigs[id] = item
+			}
+		}
 	}
-	var items []map[string]any
-	json.Unmarshal(data, &items)
-	for _, item := range items {
-		if id, ok := item["id"].(string); ok {
-			strategyConfigs[id] = item
+
+	// If DB is available, migrate once and use DB as the source of truth.
+	if db != nil {
+		strategyConfigsMigrated.Do(func() {
+			_ = strategyConfigRepo.MigrateFromJSON(strategyConfigsPath, 0)
+		})
+		items, err := strategyConfigRepo.List(nil, 0)
+		if err == nil {
+			strategyConfigs = make(map[string]map[string]any, len(items))
+			for _, rec := range items {
+				strategyConfigs[rec.ID] = rec.ToMap()
+			}
 		}
 	}
 }
 
 func saveStrategyConfigs() {
+	strategyMu.RLock()
 	items := make([]map[string]any, 0, len(strategyConfigs))
 	for _, v := range strategyConfigs {
 		items = append(items, v)
 	}
+	strategyMu.RUnlock()
 	data, _ := json.MarshalIndent(items, "", "  ")
 	os.WriteFile(strategyConfigsPath, data, 0644)
 }
 
 func GetStrategyConfigs() map[string]map[string]any {
+	if db != nil {
+		LoadStrategyConfigs()
+	}
 	strategyMu.RLock()
 	defer strategyMu.RUnlock()
 	cp := make(map[string]map[string]any)
 	for k, v := range strategyConfigs {
-		cp[k] = v
+		cp[k] = copyMap(v)
 	}
 	return cp
+}
+
+// GetStrategyConfig returns a single strategy config by id.
+func GetStrategyConfig(id string) map[string]any {
+	if db != nil {
+		rec, err := strategyConfigRepo.GetByID(id)
+		if err == nil && rec != nil {
+			strategyMu.Lock()
+			strategyConfigs[id] = rec.ToMap()
+			strategyMu.Unlock()
+		}
+	}
+	strategyMu.RLock()
+	defer strategyMu.RUnlock()
+	item := strategyConfigs[id]
+	if item == nil {
+		return nil
+	}
+	return copyMap(item)
+}
+
+// SetStrategyConfig creates or updates a strategy config under the store lock.
+func SetStrategyConfig(id string, item map[string]any) {
+	item["id"] = id
+	if db != nil {
+		rec := StrategyConfigRecordFromMap(item)
+		if existing, _ := strategyConfigRepo.GetByID(id); existing != nil {
+			_ = strategyConfigRepo.Update(rec)
+		} else {
+			_ = strategyConfigRepo.Create(rec)
+		}
+	}
+	strategyMu.Lock()
+	strategyConfigs[id] = copyMap(item)
+	strategyMu.Unlock()
+}
+
+// DeleteStrategyConfig removes a strategy config under the store lock.
+// Returns true if the entry existed.
+func DeleteStrategyConfig(id string) bool {
+	if db != nil {
+		_ = strategyConfigRepo.Delete(id)
+	}
+	strategyMu.Lock()
+	_, existed := strategyConfigs[id]
+	delete(strategyConfigs, id)
+	strategyMu.Unlock()
+	return existed
 }
 
 func GetStrategyConfigMu() *sync.RWMutex {
@@ -379,7 +664,25 @@ func GetStrategyConfigMu() *sync.RWMutex {
 }
 
 func PersistStrategyConfigs() {
+	if db != nil {
+		strategyMu.RLock()
+		items := make([]*StrategyConfigRecord, 0, len(strategyConfigs))
+		for _, m := range strategyConfigs {
+			items = append(items, StrategyConfigRecordFromMap(m))
+		}
+		strategyMu.RUnlock()
+		_ = strategyConfigRepo.UpsertAll(items)
+	}
 	saveStrategyConfigs()
+}
+
+// copyMap returns a shallow copy of a string-keyed map.
+func copyMap(m map[string]any) map[string]any {
+	cp := make(map[string]any, len(m))
+	for k, v := range m {
+		cp[k] = v
+	}
+	return cp
 }
 
 // ── In-Memory Stores ──
@@ -407,15 +710,26 @@ func PersistStrategyLogs() {
 	_ = os.WriteFile(logsPath, data, 0644)
 }
 
-// LoadStrategyTemplates loads strategy templates from disk.
+// LoadStrategyTemplates loads strategy templates from disk or DB.
 func LoadStrategyTemplates() {
 	inmemMu.Lock()
 	defer inmemMu.Unlock()
 	data, err := os.ReadFile(templatesPath)
-	if err != nil {
-		return
+	if err == nil {
+		_ = json.Unmarshal(data, &templates)
 	}
-	_ = json.Unmarshal(data, &templates)
+	if db != nil {
+		strategyTemplatesMigrated.Do(func() {
+			_ = strategyTemplateRepo.MigrateFromJSON(templatesPath, 0)
+		})
+		items, err := strategyTemplateRepo.List(0, "", 0)
+		if err == nil {
+			templates = make([]map[string]any, 0, len(items))
+			for _, rec := range items {
+				templates = append(templates, rec.ToMap())
+			}
+		}
+	}
 }
 
 // PersistStrategyTemplates writes strategy templates to disk.
@@ -969,6 +1283,39 @@ func getBool(m map[string]any, key string, def bool) bool {
 		}
 	}
 	return def
+}
+
+func getTimestampMillis(m map[string]any, key string) int64 {
+	if v, ok := m[key]; ok {
+		switch val := v.(type) {
+		case float64:
+			return int64(val)
+		case int64:
+			return val
+		case int:
+			return int64(val)
+		case string:
+			if i, err := strconv.ParseInt(val, 10, 64); err == nil {
+				return i
+			}
+		}
+	}
+	return time.Now().UnixMilli()
+}
+
+func normalizeConfigJSON(v any) string {
+	switch val := v.(type) {
+	case string:
+		if val == "" {
+			return "{}"
+		}
+		return val
+	case map[string]any:
+		b, _ := json.Marshal(val)
+		return string(b)
+	default:
+		return "{}"
+	}
 }
 
 func orderToMap(o *OrderRecord) map[string]any {

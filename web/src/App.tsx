@@ -43,17 +43,14 @@ const ModelManagement = lazyPage(() => import('./pages/ModelManagement'), 'Model
 const RiskControl = lazyPage(() => import('./pages/RiskControl'), 'RiskControl')
 const PairlistManagement = lazyPage(() => import('./pages/PairlistManagement'), 'PairlistManagement')
 const AdvancedOrderManagement = lazyPage(() => import('./pages/AdvancedOrderManagement'), 'AdvancedOrderManagement')
-const ArbitrageMonitor = lazyPage(() => import('./pages/ArbitrageMonitor'), 'ArbitrageMonitor')
 const HyperoptManagement = lazyPage(() => import('./pages/HyperoptManagement'), 'HyperoptManagement')
 const SocialTrading = lazyPage(() => import('./pages/SocialTrading'), 'SocialTrading')
 const OnChain = lazyPage(() => import('./pages/OnChain'), 'OnChain')
 
 // ── Split pages (flat navigation) ──
-const Market = lazyPage(() => import('./pages/Market'), 'Market')
-const AIAnalysis = lazyPage(() => import('./pages/ai/AIAnalysis'), 'AIAnalysis')
-const FreqAI = lazyPage(() => import('./pages/ai/FreqAI'), 'FreqAI')
-const RLTraining = lazyPage(() => import('./pages/ai/RLTraining'), 'RLTraining')
-const TensorBoard = lazyPage(() => import('./pages/ai/TensorBoard'), 'TensorBoard')
+const FreqAI = lazyPage(() => import('./pages/AI/FreqAI'), 'FreqAI')
+const RLTraining = lazyPage(() => import('./pages/AI/RLTraining'), 'RLTraining')
+const TensorBoard = lazyPage(() => import('./pages/AI/TensorBoard'), 'TensorBoard')
 const StrategyEditor = lazyPage(() => import('./pages/strategy/StrategyEditor'), 'StrategyEditor')
 const BotsStrategy = lazyPage(() => import('./pages/bots/BotsStrategy'), 'BotsStrategy')
 const BotsSignal = lazyPage(() => import('./pages/bots/BotsSignal'), 'BotsSignal')
@@ -114,7 +111,7 @@ function DocumentTitle() {
     '/dashboard': '仪表盘 - 小天量化',
     '/trading': '交易 - 小天量化',
     '/strategy': '策略 - 小天量化',
-    '/ai': 'AI研究 - 小天量化',
+    '/ai': 'AI分析 - 小天量化',
     '/backtest': '回测 - 小天量化',
     '/bots': '机器人 - 小天量化',
     '/ai-bots': 'AI Bots - 小天量化',
@@ -139,11 +136,10 @@ function DocumentTitle() {
     '/strategy-leaderboard': '策略排行榜 - 小天量化',
 
     // Flat navigation titles
-    '/market': '市场数据 - 小天量化',
+    '/market': 'AI分析 - 小天量化',
     '/trading/spot': '现货交易 - 小天量化',
     '/trading/contract': '合约交易 - 小天量化',
     '/strategy/editor': '策略编辑器 - 小天量化',
-    '/ai/analysis': 'AI分析 - 小天量化',
     '/ai/freqai': 'FreqAI - 小天量化',
     '/ai/rl': 'RL强化学习 - 小天量化',
     '/ai/tensorboard': 'TensorBoard - 小天量化',
@@ -308,12 +304,12 @@ export default function App() {
                     }
                   />
 
-                  {/* AI - old routes redirect to flat routes */}
+                  {/* AI Analysis (combined market + AI) */}
                   <Route
                     path="/ai"
                     element={
                       <PageShell>
-                        <Navigate to="/ai/analysis" replace />
+                        <AI />
                       </PageShell>
                     }
                   />
@@ -321,7 +317,7 @@ export default function App() {
                     path="/market"
                     element={
                       <PageShell>
-                        <Market />
+                        <Navigate to="/ai" replace />
                       </PageShell>
                     }
                   />
@@ -329,7 +325,7 @@ export default function App() {
                     path="/ai/analysis"
                     element={
                       <PageShell>
-                        <AIAnalysis />
+                        <Navigate to="/ai" replace />
                       </PageShell>
                     }
                   />

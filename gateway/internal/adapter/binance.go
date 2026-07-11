@@ -706,8 +706,10 @@ func (b *BinanceAdapter) StartMarketStream(symbols []string) error {
 		)
 	}
 
-	streamURL := b.wsURL() + "/stream?streams=" + strings.Join(streams, "/")
-	log.Printf("[Binance] Connecting market stream: %d symbols", len(symbols))
+	// Combined stream endpoint uses /stream, single streams use /ws/<stream>.
+	base := strings.TrimSuffix(b.wsURL(), "/ws")
+	streamURL := base + "/stream?streams=" + strings.Join(streams, "/")
+	log.Printf("[Binance] Connecting market stream: %d symbols, url=%s", len(symbols), streamURL)
 
 	wsClient := exchange.NewWSClient(exchange.WSConfig{
 		URL:     streamURL,

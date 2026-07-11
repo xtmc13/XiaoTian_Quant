@@ -1,19 +1,26 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
-import { Zap, BrainCircuit, History, Search } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { Zap, History, Search } from 'lucide-react'
 import { aiApi, marketApi } from '@/lib/api'
-import type { AIAnalysisResult, AIModelAnalysis, MLModelInfo, RLModelInfo, TickerSnapshot } from '@/types'
+import { toast } from '@/lib/useToast'
+import type { AIAnalysisResult, AIModelAnalysis, TickerSnapshot } from '@/types'
 
 import { TopIndexBar } from './components/TopIndexBar'
 import { HeatmapSection } from './components/HeatmapSection'
 import { EconomicCalendar } from './components/EconomicCalendar'
 import { AnalysisPlaceholder, AnalysisResultView } from './components/AnalysisPanel'
-import { MLPanel } from './components/MLPanel'
 import { WatchlistPanel } from './components/WatchlistPanel'
 import { AddStockModal, HistoryModal } from './components/Modals'
 
 import { MARKET_NAMES } from './constants'
-import type { HeatmapType, MarketIndex, HeatmapItem, CalendarEvent, WatchlistItem, WatchlistPrice, PositionSummary } from './types'
+import type {
+  HeatmapType,
+  MarketIndex,
+  HeatmapItem,
+  CalendarEvent,
+  WatchlistItem,
+  WatchlistPrice,
+  PositionSummary,
+} from './types'
 
 export function AI() {
   /* -- Market data states -- */
@@ -56,7 +63,9 @@ export function AI() {
         const parsed = JSON.parse(raw)
         if (Array.isArray(parsed)) return parsed
       }
-    } catch { /* ignore corrupt data */ }
+    } catch {
+      /* ignore corrupt data */
+    }
     return []
   })
   const [watchlistPrices, setWatchlistPrices] = useState<Record<string, WatchlistPrice>>({})
@@ -71,30 +80,18 @@ export function AI() {
   const [analysisResult, setAnalysisResult] = useState<AIAnalysisResult | null>(null)
   const [analysisError, setAnalysisError] = useState<string | null>(null)
   const [showHistoryModal, setShowHistoryModal] = useState(false)
-  const [analysisHistory, setAnalysisHistory] = useState<{ symbol: string; result: AIAnalysisResult; time: number }[]>(() => {
-    try {
-      const raw = localStorage.getItem('ai-analysis-history')
-      if (raw) return JSON.parse(raw)
-    } catch { /* ignore corrupt data */ }
-    return []
-  })
-
-  /* -- ML states -- */
-  const [mlMode, setMlMode] = useState(false)
-  const [mlModels, setMlModels] = useState<MLModelInfo[]>([])
-  const [rlModels, setRlModels] = useState<RLModelInfo[]>([])
-
-  const loadRlModels = useCallback(async () => {
-    try {
-      const { rlApi } = await import('@/lib/api')
-      const data = await rlApi.list()
-      setRlModels(data || [])
-    } catch (e: unknown) {
-      console.error('Failed to load RL models:', e)
+  const [analysisHistory, setAnalysisHistory] = useState<{ symbol: string; result: AIAnalysisResult; time: number }[]>(
+    () => {
+      try {
+        const raw = localStorage.getItem('ai-analysis-history')
+        if (raw) return JSON.parse(raw)
+      } catch {
+        /* ignore corrupt data */
+      }
+      return []
     }
-  }, [])
+  )
 
-  /* -- Derived -- */
   const currentHeatmap = useMemo(() => marketData.heatmap[heatmapType] || [], [marketData.heatmap, heatmapType])
 
   /* -- Actions -- */
@@ -132,7 +129,9 @@ export function AI() {
         )
       )
       const cryptoItems = cryptoSettled
-        .filter((r): r is PromiseFulfilledResult<{ name: string; price: number; value: number }> => r.status === 'fulfilled')
+        .filter(
+          (r): r is PromiseFulfilledResult<{ name: string; price: number; value: number }> => r.status === 'fulfilled'
+        )
         .map((r) => r.value)
 
       // 2. US stocks (using indices snapshot for major tech stocks)
@@ -141,7 +140,9 @@ export function AI() {
         usStockSymbols.map((s) =>
           marketApi.snapshot(`SPX,${s}`).then((d) => {
             // Try to get stock data from indices result, fall back to SPX index data
-            const snapshot = d as TickerSnapshot & { indices?: Array<{ symbol: string; price: number; change: number }> }
+            const snapshot = d as TickerSnapshot & {
+              indices?: Array<{ symbol: string; price: number; change: number }>
+            }
             const stockIdx = snapshot?.indices?.find((i: { symbol: string }) => i.symbol === s)
             return {
               name: s,
@@ -152,7 +153,9 @@ export function AI() {
         )
       )
       const usStockItems = usSettled
-        .filter((r): r is PromiseFulfilledResult<{ name: string; price: number; value: number }> => r.status === 'fulfilled')
+        .filter(
+          (r): r is PromiseFulfilledResult<{ name: string; price: number; value: number }> => r.status === 'fulfilled'
+        )
         .map((r) => r.value)
         .filter((item) => item.price > 0)
 
@@ -170,7 +173,9 @@ export function AI() {
       const hkSettled = await Promise.allSettled(
         hkSymbols.map((s) =>
           marketApi.snapshot(`HSI,${s.symbol}`).then((d) => {
-            const snapshot = d as TickerSnapshot & { indices?: Array<{ symbol: string; price: number; change: number }> }
+            const snapshot = d as TickerSnapshot & {
+              indices?: Array<{ symbol: string; price: number; change: number }>
+            }
             const stockIdx = snapshot?.indices?.find((i: { symbol: string }) => i.symbol === s.symbol)
             return {
               name: s.name,
@@ -181,7 +186,9 @@ export function AI() {
         )
       )
       const hKItems = hkSettled
-        .filter((r): r is PromiseFulfilledResult<{ name: string; price: number; value: number }> => r.status === 'fulfilled')
+        .filter(
+          (r): r is PromiseFulfilledResult<{ name: string; price: number; value: number }> => r.status === 'fulfilled'
+        )
         .map((r) => r.value)
         .filter((item) => item.price > 0)
 
@@ -204,7 +211,9 @@ export function AI() {
         )
       )
       const commodityItems = commoditySettled
-        .filter((r): r is PromiseFulfilledResult<{ name: string; price: number; value: number }> => r.status === 'fulfilled')
+        .filter(
+          (r): r is PromiseFulfilledResult<{ name: string; price: number; value: number }> => r.status === 'fulfilled'
+        )
         .map((r) => r.value)
         .filter((item) => item.price > 0)
 
@@ -231,7 +240,9 @@ export function AI() {
         )
       )
       const sectorItems = sectorSettled
-        .filter((r): r is PromiseFulfilledResult<{ name: string; price: number; value: number }> => r.status === 'fulfilled')
+        .filter(
+          (r): r is PromiseFulfilledResult<{ name: string; price: number; value: number }> => r.status === 'fulfilled'
+        )
         .map((r) => r.value)
         .filter((item) => item.price > 0)
 
@@ -254,7 +265,9 @@ export function AI() {
         )
       )
       const forexItems = forexSettled
-        .filter((r): r is PromiseFulfilledResult<{ name: string; price: number; value: number }> => r.status === 'fulfilled')
+        .filter(
+          (r): r is PromiseFulfilledResult<{ name: string; price: number; value: number }> => r.status === 'fulfilled'
+        )
         .map((r) => r.value)
         .filter((item) => item.price > 0)
 
@@ -277,7 +290,9 @@ export function AI() {
         if (indicesRes && 'indices' in indicesRes && Array.isArray(indicesRes.indices)) {
           setMarketData((prev) => ({ ...prev, indices: indicesRes.indices }))
         }
-      } catch { /* API may not exist */ }
+      } catch {
+        /* API may not exist */
+      }
 
       // ── Fetch sentiment (Fear & Greed, VIX, DXY) ──
       try {
@@ -290,7 +305,9 @@ export function AI() {
             dxy: 'dxy' in sentimentRes ? sentimentRes.dxy : undefined,
           }))
         }
-      } catch { /* API may not exist */ }
+      } catch {
+        /* API may not exist */
+      }
 
       // ── Fetch economic calendar ──
       try {
@@ -298,9 +315,12 @@ export function AI() {
         if (calendarRes && 'events' in calendarRes && Array.isArray(calendarRes.events)) {
           setMarketData((prev) => ({ ...prev, calendar: calendarRes.events }))
         }
-      } catch { /* API may not exist */ }
+      } catch {
+        /* API may not exist */
+      }
     } catch (e: unknown) {
-      console.error('Market data fetch failed:', e)
+      const err = e instanceof Error ? e : new Error(String(e))
+      toast('error', 'Market data fetch failed: ' + err.message)
     } finally {
       setLoadingSentiment(false)
       setLoadingIndices(false)
@@ -310,7 +330,9 @@ export function AI() {
     }
   }, [])
 
-  useEffect(() => { loadMarketData() }, [loadMarketData])
+  useEffect(() => {
+    loadMarketData()
+  }, [loadMarketData])
 
   /* -- Watchlist price polling -- */
   const loadWatchlistPrices = useCallback(async () => {
@@ -339,7 +361,8 @@ export function AI() {
         setWatchlistPrices((prev) => ({ ...prev, ...updates }))
       }
     } catch (e: unknown) {
-      console.error('Watchlist price fetch failed:', e)
+      const err = e instanceof Error ? e : new Error(String(e))
+      toast('error', 'Watchlist price fetch failed: ' + err.message)
     }
   }, [watchlist])
 
@@ -353,7 +376,9 @@ export function AI() {
   useEffect(() => {
     try {
       localStorage.setItem('ai-watchlist', JSON.stringify(watchlist))
-    } catch { /* ignore storage errors */ }
+    } catch {
+      /* ignore storage errors */
+    }
   }, [watchlist])
 
   const handleSymbolChange = useCallback((value: string) => {
@@ -383,11 +408,12 @@ export function AI() {
       }
       setAnalysisResult(result)
       setAnalysisHistory((prev) => {
-        const next = [
-          { symbol: result.symbol, result, time: Date.now() },
-          ...prev.slice(0, 49),
-        ]
-        try { localStorage.setItem('ai-analysis-history', JSON.stringify(next)) } catch { /* ignore */ }
+        const next = [{ symbol: result.symbol, result, time: Date.now() }, ...prev.slice(0, 49)]
+        try {
+          localStorage.setItem('ai-analysis-history', JSON.stringify(next))
+        } catch {
+          /* ignore */
+        }
         return next
       })
     } catch (e: unknown) {
@@ -398,7 +424,9 @@ export function AI() {
     }
   }, [selectedSymbol])
 
-  const handleRetry = useCallback(() => { startFastAnalysis() }, [startFastAnalysis])
+  const handleRetry = useCallback(() => {
+    startFastAnalysis()
+  }, [startFastAnalysis])
 
   const handleStockSearch = useCallback(async () => {
     const q = stockSearchQuery.trim().toUpperCase()
@@ -411,17 +439,55 @@ export function AI() {
         return
       }
     } catch (e) {
-      console.warn('Symbol search API failed, falling back to local pool:', e)
+      toast('warning', 'Symbol search API failed, falling back to local pool')
     }
     // Fallback: expanded local symbol pool
     const localPool = [
-      'AAPL', 'MSFT', 'NVDA', 'TSLA', 'GOOGL', 'AMZN', 'META', 'NFLX', 'CRM', 'AMD', 'INTC', 'BABA',
-      'BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'XRP/USDT', 'DOGE/USDT', 'ADA/USDT', 'AVAX/USDT',
-      'LINK/USDT', 'MATIC/USDT', 'DOT/USDT', 'LTC/USDT',
-      '00700', '09988', '03690', '01810', '09618', '01299',
-      'SPX', 'NDX', 'DJI', 'SH', 'HSI', 'N225', 'FTSE', 'DAX',
-      'EUR/USD', 'GBP/USD', 'USD/JPY', 'USD/CNH',
-      'Gold', 'Silver', 'Crude Oil',
+      'AAPL',
+      'MSFT',
+      'NVDA',
+      'TSLA',
+      'GOOGL',
+      'AMZN',
+      'META',
+      'NFLX',
+      'CRM',
+      'AMD',
+      'INTC',
+      'BABA',
+      'BTC/USDT',
+      'ETH/USDT',
+      'BNB/USDT',
+      'SOL/USDT',
+      'XRP/USDT',
+      'DOGE/USDT',
+      'ADA/USDT',
+      'AVAX/USDT',
+      'LINK/USDT',
+      'MATIC/USDT',
+      'DOT/USDT',
+      'LTC/USDT',
+      '00700',
+      '09988',
+      '03690',
+      '01810',
+      '09618',
+      '01299',
+      'SPX',
+      'NDX',
+      'DJI',
+      'SH',
+      'HSI',
+      'N225',
+      'FTSE',
+      'DAX',
+      'EUR/USD',
+      'GBP/USD',
+      'USD/JPY',
+      'USD/CNH',
+      'Gold',
+      'Silver',
+      'Crude Oil',
     ]
     const matched = localPool.filter((s) => s.includes(q))
     setStockSearchResults(matched)
@@ -442,27 +508,6 @@ export function AI() {
     setAnalysisResult(null)
     setAnalysisError(null)
   }, [])
-
-  const loadMlModels = useCallback(async () => {
-    try {
-      const { mlApi } = await import('@/lib/api')
-      const data = await mlApi.list()
-      setMlModels(data || [])
-    } catch (e: unknown) {
-      console.error('Failed to load ML models:', e)
-    }
-  }, [])
-
-  const toggleMlMode = useCallback(() => {
-    const next = !mlMode
-    setMlMode(next)
-    setAnalysisResult(null)
-    setAnalysisError('')
-    if (next) {
-      loadMlModels()
-      loadRlModels()
-    }
-  }, [mlMode, loadMlModels, loadRlModels])
 
   const addToWatchlist = useCallback((sym: string) => {
     setWatchlist((prev) => {
@@ -525,16 +570,6 @@ export function AI() {
               <Zap className="w-3.5 h-3.5" /> AI 分析
             </button>
             <button
-              onClick={toggleMlMode}
-              className={cn(
-                'inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold transition-all',
-                mlMode ? 'bg-quant-gold text-white' : 'bg-quant-card border border-quant-border text-foreground hover:border-quant-gold/40'
-              )}
-            >
-              {mlMode ? <><Zap className="w-3.5 h-3.5" /> 返回 AI 分析</>
-                      : <><BrainCircuit className="w-3.5 h-3.5" /> ML 预测</>}
-            </button>
-            <button
               onClick={() => setShowHistoryModal(true)}
               className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-quant-card border border-quant-border text-foreground text-xs font-medium hover:border-quant-gold/40 transition-colors"
             >
@@ -543,9 +578,7 @@ export function AI() {
           </div>
 
           <div className="flex-1 overflow-auto p-4 min-h-0">
-            {mlMode ? (
-              <MLPanel selectedSymbol={selectedSymbol} mlModels={mlModels} loadMlModels={loadMlModels} rlModels={rlModels} loadRlModels={loadRlModels} />
-            ) : !analysisResult && !analyzing && !analysisError ? (
+            {!analysisResult && !analyzing && !analysisError ? (
               <AnalysisPlaceholder
                 onAddStock={() => setShowAddStockModal(true)}
                 onAnalyze={startFastAnalysis}

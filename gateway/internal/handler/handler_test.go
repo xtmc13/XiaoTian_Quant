@@ -18,6 +18,7 @@ func TestMain(m *testing.M) {
 	gin.SetMode(gin.TestMode)
 	_ = os.Setenv("DB_PATH", "./data/test_handler.db")
 	_ = os.Setenv("CONFIG_PATH", "./data/test_handler_config.yaml")
+	_ = os.Setenv("SECRET_KEY", "test-secret-key-not-for-production-use-only")
 	if err := store.InitDB(); err != nil {
 		panic(err)
 	}

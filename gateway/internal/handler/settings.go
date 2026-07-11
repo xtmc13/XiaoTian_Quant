@@ -68,22 +68,19 @@ func SettingsAgentModels(c *gin.Context) {
 
 // SettingsDefaultsGet returns default exchange and AI settings.
 func SettingsDefaultsGet(c *gin.Context) {
+	cfg := store.GetConfig()
 	defaultExchange := ""
 	defaultAI := ""
-
-	mu := store.GetStrategyConfigMu()
-	mu.RLock()
-	if def, ok := store.GetConfig()["default_exchange"]; ok {
+	if def, ok := cfg["default_exchange"]; ok {
 		if s, ok := def.(string); ok {
 			defaultExchange = s
 		}
 	}
-	if def, ok := store.GetConfig()["default_ai"]; ok {
+	if def, ok := cfg["default_ai"]; ok {
 		if s, ok := def.(string); ok {
 			defaultAI = s
 		}
 	}
-	mu.RUnlock()
 
 	c.JSON(http.StatusOK, gin.H{
 		"default_exchange": defaultExchange,
@@ -96,16 +93,14 @@ func SettingsDefaultsSave(c *gin.Context) {
 	var body map[string]any
 	c.ShouldBindJSON(&body)
 
-	mu := store.GetStrategyConfigMu()
-	mu.Lock()
+	cfg := store.GetConfig()
 	if v, ok := body["default_exchange"]; ok {
-		store.GetConfig()["default_exchange"] = v
+		cfg["default_exchange"] = v
 	}
 	if v, ok := body["default_ai"]; ok {
-		store.GetConfig()["default_ai"] = v
+		cfg["default_ai"] = v
 	}
-	mu.Unlock()
-	store.SaveConfig(store.GetConfig())
+	_ = store.SaveConfig(cfg)
 
 	c.JSON(http.StatusOK, body)
 }
@@ -116,8 +111,6 @@ func GetStrategiesSpot(c *gin.Context) {
 	stype := c.Query("type")
 	search := c.Query("search")
 
-	mu := store.GetStrategyConfigMu()
-	mu.RLock()
 	all := store.GetStrategyConfigs()
 	items := make([]map[string]any, 0)
 	for _, v := range all {
@@ -139,7 +132,6 @@ func GetStrategiesSpot(c *gin.Context) {
 		}
 		items = append(items, v)
 	}
-	mu.RUnlock()
 
 	if items == nil {
 		items = []map[string]any{}
@@ -151,8 +143,6 @@ func GetStrategiesSpot(c *gin.Context) {
 func GetStrategiesContract(c *gin.Context) {
 	status := c.Query("status")
 
-	mu := store.GetStrategyConfigMu()
-	mu.RLock()
 	all := store.GetStrategyConfigs()
 	items := make([]map[string]any, 0)
 	for _, v := range all {
@@ -164,7 +154,6 @@ func GetStrategiesContract(c *gin.Context) {
 		}
 		items = append(items, v)
 	}
-	mu.RUnlock()
 
 	if items == nil {
 		items = []map[string]any{}
@@ -174,8 +163,6 @@ func GetStrategiesContract(c *gin.Context) {
 
 // GetStrategiesRanking returns strategy ranking by PnL.
 func GetStrategiesRanking(c *gin.Context) {
-	mu := store.GetStrategyConfigMu()
-	mu.RLock()
 	items := make([]map[string]any, 0)
 	all := store.GetStrategyConfigs()
 	for _, v := range all {
@@ -190,7 +177,6 @@ func GetStrategiesRanking(c *gin.Context) {
 			"return": store.RoundFloat(pnl/1000*100, 2),
 		})
 	}
-	mu.RUnlock()
 
 	if items == nil {
 		items = []map[string]any{}

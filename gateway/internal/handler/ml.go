@@ -258,7 +258,7 @@ func EvaluateModel(c *gin.Context) {
 func ListModels(c *gin.Context) {
 	models, err := MLClient.ListModels()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(http.StatusOK, gin.H{"models": []any{}})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"models": models})
@@ -444,7 +444,7 @@ func GenerateFeatures(c *gin.Context) {
 // MLHealth checks if the ML server is reachable.
 func MLHealth(c *gin.Context) {
 	if err := MLClient.Health(); err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "unhealthy", "error": err.Error()})
+		c.JSON(http.StatusOK, gin.H{"status": "unhealthy", "error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "healthy"})
@@ -525,9 +525,7 @@ func MLDeployStrategy(c *gin.Context) {
 	}
 
 	// Update or create strategy config in store
-	mu := store.GetStrategyConfigMu()
-	mu.Lock()
-	item := store.GetStrategyConfigs()[req.StrategyID]
+	item := store.GetStrategyConfig(req.StrategyID)
 	if item == nil {
 		// Create new strategy config for this ML model
 		item = map[string]any{
@@ -541,7 +539,6 @@ func MLDeployStrategy(c *gin.Context) {
 			"created_at":    float64(time.Now().UnixMilli()),
 			"updated_at":    float64(time.Now().UnixMilli()),
 		}
-		store.GetStrategyConfigs()[req.StrategyID] = item
 	}
 	item["strategy_type"] = "ml"
 	item["symbol"] = req.Symbol
@@ -550,7 +547,7 @@ func MLDeployStrategy(c *gin.Context) {
 		return string(b)
 	}()
 	item["updated_at"] = float64(time.Now().UnixMilli())
-	mu.Unlock()
+	store.SetStrategyConfig(req.StrategyID, item)
 	store.PersistStrategyConfigs()
 
 	// Register in strategy engine if available and auto_start requested

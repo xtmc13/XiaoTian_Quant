@@ -478,11 +478,6 @@ func AIDeploy(c *gin.Context) {
 	}
 
 	// Create strategy config via store
-	mu := store.GetStrategyConfigMu()
-	mu.Lock()
-	defer mu.Unlock()
-
-	configs := store.GetStrategyConfigs()
 	id := fmt.Sprintf("ai-%d", time.Now().UnixMilli())
 	config := map[string]any{
 		"id":              id,
@@ -495,7 +490,7 @@ func AIDeploy(c *gin.Context) {
 		"created_at":      time.Now().Unix(),
 		"updated_at":      time.Now().Unix(),
 	}
-	configs[id] = config
+	store.SetStrategyConfig(id, config)
 	store.PersistStrategyConfigs()
 
 	c.JSON(http.StatusOK, gin.H{

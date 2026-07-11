@@ -1,15 +1,13 @@
 import { cn } from '@/lib/utils'
-import { SectionCard } from '@/components/ui/SectionCard'
-import { RefreshCw, Save, Globe, CheckCircle2, Plus } from 'lucide-react'
+import { RefreshCw, Save, Globe, CheckCircle2, Plus, X } from 'lucide-react'
 import { TextInput, NumberInput, Toggle } from './ArbitrageUI'
 import type { ArbitrageConfig, ExchangeConfiguredStatus } from '@/types'
-import type { UseMutationResult } from '@tanstack/react-query'
 
 const SUPPORTED_EXCHANGES = [
   { key: 'binance', label: 'Binance', needsPassphrase: false, supportsTestnet: true },
   { key: 'okx', label: 'OKX', needsPassphrase: true, supportsTestnet: true },
   { key: 'mexc', label: 'MEXC', needsPassphrase: false, supportsTestnet: false },
-  { key: 'gateio', label: 'Gate.io', needsPassphrase: false, supportsTestnet: false },
+  { key: 'gate', label: 'Gate.io', needsPassphrase: false, supportsTestnet: false },
   { key: 'bybit', label: 'Bybit', needsPassphrase: false, supportsTestnet: true },
   { key: 'coinbase', label: 'Coinbase', needsPassphrase: false, supportsTestnet: false },
   { key: 'kraken', label: 'Kraken', needsPassphrase: false, supportsTestnet: false },
@@ -17,6 +15,8 @@ const SUPPORTED_EXCHANGES = [
 ] as const
 
 interface CrossArbitrageConfigProps {
+  open: boolean
+  onClose: () => void
   editConfig: ArbitrageConfig | null
   setEditConfig: (cfg: ArbitrageConfig | null) => void
   symbolsInput: string
@@ -39,6 +39,8 @@ function ConfigField({ label, input, fieldKey }: { label: string; input: React.R
 }
 
 export function CrossArbitrageConfig({
+  open,
+  onClose,
   editConfig,
   setEditConfig,
   symbolsInput,
@@ -50,11 +52,24 @@ export function CrossArbitrageConfig({
   isSaving,
   isRegistering,
 }: CrossArbitrageConfigProps) {
+  if (!open) return null
+
   if (!editConfig) {
     return (
-      <SectionCard title="引擎配置">
-        <div className="text-sm text-muted-foreground text-center py-4">加载配置中...</div>
-      </SectionCard>
+      <div
+        role="dialog"
+        aria-modal="true"
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+        onClick={onClose}
+      >
+        <div
+          role="document"
+          className="w-full max-w-2xl rounded-2xl border border-quant-border bg-quant-card p-6 shadow-2xl"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="text-sm text-muted-foreground text-center py-4">加载配置中...</div>
+        </div>
+      </div>
     )
   }
 
@@ -63,218 +78,267 @@ export function CrossArbitrageConfig({
   }
 
   return (
-    <SectionCard
-      title="引擎配置"
-      headerAction={
-        <button
-          onClick={onSave}
-          disabled={isSaving}
-          className={cn(
-            'flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-colors',
-            isSaving ? 'bg-muted text-muted-foreground cursor-not-allowed' : 'bg-quant-gold text-black hover:opacity-90'
-          )}
-        >
-          {isSaving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-          保存配置
-        </button>
-      }
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+      onClick={onClose}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') onClose()
+      }}
+      tabIndex={-1}
     >
-      <div className="space-y-6">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          <ConfigField
-            label="交易对（逗号分隔）"
-            input={<TextInput value={symbolsInput} onChange={setSymbolsInput} placeholder="BTCUSDT,ETHUSDT" />}
-            fieldKey="symbol"
-          />
-          <ConfigField
-            label="最小价差 (%)"
-            input={
-              <NumberInput
-                value={editConfig.min_spread_pct}
-                onChange={(v) => updateField('min_spread_pct', v)}
-                min={0}
-                step={0.01}
-              />
-            }
-            fieldKey="min_spread_pct"
-          />
-          <ConfigField
-            label="订单数量"
-            input={
-              <NumberInput
-                value={editConfig.order_size}
-                onChange={(v) => updateField('order_size', v)}
-                min={0}
-                step={0.001}
-              />
-            }
-            fieldKey="order_size"
-          />
-          <ConfigField
-            label="最大持仓数"
-            input={
-              <NumberInput
-                value={editConfig.max_positions}
-                onChange={(v) => updateField('max_positions', Math.floor(v))}
-                min={1}
-                step={1}
-              />
-            }
-            fieldKey="max_positions"
-          />
-          <ConfigField
-            label="买入所手续费 (小数)"
-            input={
-              <NumberInput value={editConfig.fee_a} onChange={(v) => updateField('fee_a', v)} min={0} step={0.0001} />
-            }
-            fieldKey="fee_a"
-          />
-          <ConfigField
-            label="卖出所手续费 (小数)"
-            input={
-              <NumberInput value={editConfig.fee_b} onChange={(v) => updateField('fee_b', v)} min={0} step={0.0001} />
-            }
-            fieldKey="fee_b"
-          />
-          <ConfigField
-            label="轮询间隔 (秒)"
-            input={
-              <NumberInput
-                value={editConfig.poll_interval}
-                onChange={(v) => updateField('poll_interval', Math.floor(v))}
-                min={1}
-                step={1}
-              />
-            }
-            fieldKey="poll_interval"
-          />
-          <ConfigField
-            label="最大滑点 (%)"
-            input={
-              <NumberInput
-                value={editConfig.max_slippage_pct}
-                onChange={(v) => updateField('max_slippage_pct', v)}
-                min={0}
-                step={0.01}
-              />
-            }
-            fieldKey="max_slippage_pct"
-          />
-          <div className="flex items-center gap-6 md:col-span-2 flex-wrap">
-            <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
-              <Toggle value={editConfig.auto_execute} onChange={(v) => updateField('auto_execute', v)} />
-              自动执行
-            </label>
-            <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
-              <Toggle value={editConfig.dry_run} onChange={(v) => updateField('dry_run', v)} />
-              模拟运行
-            </label>
-            <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
-              <Toggle
-                value={editConfig.adaptive_qty_enabled}
-                onChange={(v) => updateField('adaptive_qty_enabled', v)}
-              />
-              自适应数量
-            </label>
-          </div>
-          {editConfig.adaptive_qty_enabled && (
-            <>
+      <div
+        role="document"
+        className="w-full max-w-4xl max-h-[90vh] flex flex-col rounded-2xl border border-quant-border bg-quant-card shadow-2xl overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-quant-border shrink-0">
+          <h3 className="text-sm font-bold">引擎配置</h3>
+          <button onClick={onClose} aria-label="关闭" className="text-muted-foreground hover:text-foreground">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto p-6">
+          <div className="space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               <ConfigField
-                label="最小订单数量"
+                label="交易对（逗号分隔）"
+                input={<TextInput value={symbolsInput} onChange={setSymbolsInput} placeholder="BTCUSDT,ETHUSDT" />}
+                fieldKey="symbol"
+              />
+              <ConfigField
+                label="最小价差 (%)"
                 input={
                   <NumberInput
-                    value={editConfig.min_order_qty}
-                    onChange={(v) => updateField('min_order_qty', v)}
+                    value={editConfig.min_spread_pct}
+                    onChange={(v) => updateField('min_spread_pct', v)}
+                    min={0}
+                    step={0.01}
+                  />
+                }
+                fieldKey="min_spread_pct"
+              />
+              <ConfigField
+                label="订单数量"
+                input={
+                  <NumberInput
+                    value={editConfig.order_size}
+                    onChange={(v) => updateField('order_size', v)}
+                    min={0}
+                    step={0.001}
+                  />
+                }
+                fieldKey="order_size"
+              />
+              <ConfigField
+                label="最大持仓数"
+                input={
+                  <NumberInput
+                    value={editConfig.max_positions}
+                    onChange={(v) => updateField('max_positions', Math.floor(v))}
+                    min={1}
+                    step={1}
+                  />
+                }
+                fieldKey="max_positions"
+              />
+              <ConfigField
+                label="买入所手续费 (小数)"
+                input={
+                  <NumberInput
+                    value={editConfig.fee_a}
+                    onChange={(v) => updateField('fee_a', v)}
                     min={0}
                     step={0.0001}
                   />
                 }
-                fieldKey="min_order_qty"
+                fieldKey="fee_a"
               />
               <ConfigField
-                label="最小订单金额 (USD)"
+                label="卖出所手续费 (小数)"
                 input={
                   <NumberInput
-                    value={editConfig.min_order_value}
-                    onChange={(v) => updateField('min_order_value', v)}
+                    value={editConfig.fee_b}
+                    onChange={(v) => updateField('fee_b', v)}
                     min={0}
+                    step={0.0001}
+                  />
+                }
+                fieldKey="fee_b"
+              />
+              <ConfigField
+                label="轮询间隔 (秒)"
+                input={
+                  <NumberInput
+                    value={editConfig.poll_interval}
+                    onChange={(v) => updateField('poll_interval', Math.floor(v))}
+                    min={1}
                     step={1}
                   />
                 }
-                fieldKey="min_order_value"
+                fieldKey="poll_interval"
               />
-            </>
-          )}
+              <ConfigField
+                label="最大滑点 (%)"
+                input={
+                  <NumberInput
+                    value={editConfig.max_slippage_pct}
+                    onChange={(v) => updateField('max_slippage_pct', v)}
+                    min={0}
+                    step={0.01}
+                  />
+                }
+                fieldKey="max_slippage_pct"
+              />
+              <div className="flex items-center gap-6 md:col-span-2 flex-wrap">
+                <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+                  <Toggle value={editConfig.auto_execute} onChange={(v) => updateField('auto_execute', v)} />
+                  自动执行
+                </label>
+                <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+                  <Toggle value={editConfig.dry_run} onChange={(v) => updateField('dry_run', v)} />
+                  模拟运行
+                </label>
+                <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+                  <Toggle
+                    value={editConfig.adaptive_qty_enabled}
+                    onChange={(v) => updateField('adaptive_qty_enabled', v)}
+                  />
+                  自适应数量
+                </label>
+              </div>
+              {editConfig.adaptive_qty_enabled && (
+                <>
+                  <ConfigField
+                    label="最小订单数量"
+                    input={
+                      <NumberInput
+                        value={editConfig.min_order_qty}
+                        onChange={(v) => updateField('min_order_qty', v)}
+                        min={0}
+                        step={0.0001}
+                      />
+                    }
+                    fieldKey="min_order_qty"
+                  />
+                  <ConfigField
+                    label="最小订单金额 (USD)"
+                    input={
+                      <NumberInput
+                        value={editConfig.min_order_value}
+                        onChange={(v) => updateField('min_order_value', v)}
+                        min={0}
+                        step={1}
+                      />
+                    }
+                    fieldKey="min_order_value"
+                  />
+                </>
+              )}
+            </div>
+
+            {/* Exchange selection */}
+            <div className="border-t border-quant-border pt-6">
+              <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-4">交易所选择</h3>
+              {configuredExchanges ? (
+                <div className="space-y-2">
+                  {SUPPORTED_EXCHANGES.map((ex) => {
+                    const cfg = configuredExchanges[ex.key]
+                    const registered = exchangesMeta?.exchanges?.includes(ex.key) ?? false
+                    const canRegister = cfg?.enabled && cfg?.has_credentials
+                    return (
+                      <div
+                        key={ex.key}
+                        className="flex items-center justify-between rounded-md border border-quant-border px-3 py-2"
+                      >
+                        <div className="flex items-center gap-3">
+                          <Globe className="h-4 w-4 text-muted-foreground" />
+                          <div>
+                            <div className="text-sm font-medium">{ex.label}</div>
+                            <div className="text-[10px] text-muted-foreground">
+                              {cfg?.enabled
+                                ? cfg?.has_credentials
+                                  ? `已配置${cfg.testnet ? ' · 测试网' : ''}`
+                                  : '缺少凭证'
+                                : '未启用'}
+                            </div>
+                          </div>
+                        </div>
+                        {registered ? (
+                          <span className="inline-flex items-center gap-1 text-xs text-green-400">
+                            <CheckCircle2 className="h-3.5 w-3.5" />
+                            已加入套利
+                          </span>
+                        ) : canRegister ? (
+                          <button
+                            onClick={() => onRegister(ex.key)}
+                            disabled={isRegistering}
+                            className={cn(
+                              'inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium transition-colors',
+                              isRegistering
+                                ? 'bg-muted text-muted-foreground cursor-not-allowed'
+                                : 'bg-quant-gold text-black hover:opacity-90'
+                            )}
+                          >
+                            {isRegistering ? (
+                              <RefreshCw className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Plus className="h-3 w-3" />
+                            )}
+                            加入套利
+                          </button>
+                        ) : (
+                          <span className="text-[10px] text-muted-foreground">未就绪</span>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className="text-sm text-muted-foreground">加载交易所配置中...</div>
+              )}
+              {configuredExchanges &&
+                !Object.values(configuredExchanges).some((c) => c.enabled && c.has_credentials) && (
+                  <div className="mt-3 text-xs text-yellow-400">
+                    系统中没有可用的交易所配置。请先在 Settings / 交易所账号 中配置 API Key。
+                  </div>
+                )}
+              {exchangesMeta && (
+                <div className="mt-3 text-xs text-muted-foreground">
+                  已加入套利交易所: {exchangesMeta.registered_count ?? 0} 个
+                </div>
+              )}
+            </div>
+          </div>
         </div>
 
-        {/* Exchange selection */}
-        <div className="border-t border-quant-border pt-6">
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-4">交易所选择</h3>
-          {configuredExchanges ? (
-            <div className="space-y-2">
-              {SUPPORTED_EXCHANGES.map((ex) => {
-                const cfg = configuredExchanges[ex.key]
-                const registered = exchangesMeta?.exchanges?.includes(ex.key) ?? false
-                const canRegister = cfg?.enabled && cfg?.has_credentials
-                return (
-                  <div
-                    key={ex.key}
-                    className="flex items-center justify-between rounded-md border border-quant-border px-3 py-2"
-                  >
-                    <div className="flex items-center gap-3">
-                      <Globe className="h-4 w-4 text-muted-foreground" />
-                      <div>
-                        <div className="text-sm font-medium">{ex.label}</div>
-                        <div className="text-[10px] text-muted-foreground">
-                          {cfg?.enabled
-                            ? cfg?.has_credentials
-                              ? `已配置${cfg.testnet ? ' · 测试网' : ''}`
-                              : '缺少凭证'
-                            : '未启用'}
-                        </div>
-                      </div>
-                    </div>
-                    {registered ? (
-                      <span className="inline-flex items-center gap-1 text-xs text-green-400">
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                        已加入套利
-                      </span>
-                    ) : canRegister ? (
-                      <button
-                        onClick={() => onRegister(ex.key)}
-                        disabled={isRegistering}
-                        className={cn(
-                          'inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium transition-colors',
-                          isRegistering
-                            ? 'bg-muted text-muted-foreground cursor-not-allowed'
-                            : 'bg-quant-gold text-black hover:opacity-90'
-                        )}
-                      >
-                        {isRegistering ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
-                        加入套利
-                      </button>
-                    ) : (
-                      <span className="text-[10px] text-muted-foreground">未就绪</span>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          ) : (
-            <div className="text-sm text-muted-foreground">加载交易所配置中...</div>
-          )}
-          {configuredExchanges && !Object.values(configuredExchanges).some((c) => c.enabled && c.has_credentials) && (
-            <div className="mt-3 text-xs text-yellow-400">
-              系统中没有可用的交易所配置。请先在 Settings / 交易所账号 中配置 API Key。
-            </div>
-          )}
-          {exchangesMeta && (
-            <div className="mt-3 text-xs text-muted-foreground">
-              已加入套利交易所: {exchangesMeta.registered_count ?? 0} 个
-            </div>
-          )}
+        {/* Footer */}
+        <div className="flex items-center justify-end gap-2 px-6 py-4 border-t border-quant-border shrink-0">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 rounded-lg border border-quant-border text-xs hover:bg-quant-hover transition-colors"
+          >
+            关闭
+          </button>
+          <button
+            onClick={onSave}
+            disabled={isSaving}
+            className={cn(
+              'flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-medium transition-colors',
+              isSaving
+                ? 'bg-muted text-muted-foreground cursor-not-allowed'
+                : 'bg-quant-gold text-black hover:opacity-90'
+            )}
+          >
+            {isSaving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+            保存配置
+          </button>
         </div>
       </div>
-    </SectionCard>
+    </div>
   )
 }

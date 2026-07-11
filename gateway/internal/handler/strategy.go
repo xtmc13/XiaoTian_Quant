@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -27,13 +26,12 @@ func GetStrategyConfigs(c *gin.Context) {
 	fmtScan(c.Query("limit"), &limit)
 	fmtScan(c.Query("offset"), &offset)
 
-	mu := store.GetStrategyConfigMu()
-	mu.RLock()
-	items := make([]map[string]any, 0, len(store.GetStrategyConfigs()))
-	for _, v := range store.GetStrategyConfigs() {
+	// GetStrategyConfigs returns a defensive copy, so no extra lock is needed here.
+	configs := store.GetStrategyConfigs()
+	items := make([]map[string]any, 0, len(configs))
+	for _, v := range configs {
 		items = append(items, v)
 	}
-	mu.RUnlock()
 
 	if category != "" {
 		items = filterMap(items, "category", category)
@@ -84,10 +82,7 @@ func GetStrategyConfigs(c *gin.Context) {
 
 func GetStrategyConfig(c *gin.Context) {
 	id := c.Param("id")
-	mu := store.GetStrategyConfigMu()
-	mu.RLock()
-	item := store.GetStrategyConfigs()[id]
-	mu.RUnlock()
+	item := store.GetStrategyConfig(id)
 	if item == nil {
 		c.JSON(http.StatusNotFound, gin.H{"detail": "not found"})
 		return
@@ -153,7 +148,7 @@ func CreateStrategyConfig(c *gin.Context) {
 		"pnl":           0.0,
 		"total_pnl":     0.0,
 		"total_pnl_percent": 0.0,
-		"current_equity": getFloat(body, "initial_capital", 1000),
+		"current_equity": getFloat(body, "initial_capital", 0),
 		"created_at":    float64(nowTS),
 		"updated_at":    float64(nowTS),
 		// ── Contract fields ──
@@ -161,7 +156,7 @@ func CreateStrategyConfig(c *gin.Context) {
 		"margin_mode":   getString(body, "margin_mode", "cross"),
 		"symbol":        symbol,
 		"timeframe":     getString(body, "timeframe", "15m"),
-		"initial_capital": getFloat(body, "initial_capital", 1000),
+		"initial_capital": getFloat(body, "initial_capital", 0),
 		"execution_mode": getString(body, "execution_mode", "signal"),
 		"mode":          getString(body, "execution_mode", "signal"),
 		"strategy_mode": getString(body, "execution_mode", "signal"),
@@ -170,10 +165,7 @@ func CreateStrategyConfig(c *gin.Context) {
 		"indicator_name": getString(body, "indicator_name", ""),
 	}
 
-	mu := store.GetStrategyConfigMu()
-	mu.Lock()
-	store.GetStrategyConfigs()[sid] = item
-	mu.Unlock()
+	store.SetStrategyConfig(sid, item)
 	store.PersistStrategyConfigs()
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "id": sid})
 }
@@ -185,11 +177,8 @@ func UpdateStrategyConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid json"})
 		return
 	}
-	mu := store.GetStrategyConfigMu()
-	mu.Lock()
-	item := store.GetStrategyConfigs()[id]
+	item := store.GetStrategyConfig(id)
 	if item == nil {
-		mu.Unlock()
 		c.JSON(http.StatusNotFound, gin.H{"detail": "not found"})
 		return
 	}
@@ -217,22 +206,17 @@ func UpdateStrategyConfig(c *gin.Context) {
 		item["config_json"] = cj
 	}
 	item["updated_at"] = float64(time.Now().UnixMilli())
-	mu.Unlock()
+	store.SetStrategyConfig(id, item)
 	store.PersistStrategyConfigs()
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
 func DeleteStrategyConfig(c *gin.Context) {
 	id := c.Param("id")
-	mu := store.GetStrategyConfigMu()
-	mu.Lock()
-	if _, ok := store.GetStrategyConfigs()[id]; !ok {
-		mu.Unlock()
+	if !store.DeleteStrategyConfig(id) {
 		c.JSON(http.StatusNotFound, gin.H{"detail": "not found"})
 		return
 	}
-	delete(store.GetStrategyConfigs(), id)
-	mu.Unlock()
 	store.PersistStrategyConfigs()
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
@@ -242,17 +226,17 @@ func BatchStartConfigs(c *gin.Context) {
 	c.ShouldBindJSON(&body)
 	ids := getStringSlice(body, "ids")
 	nowTS := float64(time.Now().UnixMilli())
-	mu := store.GetStrategyConfigMu()
-	mu.Lock()
 	for _, sid := range ids {
-		if item, ok := store.GetStrategyConfigs()[sid]; ok {
-			if err := startStrategyInEngine(sid, item); err == nil {
-				item["status"] = "running"
-				item["updated_at"] = nowTS
-			}
+		item := store.GetStrategyConfig(sid)
+		if item == nil {
+			continue
+		}
+		if err := startStrategyInEngine(sid, item); err == nil {
+			item["status"] = "running"
+			item["updated_at"] = nowTS
+			store.SetStrategyConfig(sid, item)
 		}
 	}
-	mu.Unlock()
 	store.PersistStrategyConfigs()
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
@@ -262,56 +246,88 @@ func BatchStopConfigs(c *gin.Context) {
 	c.ShouldBindJSON(&body)
 	ids := getStringSlice(body, "ids")
 	nowTS := float64(time.Now().UnixMilli())
-	mu := store.GetStrategyConfigMu()
-	mu.Lock()
 	for _, sid := range ids {
-		if item, ok := store.GetStrategyConfigs()[sid]; ok {
-			stopStrategyInEngine(sid)
-			item["status"] = "stopped"
-			item["updated_at"] = nowTS
+		item := store.GetStrategyConfig(sid)
+		if item == nil {
+			continue
 		}
+		stopStrategyInEngine(sid)
+		item["status"] = "stopped"
+		item["updated_at"] = nowTS
+		store.SetStrategyConfig(sid, item)
 	}
-	mu.Unlock()
 	store.PersistStrategyConfigs()
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "stopped": len(ids)})
+}
+
+func BatchCloseConfigs(c *gin.Context) {
+	var body map[string]any
+	c.ShouldBindJSON(&body)
+	ids := getStringSlice(body, "ids")
+	nowTS := float64(time.Now().UnixMilli())
+	closed := 0
+	for _, sid := range ids {
+		item := store.GetStrategyConfig(sid)
+		if item == nil {
+			continue
+		}
+		stopStrategyInEngine(sid)
+		item["status"] = "stopped"
+		item["closed_at"] = nowTS
+		item["updated_at"] = nowTS
+		store.SetStrategyConfig(sid, item)
+		closed++
+	}
+	store.PersistStrategyConfigs()
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "closed": closed})
+}
+
+func BatchDeleteConfigs(c *gin.Context) {
+	var body map[string]any
+	c.ShouldBindJSON(&body)
+	ids := getStringSlice(body, "ids")
+	deleted := 0
+	for _, sid := range ids {
+		if store.GetStrategyConfig(sid) == nil {
+			continue
+		}
+		stopStrategyInEngine(sid)
+		store.DeleteStrategyConfig(sid)
+		deleted++
+	}
+	store.PersistStrategyConfigs()
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "deleted": deleted})
 }
 
 func StartStrategyConfig(c *gin.Context) {
 	id := c.Param("id")
-	mu := store.GetStrategyConfigMu()
-	mu.Lock()
-	item, ok := store.GetStrategyConfigs()[id]
-	if !ok {
-		mu.Unlock()
+	item := store.GetStrategyConfig(id)
+	if item == nil {
 		c.JSON(http.StatusNotFound, gin.H{"detail": "not found"})
 		return
 	}
 	if err := startStrategyInEngine(id, item); err != nil {
-		mu.Unlock()
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
 		return
 	}
 	item["status"] = "running"
 	item["updated_at"] = float64(time.Now().UnixMilli())
-	mu.Unlock()
+	store.SetStrategyConfig(id, item)
 	store.PersistStrategyConfigs()
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
 func StopStrategyConfig(c *gin.Context) {
 	id := c.Param("id")
-	mu := store.GetStrategyConfigMu()
-	mu.Lock()
-	item, ok := store.GetStrategyConfigs()[id]
-	if !ok {
-		mu.Unlock()
+	item := store.GetStrategyConfig(id)
+	if item == nil {
 		c.JSON(http.StatusNotFound, gin.H{"detail": "not found"})
 		return
 	}
 	stopStrategyInEngine(id)
 	item["status"] = "stopped"
 	item["updated_at"] = float64(time.Now().UnixMilli())
-	mu.Unlock()
+	store.SetStrategyConfig(id, item)
 	store.PersistStrategyConfigs()
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
@@ -338,8 +354,14 @@ func startStrategyInEngine(id string, item map[string]any) error {
 		_ = eng.Unregister(id)
 	}
 
+	// Map CRA frontend strategy types to unified backend factories.
+	factoryName := strategyType
+	if mapped, ok := mapCRAFactory(strategyType, item); ok {
+		factoryName = mapped
+	}
+
 	// Create strategy instance from factory
-	s := strategy.StrategyFactory(strategyType)
+	s := strategy.StrategyFactory(factoryName)
 	if s == nil {
 		return fmt.Errorf("unknown strategy type: %s", strategyType)
 	}
@@ -350,6 +372,18 @@ func startStrategyInEngine(id string, item map[string]any) error {
 	// Build params from config
 	params := buildStrategyParams(item)
 
+	// Filter params to only those accepted by the strategy's parameter registry.
+	// CRA-style configs carry many frontend fields that indicator strategies do not declare.
+	if registry := s.GetParameters(); registry != nil {
+		filtered := make(map[string]any)
+		for _, p := range registry.All() {
+			if v, ok := params[p.Name]; ok {
+				filtered[p.Name] = v
+			}
+		}
+		params = filtered
+	}
+
 	// Register and start
 	if err := eng.Register(wrapped); err != nil {
 		return fmt.Errorf("register strategy: %w", err)
@@ -359,6 +393,48 @@ func startStrategyInEngine(id string, item map[string]any) error {
 		return fmt.Errorf("start strategy: %w", err)
 	}
 	return nil
+}
+
+// mapCRAFactory maps frontend CRA strategy types to the unified backend factories.
+func mapCRAFactory(strategyType string, item map[string]any) (string, bool) {
+	spotTypes := map[string]bool{
+		"martin_trend":   true,
+		"wallstreet":     true,
+		"aggressive":     true,
+		"conservative":   true,
+		"high_frequency": true,
+	}
+	contractTypes := map[string]bool{
+		"trend_long":          true,
+		"trend_short":         true,
+		"counter_stable":      true,
+		"counter_safe":        true,
+		"high_frequency":      true,
+		"head_tail_arbitrage": true,
+	}
+	if spotTypes[strategyType] {
+		// high_frequency is ambiguous: use category/market_type if available.
+		if strategyType == "high_frequency" {
+			if isContractCategory(item) {
+				return "cra_contract", true
+			}
+		}
+		return "cra_spot", true
+	}
+	if contractTypes[strategyType] {
+		return "cra_contract", true
+	}
+	return "", false
+}
+
+func isContractCategory(item map[string]any) bool {
+	if v, ok := item["category"].(string); ok {
+		return v == "contract"
+	}
+	if v, ok := item["market_type"].(string); ok {
+		return v == "swap" || v == "futures" || v == "margin"
+	}
+	return false
 }
 
 // stopStrategyInEngine stops and unregisters a strategy from the engine.
@@ -462,52 +538,88 @@ func GetTemplates(c *gin.Context) {
 	category := c.DefaultQuery("category", "spot")
 	limit := 200
 	fmtScan(c.Query("limit"), &limit)
-	templates := *store.GetTemplatesStore()
-	var filtered []map[string]any
-	for _, t := range templates {
-		if getString(t, "category", "spot") == category {
-			filtered = append(filtered, t)
-		}
+
+	userID := getUserID(c)
+	items, err := store.GetStrategyTemplateRepo().List(userID, category, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to list templates"})
+		return
 	}
-	if len(filtered) > limit {
-		filtered = filtered[len(filtered)-limit:]
+	result := make([]map[string]any, 0, len(items))
+	for _, rec := range items {
+		result = append(result, rec.ToMap())
 	}
-	if filtered == nil {
-		filtered = []map[string]any{}
+	if result == nil {
+		result = []map[string]any{}
 	}
-	c.JSON(http.StatusOK, filtered)
+	c.JSON(http.StatusOK, result)
 }
 
 func CreateTemplate(c *gin.Context) {
 	var data map[string]any
-	c.ShouldBindJSON(&data)
-	tpl := map[string]any{
-		"id":            "tpl-" + strconv.FormatInt(time.Now().UnixMilli(), 10),
-		"name":          getString(data, "strategy_name", getString(data, "name", "Untitled")),
-		"strategy_code": getString(data, "strategy_code", ""),
-		"description":   getString(data, "description", ""),
-		"category":      getString(data, "category", "spot"),
-		"symbol":        getString(data, "symbol", "BTCUSDT"),
-		"risk_level":    getString(data, "risk", "medium"),
-		"created_at":    float64(time.Now().Unix()),
+	if err := c.ShouldBindJSON(&data); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid json"})
+		return
 	}
-	*store.GetTemplatesStore() = append(*store.GetTemplatesStore(), tpl)
-	store.PersistStrategyTemplates()
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "id": tpl["id"]})
+	userID := getUserID(c)
+	name := getString(data, "strategy_name", getString(data, "name", ""))
+	if strings.TrimSpace(name) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "template name required"})
+		return
+	}
+	defaultConfig := "{}"
+	if dc, ok := data["default_config"]; ok {
+		switch v := dc.(type) {
+		case string:
+			defaultConfig = v
+		default:
+			b, _ := json.Marshal(v)
+			defaultConfig = string(b)
+		}
+	}
+	rec := &store.StrategyTemplateRecord{
+		UserID:            userID,
+		Name:              strings.TrimSpace(name),
+		Category:          getString(data, "category", "spot"),
+		StrategyType:      getString(data, "strategy_type", ""),
+		Description:       getString(data, "description", ""),
+		DefaultConfigJSON: defaultConfig,
+	}
+	if err := store.GetStrategyTemplateRepo().Create(rec); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to create template"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "id": rec.ID})
 }
 
 func DeleteTemplate(c *gin.Context) {
 	id := c.Param("id")
-	templates := store.GetTemplatesStore()
-	for i, t := range *templates {
-		if t["id"] == id {
-			*templates = append((*templates)[:i], (*templates)[i+1:]...)
-			store.PersistStrategyTemplates()
-			c.JSON(http.StatusOK, gin.H{"status": "ok"})
-			return
+	userID := getUserID(c)
+	deleted, err := store.GetStrategyTemplateRepo().Delete(id, userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to delete template"})
+		return
+	}
+	if !deleted {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "Template not found"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
+// getUserID extracts the authenticated user ID from the Gin context.
+func getUserID(c *gin.Context) int64 {
+	if v, ok := c.Get("user_id"); ok {
+		switch val := v.(type) {
+		case int:
+			return int64(val)
+		case int64:
+			return val
+		case float64:
+			return int64(val)
 		}
 	}
-	c.JSON(http.StatusNotFound, gin.H{"detail": "Template not found"})
+	return 0
 }
 
 // ── Helpers ──
@@ -568,16 +680,37 @@ func GetStrategyParamDefs(c *gin.Context) {
 		return
 	}
 
+	// CRA 策略的前端表单由 CRAParamForm 统一渲染，不需要动态参数定义。
+	craTypes := map[string]bool{
+		"martin_trend":        true,
+		"wallstreet":          true,
+		"aggressive":          true,
+		"conservative":        true,
+		"high_frequency":      true,
+		"high_flat":           true,
+		"counter_stable":      true,
+		"counter_safe":        true,
+		"head_tail_arbitrage": true,
+		"dual_burn":           true,
+		"global_burn":         true,
+		"trend_long":          true,
+		"trend_short":         true,
+	}
+	if craTypes[strategyType] {
+		c.JSON(http.StatusOK, gin.H{"type": strategyType, "params": []map[string]any{}})
+		return
+	}
+
 	var defs []map[string]any
 
 	switch strategyType {
 	case "breakout", "trend", "custom":
 		s := strategies.NewBreakoutStrategy()
 		defs = s.ParamDefs()
-	case "ema_cross", "ema_follow", "ema_counter":
+	case "ema_cross", "ema_follow", "ema_counter", "ema_follow_trend", "ema_counter_trend", "ema_spot":
 		s := strategies.NewEMACrossStrategy()
 		defs = s.ParamDefs()
-	case "macd", "macd_golden", "macd_death":
+	case "macd", "macd_golden", "macd_death", "macd_spot_long":
 		s := strategies.NewMACDStrategy()
 		defs = s.ParamDefs()
 	case "rsi":
@@ -598,17 +731,14 @@ func GetStrategyParamDefs(c *gin.Context) {
 	case "grid_trading", "grid":
 		s := strategies.NewGridTradingStrategy()
 		defs = s.ParamDefs()
-	case "arbitrage":
+	case "arbitrage", "head_tail_arb":
 		s := strategies.NewArbitrageStrategy()
 		defs = s.ParamDefs()
 	case "market_making":
 		s := strategies.NewMarketMakingStrategy()
 		defs = s.ParamDefs()
-	case "martingale", "dca", "martin_trend", "dual_burn":
+	case "martingale", "dca":
 		s := strategies.NewMartingaleStrategy()
-		defs = s.ParamDefs()
-	case "wallstreet":
-		s := strategies.NewWallstreetStrategy()
 		defs = s.ParamDefs()
 	// AI Bot marketplace aliases (registered in cmd/server/main.go)
 	case "optimus", "mono_optimus", "noah":
@@ -650,7 +780,7 @@ func GetStrategyParamDefs(c *gin.Context) {
 	if defs == nil {
 		defs = []map[string]any{}
 	}
-	c.JSON(http.StatusOK, gin.H{"type": strategyType, "parameters": defs})
+	c.JSON(http.StatusOK, gin.H{"type": strategyType, "params": defs})
 }
 
 // normalizeStrategyConfig converts a raw store strategy config map into the

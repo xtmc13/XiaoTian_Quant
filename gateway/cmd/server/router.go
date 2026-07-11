@@ -14,7 +14,6 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/social"
 	"github.com/xiaotian-quant/gateway/internal/store"
 	"github.com/xiaotian-quant/gateway/internal/ws"
-	"github.com/xiaotian-quant/gateway/spa"
 	"os"
 )
 
@@ -27,18 +26,8 @@ type serverConfig struct {
 // Public routes (no auth) are registered at the top level,
 // while private routes are under the /api group with AuthRequired middleware.
 func setupRoutes(r *gin.Engine, cfg *serverConfig) *gin.Engine {
-	// ── Public Routes ──
-	assetsFS := spa.AssetsFS()
-	r.GET("/assets/*filepath", func(c *gin.Context) {
-		fileServer := http.FileServer(assetsFS)
-		c.Request.URL.Path = c.Param("filepath")
-		fileServer.ServeHTTP(c.Writer, c.Request)
-	})
-	r.GET("/manifest.json", spa.ServeRootFile("manifest.json"))
-	r.GET("/sw.js", spa.ServeRootFile("sw.js"))
-	r.GET("/favicon.svg", spa.ServeRootFile("favicon.svg"))
-	r.GET("/", handler.Index)
-	r.NoRoute(handler.Index)
+	// Gateway no longer serves the frontend SPA. The frontend is deployed
+	// independently and communicates via /api and /ws.
 
 	api := r.Group("/api")
 	{
@@ -367,6 +356,8 @@ func registerStrategyRoutes(api *gin.RouterGroup) {
 	private.DELETE("/strategies/configs/:id", handler.DeleteStrategyConfig)
 	private.POST("/strategies/configs/batch-start", handler.BatchStartConfigs)
 	private.POST("/strategies/configs/batch-stop", handler.BatchStopConfigs)
+	private.POST("/strategies/configs/batch-close", handler.BatchCloseConfigs)
+	private.POST("/strategies/configs/batch-delete", handler.BatchDeleteConfigs)
 	private.POST("/strategies/configs/:id/start", handler.StartStrategyConfig)
 	private.POST("/strategies/configs/:id/stop", handler.StopStrategyConfig)
 	private.GET("/strategies/logs", handler.GetStrategyLogs)

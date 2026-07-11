@@ -27,7 +27,8 @@ func GetLogs(c *gin.Context) {
 	logPath := filepath.Join("logs", "gateway.log")
 	file, err := os.Open(logPath)
 	if err != nil {
-		c.String(http.StatusServiceUnavailable, "日志文件暂不可用: "+err.Error())
+		c.Header("Content-Type", "text/plain; charset=utf-8")
+		c.String(http.StatusOK, "")
 		return
 	}
 	defer file.Close()
