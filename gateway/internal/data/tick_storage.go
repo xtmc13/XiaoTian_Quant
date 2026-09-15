@@ -15,26 +15,27 @@ import (
 
 // TickStorage provides local SQLite persistence for tick data.
 type TickStorage struct {
-	mu sync.RWMutex
+	mu         sync.RWMutex
+	ensureOnce sync.Once
 }
 
 // NewTickStorage creates a new tick storage instance.
 func NewTickStorage() *TickStorage {
-	s := &TickStorage{}
-	s.ensureTables()
-	return s
+	return &TickStorage{}
 }
 
 func (ts *TickStorage) db() *sql.DB {
-	return store.GetDB()
+	db := store.GetDB()
+	if db == nil {
+		return nil
+	}
+	// 懒建表：构造函数可能在 store.InitDB() 之前被包级 init() 调用，
+	// 此时 db 为 nil；改为首次真正用到 db 时再建表（与 Storage 同模式）。
+	ts.ensureOnce.Do(func() { ts.ensureTables(db) })
+	return db
 }
 
-func (ts *TickStorage) ensureTables() {
-	db := ts.db()
-	if db == nil {
-		return
-	}
-
+func (ts *TickStorage) ensureTables(db *sql.DB) {
 	db.Exec(`CREATE TABLE IF NOT EXISTS ticks (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		symbol TEXT NOT NULL,

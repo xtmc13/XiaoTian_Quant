@@ -80,7 +80,8 @@ func RunMigrations() error {
 		}
 	}
 
-	return nil
+	// Go 版本迁移完成后应用纯 SQL 迁移（migrations/sql/*.sql）。
+	return RunSQLMigrations()
 }
 
 // migrateV1 creates the initial tables (already in InitDB).
