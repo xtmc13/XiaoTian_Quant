@@ -137,14 +137,9 @@ func InitDB() error {
 		fmt.Fprintf(os.Stderr, "╚══════════════════════════════════════════════════════════╝\n\n")
 	}
 
-	// ── JWT Secret ──
-	// SECURITY: JWT secret must be supplied via the SECRET_KEY environment variable.
-	// Reading from or persisting to disk is disallowed to prevent secret leakage.
-	jwtSecret = os.Getenv("SECRET_KEY")
-	if jwtSecret == "" {
-		return fmt.Errorf("SECRET_KEY environment variable is required; set it in .env and never commit it")
-	}
-
+	// 路径默认值必须先于 SECRET_KEY 检查设置：SECRET_KEY 缺失时此处会
+	// return，但数据库与运行时路径仍应就位，否则 LoadConfig 读到空路径
+	// 静默产出空配置（交易所凭证等全部丢失）。
 	if configPath == "" {
 		configPath = "./config/config.yaml"
 	}
@@ -159,6 +154,14 @@ func InitDB() error {
 	}
 	if agentTokensPath == "" {
 		agentTokensPath = "./runtime/agent_tokens.json"
+	}
+
+	// ── JWT Secret ──
+	// SECURITY: JWT secret must be supplied via the SECRET_KEY environment variable.
+	// Reading from or persisting to disk is disallowed to prevent secret leakage.
+	jwtSecret = os.Getenv("SECRET_KEY")
+	if jwtSecret == "" {
+		return fmt.Errorf("SECRET_KEY environment variable is required; set it in .env and never commit it")
 	}
 
 	// Run schema migrations
@@ -371,6 +374,9 @@ func deepCopySlice(s []any) []any {
 func LoadConfig() {
 	configMu.Lock()
 	defer configMu.Unlock()
+	if configPath == "" {
+		configPath = "./config/config.yaml"
+	}
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		configCache = make(map[string]any)

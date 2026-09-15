@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/xiaotian-quant/gateway/internal/adapter"
+	"github.com/xiaotian-quant/gateway/internal/store"
 	"github.com/xiaotian-quant/gateway/internal/model"
 )
 
@@ -58,18 +59,29 @@ func GetManager() *Manager {
 // NewManager creates a new portfolio manager.
 func NewManager() *Manager {
 	m := &Manager{
-		accounts:        make(map[string]*model.AccountData),
-		positions:       make(map[string]*model.PositionData),
-		otherExcTotals:  make(map[string]float64),
+		accounts:       make(map[string]*model.AccountData),
+		positions:      make(map[string]*model.PositionData),
+		otherExcTotals: make(map[string]float64),
 	}
-	m.accounts["default"] = &model.AccountData{
-		ID:       "default",
-		Exchange: "paper",
-		Balances: map[string]*model.Balance{
-			"USDT": {Currency: "USDT", Total: 100000, Free: 100000, Used: 0},
-		},
-		Positions: make(map[string]*model.PositionData),
-		CreatedAt: time.Now().UnixMilli(),
+	// 默认注入 10 万 USDT 模拟账户仅在未显式关闭时进行
+	// （config.yaml 中 paper_account.enabled: false 可关闭，
+	// 接入真实交易所凭证后不再显示假权益）。
+	paperEnabled := true
+	if cfg, ok := store.GetConfig()["paper_account"].(map[string]any); ok {
+		if en, ok := cfg["enabled"].(bool); ok {
+			paperEnabled = en
+		}
+	}
+	if paperEnabled {
+		m.accounts["default"] = &model.AccountData{
+			ID:       "default",
+			Exchange: "paper",
+			Balances: map[string]*model.Balance{
+				"USDT": {Currency: "USDT", Total: 100000, Free: 100000, Used: 0},
+			},
+			Positions: make(map[string]*model.PositionData),
+			CreatedAt: time.Now().UnixMilli(),
+		}
 	}
 	m.peak = 0
 	return m

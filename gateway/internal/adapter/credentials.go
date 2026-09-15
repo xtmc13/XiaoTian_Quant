@@ -61,6 +61,11 @@ func GetCredential(exchangeName string) (apiKey, secret, passphrase string) {
 			passphrase = v
 		}
 	}
+	// 配置值可能意外携带首尾空白（如引号内 trailing space），
+	// 直接用于交易所签名会导致鉴权失败，统一裁剪。
+	apiKey = strings.TrimSpace(apiKey)
+	secret = strings.TrimSpace(secret)
+	passphrase = strings.TrimSpace(passphrase)
 	return
 }
 
