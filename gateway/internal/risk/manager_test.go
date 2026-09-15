@@ -196,6 +196,21 @@ func TestMaxDrawdownExceeded(t *testing.T) {
 	assertErr(t, check(ctx), "over drawdown should fail")
 }
 
+func TestMaxDrawdownZeroEquityAllowed(t *testing.T) {
+	check := MaxDrawdown(10.0)
+	ctx := defaultCtx()
+	ctx.TotalEquity = 0
+	ctx.MaxDrawdownPct = 50.0 // would exceed limit if equity baseline existed
+	assertNoErr(t, check(ctx), "zero/negative equity must pass (no baseline)")
+}
+
+func TestMaxDrawdownZeroDrawdownAllowed(t *testing.T) {
+	check := MaxDrawdown(10.0)
+	ctx := defaultCtx()
+	ctx.MaxDrawdownPct = 0
+	assertNoErr(t, check(ctx), "zero drawdown must pass")
+}
+
 /* ── ConsecutiveLossesCheck Tests ────────────────────────────── */
 
 func TestConsecutiveLossesNormal(t *testing.T) {

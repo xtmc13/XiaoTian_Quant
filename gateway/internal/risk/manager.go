@@ -275,6 +275,11 @@ func MaxDrawdown(maxPct float64) CheckFn {
 		maxPct = 10.0
 	}
 	return func(ctx *Context) error {
+		// No equity baseline (fresh account, paper default not yet snapshotted)
+		// or no measured drawdown → nothing meaningful to enforce, allow.
+		if ctx.TotalEquity <= 0 || ctx.MaxDrawdownPct <= 0 {
+			return nil
+		}
 		if ctx.MaxDrawdownPct > maxPct {
 			return fmt.Errorf("drawdown %.1f%% exceeds limit %.1f%%", ctx.MaxDrawdownPct, maxPct)
 		}

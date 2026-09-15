@@ -34,7 +34,7 @@ var (
 func GetMarketService() *MarketDataService {
 	marketSvcOnce.Do(func() {
 		marketSvc = &MarketDataService{
-			httpClient: &http.Client{Timeout: 30 * time.Second},
+			httpClient: &http.Client{Timeout: 5 * time.Second},
 			cache:      make(map[string]*CachedKlines),
 		}
 	})

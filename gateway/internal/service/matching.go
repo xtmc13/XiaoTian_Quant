@@ -27,6 +27,10 @@ var (
 	matchSvcOnce sync.Once
 )
 
+// dataFeedHTTPClient has a short timeout so the background simulated-trading
+// feed skips a cycle quickly when the network is unreachable.
+var dataFeedHTTPClient = &http.Client{Timeout: 3 * time.Second}
+
 // GetMatchingService returns the singleton matching service.
 func GetMatchingService() *MatchingService {
 	matchSvcOnce.Do(func() {
@@ -165,8 +169,9 @@ func (ms *MatchingService) StartDataFeed() {
 }
 
 // fetchLastPrice retrieves the latest price from Binance public API.
+// Short timeout so a dead network skips a cycle instead of wedging the feed.
 func fetchLastPrice(symbol string) float64 {
-	resp, err := http.Get("https://api.binance.com/api/v3/ticker/price?symbol=" + symbol)
+	resp, err := dataFeedHTTPClient.Get("https://api.binance.com/api/v3/ticker/price?symbol=" + symbol)
 	if err != nil {
 		return 0
 	}

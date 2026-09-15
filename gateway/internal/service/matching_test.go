@@ -9,6 +9,7 @@ import (
 
 func TestMain(m *testing.M) {
 	_ = os.Setenv("DB_PATH", "./data/test_service.db")
+	_ = os.Setenv("SECRET_KEY", "test-secret-key-for-unit-tests")
 	if err := store.InitDB(); err != nil {
 		panic(err)
 	}

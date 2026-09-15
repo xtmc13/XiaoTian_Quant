@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -1001,21 +1002,121 @@ func parseSymbolPair(symbol string) (base, quote string) {
 	return symbol, "USDT"
 }
 
-// getLastPrice fetches the latest price for a symbol from Binance public API.
+// ── Market-data liveness & offline fallbacks ──
+//
+// The order pipeline must stay responsive even when every external market
+// data source is unreachable (dead proxy, blocked direct connection). These
+// helpers resolve prices in three tiers — in-memory WS cache, short-timeout
+// REST probe, synthetic anchor — and track liveness so that expensive market
+// enrichment (bid/ask, volatility, funding) is skipped entirely while offline
+// instead of blocking the pipeline with multi-second TCP timeouts.
+
+var marketDataGate struct {
+	okUntil   int64 // unix nano until which market data is considered fresh
+	failUntil int64 // unix nano until which market data is considered unreachable
+}
+
+const (
+	marketDataOKWindow   = 60 * time.Second
+	marketDataFailWindow = 30 * time.Second
+)
+
+// shortTimeoutHTTPClient is used for market probes on the order path; a dead
+// network must fail in ~2s, not hang on TCP retransmits for minutes.
+var shortTimeoutHTTPClient = &http.Client{Timeout: 2 * time.Second}
+
+func markMarketDataOK() {
+	atomic.StoreInt64(&marketDataGate.okUntil, time.Now().Add(marketDataOKWindow).UnixNano())
+}
+
+func markMarketDataFailed() {
+	now := time.Now()
+	atomic.StoreInt64(&marketDataGate.failUntil, now.Add(marketDataFailWindow).UnixNano())
+	atomic.StoreInt64(&marketDataGate.okUntil, now.UnixNano())
+}
+
+// marketDataOnline reports whether live market data is flowing. While offline,
+// order-path enrichment skips network calls completely.
+func marketDataOnline() bool {
+	now := time.Now().UnixNano()
+	if now < atomic.LoadInt64(&marketDataGate.failUntil) {
+		return false
+	}
+	return now < atomic.LoadInt64(&marketDataGate.okUntil)
+}
+
+// syntheticAnchorPrices are deterministic last-resort prices per symbol, used
+// only when no live market data is reachable. They keep the paper pipeline
+// functional offline — same idea as the paper exchange's synthetic klines and
+// the AI bot simulator's seeded random walk.
+var syntheticAnchorPrices = map[string]float64{
+	"BTCUSDT":  50000,
+	"ETHUSDT":  3000,
+	"SOLUSDT":  150,
+	"BNBUSDT":  500,
+	"DOGEUSDT": 0.12,
+	"XRPUSDT":  0.5,
+	"ADAUSDT":  0.4,
+}
+
+// normalizeMarketSymbol converts "BTC/USDT" → "BTCUSDT" for cache/HTTP lookups.
+func normalizeMarketSymbol(symbol string) string {
+	return strings.ToUpper(strings.ReplaceAll(symbol, "/", ""))
+}
+
+// syntheticPriceFor returns a stable fallback price for a symbol with no live
+// data: a well-known anchor when available, otherwise a deterministic
+// hash-derived value (stable across restarts).
+func syntheticPriceFor(symbol string) float64 {
+	norm := normalizeMarketSymbol(symbol)
+	if p, ok := syntheticAnchorPrices[norm]; ok {
+		return p
+	}
+	var h int64 = 5381
+	for _, c := range norm {
+		h = ((h << 5) + h) + int64(c)
+	}
+	if h < 0 {
+		h = -h
+	}
+	return 10000.0 + float64(h%90000)
+}
+
+// getLastPrice fetches the latest price for a symbol. Resolution order:
+// in-memory WS price cache (zero network), short-timeout REST probe, then a
+// synthetic anchor so paper trading stays fully offline-capable. The old
+// implementation used http.Get (default client, no timeout), which hung for
+// minutes on a dead route and blocked paper order placement entirely.
 func getLastPrice(symbol string) float64 {
-	var result map[string]any
-	resp, err := http.Get("https://api.binance.com/api/v3/ticker/price?symbol=" + symbol)
-	if err != nil {
-		return 0
+	norm := normalizeMarketSymbol(symbol)
+
+	// Tier 1: in-memory WS price cache.
+	if appCtx := Get(); appCtx != nil && appCtx.BinanceWS != nil {
+		if p := appCtx.BinanceWS.GetPrice(norm); p > 0 {
+			markMarketDataOK()
+			return p
+		}
 	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
-	json.Unmarshal(raw, &result)
-	if priceStr, ok := result["price"].(string); ok {
-		f, _ := strconv.ParseFloat(priceStr, 64)
-		return f
+
+	// Tier 2: short-timeout REST probe.
+	resp, err := shortTimeoutHTTPClient.Get("https://api.binance.com/api/v3/ticker/price?symbol=" + norm)
+	if err == nil {
+		raw, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		var result map[string]any
+		if json.Unmarshal(raw, &result) == nil {
+			if priceStr, ok := result["price"].(string); ok {
+				if f, err := strconv.ParseFloat(priceStr, 64); err == nil && f > 0 {
+					markMarketDataOK()
+					return f
+				}
+			}
+		}
 	}
-	return 0
+	markMarketDataFailed()
+
+	// Tier 3: synthetic anchor.
+	return syntheticPriceFor(symbol)
 }
 
 // buildRiskContext assembles a complete risk context for an order request.
@@ -1027,12 +1128,22 @@ func (ctx *Context) buildRiskContext(req *order.Request) *risk.Context {
 		price = getLastPrice(req.Symbol)
 	}
 
-	bid, ask := getBidAsk(req.Symbol)
-	volatility := getVolatility(req.Symbol)
-
+	// Enrich with live market data only while market data is actually
+	// flowing. Offline, each of these calls burns a TCP timeout (previously
+	// 30s each, run sequentially — the root cause of multi-minute paper order
+	// hangs); the paper path then falls back to synthetic quotes derived from
+	// the resolved price (same 0.9999/1.0001 spread as the paper exchange).
+	bid, ask := 0.0, 0.0
+	volatility := 0.0
 	fundingRate := 0.0
-	if req.MarketType == model.MarketSwap {
-		fundingRate = getFundingRate(req.Symbol)
+	if marketDataOnline() {
+		bid, ask = getBidAsk(req.Symbol)
+		volatility = getVolatility(req.Symbol)
+		if req.MarketType == model.MarketSwap {
+			fundingRate = getFundingRate(req.Symbol)
+		}
+	} else if price > 0 {
+		bid, ask = price*0.9999, price*1.0001
 	}
 
 	return &risk.Context{
@@ -1065,8 +1176,10 @@ func (ctx *Context) buildRiskContext(req *order.Request) *risk.Context {
 func getBidAsk(symbol string) (bid, ask float64) {
 	ticker, err := service.GetMarketService().GetTicker(symbol)
 	if err != nil {
+		markMarketDataFailed()
 		return 0, 0
 	}
+	markMarketDataOK()
 	bid = parseAnyFloat(ticker["bidPrice"])
 	ask = parseAnyFloat(ticker["askPrice"])
 	return
@@ -1076,8 +1189,12 @@ func getBidAsk(symbol string) (bid, ask float64) {
 func getVolatility(symbol string) float64 {
 	klines, err := service.GetMarketService().FetchKlines(symbol, "1m", 20)
 	if err != nil || len(klines) < 2 {
+		if err != nil {
+			markMarketDataFailed()
+		}
 		return 0
 	}
+	markMarketDataOK()
 
 	returns := make([]float64, len(klines)-1)
 	for i := 1; i < len(klines); i++ {
@@ -1108,8 +1225,10 @@ func getFundingRate(symbol string) float64 {
 	binance := adapter.NewBinanceAdapter("", "", false)
 	rate, err := binance.GetFundingRate(symbol)
 	if err != nil {
+		markMarketDataFailed()
 		return 0
 	}
+	markMarketDataOK()
 	return rate
 }
 

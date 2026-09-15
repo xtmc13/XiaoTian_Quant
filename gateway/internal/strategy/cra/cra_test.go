@@ -79,9 +79,12 @@ func TestCRAStateAddPositionLong(t *testing.T) {
 	if st.ShouldAddPosition(97, cfg) {
 		t.Error("should not add at 3% drop")
 	}
-	// Price drop 6% triggers pending.
-	if !st.ShouldAddPosition(94, cfg) {
-		t.Error("should enter pending add at 6% drop")
+	// Price drop 6% arms the pending add; it must NOT fire before a bounce.
+	if st.ShouldAddPosition(94, cfg) {
+		t.Error("should not fire add before bounce")
+	}
+	if !st.PendingAdd {
+		t.Error("pending should be armed at 6% drop")
 	}
 	// Bounce 0.5% from trigger low 94 -> 94.47 triggers add.
 	if !st.ShouldAddPosition(94.47, cfg) {
