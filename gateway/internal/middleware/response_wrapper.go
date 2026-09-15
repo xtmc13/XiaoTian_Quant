@@ -92,6 +92,8 @@ func UnifiedResponseWrapper() gin.HandlerFunc {
 
 		status := c.Writer.Status()
 		if status == http.StatusNoContent {
+			// 204 无内容：恢复 writer 即可，不冲刷 body
+			c.Writer = writer.ResponseWriter
 			return
 		}
 
@@ -103,8 +105,13 @@ func UnifiedResponseWrapper() gin.HandlerFunc {
 			return
 		}
 
-		// Already wrapped? Skip
+		// Already wrapped? 透传原 body（修复：此前直接 return 会把
+		// body 丢在 buffer 里，客户端收到 200 空响应）
 		if _, ok := raw["success"]; ok {
+			c.Writer = writer.ResponseWriter
+			if buf.Len() > 0 {
+				c.Writer.Write(buf.Bytes())
+			}
 			return
 		}
 

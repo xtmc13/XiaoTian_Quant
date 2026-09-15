@@ -125,9 +125,6 @@ import {
   type StatusResponse,
   type TradingSafetyResponse,
   type ExchangeStatusResponse,
-  type RustOrderBookSnapshot,
-  type RustTradeResponse,
-  type RustEngineStatsResponse,
 } from '@/types'
 
 // ── Timeout presets (XiaoTianQuant style) ──
@@ -1262,17 +1259,6 @@ export const paperApi = {
 export const exchangeStatusApi = {
   status: () => api.get<ExchangeStatusResponse>('/exchange/status'),
   setDefault: (id: string) => api.post<{ success: boolean }>('/exchange/default', { id }),
-}
-
-// ── Rust Matching Engine (via Gateway) ──
-// NOTE: backend may need a lightweight handler/engine.go to expose these.
-// If /engine/* is not available yet, fall back to marketApi for UI placeholders.
-export const rustEngineApi = {
-  snapshot: (symbol: string, depth?: number) =>
-    api.get<RustOrderBookSnapshot>(`/engine/snapshot?symbol=${symbol}&depth=${depth || 20}`),
-  trades: (symbol: string, limit?: number) =>
-    api.get<RustTradeResponse>(`/engine/trades?symbol=${symbol}&limit=${limit || 100}`),
-  stats: () => api.get<RustEngineStatsResponse>('/engine/stats'),
 }
 
 export { ApiError }

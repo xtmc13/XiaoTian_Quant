@@ -35,7 +35,6 @@ import { DataTable } from '@/components/DataTable'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import { LogViewer } from '@/components/system/LogViewer'
-import { RustEnginePanel } from '@/components/engine/RustEnginePanel'
 import { useFaviconIndicator } from '@/hooks/useFaviconIndicator'
 import type { ECharts } from 'echarts'
 import type { StrategyRanking } from '@/types'
@@ -1379,11 +1378,10 @@ export function Dashboard() {
             </SectionCard>
           </div>
 
-          {/* Far Right: Risk Control + ML Status + Engine + Logs */}
+          {/* Far Right: Risk Control + ML Status + Logs */}
           <div className="space-y-4">
             <RiskControlCard status={protectionStatus} isLoading={protectionLoading} />
             <MLStatusCard health={mlHealth} models={mlModelsData} isLoading={mlHealthLoading || mlModelsLoading} />
-            <RustEnginePanel />
             <LogPreviewCard />
           </div>
         </div>

@@ -210,6 +210,10 @@ func registerConfigRoutes(api *gin.RouterGroup) {
 	private.POST("/strategies/martin", handler.StrategyMartinCreate)
 	private.PUT("/strategies/martin/:id", handler.StrategyMartinUpdate)
 	private.DELETE("/strategies/martin/:id", handler.StrategyMartinDelete)
+	private.GET("/strategies/wallstreet", handler.StrategyWallStreetList)
+	private.POST("/strategies/wallstreet", handler.StrategyWallStreetCreate)
+	private.PUT("/strategies/wallstreet/:id", handler.StrategyWallStreetUpdate)
+	private.DELETE("/strategies/wallstreet/:id", handler.StrategyWallStreetDelete)
 }
 
 func registerOrderRoutes(api *gin.RouterGroup) {
