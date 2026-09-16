@@ -1297,7 +1297,10 @@ func (ctx *Context) wireStrategyEngine() {
 		}
 
 		// ── Contract support: load strategy config for leverage/TP/SL ──
-		if cfg := store.GetStrategyConfig(signal.Strategy); cfg != nil {
+		// 注意必须用 findStrategyConfigForSignal：signal.Strategy 是策略内部名
+		// （如 "macd"）而非配置 id，GetStrategyConfig 按 id 查永远落空——这曾导致
+		// execution_mode=paper 与杠杆/TP/SL 配置被静默跳过，信号单直连真实交易所。
+		if cfg := findStrategyConfigForSignal(signal); cfg != nil {
 			// 策略配置 execution_mode=paper 时强制 paper 撮合：dry_run 下
 			// 真实交易所路径不会自动成交，信号单会永远停在 NEW。
 			if em, _ := cfg["execution_mode"].(string); em == "paper" {
@@ -1387,6 +1390,22 @@ func (ctx *Context) wireStrategyEngine() {
 	}
 
 	ctx.Logger.Info("StrategyEngine wired")
+}
+
+// findStrategyConfigForSignal resolves the strategy config for a signal.
+// signal.Strategy carries the strategy's internal name (e.g. "macd"), not the
+// config id, so the direct GetStrategyConfig lookup misses; fall back to
+// matching by strategy_type (first match wins when several share a type).
+func findStrategyConfigForSignal(signal model.Signal) map[string]any {
+	if cfg := store.GetStrategyConfig(signal.Strategy); cfg != nil {
+		return cfg
+	}
+	for _, cfg := range store.GetStrategyConfigs() {
+		if st, _ := cfg["strategy_type"].(string); st == signal.Strategy {
+			return cfg
+		}
+	}
+	return nil
 }
 
 // resolveSignalQuantity determines the order quantity from strategy config or defaults.
