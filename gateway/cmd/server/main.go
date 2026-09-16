@@ -60,6 +60,8 @@ func main() {
 		return 0
 	}
 	gridRunner := grid.NewRunner(priceSource, gridRepo)
+	// HTTP 层通过窄接口 GridService 操控 runner（创建/启动/停止机器人）。
+	handler.SetGridService(gridRunner)
 	// 启动即恢复 grid_bots 中 status='running' 的机器人，之后每 60s 复查，
 	// 防御进程重启漏恢复或行情无效导致的跳过。
 	go gridRunner.RetryResume(func() ([]*store.GridBotRecord, error) {

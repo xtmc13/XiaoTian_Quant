@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -16,17 +17,21 @@ import (
 
 func TestMain(m *testing.M) {
 	gin.SetMode(gin.TestMode)
-	_ = os.Setenv("DB_PATH", "./data/test_handler.db")
-	_ = os.Setenv("CONFIG_PATH", "./data/test_handler_config.yaml")
+	// 临时 sqlite（同 runner_test 的模式）：DB 文件放系统临时目录，
+	// 绝不触碰 ./runtime/gateway.db；结束后关闭连接并删除整个目录。
+	dir, err := os.MkdirTemp("", "handler_test")
+	if err != nil {
+		panic(err)
+	}
+	_ = os.Setenv("DB_PATH", filepath.Join(dir, "gateway.db"))
+	_ = os.Setenv("CONFIG_PATH", filepath.Join(dir, "test_handler_config.yaml"))
 	_ = os.Setenv("SECRET_KEY", "test-secret-key-not-for-production-use-only")
 	if err := store.InitDB(); err != nil {
 		panic(err)
 	}
 	code := m.Run()
-	_ = os.Remove("./data/test_handler.db")
-	_ = os.Remove("./data/test_handler.db-shm")
-	_ = os.Remove("./data/test_handler.db-wal")
-	_ = os.Remove("./data/test_handler_config.yaml")
+	store.CloseDB()
+	_ = os.RemoveAll(dir)
 	os.Exit(code)
 }
 

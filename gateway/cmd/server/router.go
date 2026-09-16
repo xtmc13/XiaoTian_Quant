@@ -67,6 +67,7 @@ func setupRoutes(r *gin.Engine, cfg *serverConfig) *gin.Engine {
 		registerSocialRoutes(api)
 		registerOnChainRoutes(api)
 		registerAIBotRoutes(api)
+		registerGridRoutes(api)
 	}
 
 	// ── Webhooks ──
@@ -682,5 +683,19 @@ func registerAIBotRoutes(api *gin.RouterGroup) {
 		private.GET("/subscriptions", handler.AIBotSubscriptionList)
 		private.POST("/subscriptions", handler.AIBotSubscriptionCreate)
 		private.POST("/subscriptions/:id/cancel", handler.AIBotSubscriptionCancel)
+	}
+}
+
+func registerGridRoutes(api *gin.RouterGroup) {
+	private := api.Group("/grid")
+	private.Use(middleware.AuthRequired())
+	{
+		private.GET("/bots", handler.GridBotList)
+		private.POST("/bots", handler.GridBotCreate)
+		private.GET("/bots/:id", handler.GridBotGet)
+		private.PUT("/bots/:id", handler.GridBotUpdate)
+		private.DELETE("/bots/:id", handler.GridBotDelete)
+		private.POST("/bots/:id/start", handler.GridBotStart)
+		private.POST("/bots/:id/stop", handler.GridBotStop)
 	}
 }
