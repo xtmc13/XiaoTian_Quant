@@ -182,11 +182,6 @@ func CreateStrategyConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": "策略名称不能为空"})
 		return
 	}
-	strategyType := getString(body, "strategy_type", "")
-	if strategyType == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "策略类型不能为空"})
-		return
-	}
 	symbol := getString(body, "symbol", "")
 	if symbol == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": "交易对不能为空"})
@@ -202,39 +197,58 @@ func CreateStrategyConfig(c *gin.Context) {
 		configJSON = string(data)
 	} else if cj, ok := body["config_json"].(string); ok && cj != "" {
 		configJSON = cj
+	} else if flat := flattenCRAParams(body); len(flat) > 0 {
+		// 部分入口（如指标 IDE）把 CRA 参数平铺在请求顶层且不带
+		// config/config_json：收进 config_json，避免用户参数丢失。
+		data, _ := json.Marshal(flat)
+		configJSON = string(data)
 	}
 
 	item := map[string]any{
-		"id":            sid,
-		"name":          strings.TrimSpace(name),
-		"category":      getString(body, "category", "spot"),
-		"strategy_type": strategyType,
-		"type":          strategyType,
-		"strategy_name": strategyType,
-		"coin":          getString(body, "coin", ""),
-		"config_json":   configJSON,
-		"direction":     getString(body, "direction", "long"),
-		"trade_direction": getString(body, "direction", "long"),
-		"leverage":      getFloat(body, "leverage", 1.0),
-		"status":        "stopped",
-		"pnl":           0.0,
-		"total_pnl":     0.0,
+		"id":                sid,
+		"name":              strings.TrimSpace(name),
+		"category":          getString(body, "category", ""),
+		"strategy_type":     getString(body, "strategy_type", ""),
+		"type":              getString(body, "strategy_type", ""),
+		"strategy_name":     getString(body, "strategy_type", ""),
+		"coin":              getString(body, "coin", ""),
+		"config_json":       configJSON,
+		"direction":         getString(body, "direction", ""),
+		"trade_direction":   getString(body, "direction", ""),
+		"leverage":          getFloat(body, "leverage", 1.0),
+		"status":            "stopped",
+		"pnl":               0.0,
+		"total_pnl":         0.0,
 		"total_pnl_percent": 0.0,
-		"current_equity": getFloat(body, "initial_capital", 0),
-		"created_at":    float64(nowTS),
-		"updated_at":    float64(nowTS),
+		"current_equity":    getFloat(body, "initial_capital", 0),
+		"created_at":        float64(nowTS),
+		"updated_at":        float64(nowTS),
 		// ── Contract fields ──
-		"market_type":   getString(body, "market_type", "spot"),
-		"margin_mode":   getString(body, "margin_mode", "cross"),
-		"symbol":        symbol,
-		"timeframe":     getString(body, "timeframe", "15m"),
+		"market_type":     getString(body, "market_type", "spot"),
+		"margin_mode":     getString(body, "margin_mode", "cross"),
+		"symbol":          symbol,
+		"timeframe":       getString(body, "timeframe", "15m"),
 		"initial_capital": getFloat(body, "initial_capital", 0),
-		"execution_mode": getString(body, "execution_mode", "signal"),
-		"mode":          getString(body, "execution_mode", "signal"),
-		"strategy_mode": getString(body, "execution_mode", "signal"),
-		"group_id":      getString(body, "group_id", ""),
-		"group_name":    getString(body, "group_name", ""),
-		"indicator_name": getString(body, "indicator_name", ""),
+		"execution_mode":  getString(body, "execution_mode", ""),
+		"mode":            getString(body, "execution_mode", ""),
+		"strategy_mode":   getString(body, "execution_mode", ""),
+		"group_id":        getString(body, "group_id", ""),
+		"group_name":      getString(body, "group_name", ""),
+		"indicator_name":  getString(body, "indicator_name", ""),
+	}
+
+	// "222 式"残废 payload 兜底：CRA 表单场景（及任何缺省入口）补全
+	// strategy_type/category/execution_mode/direction，保证落库记录字段齐备。
+	var payloadConfig map[string]any
+	if cfg, ok := body["config"].(map[string]any); ok {
+		payloadConfig = cfg
+	}
+	fillStrategyFieldDefaults(item, payloadConfig)
+
+	// strategy_type 兜底后仍为空说明不是 CRA payload，维持原有拒绝行为。
+	if getString(item, "strategy_type", "") == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "策略类型不能为空"})
+		return
 	}
 
 	store.SetStrategyConfig(sid, item)
@@ -278,11 +292,120 @@ func UpdateStrategyConfig(c *gin.Context) {
 	} else if cj, ok := body["config_json"].(string); ok {
 		item["config_json"] = cj
 	}
+	// 编辑是修复历史残废记录（如 "222"）的入口：合并后同样做缺省补全。
+	var payloadConfig map[string]any
+	if cfg, ok := body["config"].(map[string]any); ok {
+		payloadConfig = cfg
+	}
+	fillStrategyFieldDefaults(item, payloadConfig)
 	item["updated_at"] = float64(time.Now().UnixMilli())
 	store.SetStrategyConfig(id, item)
 	store.PersistStrategyConfigs()
 	persistStrategyConfigToDB(item)
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
+// flattenCRAParams collects CRA parameter keys that some entry points flatten
+// into the request body top level (instead of nesting them under config).
+func flattenCRAParams(body map[string]any) map[string]any {
+	flat := map[string]any{}
+	for _, k := range craFormMarkers {
+		if v, ok := body[k]; ok {
+			flat[k] = v
+		}
+	}
+	return flat
+}
+
+// craFormMarkers are config keys that identify a CRA parameter payload
+// (web CRAParamForm). A config carrying any of these keys is treated as a CRA
+// config even when strategy_type is missing ("222 式"残废 payload).
+var craFormMarkers = []string{
+	"first_order_amount", "first_order_multiplier", "add_positions",
+	"tp_mode", "take_profit_method", "moving_take_profit_tiers", "enable_add_position",
+}
+
+// craContractMarketTypes are market_type values denoting a contract strategy.
+var craContractMarketTypes = map[string]bool{"swap": true, "futures": true, "margin": true}
+
+// fillStrategyFieldDefaults backfills the identity fields every persisted
+// strategy record must carry. Only empty fields are filled; explicit values
+// pass through untouched.
+//
+// Defaults for the CRA form scenario: strategy_type cra_contract/cra_spot,
+// category futures/spot, direction long. execution_mode always defaults to
+// paper — 安全红线：空 execution_mode 会让信号单直连真实交易所
+// （见 app/context.go 的 signal → order 管线）。
+func fillStrategyFieldDefaults(item map[string]any, payloadConfig map[string]any) {
+	cfg := map[string]any{}
+	for k, v := range payloadConfig {
+		cfg[k] = v
+	}
+	if cj, ok := item["config_json"].(string); ok && cj != "" {
+		var parsed map[string]any
+		if json.Unmarshal([]byte(cj), &parsed) == nil {
+			for k, v := range parsed {
+				if _, exists := cfg[k]; !exists {
+					cfg[k] = v
+				}
+			}
+		}
+	}
+
+	isContract := craContractMarketTypes[strings.ToLower(getString(item, "market_type", ""))] ||
+		craContractMarketTypes[strings.ToLower(getString(cfg, "market_type", ""))]
+	if cat := strings.ToLower(getString(item, "category", "")); cat == "contract" || cat == "futures" {
+		isContract = true
+	}
+	if getFloat(item, "leverage", 0) > 1 || getFloat(cfg, "leverage", 0) > 1 {
+		isContract = true
+	}
+
+	isCRA := false
+	for _, k := range craFormMarkers {
+		if _, ok := cfg[k]; ok {
+			isCRA = true
+			break
+		}
+	}
+
+	if getString(item, "strategy_type", "") == "" && isCRA {
+		if isContract {
+			item["strategy_type"] = "cra_contract"
+		} else {
+			item["strategy_type"] = "cra_spot"
+		}
+	}
+	if getString(item, "category", "") == "" {
+		if isContract {
+			item["category"] = "futures"
+		} else {
+			item["category"] = "spot"
+		}
+	}
+	if getString(item, "execution_mode", "") == "" {
+		item["execution_mode"] = "paper"
+	}
+	if getString(item, "direction", "") == "" {
+		switch d := strings.ToLower(getString(cfg, "direction", "")); d {
+		case "long", "short", "dual":
+			item["direction"] = d
+		default:
+			item["direction"] = "long"
+		}
+	}
+	// Keep alias fields in sync with the resolved values.
+	if v := getString(item, "strategy_type", ""); v != "" {
+		item["type"] = v
+		item["strategy_name"] = v
+	}
+	if v := getString(item, "execution_mode", ""); v != "" {
+		item["mode"] = v
+		item["strategy_mode"] = v
+	}
+	if v := getString(item, "direction", ""); v != "" {
+		item["trade_direction"] = v
+	}
 }
 
 func DeleteStrategyConfig(c *gin.Context) {

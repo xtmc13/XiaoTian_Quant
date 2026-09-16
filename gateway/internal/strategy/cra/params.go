@@ -200,8 +200,8 @@ func ParseCRAParams(configJSON string) (*CRAParams, error) {
 
 // Validate checks CRA params against frontend/CRA constraints.
 func (p *CRAParams) Validate() error {
-	if p.FirstOrderAmount < 10 || p.FirstOrderAmount > 10000 {
-		return fmt.Errorf("first_order_amount must be between 10 and 10000")
+	if p.FirstOrderAmount < 1 || p.FirstOrderAmount > 10000 {
+		return fmt.Errorf("first_order_amount must be between 1 and 10000")
 	}
 	if p.FirstOrderMultiplier < 1 || p.FirstOrderMultiplier > 10 {
 		return fmt.Errorf("first_order_multiplier must be between 1 and 10")
@@ -210,8 +210,8 @@ func (p *CRAParams) Validate() error {
 		return fmt.Errorf("order_count must be between 0 and 20")
 	}
 	if p.IsContract() {
-		if p.Leverage < 1 || p.Leverage > 125 {
-			return fmt.Errorf("leverage must be between 1 and 125")
+		if p.Leverage < 1 || p.Leverage > 150 {
+			return fmt.Errorf("leverage must be between 1 and 150")
 		}
 	}
 	if p.TPMode == "moving" && len(p.MovingTakeProfitTiers) != 4 {

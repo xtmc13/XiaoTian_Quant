@@ -120,3 +120,40 @@ func TestStrategyTemplateRepoCRUD(t *testing.T) {
 		t.Errorf("list after delete = %d", len(items))
 	}
 }
+
+// TestStrategyConfigRecordFromMapDefaults "222 式"残废 map（strategy_type/
+// category/execution_mode/direction 缺失）经 DB 漏斗落库时必须有兜底值：
+// execution_mode 默认 paper（安全红线：空值会让信号单直连真实交易所），
+// category 按合约特征（market_type swap/futures/margin 或 leverage>1）兜底
+// 为 futures，否则 spot，direction 默认 long。
+func TestStrategyConfigRecordFromMapDefaults(t *testing.T) {
+	contract := StrategyConfigRecordFromMap(map[string]any{
+		"id":          "crippled-contract",
+		"name":        "222",
+		"symbol":      "BTCUSDT",
+		"leverage":    150.0,
+		"config_json": `{"tp_mode":"moving","leverage":150}`,
+	})
+	if contract.ExecutionMode != "paper" {
+		t.Errorf("execution_mode = %q, want paper", contract.ExecutionMode)
+	}
+	if contract.Category != "futures" {
+		t.Errorf("category = %q, want futures", contract.Category)
+	}
+	if contract.Direction != "long" {
+		t.Errorf("direction = %q, want long", contract.Direction)
+	}
+
+	spot := StrategyConfigRecordFromMap(map[string]any{
+		"id":       "crippled-spot",
+		"name":     "现货",
+		"symbol":   "BTCUSDT",
+		"leverage": 1.0,
+	})
+	if spot.ExecutionMode != "paper" {
+		t.Errorf("spot execution_mode = %q, want paper", spot.ExecutionMode)
+	}
+	if spot.Category != "spot" {
+		t.Errorf("spot category = %q, want spot", spot.Category)
+	}
+}

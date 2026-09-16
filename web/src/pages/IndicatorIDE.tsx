@@ -1151,7 +1151,7 @@ export function IndicatorIDE() {
                         <input
                           type="number"
                           min={1}
-                          max={125}
+                          max={150}
                           value={leverage}
                           onChange={(e) => setLeverage(Number(e.target.value))}
                           className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1.5 text-xs text-white outline-none focus:border-quant-gold"
@@ -1368,7 +1368,7 @@ export function IndicatorIDE() {
                   <input
                     type="number"
                     min={1}
-                    max={125}
+                    max={150}
                     value={stratBase.leverage}
                     onChange={(e) => setStratBase({ ...stratBase, leverage: Number(e.target.value) })}
                     className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold"

@@ -146,7 +146,8 @@ func GetStrategiesContract(c *gin.Context) {
 	all := store.GetStrategyConfigs()
 	items := make([]map[string]any, 0)
 	for _, v := range all {
-		if cat := getString(v, "category", ""); cat != "" && cat != "contract" {
+		// category 缺省（历史数据）或显式 contract/futures 都视为合约策略。
+		if cat := getString(v, "category", ""); cat != "" && cat != "contract" && cat != "futures" {
 			continue
 		}
 		if status != "" && status != "all" && getString(v, "status", "") != status {

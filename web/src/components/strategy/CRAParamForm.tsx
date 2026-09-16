@@ -219,7 +219,7 @@ export function CRAParamForm({ value, onChange, market, className }: CRAParamFor
             <label className="text-[11px] text-muted-foreground mb-1.5 block">首单额度 (USDT)</label>
             <input
               type="number"
-              min={10}
+              min={1}
               max={10000}
               step={10}
               value={value.firstOrderAmount}
@@ -233,7 +233,7 @@ export function CRAParamForm({ value, onChange, market, className }: CRAParamFor
               <input
                 type="number"
                 min={1}
-                max={125}
+                max={150}
                 value={value.leverage}
                 onChange={(e) => update('leverage', Number(e.target.value))}
                 className={inputCls}

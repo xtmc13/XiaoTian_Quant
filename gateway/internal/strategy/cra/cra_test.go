@@ -71,6 +71,37 @@ func TestParseCRAParamsFull(t *testing.T) {
 	}
 }
 
+// TestParseCRAParamsValidateBoundaries 校验边界（用户实盘标准）：
+// 币安支持 150x 杠杆 → 150 通过、151 拒绝；1U 起下单 → 首单 1 通过、0 拒绝；
+// 首单上限 10000 不变。
+func TestParseCRAParamsValidateBoundaries(t *testing.T) {
+	cases := []struct {
+		name    string
+		raw     string
+		wantErr bool
+	}{
+		{"leverage 150 accepted", `{"market_type":"swap","leverage":150,"first_order_amount":10,"tp_mode":"static"}`, false},
+		{"leverage 151 rejected", `{"market_type":"swap","leverage":151,"first_order_amount":10,"tp_mode":"static"}`, true},
+		{"first order 1 accepted", `{"first_order_amount":1,"tp_mode":"static"}`, false},
+		{"first order 0 rejected", `{"first_order_amount":0,"tp_mode":"static"}`, true},
+		{"first order 10000 accepted", `{"first_order_amount":10000,"tp_mode":"static"}`, false},
+		{"first order 10001 rejected", `{"first_order_amount":10001,"tp_mode":"static"}`, true},
+	}
+	for _, tc := range cases {
+		p, err := ParseCRAParams(tc.raw)
+		if err != nil {
+			t.Fatalf("%s: parse: %v", tc.name, err)
+		}
+		err = p.Validate()
+		if tc.wantErr && err == nil {
+			t.Errorf("%s: expected validation error, got nil", tc.name)
+		}
+		if !tc.wantErr && err != nil {
+			t.Errorf("%s: expected validation to pass, got %v", tc.name, err)
+		}
+	}
+}
+
 func TestCRAStateAddPositionLong(t *testing.T) {
 	st := &CRAState{}
 	st.EnterPosition(100, SideLong)

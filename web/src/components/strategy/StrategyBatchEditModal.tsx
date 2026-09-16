@@ -122,7 +122,7 @@ export function StrategyBatchEditModal({ ids, market, onClose, onSaved }: Strate
                 <input
                   type="number"
                   min={1}
-                  max={100}
+                  max={150}
                   value={fields.leverage.value}
                   disabled={!fields.leverage.enabled}
                   onChange={(e) => updateValue('leverage', Number(e.target.value))}

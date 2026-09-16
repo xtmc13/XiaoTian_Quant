@@ -203,11 +203,20 @@ func (r *StrategyConfigRepo) MigrateFromJSON(path string, userID int64) error {
 
 // StrategyConfigRecordFromMap builds a record from the in-memory map representation.
 func StrategyConfigRecordFromMap(m map[string]any) *StrategyConfigRecord {
+	category := getString(m, "category", "")
+	if category == "" {
+		// 缺省 category 按合约特征兜底为 futures，否则 spot。
+		if isContractStrategyMap(m) {
+			category = "futures"
+		} else {
+			category = "spot"
+		}
+	}
 	r := &StrategyConfigRecord{
 		ID:                 getString(m, "id", ""),
 		UserID:             getInt64(m, "user_id", 0),
 		Name:               getString(m, "name", ""),
-		Category:           getString(m, "category", "spot"),
+		Category:           category,
 		StrategyType:       getString(m, "strategy_type", getString(m, "type", "")),
 		Symbol:             getString(m, "symbol", ""),
 		Coin:               getString(m, "coin", ""),
@@ -216,7 +225,7 @@ func StrategyConfigRecordFromMap(m map[string]any) *StrategyConfigRecord {
 		MarketType:         getString(m, "market_type", "spot"),
 		MarginMode:         getString(m, "margin_mode", "cross"),
 		Timeframe:          getString(m, "timeframe", "15m"),
-		ExecutionMode:      getString(m, "execution_mode", getString(m, "mode", "signal")),
+		ExecutionMode:      getString(m, "execution_mode", getString(m, "mode", "paper")),
 		InitialCapital:     getFloat(m, "initial_capital", 0),
 		CurrentEquity:      getFloat(m, "current_equity", getFloat(m, "initial_capital", 0)),
 		TotalPnL:           getFloat(m, "total_pnl", getFloat(m, "pnl", 0)),
@@ -296,6 +305,21 @@ func scanStrategyConfig(scanner interface {
 		return nil, err
 	}
 	return &r, nil
+}
+
+// isContractStrategyMap reports whether a config map describes a contract
+// (futures) strategy: contract market_type/category or leverage above spot
+// levels. Used to backfill a missing category without misclassifying spot.
+func isContractStrategyMap(m map[string]any) bool {
+	switch mt := strings.ToLower(getString(m, "market_type", "")); mt {
+	case "swap", "futures", "margin":
+		return true
+	}
+	switch cat := strings.ToLower(getString(m, "category", "")); cat {
+	case "contract", "futures":
+		return true
+	}
+	return getFloat(m, "leverage", 0) > 1
 }
 
 func readFileIfExists(path string) ([]byte, error) {

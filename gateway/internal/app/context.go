@@ -1303,7 +1303,9 @@ func (ctx *Context) wireStrategyEngine() {
 		if cfg := findStrategyConfigForSignal(signal); cfg != nil {
 			// 策略配置 execution_mode=paper 时强制 paper 撮合：dry_run 下
 			// 真实交易所路径不会自动成交，信号单会永远停在 NEW。
-			if em, _ := cfg["execution_mode"].(string); em == "paper" {
+			// 安全红线：execution_mode 为空（历史残废记录）视为 paper——
+			// 空值会走凭证直连真实交易所。
+			if em, _ := cfg["execution_mode"].(string); em == "" || em == "paper" {
 				req.Exchange = "paper"
 			}
 			if cj, ok := cfg["config_json"].(string); ok && cj != "" {

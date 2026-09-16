@@ -170,16 +170,17 @@ func strategyCreateHandler[T strategyBotConstraint](c *gin.Context, category str
 		status = "stopped"
 	}
 	rec := &store.StrategyConfigRecord{
-		UserID:       getUserID(c),
-		Name:         cfg.Symbol + "-" + category,
-		Category:     category,
-		StrategyType: category,
-		Symbol:       cfg.Symbol,
-		Direction:    "long",
-		MarketType:   "spot",
-		Timeframe:    "15m",
-		Status:       status,
-		ConfigJSON:   string(payload),
+		UserID:        getUserID(c),
+		Name:          cfg.Symbol + "-" + category,
+		Category:      category,
+		StrategyType:  category,
+		Symbol:        cfg.Symbol,
+		Direction:     "long",
+		MarketType:    "spot",
+		Timeframe:     "15m",
+		ExecutionMode: "paper",
+		Status:        status,
+		ConfigJSON:    string(payload),
 	}
 	if err := store.NewStrategyConfigRepo().Create(rec); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": err.Error()})
