@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -59,6 +60,19 @@ func releaseKlineFeed(id string) {
 	}
 }
 
+// persistStrategyConfigToDB 把策略配置写穿透到 SQLite，保证 DB 优先的
+// 读取路径（GetStrategyConfigs 每次从 DB 重建）能立即看到 API 的变更。
+// 失败仅记日志——JSON 文件仍是兜底。
+func persistStrategyConfigToDB(item map[string]any) {
+	rec := store.StrategyConfigRecordFromMap(item)
+	if rec == nil || rec.ID == "" {
+		return
+	}
+	if err := store.NewStrategyConfigRepo().UpsertAll([]*store.StrategyConfigRecord{rec}); err != nil {
+		log.Printf("[strategy] persist to DB failed (id=%s): %v", rec.ID, err)
+	}
+}
+
 func GetStrategyConfigs(c *gin.Context) {
 	category := c.Query("category")
 	status := c.Query("status")
@@ -74,6 +88,21 @@ func GetStrategyConfigs(c *gin.Context) {
 	items := make([]map[string]any, 0, len(configs))
 	for _, v := range configs {
 		items = append(items, v)
+	}
+
+	// 策略机器人（马丁/华尔街）与策略实验室共用存储；未指定 category 时
+	// 默认排除机器人品类，避免两个页面数据互窜。机器人类请走
+	// /api/strategies/martin|wallstreet 专用接口（那边已按 category 过滤）。
+	if category == "" {
+		kept := items[:0]
+		for _, it := range items {
+			cat, _ := it["category"].(string)
+			if cat == "martin" || cat == "wallstreet" {
+				continue
+			}
+			kept = append(kept, it)
+		}
+		items = kept
 	}
 
 	if category != "" {
@@ -210,6 +239,7 @@ func CreateStrategyConfig(c *gin.Context) {
 
 	store.SetStrategyConfig(sid, item)
 	store.PersistStrategyConfigs()
+	persistStrategyConfigToDB(item)
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "id": sid})
 }
 
@@ -251,6 +281,7 @@ func UpdateStrategyConfig(c *gin.Context) {
 	item["updated_at"] = float64(time.Now().UnixMilli())
 	store.SetStrategyConfig(id, item)
 	store.PersistStrategyConfigs()
+	persistStrategyConfigToDB(item)
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
@@ -261,6 +292,9 @@ func DeleteStrategyConfig(c *gin.Context) {
 		return
 	}
 	store.PersistStrategyConfigs()
+	if err := store.NewStrategyConfigRepo().Delete(id); err != nil {
+		log.Printf("[strategy] delete from DB failed (id=%s): %v", id, err)
+	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
