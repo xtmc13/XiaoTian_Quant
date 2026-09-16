@@ -61,8 +61,7 @@
   cra first order long qty=0.001948 → paper FILLED）；goroutine 总数 218（死锁时）→35（健康）。
   ③已知坑+1：shell 环境若自带 PORT（如 node 环境的 PORT=3000），config.yaml 无 server.port
   会 fallback 到 env 撞车 Claude UI 端口，网关启动失败——重启必须显式 PORT=8080。
-- 2026-09-16：【权益改真实数据】用户要求"权益必须是真实数据"。改前 total_equity=100004.75，
-  其中 10 万是假 paper 种子（真实币安账户仅 0.2U：earn 0.2064+futures dust 0.000146）。
+- 2026-09-16：【权益改真实数据】用户要求"权益必须是真实数据"。改前 total_equity=100004.75，  其中 10 万是假 paper 种子（真实币安账户仅 0.2U：earn 0.2064+futures dust 0.000146）。
   修复三件事：①`TotalEquity()` 排除 paper 账户（只算真实交易所），新增 `PaperEquity()`
   单独统计模拟账本，summary 接口与 Portfolio 页同步展示（总资产估值卡下加"模拟权益"）；
   ②**paper 种子 10 万真凶实锤**：YAML 整数字面量解出为 int，`.(float64)` 断言静默失败
@@ -74,3 +73,12 @@
   paper_equity=999.01（1000 种子-手续费，结算正常）、333 首单 paper FILLED、持仓
   BTCUSDT 0.001948 已入账。已知表现变化：历史权益曲线里旧假数据会显示一次陡降
   （xt_portfolio_snapshots 旧快照未清理）；回撤监控基准从假 10 万变为真实权益。
+- 2026-09-16：【策略投入资金显示修复】用户问"333 初始投入为什么变 100，1U×150 杠杆
+  应 150U"。结论：下单口径一直正确（first_order_amount=1 保证金 ×150 杠杆=150U 名义，
+  日志实证）；100 是修复脚本填的占位值。揪出病根：投入资金自动维护逻辑自写出就没生效
+  ——signal.Strategy 带策略内部名（cra_contract），下游按配置 id 查永远落空；且累加语义
+  遇 CRA 重启重放首单会虚增（实测一次重启 150→297.92）。修复：①引擎 dispatch 统一把
+  signal.Strategy 覆盖为配置 id（下游精确命中，顺带消除 222/333 同类型匹配张冠李戴）；
+  ②改 SET 语义：开仓=该单名义价值、平仓=0（用户口径 1U×150x=150U，2026-09-16 用户
+  明确）。实测：日志 strategy= 已显示 7bb9a9a6；连续两笔 FILLED 后 333 显示稳定
+  147.88（随 BTC 75900 的名义值），不再累加。commit 86ea66d。
