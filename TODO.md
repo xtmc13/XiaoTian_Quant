@@ -48,3 +48,16 @@
 - 2026-09-16：合约策略跑通（goal）——MACD15m/BTCUSDT/1U×125x/逐仓/paper 配置（bd592954）真实运行：K线供给管→总线(PublishSync保序)→引擎→MACD→信号 全链路实测（双策略各发真实 LONG 信号）。关键修复：①事件总线多worker乱序→PublishSync ②供给管删除币安WS伪1m Bar（会污染指标）③启动回补100根历史K线暖机 ④risk position_limit_pct 50%→2500%（paper小权益+最大杠杆会误杀；config.yaml 未入库，开实盘前必须回调）。遗留：信号→paper成交的最终落库验证因手机代理再次断连（13:40起）暂缓，网络恢复后 feeder 每20s自动重试，下一个金叉即完成闭环。
 - 2026-09-16：代码已同步 GitHub（SSH deploy key，main=f7df0eb，16 提交：SQL迁移机制/网格机器人五切片/响应包装器修复/下单离线修复/K线供给管/可观测性）。手机代理极不稳定（一天多次被杀），后续验证与部署转入用户提供的服务器进行。
 - 2026-09-16：【服务器部署完成】43.165.179.199（x86_64，网络自由）：Go1.25.3+仓库+编译+真实币安数据（余额同步成功）。合约策略全链路在服务器实测跑通：真实15m/1m K线→MACD→信号→**paper撮合成交（FILLED, qty=0.0016=125U名义）**。过程中揪出并修复三个深坑：①信号配置查找 id/名字不匹配导致 execution_mode=paper 与杠杆/TP/SL 全部被跳过、信号单直连真实交易所（用户密钥为只读，未造成实际下单，虚惊）②前端 dist 曾缺 index.html（旧部署假象掩盖）③事件进程残留导致新代码不生效（pkill 自匹配自杀）。前端已部署（nginx 8088），网格机器人服务器版已启动（b8c379b57193）。遗留：①云安全组未开 8088，外网暂不可访问（需用户在云控制台放行）②paper 种子金额时序（LoadConfig 晚于 NewManager，1000 配置生效为 100000）③合约 paper 持仓的权益展示口径 ④两策略同刻信号撞 500ms 限速仅成一单。
+- 2026-09-16：【里程碑·333 修复 + P1 死锁修复】①修复脚本执行：333（7bb9a9a6）策略类型
+  trend_long→cra_contract、execution_mode→paper，其余参数保留（DB 实读确认）。
+  ②启动 333 时触发了一个隐藏 P1 死锁：Start 请求挂死 >10min、pprof 抓栈发现 174 个
+  goroutine 堆积、SIGTERM 无法退出、只能 SIGKILL。病根：`event.dispatch` 持 RLock 调
+  handler，策略信号→PlaceOrder→order-update 重入 `Publish`，与并发 `Subscribe`（Register
+  持 Engine 写锁等 bus 写锁）成环（Go RWMutex 不可重入）。修复：`dispatch` 改为锁内快照
+  订阅、锁外调 handler（event.go）；顺带修 `Engine.Unregister` 从不退订的僵尸订阅泄漏
+  （engine.go，订阅 id 登记+退订）；补回归测试 `TestReentrantPublishWithConcurrentSubscribeNoDeadlock`
+  （event_test.go，-count=10 全绿，旧代码必挂）。实测证据：重启后 333/222/MACD 三个策略
+  启动 API 均 <12ms 返回；333 全链路跑通（received first bar 15m close=76933.35 →
+  cra first order long qty=0.001948 → paper FILLED）；goroutine 总数 218（死锁时）→35（健康）。
+  ③已知坑+1：shell 环境若自带 PORT（如 node 环境的 PORT=3000），config.yaml 无 server.port
+  会 fallback 到 env 撞车 Claude UI 端口，网关启动失败——重启必须显式 PORT=8080。

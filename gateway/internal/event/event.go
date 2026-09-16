@@ -120,13 +120,18 @@ func (b *EventBus) worker() {
 
 func (b *EventBus) dispatch(evt Event) {
 	b.mu.RLock()
-	defer b.mu.RUnlock()
-
 	if b.closed {
+		b.mu.RUnlock()
 		return
 	}
 
-	// Find matching subscribers
+	// Snapshot matching subscribers under the lock, then invoke handlers
+	// AFTER releasing it. Holding the RLock across handler execution made
+	// re-entrant Publish deadlock with any concurrent Subscribe/Unregister:
+	// 信号→下单→order-update 事件在 dispatch 上下文里再次 Publish，排队中的
+	// 写者会阻塞新的读者，而 dispatch 里的读者正等着自己二次 RLock 放行
+	// （Go RWMutex 不可重入）。真实死锁案例：2026-09-16 启动策略 333 时
+	// Register 持 Engine 锁等 bus 写锁，K线供给管持 bus RLock 等二次 RLock。
 	candidates := make(map[SubscriptionID]*subscription)
 
 	// Add subscribers for this specific symbol
@@ -146,6 +151,7 @@ func (b *EventBus) dispatch(evt Event) {
 			}
 		}
 	}
+	b.mu.RUnlock()
 
 	// Sort by priority
 	type prioSub struct {
@@ -162,7 +168,8 @@ func (b *EventBus) dispatch(evt Event) {
 		}
 	}
 
-	// Stable order: higher priority (lower number) first
+	// Stable order: higher priority (lower number) first.
+	// 在锁外调用 handler：handler 可能（合法地）再向总线 Publish。
 	for p := Priority(0); p <= PrioLow; p++ {
 		for _, ps := range sorted {
 			if ps.prio == p {

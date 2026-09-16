@@ -116,6 +116,7 @@ func (b *BaseStrategy) ParamDefs() []map[string]any { return nil }
 type Engine struct {
 	strategies map[string]Strategy // name -> strategy
 	symbolMap  map[string][]string // symbol -> strategy names
+	subIDs     map[string]event.SubscriptionID // strategy name -> bus subscription
 	bus        *event.EventBus
 	mu         sync.RWMutex
 
@@ -145,6 +146,7 @@ func GetEngine(bus *event.EventBus) *Engine {
 		engineInstance = &Engine{
 			strategies: make(map[string]Strategy),
 			symbolMap:  make(map[string][]string),
+			subIDs:     make(map[string]event.SubscriptionID),
 			bus:        bus,
 		}
 	})
@@ -174,7 +176,9 @@ func (e *Engine) Register(s Strategy) error {
 	// Subscribe to all relevant event types for this strategy's symbol.
 	// 订阅回调带 recover：单个策略/信号处理 panic 不得拖垮整个事件总线
 	// 与网关进程（真实崩溃案例：信号下单 nil deref 在回补重放时炸掉主进程）。
-	e.bus.Subscribe(s.Symbol(), event.PrioNormal, func(evt event.Event) {
+	// 订阅 id 必须登记，Unregister 时退订——否则停止的策略会变成僵尸订阅，
+	// 继续白收事件（每次重启策略累积一个）。
+	e.subIDs[name] = e.bus.Subscribe(s.Symbol(), event.PrioNormal, func(evt event.Event) {
 		defer func() {
 			if r := recover(); r != nil {
 				log.Printf("[StrategyEngine] panic in strategy %s dispatch (recovered): %v", s.Name(), r)
@@ -206,6 +210,11 @@ func (e *Engine) Unregister(name string) error {
 	}
 	if len(e.symbolMap[symbol]) == 0 {
 		delete(e.symbolMap, symbol)
+	}
+
+	if subID, ok := e.subIDs[name]; ok {
+		e.bus.Unsubscribe(subID)
+		delete(e.subIDs, name)
 	}
 
 	s.Stop()

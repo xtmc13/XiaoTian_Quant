@@ -40,10 +40,12 @@ XiaoTian_Quant（小天量化 v3.0）已完成"从用不了到全链路真实数
 
 ## 当前进行中的事（接手后按此继续）
 
-1. **333 修复待执行**：病根=保存时策略类型错配（trend_long+CRA参数）+ live 模式。
-   修复脚本已在服务器 `/tmp/fix333.py`（改 cra_contract + 强制 paper，参数全保留）。
-   执行：`python3 /tmp/fix333.py && cat /tmp/fix333-result.txt`，然后看
-   `grep -a "7bb9a9a6" ~/gateway.log` 确认 `cra strategy started`。
+1. ~~**333 修复**~~ ✅ 2026-09-16 完成。修复脚本已执行（策略类型→cra_contract、强制 paper、
+   参数保留），且揪出并修复了一个 P1 死锁：dispatch 持 bus RLock 调 handler，信号→下单
+   重入 Publish 与并发 Subscribe 成环（Start 请求永久挂死、174 个 goroutine 堆积、SIGTERM
+   都杀不掉）。修法=event.dispatch 快照订阅后放锁再调 handler + Engine 补订阅退订。
+   已验证：333/222/MACD 启动均 <12ms 返回，333 全链路（首根 15m K线→cra 首单→paper FILLED）实测跑通。
+   详见 TODO.md 验证记录末节。
 2. **待用户答复**：333 是在 UI 哪个页面菜单创建的（要堵保存暗道，需知道入口；
    请求日志不记路径，这是已知观测缺口，可考虑给 RequestLogger 加 path 字段）。
 3. **待用户操作**：云控制台安全组放行 TCP 8088 和 3000。
@@ -51,6 +53,8 @@ XiaoTian_Quant（小天量化 v3.0）已完成"从用不了到全链路真实数
 ## 已知坑（血泪史，别再踩）
 
 - `pkill -f "xxx"` 会匹配到自己的命令行 → shell 自杀、后续命令不执行。用 `pkill -x 进程名`。
+- 启动网关必须显式 `PORT=8080`：若 shell 环境自带 PORT（如从 Claude UI 的 node 环境带出的
+  PORT=3000），config.yaml 无 server.port 时会fallback到 env，撞车 3000 直接启动失败。
 - SSH 到该服务器会随机断连；重启服务一律 `setsid` 脱离会话；连续断连会触发
   fail2ban 封 IP（约几十分钟~几小时自动解，别高频重试刷新计时）。
 - 旧进程残留导致"新代码不生效"的假象：改完代码先 `pgrep -x gateway` 核对进程
