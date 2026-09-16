@@ -71,6 +71,10 @@ func main() {
 	// ── Register strategy factories for combo engine ──
 	registerStrategyFactories()
 
+	// ── K线供给管：轮询币安 REST，新闭合 K 线发布 model.Bar 事件到总线，
+	// 让吃 K 线（OnBar）的策略在实盘能收到真实 K 线。 ──
+	handler.SetKlineFeeder(market.NewKlineFeeder(appCtx.EventBus))
+
 	// ── Setup Gin ──
 	setupGinMode(cfg)
 	r := setupGinEngine(appCtx)

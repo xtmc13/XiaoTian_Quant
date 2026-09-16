@@ -312,7 +312,11 @@ func (s *BinanceWSStream) handleTicker(data json.RawMessage, stream string) {
 	s.prices[ticker.Symbol] = last
 	s.pricesMu.Unlock()
 
-	// Build bar-like data from ticker (approximate, for strategies that need bars)
+	// Build bar-like data from the 24h ticker for the optional local onBar
+	// callback only. It must NOT be published on the bus as TypeBar: it is not
+	// a real kline, and mixing it with real closed klines (market.KlineFeeder)
+	// would corrupt bar-consuming strategies. Real klines are published by
+	// market.KlineFeeder polling Binance REST.
 	bar := model.Bar{
 		Symbol:   ticker.Symbol,
 		Open:     parseFloat(ticker.OpenPrice),
@@ -322,14 +326,6 @@ func (s *BinanceWSStream) handleTicker(data json.RawMessage, stream string) {
 		Volume:   vol,
 		Interval: "1m",
 		Time:     time.Now().UnixMilli(),
-	}
-
-	if s.bus != nil {
-		s.bus.Publish(event.Event{
-			Type:   event.TypeBar,
-			Symbol: ticker.Symbol,
-			Data:   bar,
-		})
 	}
 
 	if s.onBar != nil {

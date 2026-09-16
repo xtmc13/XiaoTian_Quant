@@ -8,13 +8,56 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xiaotian-quant/gateway/internal/market"
 	"github.com/xiaotian-quant/gateway/internal/store"
 	"github.com/xiaotian-quant/gateway/internal/strategy"
 	"github.com/xiaotian-quant/gateway/internal/strategy/strategies"
 )
+
+// ── K线供给管 ──
+// 币安 WS 不向事件总线推真实 K 线，吃 K 线（OnBar）的策略靠 KlineFeeder
+// 轮询 REST 补齐：策略配置启动时为 symbol+timeframe 建轮询，停止时释放。
+var (
+	klineFeeder  *market.KlineFeeder
+	klineFeedsMu sync.Mutex
+	klineFeeds   = map[string][2]string{} // configID -> {symbol, interval}
+)
+
+// SetKlineFeeder 注入 K 线供给管（参考 SetGridService，main 启动时接线）。
+func SetKlineFeeder(f *market.KlineFeeder) { klineFeeder = f }
+
+// ensureKlineFeed 为配置 id 启动对应 symbol+timeframe 的 K 线轮询。
+// symbol 用引擎实际订阅的 wrapped.Symbol()，保证事件 topic 与策略订阅一致。
+func ensureKlineFeed(id, symbol, timeframe string) {
+	if klineFeeder == nil || symbol == "" {
+		return
+	}
+	interval := strings.TrimSpace(strings.ToLower(timeframe))
+	if interval == "" {
+		interval = "15m"
+	}
+	klineFeedsMu.Lock()
+	klineFeeds[id] = [2]string{symbol, interval}
+	klineFeedsMu.Unlock()
+	klineFeeder.EnsureSymbol(symbol, interval)
+}
+
+// releaseKlineFeed 停掉配置 id 的 K 线轮询（幂等）。
+func releaseKlineFeed(id string) {
+	klineFeedsMu.Lock()
+	key, ok := klineFeeds[id]
+	if ok {
+		delete(klineFeeds, id)
+	}
+	klineFeedsMu.Unlock()
+	if ok && klineFeeder != nil {
+		klineFeeder.ReleaseSymbol(key[0], key[1])
+	}
+}
 
 func GetStrategyConfigs(c *gin.Context) {
 	category := c.Query("category")
@@ -349,6 +392,7 @@ func startStrategyInEngine(id string, item map[string]any) error {
 	}
 
 	// If already registered with this id, stop and unregister first
+	releaseKlineFeed(id)
 	if existing := eng.Get(id); existing != nil {
 		_ = eng.Stop(id)
 		_ = eng.Unregister(id)
@@ -372,6 +416,13 @@ func startStrategyInEngine(id string, item map[string]any) error {
 	// Build params from config
 	params := buildStrategyParams(item)
 
+	// Normalize the Binance symbol to its canonical uppercase form so the
+	// engine subscription topic, the strategy symbol, and the K线供给管
+	// publish topic all agree.
+	if sym, ok := params["symbol"].(string); ok {
+		params["symbol"] = strings.ToUpper(strings.TrimSpace(sym))
+	}
+
 	// Filter params to only those accepted by the strategy's parameter registry.
 	// CRA-style configs carry many frontend fields that indicator strategies do not declare.
 	if registry := s.GetParameters(); registry != nil {
@@ -392,6 +443,10 @@ func startStrategyInEngine(id string, item map[string]any) error {
 		_ = eng.Unregister(id)
 		return fmt.Errorf("start strategy: %w", err)
 	}
+	// 引擎订阅的 topic 是 wrapped.Symbol()（Start 应用参数后的值），
+	// K 线供给管必须按同一 symbol 发布，策略的 OnBar 才收得到。
+	timeframe, _ := item["timeframe"].(string)
+	ensureKlineFeed(id, wrapped.Symbol(), timeframe)
 	return nil
 }
 
@@ -439,6 +494,7 @@ func isContractCategory(item map[string]any) bool {
 
 // stopStrategyInEngine stops and unregisters a strategy from the engine.
 func stopStrategyInEngine(id string) {
+	releaseKlineFeed(id)
 	eng := strategy.GetEngine(nil)
 	if eng == nil {
 		return
