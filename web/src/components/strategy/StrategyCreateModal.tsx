@@ -9,7 +9,7 @@ import { CRAParamForm, craParamsToApiPayload, type CRAParams } from './CRAParamF
 import { STRATEGY_PRESETS, type Preset, type PresetKey } from './StrategyPresets'
 import { ExchangeSelectModal } from './ExchangeSelectModal'
 import { createDefaultCRAParams, migrateLegacyConfigToCRAParams } from '@/lib/strategyUtils'
-import { X, CheckCircle2, ChevronRight, ChevronDown, Activity, FileCode2, Zap, BarChart3, Globe } from 'lucide-react'
+import { X, CheckCircle2, ChevronRight, ChevronDown, Activity, FileCode2, BarChart3, Globe } from 'lucide-react'
 
 /* ─── helpers ───────────────────────────────────────────────────────── */
 function inferTimeframeFromCRAParams(cra: CRAParams): string {
@@ -339,7 +339,7 @@ export function StrategyCreateModal({
       leverage: market === 'spot' ? 1 : craParams.leverage,
       trade_direction: market === 'spot' ? 'long' : craParams.direction,
       market_type: market === 'spot' ? 'spot' : 'swap',
-      execution_mode: executionMode,
+      execution_mode: 'paper', // 安全红线：一律 paper，未开放实盘
       notification_config: { channels: notifyChannels },
       strategy_type: strategyType,
       status: 'stopped',
@@ -691,32 +691,9 @@ export function StrategyCreateModal({
             <>
               <div className="rounded-xl border border-quant-border bg-quant-bg-tertiary p-4">
                 <div className="text-xs font-semibold mb-3">执行模式</div>
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    onClick={() => setExecutionMode('live')}
-                    className={cn(
-                      'flex items-start gap-3 p-4 rounded-xl border transition-all text-left',
-                      executionMode === 'live'
-                        ? 'border-quant-gold bg-quant-gold/5'
-                        : 'border-quant-border hover:border-quant-gold/30'
-                    )}
-                  >
-                    <div
-                      className={cn(
-                        'w-10 h-10 rounded-lg flex items-center justify-center shrink-0',
-                        executionMode === 'live'
-                          ? 'bg-quant-gold/10 text-quant-gold'
-                          : 'bg-quant-bg text-muted-foreground'
-                      )}
-                    >
-                      <Zap className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <div className="text-xs font-semibold">实盘交易</div>
-                      <div className="text-[10px] text-muted-foreground mt-1">连接交易所API自动执行买卖</div>
-                    </div>
-                    {executionMode === 'live' && <CheckCircle2 className="w-4 h-4 text-quant-gold ml-auto shrink-0" />}
-                  </button>
+                {/* 实盘选项已下线：平台未开放实盘，任何保存都会被后端压回 paper
+                    （安全红线 2026-09-17）。保留单一模拟盘选项。 */}
+                <div className="grid grid-cols-1 gap-3">
                   <button
                     onClick={() => setExecutionMode('signal')}
                     className={cn(
@@ -737,8 +714,10 @@ export function StrategyCreateModal({
                       <Activity className="w-5 h-5" />
                     </div>
                     <div>
-                      <div className="text-xs font-semibold">信号通知</div>
-                      <div className="text-[10px] text-muted-foreground mt-1">仅发送交易信号，不自动下单</div>
+                      <div className="text-xs font-semibold">模拟盘交易</div>
+                      <div className="text-[10px] text-muted-foreground mt-1">
+                        撮合引擎模拟成交（paper），不产生真实交易所下单
+                      </div>
                     </div>
                     {executionMode === 'signal' && (
                       <CheckCircle2 className="w-4 h-4 text-quant-gold ml-auto shrink-0" />

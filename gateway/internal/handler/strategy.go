@@ -385,13 +385,14 @@ func fillStrategyFieldDefaults(item map[string]any, payloadConfig map[string]any
 			item["category"] = "spot"
 		}
 	}
-	// 安全红线：一切下单默认 paper。合约策略等入口会显式传 "live"，
-	// 空值兜底挡不住——live 意味着信号单直连真实交易所（333/444 两次
-	// 事故都是 UI 保存路径产出 execution_mode=live 所致）。平台尚未开放
-	// 实盘，这里统一压回 paper 并留痕；将来开放实盘时应改为显式白名单校验。
-	if em := strings.ToLower(getString(item, "execution_mode", "")); em == "live" {
-		log.Printf("[strategy] execution_mode=live 已压回 paper（安全红线，未开放实盘）: id=%v name=%v type=%v",
-			item["id"], item["name"], item["strategy_type"])
+	// 安全红线：一切下单默认 paper。合约策略等入口会显式传 "live"/"signal"，
+	// 空值兜底挡不住——这些值会让信号单直连真实交易所（resolveExchange 有
+	// 凭证即返回 binance；333/444 事故 + 前端默认 'signal' 均因此危险）。
+	// 平台尚未开放实盘，任何非 paper 值统一压回 paper 并留痕；将来开放实盘
+	// 时应改为显式白名单校验。
+	if em := strings.ToLower(getString(item, "execution_mode", "")); em != "" && em != "paper" {
+		log.Printf("[strategy] execution_mode=%s 已压回 paper（安全红线，未开放实盘）: id=%v name=%v type=%v",
+			em, item["id"], item["name"], item["strategy_type"])
 		item["execution_mode"] = "paper"
 	}
 	if getString(item, "execution_mode", "") == "" {
