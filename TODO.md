@@ -91,3 +91,14 @@
   供给管则直接喂最近 100 根闭合 K 线养指标，信号丢弃）；②updateStrategyCapital
   两条静默 early-return 补 WARN。实测：444 秒收首根 K 线、首单 paper FILLED、
   投入资金自动写入 147.93。另：222/MACD 已被用户从 UI 删除（非系统行为）。
+- 2026-09-17：【保存暗道三重封堵】用户确认 333/444 均从"合约策略"页创建，且要求
+  "合约策略不能进策略机器人里面去"。三重修复（commit b285d5b + d0ab758，均已部署）：
+  ①后端红线加宽：原只压 live，但前端默认发送 execution_mode='signal'——signal
+  同样直连真实交易所（resolveExchange 有凭证即 binance），危险同级。现任何非
+  paper 值保存时一律压回 paper 并留痕；信号下单路径改白名单式（非显式 live 一律
+  paper）作第二道防线。②策略机器人列表过滤：useBotData 按 market_type=swap
+  排除合约策略（列表接口未带 category，swap 是可靠判别字段）。③前端创建弹窗/
+  面板下线"实盘交易"选项，唯一选项"模拟盘交易（paper）"，payload 固定 paper。
+  实测：POST execution_mode=signal 落库为 paper，日志 `execution_mode=signal
+  已压回 paper`；前端已重新构建部署。教训：前端"信号通知"选项文案与后端语义
+  长期不一致（号称不下单实际直连交易所），UI 文案不可信，安全红线必须在后端。
