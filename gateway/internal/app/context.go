@@ -315,9 +315,16 @@ func (ctx *Context) wireOrderManager() {
 			}
 			margin := notional / leverage
 
-			quote := "USDT"
-			qb := acct.Balances[quote]
-			if qb == nil || qb.Free < margin {
+			qb := acct.Balances["USDT"]
+			if qb == nil {
+				if acct.Exchange != "paper" {
+					return fmt.Errorf("insufficient USDT margin")
+				}
+				// paper 账户兜底建余额条目，避免 nil deref（真实崩溃案例）
+				qb = &model.Balance{Currency: "USDT"}
+				acct.Balances["USDT"] = qb
+			}
+			if qb.Free < margin {
 				return fmt.Errorf("insufficient margin: %.4f < %.4f USDT", qb.Free, margin)
 			}
 			qb.Free -= margin
@@ -334,14 +341,28 @@ func (ctx *Context) wireOrderManager() {
 
 		if req.Side == model.SideBuy {
 			qb := acct.Balances[quote]
-			if qb == nil || qb.Free < cost {
+			if qb == nil {
+				if acct.Exchange != "paper" {
+					return fmt.Errorf("insufficient %s balance", quote)
+				}
+				qb = &model.Balance{Currency: quote}
+				acct.Balances[quote] = qb
+			}
+			if qb.Free < cost {
 				return fmt.Errorf("insufficient %s balance: %.2f < %.2f", quote, qb.Free, cost)
 			}
 			qb.Free -= cost
 			qb.Used += cost
 		} else {
 			bb := acct.Balances[base]
-			if bb == nil || bb.Free < req.Quantity {
+			if bb == nil {
+				if acct.Exchange != "paper" {
+					return fmt.Errorf("insufficient %s balance", base)
+				}
+				bb = &model.Balance{Currency: base}
+				acct.Balances[base] = bb
+			}
+			if bb.Free < req.Quantity {
 				return fmt.Errorf("insufficient %s balance: %.2f < %.2f", base, bb.Free, req.Quantity)
 			}
 			bb.Free -= req.Quantity

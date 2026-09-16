@@ -171,8 +171,15 @@ func (e *Engine) Register(s Strategy) error {
 	e.strategies[name] = s
 	e.symbolMap[s.Symbol()] = append(e.symbolMap[s.Symbol()], name)
 
-	// Subscribe to all relevant event types for this strategy's symbol
+	// Subscribe to all relevant event types for this strategy's symbol.
+	// 订阅回调带 recover：单个策略/信号处理 panic 不得拖垮整个事件总线
+	// 与网关进程（真实崩溃案例：信号下单 nil deref 在回补重放时炸掉主进程）。
 	e.bus.Subscribe(s.Symbol(), event.PrioNormal, func(evt event.Event) {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[StrategyEngine] panic in strategy %s dispatch (recovered): %v", s.Name(), r)
+			}
+		}()
 		e.dispatch(s, evt)
 	}, event.TypeTick, event.TypeOrderBook, event.TypeBar, event.TypeOrderUpdate)
 
