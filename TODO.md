@@ -21,7 +21,7 @@
 
 - [x] 1. **端到端基线验证**：干净环境走通 构建 → 启动 → 登录 → 模拟盘下第一单，结果记录在本文件末节。工具链已就绪（Go 1.25.3 / Node 22 / nginx 8088）。✅ 2026-09-15 完成，见末节验证记录。
 - [x] 2. **修复"全新部署风控拦截首单"**：首次下单被 `drawdown 100% > 10%` 拦截（`gateway/internal/risk/manager.go`）；paper 模式应初始化 peak equity 或首单默认放行。✅ 2026-09-15：MaxDrawdown 增加无权益基线放行防御；真正卡单主因是风控上下文构建同步等网络（60s+），已改为离线合成价格兜底。
-- [ ] 3. **paper 行情接真实数据源**：无 PriceProvider 时返回合成数据（Simulated 标记）；接入币安公共行情（无需密钥），或在页面明确标注"演示数据"。
+- [x] 3. **paper 行情接真实数据源**：无 PriceProvider 时返回合成数据（Simulated 标记）；接入币安公共行情（无需密钥），或在页面明确标注"演示数据"。✅ 2026-09-16：WS 行情流修复（代理死锁：env 代理不可达时回退直连由 TUN 接管）后 connected 成功；BTC 实时快照/1m K 线实测为真实币安数据。合成价兜底逻辑保留作为断网保护。
 - [x] 4. **数据层修复**（2026-09-15）：引入 `internal/store/migrations/sql/*.sql` 纯 SQL 迁移机制（`internal/store/sql_migrations.go`）；修复 `agent_audit_log` 列定义冲突；修复 `ticks` 表初始化竞态；补 4 个高频过滤列索引。
 
 ## P1 —— 稳定性与可信度
