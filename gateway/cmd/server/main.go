@@ -6,12 +6,15 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/app"
 	"github.com/xiaotian-quant/gateway/internal/config"
+	"github.com/xiaotian-quant/gateway/internal/grid"
 	"github.com/xiaotian-quant/gateway/internal/handler"
 	"github.com/xiaotian-quant/gateway/internal/market"
 	"github.com/xiaotian-quant/gateway/internal/metrics"
@@ -46,6 +49,22 @@ func main() {
 	}
 	store.LoadConfig()
 	store.LoadStrategyConfigs()
+
+	// ── Grid bot runner: 7×24 real-market grid trading bots ──
+	// 价格源直接用 BinanceWS 内存价（零网络）；返回 0 时由 runner 跳过本轮。
+	gridRepo := store.NewGridRepo()
+	priceSource := func(symbol string) float64 {
+		if appCtx.BinanceWS != nil {
+			return appCtx.BinanceWS.GetPrice(symbol)
+		}
+		return 0
+	}
+	gridRunner := grid.NewRunner(priceSource, gridRepo)
+	// 启动即恢复 grid_bots 中 status='running' 的机器人，之后每 60s 复查，
+	// 防御进程重启漏恢复或行情无效导致的跳过。
+	go gridRunner.RetryResume(func() ([]*store.GridBotRecord, error) {
+		return gridRepo.List(map[string]any{"status": "running"}, 0)
+	}, 60*time.Second)
 
 	// ── Register strategy factories for combo engine ──
 	registerStrategyFactories()
@@ -86,6 +105,14 @@ func main() {
 	}
 
 	go func() {
+		// Grid bots must stop BEFORE appCtx.WaitForShutdown returns: that
+		// call runs Shutdown(), which closes the store — a StopAll after it
+		// would persist nothing. Both signal channels receive the same
+		// SIGINT/SIGTERM, so WaitForShutdown proceeds immediately after.
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		<-sigCh
+		gridRunner.StopAll()
 		appCtx.WaitForShutdown()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
