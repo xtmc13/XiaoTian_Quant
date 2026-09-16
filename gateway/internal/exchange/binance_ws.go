@@ -150,6 +150,12 @@ func wsDialer() *websocket.Dialer {
 	if proxyURL == "" {
 		proxyURL = os.Getenv("https_proxy")
 	}
+	// 环境变量给的代理不可达时回退直连：TUN 模式的系统代理在 IP 层
+	// 接管流量，应用层无需（也不能）走一个死掉的代理端口。
+	if proxyURL != "" && !testProxy(proxyURL) {
+		log.Printf("[binance_ws] proxy %s unreachable, falling back to direct dial", proxyURL)
+		proxyURL = ""
+	}
 	if proxyURL == "" {
 		// Try common proxy ports
 		for _, addr := range []string{"http://127.0.0.1:7897", "http://127.0.0.1:7890", "http://127.0.0.1:1080", "http://127.0.0.1:10808"} {
