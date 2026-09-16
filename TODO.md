@@ -82,3 +82,12 @@
   ②改 SET 语义：开仓=该单名义价值、平仓=0（用户口径 1U×150x=150U，2026-09-16 用户
   明确）。实测：日志 strategy= 已显示 7bb9a9a6；连续两笔 FILLED 后 333 显示稳定
   147.88（随 BTC 75900 的名义值），不再累加。commit 86ea66d。
+- 2026-09-16：【444 上线 + 新策略暖机修复】用户从 UI 新建 444，保存路径又产出
+  错配记录（strategy_type=trend_long、**execution_mode=live**）——证实"保存暗道"
+  仍在（HANDOFF 进行中的事 #2 待用户答复入口页面）。已按 333 同款修复
+  （cra_contract+paper）。启动后暴露两个 bug 并修掉（commit c8d877e）：
+  ①K 线供给管回补只在轮询 goroutine 新起时发生一次，同 symbol 已有策略在跑时
+  新策略最长干等一个完整周期——新增直接暖机（EnsureSymbol 返回是否新起，已有
+  供给管则直接喂最近 100 根闭合 K 线养指标，信号丢弃）；②updateStrategyCapital
+  两条静默 early-return 补 WARN。实测：444 秒收首根 K 线、首单 paper FILLED、
+  投入资金自动写入 147.93。另：222/MACD 已被用户从 UI 删除（非系统行为）。
