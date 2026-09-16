@@ -242,6 +242,15 @@ func (b *EventBus) Publish(event Event) {
 	}
 }
 
+// PublishSync dispatches the event synchronously in the caller's goroutine.
+// Unlike Publish (multi-worker queue), this preserves caller-side ordering —
+// required for ordered sequences such as kline backfill, where concurrent
+// dispatch would scramble the bar order that indicator strategies depend on.
+// The caller is responsible for not blocking on slow handlers.
+func (b *EventBus) PublishSync(event Event) {
+	b.dispatch(event)
+}
+
 // PublishBlocking publishes an event and blocks until it's queued.
 func (b *EventBus) PublishBlocking(event Event) {
 	b.mu.RLock()
