@@ -213,6 +213,8 @@ func (f *KlineFeeder) run(symbol, interval string, e *feedEntry) {
 						}
 					}
 					e.lastOpen = bars[len(bars)-1].Time
+					log.Printf("[KlineFeeder] backfilled %d bars for %s %s (baseline openTime=%d)",
+						len(bars), symbol, interval, e.lastOpen)
 				}
 			} else if bar.Time > e.lastOpen {
 				e.lastOpen = bar.Time

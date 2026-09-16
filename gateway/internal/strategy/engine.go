@@ -298,6 +298,7 @@ func (e *Engine) dispatch(s Strategy, evt event.Event) {
 		}
 	case event.TypeBar:
 		if bar, ok := evt.Data.(model.Bar); ok {
+			LogFirstBar(s.Name(), bar)
 			signal, err = s.OnBar(bar, e.bus)
 		}
 	case event.TypeOrderUpdate:
