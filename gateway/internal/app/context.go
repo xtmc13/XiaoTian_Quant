@@ -123,6 +123,17 @@ func (ctx *Context) Init(cfg *config.Config) error {
 	if cfg.Risk.PriceSanityPct > 0 {
 		riskCfg.PriceDeviationPct = cfg.Risk.PriceSanityPct
 	}
+	// position_limit_pct 等风控配置此前从未接线（恒用默认 50%），paper 时期
+	// 被 10 万假权益掩盖；权益改真实后暴露为 paper 单全被误杀。2026-09-16。
+	if cfg.Risk.PositionLimit > 0 {
+		riskCfg.MaxPositionPct = cfg.Risk.PositionLimit
+	}
+	if cfg.Risk.NetExposureLimit > 0 {
+		riskCfg.MaxExposurePct = cfg.Risk.NetExposureLimit
+	}
+	if cfg.Risk.MaxDrawdown > 0 {
+		riskCfg.MaxDrawdownPct = cfg.Risk.MaxDrawdown
+	}
 	ctx.RiskManager = risk.NewManager(riskCfg)
 	ctx.Logger.Info("Risk manager initialized")
 
@@ -1167,16 +1178,28 @@ func (ctx *Context) buildRiskContext(req *order.Request) *risk.Context {
 		bid, ask = price*0.9999, price*1.0001
 	}
 
+	// 权益/曝险基准按订单执行目标区分：paper 单用模拟账本权益做分母（否则
+	// 0.2U 真实权益会让 150U 名义的 paper 单曝险 70000%+ 被风控误杀）；
+	// 实盘单用真实权益。
+	equity := ctx.PortfolioManager.TotalEquity()
+	netExposure := ctx.PortfolioManager.NetExposure()
+	if req.Exchange == "paper" {
+		if pe := ctx.PortfolioManager.PaperEquity(); pe > 0 {
+			equity = pe
+			netExposure = ctx.PortfolioManager.NetExposureAgainst(pe)
+		}
+	}
+
 	return &risk.Context{
 		Symbol:           req.Symbol,
 		CurrentPrice:     price,
 		OrderPrice:       price,
 		OrderQuantity:    req.Quantity,
 		OrderSide:        req.Side,
-		TotalEquity:      ctx.PortfolioManager.TotalEquity(),
+		TotalEquity:      equity,
 		AvailableBalance: ctx.PortfolioManager.AvailableBalance(),
 		PositionCount:    len(ctx.PortfolioManager.GetPositions()),
-		NetExposure:      ctx.PortfolioManager.NetExposure(),
+		NetExposure:      netExposure,
 		MaxDrawdownPct:   ctx.PortfolioManager.Drawdown(),
 		BidPrice:         bid,
 		AskPrice:         ask,

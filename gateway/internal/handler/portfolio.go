@@ -160,6 +160,7 @@ func PortfolioSummary(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"total_equity":             mgr.TotalEquity(),
+		"paper_equity":             mgr.PaperEquity(),
 		"total_pnl":                mgr.TotalPnL(),
 		"available_balance":        mgr.AvailableBalance(),
 		"margin_used":              mgr.MarginUsed(),

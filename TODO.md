@@ -61,3 +61,16 @@
   cra first order long qty=0.001948 → paper FILLED）；goroutine 总数 218（死锁时）→35（健康）。
   ③已知坑+1：shell 环境若自带 PORT（如 node 环境的 PORT=3000），config.yaml 无 server.port
   会 fallback 到 env 撞车 Claude UI 端口，网关启动失败——重启必须显式 PORT=8080。
+- 2026-09-16：【权益改真实数据】用户要求"权益必须是真实数据"。改前 total_equity=100004.75，
+  其中 10 万是假 paper 种子（真实币安账户仅 0.2U：earn 0.2064+futures dust 0.000146）。
+  修复三件事：①`TotalEquity()` 排除 paper 账户（只算真实交易所），新增 `PaperEquity()`
+  单独统计模拟账本，summary 接口与 Portfolio 页同步展示（总资产估值卡下加"模拟权益"）；
+  ②**paper 种子 10 万真凶实锤**：YAML 整数字面量解出为 int，`.(float64)` 断言静默失败
+  回退默认值——config 的 1000 从未生效；已兼容 int/int64/float64；③权益改真实后暴露两个
+  次生 bug 并修掉：`position_limit_pct: 2500` 等风控配置从未接线（恒默认 50%，此前被 10 万
+  假权益掩盖）；风控上下文对 paper 单用 0.2U 真实权益做分母→曝险 70000%+ 全被误杀——
+  现在按订单执行目标选基准（paper 单用 paper 权益+`NetExposureAgainst`）。顺带删掉
+  TotalEquity 每次调用打一行 debug 日志的刷屏逻辑。实测：total_equity=0.2066（真实）、
+  paper_equity=999.01（1000 种子-手续费，结算正常）、333 首单 paper FILLED、持仓
+  BTCUSDT 0.001948 已入账。已知表现变化：历史权益曲线里旧假数据会显示一次陡降
+  （xt_portfolio_snapshots 旧快照未清理）；回撤监控基准从假 10 万变为真实权益。

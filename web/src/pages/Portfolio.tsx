@@ -371,6 +371,7 @@ export function Portfolio() {
 
   const isLoading = portfolioLoading || balanceLoading
   const totalEquity = portfolio?.total_equity ?? 0
+  const paperEquity = portfolio?.paper_equity ?? 0
   const availableBalance = portfolio?.available_balance ?? 0
   const totalPnl = portfolio?.total_pnl ?? 0
   const marginUsed = portfolio?.margin_used ?? 0
@@ -394,6 +395,8 @@ export function Portfolio() {
                 icon={<Wallet className="h-4 w-4 text-amber-400" />}
                 label="总资产估值"
                 value={`$${formatCurrency(totalEquity)}`}
+                subValue={`$${formatCurrency(paperEquity)}`}
+                subLabel="模拟权益"
                 trend="neutral"
                 primary
               />

@@ -60,6 +60,9 @@ XiaoTian_Quant（小天量化 v3.0）已完成"从用不了到全链路真实数
 - 旧进程残留导致"新代码不生效"的假象：改完代码先 `pgrep -x gateway` 核对进程
   启动时间 vs 二进制 mtime，再验证。
 - 事件总线多 worker 并发分发不保序——K 线等有序序列必须用 `PublishSync`。
+- **权益口径（2026-09-16 起）**：`TotalEquity()`=真实交易所权益（paper 账户已排除）；
+  `PaperEquity()`=模拟账本。风控上下文按订单执行目标选基准（paper 单用 paper 权益）。
+  真实币安账户当前只有 ~0.2U，权益显示个位数是正常的，不是 bug。
 - 币安 WS 客户端以前会发"伪 1m Bar"（ticker 伪造），已移除；别恢复。
 - 手机 proot 环境：`/usr/local/go` 曾有 2024 旧版残留污染（ZeroValSize 重定义），
   装 Go 前必须 `rm -rf /usr/local/go`；绑定 <1024 端口会被 proot 拒绝（nginx 用 8088）。

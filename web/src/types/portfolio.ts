@@ -13,6 +13,7 @@ export interface Position {
 
 export interface PortfolioSummary {
   total_equity: number
+  paper_equity?: number
   total_pnl: number
   total_pnl_pct: number
   spot_balance: number

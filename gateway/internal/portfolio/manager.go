@@ -72,8 +72,21 @@ func NewManager() *Manager {
 		if en, ok := cfg["enabled"].(bool); ok {
 			paperEnabled = en
 		}
-		if v, ok := cfg["initial_balance"].(float64); ok && v > 0 {
-			paperInitial = v
+		// YAML 整数字面量解出来是 int，原来的 float64 断言会静默失败、
+		// 退回 10 万默认值（1000 配置生效为 100000 的真凶，2026-09-16 实锤）。
+		switch v := cfg["initial_balance"].(type) {
+		case float64:
+			if v > 0 {
+				paperInitial = v
+			}
+		case int:
+			if v > 0 {
+				paperInitial = float64(v)
+			}
+		case int64:
+			if v > 0 {
+				paperInitial = float64(v)
+			}
 		}
 	}
 	if paperEnabled {
@@ -651,6 +664,9 @@ func (m *Manager) GetPositions() []*model.PositionData {
 // ── Equity & KPIs ──
 
 // TotalEquity calculates the total portfolio equity.
+// 只统计真实交易所权益：模拟（paper）账户是内部记账本，混进来会让
+// 总资产显示成 10 万假数据（用户明确要求权益必须真实，2026-09-16）。
+// 模拟权益单独看 PaperEquity()。
 func (m *Manager) TotalEquity() float64 {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -660,16 +676,23 @@ func (m *Manager) TotalEquity() float64 {
 		other += v
 	}
 	m.otherExcMu.RUnlock()
-	// Include account balances (e.g., default paper trading account)
-	accountTotal := 0.0
+	total := m.spotTotalUSDT + m.futuresTotalUSDT + m.fundingTotalUSDT + m.earnTotalUSDT + other
+	return total
+}
+
+// PaperEquity returns the total balance of internal paper (simulated) accounts.
+func (m *Manager) PaperEquity() float64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	total := 0.0
 	for _, acct := range m.accounts {
+		if acct.Exchange != "paper" {
+			continue
+		}
 		for _, bal := range acct.Balances {
-			accountTotal += bal.Total
+			total += bal.Total
 		}
 	}
-	total := m.spotTotalUSDT + m.futuresTotalUSDT + m.fundingTotalUSDT + m.earnTotalUSDT + other + accountTotal
-	log.Printf("[Portfolio] TotalEquity debug: spot=%.2f futures=%.2f funding=%.2f earn=%.2f other=%.2f accounts=%.2f total=%.2f accounts_count=%d",
-		m.spotTotalUSDT, m.futuresTotalUSDT, m.fundingTotalUSDT, m.earnTotalUSDT, other, accountTotal, total, len(m.accounts))
 	return total
 }
 
@@ -820,7 +843,12 @@ func (m *Manager) TotalPnL() float64 {
 
 // NetExposure calculates total exposure as a percentage of equity.
 func (m *Manager) NetExposure() float64 {
-	equity := m.TotalEquity()
+	return m.NetExposureAgainst(m.TotalEquity())
+}
+
+// NetExposureAgainst 按指定权益基数计算曝险占比。paper 单必须用 paper 权益
+// 做分母，否则 0.2U 真实权益会让 paper 持仓曝险虚高几万倍被风控误杀（2026-09-16）。
+func (m *Manager) NetExposureAgainst(equity float64) float64 {
 	if equity <= 0 {
 		return 0
 	}
