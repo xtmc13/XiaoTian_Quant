@@ -326,6 +326,13 @@ func (e *Engine) dispatch(s Strategy, evt event.Event) {
 	if err != nil {
 		return
 	}
+	if signal != nil {
+		// 用包装后的策略名（=配置 id，如 7bb9a9a6）覆盖策略内部名（如
+		// cra_contract）。下游按 signal.Strategy 查配置/维护投入资金：
+		// 内部名查配置永远落空（投入资金累加从未生效），且多个同类型策略
+		// 按 strategy_type 兜底匹配会张冠李戴（222/333 同 cra_contract）。
+		signal.Strategy = s.Name()
+	}
 	if signal != nil && e.OnSignal != nil {
 		// Check DCA for existing positions before emitting signal
 		if e.dcaManager != nil && (signal.Direction == "LONG" || signal.Direction == "BUY" || signal.Direction == "long" || signal.Direction == "buy") {

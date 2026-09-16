@@ -1577,22 +1577,14 @@ func (ctx *Context) updateStrategyCapitalFromOrder(strategyID string, req *order
 		return
 	}
 
-	notional := price * req.Quantity
-	var margin float64
-	if req.MarketType == model.MarketSwap {
-		leverage := req.Leverage
-		if leverage <= 0 {
-			leverage = 1
-		}
-		margin = notional / leverage
-	} else {
-		margin = notional
-	}
+	// 投入资金按名义价值口径、SET 语义维护（用户口径：1U 保证金×150 杠杆
+	// =150U 投入，2026-09-16 用户明确）。不能用累加：CRA 重启后状态清零会
+	// 重放首单，累加会让每次重启都虚增 +150；且持仓不归属策略，无法精确
+	// 累计。平仓时 releaseStrategyCapital 归零。
+	invested := price * req.Quantity
 
-	initialCapital, _ := cfg["initial_capital"].(float64)
-	currentEquity, _ := cfg["current_equity"].(float64)
-	cfg["initial_capital"] = initialCapital + margin
-	cfg["current_equity"] = currentEquity + margin
+	cfg["initial_capital"] = invested
+	cfg["current_equity"] = invested
 	cfg["updated_at"] = float64(time.Now().UnixMilli())
 	store.SetStrategyConfig(strategyID, cfg)
 	store.PersistStrategyConfigs()
