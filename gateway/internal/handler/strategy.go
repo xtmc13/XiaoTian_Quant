@@ -33,9 +33,11 @@ func SetKlineFeeder(f *market.KlineFeeder) { klineFeeder = f }
 
 // ensureKlineFeed 为配置 id 启动对应 symbol+timeframe 的 K 线轮询。
 // symbol 用引擎实际订阅的 wrapped.Symbol()，保证事件 topic 与策略订阅一致。
-func ensureKlineFeed(id, symbol, timeframe string) {
+// 返回供给管是否新起轮询（true=bus 侧即将回补历史 K 线；false=供给管已在跑，
+// 需要调用方直接暖机策略，否则新策略要等下一根新闭合 K 线，最长一个周期）。
+func ensureKlineFeed(id, symbol, timeframe string) bool {
 	if klineFeeder == nil || symbol == "" {
-		return
+		return false
 	}
 	interval := strings.TrimSpace(strings.ToLower(timeframe))
 	if interval == "" {
@@ -44,7 +46,7 @@ func ensureKlineFeed(id, symbol, timeframe string) {
 	klineFeedsMu.Lock()
 	klineFeeds[id] = [2]string{symbol, interval}
 	klineFeedsMu.Unlock()
-	klineFeeder.EnsureSymbol(symbol, interval)
+	return klineFeeder.EnsureSymbol(symbol, interval)
 }
 
 // releaseKlineFeed 停掉配置 id 的 K 线轮询（幂等）。
@@ -603,7 +605,20 @@ func startStrategyInEngine(id string, item map[string]any) error {
 	// 引擎订阅的 topic 是 wrapped.Symbol()（Start 应用参数后的值），
 	// K 线供给管必须按同一 symbol 发布，策略的 OnBar 才收得到。
 	timeframe, _ := item["timeframe"].(string)
-	ensureKlineFeed(id, wrapped.Symbol(), timeframe)
+	if fresh := ensureKlineFeed(id, wrapped.Symbol(), timeframe); !fresh {
+		// 供给管已在运行（其他策略共用），不会有历史回补推给本策略。
+		// 直接喂最近 100 根已闭合 K 线暖机：只吃 K 线养指标状态，信号丢弃，
+		// 实盘信号等下一根真实 K 线（否则新策略最长要干等一个完整周期）。
+		if klineFeeder != nil {
+			if bars, err := klineFeeder.RecentClosedBars(wrapped.Symbol(), timeframe, 100); err == nil && len(bars) > 0 {
+				for _, b := range bars {
+					_, _ = wrapped.OnBar(b, nil)
+				}
+				log.Printf("[KlineFeed] direct warmup %d bars for strategy %s (%s %s)",
+					len(bars), id, wrapped.Symbol(), timeframe)
+			}
+		}
+	}
 	return nil
 }
 

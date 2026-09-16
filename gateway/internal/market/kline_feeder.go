@@ -90,10 +90,12 @@ func feedKey(symbol, interval string) string {
 // paired with one ReleaseSymbol. The first successful poll back-publishes up
 // to 100 recently closed bars (oldest→newest) for indicator warmup, then
 // only newly closed bars are published.
-func (f *KlineFeeder) EnsureSymbol(symbol, interval string) {
+// 返回值 started 表示本次是否新起了轮询 goroutine：false 说明供给管已在跑、
+// 不会再有历史回补——新启动的策略需要调用方自行暖机（否则要等下一根新 K 线）。
+func (f *KlineFeeder) EnsureSymbol(symbol, interval string) (started bool) {
 	symbol = normalizeFeedSymbol(symbol)
 	if symbol == "" {
-		return
+		return false
 	}
 	interval = strings.ToLower(strings.TrimSpace(interval))
 	if interval == "" {
@@ -106,13 +108,26 @@ func (f *KlineFeeder) EnsureSymbol(symbol, interval string) {
 	if e, ok := f.running[key]; ok {
 		e.refs++
 		f.mu.Unlock()
-		return
+		return false
 	}
 	e := &feedEntry{stop: make(chan struct{}), done: make(chan struct{}), refs: 1}
 	f.running[key] = e
 	f.mu.Unlock()
 
 	go f.run(symbol, interval, e)
+	return true
+}
+
+// RecentClosedBars returns the most recently closed bars (oldest→newest) for
+// direct strategy warmup when the feed loop is already running and will not
+// replay its backfill.
+func (f *KlineFeeder) RecentClosedBars(symbol, interval string, limit int) ([]model.Bar, error) {
+	symbol = normalizeFeedSymbol(symbol)
+	interval = strings.ToLower(strings.TrimSpace(interval))
+	if interval == "" {
+		interval = "15m"
+	}
+	return f.fetchClosedBars(symbol, interval, limit)
 }
 
 // ReleaseSymbol drops one ref for symbol+interval; the poll loop stops when

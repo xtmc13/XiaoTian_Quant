@@ -1566,6 +1566,7 @@ func (ctx *Context) updateStrategyCapitalFromOrder(strategyID string, req *order
 	}
 	cfg := store.GetStrategyConfig(strategyID)
 	if cfg == nil {
+		ctx.Logger.Warn("updateStrategyCapital: config not found", "strategy", strategyID)
 		return
 	}
 
@@ -1574,6 +1575,8 @@ func (ctx *Context) updateStrategyCapitalFromOrder(strategyID string, req *order
 		price = getLastPrice(req.Symbol)
 	}
 	if price <= 0 {
+		ctx.Logger.Warn("updateStrategyCapital: no price", "strategy", strategyID,
+			"symbol", req.Symbol, "reqPrice", req.Price)
 		return
 	}
 
