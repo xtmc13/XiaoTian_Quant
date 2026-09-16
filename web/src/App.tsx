@@ -55,6 +55,7 @@ const StrategyEditor = lazyPage(() => import('./pages/strategy/StrategyEditor'),
 const BotsStrategy = lazyPage(() => import('./pages/bots/BotsStrategy'), 'BotsStrategy')
 const BotsSignal = lazyPage(() => import('./pages/bots/BotsSignal'), 'BotsSignal')
 const BotsAI = lazyPage(() => import('./pages/bots/BotsAI'), 'BotsAI')
+const BotsGrid = lazyPage(() => import('./pages/bots/BotsGrid'), 'BotsGrid')
 const TradingSpot = lazyPage(() => import('./pages/trading/TradingSpot'), 'TradingSpot')
 const TradingContract = lazyPage(() => import('./pages/trading/TradingContract'), 'TradingContract')
 const ArbitrageCross = lazyPage(() => import('./pages/arbitrage/ArbitrageCross'), 'ArbitrageCross')
@@ -146,6 +147,7 @@ function DocumentTitle() {
     '/bots/strategy': '策略机器人 - 小天量化',
     '/bots/signal': '信号机器人 - 小天量化',
     '/bots/ai': 'AI机器人 - 小天量化',
+    '/bots/grid': '网格机器人 - 小天量化',
     '/arbitrage/cross': '跨所套利 - 小天量化',
     '/arbitrage/triangular': '三角套利 - 小天量化',
 
@@ -400,6 +402,14 @@ export default function App() {
                     element={
                       <PageShell>
                         <BotsAI />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/bots/grid"
+                    element={
+                      <PageShell>
+                        <BotsGrid />
                       </PageShell>
                     }
                   />

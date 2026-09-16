@@ -1261,4 +1261,77 @@ export const exchangeStatusApi = {
   setDefault: (id: string) => api.post<{ success: boolean }>('/exchange/default', { id }),
 }
 
+// ── Grid Trading ──
+export interface GridBot {
+  id: string
+  name: string
+  symbol: string
+  lower_price: number
+  upper_price: number
+  grid_count: number
+  investment: number
+  fee_rate: number
+  status: 'stopped' | 'running'
+  exchange?: string
+  realized_pnl: number
+  total_trades: number
+  base_qty: number
+  quote_balance: number
+  initial_equity: number
+  created_at: number
+  updated_at: number
+  started_at?: number
+  stopped_at?: number
+  is_running?: boolean
+}
+
+export interface GridTrade {
+  id: number
+  bot_id: string
+  level_index: number
+  side: string
+  price: number
+  quantity: number
+  quote_qty: number
+  fee: number
+  pnl: number
+  ts: number
+}
+
+export interface GridSnapshot {
+  id: number
+  bot_id: string
+  equity: number
+  price: number
+  realized_pnl: number
+  open_orders: number
+  ts: number
+}
+
+export interface GridBotDetail extends GridBot {
+  open_orders: number
+  trades: GridTrade[]
+  snapshots: GridSnapshot[]
+}
+
+export interface GridBotPayload {
+  name: string
+  symbol: string
+  lower_price: number
+  upper_price: number
+  grid_count: number
+  investment: number
+  fee_rate?: number
+}
+
+export const gridApi = {
+  list: () => api.get<{ bots: GridBot[] }>('/grid/bots').then((d) => d?.bots ?? []),
+  create: (data: GridBotPayload) => api.post<GridBot>('/grid/bots', data),
+  get: (id: string) => api.get<GridBotDetail>(`/grid/bots/${id}`),
+  update: (id: string, data: GridBotPayload) => api.put<GridBot>(`/grid/bots/${id}`, data),
+  remove: (id: string) => api.del<{ deleted: boolean; id: string }>(`/grid/bots/${id}`),
+  start: (id: string) => api.post<{ started: boolean; id: string; price: number }>(`/grid/bots/${id}/start`),
+  stop: (id: string) => api.post<{ stopped: boolean; id: string }>(`/grid/bots/${id}/stop`),
+}
+
 export { ApiError }

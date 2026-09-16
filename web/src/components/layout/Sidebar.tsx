@@ -83,6 +83,7 @@ const navItems: NavItem[] = [
       { path: '/bots/strategy', label: '策略机器人' },
       { path: '/bots/signal', label: '信号机器人' },
       { path: '/bots/ai', label: 'AI 机器人' },
+      { path: '/bots/grid', label: '网格机器人' },
     ],
   },
 
