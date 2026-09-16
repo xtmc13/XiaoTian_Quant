@@ -67,9 +67,13 @@ func NewManager() *Manager {
 	// （config.yaml 中 paper_account.enabled: false 可关闭，
 	// 接入真实交易所凭证后不再显示假权益）。
 	paperEnabled := true
+	paperInitial := 100000.0
 	if cfg, ok := store.GetConfig()["paper_account"].(map[string]any); ok {
 		if en, ok := cfg["enabled"].(bool); ok {
 			paperEnabled = en
+		}
+		if v, ok := cfg["initial_balance"].(float64); ok && v > 0 {
+			paperInitial = v
 		}
 	}
 	if paperEnabled {
@@ -77,7 +81,7 @@ func NewManager() *Manager {
 			ID:       "default",
 			Exchange: "paper",
 			Balances: map[string]*model.Balance{
-				"USDT": {Currency: "USDT", Total: 100000, Free: 100000, Used: 0},
+				"USDT": {Currency: "USDT", Total: paperInitial, Free: paperInitial, Used: 0},
 			},
 			Positions: make(map[string]*model.PositionData),
 			CreatedAt: time.Now().UnixMilli(),
