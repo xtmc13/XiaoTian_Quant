@@ -1298,6 +1298,11 @@ func (ctx *Context) wireStrategyEngine() {
 
 		// ── Contract support: load strategy config for leverage/TP/SL ──
 		if cfg := store.GetStrategyConfig(signal.Strategy); cfg != nil {
+			// 策略配置 execution_mode=paper 时强制 paper 撮合：dry_run 下
+			// 真实交易所路径不会自动成交，信号单会永远停在 NEW。
+			if em, _ := cfg["execution_mode"].(string); em == "paper" {
+				req.Exchange = "paper"
+			}
 			if cj, ok := cfg["config_json"].(string); ok && cj != "" {
 				if craParams, err := cra.ParseCRAParams(cj); err == nil && craParams.IsContract() {
 					req.MarketType = model.MarketSwap
@@ -1394,7 +1399,11 @@ func (ctx *Context) resolveSignalQuantity(signal model.Signal) float64 {
 	for _, cfg := range configs {
 		id, _ := cfg["id"].(string)
 		if id != signal.Strategy {
-			continue
+			// signal.Strategy 通常是策略内部名（如 "macd"）而非配置 id，
+			// 退而按 strategy_type 匹配，否则配置里的 quantity 永远不生效。
+			if st, _ := cfg["strategy_type"].(string); st != signal.Strategy {
+				continue
+			}
 		}
 		// Check config_json for quantity/stake_amount
 		if cj, ok := cfg["config_json"].(string); ok && cj != "" {
