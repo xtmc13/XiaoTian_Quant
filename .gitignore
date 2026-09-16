@@ -110,3 +110,4 @@ IMPLEMENTATION_REPORT_*.md
 *test_train.json
 .workbuddy/
 gateway/gateway
+gateway/runtime/
