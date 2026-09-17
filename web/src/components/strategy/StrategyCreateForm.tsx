@@ -81,8 +81,10 @@ const CRA_ONLY_TYPES = new Set(['cra_contract', 'cra_spot', 'trend_long', 'trend
 
 export interface StrategyCreateFormState {
   market: 'spot' | 'contract'
-  /** 派生（或 initialType 覆盖）后的策略类型，提交 payload 用。 */
+  /** 派生（或用户改选/initialType 覆盖）后的策略类型，提交 payload 用。 */
   strategyType: string
+  /** 改选策略类型（现货：现货网格/马丁趋势/华尔街/激进）。 */
+  setStrategyType: (t: string) => void
   name: string
   setName: Dispatch<SetStateAction<string>>
   symbol: string
@@ -128,11 +130,15 @@ export function useStrategyCreateForm(
 ): StrategyCreateFormState {
   const initialType = options?.initialType
   const editId = options?.editId
-  // 类型自动派生；initialType 兼容非 cra 原值（编辑回写/旧快捷入口），不强制改派生。
-  const strategyType = useMemo(
-    () => (initialType ? initialType : deriveStrategyType(market)),
-    [initialType, market]
-  )
+  // 类型默认按市场派生（contract→cra_contract，spot→cra_spot）；用户可用
+  // setStrategyType 在表单里改选（如现货的 马丁趋势/华尔街/激进），编辑时
+  // initialType 作为初始值且不强制覆盖用户改选。
+  const derivedType = useMemo(() => deriveStrategyType(market), [market])
+  const [typeOverride, setTypeOverride] = useState<string | null>(null)
+  const strategyType = typeOverride ?? initialType ?? derivedType
+  const setStrategyType = (t: string) => setTypeOverride(t)
+  // 市场切换时清除改选，跟随新市场默认值
+  useEffect(() => setTypeOverride(null), [market])
   const { create } = useStrategyData()
   const [isSubmitting, setIsSubmitting] = useState(false)
 
@@ -341,6 +347,7 @@ export function useStrategyCreateForm(
   return {
     market,
     strategyType,
+    setStrategyType,
     name,
     setName,
     symbol,
@@ -387,6 +394,7 @@ export function StrategyCreateFormSections({
   const {
     market,
     strategyType,
+    setStrategyType,
     name,
     setName,
     symbol,
@@ -448,6 +456,23 @@ export function StrategyCreateFormSections({
       <SectionCard title="基础信息">
         <div id="create-sec-basic" className="scroll-mt-20 -m-1 p-1">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {/* 策略类型（现货可选：现货网格/马丁趋势/华尔街/激进；合约自动=合约网格） */}
+            {market === 'spot' && (
+              <div className="bg-quant-bg border border-quant-gold/50 rounded-lg px-3 py-2 text-xs flex items-center gap-2 min-w-0">
+                <span className="text-muted-foreground shrink-0">策略类型</span>
+                <select
+                  value={strategyType}
+                  onChange={(e) => setStrategyType(e.target.value)}
+                  className="flex-1 min-w-0 bg-transparent focus:outline-none font-bold text-foreground bg-quant-bg"
+                >
+                  {STRAT_TYPES.spot.map((t) => (
+                    <option key={t.value} value={t.value}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             {/* 策略名称 */}
             <div className="bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs flex items-center gap-2 min-w-0">
               <span className="text-muted-foreground shrink-0">策略名称</span>
