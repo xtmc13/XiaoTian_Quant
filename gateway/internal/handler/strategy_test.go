@@ -6,11 +6,14 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/event"
+	"github.com/xiaotian-quant/gateway/internal/model"
 	"github.com/xiaotian-quant/gateway/internal/store"
 	"github.com/xiaotian-quant/gateway/internal/strategy"
+	"github.com/xiaotian-quant/gateway/internal/strategy/cra"
 	"github.com/xiaotian-quant/gateway/internal/strategy/strategies"
 )
 
@@ -669,4 +672,135 @@ func TestCreateBotConfigKindPersistence(t *testing.T) {
 	assertTrue(t, listContainsID(botList, id), "bot identity must survive update with execution_mode")
 	strategyList = getStrategyConfigList(t, r, "/strategies/configs?kind=strategy")
 	assertTrue(t, !listContainsID(strategyList, id), "bot must stay out of kind=strategy after update")
+}
+
+/* ── 任务 C：开仓指标选择器（indicator_params）后端配套 ──────── */
+
+// TestCreateStrategyConfigIndicatorParams 合法参数透传落库可回读；非法参数
+// （非对象/非正数/custom 缺字段）400；custom 合法不报错。
+func TestCreateStrategyConfigIndicatorParams(t *testing.T) {
+	r := setupRouter()
+	r.POST("/strategies/configs", CreateStrategyConfig)
+	r.GET("/strategies/configs/:id", GetStrategyConfig)
+
+	post := func(body string) (int, map[string]any) {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("POST", "/strategies/configs", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		r.ServeHTTP(w, req)
+		var resp map[string]any
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		return w.Code, resp
+	}
+
+	craCfg := `"first_order_amount":100,"add_positions":[{"order":1,"multiplier":1,"spread":0.03,"callback":0.003}]`
+
+	// 合法：顺势多 + indicator_params.macd 风格参数 → 200 且可回读。
+	okBody := `{"name":"指标参数","strategy_type":"cra_contract","symbol":"BTCUSDT","config":{` + craCfg + `,"open_indicator":"trend_long","indicator_params":{"trend_long":{"fast":10,"slow":30,"period":"5m"}}}}`
+	code, resp := post(okBody)
+	assertEq(t, code, http.StatusOK, "valid indicator_params create")
+	id, _ := resp["id"].(string)
+	assertTrue(t, id != "", "create id")
+	t.Cleanup(func() { store.DeleteStrategyConfig(id) })
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/strategies/configs/"+id, nil)
+	r.ServeHTTP(w, req)
+	assertEq(t, w.Code, http.StatusOK, "get config")
+	var got map[string]any
+	assertTrue(t, json.Unmarshal(w.Body.Bytes(), &got) == nil, "get config JSON")
+	cfg, _ := got["config"].(map[string]any)
+	assertTrue(t, cfg != nil, "config must be parsed")
+	ip, _ := cfg["indicator_params"].(map[string]any)
+	assertTrue(t, ip != nil, "indicator_params must survive round-trip")
+	tl, _ := ip["trend_long"].(map[string]any)
+	assertTrue(t, tl != nil && tl["fast"].(float64) == 10, "indicator_params.trend_long.fast must be readable")
+	assertTrue(t, cfg["open_indicator"].(string) == "trend_long", "open_indicator must survive round-trip")
+
+	// 非法：fast 非正数 → 400。
+	bad1 := `{"name":"坏参数1","strategy_type":"cra_contract","symbol":"BTCUSDT","config":{` + craCfg + `,"indicator_params":{"macd":{"fast":-5,"slow":26,"signal":9}}}}`
+	code, _ = post(bad1)
+	assertEq(t, code, http.StatusBadRequest, "non-positive indicator param must be 400")
+
+	// 非法：indicator_params 不是对象 → 400。
+	bad2 := `{"name":"坏参数2","strategy_type":"cra_contract","symbol":"BTCUSDT","config":{` + craCfg + `,"indicator_params":"oops"}}`
+	code, _ = post(bad2)
+	assertEq(t, code, http.StatusBadRequest, "non-object indicator_params must be 400")
+
+	// 非法：custom 缺 code_id → 400。
+	bad3 := `{"name":"坏参数3","strategy_type":"cra_contract","symbol":"BTCUSDT","config":{` + craCfg + `,"open_indicator":"custom","indicator_params":{"custom":{"name":"x"}}}}`
+	code, _ = post(bad3)
+	assertEq(t, code, http.StatusBadRequest, "custom without code_id must be 400")
+
+	// 合法：custom 完整 → 200（本期解析层接受、不报错）。
+	okCustom := `{"name":"自定义指标","strategy_type":"cra_contract","symbol":"BTCUSDT","config":{` + craCfg + `,"open_indicator":"custom","indicator_params":{"custom":{"code_id":42,"name":"我的指标"}}}}`
+	code, resp = post(okCustom)
+	assertEq(t, code, http.StatusOK, "valid custom indicator create must be accepted")
+	customID, _ := resp["id"].(string)
+	t.Cleanup(func() { store.DeleteStrategyConfig(customID) })
+}
+
+// TestIndicatorParamsFullChain 全链路自测：构造"顺势多"风格 CRA config（含
+// indicator_params）→ Create → Start（引擎直驱，假价格）→ 引擎收到配置且
+// 信号路径不报错。真实币安下单链路依赖外网与凭证，不可用则以本测试为准。
+func TestIndicatorParamsFullChain(t *testing.T) {
+	eng := strategy.GetEngine(event.NewEventBus(4096, 1))
+	strategy.RegisterStrategyFactory("cra_contract", func() strategy.Strategy {
+		return cra.NewCRAContractStrategy("cra_contract", "BTCUSDT")
+	})
+
+	r := setupRouter()
+	r.POST("/strategies/configs", CreateStrategyConfig)
+
+	body := `{
+		"name":"顺势多全链路",
+		"strategy_type":"cra_contract",
+		"symbol":"BTCUSDT",
+		"direction":"long",
+		"config":{
+			"first_order_amount":100,
+			"first_order_multiplier":1,
+			"order_count":3,
+			"enable_add_position":true,
+			"add_positions":[{"order":1,"multiplier":1,"spread":0.03,"callback":0.003}],
+			"tp_mode":"static","take_profit_method":"full","take_profit_ratio":0.013,
+			"open_indicator":"trend_long",
+			"indicator_params":{"trend_long":{"fast":10,"slow":30,"period":"close"}},
+			"market_type":"swap","leverage":10,"direction":"long"
+		}
+	}`
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/strategies/configs", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	assertEq(t, w.Code, http.StatusOK, "chain create")
+	var resp map[string]any
+	assertTrue(t, json.Unmarshal(w.Body.Bytes(), &resp) == nil, "chain create JSON")
+	id, _ := resp["id"].(string)
+	assertTrue(t, id != "", "chain create id")
+	t.Cleanup(func() {
+		stopStrategyInEngine(id)
+		store.DeleteStrategyConfig(id)
+	})
+
+	// Start（引擎直驱路径与 StartStrategyConfig 相同）。
+	item := store.GetStrategyConfig(id)
+	assertTrue(t, item != nil, "chain item must exist")
+	assertTrue(t, startStrategyInEngine(id, item) == nil, "startStrategyInEngine must succeed with indicator_params")
+
+	s := eng.Get(id)
+	assertTrue(t, s != nil, "strategy must be registered in engine")
+	assertTrue(t, s.IsRunning(), "strategy must be running")
+
+	// 假价格直驱 OnBar：信号路径不得报错，顺势多应发出 LONG 首单信号
+	//（open_* 门槛全 false → 指标确认放行；custom/trend_long 新键不改变门槛）。
+	sig, err := s.OnBar(model.Bar{Symbol: "BTCUSDT", Open: 50000, High: 50000, Low: 50000, Close: 50000, Volume: 1, Interval: "15m", Time: time.Now().UnixMilli()}, nil)
+	assertTrue(t, err == nil, "OnBar must not error")
+	assertTrue(t, sig != nil, "first bar must emit entry signal")
+	assertTrue(t, sig.Direction == "LONG", "顺势多 first signal must be LONG, got "+sig.Direction)
+
+	// RuntimeStatus 路径也不报错（上一迭代的面板数据源）。
+	if rs, ok := eng.RuntimeStatus(id); ok {
+		assertTrue(t, rs != nil, "runtime status must be non-nil for cra strategy")
+	}
 }

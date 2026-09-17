@@ -5,6 +5,13 @@ import type { AddPositionItem, MovingTPTier } from '@/types'
 import { percentToDecimal, decimalToPercent, PERCENTAGE_FIELD_THRESHOLDS } from '@/lib/craPercentUtils'
 import { AddPositionModal } from './AddPositionModal'
 import { MovingTPModal } from './MovingTPModal'
+import { IndicatorPicker } from './IndicatorPicker'
+import {
+  buildOpenIndicatorConfig,
+  detectOpenIndicator,
+  type IndicatorParamValue,
+  type OpenIndicatorKey,
+} from './indicatorPresets'
 
 export type MarketType = 'spot' | 'contract'
 
@@ -35,6 +42,11 @@ export interface CRAParams {
   openCounterEmaPeriod: 'close' | '5m' | '15m'
   openTrendEmaEnabled: boolean
   openTrendEmaPeriod: 'close' | '5m' | '15m'
+
+  // ── 开仓指标选择器（IndicatorPicker）──
+  openIndicator: OpenIndicatorKey
+  openIndicatorParams: Record<string, IndicatorParamValue>
+  openIndicatorCustom: { code_id: number; name: string } | null
 
   // ── 合约补仓指标 ──
   addMacdEnabled: boolean
@@ -96,6 +108,9 @@ export const DEFAULT_CRA_PARAMS: CRAParams = {
   openCounterEmaPeriod: '15m',
   openTrendEmaEnabled: false,
   openTrendEmaPeriod: '15m',
+  openIndicator: 'none',
+  openIndicatorParams: {},
+  openIndicatorCustom: null,
   addMacdEnabled: false,
   addMacdPeriod: 'close',
   addEmaEnabled: false,
@@ -319,29 +334,35 @@ export function CRAParamForm({ value, onChange, market, className }: CRAParamFor
         {isContract && (
           <div className="space-y-2">
             <div className="text-[11px] text-muted-foreground">开仓指标</div>
-            <div className="space-y-2">
-              <PeriodSelect
-                label="开仓 MACD 监测"
-                enabled={value.openMacdEnabled}
-                period={value.openMacdPeriod}
-                onToggle={(v) => update('openMacdEnabled', v)}
-                onPeriodChange={(v) => update('openMacdPeriod', v)}
-              />
-              <PeriodSelect
-                label="逆势 EMA 监测"
-                enabled={value.openCounterEmaEnabled}
-                period={value.openCounterEmaPeriod}
-                onToggle={(v) => update('openCounterEmaEnabled', v)}
-                onPeriodChange={(v) => update('openCounterEmaPeriod', v)}
-              />
-              <PeriodSelect
-                label="顺势 EMA 监测"
-                enabled={value.openTrendEmaEnabled}
-                period={value.openTrendEmaPeriod}
-                onToggle={(v) => update('openTrendEmaEnabled', v)}
-                onPeriodChange={(v) => update('openTrendEmaPeriod', v)}
-              />
-            </div>
+            <IndicatorPicker
+              indicator={value.openIndicator}
+              params={value.openIndicatorParams}
+              custom={value.openIndicatorCustom}
+              direction={value.direction}
+              onChange={(sel) => {
+                // 选择器为唯一事实源：由选择派生引擎兼容键（旧 open_* 字段
+                // 同步写入，供周期推断等既有消费方使用），复合指标锁定方向。
+                const cfg = buildOpenIndicatorConfig(sel.indicator, sel.params, sel.custom)
+                onChange({
+                  ...value,
+                  openIndicator: sel.indicator,
+                  openIndicatorParams: sel.params,
+                  openIndicatorCustom: sel.custom,
+                  openMacdEnabled: cfg.open_macd_enabled,
+                  openMacdPeriod: cfg.open_macd_period as CRAParams['openMacdPeriod'],
+                  openCounterEmaEnabled: cfg.open_counter_ema_enabled,
+                  openCounterEmaPeriod: cfg.open_counter_ema_period as CRAParams['openCounterEmaPeriod'],
+                  openTrendEmaEnabled: cfg.open_trend_ema_enabled,
+                  openTrendEmaPeriod: cfg.open_trend_ema_period as CRAParams['openTrendEmaPeriod'],
+                  direction:
+                    sel.indicator === 'trend_long'
+                      ? 'long'
+                      : sel.indicator === 'trend_short'
+                        ? 'short'
+                        : value.direction,
+                })
+              }}
+            />
           </div>
         )}
 
@@ -788,6 +809,8 @@ interface ApiPayload {
   moving_take_profit_tiers: ApiMovingTPTier[]
   open_macd_enabled: boolean
   open_macd_period: 'close' | '5m' | '15m'
+  open_indicator?: string
+  indicator_params?: Record<string, unknown>
   open_counter_ema_enabled: boolean
   open_counter_ema_period: 'close' | '5m' | '15m'
   open_trend_ema_enabled: boolean
@@ -841,12 +864,30 @@ export function craParamsToApiPayload(p: CRAParams): ApiPayload {
       ratio: percentToDecimal(t.ratio),
       drawback: percentToDecimal(t.drawback),
     })),
-    open_macd_enabled: p.openMacdEnabled,
-    open_macd_period: p.openMacdPeriod,
-    open_counter_ema_enabled: p.openCounterEmaEnabled,
-    open_counter_ema_period: p.openCounterEmaPeriod,
-    open_trend_ema_enabled: p.openTrendEmaEnabled,
-    open_trend_ema_period: p.openTrendEmaPeriod,
+    // 开仓指标：选择器为唯一事实源（选择器派生优先，旧字段回退）。
+    ...(() => {
+      if (p.openIndicator && p.openIndicator !== 'none') {
+        const cfg = buildOpenIndicatorConfig(p.openIndicator, p.openIndicatorParams, p.openIndicatorCustom)
+        return {
+          open_macd_enabled: cfg.open_macd_enabled,
+          open_macd_period: cfg.open_macd_period as ApiPayload['open_macd_period'],
+          open_counter_ema_enabled: cfg.open_counter_ema_enabled,
+          open_counter_ema_period: cfg.open_counter_ema_period as ApiPayload['open_counter_ema_period'],
+          open_trend_ema_enabled: cfg.open_trend_ema_enabled,
+          open_trend_ema_period: cfg.open_trend_ema_period as ApiPayload['open_trend_ema_period'],
+          open_indicator: cfg.open_indicator,
+          indicator_params: cfg.indicator_params,
+        }
+      }
+      return {
+        open_macd_enabled: p.openMacdEnabled,
+        open_macd_period: p.openMacdPeriod,
+        open_counter_ema_enabled: p.openCounterEmaEnabled,
+        open_counter_ema_period: p.openCounterEmaPeriod,
+        open_trend_ema_enabled: p.openTrendEmaEnabled,
+        open_trend_ema_period: p.openTrendEmaPeriod,
+      }
+    })(),
     add_macd_enabled: p.addMacdEnabled,
     add_macd_period: p.addMacdPeriod,
     add_ema_enabled: p.addEmaEnabled,
@@ -906,6 +947,22 @@ export function apiPayloadToCraParams(payload: Partial<ApiPayload>): CRAParams {
       ratio: decimalToPercent(t.ratio, PERCENTAGE_FIELD_THRESHOLDS.movingTPRatio),
       drawback: decimalToPercent(t.drawback, PERCENTAGE_FIELD_THRESHOLDS.movingTPDrawback),
     })),
+    ...(() => {
+      const det = detectOpenIndicator(payload as Record<string, unknown>)
+      // 新键（open_indicator）优先；缺省时按旧 enabled 键回退推导。
+      if (det.indicator !== 'none') {
+        return {
+          openIndicator: det.indicator,
+          openIndicatorParams: det.params,
+          openIndicatorCustom: det.custom,
+        }
+      }
+      return {
+        openIndicator: base.openIndicator,
+        openIndicatorParams: base.openIndicatorParams,
+        openIndicatorCustom: base.openIndicatorCustom,
+      }
+    })(),
     openMacdEnabled: payload.open_macd_enabled ?? base.openMacdEnabled,
     openMacdPeriod: payload.open_macd_period ?? base.openMacdPeriod,
     openCounterEmaEnabled: payload.open_counter_ema_enabled ?? base.openCounterEmaEnabled,

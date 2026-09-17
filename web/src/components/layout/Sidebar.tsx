@@ -8,8 +8,9 @@ import {
   LineChart,
   Cpu,
   Brain,
+  BrainCircuit,
   FlaskConical,
-  Bot,
+  LayoutGrid,
   Settings,
   PieChart,
   Users,
@@ -36,8 +37,25 @@ const isChildActive = (location: ReturnType<typeof useLocation>, childPath: stri
 const navItems: NavItem[] = [
   { path: '/dashboard', label: '仪表盘', icon: BarChart3 },
 
-  // AI 分析
-  { path: '/ai', label: 'AI分析', icon: Brain },
+  // 机器人中心（统一页：网格/马丁/华尔街/补仓/AI）
+  { path: '/bots', label: '机器人中心', icon: LayoutGrid },
+
+  // 策略管理（独立一级页）
+  { path: '/strategies', label: '策略管理', icon: BrainCircuit },
+
+  // 策略实验室（原"策略管理"标签内容已迁出至 /strategies）
+  {
+    label: '策略实验室',
+    icon: FlaskConical,
+    children: [
+      { path: '/strategy', label: '概览与工具' },
+      { path: '/strategy/editor', label: '策略编辑器' },
+      { path: '/backtest', label: '回测' },
+      { path: '/indicator-ide', label: '指标 IDE' },
+      { path: '/indicator-community', label: '指标市场' },
+      { path: '/strategy-leaderboard', label: '排行榜' },
+    ],
+  },
 
   // 交易
   {
@@ -49,19 +67,8 @@ const navItems: NavItem[] = [
     ],
   },
 
-  // 策略实验室
-  {
-    label: '策略实验室',
-    icon: FlaskConical,
-    children: [
-      { path: '/strategy', label: '策略管理' },
-      { path: '/strategy/editor', label: '策略编辑器' },
-      { path: '/backtest', label: '回测' },
-      { path: '/indicator-ide', label: '指标 IDE' },
-      { path: '/indicator-community', label: '指标市场' },
-      { path: '/strategy-leaderboard', label: '排行榜' },
-    ],
-  },
+  // AI 分析
+  { path: '/ai', label: 'AI分析', icon: Brain },
 
   // AI 研究
   {
@@ -72,18 +79,6 @@ const navItems: NavItem[] = [
       { path: '/ai/rl', label: 'RL 强化学习' },
       { path: '/ai/tensorboard', label: 'TensorBoard' },
       { path: '/model-management', label: '模型管理' },
-    ],
-  },
-
-  // 机器人中心
-  {
-    label: '机器人中心',
-    icon: Bot,
-    children: [
-      { path: '/bots/strategy', label: '策略机器人' },
-      { path: '/bots/signal', label: '信号机器人' },
-      { path: '/bots/ai', label: 'AI 机器人' },
-      { path: '/bots/grid', label: '网格机器人' },
     ],
   },
 

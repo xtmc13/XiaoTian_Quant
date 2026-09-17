@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"time"
 
@@ -384,6 +385,12 @@ func (s *BaseCRAStrategy) checkTakeProfit(price float64) bool {
 
 func (s *BaseCRAStrategy) openIndicatorsConfirmed(side PositionSide) bool {
 	p := s.params
+	// 开仓指标选择器：'custom'（自定义指标）本期仅在解析层接受、不报错；
+	// 执行依赖指标沙箱（TODO(沙箱执行)），过渡期视为无开仓门槛直接放行。
+	// 其余无引擎门槛的选择（rsi/range 等）同样因 enabled 标志全 false 而放行。
+	if strings.EqualFold(p.OpenIndicator, "custom") {
+		return true
+	}
 	bars := s.indicatorBars()
 	if p.OpenMacdEnabled && !IndicatorConfirmed(bars, true, p.OpenMacdPeriod, "macd", side) {
 		return false

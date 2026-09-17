@@ -23,6 +23,7 @@ function lazyPage(factory: () => Promise<unknown>, name: string) {
 const Dashboard = lazyPage(() => import('./pages/Dashboard'), 'Dashboard')
 const Trading = lazyPage(() => import('./pages/Trading'), 'Trading')
 const Strategy = lazyPage(() => import('./pages/Strategy'), 'Strategy')
+const Strategies = lazyPage(() => import('./pages/Strategies'), 'Strategies')
 const AI = lazyPage(() => import('./pages/AI'), 'AI')
 const Backtest = lazyPage(() => import('./pages/Backtest'), 'Backtest')
 const Bots = lazyPage(() => import('./pages/Bots'), 'Bots')
@@ -52,10 +53,9 @@ const FreqAI = lazyPage(() => import('./pages/AI/FreqAI'), 'FreqAI')
 const RLTraining = lazyPage(() => import('./pages/AI/RLTraining'), 'RLTraining')
 const TensorBoard = lazyPage(() => import('./pages/AI/TensorBoard'), 'TensorBoard')
 const StrategyEditor = lazyPage(() => import('./pages/strategy/StrategyEditor'), 'StrategyEditor')
-const BotsStrategy = lazyPage(() => import('./pages/bots/BotsStrategy'), 'BotsStrategy')
 const BotsSignal = lazyPage(() => import('./pages/bots/BotsSignal'), 'BotsSignal')
 const BotsAI = lazyPage(() => import('./pages/bots/BotsAI'), 'BotsAI')
-const BotsGrid = lazyPage(() => import('./pages/bots/BotsGrid'), 'BotsGrid')
+const BotsCenter = lazyPage(() => import('./pages/bots/BotsCenter'), 'BotsCenter')
 const TradingSpot = lazyPage(() => import('./pages/trading/TradingSpot'), 'TradingSpot')
 const TradingContract = lazyPage(() => import('./pages/trading/TradingContract'), 'TradingContract')
 const ArbitrageCross = lazyPage(() => import('./pages/arbitrage/ArbitrageCross'), 'ArbitrageCross')
@@ -111,10 +111,11 @@ function DocumentTitle() {
     '/login': '登录 - 小天量化',
     '/dashboard': '仪表盘 - 小天量化',
     '/trading': '交易 - 小天量化',
-    '/strategy': '策略 - 小天量化',
+    '/strategy': '策略实验室 - 小天量化',
+    '/strategies': '策略管理 - 小天量化',
     '/ai': 'AI分析 - 小天量化',
     '/backtest': '回测 - 小天量化',
-    '/bots': '机器人 - 小天量化',
+    '/bots': '机器人中心 - 小天量化',
     '/ai-bots': 'AI Bots - 小天量化',
     '/settings': '设置 - 小天量化',
     '/exchange-account': '账户 - 小天量化',
@@ -144,10 +145,8 @@ function DocumentTitle() {
     '/ai/freqai': 'FreqAI - 小天量化',
     '/ai/rl': 'RL强化学习 - 小天量化',
     '/ai/tensorboard': 'TensorBoard - 小天量化',
-    '/bots/strategy': '策略机器人 - 小天量化',
     '/bots/signal': '信号机器人 - 小天量化',
     '/bots/ai': 'AI机器人 - 小天量化',
-    '/bots/grid': '网格机器人 - 小天量化',
     '/arbitrage/cross': '跨所套利 - 小天量化',
     '/arbitrage/triangular': '三角套利 - 小天量化',
 
@@ -290,6 +289,14 @@ export default function App() {
                     }
                   />
                   <Route
+                    path="/strategies"
+                    element={
+                      <PageShell>
+                        <Strategies />
+                      </PageShell>
+                    }
+                  />
+                  <Route
                     path="/strategy/editor"
                     element={
                       <PageShell>
@@ -364,12 +371,12 @@ export default function App() {
                     }
                   />
 
-                  {/* Bots - old routes redirect to flat routes */}
+                  {/* 机器人中心统一页 */}
                   <Route
                     path="/bots"
                     element={
                       <PageShell>
-                        <Navigate to="/bots/strategy" replace />
+                        <BotsCenter />
                       </PageShell>
                     }
                   />
@@ -381,11 +388,20 @@ export default function App() {
                       </PageShell>
                     }
                   />
+                  {/* 旧机器人路由 → 机器人中心（带类型筛选） */}
                   <Route
                     path="/bots/strategy"
                     element={
                       <PageShell>
-                        <BotsStrategy />
+                        <Navigate to="/bots" replace state={{ type: 'martin' }} />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/bots/grid"
+                    element={
+                      <PageShell>
+                        <Navigate to="/bots" replace state={{ type: 'grid' }} />
                       </PageShell>
                     }
                   />
@@ -402,14 +418,6 @@ export default function App() {
                     element={
                       <PageShell>
                         <BotsAI />
-                      </PageShell>
-                    }
-                  />
-                  <Route
-                    path="/bots/grid"
-                    element={
-                      <PageShell>
-                        <BotsGrid />
                       </PageShell>
                     }
                   />

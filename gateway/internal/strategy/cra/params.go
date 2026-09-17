@@ -7,15 +7,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 // AddPositionItem defines a single averaging-down order.
 type AddPositionItem struct {
-	Order        int     `json:"order"`
-	Multiplier   float64 `json:"multiplier"`
-	Spread       float64 `json:"spread"`
-	Callback     float64 `json:"callback"`
-	EmaEnabled   bool    `json:"ema_enabled,omitempty"`
+	Order      int     `json:"order"`
+	Multiplier float64 `json:"multiplier"`
+	Spread     float64 `json:"spread"`
+	Callback   float64 `json:"callback"`
+	EmaEnabled bool    `json:"ema_enabled,omitempty"`
 }
 
 // MovingTPTier is one tier of the moving take-profit ladder.
@@ -39,11 +40,11 @@ type CRAParams struct {
 	AddPositions      []*AddPositionItem `json:"add_positions"`
 
 	// Take profit
-	TakeProfitMethod      string            `json:"take_profit_method"` // "full" | "tail" | "head_tail"
-	TPMode                string            `json:"tp_mode"`            // "static" | "moving"
-	TakeProfitRatio       float64           `json:"take_profit_ratio"`
-	ProfitCallback        float64           `json:"profit_callback"`
-	MovingTakeProfitTiers []*MovingTPTier   `json:"moving_take_profit_tiers"`
+	TakeProfitMethod      string          `json:"take_profit_method"` // "full" | "tail" | "head_tail"
+	TPMode                string          `json:"tp_mode"`            // "static" | "moving"
+	TakeProfitRatio       float64         `json:"take_profit_ratio"`
+	ProfitCallback        float64         `json:"profit_callback"`
+	MovingTakeProfitTiers []*MovingTPTier `json:"moving_take_profit_tiers"`
 
 	// Contract open indicators
 	OpenMacdEnabled       bool   `json:"open_macd_enabled"`
@@ -52,6 +53,14 @@ type CRAParams struct {
 	OpenCounterEmaPeriod  string `json:"open_counter_ema_period"`
 	OpenTrendEmaEnabled   bool   `json:"open_trend_ema_enabled"`
 	OpenTrendEmaPeriod    string `json:"open_trend_ema_period"`
+
+	// 开仓指标选择器（IndicatorPicker）新键。OpenIndicator 为选择器标记键
+	//（macd/ema_cross/rsi/trend/trend_long/trend_short/range/custom）；
+	// IndicatorParams 承载各指标的自定义数值参数（fast/slow/signal/period
+	// 等）。解析策略：新键优先，旧 open_* 键回退；引擎已认识的门槛仍走旧键，
+	// custom 等无门槛指标本期仅保存配置（TODO(沙箱执行)）。
+	OpenIndicator   string         `json:"open_indicator"`
+	IndicatorParams map[string]any `json:"indicator_params"`
 
 	// Contract add indicators
 	AddMacdEnabled bool   `json:"add_macd_enabled"`
@@ -75,20 +84,20 @@ type CRAParams struct {
 	ReverseStopLoss         bool   `json:"reverse_stop_loss"`
 
 	// Contract burn
-	BurnGlobalEnabled bool `json:"burn_global_enabled"`
-	BurnGlobalThreshold int `json:"burn_global_threshold"`
+	BurnGlobalEnabled   bool `json:"burn_global_enabled"`
+	BurnGlobalThreshold int  `json:"burn_global_threshold"`
 	BurnDualEnabled     bool `json:"burn_dual_enabled"`
 	BurnDualThreshold   int  `json:"burn_dual_threshold"`
 
 	// Contract extras
-	OpenDouble      bool     `json:"open_double"`
-	FollowTrend     bool     `json:"follow_trend"`
-	OnlineOrderLimit int     `json:"online_order_limit"`
-	Leverage        float64  `json:"leverage"`
-	Direction       string   `json:"direction"` // "long" | "short" | "dual"
-	MarketType      string   `json:"market_type"` // "spot" | "swap"
-	PositionSide    string   `json:"position_side"` // "LONG" | "SHORT" | "BOTH"
-	MarginMode      string   `json:"margin_mode"` // "cross" | "isolated"
+	OpenDouble        bool     `json:"open_double"`
+	FollowTrend       bool     `json:"follow_trend"`
+	OnlineOrderLimit  int      `json:"online_order_limit"`
+	Leverage          float64  `json:"leverage"`
+	Direction         string   `json:"direction"`     // "long" | "short" | "dual"
+	MarketType        string   `json:"market_type"`   // "spot" | "swap"
+	PositionSide      string   `json:"position_side"` // "LONG" | "SHORT" | "BOTH"
+	MarginMode        string   `json:"margin_mode"`   // "cross" | "isolated"
 	SelectedExchanges []string `json:"selected_exchanges"`
 }
 
@@ -162,6 +171,41 @@ func ParseCRAParams(configJSON string) (*CRAParams, error) {
 	p.OpenTrendEmaEnabled = boolVal(raw, "open_trend_ema_enabled", false)
 	p.OpenTrendEmaPeriod = strVal(raw, "open_trend_ema_period", "close")
 
+	// 开仓指标选择器新键：indicator_params 宽松校验（对象/正数范围），
+	// custom 需要 code_id+name；非法值直接报错，避免脏配置静默进引擎。
+	p.OpenIndicator = strings.TrimSpace(strVal(raw, "open_indicator", ""))
+	if v, ok := raw["indicator_params"]; ok && v != nil {
+		m, ok := v.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("indicator_params must be a JSON object")
+		}
+		if err := ValidateIndicatorParams(m); err != nil {
+			return nil, err
+		}
+		p.IndicatorParams = m
+	}
+	// 新键回退旧键：选择器参数里的 period 覆盖同义旧键，保持引擎行为一致。
+	if p.IndicatorParams != nil {
+		for _, ik := range []string{"macd", "ema_cross", "trend_long", "trend_short"} {
+			sub, _ := p.IndicatorParams[ik].(map[string]any)
+			if sub == nil {
+				continue
+			}
+			if period := strVal(sub, "period", ""); period != "" && period != "close" {
+				switch ik {
+				case "macd":
+					if p.OpenMacdPeriod == "close" {
+						p.OpenMacdPeriod = period
+					}
+				default:
+					if p.OpenTrendEmaPeriod == "close" {
+						p.OpenTrendEmaPeriod = period
+					}
+				}
+			}
+		}
+	}
+
 	p.AddMacdEnabled = boolVal(raw, "add_macd_enabled", false)
 	p.AddMacdPeriod = strVal(raw, "add_macd_period", "close")
 	p.AddEmaEnabled = boolVal(raw, "add_ema_enabled", false)
@@ -196,6 +240,80 @@ func ParseCRAParams(configJSON string) (*CRAParams, error) {
 
 	p.fillMissingAddPositions()
 	return p, nil
+}
+
+// ValidateIndicatorParams 对开仓指标选择器的 indicator_params 做宽松合法化：
+// 顶层必须是对象；已知指标（macd/ema_cross/rsi/trend/trend_long/trend_short/
+// range）的数值字段必须是正数；custom 需要 code_id（数值）+ name（字符串）。
+// 未知键忽略（向前兼容）。handler Create/Update 与 ParseCRAParams 共用。
+func ValidateIndicatorParams(m map[string]any) error {
+	if m == nil {
+		return nil
+	}
+	numeric := map[string][]string{
+		"macd":        {"fast", "slow", "signal"},
+		"ema_cross":   {"fast", "slow"},
+		"trend_long":  {"fast", "slow"},
+		"trend_short": {"fast", "slow"},
+		"rsi":         {"period", "oversold", "overbought"},
+		"trend":       {"period"},
+		"range":       {"period", "neutral_band"},
+	}
+	for key, fields := range numeric {
+		sub, ok := m[key]
+		if !ok || sub == nil {
+			continue
+		}
+		sm, ok := sub.(map[string]any)
+		if !ok {
+			return fmt.Errorf("indicator_params.%s must be a JSON object", key)
+		}
+		for _, f := range fields {
+			v, exists := sm[f]
+			if !exists || v == nil {
+				continue
+			}
+			n, ok := toFloat(v)
+			if !ok {
+				return fmt.Errorf("indicator_params.%s.%s must be a number", key, f)
+			}
+			if n <= 0 {
+				return fmt.Errorf("indicator_params.%s.%s must be positive", key, f)
+			}
+		}
+	}
+	if sub, ok := m["custom"]; ok && sub != nil {
+		sm, ok := sub.(map[string]any)
+		if !ok {
+			return fmt.Errorf("indicator_params.custom must be a JSON object")
+		}
+		if _, ok := toFloat(sm["code_id"]); !ok {
+			return fmt.Errorf("indicator_params.custom.code_id must be a number")
+		}
+		if strVal(sm, "name", "") == "" {
+			return fmt.Errorf("indicator_params.custom.name must be a string")
+		}
+	}
+	return nil
+}
+
+// toFloat 宽松数值转换（float64/int/json.Number/数字字符串）。
+func toFloat(v any) (float64, bool) {
+	switch val := v.(type) {
+	case float64:
+		return val, true
+	case int:
+		return float64(val), true
+	case int64:
+		return float64(val), true
+	case json.Number:
+		f, err := val.Float64()
+		return f, err == nil
+	case string:
+		f, err := strconv.ParseFloat(val, 64)
+		return f, err == nil
+	}
+	return 0, false
 }
 
 // Validate checks CRA params against frontend/CRA constraints.

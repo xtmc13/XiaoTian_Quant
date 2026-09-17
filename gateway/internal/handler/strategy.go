@@ -17,6 +17,7 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/market"
 	"github.com/xiaotian-quant/gateway/internal/store"
 	"github.com/xiaotian-quant/gateway/internal/strategy"
+	"github.com/xiaotian-quant/gateway/internal/strategy/cra"
 	"github.com/xiaotian-quant/gateway/internal/strategy/strategies"
 )
 
@@ -454,6 +455,11 @@ func CreateStrategyConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
 		return
 	}
+	// ── 开仓指标选择器：indicator_params 合法化（宽松校验，非法 400）──
+	if err := validateIndicatorParams(mergedStrategyConfig(item, payloadConfig)); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
 
 	// ── 机器人身份持久化：strategy_mode/bot_type 不是 DB 列，必须写入
 	// config_json 才能在 DB 重建后继续被 isBotItem 判别（根治互窜）。 ──
@@ -524,6 +530,11 @@ func UpdateStrategyConfig(c *gin.Context) {
 	// ── 类型-参数防呆（P0-4）：以合并后的类型/config 为准 ──
 	explicitType := strings.TrimSpace(getString(body, "strategy_type", "")) != ""
 	if err := checkStrategyTypeConfigMatch(getString(item, "strategy_type", ""), mergedStrategyConfig(item, payloadConfig), explicitType); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
+	// ── 开仓指标选择器：indicator_params 合法化 ──
+	if err := validateIndicatorParams(mergedStrategyConfig(item, payloadConfig)); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
 		return
 	}
@@ -631,6 +642,24 @@ func checkStrategyTypeConfigMatch(stype string, cfg map[string]any, explicitType
 		if _, ok := cfg[k]; ok {
 			return fmt.Errorf("参数与策略类型不匹配：补仓/移动止盈参数仅适用于 cra_contract/cra_spot 及其模板类型，不适用于 %s", stype)
 		}
+	}
+	return nil
+}
+
+// validateIndicatorParams 对 config 里的 indicator_params（开仓指标选择器）
+// 做宽松合法化：不是 JSON 对象、已知数值字段非正数、custom 缺 code_id/name
+// 一律 400。合法则透传落库（与 cra.ParseCRAParams 的校验口径一致）。
+func validateIndicatorParams(cfg map[string]any) error {
+	v, exists := cfg["indicator_params"]
+	if !exists || v == nil {
+		return nil
+	}
+	m, ok := v.(map[string]any)
+	if !ok {
+		return fmt.Errorf("indicator_params 必须是 JSON 对象")
+	}
+	if err := cra.ValidateIndicatorParams(m); err != nil {
+		return err
 	}
 	return nil
 }

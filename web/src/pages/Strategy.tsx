@@ -16,7 +16,6 @@ import {
   Bot,
   MessageSquare,
   LayoutDashboard,
-  FolderOpen,
   Plus,
   Trash2,
   Activity,
@@ -36,11 +35,7 @@ import {
   Settings,
   ChevronRight as ChevronRightIcon,
 } from 'lucide-react'
-import { useStrategyData } from '@/hooks/useStrategyData'
-import { StrategyList, StatusBadge, getStatusDot } from '@/components/strategy/StrategyList'
-import { StrategyDetailPanel } from '@/components/strategy/StrategyDetailPanel'
-import { StrategyCreateModal } from '@/components/strategy/StrategyCreateModal'
-import { StrategyCreatePanel } from '@/components/strategy/StrategyCreatePanel'
+import { StatusBadge, getStatusDot } from '@/components/strategy/StrategyList'
 import { StrategyEditor } from '@/components/strategy/StrategyEditor'
 import { FormField } from '@/components/strategy/StrategyFormFields'
 import type { StrategyItem } from '@/types'
@@ -55,7 +50,6 @@ interface ChatMessage {
 /* ─── Constants ─── */
 const TABS = [
   { key: 'overview', label: '概览', icon: LayoutDashboard },
-  { key: 'strategy', label: '策略管理', icon: FolderOpen },
   { key: 'code', label: '代码编辑器', icon: Code },
   { key: 'ml', label: 'ML 部署', icon: FlaskConical },
   { key: 'dinger', label: 'AI 策略生成器', icon: MessageSquare },
@@ -84,13 +78,14 @@ function useLocalStorage<T>(key: string, initial: T): [T, (v: T) => void] {
 
 /* ─── Main Component ─── */
 export function Strategy() {
+  const navigate = useNavigate()
   const [tab, setTab] = useState<(typeof TABS)[number]['key']>('overview')
   const [guideDismissed, setGuideDismissed] = useLocalStorage('strategy-guide-dismissed', false)
 
   return (
     <div className="h-full flex flex-col min-w-0">
       {/* Top Guide Bar */}
-      {!guideDismissed && <GuideBar onDismiss={() => setGuideDismissed(true)} onCreate={() => setTab('strategy')} />}
+      {!guideDismissed && <GuideBar onDismiss={() => setGuideDismissed(true)} onCreate={() => navigate('/strategies')} />}
 
       {/* Tabs */}
       <div className="flex border-b border-quant-border px-2 shrink-0">
@@ -113,7 +108,6 @@ export function Strategy() {
       {/* Content */}
       <div className="flex-1 overflow-hidden">
         {tab === 'overview' && <OverviewTab />}
-        {tab === 'strategy' && <StrategyManagementTab />}
         {tab === 'code' && <StrategyEditor />}
         {tab === 'ml' && <MLStrategyTab />}
         {tab === 'dinger' && <AIStrategyGeneratorTab />}
@@ -212,7 +206,7 @@ function OverviewTab() {
         headerAction={
           list.length > 5 ? (
             <button
-              onClick={() => navigate('/strategy?tab=strategy')}
+              onClick={() => navigate('/strategies')}
               className="flex items-center gap-0.5 text-[10px] text-muted-foreground transition-colors hover:text-foreground"
             >
               查看全部 <ChevronRightIcon className="h-3 w-3" />
@@ -227,7 +221,7 @@ function OverviewTab() {
             ))}
           </div>
         ) : list.length === 0 ? (
-          <EmptyState title="暂无策略" description="前往策略管理页创建你的第一个策略" />
+          <EmptyState title="暂无策略" description="前往策略管理（/strategies）创建你的第一个策略" />
         ) : (
           <div className="space-y-2">
             {list.slice(0, 5).map((s) => (
@@ -277,162 +271,6 @@ function StatCard({
       </div>
     </div>
   )
-}
-
-/* ═══════════════════════════════════════════════════════════════
-   Strategy Management Tab
-   ═══════════════════════════════════════════════════════════════ */
-function StrategyManagementTab() {
-  const { strategies, isLoading, stop, delete: del, startAsync, batchStart, batchStop } = useStrategyData()
-  const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [showCreate, setShowCreate] = useState(false)
-  const [creatingType, setCreatingType] = useState<string | null>(null)
-  const [editingStrategy, setEditingStrategy] = useState<StrategyItem | null>(null)
-  // P0-3 启动失败持久化反馈（会话级）：strategyId → 后端错误信息。
-  const [startErrors, setStartErrors] = useState<Record<string, string>>({})
-  // P2-10 空状态模板预填。
-  const [templatePreset, setTemplatePreset] = useState<{ strategyType: string; config?: Record<string, unknown> } | null>(null)
-
-  const selected = strategies.find((s) => s.id === selectedId) || null
-
-  const handleCloseCreate = () => {
-    setShowCreate(false)
-    setCreatingType(null)
-    setEditingStrategy(null)
-    setTemplatePreset(null)
-  }
-
-  const clearStartError = (id: string) =>
-    setStartErrors((prev) => {
-      if (!(id in prev)) return prev
-      const next = { ...prev }
-      delete next[id]
-      return next
-    })
-
-  const handleStart = async (id: string) => {
-    try {
-      await startAsync(id)
-      clearStartError(id)
-    } catch (e) {
-      setStartErrors((prev) => ({ ...prev, [id]: e instanceof Error ? e.message : String(e) }))
-    }
-  }
-
-  return (
-    <div className="h-full flex">
-      <StrategyList
-        strategies={strategies}
-        isLoading={isLoading}
-        selectedId={selectedId}
-        onSelect={setSelectedId}
-        onStart={(id) => {
-          void handleStart(id)
-        }}
-        onStop={stop}
-        onEdit={(s) => {
-          setEditingStrategy(s)
-          setShowCreate(true)
-        }}
-        onDelete={(id) => {
-          clearStartError(id)
-          del(id)
-        }}
-        onCreate={() => {
-          setEditingStrategy(null)
-          setShowCreate(true)
-        }}
-        onCreateType={(type) => {
-          setEditingStrategy(null)
-          setCreatingType(type)
-          setSelectedId(null)
-        }}
-        startErrors={startErrors}
-        onDismissStartError={clearStartError}
-        onBatchStart={(ids) => {
-          void batchStart(ids)
-        }}
-        onBatchStop={(ids) => {
-          void batchStop(ids)
-        }}
-        onCreateTemplate={(preset) => {
-          setTemplatePreset(preset)
-          setEditingStrategy(null)
-          setCreatingType(null)
-          setShowCreate(true)
-        }}
-      />
-
-      <div className={cn('flex-1', creatingType ? 'overflow-hidden' : 'overflow-y-auto p-4 sm:p-6')}>
-        {creatingType ? (
-          <StrategyCreatePanel strategyType={creatingType} onClose={handleCloseCreate} onSaved={handleCloseCreate} />
-        ) : !selected ? (
-          <div className="h-full flex items-center justify-center">
-            <EmptyState
-              icon={<Bot className="w-6 h-6" />}
-              title="选择或创建一个策略"
-              description="从左侧列表选择策略查看详情，或点击创建按钮新建策略"
-              actionLabel="创建策略"
-              onAction={() => {
-                setEditingStrategy(null)
-                setShowCreate(true)
-              }}
-            />
-          </div>
-        ) : (
-          <StrategyDetailPanel
-            strategy={selected}
-            onStart={() => {
-              void handleStart(selected.id)
-            }}
-            onStop={() => stop(selected.id)}
-            onEdit={() => {
-              setEditingStrategy(selected)
-              setShowCreate(true)
-            }}
-            onDelete={() => {
-              if (confirm(`删除策略 "${selected.name}"？`)) {
-                clearStartError(selected.id)
-                del(selected.id)
-              }
-            }}
-            startError={startErrors[selected.id] ?? null}
-            onDismissStartError={() => clearStartError(selected.id)}
-          />
-        )}
-      </div>
-
-      {showCreate && (
-        <StrategyCreateModal
-          editing={editingStrategy}
-          defaultStrategyType={templatePreset?.strategyType}
-          defaultConfig={templatePreset?.config}
-          onClose={handleCloseCreate}
-          onSaved={handleCloseCreate}
-        />
-      )}
-    </div>
-  )
-}
-
-function marketTypeFromType(strategyType: string): 'spot' | 'contract' {
-  const contractTypes = [
-    'cra_contract',
-    'trend_long',
-    'trend_short',
-    'counter_stable',
-    'counter_safe',
-    'high_frequency',
-    'head_tail_arbitrage',
-    'high_flat',
-    'macd_golden_long',
-    'macd_death_short',
-    'ema_follow_trend',
-    'ema_counter_trend',
-    'dual_burn',
-    'global_burn',
-  ]
-  return contractTypes.includes(strategyType) ? 'contract' : 'spot'
 }
 
 /* ═══════════════════════════════════════════════════════════════
