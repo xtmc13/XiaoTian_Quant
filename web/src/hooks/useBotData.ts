@@ -269,20 +269,17 @@ export function useBotData(filterType?: NewBotType) {
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null)
 
   const { data: strategies, isLoading } = useQuery({
-    queryKey: ['strategies'],
-    queryFn: () => strategyApi.list(),
+    queryKey: ['strategies', 'bot'],
+    // 归属判别收归后端 isBotItem（2026-09-17 根治互窜）：market_type 启发式
+    // （swap 过滤漏 futures）已废弃，不再前端猜谜。
+    queryFn: () => strategyApi.list({ kind: 'bot' }),
     refetchInterval: 5000,
   })
 
   const bots: BotItem[] = useMemo(() => {
     const all = Array.isArray(strategies) ? strategies : []
-    // 合约策略（合约策略页创建，market_type=swap）不属于策略机器人，
-    // 列表接口未区分来源，这里统一过滤掉（用户明确要求 2026-09-17）。
-    const nonContract = all.filter(
-      (s: StrategyItem) => (s as StrategyItem & { market_type?: string }).market_type !== 'swap'
-    )
     // 映射旧 bot_type 到新分类
-    const mapped = nonContract.map((s: StrategyItem) => {
+    const mapped = all.map((s: StrategyItem) => {
       const oldType =
         (s as StrategyItem & { bot_type?: string }).bot_type ||
         ((s.trading_config as Record<string, unknown> | undefined)?.bot_type as string) ||

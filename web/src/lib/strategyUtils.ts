@@ -165,6 +165,53 @@ export function strategyTypeToMultiplierPreset(
 }
 
 /**
+ * 接受 CRA 参数包的策略类型（P0-4 防呆集合）：cra_contract/cra_spot 及后端
+ * 启动时映射到 CRA 引擎的全部前端别名（handler mapCRAFactory）。集合外类型
+ * （macd/rsi/trend/ScriptStrategy 等纯指标或脚本策略）不得携带补仓/移动止盈
+ * 参数——运行时会被参数注册表静默丢弃，保存即"残废配置"。
+ */
+export const CRA_COMPATIBLE_TYPES: ReadonlySet<string> = new Set([
+  'cra_contract',
+  'cra_spot',
+  // mapCRAFactory spotTypes
+  'martin_trend',
+  'wallstreet',
+  'aggressive',
+  'conservative',
+  'high_frequency',
+  // mapCRAFactory contractTypes
+  'trend_long',
+  'trend_short',
+  'counter_stable',
+  'counter_safe',
+  'head_tail_arbitrage',
+])
+
+export function isCRAStrategyType(strategyType: string): boolean {
+  return CRA_COMPATIBLE_TYPES.has(strategyType)
+}
+
+/** CRA 特征键：config 中含任一即视为 CRA 参数包（与后端 craFormMarkers 对齐）。 */
+export const CRA_FEATURE_KEYS: readonly string[] = [
+  'first_order_amount',
+  'first_order_multiplier',
+  'add_positions',
+  'tp_mode',
+  'take_profit_method',
+  'moving_take_profit_tiers',
+  'enable_add_position',
+]
+
+/** 从 config 对象剥离 CRA 专属键（非 CRA 类型保存时调用，防止残废配置）。 */
+export function stripCRAFeatureKeys(config: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(config)) {
+    if (!(CRA_FEATURE_KEYS as readonly string[]).includes(k)) out[k] = v
+  }
+  return out
+}
+
+/**
  * Create default CRA params for a given market.
  */
 export function createDefaultCRAParams(market: 'spot' | 'contract'): CRAParams {

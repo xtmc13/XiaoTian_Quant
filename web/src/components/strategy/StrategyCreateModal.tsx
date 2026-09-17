@@ -8,10 +8,20 @@ import { FormField, STRAT_TYPES, getDefaultStrategyCode, type StrategyRow } from
 import { CRAParamForm, craParamsToApiPayload, type CRAParams } from './CRAParamForm'
 import { STRATEGY_PRESETS, type Preset, type PresetKey } from './StrategyPresets'
 import { ExchangeSelectModal } from './ExchangeSelectModal'
-import { createDefaultCRAParams, migrateLegacyConfigToCRAParams } from '@/lib/strategyUtils'
+import { createDefaultCRAParams, migrateLegacyConfigToCRAParams, isCRAStrategyType, CRA_FEATURE_KEYS } from '@/lib/strategyUtils'
 import { X, CheckCircle2, ChevronRight, ChevronDown, Activity, FileCode2, BarChart3, Globe } from 'lucide-react'
 
 /* ─── helpers ───────────────────────────────────────────────────────── */
+const CONTRACT_STRATEGY_TYPES = new Set([
+  'cra_contract',
+  'trend_long',
+  'trend_short',
+  'counter_stable',
+  'counter_safe',
+  'high_frequency',
+  'head_tail_arbitrage',
+])
+
 function inferTimeframeFromCRAParams(cra: CRAParams): string {
   const candidates: (string | null)[] = [
     cra.openMacdEnabled && cra.openMacdPeriod !== 'close' ? cra.openMacdPeriod : null,
@@ -64,6 +74,8 @@ interface StrategyCreateModalProps {
   editing: StrategyRow | null
   defaultMarket?: 'spot' | 'contract'
   defaultStrategyType?: string
+  /** P2-10：模板预填的默认 config（snake_case，含 CRA 参数）。 */
+  defaultConfig?: Record<string, unknown>
   inline?: boolean
   onClose: () => void
   onSaved: () => void
@@ -73,6 +85,7 @@ export function StrategyCreateModal({
   editing,
   defaultMarket = 'contract',
   defaultStrategyType,
+  defaultConfig,
   inline = false,
   onClose,
   onSaved,
@@ -85,6 +98,8 @@ export function StrategyCreateModal({
     if (editing) {
       return editing.market_type === 'spot' ? 'spot' : 'contract'
     }
+    // 模板预填（P2-10）：按 strategy_type 推导市场，避免现货模板落进合约表单。
+    if (defaultStrategyType && !CONTRACT_STRATEGY_TYPES.has(defaultStrategyType)) return 'spot'
     return defaultMarket
   })
   const [presetKey, setPresetKey] = useState<PresetKey | null>(null)
@@ -120,6 +135,9 @@ export function StrategyCreateModal({
     if (editing?.notification_config?.channels) {
       setNotifyChannels(editing.notification_config.channels)
     }
+    if (typeof editing?.initial_capital === 'number') {
+      setInitialCapital(editing.initial_capital)
+    }
     if (editing?.config_json) {
       try {
         const parsed = JSON.parse(editing.config_json)
@@ -130,8 +148,21 @@ export function StrategyCreateModal({
       } catch {
         /* ignore */
       }
+    } else if (defaultConfig) {
+      // P2-10 模板预填：strategy_type + 保守默认 config。
+      try {
+        setCraParams(migrateLegacyConfigToCRAParams(defaultConfig, market))
+        if (typeof defaultConfig.symbol === 'string' && defaultConfig.symbol) {
+          setSymbol(defaultConfig.symbol.toUpperCase())
+        }
+        if (Array.isArray(defaultConfig.selected_exchanges)) {
+          setSelectedExchanges(defaultConfig.selected_exchanges as string[])
+        }
+      } catch {
+        /* ignore */
+      }
     }
-  }, [editing, defaultStrategyType, market])
+  }, [editing, defaultStrategyType, market, defaultConfig])
 
   const [executionMode, setExecutionMode] = useState<'live' | 'signal'>('signal')
   const [notifyChannels, setNotifyChannels] = useState<string[]>(['browser'])
@@ -139,6 +170,7 @@ export function StrategyCreateModal({
   const [selectedExchanges, setSelectedExchanges] = useState<string[]>([])
   const [showExchangeModal, setShowExchangeModal] = useState(false)
   const [backtestCapital, setBacktestCapital] = useState(10000)
+  const [initialCapital, setInitialCapital] = useState(1000)
 
   const {
     data: configuredExchanges,
@@ -268,14 +300,21 @@ export function StrategyCreateModal({
   // ── Create / Update ──
   const createMut = useMutation({
     mutationFn: (data: Record<string, unknown>) => strategyApi.create(data),
-    onSuccess: () => {
+    onSuccess: (res) => {
+      // P1-7：后端把 live/空 execution_mode 压回 paper 时提示用户。
+      if (res?.forced_paper) {
+        toast('warning', '已按安全默认设为模拟盘（实盘选项已下线）')
+      }
       handleSaveAsDefault()
       onSaved()
     },
   })
   const updateMut = useMutation({
     mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) => strategyApi.update(id, data),
-    onSuccess: () => {
+    onSuccess: (res) => {
+      if (res?.forced_paper) {
+        toast('warning', '已按安全默认设为模拟盘（实盘选项已下线）')
+      }
       handleSaveAsDefault()
       onSaved()
     },
@@ -326,12 +365,32 @@ export function StrategyCreateModal({
       return
     }
 
+    // ── P0-4 类型-参数防呆 ──
+    const craType = isCRAStrategyType(strategyType)
+    if (craType) {
+      if (!craParams.firstOrderAmount || craParams.firstOrderAmount < 1) {
+        toast('error', '参数与策略类型不匹配：CRA 策略需要首单金额 ≥ 1')
+        return
+      }
+      if (craParams.enableAddPosition && craParams.addPositions.length === 0) {
+        toast('error', '参数与策略类型不匹配：CRA 策略需要至少一档补仓（或关闭补仓）')
+        return
+      }
+    }
+
+    // 非 CRA 类型：config 只保留通用字段，CRA 专属键一律不写入，防止保存
+    // "残废配置"（运行时会被参数注册表静默丢弃）。
     const config: Record<string, unknown> = {
-      ...craParamsToApiPayload(craParams),
+      ...(craType ? craParamsToApiPayload(craParams) : {}),
       market_type: market === 'spot' ? 'spot' : 'swap',
       position_side: craParams.direction === 'long' ? 'LONG' : craParams.direction === 'short' ? 'SHORT' : 'BOTH',
       margin_mode: 'cross',
       selected_exchanges: selectedExchanges,
+    }
+    const configKeys = Object.keys(config)
+    if (!craType && CRA_FEATURE_KEYS.some((k) => configKeys.includes(k))) {
+      toast('error', '参数与策略类型不匹配：补仓/移动止盈参数仅适用于 cra_contract/cra_spot')
+      return
     }
     const payload: Record<string, unknown> = {
       name: name.trim(),
@@ -347,6 +406,7 @@ export function StrategyCreateModal({
       category: market === 'spot' ? 'spot' : 'contract',
       coin: symbol.trim().toUpperCase().replace('USDT', '').replace('USD', ''),
       direction: market === 'spot' ? 'long' : craParams.direction,
+      initial_capital: initialCapital,
     }
     if (mode === 'script') {
       payload.strategy_code = codeWorkspace
@@ -386,7 +446,7 @@ export function StrategyCreateModal({
           'flex flex-col bg-quant-card overflow-hidden',
           inline
             ? 'h-full border-r border-quant-border'
-            : 'w-full max-w-3xl max-h-[90vh] rounded-2xl border border-quant-border shadow-2xl'
+            : 'w-full max-w-3xl max-h-[85vh] rounded-2xl border border-quant-border shadow-2xl'
         )}
       >
         {/* Header */}
@@ -448,11 +508,11 @@ export function StrategyCreateModal({
                 </div>
               )}
 
-              {/* Preset templates */}
-              {!editing && mode === 'signal' && (
+              {/* Preset templates（仅 CRA 类型；非 CRA 类型预设的补仓/止盈参数不会生效） */}
+              {!editing && mode === 'signal' && (!strategyType || isCRAStrategyType(strategyType)) && (
                 <div>
                   <div className="text-xs font-semibold text-muted-foreground mb-3">快速预设</div>
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     {STRATEGY_PRESETS.map((pr) => (
                       <button
                         key={pr.key}
@@ -507,7 +567,7 @@ export function StrategyCreateModal({
                 </FormField>
               )}
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <FormField label="市场类型">
                   <div className="flex rounded-lg border border-quant-border overflow-hidden">
                     <button
@@ -536,6 +596,17 @@ export function StrategyCreateModal({
                   />
                 </FormField>
               </div>
+
+              <FormField label="初始资金 (USDT)">
+                <input
+                  type="number"
+                  min={0}
+                  value={initialCapital}
+                  onChange={(e) => setInitialCapital(Number(e.target.value) || 0)}
+                  className={inputCls}
+                  placeholder="模拟盘初始权益"
+                />
+              </FormField>
 
               <FormField label="策略类型">
                 <select value={strategyType} onChange={(e) => setStrategyType(e.target.value)} className={inputCls}>
@@ -582,11 +653,26 @@ export function StrategyCreateModal({
           {/* ═══ STEP 2: CRA 参数配置（使用共享组件） ═══ */}
           {mode === 'signal' && step === 1 && (
             <div className="space-y-3">
-              <div className="text-xs text-muted-foreground mb-2">调整策略参数，或使用预设快速填充</div>
+              {isCRAStrategyType(strategyType) ? (
+                <>
+                  <div className="text-xs text-muted-foreground mb-2">调整策略参数，或使用预设快速填充</div>
 
-              <CollapsibleSection title="CRA 量化参数" count={4} defaultOpen>
-                <CRAParamForm value={craParams} onChange={setCraParams} market={market} />
-              </CollapsibleSection>
+                  <CollapsibleSection title="CRA 量化参数" count={4} defaultOpen>
+                    <CRAParamForm value={craParams} onChange={setCraParams} market={market} />
+                  </CollapsibleSection>
+                </>
+              ) : !strategyType ? (
+                <div className="text-xs text-muted-foreground py-6 text-center">
+                  请先在「基础配置」中选择策略类型
+                </div>
+              ) : (
+                /* P0-4：非 CRA 类型不展示 CRA 专属参数区，避免类型-参数错配。 */
+                <div className="text-xs text-muted-foreground py-6 text-center leading-relaxed">
+                  当前策略类型不支持 CRA 补仓/移动止盈参数
+                  <br />
+                  仅需配置交易对、杠杆、方向等通用字段（后续步骤）
+                </div>
+              )}
             </div>
           )}
 
@@ -621,7 +707,7 @@ export function StrategyCreateModal({
               </div>
 
               {btResult && (
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                   <div className="rounded-xl border border-quant-border p-4 text-center">
                     <div className="text-[10px] text-muted-foreground">总收益</div>
                     <div
@@ -728,7 +814,7 @@ export function StrategyCreateModal({
 
               <div className="rounded-xl border border-quant-border bg-quant-bg-tertiary p-4">
                 <div className="text-xs font-semibold mb-3">通知渠道</div>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   {[
                     { key: 'browser', label: '浏览器' },
                     { key: 'email', label: '邮件' },

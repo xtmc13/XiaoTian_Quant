@@ -283,11 +283,15 @@ function StatCard({
    Strategy Management Tab
    ═══════════════════════════════════════════════════════════════ */
 function StrategyManagementTab() {
-  const { strategies, isLoading, start, stop, delete: del } = useStrategyData()
+  const { strategies, isLoading, stop, delete: del, startAsync, batchStart, batchStop } = useStrategyData()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [showCreate, setShowCreate] = useState(false)
   const [creatingType, setCreatingType] = useState<string | null>(null)
   const [editingStrategy, setEditingStrategy] = useState<StrategyItem | null>(null)
+  // P0-3 启动失败持久化反馈（会话级）：strategyId → 后端错误信息。
+  const [startErrors, setStartErrors] = useState<Record<string, string>>({})
+  // P2-10 空状态模板预填。
+  const [templatePreset, setTemplatePreset] = useState<{ strategyType: string; config?: Record<string, unknown> } | null>(null)
 
   const selected = strategies.find((s) => s.id === selectedId) || null
 
@@ -295,6 +299,24 @@ function StrategyManagementTab() {
     setShowCreate(false)
     setCreatingType(null)
     setEditingStrategy(null)
+    setTemplatePreset(null)
+  }
+
+  const clearStartError = (id: string) =>
+    setStartErrors((prev) => {
+      if (!(id in prev)) return prev
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
+
+  const handleStart = async (id: string) => {
+    try {
+      await startAsync(id)
+      clearStartError(id)
+    } catch (e) {
+      setStartErrors((prev) => ({ ...prev, [id]: e instanceof Error ? e.message : String(e) }))
+    }
   }
 
   return (
@@ -304,13 +326,18 @@ function StrategyManagementTab() {
         isLoading={isLoading}
         selectedId={selectedId}
         onSelect={setSelectedId}
-        onStart={start}
+        onStart={(id) => {
+          void handleStart(id)
+        }}
         onStop={stop}
         onEdit={(s) => {
           setEditingStrategy(s)
           setShowCreate(true)
         }}
-        onDelete={del}
+        onDelete={(id) => {
+          clearStartError(id)
+          del(id)
+        }}
         onCreate={() => {
           setEditingStrategy(null)
           setShowCreate(true)
@@ -320,9 +347,23 @@ function StrategyManagementTab() {
           setCreatingType(type)
           setSelectedId(null)
         }}
+        startErrors={startErrors}
+        onDismissStartError={clearStartError}
+        onBatchStart={(ids) => {
+          void batchStart(ids)
+        }}
+        onBatchStop={(ids) => {
+          void batchStop(ids)
+        }}
+        onCreateTemplate={(preset) => {
+          setTemplatePreset(preset)
+          setEditingStrategy(null)
+          setCreatingType(null)
+          setShowCreate(true)
+        }}
       />
 
-      <div className={cn('flex-1', creatingType ? 'overflow-hidden' : 'overflow-y-auto p-6')}>
+      <div className={cn('flex-1', creatingType ? 'overflow-hidden' : 'overflow-y-auto p-4 sm:p-6')}>
         {creatingType ? (
           <StrategyCreatePanel strategyType={creatingType} onClose={handleCloseCreate} onSaved={handleCloseCreate} />
         ) : !selected ? (
@@ -341,21 +382,34 @@ function StrategyManagementTab() {
         ) : (
           <StrategyDetailPanel
             strategy={selected}
-            onStart={() => start(selected.id)}
+            onStart={() => {
+              void handleStart(selected.id)
+            }}
             onStop={() => stop(selected.id)}
             onEdit={() => {
               setEditingStrategy(selected)
               setShowCreate(true)
             }}
             onDelete={() => {
-              if (confirm(`删除策略 "${selected.name}"？`)) del(selected.id)
+              if (confirm(`删除策略 "${selected.name}"？`)) {
+                clearStartError(selected.id)
+                del(selected.id)
+              }
             }}
+            startError={startErrors[selected.id] ?? null}
+            onDismissStartError={() => clearStartError(selected.id)}
           />
         )}
       </div>
 
       {showCreate && (
-        <StrategyCreateModal editing={editingStrategy} onClose={handleCloseCreate} onSaved={handleCloseCreate} />
+        <StrategyCreateModal
+          editing={editingStrategy}
+          defaultStrategyType={templatePreset?.strategyType}
+          defaultConfig={templatePreset?.config}
+          onClose={handleCloseCreate}
+          onSaved={handleCloseCreate}
+        />
       )}
     </div>
   )
@@ -363,6 +417,7 @@ function StrategyManagementTab() {
 
 function marketTypeFromType(strategyType: string): 'spot' | 'contract' {
   const contractTypes = [
+    'cra_contract',
     'trend_long',
     'trend_short',
     'counter_stable',

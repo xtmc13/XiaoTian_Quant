@@ -31,6 +31,8 @@ import {
   type StrategyTemplate,
   type StrategyParamDefs,
   type StrategyRanking,
+  type StrategyRuntimeResponse,
+  type StrategyBatchResult,
   type StrategyGlobalConfig,
   type BacktestRequest,
   type AISnapshot,
@@ -281,6 +283,7 @@ axiosInstance.interceptors.response.use(
         const msg =
           (wrappedError?.message as string) ||
           (data?.message as string) ||
+          (data?.detail as string) ||
           (data?.error as string) ||
           '服务器错误，请稍后重试'
         try {
@@ -295,7 +298,11 @@ axiosInstance.interceptors.response.use(
 
       // Backend wraps errors as { error: { code, message } }
       const wrappedError = data?.error as Record<string, unknown> | undefined
-      const message = (wrappedError?.message as string) || (data?.message as string) || `请求失败 (${status})`
+      const message =
+        (wrappedError?.message as string) ||
+        (data?.message as string) ||
+        (data?.detail as string) ||
+        `请求失败 (${status})`
       const code = (wrappedError?.code as string) || (data?.code as string) || 'HTTP_ERROR'
       // Show toast for client errors (4xx except 401/403/429)
       if (status >= 400 && status !== 401 && status !== 403 && status !== 429) {
@@ -516,15 +523,18 @@ export const strategyApi = {
     return api.get<StrategyItem[]>(`/strategies/configs${qs}`)
   },
   get: (id: string) => api.get<StrategyItem>(`/strategies/configs/${id}`),
-  create: (data: Partial<StrategyItem>) => api.post<{ id: string; success: boolean }>('/strategies/configs', data),
-  update: (id: string, data: Partial<StrategyItem>) => api.put<{ success: boolean }>(`/strategies/configs/${id}`, data),
+  create: (data: Partial<StrategyItem>) =>
+    api.post<{ id: string; success: boolean; forced_paper?: boolean }>('/strategies/configs', data),
+  update: (id: string, data: Partial<StrategyItem>) =>
+    api.put<{ success: boolean; forced_paper?: boolean }>(`/strategies/configs/${id}`, data),
   delete: (id: string) => api.del<{ success: boolean }>(`/strategies/configs/${id}`),
   start: (id: string) => api.post<{ success: boolean }>(`/strategies/configs/${id}/start`),
   stop: (id: string) => api.post<{ success: boolean }>(`/strategies/configs/${id}/stop`),
+  runtime: (id: string) => api.get<StrategyRuntimeResponse>(`/strategies/configs/${id}/runtime`),
   batchStart: (ids: string[]) =>
-    api.post<{ success: boolean; started: number }>('/strategies/configs/batch-start', { ids }),
+    api.post<StrategyBatchResult>('/strategies/configs/batch-start', { ids }),
   batchStop: (ids: string[]) =>
-    api.post<{ success: boolean; stopped: number }>('/strategies/configs/batch-stop', { ids }),
+    api.post<StrategyBatchResult>('/strategies/configs/batch-stop', { ids }),
   batchClose: (ids: string[]) =>
     api.post<{ success: boolean; closed: number }>('/strategies/configs/batch-close', { ids }),
   batchDelete: (ids: string[]) =>

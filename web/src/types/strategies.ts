@@ -223,6 +223,57 @@ export interface MovingTPTier {
   drawback: number
 }
 
+/** 运行中策略的实时状态（GET /strategies/configs/:id/runtime 的 status 字段）。 */
+export interface StrategyRuntimeStatus {
+  running?: boolean
+  in_position?: boolean
+  direction?: string
+  entry_price?: number
+  avg_entry_price?: number
+  quantity?: number
+  position_qty?: number
+  position_cost?: number
+  bars_collected?: number
+  filled_orders?: number
+  current_tier?: number
+  add_positions_triggered?: number
+  pending_add_count?: number
+  total_add_tiers?: number
+  order_count?: number
+  loops_executed?: number
+  waterfall_paused?: boolean
+  tp_mode?: string
+  last_signal_time?: number
+  last_signal_direction?: string
+}
+
+/** GET /strategies/configs/:id/runtime 响应体。 */
+export interface StrategyRuntimeResponse {
+  status: StrategyRuntimeStatus | null
+  price: number
+  config: Record<string, unknown>
+  /** 现价到下一档未触发补仓档位的距离百分比（可计算才返回）。 */
+  next_add_distance_pct?: number
+  /** 静态止盈目标价距离百分比（moving 模式不返回）。 */
+  take_profit_distance_pct?: number
+}
+
+export interface StrategyBatchItemResult {
+  id: string
+  name: string
+  ok: boolean
+  error?: string
+}
+
+/** 批量启停响应：per-item 结果 + 成功/失败计数。 */
+export interface StrategyBatchResult {
+  status: string
+  results: StrategyBatchItemResult[]
+  started?: number
+  stopped?: number
+  failed: number
+}
+
 export interface MartinConfig {
   id?: string
   name: string

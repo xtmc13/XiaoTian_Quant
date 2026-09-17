@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xiaotian-quant/gateway/internal/app"
 	"github.com/xiaotian-quant/gateway/internal/market"
 	"github.com/xiaotian-quant/gateway/internal/store"
 	"github.com/xiaotian-quant/gateway/internal/strategy"
@@ -80,6 +81,11 @@ func GetStrategyConfigs(c *gin.Context) {
 	status := c.Query("status")
 	coin := c.Query("coin")
 	stype := c.Query("type")
+	kind := strings.ToLower(strings.TrimSpace(c.Query("kind")))
+	if kind != "" && kind != "strategy" && kind != "bot" {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "kind must be strategy or bot"})
+		return
+	}
 	limit := 200
 	offset := 0
 	fmtScan(c.Query("limit"), &limit)
@@ -92,19 +98,28 @@ func GetStrategyConfigs(c *gin.Context) {
 		items = append(items, v)
 	}
 
-	// 策略机器人（马丁/华尔街）与策略实验室共用存储；未指定 category 时
-	// 默认排除机器人品类，避免两个页面数据互窜。机器人类请走
-	// /api/strategies/martin|wallstreet 专用接口（那边已按 category 过滤）。
-	if category == "" {
-		kept := items[:0]
-		for _, it := range items {
-			cat, _ := it["category"].(string)
-			if cat == "martin" || cat == "wallstreet" {
-				continue
+	// bot 身份字段（bot_type/trading_config）不是 DB 列，DB 重建（ToMap）会
+	// 丢弃；这里从 config_json 兜底恢复到顶层，保证 isBotItem 判别与机器人页
+	// 数据在重启/重建后依然稳定。
+	for _, it := range items {
+		hydrateBotFields(it)
+	}
+
+	// 策略机器人（马丁/华尔街）与策略实验室共用存储。未指定 category 且未
+	// 指定 kind 时默认排除机器人品类，避免两个页面数据互窜（向后兼容）。
+	// 指定 kind 时由后端判别函数 isBotItem 精确分流，不再依赖 category 猜谜。
+	if kind == "" {
+		if category == "" {
+			kept := items[:0]
+			for _, it := range items {
+				cat, _ := it["category"].(string)
+				if cat == "martin" || cat == "wallstreet" {
+					continue
+				}
+				kept = append(kept, it)
 			}
-			kept = append(kept, it)
+			items = kept
 		}
-		items = kept
 	}
 
 	if category != "" {
@@ -118,6 +133,30 @@ func GetStrategyConfigs(c *gin.Context) {
 	}
 	if stype != "" {
 		items = filterMap(items, "strategy_type", stype)
+	}
+
+	// kind 分流：strategy=仅策略实验室（!isBotItem），bot=仅策略机器人。
+	// market_type='futures' 的无 bot 标记合约策略归 strategy 侧——这是
+	// 2026-09-17 用户反馈的回归点（前端 swap 启发式过滤漏 futures）。
+	switch kind {
+	case "strategy":
+		kept := items[:0]
+		for _, it := range items {
+			if isBotItem(it) {
+				continue
+			}
+			kept = append(kept, it)
+		}
+		items = kept
+	case "bot":
+		kept := items[:0]
+		for _, it := range items {
+			if !isBotItem(it) {
+				continue
+			}
+			kept = append(kept, it)
+		}
+		items = kept
 	}
 
 	sort.Slice(items, func(i, j int) bool {
@@ -161,6 +200,7 @@ func GetStrategyConfig(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"detail": "not found"})
 		return
 	}
+	hydrateBotFields(item)
 	result := copyMap(item)
 	if configJSON, ok := item["config_json"].(string); ok {
 		var config map[string]any
@@ -169,6 +209,161 @@ func GetStrategyConfig(c *gin.Context) {
 		}
 	}
 	c.JSON(http.StatusOK, normalizeStrategyConfig(result))
+}
+
+// GetStrategyRuntime 返回运行中策略的实时状态（运行面板数据源）：
+// status=引擎内策略实例的 RuntimeStatus（未运行/不支持时为 null）、
+// price=币安 WS 最新价（取不到为 0）、config=该策略 config_json 解析结果，
+// 另附 next_add_distance_pct（下一档补仓距离）与 take_profit_distance_pct
+// （静态止盈距离，可计算时才返回）。
+func GetStrategyRuntime(c *gin.Context) {
+	id := c.Param("id")
+	item := store.GetStrategyConfig(id)
+	if item == nil {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "not found"})
+		return
+	}
+
+	var status map[string]any
+	if eng := strategy.GetEngine(nil); eng != nil {
+		if st, ok := eng.RuntimeStatus(id); ok {
+			status = st
+		}
+	}
+
+	price := 0.0
+	if appCtx := app.Get(); appCtx != nil && appCtx.BinanceWS != nil {
+		sym := strings.ToUpper(strings.TrimSpace(getString(item, "symbol", "")))
+		if sym == "" {
+			if coin := strings.TrimSpace(getString(item, "coin", "")); coin != "" {
+				sym = strings.ToUpper(coin) + "USDT"
+			}
+		}
+		if sym != "" {
+			price = appCtx.BinanceWS.GetPrice(sym)
+		}
+	}
+
+	config := map[string]any{}
+	if cj, ok := item["config_json"].(string); ok && cj != "" {
+		var parsed map[string]any
+		if json.Unmarshal([]byte(cj), &parsed) == nil && parsed != nil {
+			config = parsed
+		}
+	}
+
+	resp := gin.H{
+		"status": status,
+		"price":  price,
+		"config": config,
+	}
+	if d, ok := computeNextAddDistance(status, config, price); ok {
+		resp["next_add_distance_pct"] = d
+	}
+	if d, ok := computeTakeProfitDistance(status, config, price); ok {
+		resp["take_profit_distance_pct"] = d
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// computeNextAddDistance 计算现价到下一档未触发补仓档位的距离百分比。
+// 在仓、有阶梯、有参考价（均价/入场价）且现价>0 才有意义，否则不返回。
+func computeNextAddDistance(status, config map[string]any, price float64) (float64, bool) {
+	if price <= 0 || status == nil {
+		return 0, false
+	}
+	inPos, _ := status["in_position"].(bool)
+	if !inPos {
+		return 0, false
+	}
+	ladder, ok := config["add_positions"].([]any)
+	if !ok || len(ladder) == 0 {
+		return 0, false
+	}
+	ref := getFloat(status, "avg_entry_price", 0)
+	if ref <= 0 {
+		ref = getFloat(status, "entry_price", 0)
+	}
+	if ref <= 0 {
+		return 0, false
+	}
+	side, _ := status["direction"].(string)
+	filled := int(getFloat(status, "filled_orders", 0))
+	// 当前价下方（做多）/上方（做空）最近的未触发档位。
+	best := 0.0
+	found := false
+	for _, it := range ladder {
+		m, ok := it.(map[string]any)
+		if !ok {
+			continue
+		}
+		order := int(getFloat(m, "order", 0))
+		if order <= filled {
+			continue // 已触发
+		}
+		spread := getFloat(m, "spread", 0)
+		if spread <= 0 {
+			continue
+		}
+		var tierPrice float64
+		var dist float64
+		if side == "short" {
+			tierPrice = ref * (1 + spread)
+			if tierPrice <= price {
+				continue
+			}
+			dist = (tierPrice - price) / price * 100
+		} else {
+			tierPrice = ref * (1 - spread)
+			if tierPrice >= price {
+				continue
+			}
+			dist = (price - tierPrice) / price * 100
+		}
+		if !found || dist < best {
+			best, found = dist, true
+		}
+	}
+	return best, found
+}
+
+// computeTakeProfitDistance 静态止盈（tp_mode=static）下，现价到止盈目标价的
+// 距离百分比；移动止盈（moving）没有固定目标价，不返回。
+func computeTakeProfitDistance(status, config map[string]any, price float64) (float64, bool) {
+	if price <= 0 || status == nil {
+		return 0, false
+	}
+	if strings.ToLower(getString(config, "tp_mode", "")) != "static" {
+		return 0, false
+	}
+	tpRatio := getFloat(config, "take_profit_ratio", 0)
+	if tpRatio <= 0 {
+		return 0, false
+	}
+	inPos, _ := status["in_position"].(bool)
+	if !inPos {
+		return 0, false
+	}
+	ref := getFloat(status, "avg_entry_price", 0)
+	if ref <= 0 {
+		ref = getFloat(status, "entry_price", 0)
+	}
+	if ref <= 0 {
+		return 0, false
+	}
+	side, _ := status["direction"].(string)
+	if side == "short" {
+		target := ref * (1 - tpRatio)
+		if target >= price {
+			return 0, false
+		}
+		return (price - target) / price * 100, true
+	}
+	target := ref * (1 + tpRatio)
+	if target <= price {
+		return 0, false
+	}
+	return (target - price) / price * 100, true
 }
 
 func CreateStrategyConfig(c *gin.Context) {
@@ -253,10 +448,31 @@ func CreateStrategyConfig(c *gin.Context) {
 		return
 	}
 
+	// ── 类型-参数防呆（P0-4）：显式类型与 CRA 特征键必须匹配 ──
+	explicitType := strings.TrimSpace(getString(body, "strategy_type", "")) != ""
+	if err := checkStrategyTypeConfigMatch(getString(item, "strategy_type", ""), mergedStrategyConfig(item, payloadConfig), explicitType); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
+
+	// ── 机器人身份持久化：strategy_mode/bot_type 不是 DB 列，必须写入
+	// config_json 才能在 DB 重建后继续被 isBotItem 判别（根治互窜）。 ──
+	if botType, isBot := botIdentityFromBody(body); isBot {
+		if tc, ok := body["trading_config"]; ok && tc != nil {
+			item["trading_config"] = tc
+		}
+		persistBotIdentity(item, botType)
+	}
+
 	store.SetStrategyConfig(sid, item)
 	store.PersistStrategyConfigs()
 	persistStrategyConfigToDB(item)
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "id": sid})
+	resp := gin.H{"status": "ok", "id": sid}
+	// 模拟盘压回提示：请求是 live/空且被压回 paper 时标记，前端据此 toast。
+	if strings.ToLower(getString(body, "execution_mode", "")) != "paper" {
+		resp["forced_paper"] = true
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 func UpdateStrategyConfig(c *gin.Context) {
@@ -271,6 +487,10 @@ func UpdateStrategyConfig(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"detail": "not found"})
 		return
 	}
+	// 先在别名同步前捕获机器人身份（execution_mode 同步会把 strategy_mode
+	// 覆写成 'paper'）；config_json 是 DB 重建后的唯一持久载体，需先水合。
+	hydrateBotFields(item)
+	wasBot := isBotItem(item)
 	for _, f := range []string{"name", "coin", "strategy_type", "direction", "leverage", "category", "market_type", "margin_mode", "symbol", "timeframe", "execution_mode", "initial_capital", "group_id", "group_name", "indicator_name"} {
 		if v, ok := body[f]; ok {
 			item[f] = v
@@ -300,11 +520,36 @@ func UpdateStrategyConfig(c *gin.Context) {
 		payloadConfig = cfg
 	}
 	fillStrategyFieldDefaults(item, payloadConfig)
+
+	// ── 类型-参数防呆（P0-4）：以合并后的类型/config 为准 ──
+	explicitType := strings.TrimSpace(getString(body, "strategy_type", "")) != ""
+	if err := checkStrategyTypeConfigMatch(getString(item, "strategy_type", ""), mergedStrategyConfig(item, payloadConfig), explicitType); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
+
+	// ── 机器人身份保留/刷新：执行别名字段同步会把 strategy_mode 覆写成
+	// execution_mode('paper')，这里对机器人记录恢复 'bot' 标记。 ──
+	botType, isBotInBody := botIdentityFromBody(body)
+	if isBotInBody || wasBot {
+		if tc, ok := body["trading_config"]; ok && tc != nil {
+			item["trading_config"] = tc
+		}
+		if botType == "" {
+			botType = getString(item, "bot_type", "")
+		}
+		persistBotIdentity(item, botType)
+	}
+
 	item["updated_at"] = float64(time.Now().UnixMilli())
 	store.SetStrategyConfig(id, item)
 	store.PersistStrategyConfigs()
 	persistStrategyConfigToDB(item)
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	resp := gin.H{"status": "ok"}
+	if em, ok := body["execution_mode"].(string); ok && strings.ToLower(strings.TrimSpace(em)) != "paper" {
+		resp["forced_paper"] = true
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // flattenCRAParams collects CRA parameter keys that some entry points flatten
@@ -325,6 +570,87 @@ func flattenCRAParams(body map[string]any) map[string]any {
 var craFormMarkers = []string{
 	"first_order_amount", "first_order_multiplier", "add_positions",
 	"tp_mode", "take_profit_method", "moving_take_profit_tiers", "enable_add_position",
+}
+
+// craCompatibleTypes 是接受 CRA 参数包的策略类型：cra_contract/cra_spot 及
+// 后端启动时映射到 CRA 引擎的全部前端别名（见 mapCRAFactory）。参数防呆以
+// 这个集合为准——集合外类型（macd/rsi/trend/ScriptStrategy 等纯指标或脚本
+// 策略）携带 CRA 特征键即视为错配，防止保存"残废配置"（运行时按参数注册表
+// 过滤，CRA 参数被静默丢弃）。
+var craCompatibleTypes = map[string]bool{
+	"cra_contract": true,
+	"cra_spot":     true,
+	// mapCRAFactory spotTypes
+	"martin_trend":   true,
+	"wallstreet":     true,
+	"aggressive":     true,
+	"conservative":   true,
+	"high_frequency": true,
+	// mapCRAFactory contractTypes
+	"trend_long":          true,
+	"trend_short":         true,
+	"counter_stable":      true,
+	"counter_safe":        true,
+	"head_tail_arbitrage": true,
+}
+
+// checkStrategyTypeConfigMatch 类型-参数防呆：
+//   - CRA 特征键 + 非 CRA 类型 → 400（残废配置拦截）；
+//   - 显式 CRA 类型缺少 first_order_amount(≥1) 或 add_positions → 400。
+//
+// explicitType 表示请求体显式携带 strategy_type。反向（CRA 类型缺参）校验
+// 只在显式声明类型时做：推断路径（"222 式"缺 strategy_type、按 CRA 特征键
+// 兜底 cra_*）要保留默认补全行为，不能被 400 卡死。
+func checkStrategyTypeConfigMatch(stype string, cfg map[string]any, explicitType bool) error {
+	stype = strings.ToLower(strings.TrimSpace(stype))
+	if stype == "" {
+		return nil
+	}
+	if craCompatibleTypes[stype] {
+		if !explicitType {
+			return nil
+		}
+		if getFloat(cfg, "first_order_amount", 0) < 1 {
+			return fmt.Errorf("参数与策略类型不匹配：%s 策略需要 first_order_amount（首单金额≥1）", stype)
+		}
+		addDisabled := false
+		if v, ok := cfg["enable_add_position"].(bool); ok && !v {
+			addDisabled = true
+		}
+		if s, ok := cfg["enable_add_position"].(string); ok && (s == "false" || s == "0") {
+			addDisabled = true
+		}
+		if !addDisabled {
+			if add, ok := cfg["add_positions"].([]any); !ok || len(add) == 0 {
+				return fmt.Errorf("参数与策略类型不匹配：%s 策略需要 add_positions 补仓梯子（或显式关闭补仓）", stype)
+			}
+		}
+		return nil
+	}
+	for _, k := range craFormMarkers {
+		if _, ok := cfg[k]; ok {
+			return fmt.Errorf("参数与策略类型不匹配：补仓/移动止盈参数仅适用于 cra_contract/cra_spot 及其模板类型，不适用于 %s", stype)
+		}
+	}
+	return nil
+}
+
+// mergedStrategyConfig 解析 item.config_json 并用 payloadConfig（请求体携带的
+// config）覆盖，得到"保存后将生效"的参数视图。
+func mergedStrategyConfig(item, payloadConfig map[string]any) map[string]any {
+	cfg := map[string]any{}
+	if cj, ok := item["config_json"].(string); ok && cj != "" {
+		var parsed map[string]any
+		if json.Unmarshal([]byte(cj), &parsed) == nil {
+			for k, v := range parsed {
+				cfg[k] = v
+			}
+		}
+	}
+	for k, v := range payloadConfig {
+		cfg[k] = v
+	}
+	return cfg
 }
 
 // craContractMarketTypes are market_type values denoting a contract strategy.
@@ -433,24 +759,41 @@ func DeleteStrategyConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
+// batchItemResult 是批量操作的单条结果（P1-8 汇总 toast 数据源）。
+type batchItemResult struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+}
+
 func BatchStartConfigs(c *gin.Context) {
 	var body map[string]any
 	c.ShouldBindJSON(&body)
 	ids := getStringSlice(body, "ids")
 	nowTS := float64(time.Now().UnixMilli())
+	results := make([]batchItemResult, 0, len(ids))
+	started, failed := 0, 0
 	for _, sid := range ids {
 		item := store.GetStrategyConfig(sid)
 		if item == nil {
+			failed++
+			results = append(results, batchItemResult{ID: sid, OK: false, Error: "策略不存在"})
 			continue
 		}
-		if err := startStrategyInEngine(sid, item); err == nil {
-			item["status"] = "running"
-			item["updated_at"] = nowTS
-			store.SetStrategyConfig(sid, item)
+		if err := startStrategyInEngine(sid, item); err != nil {
+			failed++
+			results = append(results, batchItemResult{ID: sid, Name: getString(item, "name", ""), OK: false, Error: err.Error()})
+			continue
 		}
+		started++
+		item["status"] = "running"
+		item["updated_at"] = nowTS
+		store.SetStrategyConfig(sid, item)
+		results = append(results, batchItemResult{ID: sid, Name: getString(item, "name", ""), OK: true})
 	}
 	store.PersistStrategyConfigs()
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "results": results, "started": started, "failed": failed})
 }
 
 func BatchStopConfigs(c *gin.Context) {
@@ -458,18 +801,24 @@ func BatchStopConfigs(c *gin.Context) {
 	c.ShouldBindJSON(&body)
 	ids := getStringSlice(body, "ids")
 	nowTS := float64(time.Now().UnixMilli())
+	results := make([]batchItemResult, 0, len(ids))
+	stopped, failed := 0, 0
 	for _, sid := range ids {
 		item := store.GetStrategyConfig(sid)
 		if item == nil {
+			failed++
+			results = append(results, batchItemResult{ID: sid, OK: false, Error: "策略不存在"})
 			continue
 		}
 		stopStrategyInEngine(sid)
 		item["status"] = "stopped"
 		item["updated_at"] = nowTS
 		store.SetStrategyConfig(sid, item)
+		stopped++
+		results = append(results, batchItemResult{ID: sid, Name: getString(item, "name", ""), OK: true})
 	}
 	store.PersistStrategyConfigs()
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "stopped": len(ids)})
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "results": results, "stopped": stopped, "failed": failed})
 }
 
 func BatchCloseConfigs(c *gin.Context) {
@@ -672,6 +1021,117 @@ func isContractCategory(item map[string]any) bool {
 		return v == "swap" || v == "futures" || v == "margin"
 	}
 	return false
+}
+
+// isBotItem 判定一条配置是否属于"策略机器人"（vs 策略实验室）。这是后端
+// 唯一的归属判别口径，前端不再用 market_type 启发式猜谜：
+//   - strategy_mode/mode == 'bot'（含 DB 往返后的别名）；
+//   - 存在 bot_type（顶层，或 trading_config.bot_type —— map 或 JSON 串均可，
+//     或 config_json 解析结果里的 bot_type）。
+//   - category ∈ {martin, wallstreet}（历史机器人品类）。
+func isBotItem(it map[string]any) bool {
+	if strings.EqualFold(getString(it, "strategy_mode", ""), "bot") {
+		return true
+	}
+	if strings.EqualFold(getString(it, "mode", ""), "bot") {
+		return true
+	}
+	if getString(it, "bot_type", "") != "" {
+		return true
+	}
+	if cfg, ok := it["config"].(map[string]any); ok && getString(cfg, "bot_type", "") != "" {
+		return true
+	}
+	if tc := getString(it, "trading_config", ""); tc != "" {
+		var m map[string]any
+		if json.Unmarshal([]byte(tc), &m) == nil && getString(m, "bot_type", "") != "" {
+			return true
+		}
+	}
+	if tc, ok := it["trading_config"].(map[string]any); ok && getString(tc, "bot_type", "") != "" {
+		return true
+	}
+	switch strings.ToLower(getString(it, "category", "")) {
+	case "martin", "wallstreet":
+		return true
+	}
+	return false
+}
+
+// hydrateBotFields 从 config_json 解析结果把 bot_type/trading_config 兜底恢
+// 复到顶层。bot 身份字段不是 DB 列：SetStrategyConfig 落库走
+// StrategyConfigRecordFromMap（白名单列），DB 重建（ToMap）后顶层丢失，
+// 但 config_json 是持久载体，创建时已把 bot 标记写入其中。
+func hydrateBotFields(it map[string]any) {
+	if getString(it, "bot_type", "") != "" && it["trading_config"] != nil {
+		return
+	}
+	cj, ok := it["config_json"].(string)
+	if !ok || cj == "" {
+		return
+	}
+	var cfg map[string]any
+	if json.Unmarshal([]byte(cj), &cfg) != nil || cfg == nil {
+		return
+	}
+	if getString(it, "bot_type", "") == "" {
+		if bt, ok := cfg["bot_type"].(string); ok && bt != "" {
+			it["bot_type"] = bt
+		}
+	}
+	if it["trading_config"] == nil {
+		if tc, ok := cfg["trading_config"]; ok && tc != nil {
+			it["trading_config"] = tc
+		}
+	}
+}
+
+// botIdentityFromBody 从创建/更新请求体提取 bot 身份：
+// strategy_mode=='bot'、顶层 bot_type、或 trading_config.bot_type 任一命中
+// 即视为机器人配置，返回 (botType, true)。
+func botIdentityFromBody(body map[string]any) (string, bool) {
+	botType := getString(body, "bot_type", "")
+	if botType == "" {
+		if tc, ok := body["trading_config"].(map[string]any); ok {
+			botType = getString(tc, "bot_type", "")
+		}
+	}
+	isBot := strings.EqualFold(getString(body, "strategy_mode", ""), "bot") || botType != ""
+	return botType, isBot
+}
+
+// persistBotIdentity 把 bot 身份写进 item：顶层 bot_type + strategy_mode/mode
+// 置 'bot'（execution_mode 仍按安全红线保存为 paper），并合入 config_json —
+// config_json 是 DB 重建后唯一可靠的身份载体。
+func persistBotIdentity(item map[string]any, botType string) {
+	if botType != "" {
+		item["bot_type"] = botType
+	}
+	item["strategy_mode"] = "bot"
+	item["mode"] = "bot"
+	cj := getString(item, "config_json", "")
+	cfg := map[string]any{}
+	if cj != "" {
+		var parsed map[string]any
+		if json.Unmarshal([]byte(cj), &parsed) == nil && parsed != nil {
+			cfg = parsed
+		}
+	}
+	if botType != "" {
+		if _, exists := cfg["bot_type"]; !exists {
+			cfg["bot_type"] = botType
+		}
+	}
+	if _, exists := cfg["trading_config"]; !exists {
+		if tc, ok := item["trading_config"]; ok && tc != nil {
+			cfg["trading_config"] = tc
+		}
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return
+	}
+	item["config_json"] = string(data)
 }
 
 // stopStrategyInEngine stops and unregisters a strategy from the engine.
@@ -920,6 +1380,8 @@ func GetStrategyParamDefs(c *gin.Context) {
 
 	// CRA 策略的前端表单由 CRAParamForm 统一渲染，不需要动态参数定义。
 	craTypes := map[string]bool{
+		"cra_contract":        true,
+		"cra_spot":            true,
 		"martin_trend":        true,
 		"wallstreet":          true,
 		"aggressive":          true,
@@ -1028,7 +1490,7 @@ func normalizeStrategyConfig(it map[string]any) map[string]any {
 	result := make(map[string]any)
 
 	// Copy basic fields
-	for _, k := range []string{"id", "name", "symbol", "status", "leverage", "timeframe", "initial_capital", "current_equity", "total_pnl", "total_pnl_percent", "group_id", "group_name", "indicator_name", "market_type", "margin_mode", "config", "config_json"} {
+	for _, k := range []string{"id", "name", "symbol", "status", "leverage", "timeframe", "initial_capital", "current_equity", "total_pnl", "total_pnl_percent", "group_id", "group_name", "indicator_name", "market_type", "margin_mode", "config", "config_json", "bot_type", "trading_config"} {
 		if v, ok := it[k]; ok {
 			result[k] = v
 		}

@@ -1,6 +1,8 @@
 import type { StrategyItem, AddPositionItem, MovingTPTier } from '@/types'
 import { cn, formatCurrency } from '@/lib/utils'
 import { decimalToPercent, PERCENTAGE_FIELD_THRESHOLDS } from '@/lib/craPercentUtils'
+import { isCRAStrategyType } from '@/lib/strategyUtils'
+import { RuntimePanel } from './RuntimePanel'
 import {
   Play,
   Pause,
@@ -15,6 +17,7 @@ import {
   TrendingUp,
   TrendingDown,
   Activity,
+  X,
 } from 'lucide-react'
 import { StatusBadge } from './StrategyList'
 
@@ -24,6 +27,9 @@ interface StrategyDetailPanelProps {
   onStop: () => void
   onEdit: () => void
   onDelete: () => void
+  /** P0-3：启动失败的持久化错误（页面级 state），显示在面板顶部红色横条。 */
+  startError?: string | null
+  onDismissStartError?: () => void
 }
 
 function safeJsonParse(json?: string | null): Record<string, unknown> {
@@ -69,15 +75,44 @@ function formatMovingTPTiers(tiers?: MovingTPTier[]): string {
     .join(' · ')
 }
 
-export function StrategyDetailPanel({ strategy, onStart, onStop, onEdit, onDelete }: StrategyDetailPanelProps) {
+export function StrategyDetailPanel({
+  strategy,
+  onStart,
+  onStop,
+  onEdit,
+  onDelete,
+  startError,
+  onDismissStartError,
+}: StrategyDetailPanelProps) {
   const s = strategy
   const config = safeJsonParse(s.config_json)
   const pnl = s.total_pnl ?? 0
   const pnlPct = s.total_pnl_percent ?? 0
   const isContract = s.market_type !== 'spot' && s.category !== 'spot'
+  // P1-5 资金三件套：收益率 = (当前权益 - 初始资金) / 初始资金。
+  const initial = s.initial_capital ?? 0
+  const equity = s.current_equity
+  const returnPct = initial > 0 && equity != null ? ((equity - initial) / initial) * 100 : null
+  const craType = isCRAStrategyType(s.strategy_type || s.type || '')
 
   return (
     <div className="space-y-4 max-w-4xl mx-auto">
+      {/* P0-3 启动失败持久化反馈 */}
+      {startError && (
+        <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-quant-red/10 border border-quant-red/30 text-xs text-quant-red">
+          <span className="font-medium shrink-0">启动失败：</span>
+          <span className="min-w-0 break-words flex-1">{startError}</span>
+          {onDismissStartError && (
+            <button
+              onClick={onDismissStartError}
+              aria-label="关闭错误提示"
+              className="shrink-0 p-0.5 rounded hover:bg-quant-red/20 transition-colors"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      )}
       <div className="rounded-xl border border-quant-border bg-quant-card p-5">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
@@ -138,16 +173,24 @@ export function StrategyDetailPanel({ strategy, onStart, onStop, onEdit, onDelet
           </div>
         </div>
 
-        <div className="grid grid-cols-3 gap-3 mt-5">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mt-5">
           <StatBox
             icon={Wallet}
-            label="投入资金"
+            label="初始资金"
             value={s.initial_capital != null ? `$${formatCurrency(s.initial_capital)}` : '-'}
           />
           <StatBox
             icon={Activity}
-            label="当前净值"
+            label="当前权益"
             value={s.current_equity != null ? `$${formatCurrency(s.current_equity)}` : '-'}
+          />
+          <StatBox
+            icon={returnPct != null && returnPct >= 0 ? TrendingUp : TrendingDown}
+            label="收益率"
+            value={returnPct != null ? `${returnPct >= 0 ? '+' : ''}${returnPct.toFixed(2)}%` : '—'}
+            valueColor={
+              returnPct == null ? undefined : returnPct >= 0 ? 'text-quant-green' : 'text-quant-red'
+            }
           />
           <StatBox
             icon={pnl >= 0 ? TrendingUp : TrendingDown}
@@ -158,9 +201,15 @@ export function StrategyDetailPanel({ strategy, onStart, onStop, onEdit, onDelet
         </div>
       </div>
 
+      {/* P0-1 实时运行面板 */}
+      <div className="rounded-xl border border-quant-border bg-quant-card p-5">
+        <div className="text-xs font-semibold mb-3">实时运行状态</div>
+        <RuntimePanel strategy={s} />
+      </div>
+
       <div className="rounded-xl border border-quant-border bg-quant-card p-5">
         <div className="text-xs font-semibold mb-3">策略详情</div>
-        <div className="grid grid-cols-2 gap-4 text-xs">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
           <DetailRow label="策略ID" value={s.id} />
           <DetailRow
             label="状态"
@@ -180,7 +229,14 @@ export function StrategyDetailPanel({ strategy, onStart, onStop, onEdit, onDelet
 
       <div className="rounded-xl border border-quant-border bg-quant-card p-5">
         <div className="text-xs font-semibold mb-3">CRA 量化参数</div>
-        <div className="grid grid-cols-2 gap-4 text-xs">
+        {!craType ? (
+          <div className="text-[11px] text-muted-foreground py-2">
+            当前策略类型（{s.strategy_type || s.type || '未知'}）为指标/脚本策略，不支持 CRA
+            补仓/移动止盈参数；此类参数即使写入配置也不会在运行时生效。
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
           <DetailRow label="挂单价格" value={config.first_order_price ? `${config.first_order_price} USDT` : '市价'} />
           <DetailRow label="首单额度" value={config.first_order_amount ? `${config.first_order_amount} USDT` : '-'} />
           <DetailRow
@@ -247,10 +303,10 @@ export function StrategyDetailPanel({ strategy, onStart, onStop, onEdit, onDelet
           </div>
         )}
 
-        {isContract && (
+        {isContract && craType && (
           <>
             <div className="mt-4 text-xs font-semibold text-quant-gold">合约专属参数</div>
-            <div className="grid grid-cols-2 gap-4 text-xs mt-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs mt-3">
               <DetailRow
                 label="开仓 MACD"
                 value={(config.open_macd_enabled ? `${config.open_macd_period}` : '关闭') as string}
@@ -304,6 +360,8 @@ export function StrategyDetailPanel({ strategy, onStart, onStop, onEdit, onDelet
                 value={config.burn_dual_enabled ? `第 ${config.burn_dual_threshold} 次` : '未开启'}
               />
             </div>
+          </>
+        )}
           </>
         )}
       </div>

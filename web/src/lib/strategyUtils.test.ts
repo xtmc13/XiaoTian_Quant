@@ -6,6 +6,9 @@ import {
   calculateAddPositionTotal,
   strategyTypeToMultiplierPreset,
   createDefaultCRAParams,
+  isCRAStrategyType,
+  stripCRAFeatureKeys,
+  CRA_FEATURE_KEYS,
   MARKET_DEFAULTS,
 } from './strategyUtils'
 import type { AddPositionItem } from '@/types'
@@ -159,5 +162,44 @@ describe('strategyUtils', () => {
       expect(params.movingTPTiers).toEqual(createDefaultMovingTPTiers('contract'))
       expect(params.stopLossEnabled).toBe(true)
     })
+  })
+})
+
+describe('P0-4 类型-参数防呆', () => {
+  it('isCRAStrategyType accepts cra_contract/cra_spot and backend CRA aliases', () => {
+    expect(isCRAStrategyType('cra_contract')).toBe(true)
+    expect(isCRAStrategyType('cra_spot')).toBe(true)
+    expect(isCRAStrategyType('trend_long')).toBe(true)
+    expect(isCRAStrategyType('trend_short')).toBe(true)
+    expect(isCRAStrategyType('martin_trend')).toBe(true)
+    expect(isCRAStrategyType('wallstreet')).toBe(true)
+    expect(isCRAStrategyType('counter_safe')).toBe(true)
+    expect(isCRAStrategyType('head_tail_arbitrage')).toBe(true)
+  })
+
+  it('isCRAStrategyType rejects indicator/script types', () => {
+    expect(isCRAStrategyType('macd')).toBe(false)
+    expect(isCRAStrategyType('rsi')).toBe(false)
+    expect(isCRAStrategyType('trend')).toBe(false)
+    expect(isCRAStrategyType('ScriptStrategy')).toBe(false)
+    expect(isCRAStrategyType('')).toBe(false)
+  })
+
+  it('stripCRAFeatureKeys removes CRA-only keys and keeps generic fields', () => {
+    const config = {
+      symbol: 'BTCUSDT',
+      leverage: 10,
+      margin_mode: 'cross',
+      first_order_amount: 100,
+      add_positions: [{ order: 1, multiplier: 1, spread: 0.03, callback: 0.003 }],
+      tp_mode: 'static',
+      moving_take_profit_tiers: [],
+      timeframe: '15m',
+    }
+    const stripped = stripCRAFeatureKeys(config)
+    for (const k of CRA_FEATURE_KEYS) {
+      expect(stripped).not.toHaveProperty(k)
+    }
+    expect(stripped).toMatchObject({ symbol: 'BTCUSDT', leverage: 10, margin_mode: 'cross', timeframe: '15m' })
   })
 })

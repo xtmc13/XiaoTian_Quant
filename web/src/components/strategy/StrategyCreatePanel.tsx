@@ -9,7 +9,7 @@ import { CRAParamForm, craParamsToApiPayload, type CRAParams } from './CRAParamF
 import { ExchangeSelectModal } from './ExchangeSelectModal'
 import { FormField, DynamicParamField, STRAT_TYPES } from './StrategyFormFields'
 import { STRATEGY_PRESETS, type Preset } from './StrategyPresets'
-import { createDefaultCRAParams } from '@/lib/strategyUtils'
+import { createDefaultCRAParams, isCRAStrategyType, CRA_FEATURE_KEYS } from '@/lib/strategyUtils'
 import type { StrategyParamDefs } from '@/types'
 import { X, CheckCircle2, Activity, Globe } from 'lucide-react'
 
@@ -24,6 +24,7 @@ interface StrategyCreatePanelProps {
 
 function marketTypeFromType(strategyType: string): 'spot' | 'contract' {
   const contractTypes = [
+    'cra_contract',
     'trend_long',
     'trend_short',
     'counter_stable',
@@ -65,7 +66,7 @@ function strategyTypeLabel(strategyType: string, market: 'spot' | 'contract'): s
 }
 
 // Strategy types rendered entirely by CRAParamForm; no dynamic params needed.
-const CRA_ONLY_TYPES = new Set(['trend_long', 'trend_short'])
+const CRA_ONLY_TYPES = new Set(['cra_contract', 'cra_spot', 'trend_long', 'trend_short'])
 
 export function StrategyCreatePanel({ strategyType, onClose, onSaved }: StrategyCreatePanelProps) {
   const market = useMemo(() => marketTypeFromType(strategyType), [strategyType])
@@ -95,6 +96,7 @@ export function StrategyCreatePanel({ strategyType, onClose, onSaved }: Strategy
   const [name, setName] = useState('')
   const [symbol, setSymbol] = useState('BTCUSDT')
   const [timeframe, setTimeframe] = useState('15m')
+  const [initialCapital, setInitialCapital] = useState(1000)
   const [selectedExchanges, setSelectedExchanges] = useState<string[]>([])
   const [showExchangeModal, setShowExchangeModal] = useState(false)
   const [executionMode, setExecutionMode] = useState<'live' | 'signal'>('signal')
@@ -207,15 +209,35 @@ export function StrategyCreatePanel({ strategyType, onClose, onSaved }: Strategy
       return
     }
 
+    // ── P0-4 类型-参数防呆 ──
+    const craType = isCRAStrategyType(strategyType)
+    if (craType) {
+      if (!craParams.firstOrderAmount || craParams.firstOrderAmount < 1) {
+        toast('error', '参数与策略类型不匹配：CRA 策略需要首单金额 ≥ 1')
+        return
+      }
+      if (craParams.enableAddPosition && craParams.addPositions.length === 0) {
+        toast('error', '参数与策略类型不匹配：CRA 策略需要至少一档补仓（或关闭补仓）')
+        return
+      }
+    }
+
     setIsSubmitting(true)
     try {
+      const dynamicConfig = craType ? dynamicParams : Object.fromEntries(
+        Object.entries(dynamicParams).filter(([k]) => !CRA_FEATURE_KEYS.includes(k))
+      )
       const config: Record<string, unknown> = {
-        ...craParamsToApiPayload(craParams),
-        ...dynamicParams,
+        ...(craType ? craParamsToApiPayload(craParams) : {}),
+        ...dynamicConfig,
         market_type: market === 'spot' ? 'spot' : 'swap',
         position_side: craParams.direction === 'long' ? 'LONG' : craParams.direction === 'short' ? 'SHORT' : 'BOTH',
         margin_mode: 'cross',
         selected_exchanges: selectedExchanges,
+      }
+      if (!craType && CRA_FEATURE_KEYS.some((k) => k in config)) {
+        toast('error', '参数与策略类型不匹配：补仓/移动止盈参数仅适用于 cra_contract/cra_spot')
+        return
       }
       const payload: Record<string, unknown> = {
         name: name.trim(),
@@ -233,10 +255,14 @@ export function StrategyCreatePanel({ strategyType, onClose, onSaved }: Strategy
         coin: symbol.trim().toUpperCase().replace('USDT', '').replace('USD', ''),
         direction: market === 'spot' ? 'long' : craParams.direction,
         mode: 'signal',
-        initial_capital: 0,
+        initial_capital: initialCapital,
       }
-      await create(payload)
+      const res = await create(payload)
       handleSaveAsDefault()
+      // P1-7：后端把 live/空 execution_mode 压回 paper 时提示用户。
+      if (res?.forced_paper) {
+        toast('warning', '已按安全默认设为模拟盘（实盘选项已下线）')
+      }
       toast('success', `策略 "${name.trim()}" 已创建`)
       onSaved()
     } catch (e: unknown) {
@@ -269,7 +295,7 @@ export function StrategyCreatePanel({ strategyType, onClose, onSaved }: Strategy
       <div className="flex-1 overflow-y-auto p-6 space-y-5">
         {/* Presets */}
         <SectionCard title="快速预设">
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             {STRATEGY_PRESETS.map((pr) => (
               <button
                 key={pr.key}
@@ -304,7 +330,7 @@ export function StrategyCreatePanel({ strategyType, onClose, onSaved }: Strategy
               />
             </FormField>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <FormField label="市场类型">
                 <div className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs text-muted-foreground">
                   {market === 'spot' ? '现货' : '合约'}
@@ -320,7 +346,7 @@ export function StrategyCreatePanel({ strategyType, onClose, onSaved }: Strategy
               </FormField>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <FormField label="选择交易所">
                 <button
                   type="button"
@@ -341,6 +367,16 @@ export function StrategyCreatePanel({ strategyType, onClose, onSaved }: Strategy
                   </span>
                 </button>
               </FormField>
+              <FormField label="初始资金 (USDT)">
+                <input
+                  type="number"
+                  min={0}
+                  value={initialCapital}
+                  onChange={(e) => setInitialCapital(Number(e.target.value) || 0)}
+                  className={inputCls}
+                  placeholder="模拟盘初始权益"
+                />
+              </FormField>
             </div>
           </div>
         </SectionCard>
@@ -353,15 +389,23 @@ export function StrategyCreatePanel({ strategyType, onClose, onSaved }: Strategy
           configuredExchanges={configuredExchanges}
         />
 
-        {/* CRA params */}
-        <CRAParamForm value={craParams} onChange={setCraParams} market={market} />
+        {/* CRA params（P0-4：仅 CRA 兼容类型展示；面板类型全部兼容，防御未来扩展） */}
+        {isCRAStrategyType(strategyType) ? (
+          <CRAParamForm value={craParams} onChange={setCraParams} market={market} />
+        ) : (
+          <SectionCard title="参数">
+            <div className="text-xs text-muted-foreground py-4 text-center">
+              当前策略类型不支持 CRA 补仓/移动止盈参数，仅使用通用字段与动态参数
+            </div>
+          </SectionCard>
+        )}
 
         {/* Dynamic params */}
         {!CRA_ONLY_TYPES.has(strategyType) && (paramDefsLoading || paramDefs.length > 0) && (
           <SectionCard title="动态策略参数">
             {paramDefsLoading && <div className="text-xs text-muted-foreground py-2">加载参数定义...</div>}
             {paramDefs.length > 0 && (
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {paramDefs.map((def) => (
                   <DynamicParamField
                     key={def.name}
@@ -412,7 +456,7 @@ export function StrategyCreatePanel({ strategyType, onClose, onSaved }: Strategy
 
             <div>
               <div className="text-xs font-semibold mb-3">通知渠道</div>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 {[
                   { key: 'browser', label: '浏览器' },
                   { key: 'email', label: '邮件' },

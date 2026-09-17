@@ -17,8 +17,8 @@ import (
 type BaseCRAStrategy struct {
 	strategy.BaseStrategy
 
-	name    string
-	symbol  string
+	name       string
+	symbol     string
 	isContract bool
 
 	mu      sync.RWMutex
@@ -26,6 +26,10 @@ type BaseCRAStrategy struct {
 	params  *CRAParams
 	state   *CRAState
 	bars    []model.Bar
+
+	// 最近信号（RuntimeStatus 展示用）。
+	lastSignalTime      int64 // Unix 毫秒
+	lastSignalDirection string
 
 	flashDetector *strategy.FlashCrashDetector
 	logger        *logging.Logger
@@ -131,6 +135,50 @@ func (s *BaseCRAStrategy) Stop() error {
 	s.bars = nil
 	s.logger.Info("cra strategy stopped", "symbol", s.symbol)
 	return nil
+}
+
+// RuntimeStatus exposes live runtime state for the running panel.
+// Field names are snake_case for the frontend. Only state that actually
+// exists is reported (no fabrication).
+func (s *BaseCRAStrategy) RuntimeStatus() map[string]any {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	m := map[string]any{
+		"running":        s.running,
+		"bars_collected": len(s.bars),
+	}
+	if s.params != nil {
+		m["tp_mode"] = s.params.TPMode
+		m["total_add_tiers"] = len(s.params.AddPositions)
+		m["order_count"] = s.params.OrderCount
+	}
+	st := s.state
+	if st != nil {
+		m["in_position"] = st.InPosition
+		m["loops_executed"] = st.LoopExecuted
+		m["waterfall_paused"] = st.WaterfallPaused
+		// filled_orders = 已成交入场订单数（含首单）；当前档位同义。
+		m["filled_orders"] = st.PositionCount
+		m["current_tier"] = st.PositionCount
+		if st.PositionCount > 1 {
+			m["add_positions_triggered"] = st.PositionCount - 1
+		} else {
+			m["add_positions_triggered"] = 0
+		}
+		m["pending_add_count"] = st.PendingAddCount
+		if st.InPosition {
+			m["direction"] = string(st.Side)
+			m["entry_price"] = st.EntryPrice
+			m["avg_entry_price"] = st.AvgEntryPrice
+			m["position_qty"] = st.TotalQty
+			m["position_cost"] = st.TotalCost
+		}
+	}
+	if s.lastSignalTime > 0 {
+		m["last_signal_time"] = s.lastSignalTime
+		m["last_signal_direction"] = s.lastSignalDirection
+	}
+	return m
 }
 
 func (s *BaseCRAStrategy) OnTick(tick model.Tick, bus *event.EventBus) (*model.Signal, error) {
@@ -266,6 +314,8 @@ func (s *BaseCRAStrategy) OnOrderUpdate(order model.OrderData, bus *event.EventB
 // ── helpers ──
 
 func (s *BaseCRAStrategy) signal(direction string, qty float64, reason string) *model.Signal {
+	s.lastSignalTime = time.Now().UnixMilli()
+	s.lastSignalDirection = direction
 	sig := &model.Signal{
 		Symbol:    s.symbol,
 		Direction: direction,

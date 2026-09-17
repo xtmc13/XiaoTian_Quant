@@ -8,7 +8,10 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xiaotian-quant/gateway/internal/event"
 	"github.com/xiaotian-quant/gateway/internal/store"
+	"github.com/xiaotian-quant/gateway/internal/strategy"
+	"github.com/xiaotian-quant/gateway/internal/strategy/strategies"
 )
 
 // TestCreateStrategyConfigWriteThrough 回归测试（Bug 1）：策略实验室新建的配置
@@ -248,4 +251,422 @@ func listContainsID(list []map[string]any, id string) bool {
 		}
 	}
 	return false
+}
+
+/* ── P0-1 运行面板：runtime 接口 ─────────────────────────────── */
+
+// TestGetStrategyRuntimeNotFound 404 路径：未知 id 必须 404。
+func TestGetStrategyRuntimeNotFound(t *testing.T) {
+	r := setupRouter()
+	r.GET("/strategies/configs/:id/runtime", GetStrategyRuntime)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/strategies/configs/no-such-id/runtime", nil)
+	r.ServeHTTP(w, req)
+	assertEq(t, w.Code, http.StatusNotFound, "runtime for unknown id must be 404")
+}
+
+// TestGetStrategyRuntimeRunning 全链路：macd 配置启动后，runtime 接口返回
+// 引擎内真实运行状态（running=true）；未启动配置 status 为 null。
+func TestGetStrategyRuntimeRunning(t *testing.T) {
+	// 引擎单例先用真实事件总线初始化（GetEngine(nil) 依赖该单例）。
+	eng := strategy.GetEngine(event.NewEventBus(4096, 1))
+	strategy.RegisterStrategyFactory("macd", func() strategy.Strategy { return strategies.NewMACDStrategy() })
+
+	r := setupRouter()
+	r.POST("/strategies/configs", CreateStrategyConfig)
+	r.POST("/strategies/configs/batch-start", BatchStartConfigs)
+	r.GET("/strategies/configs/:id/runtime", GetStrategyRuntime)
+
+	create := func(name string) string {
+		body := `{"name":"` + name + `","strategy_type":"macd","symbol":"BTCUSDT","config":{}}`
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("POST", "/strategies/configs", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		r.ServeHTTP(w, req)
+		assertEq(t, w.Code, http.StatusOK, "create "+name)
+		var resp map[string]any
+		assertTrue(t, json.Unmarshal(w.Body.Bytes(), &resp) == nil, "create response JSON")
+		id, _ := resp["id"].(string)
+		assertTrue(t, id != "", "create id")
+		t.Cleanup(func() { store.DeleteStrategyConfig(id) })
+		return id
+	}
+
+	runningID := create("runtime运行中")
+	stoppedID := create("runtime已停止")
+
+	// 启动 runningID。
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/strategies/configs/batch-start", strings.NewReader(`{"ids":["`+runningID+`"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	assertEq(t, w.Code, http.StatusOK, "batch-start")
+	t.Cleanup(func() { stopStrategyInEngine(runningID) })
+
+	var payload map[string]any
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest("GET", "/strategies/configs/"+runningID+"/runtime", nil)
+	r.ServeHTTP(w, req)
+	assertEq(t, w.Code, http.StatusOK, "runtime status code")
+	assertTrue(t, json.Unmarshal(w.Body.Bytes(), &payload) == nil, "runtime response JSON")
+	st, ok := payload["status"].(map[string]any)
+	assertTrue(t, ok, "status must be an object for running strategy")
+	assertTrue(t, st["running"] == true, "engine status.running must be true")
+	if _, has := st["bars_collected"]; !has {
+		t.Fatal("status must carry bars_collected")
+	}
+
+	// 未启动配置：status 为 null，config 仍可解析。
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest("GET", "/strategies/configs/"+stoppedID+"/runtime", nil)
+	r.ServeHTTP(w, req)
+	assertEq(t, w.Code, http.StatusOK, "runtime (stopped) status code")
+	payload = map[string]any{}
+	assertTrue(t, json.Unmarshal(w.Body.Bytes(), &payload) == nil, "runtime (stopped) response JSON")
+	assertTrue(t, payload["status"] == nil, "status must be null for stopped strategy")
+	if _, has := payload["config"]; !has {
+		t.Fatal("config field must be present")
+	}
+	_ = eng
+}
+
+/* ── P0-4 类型-参数防呆 ─────────────────────────────────────── */
+
+// TestCreateStrategyConfigTypeConfigMismatch 显式非 CRA 类型携带 CRA 特征键
+// 必须 400；显式 CRA 类型缺 first_order_amount / add_positions 也必须 400。
+func TestCreateStrategyConfigTypeConfigMismatch(t *testing.T) {
+	r := setupRouter()
+	r.POST("/strategies/configs", CreateStrategyConfig)
+
+	cases := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "macd + CRA 特征键",
+			body: `{"name":"错配macd","strategy_type":"macd","symbol":"BTCUSDT","config":{"add_positions":[{"order":1,"multiplier":1,"spread":0.03,"callback":0.003}]}}`,
+		},
+		{
+			name: "trend + moving_take_profit_tiers",
+			body: `{"name":"错配trend","strategy_type":"trend","symbol":"BTCUSDT","config":{"moving_take_profit_tiers":[{"ratio":0.02,"drawback":0.2}]}}`,
+		},
+		{
+			name: "cra_contract 缺首单金额",
+			body: `{"name":"缺首单","strategy_type":"cra_contract","symbol":"BTCUSDT","config":{"add_positions":[{"order":1,"multiplier":1,"spread":0.03,"callback":0.003}]}}`,
+		},
+		{
+			name: "cra_spot 缺补仓梯子",
+			body: `{"name":"缺梯子","strategy_type":"cra_spot","symbol":"BTCUSDT","config":{"first_order_amount":100}}`,
+		},
+	}
+	for _, tc := range cases {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("POST", "/strategies/configs", strings.NewReader(tc.body))
+		req.Header.Set("Content-Type", "application/json")
+		r.ServeHTTP(w, req)
+		assertEq(t, w.Code, http.StatusBadRequest, tc.name+" must be rejected with 400")
+		var resp map[string]any
+		assertTrue(t, json.Unmarshal(w.Body.Bytes(), &resp) == nil, tc.name+" error body JSON")
+		detail, _ := resp["detail"].(string)
+		assertTrue(t, strings.Contains(detail, "参数与策略类型不匹配"), tc.name+" error must explain mismatch, got: "+detail)
+	}
+
+	// 对照：显式 cra_contract + 完整 CRA 参数必须 200。
+	okBody := `{"name":"正确cra","strategy_type":"cra_contract","symbol":"BTCUSDT","config":{"first_order_amount":100,"add_positions":[{"order":1,"multiplier":1,"spread":0.03,"callback":0.003}]}}`
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/strategies/configs", strings.NewReader(okBody))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	assertEq(t, w.Code, http.StatusOK, "explicit cra_contract with full params must be accepted")
+	var resp map[string]any
+	assertTrue(t, json.Unmarshal(w.Body.Bytes(), &resp) == nil, "ok response JSON")
+	id, _ := resp["id"].(string)
+	assertTrue(t, id != "", "ok response id")
+	t.Cleanup(func() { store.DeleteStrategyConfig(id) })
+}
+
+// TestCreateStrategyConfigCRATypeAliasesKeepWorking 映射到 CRA 引擎的前端
+// 别名类型（trend_long 等）携带 CRA 参数必须照常保存——防呆不得误伤
+// 现有创建路径（StrategyCreatePanel 全部走这个组合）。
+func TestCreateStrategyConfigCRATypeAliasesKeepWorking(t *testing.T) {
+	r := setupRouter()
+	r.POST("/strategies/configs", CreateStrategyConfig)
+
+	body := `{"name":"别名trendlong","strategy_type":"trend_long","symbol":"BTCUSDT","config":{"first_order_amount":100,"add_positions":[{"order":1,"multiplier":1,"spread":0.03,"callback":0.003}]}}`
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/strategies/configs", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	assertEq(t, w.Code, http.StatusOK, "trend_long + CRA params must keep working")
+	var resp map[string]any
+	assertTrue(t, json.Unmarshal(w.Body.Bytes(), &resp) == nil, "response JSON")
+	id, _ := resp["id"].(string)
+	t.Cleanup(func() { store.DeleteStrategyConfig(id) })
+}
+
+// TestUpdateStrategyConfigTypeConfigMismatch 编辑时同样防呆：把已有配置
+// 改成"非 CRA 类型 + CRA 特征键"必须 400。
+func TestUpdateStrategyConfigTypeConfigMismatch(t *testing.T) {
+	r := setupRouter()
+	r.POST("/strategies/configs", CreateStrategyConfig)
+	r.PUT("/strategies/configs/:id", UpdateStrategyConfig)
+
+	body := `{"name":"更新防呆","strategy_type":"cra_contract","symbol":"BTCUSDT","config":{"first_order_amount":100,"add_positions":[{"order":1,"multiplier":1,"spread":0.03,"callback":0.003}]}}`
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/strategies/configs", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	assertEq(t, w.Code, http.StatusOK, "setup create")
+	var resp map[string]any
+	assertTrue(t, json.Unmarshal(w.Body.Bytes(), &resp) == nil, "setup response JSON")
+	id, _ := resp["id"].(string)
+	t.Cleanup(func() { store.DeleteStrategyConfig(id) })
+
+	// 改成 macd 但保留 CRA 参数 → 400。
+	bad := `{"strategy_type":"macd","config":{"first_order_amount":100,"add_positions":[{"order":1,"multiplier":1,"spread":0.03,"callback":0.003}]}}`
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest("PUT", "/strategies/configs/"+id, strings.NewReader(bad))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	assertEq(t, w.Code, http.StatusBadRequest, "update to macd + CRA keys must be 400")
+
+	// 改成 macd 且清掉 CRA 参数（修复残废配置）→ 200。
+	good := `{"strategy_type":"macd","config":{}}`
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest("PUT", "/strategies/configs/"+id, strings.NewReader(good))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	assertEq(t, w.Code, http.StatusOK, "update to macd with clean config must succeed")
+}
+
+/* ── P1-7 模拟盘压回提示 ────────────────────────────────────── */
+
+// TestCreateUpdateForcedPaperFlag 请求 execution_mode 为 live/空被压回 paper
+// 时响应带 forced_paper；显式 paper 时不带。
+func TestCreateUpdateForcedPaperFlag(t *testing.T) {
+	r := setupRouter()
+	r.POST("/strategies/configs", CreateStrategyConfig)
+	r.PUT("/strategies/configs/:id", UpdateStrategyConfig)
+
+	post := func(body string) map[string]any {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("POST", "/strategies/configs", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		r.ServeHTTP(w, req)
+		assertEq(t, w.Code, http.StatusOK, "create status")
+		var resp map[string]any
+		assertTrue(t, json.Unmarshal(w.Body.Bytes(), &resp) == nil, "create response JSON")
+		return resp
+	}
+
+	// live 被压回 → forced_paper。
+	resp := post(`{"name":"压回live","strategy_type":"macd","symbol":"BTCUSDT","execution_mode":"live","config":{}}`)
+	assertTrue(t, resp["forced_paper"] == true, "live must be flagged forced_paper")
+	idLive, _ := resp["id"].(string)
+	t.Cleanup(func() { store.DeleteStrategyConfig(idLive) })
+	rec, err := store.NewStrategyConfigRepo().GetByID(idLive)
+	assertTrue(t, err == nil && rec != nil, "record persisted")
+	assertTrue(t, rec.ExecutionMode == "paper", "live must be stored as paper")
+
+	// 空 execution_mode 兜底 paper → forced_paper。
+	resp = post(`{"name":"压回空","strategy_type":"macd","symbol":"BTCUSDT","config":{}}`)
+	assertTrue(t, resp["forced_paper"] == true, "empty execution_mode must be flagged forced_paper")
+	idEmpty, _ := resp["id"].(string)
+	t.Cleanup(func() { store.DeleteStrategyConfig(idEmpty) })
+
+	// 显式 paper → 不标记。
+	resp = post(`{"name":"正常paper","strategy_type":"macd","symbol":"BTCUSDT","execution_mode":"paper","config":{}}`)
+	if _, has := resp["forced_paper"]; has {
+		t.Fatal("explicit paper must not be flagged forced_paper")
+	}
+	idPaper, _ := resp["id"].(string)
+	t.Cleanup(func() { store.DeleteStrategyConfig(idPaper) })
+
+	// Update：live → forced_paper；paper → 无标记。
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("PUT", "/strategies/configs/"+idPaper, strings.NewReader(`{"execution_mode":"live"}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	assertEq(t, w.Code, http.StatusOK, "update status")
+	resp = map[string]any{}
+	assertTrue(t, json.Unmarshal(w.Body.Bytes(), &resp) == nil, "update response JSON")
+	assertTrue(t, resp["forced_paper"] == true, "update with live must be flagged forced_paper")
+}
+
+/* ── P1-8 批量结果汇总 ──────────────────────────────────────── */
+
+// TestBatchStartStopConfigsPerItemResults 批量启停必须返回 per-item 结果与
+// started/stopped、failed 计数（前端汇总 toast 数据源）。
+func TestBatchStartStopConfigsPerItemResults(t *testing.T) {
+	eng := strategy.GetEngine(event.NewEventBus(4096, 1))
+	strategy.RegisterStrategyFactory("macd", func() strategy.Strategy { return strategies.NewMACDStrategy() })
+	_ = eng
+
+	r := setupRouter()
+	r.POST("/strategies/configs", CreateStrategyConfig)
+	r.POST("/strategies/configs/batch-start", BatchStartConfigs)
+	r.POST("/strategies/configs/batch-stop", BatchStopConfigs)
+
+	ids := []string{}
+	for _, name := range []string{"批量A", "批量B"} {
+		body := `{"name":"` + name + `","strategy_type":"macd","symbol":"BTCUSDT","config":{}}`
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("POST", "/strategies/configs", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		r.ServeHTTP(w, req)
+		assertEq(t, w.Code, http.StatusOK, "create "+name)
+		var resp map[string]any
+		assertTrue(t, json.Unmarshal(w.Body.Bytes(), &resp) == nil, "create response JSON")
+		id, _ := resp["id"].(string)
+		ids = append(ids, id)
+		t.Cleanup(func() {
+			stopStrategyInEngine(id)
+			store.DeleteStrategyConfig(id)
+		})
+	}
+
+	payload := `{"ids":["` + strings.Join(ids, `","`) + `","ghost-id"]}`
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/strategies/configs/batch-start", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	assertEq(t, w.Code, http.StatusOK, "batch-start status")
+	var resp map[string]any
+	assertTrue(t, json.Unmarshal(w.Body.Bytes(), &resp) == nil, "batch-start response JSON")
+	assertTrue(t, resp["started"].(float64) == 2, "started must be 2")
+	assertTrue(t, resp["failed"].(float64) == 1, "failed must be 1 (ghost id)")
+	results, ok := resp["results"].([]any)
+	assertTrue(t, ok && len(results) == 3, "results must carry per-item entries")
+	ghost := results[2].(map[string]any)
+	assertTrue(t, ghost["ok"] == false, "ghost item must be ok=false")
+	assertTrue(t, ghost["error"].(string) != "", "ghost item must carry error")
+
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest("POST", "/strategies/configs/batch-stop", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	assertEq(t, w.Code, http.StatusOK, "batch-stop status")
+	resp = map[string]any{}
+	assertTrue(t, json.Unmarshal(w.Body.Bytes(), &resp) == nil, "batch-stop response JSON")
+	assertTrue(t, resp["stopped"].(float64) == 2, "stopped must be 2")
+	assertTrue(t, resp["failed"].(float64) == 1, "failed must be 1 (ghost id)")
+}
+
+/* ── 归属判别收归后端（kind 查询参数，2026-09-17 根治互窜） ─────── */
+
+// TestGetStrategyConfigsKindFilter 混合数据集下 kind=bot / kind=strategy 的
+// 分流正确性。回归点：market_type='futures' 的无 bot 标记合约策略必须归
+// strategy 侧（前端 swap 启发式过滤的漏网之鱼）。
+func TestGetStrategyConfigsKindFilter(t *testing.T) {
+	repo := store.NewStrategyConfigRepo()
+	seed := []*store.StrategyConfigRecord{
+		// strategy_mode='bot'（DB 往返后 ToMap 给出 mode/strategy_mode='bot'）
+		{ID: "kind-bot-mode", Name: "脚本机器人", Category: "futures", StrategyType: "grid_trading", Symbol: "BTCUSDT", ExecutionMode: "bot"},
+		// 历史机器人品类
+		{ID: "kind-martin", Name: "马丁机器人", Category: "martin", StrategyType: "martin", Symbol: "BTCUSDT"},
+		// 纯策略：cra_contract（swap）
+		{ID: "kind-cra", Name: "CRA合约策略", Category: "futures", StrategyType: "cra_contract", Symbol: "BTCUSDT", MarketType: "swap", ExecutionMode: "paper"},
+		// 回归点：market_type='futures' 的无 bot 标记合约策略
+		{ID: "kind-futures-leak", Name: "futures合约策略", Category: "futures", StrategyType: "trend_long", Symbol: "ETHUSDT", MarketType: "futures", ExecutionMode: "paper"},
+	}
+	if err := repo.UpsertAll(seed); err != nil {
+		t.Fatalf("seed configs: %v", err)
+	}
+	t.Cleanup(func() {
+		for _, rec := range seed {
+			_ = store.NewStrategyConfigRepo().Delete(rec.ID)
+		}
+	})
+
+	r := setupRouter()
+	r.GET("/strategies/configs", GetStrategyConfigs)
+
+	botList := getStrategyConfigList(t, r, "/strategies/configs?kind=bot")
+	assertTrue(t, listContainsID(botList, "kind-bot-mode"), "kind=bot must include strategy_mode=bot record")
+	assertTrue(t, listContainsID(botList, "kind-martin"), "kind=bot must include martin category record")
+	assertTrue(t, !listContainsID(botList, "kind-cra"), "kind=bot must exclude cra_contract strategy")
+	assertTrue(t, !listContainsID(botList, "kind-futures-leak"), "kind=bot must exclude futures contract strategy (regression)")
+
+	strategyList := getStrategyConfigList(t, r, "/strategies/configs?kind=strategy")
+	assertTrue(t, listContainsID(strategyList, "kind-cra"), "kind=strategy must include cra_contract strategy")
+	assertTrue(t, listContainsID(strategyList, "kind-futures-leak"), "kind=strategy must include futures contract strategy (regression)")
+	assertTrue(t, !listContainsID(strategyList, "kind-bot-mode"), "kind=strategy must exclude strategy_mode=bot record")
+	assertTrue(t, !listContainsID(strategyList, "kind-martin"), "kind=strategy must exclude martin category record")
+
+	// 不传 kind：保持旧行为（仅排除 martin/wallstreet 品类）。
+	legacyList := getStrategyConfigList(t, r, "/strategies/configs")
+	assertTrue(t, !listContainsID(legacyList, "kind-martin"), "legacy default must still exclude martin")
+	assertTrue(t, listContainsID(legacyList, "kind-cra"), "legacy default must include cra strategy")
+	assertTrue(t, listContainsID(legacyList, "kind-futures-leak"), "legacy default must include futures strategy")
+	assertTrue(t, listContainsID(legacyList, "kind-bot-mode"), "legacy default must include bot-mode record (not martin category)")
+
+	// 非法 kind → 400。
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/strategies/configs?kind=bogus", nil)
+	r.ServeHTTP(w, req)
+	assertEq(t, w.Code, http.StatusBadRequest, "invalid kind must be 400")
+}
+
+// TestCreateBotConfigKindPersistence 通过 API 创建的机器人配置，bot 身份
+// 必须落进 config_json（DB 重建后仍被判别为 bot）；列表响应水合 bot_type/
+// trading_config 顶层字段；带 execution_mode 的 Update 不得洗掉 bot 身份。
+func TestCreateBotConfigKindPersistence(t *testing.T) {
+	r := setupRouter()
+	r.POST("/strategies/configs", CreateStrategyConfig)
+	r.PUT("/strategies/configs/:id", UpdateStrategyConfig)
+	r.GET("/strategies/configs", GetStrategyConfigs)
+
+	body := `{
+		"name":"网格机器人",
+		"strategy_type":"grid_trading",
+		"strategy_mode":"bot",
+		"bot_type":"grid",
+		"symbol":"BTCUSDT",
+		"market_type":"swap",
+		"trading_config":{"bot_type":"grid","initial_capital":1000,"symbol":"BTCUSDT"}
+	}`
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/strategies/configs", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	assertEq(t, w.Code, http.StatusOK, "bot create status")
+	var resp map[string]any
+	assertTrue(t, json.Unmarshal(w.Body.Bytes(), &resp) == nil, "create response JSON")
+	id, _ := resp["id"].(string)
+	assertTrue(t, id != "", "create id")
+	t.Cleanup(func() { store.DeleteStrategyConfig(id) })
+
+	// 每个 list 请求都走 DB 重建（GetStrategyConfigs 每次从 DB 重建），
+	// 因此这里直接验证持久化后的判别结果。
+	botList := getStrategyConfigList(t, r, "/strategies/configs?kind=bot")
+	assertTrue(t, listContainsID(botList, id), "created bot must appear in kind=bot after DB rebuild")
+	strategyList := getStrategyConfigList(t, r, "/strategies/configs?kind=strategy")
+	assertTrue(t, !listContainsID(strategyList, id), "created bot must not appear in kind=strategy")
+
+	// 响应水合：顶层 bot_type 与 trading_config 从 config_json 恢复。
+	var item map[string]any
+	for _, it := range botList {
+		if it["id"] == id {
+			item = it
+		}
+	}
+	assertTrue(t, item != nil, "bot item must be in kind=bot list")
+	assertTrue(t, getString(item, "bot_type", "") == "grid", "bot_type must be hydrated to top level")
+	tc, ok := item["trading_config"].(map[string]any)
+	assertTrue(t, ok && getString(tc, "bot_type", "") == "grid", "trading_config.bot_type must be hydrated")
+
+	// Update 携带 execution_mode（别名同步会覆写 strategy_mode）后，
+	// bot 身份必须保留。
+	upd := `{"execution_mode":"paper","trading_config":{"bot_type":"grid","initial_capital":2000}}`
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest("PUT", "/strategies/configs/"+id, strings.NewReader(upd))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	assertEq(t, w.Code, http.StatusOK, "bot update status")
+
+	botList = getStrategyConfigList(t, r, "/strategies/configs?kind=bot")
+	assertTrue(t, listContainsID(botList, id), "bot identity must survive update with execution_mode")
+	strategyList = getStrategyConfigList(t, r, "/strategies/configs?kind=strategy")
+	assertTrue(t, !listContainsID(strategyList, id), "bot must stay out of kind=strategy after update")
 }

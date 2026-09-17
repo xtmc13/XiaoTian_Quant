@@ -1,8 +1,10 @@
 import { useState, useMemo, memo } from 'react'
+import { useNavigate } from 'react-router-dom'
 import type { StrategyItem } from '@/types'
 import { cn } from '@/lib/utils'
 import { VirtualList } from '@/components/VirtualList'
 import { STRAT_TYPES } from './StrategyFormFields'
+import { decimalToPercent, PERCENTAGE_FIELD_THRESHOLDS } from '@/lib/craPercentUtils'
 import {
   Search,
   Plus,
@@ -15,7 +17,96 @@ import {
   Trash2,
   DollarSign,
   Clock,
+  X,
+  LayoutGrid,
+  TrendingUp,
+  Bot,
 } from 'lucide-react'
+
+/** P2-10 空状态模板卡预设：点击"用此模板创建"预填 strategy_type 与保守默认 config。 */
+export interface StrategyTemplatePreset {
+  strategyType: string
+  config?: Record<string, unknown>
+}
+
+const CREATE_TEMPLATES: {
+  key: string
+  title: string
+  desc: string
+  strategyType?: string
+  config?: Record<string, unknown>
+  href?: string
+}[] = [
+  {
+    key: 'cra_contract',
+    title: '合约网格',
+    desc: 'CRA 合约网格：首单 100U · 5 档补仓 · 10x 杠杆（模拟盘）',
+    strategyType: 'cra_contract',
+    config: {
+      first_order_amount: 100,
+      first_order_multiplier: 1,
+      order_count: 5,
+      enable_add_position: true,
+      add_positions: [1, 2, 3, 4, 5].map((order) => ({
+        order,
+        multiplier: [1, 1, 2, 2, 4][order - 1],
+        spread: [0.03, 0.04, 0.05, 0.07, 0.09][order - 1],
+        callback: 0.005,
+        ema_enabled: false,
+      })),
+      trade_count_mode: 'cycle',
+      loop_count: 100,
+      take_profit_method: 'full',
+      tp_mode: 'static',
+      take_profit_ratio: 0.013,
+      profit_callback: 0.003,
+      waterfall_enabled: true,
+      waterfall_protection: 0.02,
+      stop_loss_enabled: true,
+      stop_loss_type: 'ratio',
+      stop_loss_ratio: 0.4,
+      leverage: 10,
+      direction: 'long',
+      market_type: 'swap',
+      margin_mode: 'cross',
+    },
+  },
+  {
+    key: 'spot_trend',
+    title: '现货趋势',
+    desc: '马丁趋势现货策略：首单 100U · 5 档补仓 · 稳健参数（模拟盘）',
+    strategyType: 'martin_trend',
+    config: {
+      first_order_amount: 100,
+      first_order_multiplier: 1,
+      order_count: 5,
+      enable_add_position: true,
+      add_positions: [1, 2, 3, 4, 5].map((order) => ({
+        order,
+        multiplier: [1, 1, 2, 2, 4][order - 1],
+        spread: [0.035, 0.05, 0.07, 0.09, 0.11][order - 1],
+        callback: 0.005,
+      })),
+      trade_count_mode: 'cycle',
+      loop_count: 100,
+      take_profit_method: 'full',
+      tp_mode: 'static',
+      take_profit_ratio: 0.02,
+      profit_callback: 0.003,
+      waterfall_enabled: true,
+      waterfall_protection: 0.02,
+      direction: 'long',
+      market_type: 'spot',
+      margin_mode: 'cross',
+    },
+  },
+  {
+    key: 'martin_bot',
+    title: '马丁格尔机器人',
+    desc: '经典马丁格尔机器人已迁移至机器人页，支持更多风控选项',
+    href: '/bots',
+  },
+]
 
 type MarketType = 'spot' | 'contract'
 type StatusFilter = 'all' | 'running' | 'stopped' | 'detecting' | 'history'
@@ -139,6 +230,8 @@ const StrategyListItem = memo(function StrategyListItem({
   onStop,
   onEdit,
   onDelete,
+  startError,
+  onDismissStartError,
 }: {
   strategy: StrategyItem
   selected: boolean
@@ -147,44 +240,98 @@ const StrategyListItem = memo(function StrategyListItem({
   onStop: () => void
   onEdit: () => void
   onDelete: () => void
+  startError?: string
+  onDismissStartError?: () => void
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
+
+  // P1-6 卡片风险摘要：杠杆·保证金·止损·止盈模式（config_json 缺字段则跳过）。
+  const riskSummary = useMemo(() => {
+    let cfg: Record<string, unknown> = {}
+    if (strategy.config_json) {
+      try {
+        cfg = JSON.parse(strategy.config_json) as Record<string, unknown>
+      } catch {
+        cfg = {}
+      }
+    }
+    const parts: string[] = []
+    const lev = cfg.leverage ?? strategy.leverage
+    if (typeof lev === 'number' && lev > 0) parts.push(`杠杆${lev}x`)
+    const margin = (cfg.margin_mode as string) || (strategy as { margin_mode?: string }).margin_mode
+    if (margin === 'cross') parts.push('全仓')
+    else if (margin === 'isolated') parts.push('逐仓')
+    const slRaw = cfg.stop_loss_ratio
+    if (typeof slRaw === 'number' && slRaw > 0) {
+      parts.push(`止损${decimalToPercent(slRaw, PERCENTAGE_FIELD_THRESHOLDS.stopLossRatio).toFixed(0)}%`)
+    }
+    const tpMode = cfg.tp_mode as string
+    if (tpMode === 'static') parts.push('静态止盈')
+    else if (tpMode === 'moving') parts.push('移动止盈')
+    return parts
+  }, [strategy.config_json, strategy.leverage])
+
   return (
     <div
       onClick={onSelect}
       className={cn(
-        'flex items-center justify-between gap-2 px-3 py-2.5 rounded-md cursor-pointer transition-all border',
+        'px-3 py-2.5 rounded-md cursor-pointer transition-all border',
         selected
           ? 'bg-quant-gold/5 border-quant-gold/30 border-l-2 border-l-quant-gold'
           : 'bg-quant-bg border-transparent hover:bg-quant-bg-tertiary hover:border-quant-border'
       )}
     >
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-medium truncate">{strategy.name}</span>
-          {strategy.ai_generated && (
-            <span className="text-[10px] px-1 rounded bg-purple-500/10 text-purple-400 border border-purple-500/20">
-              AI
-            </span>
-          )}
-          {strategy.mode === 'script' && (
-            <span className="text-[10px] px-1 rounded bg-green-500/10 text-green-400 border border-green-500/20">
-              脚本
-            </span>
+      {/* P0-3 启动失败持久化反馈（会话级，成功启动后由父组件自动清除） */}
+      {startError && (
+        <div
+          className="flex items-start gap-1.5 mb-2 -mt-0.5 px-2 py-1.5 rounded bg-quant-red/10 border border-quant-red/30 text-[10px] text-quant-red"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <span className="min-w-0 break-words flex-1">
+            <span className="font-semibold">启动失败：</span>
+            {startError}
+          </span>
+          {onDismissStartError && (
+            <button
+              onClick={onDismissStartError}
+              aria-label="关闭启动失败提示"
+              className="shrink-0 p-0.5 rounded hover:bg-quant-red/20 transition-colors"
+            >
+              <X className="w-3 h-3" />
+            </button>
           )}
         </div>
-        <div className="flex items-center gap-2 mt-1">
-          <span className="text-[10px] text-muted-foreground flex items-center gap-1">
-            <DollarSign className="w-3 h-3" />
-            {strategy.symbol || '-'}
-          </span>
-          <span className="text-[10px] text-muted-foreground flex items-center gap-1">
-            <Clock className="w-3 h-3" />
-            {strategy.timeframe || '-'}
-          </span>
-          <StatusBadge status={strategy.status} />
+      )}
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium truncate">{strategy.name}</span>
+            {strategy.ai_generated && (
+              <span className="text-[10px] px-1 rounded bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                AI
+              </span>
+            )}
+            {strategy.mode === 'script' && (
+              <span className="text-[10px] px-1 rounded bg-green-500/10 text-green-400 border border-green-500/20">
+                脚本
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2 mt-1">
+            <span className="text-[10px] text-muted-foreground flex items-center gap-1">
+              <DollarSign className="w-3 h-3" />
+              {strategy.symbol || '-'}
+            </span>
+            <span className="text-[10px] text-muted-foreground flex items-center gap-1">
+              <Clock className="w-3 h-3" />
+              {strategy.timeframe || '-'}
+            </span>
+            <StatusBadge status={strategy.status} />
+          </div>
+          {riskSummary.length > 0 && (
+            <div className="text-[10px] text-muted-foreground/80 mt-1 truncate">{riskSummary.join(' · ')}</div>
+          )}
         </div>
-      </div>
       <div className="relative shrink-0" onClick={(e) => e.stopPropagation()}>
         <button
           onClick={() => setMenuOpen((v) => !v)}
@@ -248,10 +395,56 @@ const StrategyListItem = memo(function StrategyListItem({
             </div>
           </>
         )}
+        </div>
       </div>
     </div>
   )
 })
+
+/* ─── TemplateCard (P2-10 空状态模板引导) ─── */
+function TemplateCard({
+  template,
+  onCreateTemplate,
+}: {
+  template: (typeof CREATE_TEMPLATES)[number]
+  onCreateTemplate?: (preset: StrategyTemplatePreset) => void
+}) {
+  const navigate = useNavigate()
+  return (
+    <div className="rounded-xl border border-quant-border bg-quant-bg p-3 hover:border-quant-gold/30 transition-colors">
+      <div className="flex items-start gap-2.5">
+        <div className="w-8 h-8 rounded-lg bg-quant-gold/10 text-quant-gold flex items-center justify-center shrink-0">
+          {template.href ? <Bot className="w-4 h-4" /> : template.key === 'cra_contract' ? (
+            <LayoutGrid className="w-4 h-4" />
+          ) : (
+            <TrendingUp className="w-4 h-4" />
+          )}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-semibold text-foreground">{template.title}</div>
+          <div className="text-[10px] text-muted-foreground leading-relaxed mt-0.5">{template.desc}</div>
+        </div>
+      </div>
+      {template.href ? (
+        <button
+          onClick={() => navigate(template.href!)}
+          className="mt-2.5 w-full px-3 py-2 rounded-lg border border-quant-border text-xs text-muted-foreground hover:text-foreground hover:border-quant-gold/30 transition-colors"
+        >
+          前往机器人页
+        </button>
+      ) : (
+        <button
+          onClick={() =>
+            onCreateTemplate?.({ strategyType: template.strategyType!, config: template.config })
+          }
+          className="mt-2.5 w-full px-3 py-2 rounded-lg bg-quant-gold/10 text-quant-gold border border-quant-gold/20 text-xs font-medium hover:bg-quant-gold/20 transition-colors"
+        >
+          用此模板创建
+        </button>
+      )}
+    </div>
+  )
+}
 
 /* ─── StrategyList ─── */
 interface StrategyListProps {
@@ -265,6 +458,14 @@ interface StrategyListProps {
   onDelete: (id: string) => void
   onCreate: () => void
   onCreateType?: (type: string) => void
+  /** P0-3：启动失败错误（strategyId → 错误信息），卡片上显示红色横条。 */
+  startErrors?: Record<string, string>
+  onDismissStartError?: (id: string) => void
+  /** P1-8：批量启停（分组操作走批量接口并 toast 汇总）。 */
+  onBatchStart?: (ids: string[]) => void
+  onBatchStop?: (ids: string[]) => void
+  /** P2-10：空状态模板卡"用此模板创建"。 */
+  onCreateTemplate?: (preset: StrategyTemplatePreset) => void
 }
 
 export function StrategyList({
@@ -278,6 +479,11 @@ export function StrategyList({
   onDelete,
   onCreate,
   onCreateType,
+  startErrors,
+  onDismissStartError,
+  onBatchStart,
+  onBatchStop,
+  onCreateTemplate,
 }: StrategyListProps) {
   const [groupBy, setGroupBy] = useState<'strategy' | 'symbol'>('strategy')
   const [search, setSearch] = useState('')
@@ -351,8 +557,14 @@ export function StrategyList({
 
   const handleGroupAction = (action: 'startAll' | 'stopAll' | 'deleteAll', group: StrategyGroup) => {
     const ids = group.strategies.map((s) => s.id)
-    if (action === 'startAll') ids.forEach((id) => onStart(id))
-    if (action === 'stopAll') ids.forEach((id) => onStop(id))
+    if (action === 'startAll') {
+      if (onBatchStart) onBatchStart(ids)
+      else ids.forEach((id) => onStart(id))
+    }
+    if (action === 'stopAll') {
+      if (onBatchStop) onBatchStop(ids)
+      else ids.forEach((id) => onStop(id))
+    }
     if (action === 'deleteAll') {
       if (confirm(`确定删除分组 "${group.baseName}" 下的 ${ids.length} 个策略？`)) ids.forEach((id) => onDelete(id))
     }
@@ -430,6 +642,19 @@ export function StrategyList({
       <div className={cn('overflow-y-auto p-2 space-y-2', filtered.length > 0 ? 'flex-1' : 'h-0')}>
         {isLoading && <div className="text-center text-xs text-muted-foreground py-8">加载中...</div>}
 
+        {/* P2-10 空状态模板引导 */}
+        {!isLoading && strategies.length === 0 && (
+          <div className="py-4 px-1 space-y-3">
+            <div className="text-[11px] text-muted-foreground text-center">还没有策略，从模板快速开始</div>
+            {CREATE_TEMPLATES.map((t) => (
+              <TemplateCard key={t.key} template={t} onCreateTemplate={onCreateTemplate} />
+            ))}
+          </div>
+        )}
+        {!isLoading && strategies.length > 0 && filtered.length === 0 && (
+          <div className="text-center text-xs text-muted-foreground py-8">无匹配的策略</div>
+        )}
+
         {grouped.groups.map((g) => (
           <div key={g.id} className="rounded-lg border border-quant-border overflow-hidden">
             <div
@@ -464,6 +689,8 @@ export function StrategyList({
                     renderItem={(s) => (
                       <StrategyListItem
                         strategy={s}
+                        startError={startErrors?.[s.id]}
+                        onDismissStartError={onDismissStartError ? () => onDismissStartError(s.id) : undefined}
                         selected={selectedId === s.id}
                         onSelect={() => onSelect(s.id)}
                         onStart={() => onStart(s.id)}
@@ -481,6 +708,8 @@ export function StrategyList({
                       <StrategyListItem
                         key={s.id}
                         strategy={s}
+                        startError={startErrors?.[s.id]}
+                        onDismissStartError={onDismissStartError ? () => onDismissStartError(s.id) : undefined}
                         selected={selectedId === s.id}
                         onSelect={() => onSelect(s.id)}
                         onStart={() => onStart(s.id)}
@@ -509,6 +738,8 @@ export function StrategyList({
                 renderItem={(s) => (
                   <StrategyListItem
                     strategy={s}
+                    startError={startErrors?.[s.id]}
+                    onDismissStartError={onDismissStartError ? () => onDismissStartError(s.id) : undefined}
                     selected={selectedId === s.id}
                     onSelect={() => onSelect(s.id)}
                     onStart={() => onStart(s.id)}
@@ -526,6 +757,8 @@ export function StrategyList({
                   <StrategyListItem
                     key={s.id}
                     strategy={s}
+                    startError={startErrors?.[s.id]}
+                    onDismissStartError={onDismissStartError ? () => onDismissStartError(s.id) : undefined}
                     selected={selectedId === s.id}
                     onSelect={() => onSelect(s.id)}
                     onStart={() => onStart(s.id)}

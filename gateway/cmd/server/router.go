@@ -356,6 +356,7 @@ func registerStrategyRoutes(api *gin.RouterGroup) {
 	private.Use(middleware.AuthRequired())
 	private.GET("/strategies/configs", handler.GetStrategyConfigs)
 	private.GET("/strategies/configs/:id", handler.GetStrategyConfig)
+	private.GET("/strategies/configs/:id/runtime", handler.GetStrategyRuntime)
 	private.POST("/strategies/configs", handler.CreateStrategyConfig)
 	private.PUT("/strategies/configs/:id", handler.UpdateStrategyConfig)
 	private.DELETE("/strategies/configs/:id", handler.DeleteStrategyConfig)

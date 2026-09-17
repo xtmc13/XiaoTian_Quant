@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"time"
 
 	"github.com/xiaotian-quant/gateway/internal/event"
 	"github.com/xiaotian-quant/gateway/internal/model"
@@ -20,16 +21,16 @@ type EMACrossStrategy struct {
 	running bool
 	mu      sync.RWMutex
 
-	fastPeriod   int
-	slowPeriod   int
-	stopLossPct  float64
+	fastPeriod    int
+	slowPeriod    int
+	stopLossPct   float64
 	takeProfitPct float64
-	positionSize float64
+	positionSize  float64
 
 	bars       []model.Bar
-	inPosition  bool
-	entryPrice  float64
-	direction   string
+	inPosition bool
+	entryPrice float64
+	direction  string
 
 	params *strategy.ParamRegistry
 }
@@ -58,12 +59,12 @@ func (s *EMACrossStrategy) Symbol() string { return s.symbol }
 
 func (s *EMACrossStrategy) Params() map[string]any {
 	return map[string]any{
-		"symbol":           s.symbol,
-		"fast_period":      s.fastPeriod,
-		"slow_period":      s.slowPeriod,
-		"stop_loss_pct":    s.stopLossPct,
-		"take_profit_pct":  s.takeProfitPct,
-		"position_size":    s.positionSize,
+		"symbol":          s.symbol,
+		"fast_period":     s.fastPeriod,
+		"slow_period":     s.slowPeriod,
+		"stop_loss_pct":   s.stopLossPct,
+		"take_profit_pct": s.takeProfitPct,
+		"position_size":   s.positionSize,
 	}
 }
 
@@ -92,21 +93,39 @@ func (s *EMACrossStrategy) Start(params map[string]any) error {
 
 func (s *EMACrossStrategy) GetParameters() *strategy.ParamRegistry { return s.params }
 func (s *EMACrossStrategy) ValidateParams() error {
-	if s.params == nil { return nil }
+	if s.params == nil {
+		return nil
+	}
 	return s.params.Validate()
 }
 func (s *EMACrossStrategy) ApplyParams(m map[string]any) error {
-	if s.params == nil { return nil }
-	if err := s.params.FromMap(m); err != nil { return err }
-	if p := s.params.Get("fast_period"); p != nil { s.fastPeriod = p.GetInt() }
-	if p := s.params.Get("slow_period"); p != nil { s.slowPeriod = p.GetInt() }
-	if p := s.params.Get("stop_loss_pct"); p != nil { s.stopLossPct = p.GetFloat() }
-	if p := s.params.Get("take_profit_pct"); p != nil { s.takeProfitPct = p.GetFloat() }
-	if p := s.params.Get("position_size"); p != nil { s.positionSize = p.GetFloat() }
+	if s.params == nil {
+		return nil
+	}
+	if err := s.params.FromMap(m); err != nil {
+		return err
+	}
+	if p := s.params.Get("fast_period"); p != nil {
+		s.fastPeriod = p.GetInt()
+	}
+	if p := s.params.Get("slow_period"); p != nil {
+		s.slowPeriod = p.GetInt()
+	}
+	if p := s.params.Get("stop_loss_pct"); p != nil {
+		s.stopLossPct = p.GetFloat()
+	}
+	if p := s.params.Get("take_profit_pct"); p != nil {
+		s.takeProfitPct = p.GetFloat()
+	}
+	if p := s.params.Get("position_size"); p != nil {
+		s.positionSize = p.GetFloat()
+	}
 	return nil
 }
 func (s *EMACrossStrategy) ParamDefs() []map[string]any {
-	if s.params == nil { return nil }
+	if s.params == nil {
+		return nil
+	}
 	return s.params.ToJSONDefs()
 }
 
@@ -118,9 +137,15 @@ func (s *EMACrossStrategy) Stop() error {
 	return nil
 }
 
-func (s *EMACrossStrategy) OnTick(tick model.Tick, bus *event.EventBus) (*model.Signal, error) { return nil, nil }
-func (s *EMACrossStrategy) OnOrderBook(ob model.OrderBookData, bus *event.EventBus) (*model.Signal, error) { return nil, nil }
-func (s *EMACrossStrategy) OnOrderUpdate(order model.OrderData, bus *event.EventBus) (*model.Signal, error) { return nil, nil }
+func (s *EMACrossStrategy) OnTick(tick model.Tick, bus *event.EventBus) (*model.Signal, error) {
+	return nil, nil
+}
+func (s *EMACrossStrategy) OnOrderBook(ob model.OrderBookData, bus *event.EventBus) (*model.Signal, error) {
+	return nil, nil
+}
+func (s *EMACrossStrategy) OnOrderUpdate(order model.OrderData, bus *event.EventBus) (*model.Signal, error) {
+	return nil, nil
+}
 
 func (s *EMACrossStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Signal, error) {
 	s.mu.Lock()
@@ -140,7 +165,9 @@ func (s *EMACrossStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Sig
 	}
 
 	closes := make([]float64, len(s.bars))
-	for i, b := range s.bars { closes[i] = b.Close }
+	for i, b := range s.bars {
+		closes[i] = b.Close
+	}
 
 	fastEMA := ema(closes, s.fastPeriod)
 	slowEMA := ema(closes, s.slowPeriod)
@@ -195,17 +222,21 @@ type MACDStrategy struct {
 	running bool
 	mu      sync.RWMutex
 
-	fastPeriod   int
-	slowPeriod   int
-	signalPeriod int
-	stopLossPct  float64
+	fastPeriod    int
+	slowPeriod    int
+	signalPeriod  int
+	stopLossPct   float64
 	takeProfitPct float64
-	positionSize float64
+	positionSize  float64
 
 	bars       []model.Bar
-	inPosition  bool
-	entryPrice  float64
-	direction   string
+	inPosition bool
+	entryPrice float64
+	direction  string
+
+	// 最近信号（RuntimeStatus 展示用）：时间与方向，信号产生时更新。
+	lastSignalTime      int64 // Unix 毫秒
+	lastSignalDirection string
 
 	params *strategy.ParamRegistry
 }
@@ -264,22 +295,42 @@ func (s *MACDStrategy) Start(params map[string]any) error {
 
 func (s *MACDStrategy) GetParameters() *strategy.ParamRegistry { return s.params }
 func (s *MACDStrategy) ValidateParams() error {
-	if s.params == nil { return nil }
+	if s.params == nil {
+		return nil
+	}
 	return s.params.Validate()
 }
 func (s *MACDStrategy) ApplyParams(m map[string]any) error {
-	if s.params == nil { return nil }
-	if err := s.params.FromMap(m); err != nil { return err }
-	if p := s.params.Get("fast_period"); p != nil { s.fastPeriod = p.GetInt() }
-	if p := s.params.Get("slow_period"); p != nil { s.slowPeriod = p.GetInt() }
-	if p := s.params.Get("signal_period"); p != nil { s.signalPeriod = p.GetInt() }
-	if p := s.params.Get("stop_loss_pct"); p != nil { s.stopLossPct = p.GetFloat() }
-	if p := s.params.Get("take_profit_pct"); p != nil { s.takeProfitPct = p.GetFloat() }
-	if p := s.params.Get("position_size"); p != nil { s.positionSize = p.GetFloat() }
+	if s.params == nil {
+		return nil
+	}
+	if err := s.params.FromMap(m); err != nil {
+		return err
+	}
+	if p := s.params.Get("fast_period"); p != nil {
+		s.fastPeriod = p.GetInt()
+	}
+	if p := s.params.Get("slow_period"); p != nil {
+		s.slowPeriod = p.GetInt()
+	}
+	if p := s.params.Get("signal_period"); p != nil {
+		s.signalPeriod = p.GetInt()
+	}
+	if p := s.params.Get("stop_loss_pct"); p != nil {
+		s.stopLossPct = p.GetFloat()
+	}
+	if p := s.params.Get("take_profit_pct"); p != nil {
+		s.takeProfitPct = p.GetFloat()
+	}
+	if p := s.params.Get("position_size"); p != nil {
+		s.positionSize = p.GetFloat()
+	}
 	return nil
 }
 func (s *MACDStrategy) ParamDefs() []map[string]any {
-	if s.params == nil { return nil }
+	if s.params == nil {
+		return nil
+	}
 	return s.params.ToJSONDefs()
 }
 
@@ -291,9 +342,37 @@ func (s *MACDStrategy) Stop() error {
 	return nil
 }
 
-func (s *MACDStrategy) OnTick(tick model.Tick, bus *event.EventBus) (*model.Signal, error) { return nil, nil }
-func (s *MACDStrategy) OnOrderBook(ob model.OrderBookData, bus *event.EventBus) (*model.Signal, error) { return nil, nil }
-func (s *MACDStrategy) OnOrderUpdate(order model.OrderData, bus *event.EventBus) (*model.Signal, error) { return nil, nil }
+// RuntimeStatus exposes live runtime state for the running panel.
+// Field names are snake_case for the frontend.
+func (s *MACDStrategy) RuntimeStatus() map[string]any {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	m := map[string]any{
+		"running":        s.running,
+		"in_position":    s.inPosition,
+		"bars_collected": len(s.bars),
+	}
+	if s.inPosition {
+		m["direction"] = s.direction
+		m["entry_price"] = s.entryPrice
+		m["quantity"] = s.positionSize
+	}
+	if s.lastSignalTime > 0 {
+		m["last_signal_time"] = s.lastSignalTime
+		m["last_signal_direction"] = s.lastSignalDirection
+	}
+	return m
+}
+
+func (s *MACDStrategy) OnTick(tick model.Tick, bus *event.EventBus) (*model.Signal, error) {
+	return nil, nil
+}
+func (s *MACDStrategy) OnOrderBook(ob model.OrderBookData, bus *event.EventBus) (*model.Signal, error) {
+	return nil, nil
+}
+func (s *MACDStrategy) OnOrderUpdate(order model.OrderData, bus *event.EventBus) (*model.Signal, error) {
+	return nil, nil
+}
 
 func (s *MACDStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Signal, error) {
 	s.mu.Lock()
@@ -313,7 +392,9 @@ func (s *MACDStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Signal,
 	}
 
 	closes := make([]float64, len(s.bars))
-	for i, b := range s.bars { closes[i] = b.Close }
+	for i, b := range s.bars {
+		closes[i] = b.Close
+	}
 
 	macdLine, signalLine := macd(closes, s.fastPeriod, s.slowPeriod, s.signalPeriod)
 	prevMACD, prevSignal := macd(closes[:len(closes)-1], s.fastPeriod, s.slowPeriod, s.signalPeriod)
@@ -322,35 +403,44 @@ func (s *MACDStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Signal,
 		s.inPosition = true
 		s.entryPrice = bar.Close
 		s.direction = "LONG"
+		s.lastSignalTime = time.Now().UnixMilli()
+		s.lastSignalDirection = "LONG"
 		return &model.Signal{Symbol: s.symbol, Direction: "LONG", Strength: 0.75, Strategy: s.name, Reason: "MACD bullish crossover"}, nil
 	}
 	if prevMACD >= prevSignal && macdLine < signalLine {
 		s.inPosition = true
 		s.entryPrice = bar.Close
 		s.direction = "SHORT"
+		s.lastSignalTime = time.Now().UnixMilli()
+		s.lastSignalDirection = "SHORT"
 		return &model.Signal{Symbol: s.symbol, Direction: "SHORT", Strength: 0.75, Strategy: s.name, Reason: "MACD bearish crossover"}, nil
 	}
 	return nil, nil
 }
 
 func (s *MACDStrategy) checkExit(bar model.Bar) *model.Signal {
+	record := func(sig *model.Signal) *model.Signal {
+		s.lastSignalTime = time.Now().UnixMilli()
+		s.lastSignalDirection = "CLOSE"
+		return sig
+	}
 	if s.direction == "LONG" {
 		if bar.Close <= s.entryPrice*(1-s.stopLossPct) {
 			s.inPosition = false
-			return &model.Signal{Symbol: s.symbol, Direction: "CLOSE", Strength: 1.0, Strategy: s.name, Reason: "long stop loss"}
+			return record(&model.Signal{Symbol: s.symbol, Direction: "CLOSE", Strength: 1.0, Strategy: s.name, Reason: "long stop loss"})
 		}
 		if bar.Close >= s.entryPrice*(1+s.takeProfitPct) {
 			s.inPosition = false
-			return &model.Signal{Symbol: s.symbol, Direction: "CLOSE", Strength: 1.0, Strategy: s.name, Reason: "long take profit"}
+			return record(&model.Signal{Symbol: s.symbol, Direction: "CLOSE", Strength: 1.0, Strategy: s.name, Reason: "long take profit"})
 		}
 	} else {
 		if bar.Close >= s.entryPrice*(1+s.stopLossPct) {
 			s.inPosition = false
-			return &model.Signal{Symbol: s.symbol, Direction: "CLOSE", Strength: 1.0, Strategy: s.name, Reason: "short stop loss"}
+			return record(&model.Signal{Symbol: s.symbol, Direction: "CLOSE", Strength: 1.0, Strategy: s.name, Reason: "short stop loss"})
 		}
 		if bar.Close <= s.entryPrice*(1-s.takeProfitPct) {
 			s.inPosition = false
-			return &model.Signal{Symbol: s.symbol, Direction: "CLOSE", Strength: 1.0, Strategy: s.name, Reason: "short take profit"}
+			return record(&model.Signal{Symbol: s.symbol, Direction: "CLOSE", Strength: 1.0, Strategy: s.name, Reason: "short take profit"})
 		}
 	}
 	return nil
@@ -366,17 +456,17 @@ type RSIStrategy struct {
 	running bool
 	mu      sync.RWMutex
 
-	period       int
-	overbought   float64
-	oversold     float64
-	stopLossPct  float64
+	period        int
+	overbought    float64
+	oversold      float64
+	stopLossPct   float64
 	takeProfitPct float64
-	positionSize float64
+	positionSize  float64
 
 	bars       []model.Bar
-	inPosition  bool
-	entryPrice  float64
-	direction   string
+	inPosition bool
+	entryPrice float64
+	direction  string
 
 	params *strategy.ParamRegistry
 }
@@ -435,22 +525,42 @@ func (s *RSIStrategy) Start(params map[string]any) error {
 
 func (s *RSIStrategy) GetParameters() *strategy.ParamRegistry { return s.params }
 func (s *RSIStrategy) ValidateParams() error {
-	if s.params == nil { return nil }
+	if s.params == nil {
+		return nil
+	}
 	return s.params.Validate()
 }
 func (s *RSIStrategy) ApplyParams(m map[string]any) error {
-	if s.params == nil { return nil }
-	if err := s.params.FromMap(m); err != nil { return err }
-	if p := s.params.Get("period"); p != nil { s.period = p.GetInt() }
-	if p := s.params.Get("overbought"); p != nil { s.overbought = p.GetFloat() }
-	if p := s.params.Get("oversold"); p != nil { s.oversold = p.GetFloat() }
-	if p := s.params.Get("stop_loss_pct"); p != nil { s.stopLossPct = p.GetFloat() }
-	if p := s.params.Get("take_profit_pct"); p != nil { s.takeProfitPct = p.GetFloat() }
-	if p := s.params.Get("position_size"); p != nil { s.positionSize = p.GetFloat() }
+	if s.params == nil {
+		return nil
+	}
+	if err := s.params.FromMap(m); err != nil {
+		return err
+	}
+	if p := s.params.Get("period"); p != nil {
+		s.period = p.GetInt()
+	}
+	if p := s.params.Get("overbought"); p != nil {
+		s.overbought = p.GetFloat()
+	}
+	if p := s.params.Get("oversold"); p != nil {
+		s.oversold = p.GetFloat()
+	}
+	if p := s.params.Get("stop_loss_pct"); p != nil {
+		s.stopLossPct = p.GetFloat()
+	}
+	if p := s.params.Get("take_profit_pct"); p != nil {
+		s.takeProfitPct = p.GetFloat()
+	}
+	if p := s.params.Get("position_size"); p != nil {
+		s.positionSize = p.GetFloat()
+	}
 	return nil
 }
 func (s *RSIStrategy) ParamDefs() []map[string]any {
-	if s.params == nil { return nil }
+	if s.params == nil {
+		return nil
+	}
 	return s.params.ToJSONDefs()
 }
 
@@ -462,9 +572,15 @@ func (s *RSIStrategy) Stop() error {
 	return nil
 }
 
-func (s *RSIStrategy) OnTick(tick model.Tick, bus *event.EventBus) (*model.Signal, error) { return nil, nil }
-func (s *RSIStrategy) OnOrderBook(ob model.OrderBookData, bus *event.EventBus) (*model.Signal, error) { return nil, nil }
-func (s *RSIStrategy) OnOrderUpdate(order model.OrderData, bus *event.EventBus) (*model.Signal, error) { return nil, nil }
+func (s *RSIStrategy) OnTick(tick model.Tick, bus *event.EventBus) (*model.Signal, error) {
+	return nil, nil
+}
+func (s *RSIStrategy) OnOrderBook(ob model.OrderBookData, bus *event.EventBus) (*model.Signal, error) {
+	return nil, nil
+}
+func (s *RSIStrategy) OnOrderUpdate(order model.OrderData, bus *event.EventBus) (*model.Signal, error) {
+	return nil, nil
+}
 
 func (s *RSIStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Signal, error) {
 	s.mu.Lock()
@@ -484,7 +600,9 @@ func (s *RSIStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Signal, 
 	}
 
 	closes := make([]float64, len(s.bars))
-	for i, b := range s.bars { closes[i] = b.Close }
+	for i, b := range s.bars {
+		closes[i] = b.Close
+	}
 
 	rsiVal := rsi(closes, s.period)
 	prevRSI := rsi(closes[:len(closes)-1], s.period)
@@ -537,16 +655,16 @@ type BollingerBandsStrategy struct {
 	running bool
 	mu      sync.RWMutex
 
-	period       int
-	stdDev       float64
-	stopLossPct  float64
+	period        int
+	stdDev        float64
+	stopLossPct   float64
 	takeProfitPct float64
-	positionSize float64
+	positionSize  float64
 
 	bars       []model.Bar
-	inPosition  bool
-	entryPrice  float64
-	direction   string
+	inPosition bool
+	entryPrice float64
+	direction  string
 
 	params *strategy.ParamRegistry
 }
@@ -602,21 +720,39 @@ func (s *BollingerBandsStrategy) Start(params map[string]any) error {
 
 func (s *BollingerBandsStrategy) GetParameters() *strategy.ParamRegistry { return s.params }
 func (s *BollingerBandsStrategy) ValidateParams() error {
-	if s.params == nil { return nil }
+	if s.params == nil {
+		return nil
+	}
 	return s.params.Validate()
 }
 func (s *BollingerBandsStrategy) ApplyParams(m map[string]any) error {
-	if s.params == nil { return nil }
-	if err := s.params.FromMap(m); err != nil { return err }
-	if p := s.params.Get("period"); p != nil { s.period = p.GetInt() }
-	if p := s.params.Get("std_dev"); p != nil { s.stdDev = p.GetFloat() }
-	if p := s.params.Get("stop_loss_pct"); p != nil { s.stopLossPct = p.GetFloat() }
-	if p := s.params.Get("take_profit_pct"); p != nil { s.takeProfitPct = p.GetFloat() }
-	if p := s.params.Get("position_size"); p != nil { s.positionSize = p.GetFloat() }
+	if s.params == nil {
+		return nil
+	}
+	if err := s.params.FromMap(m); err != nil {
+		return err
+	}
+	if p := s.params.Get("period"); p != nil {
+		s.period = p.GetInt()
+	}
+	if p := s.params.Get("std_dev"); p != nil {
+		s.stdDev = p.GetFloat()
+	}
+	if p := s.params.Get("stop_loss_pct"); p != nil {
+		s.stopLossPct = p.GetFloat()
+	}
+	if p := s.params.Get("take_profit_pct"); p != nil {
+		s.takeProfitPct = p.GetFloat()
+	}
+	if p := s.params.Get("position_size"); p != nil {
+		s.positionSize = p.GetFloat()
+	}
 	return nil
 }
 func (s *BollingerBandsStrategy) ParamDefs() []map[string]any {
-	if s.params == nil { return nil }
+	if s.params == nil {
+		return nil
+	}
 	return s.params.ToJSONDefs()
 }
 
@@ -628,9 +764,15 @@ func (s *BollingerBandsStrategy) Stop() error {
 	return nil
 }
 
-func (s *BollingerBandsStrategy) OnTick(tick model.Tick, bus *event.EventBus) (*model.Signal, error) { return nil, nil }
-func (s *BollingerBandsStrategy) OnOrderBook(ob model.OrderBookData, bus *event.EventBus) (*model.Signal, error) { return nil, nil }
-func (s *BollingerBandsStrategy) OnOrderUpdate(order model.OrderData, bus *event.EventBus) (*model.Signal, error) { return nil, nil }
+func (s *BollingerBandsStrategy) OnTick(tick model.Tick, bus *event.EventBus) (*model.Signal, error) {
+	return nil, nil
+}
+func (s *BollingerBandsStrategy) OnOrderBook(ob model.OrderBookData, bus *event.EventBus) (*model.Signal, error) {
+	return nil, nil
+}
+func (s *BollingerBandsStrategy) OnOrderUpdate(order model.OrderData, bus *event.EventBus) (*model.Signal, error) {
+	return nil, nil
+}
 
 func (s *BollingerBandsStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Signal, error) {
 	s.mu.Lock()
@@ -650,7 +792,9 @@ func (s *BollingerBandsStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*mod
 	}
 
 	closes := make([]float64, len(s.bars))
-	for i, b := range s.bars { closes[i] = b.Close }
+	for i, b := range s.bars {
+		closes[i] = b.Close
+	}
 
 	upper, lower := bollingerBands(closes, s.period, s.stdDev)
 	prevUpper, prevLower := bollingerBands(closes[:len(closes)-1], s.period, s.stdDev)
@@ -698,8 +842,12 @@ func (s *BollingerBandsStrategy) checkExit(bar model.Bar) *model.Signal {
 // ── Technical Indicator Helpers ────────────────────────────────
 
 func sma(data []float64, period int) float64 {
-	if period > len(data) { period = len(data) }
-	if period == 0 { return 0 }
+	if period > len(data) {
+		period = len(data)
+	}
+	if period == 0 {
+		return 0
+	}
 	sum := 0.0
 	for i := len(data) - period; i < len(data); i++ {
 		sum += data[i]
@@ -708,7 +856,9 @@ func sma(data []float64, period int) float64 {
 }
 
 func ema(data []float64, period int) float64 {
-	if len(data) < period { return sma(data, len(data)) }
+	if len(data) < period {
+		return sma(data, len(data))
+	}
 	alpha := 2.0 / float64(period+1)
 	e := data[0]
 	for i := 1; i < len(data); i++ {
@@ -718,8 +868,12 @@ func ema(data []float64, period int) float64 {
 }
 
 func stdDev(data []float64, period int) float64 {
-	if period > len(data) { period = len(data) }
-	if period < 2 { return 0 }
+	if period > len(data) {
+		period = len(data)
+	}
+	if period < 2 {
+		return 0
+	}
 	slice := data[len(data)-period:]
 	m := sma(slice, period)
 	sumSq := 0.0
@@ -731,7 +885,9 @@ func stdDev(data []float64, period int) float64 {
 }
 
 func rsi(data []float64, period int) float64 {
-	if len(data) < period+1 { return 50 }
+	if len(data) < period+1 {
+		return 50
+	}
 	gains, losses := 0.0, 0.0
 	for i := len(data) - period; i < len(data); i++ {
 		diff := data[i] - data[i-1]
@@ -743,7 +899,9 @@ func rsi(data []float64, period int) float64 {
 	}
 	avgGain := gains / float64(period)
 	avgLoss := losses / float64(period)
-	if avgLoss == 0 { return 100 }
+	if avgLoss == 0 {
+		return 100
+	}
 	rs := avgGain / avgLoss
 	return 100 - (100 / (1 + rs))
 }
@@ -770,7 +928,9 @@ func macd(data []float64, fast, slow, signal int) (macdLine, signalLine float64)
 }
 
 func bollingerBands(data []float64, period int, multiplier float64) (upper, lower float64) {
-	if len(data) < period { return 0, 0 }
+	if len(data) < period {
+		return 0, 0
+	}
 	m := sma(data, period)
 	sd := stdDev(data, period)
 	upper = m + multiplier*sd

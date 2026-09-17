@@ -95,13 +95,13 @@ type InformativePair struct {
 // Strategies can embed this to only override what they need.
 type BaseStrategy struct{}
 
-func (b *BaseStrategy) CustomStoploss(_ *Position, _ float64) float64               { return 0 }
-func (b *BaseStrategy) CustomStakeAmount(_ float64, _ *model.Signal) float64        { return 0 }
-func (b *BaseStrategy) ConfirmTradeEntry(_ *model.Signal) bool                       { return true }
-func (b *BaseStrategy) ConfirmTradeExit(_ *Position) bool                            { return true }
+func (b *BaseStrategy) CustomStoploss(_ *Position, _ float64) float64                    { return 0 }
+func (b *BaseStrategy) CustomStakeAmount(_ float64, _ *model.Signal) float64             { return 0 }
+func (b *BaseStrategy) ConfirmTradeEntry(_ *model.Signal) bool                           { return true }
+func (b *BaseStrategy) ConfirmTradeExit(_ *Position) bool                                { return true }
 func (b *BaseStrategy) AdjustEntryPrice(_ *model.Signal, _ *model.OrderBookData) float64 { return 0 }
-func (b *BaseStrategy) GetParameters() *ParamRegistry                                 { return nil }
-func (b *BaseStrategy) InformativePairs() []InformativePair                           { return nil }
+func (b *BaseStrategy) GetParameters() *ParamRegistry                                    { return nil }
+func (b *BaseStrategy) InformativePairs() []InformativePair                              { return nil }
 
 // ValidateParams default: no parameters to validate.
 func (b *BaseStrategy) ValidateParams() error { return nil }
@@ -114,8 +114,8 @@ func (b *BaseStrategy) ParamDefs() []map[string]any { return nil }
 
 // Engine manages strategy registration, lifecycle, and event dispatch.
 type Engine struct {
-	strategies map[string]Strategy // name -> strategy
-	symbolMap  map[string][]string // symbol -> strategy names
+	strategies map[string]Strategy             // name -> strategy
+	symbolMap  map[string][]string             // symbol -> strategy names
 	subIDs     map[string]event.SubscriptionID // strategy name -> bus subscription
 	bus        *event.EventBus
 	mu         sync.RWMutex
@@ -260,6 +260,28 @@ func (e *Engine) Get(name string) Strategy {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.strategies[name]
+}
+
+// RuntimeStatus returns runtime state for a registered strategy. The second
+// return value reports whether the strategy exists and exposes runtime state
+// (via RuntimeStatus() map[string]any, implemented by MACD/CRA strategies).
+func (e *Engine) RuntimeStatus(name string) (map[string]any, bool) {
+	e.mu.RLock()
+	s, ok := e.strategies[name]
+	e.mu.RUnlock()
+	if !ok {
+		return nil, false
+	}
+	// 注册进引擎的是 WrapStrategy 包装（NamedStrategy），断言前解包到
+	// 真实策略实例，否则接口方法集不会穿透包装。
+	if ns, isNamed := s.(*NamedStrategy); isNamed {
+		s = ns.Strategy
+	}
+	rs, ok := s.(interface{ RuntimeStatus() map[string]any })
+	if !ok {
+		return nil, false
+	}
+	return rs.RuntimeStatus(), true
 }
 
 // StrategiesForSymbol returns all strategies watching a symbol.
