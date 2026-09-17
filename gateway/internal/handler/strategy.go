@@ -889,6 +889,35 @@ func BatchDeleteConfigs(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "deleted": deleted})
 }
 
+// ResumeRunningStrategiesLoop 进程启动后恢复所有 status=running 的策略（断点续跑），
+// 之后每 60s 复查一次（防御启动时行情/组件未就绪导致的恢复失败）。
+// 此前服务器每次重启后策略都处于"DB 说 running、引擎是空"的假死状态。
+func ResumeRunningStrategiesLoop() {
+	resume := func() {
+		for _, item := range store.GetStrategyConfigs() {
+			if getString(item, "status", "") != "running" {
+				continue
+			}
+			id := getString(item, "id", "")
+			if id == "" {
+				continue
+			}
+			if err := startStrategyInEngine(id, item); err != nil {
+				if !strings.Contains(err.Error(), "already registered") {
+					log.Printf("[strategy] resume %s (%s) failed: %v", id, getString(item, "name", ""), err)
+				}
+				continue
+			}
+			log.Printf("[strategy] resumed %s (%s)", id, getString(item, "name", ""))
+		}
+	}
+	resume()
+	ticker := time.NewTicker(60 * time.Second)
+	for range ticker.C {
+		resume()
+	}
+}
+
 func StartStrategyConfig(c *gin.Context) {
 	id := c.Param("id")
 	item := store.GetStrategyConfig(id)

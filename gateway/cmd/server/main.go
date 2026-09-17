@@ -75,6 +75,9 @@ func main() {
 	// 让吃 K 线（OnBar）的策略在实盘能收到真实 K 线。 ──
 	handler.SetKlineFeeder(market.NewKlineFeeder(appCtx.EventBus))
 
+	// ── 启动即恢复 status=running 的策略（断点续跑），每 60s 复查 ──
+	go handler.ResumeRunningStrategiesLoop()
+
 	// ── Setup Gin ──
 	setupGinMode(cfg)
 	r := setupGinEngine(appCtx)
