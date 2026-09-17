@@ -326,6 +326,11 @@ const StrategyListItem = memo(function StrategyListItem({
               <Clock className="w-3 h-3" />
               {strategy.timeframe || '-'}
             </span>
+            {(strategy.execution_mode === 'live' || strategy.mode === 'live') && (
+              <span className="text-[10px] px-1 py-0.5 rounded bg-quant-red/10 text-quant-red border border-quant-red/30 font-semibold">
+                实盘
+              </span>
+            )}
             <StatusBadge status={strategy.status} />
           </div>
           {riskSummary.length > 0 && (

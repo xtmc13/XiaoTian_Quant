@@ -32,6 +32,7 @@ const routeTitles: Record<string, string> = {
   '/market': 'AI分析',
   '/backtest': '回测验证',
   '/bots': '机器人中心',
+  '/strategies': '策略库',
   '/bots/signal': '信号机器人',
   '/bots/ai': 'AI 机器人',
   '/settings': '系统设置',

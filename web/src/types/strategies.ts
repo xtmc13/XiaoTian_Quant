@@ -20,8 +20,8 @@ export interface StrategyItem {
   strategy_name?: string
   symbol?: string
   status: 'running' | 'stopped' | 'error' | 'paused' | 'detecting'
-  mode?: 'signal' | 'script' | 'bot'
-  strategy_mode?: 'signal' | 'script' | 'bot'
+  mode?: 'signal' | 'script' | 'bot' | 'live' | 'paper'
+  strategy_mode?: 'signal' | 'script' | 'bot' | 'live' | 'paper'
   type?: string
   group_id?: string
   group_name?: string

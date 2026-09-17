@@ -13,28 +13,29 @@ import (
 
 // Config holds all application configuration.
 type Config struct {
-	Server   ServerConfig   `yaml:"server"`
-	Exchange ExchangeConfig `yaml:"exchange"`
-	Risk     RiskConfig     `yaml:"risk"`
+	Server    ServerConfig    `yaml:"server"`
+	Exchange  ExchangeConfig  `yaml:"exchange"`
+	Risk      RiskConfig      `yaml:"risk"`
 	Portfolio PortfolioConfig `yaml:"portfolio"`
-	Strategy StrategyConfig `yaml:"strategy"`
-	Backtest BacktestConfig `yaml:"backtest"`
-	AI       AIConfig       `yaml:"ai"`
-	Notify   NotifyConfig   `yaml:"notify"`
-	Cache    CacheConfig    `yaml:"cache"`
+	Strategy  StrategyConfig  `yaml:"strategy"`
+	Trading   TradingConfig   `yaml:"trading"`
+	Backtest  BacktestConfig  `yaml:"backtest"`
+	AI        AIConfig        `yaml:"ai"`
+	Notify    NotifyConfig    `yaml:"notify"`
+	Cache     CacheConfig     `yaml:"cache"`
 }
 
 type ServerConfig struct {
-	Port    string `yaml:"port"`
-	Mode    string `yaml:"mode"` // release, debug
-	LogLevel string `yaml:"log_level"`
+	Port      string `yaml:"port"`
+	Mode      string `yaml:"mode"` // release, debug
+	LogLevel  string `yaml:"log_level"`
 	LogFormat string `yaml:"log_format"` // json, text
 }
 
 type ExchangeConfig struct {
-	Default  string           `yaml:"default"`
-	Binance  ExchangeCreds    `yaml:"binance"`
-	OKX      ExchangeCreds    `yaml:"okx"`
+	Default string        `yaml:"default"`
+	Binance ExchangeCreds `yaml:"binance"`
+	OKX     ExchangeCreds `yaml:"okx"`
 }
 
 type ExchangeCreds struct {
@@ -44,34 +45,49 @@ type ExchangeCreds struct {
 }
 
 type RiskConfig struct {
-	MaxOrderSize        float64 `yaml:"max_order_size_usdt"`
-	DailyLimit          float64 `yaml:"daily_limit"`
-	MaxConcurrentOrders int     `yaml:"max_concurrent_orders"`
-	MaxPositions        int     `yaml:"max_positions"`
-	PositionLimit       float64 `yaml:"position_limit_pct"`
-	NetExposureLimit    float64 `yaml:"net_exposure_limit_pct"`
-	MaxDrawdown         float64 `yaml:"max_drawdown_pct"`
-	ConsecutiveLosses   int     `yaml:"consecutive_losses"`
-	FundingRateLimit    float64 `yaml:"funding_rate_limit"`
-	MarginRatio         float64 `yaml:"margin_ratio"`
-	PriceSanityPct      float64 `yaml:"price_sanity_pct"`
-	VolatilityLimit     float64 `yaml:"volatility_limit_pct"`
-	PriceSpikeWindow    float64 `yaml:"price_spike_window_pct"`
-	RateLimitPerSec     float64 `yaml:"rate_limit_per_sec"`
-	CircuitBreakerThreshold int  `yaml:"circuit_breaker_threshold"`
-	CircuitBreakerResetSecs int `yaml:"circuit_breaker_reset_secs"`
+	MaxOrderSize            float64 `yaml:"max_order_size_usdt"`
+	DailyLimit              float64 `yaml:"daily_limit"`
+	MaxConcurrentOrders     int     `yaml:"max_concurrent_orders"`
+	MaxPositions            int     `yaml:"max_positions"`
+	PositionLimit           float64 `yaml:"position_limit_pct"`
+	NetExposureLimit        float64 `yaml:"net_exposure_limit_pct"`
+	MaxDrawdown             float64 `yaml:"max_drawdown_pct"`
+	ConsecutiveLosses       int     `yaml:"consecutive_losses"`
+	FundingRateLimit        float64 `yaml:"funding_rate_limit"`
+	MarginRatio             float64 `yaml:"margin_ratio"`
+	PriceSanityPct          float64 `yaml:"price_sanity_pct"`
+	VolatilityLimit         float64 `yaml:"volatility_limit_pct"`
+	PriceSpikeWindow        float64 `yaml:"price_spike_window_pct"`
+	RateLimitPerSec         float64 `yaml:"rate_limit_per_sec"`
+	CircuitBreakerThreshold int     `yaml:"circuit_breaker_threshold"`
+	CircuitBreakerResetSecs int     `yaml:"circuit_breaker_reset_secs"`
 }
 
 type PortfolioConfig struct {
-	InitialBalance    float64 `yaml:"initial_balance"`
-	SizingMethod      string  `yaml:"sizing_method"`
-	ReconcileIntervalSecs int `yaml:"reconcile_interval_secs"`
-	MaxSnapshots      int     `yaml:"max_snapshots"`
+	InitialBalance        float64 `yaml:"initial_balance"`
+	SizingMethod          string  `yaml:"sizing_method"`
+	ReconcileIntervalSecs int     `yaml:"reconcile_interval_secs"`
+	MaxSnapshots          int     `yaml:"max_snapshots"`
 }
 
 type StrategyConfig struct {
 	MaxStrategies int  `yaml:"max_strategies"`
 	HotReload     bool `yaml:"hot_reload"`
+}
+
+// TradingConfig 交易总闸配置。
+type TradingConfig struct {
+	// LiveEnabled 允许策略/机器人以实盘（真实资金）模式保存与下单。
+	// 默认 false：Create/Update 收到 execution_mode=live 一律 400 拒绝。
+	//
+	// ⚠️ 风险警告：开启后策略信号将直连真实交易所并使用真实资金下单，
+	// 可能造成本金全部损失。开启前务必：
+	//   1. 确认交易所 API 凭证已配置且建议仅开交易权限（禁提币）；
+	//   2. 按真实资金规模回调 risk.* 限额（尤其 position_limit_pct）；
+	//   3. 先用小额资金验证；
+	//   4. 确认所在辖区法律合规。
+	// 运行时也可由管理员调用解锁接口临时开关（重启后失效）。
+	LiveEnabled bool `yaml:"live_enabled"`
 }
 
 type BacktestConfig struct {
@@ -95,13 +111,13 @@ type AIProviderCfg struct {
 }
 
 type MultiModelCfg struct {
-	Enabled        bool `yaml:"enabled"`
-	MinConsensus   int  `yaml:"min_consensus"`
-	MinConfidence  float64 `yaml:"min_confidence"`
+	Enabled       bool    `yaml:"enabled"`
+	MinConsensus  int     `yaml:"min_consensus"`
+	MinConfidence float64 `yaml:"min_confidence"`
 }
 
 type NotifyConfig struct {
-	Enabled  bool              `yaml:"enabled"`
+	Enabled  bool               `yaml:"enabled"`
 	Channels []NotifyChannelCfg `yaml:"channels"`
 }
 
@@ -118,7 +134,8 @@ type CacheConfig struct {
 // expandEnvVars replaces ${VAR} and $VAR in all string values of the parsed config,
 // falling back to os.Getenv, then leaving the placeholder untouched.
 // This allows config.yaml to reference environment variables like:
-//   api_key: "${BINANCE_API_KEY}"
+//
+//	api_key: "${BINANCE_API_KEY}"
 func expandEnvVars(raw map[string]any) {
 	expandMap(raw)
 }
@@ -179,32 +196,36 @@ func Default() *Config {
 			Default: "binance",
 		},
 		Risk: RiskConfig{
-			MaxOrderSize:         10000,
-			DailyLimit:           100000,
-			MaxConcurrentOrders:  5,
-			MaxPositions:         10,
-			PositionLimit:        50,
-			NetExposureLimit:     80,
-			MaxDrawdown:          10,
-			ConsecutiveLosses:    5,
-			FundingRateLimit:     0.00375,
-			MarginRatio:          150,
-			PriceSanityPct:       5,
-			VolatilityLimit:      2,
-			PriceSpikeWindow:     3,
-			RateLimitPerSec:      10,
+			MaxOrderSize:            10000,
+			DailyLimit:              100000,
+			MaxConcurrentOrders:     5,
+			MaxPositions:            10,
+			PositionLimit:           50,
+			NetExposureLimit:        80,
+			MaxDrawdown:             10,
+			ConsecutiveLosses:       5,
+			FundingRateLimit:        0.00375,
+			MarginRatio:             150,
+			PriceSanityPct:          5,
+			VolatilityLimit:         2,
+			PriceSpikeWindow:        3,
+			RateLimitPerSec:         10,
 			CircuitBreakerThreshold: 5,
 			CircuitBreakerResetSecs: 60,
 		},
 		Portfolio: PortfolioConfig{
-			InitialBalance:       100000,
-			SizingMethod:         "fixed_fraction",
+			InitialBalance:        100000,
+			SizingMethod:          "fixed_fraction",
 			ReconcileIntervalSecs: 30,
-			MaxSnapshots:         5000,
+			MaxSnapshots:          5000,
 		},
 		Strategy: StrategyConfig{
 			MaxStrategies: 20,
 			HotReload:     true,
+		},
+		// Trading.LiveEnabled 默认 false：实盘需显式开启（见 TradingConfig 注释）。
+		Trading: TradingConfig{
+			LiveEnabled: false,
 		},
 		Backtest: BacktestConfig{
 			DefaultCommission: 0.001,

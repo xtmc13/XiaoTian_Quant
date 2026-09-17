@@ -37,13 +37,10 @@ const isChildActive = (location: ReturnType<typeof useLocation>, childPath: stri
 const navItems: NavItem[] = [
   { path: '/dashboard', label: '仪表盘', icon: BarChart3 },
 
-  // 机器人中心（统一页：网格/马丁/华尔街/补仓/AI）
+  // 第一页：纯机器人管理（网格/马丁/华尔街/AI 实例；新建走右上角模板向导）
   { path: '/bots', label: '机器人中心', icon: LayoutGrid },
 
-  // 策略管理（独立一级页）
-  { path: '/strategies', label: '策略管理', icon: BrainCircuit },
-
-  // 策略实验室（原"策略管理"标签内容已迁出至 /strategies）
+  // 策略实验室（AI生成/回测/指标IDE 等研究工具）
   {
     label: '策略实验室',
     icon: FlaskConical,

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -463,14 +464,21 @@ func TestCreateUpdateForcedPaperFlag(t *testing.T) {
 		return resp
 	}
 
-	// live 被压回 → forced_paper。
-	resp := post(`{"name":"压回live","strategy_type":"macd","symbol":"BTCUSDT","execution_mode":"live","config":{}}`)
-	assertTrue(t, resp["forced_paper"] == true, "live must be flagged forced_paper")
+	// live 未开启实盘总闸 → 400（详见 TestLiveTradingGate）。
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/strategies/configs", strings.NewReader(`{"name":"压回live","strategy_type":"macd","symbol":"BTCUSDT","execution_mode":"live","config":{}}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	assertEq(t, w.Code, http.StatusBadRequest, "live without gate must be rejected")
+
+	// signal 被压回 → forced_paper。
+	resp := post(`{"name":"压回signal","strategy_type":"macd","symbol":"BTCUSDT","execution_mode":"signal","config":{}}`)
+	assertTrue(t, resp["forced_paper"] == true, "signal must be flagged forced_paper")
 	idLive, _ := resp["id"].(string)
 	t.Cleanup(func() { store.DeleteStrategyConfig(idLive) })
 	rec, err := store.NewStrategyConfigRepo().GetByID(idLive)
 	assertTrue(t, err == nil && rec != nil, "record persisted")
-	assertTrue(t, rec.ExecutionMode == "paper", "live must be stored as paper")
+	assertTrue(t, rec.ExecutionMode == "paper", "signal must be stored as paper")
 
 	// 空 execution_mode 兜底 paper → forced_paper。
 	resp = post(`{"name":"压回空","strategy_type":"macd","symbol":"BTCUSDT","config":{}}`)
@@ -486,15 +494,21 @@ func TestCreateUpdateForcedPaperFlag(t *testing.T) {
 	idPaper, _ := resp["id"].(string)
 	t.Cleanup(func() { store.DeleteStrategyConfig(idPaper) })
 
-	// Update：live → forced_paper；paper → 无标记。
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("PUT", "/strategies/configs/"+idPaper, strings.NewReader(`{"execution_mode":"live"}`))
+	// Update：live（总闸未开）→ 400；signal → forced_paper。
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest("PUT", "/strategies/configs/"+idPaper, strings.NewReader(`{"execution_mode":"live"}`))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
-	assertEq(t, w.Code, http.StatusOK, "update status")
+	assertEq(t, w.Code, http.StatusBadRequest, "update live without gate must be 400")
+
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest("PUT", "/strategies/configs/"+idPaper, strings.NewReader(`{"execution_mode":"signal"}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	assertEq(t, w.Code, http.StatusOK, "update signal status")
 	resp = map[string]any{}
 	assertTrue(t, json.Unmarshal(w.Body.Bytes(), &resp) == nil, "update response JSON")
-	assertTrue(t, resp["forced_paper"] == true, "update with live must be flagged forced_paper")
+	assertTrue(t, resp["forced_paper"] == true, "update with signal must be flagged forced_paper")
 }
 
 /* ── P1-8 批量结果汇总 ──────────────────────────────────────── */
@@ -803,4 +817,189 @@ func TestIndicatorParamsFullChain(t *testing.T) {
 	if rs, ok := eng.RuntimeStatus(id); ok {
 		assertTrue(t, rs != nil, "runtime status must be non-nil for cra strategy")
 	}
+}
+
+/* ── 任务3：实盘选项（live_enabled 总闸） ─────────────────────── */
+
+// TestLiveTradingGate 实盘总闸三态：
+//   - 总闸关闭（默认）：Create/Update 的 execution_mode=live → 400，paper 正常；
+//   - 总闸开启（运行时覆盖=1）：live 原样落库、不再 forced_paper；
+//   - 恢复关闭后：live 重新 400。
+func TestLiveTradingGate(t *testing.T) {
+	// 确保测试间状态干净：强制关闭（覆盖=2），结束后复位为跟随 env/config。
+	atomic.StoreInt32(&liveTradingOverride, 2)
+	t.Cleanup(func() { atomic.StoreInt32(&liveTradingOverride, 0) })
+
+	r := setupRouter()
+	r.POST("/strategies/configs", CreateStrategyConfig)
+	r.PUT("/strategies/configs/:id", UpdateStrategyConfig)
+
+	post := func(body string) (int, map[string]any) {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("POST", "/strategies/configs", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		r.ServeHTTP(w, req)
+		var resp map[string]any
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		return w.Code, resp
+	}
+
+	// ── 总闸关闭：live → 400，paper → 200 ──
+	code, resp := post(`{"name":"闸关live","strategy_type":"macd","symbol":"BTCUSDT","execution_mode":"live","config":{}}`)
+	assertEq(t, code, http.StatusBadRequest, "live must be 400 when gate closed")
+	detail := getString(resp, "detail", "")
+	assertTrue(t, strings.Contains(detail, "实盘未开启"), "error must explain gate, got "+detail)
+
+	code, resp = post(`{"name":"闸关paper","strategy_type":"macd","symbol":"BTCUSDT","execution_mode":"paper","config":{}}`)
+	assertEq(t, code, http.StatusOK, "paper must pass when gate closed")
+	paperID, _ := resp["id"].(string)
+	t.Cleanup(func() { store.DeleteStrategyConfig(paperID) })
+	rec, err := store.NewStrategyConfigRepo().GetByID(paperID)
+	assertTrue(t, err == nil && rec != nil && rec.ExecutionMode == "paper", "paper stored as paper")
+
+	// Update 显式 live → 400。
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("PUT", "/strategies/configs/"+paperID, strings.NewReader(`{"execution_mode":"live"}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	assertEq(t, w.Code, http.StatusBadRequest, "update live must be 400 when gate closed")
+
+	// ── 总闸开启：live 原样落库、不 forced_paper ──
+	atomic.StoreInt32(&liveTradingOverride, 1)
+	code, resp = post(`{"name":"闸开live","strategy_type":"macd","symbol":"BTCUSDT","execution_mode":"live","config":{}}`)
+	assertEq(t, code, http.StatusOK, "live must be accepted when gate open")
+	if _, flagged := resp["forced_paper"]; flagged {
+		t.Fatal("live stored as live must NOT be flagged forced_paper")
+	}
+	liveID, _ := resp["id"].(string)
+	t.Cleanup(func() { store.DeleteStrategyConfig(liveID) })
+	rec, err = store.NewStrategyConfigRepo().GetByID(liveID)
+	assertTrue(t, err == nil && rec != nil, "live record persisted")
+	assertTrue(t, rec.ExecutionMode == "live", "live must be stored as live when gate open, got "+rec.ExecutionMode)
+
+	// Update 改 live → 接受并落库 live。
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest("PUT", "/strategies/configs/"+paperID, strings.NewReader(`{"execution_mode":"live"}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	assertEq(t, w.Code, http.StatusOK, "update live must pass when gate open")
+	resp = map[string]any{}
+	assertTrue(t, json.Unmarshal(w.Body.Bytes(), &resp) == nil, "update response JSON")
+	if _, flagged := resp["forced_paper"]; flagged {
+		t.Fatal("update to live must NOT be flagged forced_paper when gate open")
+	}
+	rec, err = store.NewStrategyConfigRepo().GetByID(paperID)
+	assertTrue(t, err == nil && rec != nil && rec.ExecutionMode == "live", "update stored as live")
+
+	// ── 恢复关闭：live 重新 400 ──
+	atomic.StoreInt32(&liveTradingOverride, 2)
+	code, _ = post(`{"name":"闸关live2","strategy_type":"macd","symbol":"BTCUSDT","execution_mode":"live","config":{}}`)
+	assertEq(t, code, http.StatusBadRequest, "live must be 400 again after gate closed")
+}
+
+/* ── 任务1：现货专用参数模型 → cra_spot 引擎直驱 ─────────────── */
+
+// buildSpotConfig 复刻前端现货表单的双键 config：自定义键（回填优先）+
+// 引擎认识的 CRA 映射键（first_order_amount=每格金额、order_count=格数、
+// add_positions 由区间/格数生成等差 ladder、direction 固定 long）。
+func buildSpotConfig(lower, upper float64, grids int) map[string]any {
+	stepPct := (upper - lower) / upper / float64(grids)
+	ladder := make([]any, 0, grids-1)
+	for i := 1; i < grids; i++ {
+		ladder = append(ladder, map[string]any{
+			"order": i, "multiplier": 1,
+			"spread": stepPct * float64(i), "callback": 0.003, "ema_enabled": false,
+		})
+	}
+	return map[string]any{
+		// 现货自定义键（显示/回填优先）
+		"price_lower": lower, "price_upper": upper,
+		"grid_count": grids, "per_grid_amount": 50, "loop_mode": "cycle", "fee_rate": 0.001,
+		// CRA 引擎映射键
+		"first_order_amount": 50, "first_order_multiplier": 1,
+		"trade_count_mode": "cycle", "loop_count": 100,
+		"enable_add_position": grids > 1, "order_count": grids, "add_positions": ladder,
+		"take_profit_method": "full", "tp_mode": "static",
+		"take_profit_ratio": stepPct, "profit_callback": 0.003,
+		"direction": "long", "market_type": "spot", "margin_mode": "cross",
+	}
+}
+
+// TestSpotConfigValidation 现货自定义键宽松校验：区间/格数/金额非法 400。
+func TestSpotConfigValidation(t *testing.T) {
+	r := setupRouter()
+	r.POST("/strategies/configs", CreateStrategyConfig)
+
+	post := func(cfg map[string]any) int {
+		body, _ := json.Marshal(map[string]any{
+			"name": "现货校验", "strategy_type": "cra_spot", "symbol": "BTCUSDT", "config": cfg,
+		})
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("POST", "/strategies/configs", strings.NewReader(string(body)))
+		req.Header.Set("Content-Type", "application/json")
+		r.ServeHTTP(w, req)
+		return w.Code
+	}
+
+	base := buildSpotConfig(40000, 50000, 5)
+	ok := post(base)
+	assertEq(t, ok, http.StatusOK, "valid spot config must be accepted")
+
+	bad := buildSpotConfig(50000, 40000, 5) // upper <= lower
+	assertEq(t, post(bad), http.StatusBadRequest, "upper<=lower must be 400")
+
+	bad = buildSpotConfig(40000, 50000, 1) // grids < 2
+	assertEq(t, post(bad), http.StatusBadRequest, "grid_count<2 must be 400")
+
+	bad = buildSpotConfig(-1, 50000, 5) // lower <= 0
+	assertEq(t, post(bad), http.StatusBadRequest, "non-positive lower must be 400")
+}
+
+// TestSpotConfigEngineChain 引擎直驱：现货 config（双键）→ Create → Start
+// （cra_spot 工厂）→ 引擎收到配置且信号路径不报错。
+func TestSpotConfigEngineChain(t *testing.T) {
+	eng := strategy.GetEngine(event.NewEventBus(4096, 1))
+	strategy.RegisterStrategyFactory("cra_spot", func() strategy.Strategy {
+		return cra.NewCRASpotStrategy("cra_spot", "BTCUSDT")
+	})
+
+	r := setupRouter()
+	r.POST("/strategies/configs", CreateStrategyConfig)
+
+	cfg := buildSpotConfig(40000, 50000, 5)
+	cfg["open_indicator"] = "rsi"
+	cfg["indicator_params"] = map[string]any{"rsi": map[string]any{"period": 14, "oversold": 30, "overbought": 70}}
+	body, _ := json.Marshal(map[string]any{
+		"name": "现货全链路", "strategy_type": "cra_spot", "symbol": "BTCUSDT",
+		"config": cfg,
+	})
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/strategies/configs", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	assertEq(t, w.Code, http.StatusOK, "spot chain create")
+	var resp map[string]any
+	assertTrue(t, json.Unmarshal(w.Body.Bytes(), &resp) == nil, "spot chain create JSON")
+	id, _ := resp["id"].(string)
+	assertTrue(t, id != "", "spot chain id")
+	t.Cleanup(func() {
+		stopStrategyInEngine(id)
+		store.DeleteStrategyConfig(id)
+	})
+
+	item := store.GetStrategyConfig(id)
+	assertTrue(t, item != nil, "spot item must exist")
+	assertTrue(t, startStrategyInEngine(id, item) == nil, "spot start must succeed")
+
+	s := eng.Get(id)
+	assertTrue(t, s != nil && s.IsRunning(), "spot strategy must be running in engine")
+
+	// 假价格直驱 OnBar：现货首单 + 补仓 ladder 解析均不得报错。
+	sig, err := s.OnBar(model.Bar{Symbol: "BTCUSDT", Open: 45000, High: 45000, Low: 45000, Close: 45000, Volume: 1, Interval: "15m", Time: time.Now().UnixMilli()}, nil)
+	assertTrue(t, err == nil, "spot OnBar must not error")
+	assertTrue(t, sig == nil || sig.Direction == "LONG", "spot first signal must be LONG when emitted")
+
+	// 自定义键落库可回读（回填优先键）。
+	assertTrue(t, strings.Contains(getString(item, "config_json", ""), `"price_lower"`), "price_lower must persist")
+	assertTrue(t, strings.Contains(getString(item, "config_json", ""), `"per_grid_amount"`), "per_grid_amount must persist")
 }

@@ -23,7 +23,6 @@ function lazyPage(factory: () => Promise<unknown>, name: string) {
 const Dashboard = lazyPage(() => import('./pages/Dashboard'), 'Dashboard')
 const Trading = lazyPage(() => import('./pages/Trading'), 'Trading')
 const Strategy = lazyPage(() => import('./pages/Strategy'), 'Strategy')
-const Strategies = lazyPage(() => import('./pages/Strategies'), 'Strategies')
 const AI = lazyPage(() => import('./pages/AI'), 'AI')
 const Backtest = lazyPage(() => import('./pages/Backtest'), 'Backtest')
 const Bots = lazyPage(() => import('./pages/Bots'), 'Bots')
@@ -56,6 +55,7 @@ const StrategyEditor = lazyPage(() => import('./pages/strategy/StrategyEditor'),
 const BotsSignal = lazyPage(() => import('./pages/bots/BotsSignal'), 'BotsSignal')
 const BotsAI = lazyPage(() => import('./pages/bots/BotsAI'), 'BotsAI')
 const BotsCenter = lazyPage(() => import('./pages/bots/BotsCenter'), 'BotsCenter')
+const CreateStrategyPage = lazyPage(() => import('./pages/CreateStrategyPage'), 'CreateStrategyPage')
 const TradingSpot = lazyPage(() => import('./pages/trading/TradingSpot'), 'TradingSpot')
 const TradingContract = lazyPage(() => import('./pages/trading/TradingContract'), 'TradingContract')
 const ArbitrageCross = lazyPage(() => import('./pages/arbitrage/ArbitrageCross'), 'ArbitrageCross')
@@ -112,10 +112,11 @@ function DocumentTitle() {
     '/dashboard': '仪表盘 - 小天量化',
     '/trading': '交易 - 小天量化',
     '/strategy': '策略实验室 - 小天量化',
-    '/strategies': '策略管理 - 小天量化',
     '/ai': 'AI分析 - 小天量化',
     '/backtest': '回测 - 小天量化',
     '/bots': '机器人中心 - 小天量化',
+    '/create': '创建策略 - 小天量化',
+    '/strategies': '机器人中心 - 小天量化',
     '/ai-bots': 'AI Bots - 小天量化',
     '/settings': '设置 - 小天量化',
     '/exchange-account': '账户 - 小天量化',
@@ -288,11 +289,22 @@ export default function App() {
                       </PageShell>
                     }
                   />
+                  {/* 创建策略独立页 */}
+                  <Route
+                    path="/create"
+                    element={
+                      <PageShell>
+                        <CreateStrategyPage />
+                      </PageShell>
+                    }
+                  />
+
+                  {/* 旧策略管理路由 → 机器人中心（唯一管理页） */}
                   <Route
                     path="/strategies"
                     element={
                       <PageShell>
-                        <Strategies />
+                        <Navigate to="/bots" replace />
                       </PageShell>
                     }
                   />

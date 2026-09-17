@@ -57,22 +57,22 @@ describe('StrategyCreatePanel', () => {
   })
 
   it('renders basic fields and exchange selector', () => {
-    render(<StrategyCreatePanel strategyType="martin_trend" onClose={vi.fn()} onSaved={vi.fn()} />, { wrapper })
+    render(<StrategyCreatePanel market="spot" onClose={vi.fn()} onSaved={vi.fn()} />, { wrapper })
     expect(screen.getByPlaceholderText('输入策略名称')).toBeTruthy()
-    expect(screen.getByText('点击选择交易所')).toBeTruthy()
+    expect(screen.getByText('点击选择')).toBeTruthy()
   })
 
   it('opens exchange modal and selects an exchange', async () => {
-    render(<StrategyCreatePanel strategyType="martin_trend" onClose={vi.fn()} onSaved={vi.fn()} />, { wrapper })
-    fireEvent.click(screen.getByText('点击选择交易所'))
+    render(<StrategyCreatePanel market="spot" onClose={vi.fn()} onSaved={vi.fn()} />, { wrapper })
+    fireEvent.click(screen.getByText('点击选择'))
     await waitFor(() => expect(screen.getByText('Binance')).toBeTruthy())
     fireEvent.click(screen.getByText('Binance'))
     fireEvent.click(screen.getByText('确认选择'))
-    expect(screen.getByText('已选择 1 个交易所')).toBeTruthy()
+    expect(screen.getByText('binance')).toBeTruthy()
   })
 
   it('shows validation error when no exchange is selected', async () => {
-    render(<StrategyCreatePanel strategyType="martin_trend" onClose={vi.fn()} onSaved={vi.fn()} />, { wrapper })
+    render(<StrategyCreatePanel market="spot" onClose={vi.fn()} onSaved={vi.fn()} />, { wrapper })
     fireEvent.change(screen.getByPlaceholderText('输入策略名称'), { target: { value: 'Test' } })
     fireEvent.click(screen.getByText('保存策略'))
     await waitFor(() => expect(useToastModule.toast).toHaveBeenCalledWith('error', '请至少选择一个交易所'))
@@ -81,10 +81,10 @@ describe('StrategyCreatePanel', () => {
 
   it('submits payload with selected exchanges', async () => {
     const onSaved = vi.fn()
-    render(<StrategyCreatePanel strategyType="martin_trend" onClose={vi.fn()} onSaved={onSaved} />, { wrapper })
+    render(<StrategyCreatePanel market="spot" onClose={vi.fn()} onSaved={onSaved} />, { wrapper })
 
     fireEvent.change(screen.getByPlaceholderText('输入策略名称'), { target: { value: 'Test Strategy' } })
-    fireEvent.click(screen.getByText('点击选择交易所'))
+    fireEvent.click(screen.getByText('点击选择'))
     await waitFor(() => expect(screen.getByText('Binance')).toBeTruthy())
     fireEvent.click(screen.getByText('Binance'))
     fireEvent.click(screen.getByText('确认选择'))
@@ -100,10 +100,10 @@ describe('StrategyCreatePanel', () => {
   it('saves as default template when checkbox is checked', async () => {
     vi.mocked(strategyApi.createTemplate).mockResolvedValue({ id: 'tpl-1' } as unknown as never)
     const onSaved = vi.fn()
-    render(<StrategyCreatePanel strategyType="martin_trend" onClose={vi.fn()} onSaved={onSaved} />, { wrapper })
+    render(<StrategyCreatePanel market="spot" onClose={vi.fn()} onSaved={onSaved} />, { wrapper })
 
     fireEvent.change(screen.getByPlaceholderText('输入策略名称'), { target: { value: 'Test Strategy' } })
-    fireEvent.click(screen.getByText('点击选择交易所'))
+    fireEvent.click(screen.getByText('点击选择'))
     await waitFor(() => expect(screen.getByText('Binance')).toBeTruthy())
     fireEvent.click(screen.getByText('Binance'))
     fireEvent.click(screen.getByText('确认选择'))
@@ -116,6 +116,55 @@ describe('StrategyCreatePanel', () => {
     const templatePayload = (strategyApi.createTemplate as ReturnType<typeof vi.fn>).mock.calls[0][0]
     expect(templatePayload.name).toBe('Test Strategy')
     expect(templatePayload.category).toBe('spot')
-    expect(templatePayload.default_config.strategy_type).toBe('martin_trend')
+    expect(templatePayload.default_config.strategy_type).toBe('cra_spot')
+  })
+})
+
+describe('StrategyCreatePanel 类型派生（无类型下拉）', () => {
+  const create = vi.fn()
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(useStrategyDataModule.useStrategyData).mockReturnValue({
+      create,
+    } as unknown as ReturnType<typeof useStrategyDataModule.useStrategyData>)
+    vi.mocked(configApi.exchangesConfigured).mockResolvedValue(mockConfigured)
+  })
+
+  it('按市场派生 strategy_type：spot→cra_spot，contract→cra_contract', async () => {
+    const { unmount } = render(<StrategyCreatePanel market="spot" onClose={vi.fn()} onSaved={vi.fn()} />, { wrapper })
+    fireEvent.change(screen.getByPlaceholderText('输入策略名称'), { target: { value: 'Spot策略' } })
+    fireEvent.click(screen.getByText('点击选择'))
+    await waitFor(() => expect(screen.getByText('Binance')).toBeTruthy())
+    fireEvent.click(screen.getByText('Binance'))
+    fireEvent.click(screen.getByText('确认选择'))
+    fireEvent.click(screen.getByText('保存策略'))
+    await waitFor(() => expect(create).toHaveBeenCalled())
+    expect((create.mock.calls[0][0] as Record<string, unknown>).strategy_type).toBe('cra_spot')
+    unmount()
+
+    render(<StrategyCreatePanel market="contract" onClose={vi.fn()} onSaved={vi.fn()} />, { wrapper })
+    fireEvent.change(screen.getByPlaceholderText('输入策略名称'), { target: { value: 'Contract策略' } })
+    fireEvent.click(screen.getByText('点击选择'))
+    await waitFor(() => expect(screen.getByText('Binance')).toBeTruthy())
+    fireEvent.click(screen.getByText('Binance'))
+    fireEvent.click(screen.getByText('确认选择'))
+    fireEvent.click(screen.getByText('保存策略'))
+    await waitFor(() => expect(create.mock.calls.length).toBe(2))
+    expect((create.mock.calls[1][0] as Record<string, unknown>).strategy_type).toBe('cra_contract')
+  })
+
+  it('initialType 覆盖：编辑/旧快捷入口的非 cra 原类型保留不改', async () => {
+    render(<StrategyCreatePanel market="spot" initialType="martin_trend" onClose={vi.fn()} onSaved={vi.fn()} />, {
+      wrapper,
+    })
+    fireEvent.change(screen.getByPlaceholderText('输入策略名称'), { target: { value: '马丁趋势' } })
+    fireEvent.click(screen.getByText('点击选择'))
+    await waitFor(() => expect(screen.getByText('Binance')).toBeTruthy())
+    fireEvent.click(screen.getByText('Binance'))
+    fireEvent.click(screen.getByText('确认选择'))
+    fireEvent.click(screen.getByText('保存策略'))
+    await waitFor(() => expect(create).toHaveBeenCalled())
+    expect((create.mock.calls[0][0] as Record<string, unknown>).strategy_type).toBe('martin_trend')
   })
 })

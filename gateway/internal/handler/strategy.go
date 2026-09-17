@@ -386,6 +386,13 @@ func CreateStrategyConfig(c *gin.Context) {
 		return
 	}
 
+	// ── 实盘安全闸（2026-09-17 用户要求加回实盘选项，但保留服务端总闸）──
+	// execution_mode=live 仅在实盘开关开启时被接受；未开启一律 400。
+	if strings.EqualFold(strings.TrimSpace(getString(body, "execution_mode", "")), "live") && !isLiveTradingEnabled() {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "实盘未开启：请先在服务端配置 trading.live_enabled: true（或 LIVE_TRADING_ENABLED=true / 管理员运行时解锁）后重启网关"})
+		return
+	}
+
 	sid := shortUUID()
 	nowTS := time.Now().UnixMilli()
 
@@ -460,6 +467,11 @@ func CreateStrategyConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
 		return
 	}
+	// ── 现货策略自定义键合法化 ──
+	if err := validateSpotParams(mergedStrategyConfig(item, payloadConfig)); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
 
 	// ── 机器人身份持久化：strategy_mode/bot_type 不是 DB 列，必须写入
 	// config_json 才能在 DB 重建后继续被 isBotItem 判别（根治互窜）。 ──
@@ -474,8 +486,9 @@ func CreateStrategyConfig(c *gin.Context) {
 	store.PersistStrategyConfigs()
 	persistStrategyConfigToDB(item)
 	resp := gin.H{"status": "ok", "id": sid}
-	// 模拟盘压回提示：请求是 live/空且被压回 paper 时标记，前端据此 toast。
-	if strings.ToLower(getString(body, "execution_mode", "")) != "paper" {
+	// forced_paper 仅在后端真实压回时返回（请求非 paper 且落库为 paper）；
+	// 实盘总闸开启时 live 原样落库，不得误报。
+	if req := strings.ToLower(strings.TrimSpace(getString(body, "execution_mode", ""))); req != "paper" && getString(item, "execution_mode", "") == "paper" {
 		resp["forced_paper"] = true
 	}
 	c.JSON(http.StatusOK, resp)
@@ -491,6 +504,11 @@ func UpdateStrategyConfig(c *gin.Context) {
 	item := store.GetStrategyConfig(id)
 	if item == nil {
 		c.JSON(http.StatusNotFound, gin.H{"detail": "not found"})
+		return
+	}
+	// ── 实盘安全闸：Update 显式改 live 同样受总闸约束 ──
+	if strings.EqualFold(strings.TrimSpace(getString(body, "execution_mode", "")), "live") && !isLiveTradingEnabled() {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "实盘未开启：请先在服务端配置 trading.live_enabled: true（或 LIVE_TRADING_ENABLED=true / 管理员运行时解锁）后重启网关"})
 		return
 	}
 	// 先在别名同步前捕获机器人身份（execution_mode 同步会把 strategy_mode
@@ -538,6 +556,11 @@ func UpdateStrategyConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
 		return
 	}
+	// ── 现货策略自定义键合法化 ──
+	if err := validateSpotParams(mergedStrategyConfig(item, payloadConfig)); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
 
 	// ── 机器人身份保留/刷新：执行别名字段同步会把 strategy_mode 覆写成
 	// execution_mode('paper')，这里对机器人记录恢复 'bot' 标记。 ──
@@ -557,7 +580,7 @@ func UpdateStrategyConfig(c *gin.Context) {
 	store.PersistStrategyConfigs()
 	persistStrategyConfigToDB(item)
 	resp := gin.H{"status": "ok"}
-	if em, ok := body["execution_mode"].(string); ok && strings.ToLower(strings.TrimSpace(em)) != "paper" {
+	if em, ok := body["execution_mode"].(string); ok && strings.ToLower(strings.TrimSpace(em)) != "paper" && getString(item, "execution_mode", "") == "paper" {
 		resp["forced_paper"] = true
 	}
 	c.JSON(http.StatusOK, resp)
@@ -664,6 +687,45 @@ func validateIndicatorParams(cfg map[string]any) error {
 	return nil
 }
 
+// validateSpotParams 现货策略自定义参数键宽松校验（price_lower 存在即视为
+// 现货参数包）：区间/格数/每格金额/手续费率正数与边界，区间 lower<upper。
+// 现货表单同时写引擎认识的 CRA 键（first_order_amount=每格金额、
+// order_count=格数、add_positions 等差 ladder），本校验只拦明显非法值。
+func validateSpotParams(cfg map[string]any) error {
+	if _, exists := cfg["price_lower"]; !exists {
+		return nil
+	}
+	num := func(key string) (float64, bool) {
+		v, ok := cfg[key]
+		if !ok || v == nil {
+			return 0, false
+		}
+		f, ok := v.(float64)
+		return f, ok
+	}
+	if lower, ok := num("price_lower"); ok && lower <= 0 {
+		return fmt.Errorf("现货价格区间下限必须为正数")
+	}
+	if lower, ok1 := num("price_lower"); ok1 {
+		if upper, ok2 := num("price_upper"); ok2 && upper <= lower {
+			return fmt.Errorf("现货价格区间上限必须大于下限")
+		}
+	}
+	if n, ok := num("grid_count"); ok && (n < 2 || n > 200) {
+		return fmt.Errorf("现货格数必须在 2-200 之间")
+	}
+	if n, ok := num("per_grid_amount"); ok && n < 1 {
+		return fmt.Errorf("现货每格金额必须≥1")
+	}
+	if n, ok := num("fee_rate"); ok && n < 0 {
+		return fmt.Errorf("现货手续费率不能为负数")
+	}
+	if lm, ok := cfg["loop_mode"].(string); ok && lm != "" && lm != "single" && lm != "cycle" {
+		return fmt.Errorf("现货循环模式必须是 single 或 cycle")
+	}
+	return nil
+}
+
 // mergedStrategyConfig 解析 item.config_json 并用 payloadConfig（请求体携带的
 // config）覆盖，得到"保存后将生效"的参数视图。
 func mergedStrategyConfig(item, payloadConfig map[string]any) map[string]any {
@@ -740,17 +802,18 @@ func fillStrategyFieldDefaults(item map[string]any, payloadConfig map[string]any
 			item["category"] = "spot"
 		}
 	}
-	// 安全红线：一切下单默认 paper。合约策略等入口会显式传 "live"/"signal"，
-	// 空值兜底挡不住——这些值会让信号单直连真实交易所（resolveExchange 有
-	// 凭证即返回 binance；333/444 事故 + 前端默认 'signal' 均因此危险）。
-	// 平台尚未开放实盘，任何非 paper 值统一压回 paper 并留痕；将来开放实盘
-	// 时应改为显式白名单校验。
-	if em := strings.ToLower(getString(item, "execution_mode", "")); em != "" && em != "paper" {
-		log.Printf("[strategy] execution_mode=%s 已压回 paper（安全红线，未开放实盘）: id=%v name=%v type=%v",
-			em, item["id"], item["name"], item["strategy_type"])
+	// 安全红线：一切下单默认 paper。execution_mode=live 仅在实盘总闸开启时
+	// 放行（用户明确要求加回实盘选项，2026-09-17）；signal 等直连值与未开启
+	// 总闸的 live 一律压回 paper 并留痕。将来收紧/放宽实盘时应只改总闸。
+	em := strings.ToLower(getString(item, "execution_mode", ""))
+	switch {
+	case em == "":
 		item["execution_mode"] = "paper"
-	}
-	if getString(item, "execution_mode", "") == "" {
+	case em == "live" && isLiveTradingEnabled():
+		// 实盘总闸已开启：接受 live。
+	case em != "paper":
+		log.Printf("[strategy] execution_mode=%s 已压回 paper（安全红线，实盘未开启）: id=%v name=%v type=%v",
+			em, item["id"], item["name"], item["strategy_type"])
 		item["execution_mode"] = "paper"
 	}
 	if getString(item, "direction", "") == "" {
@@ -1088,6 +1151,13 @@ func isContractCategory(item map[string]any) bool {
 //     或 config_json 解析结果里的 bot_type）。
 //   - category ∈ {martin, wallstreet}（历史机器人品类）。
 func isBotItem(it map[string]any) bool {
+	// CRA 壳策略（现货/合约策略管理创建）永远归策略侧——即使带 bot 标记
+	// （历史暗道保存的 顺势多444/333 等）。用户明确：机器人页只留真机器人，
+	// 策略实例全部在策略管理页。须放在 bot 标记判定之前。
+	switch strings.ToLower(getString(it, "strategy_type", getString(it, "type", ""))) {
+	case "cra_contract", "cra_spot":
+		return false
+	}
 	if strings.EqualFold(getString(it, "strategy_mode", ""), "bot") {
 		return true
 	}

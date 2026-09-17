@@ -240,7 +240,7 @@ func canPlaceLiveOrder(exchange string, confirmed bool) error {
 		return nil
 	}
 	if !isLiveTradingEnabled() {
-		return fmt.Errorf("实盘交易未启用。请先在 .env 中设置 LIVE_TRADING_ENABLED=true 并重启网关")
+		return fmt.Errorf("实盘交易未启用。请在 config.yaml 设置 trading.live_enabled: true（或 .env 中 LIVE_TRADING_ENABLED=true / 管理员运行时解锁）并重启网关")
 	}
 	if isConfirmRequired() && !confirmed {
 		return fmt.Errorf("实盘交易需要二次确认。请在请求中包含 confirmed=true")
@@ -256,12 +256,12 @@ func PlaceOrder(c *gin.Context) {
 	}
 
 	req := &order.Request{
-		Symbol:        getString(body, "symbol", "BTCUSDT"),
-		Side:          model.OrderSide(getString(body, "side", "BUY")),
-		OrderType:     model.OrderType(getString(body, "order_type", "LIMIT")),
-		Price:         getFloat(body, "price", 0),
-		Quantity:      getFloat(body, "quantity", 0),
-		Exchange:      getString(body, "exchange", "paper"),
+		Symbol:    getString(body, "symbol", "BTCUSDT"),
+		Side:      model.OrderSide(getString(body, "side", "BUY")),
+		OrderType: model.OrderType(getString(body, "order_type", "LIMIT")),
+		Price:     getFloat(body, "price", 0),
+		Quantity:  getFloat(body, "quantity", 0),
+		Exchange:  getString(body, "exchange", "paper"),
 
 		// ── Contract fields ──
 		MarketType:    model.MarketType(getString(body, "market_type", "spot")),
@@ -769,11 +769,11 @@ func GetAccountBalance(c *gin.Context) {
 	if apiKey == "" || secret == "" {
 		// No credentials configured — return empty balances with clear source
 		c.JSON(http.StatusOK, gin.H{
-			"balances":        []map[string]any{},
-			"currencies":      []map[string]any{},
-			"estimated_usdt":  0,
-			"source":          "unconfigured",
-			"message":         "请在「设置 → 交易所」中配置 Binance API Key 以获取真实余额",
+			"balances":       []map[string]any{},
+			"currencies":     []map[string]any{},
+			"estimated_usdt": 0,
+			"source":         "unconfigured",
+			"message":        "请在「设置 → 交易所」中配置 Binance API Key 以获取真实余额",
 		})
 		return
 	}
@@ -837,10 +837,10 @@ func GetAccountBalance(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"balances":        balances,
-		"currencies":      balances,
-		"estimated_usdt":  totalUSDT,
-		"source":          "binance",
+		"balances":       balances,
+		"currencies":     balances,
+		"estimated_usdt": totalUSDT,
+		"source":         "binance",
 	})
 }
 
@@ -885,8 +885,8 @@ func GetTradeHistory(c *gin.Context) {
 	apiKey, secret, _ := adapter.GetCredential("binance")
 	if apiKey == "" || secret == "" {
 		c.JSON(http.StatusOK, gin.H{
-			"trades": []map[string]any{},
-			"source": "unconfigured",
+			"trades":  []map[string]any{},
+			"source":  "unconfigured",
 			"message": "请在「设置 → 交易所」中配置 Binance API Key 以获取成交记录",
 		})
 		return
@@ -903,17 +903,17 @@ func GetTradeHistory(c *gin.Context) {
 	trades := make([]map[string]any, 0, len(rawTrades))
 	for _, t := range rawTrades {
 		trades = append(trades, map[string]any{
-			"symbol":    t.Symbol,
-			"side":      t.Side,
-			"price":     t.Price,
-			"qty":       t.Quantity,
-			"quantity":  t.Quantity,
-			"pnl":       t.RealizedPnl,
-			"time":      t.Time,
-			"timestamp": t.Time,
-			"id":        t.ID,
-			"order_id":  t.OrderID,
-			"commission": t.Commission,
+			"symbol":           t.Symbol,
+			"side":             t.Side,
+			"price":            t.Price,
+			"qty":              t.Quantity,
+			"quantity":         t.Quantity,
+			"pnl":              t.RealizedPnl,
+			"time":             t.Time,
+			"timestamp":        t.Time,
+			"id":               t.ID,
+			"order_id":         t.OrderID,
+			"commission":       t.Commission,
 			"commission_asset": t.CommissionAsset,
 		})
 	}

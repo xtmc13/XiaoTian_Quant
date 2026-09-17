@@ -3,6 +3,7 @@ import { Settings2, Ban, FlaskConical } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
   OPEN_INDICATORS,
+  SPOT_EXCLUDED_INDICATORS,
   defaultIndicatorParams,
   type IndicatorParamValue,
   type OpenIndicatorKey,
@@ -21,6 +22,8 @@ interface IndicatorPickerProps {
   custom: { code_id: number; name: string } | null
   /** 当前表单方向（弹窗内展示锁定关系用） */
   direction: 'long' | 'short' | 'dual'
+  /** 市场：spot 隐藏有方向概念的顺势多/顺势空（现货无 direction 语义） */
+  market?: 'spot' | 'contract'
   disabled?: boolean
   onChange: (next: IndicatorSelection) => void
 }
@@ -39,7 +42,8 @@ function summarizeParams(key: OpenIndicatorKey, params: Record<string, Indicator
  * 开仓指标选择器：一排可点选的指标卡。选中高亮；每个指标带"参数"按钮
  * 弹出 IndicatorParamModal 编辑参数；"未设置"表示使用壳默认（无开仓门槛）。
  */
-export function IndicatorPicker({ indicator, params, custom, direction, disabled, onChange }: IndicatorPickerProps) {
+export function IndicatorPicker({ indicator, params, custom, direction, market = 'contract', disabled, onChange }: IndicatorPickerProps) {
+  const visibleIndicators = market === 'spot' ? OPEN_INDICATORS.filter((d) => !SPOT_EXCLUDED_INDICATORS.has(d.key)) : OPEN_INDICATORS
   const [paramModalKey, setParamModalKey] = useState<OpenIndicatorKey | null>(null)
 
   const select = (key: OpenIndicatorKey) => {
@@ -82,7 +86,7 @@ export function IndicatorPicker({ indicator, params, custom, direction, disabled
           未设置
         </button>
 
-        {OPEN_INDICATORS.map((def) => {
+        {visibleIndicators.map((def) => {
           const active = indicator === def.key
           const summary = active ? summarizeParams(def.key, params) : ''
           return (

@@ -331,14 +331,15 @@ export function CRAParamForm({ value, onChange, market, className }: CRAParamFor
           </div>
         </div>
 
-        {isContract && (
-          <div className="space-y-2">
-            <div className="text-[11px] text-muted-foreground">开仓指标</div>
+        {/* 开仓指标（现货/合约一致：策略=指标+方向，可弹窗调参） */}
+        <div className="space-y-2">
+            <div className="text-[11px] text-muted-foreground">开仓指标（策略选择）</div>
             <IndicatorPicker
               indicator={value.openIndicator}
               params={value.openIndicatorParams}
               custom={value.openIndicatorCustom}
               direction={value.direction}
+              market={market}
               onChange={(sel) => {
                 // 选择器为唯一事实源：由选择派生引擎兼容键（旧 open_* 字段
                 // 同步写入，供周期推断等既有消费方使用），复合指标锁定方向。
@@ -364,7 +365,6 @@ export function CRAParamForm({ value, onChange, market, className }: CRAParamFor
               }}
             />
           </div>
-        )}
 
         <div className="flex flex-wrap gap-3">
           <label className="flex items-center gap-2 text-xs text-muted-foreground">

@@ -1,7 +1,13 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { CRAParamForm, DEFAULT_CRA_PARAMS } from '../CRAParamForm'
 import type { CRAParams } from '../CRAParamForm'
+
+function wrapper({ children }: { children: React.ReactNode }) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+}
 
 describe('CRAParamForm', () => {
   const baseProps = {
@@ -11,20 +17,20 @@ describe('CRAParamForm', () => {
   }
 
   it('renders default first order amount from DEFAULT_CRA_PARAMS', () => {
-    render(<CRAParamForm {...baseProps} />)
+    render(<CRAParamForm {...baseProps} />, { wrapper })
     const inputs = screen.getAllByDisplayValue(String(DEFAULT_CRA_PARAMS.firstOrderAmount))
     expect(inputs.length).toBeGreaterThan(0)
   })
 
   it('shows static take profit inputs by default', () => {
-    render(<CRAParamForm {...baseProps} />)
+    render(<CRAParamForm {...baseProps} />, { wrapper })
     expect(screen.getByText('止盈比例 (%)')).toBeTruthy()
     expect(screen.getByText('盈利回调 (%)')).toBeTruthy()
   })
 
   it('switches take profit mode to moving when clicked', () => {
     const onChange = vi.fn()
-    render(<CRAParamForm {...baseProps} onChange={onChange} />)
+    render(<CRAParamForm {...baseProps} onChange={onChange} />, { wrapper })
     fireEvent.click(screen.getByText('移动止盈'))
     expect(onChange).toHaveBeenCalled()
     const lastCall = onChange.mock.calls[onChange.mock.calls.length - 1][0] as CRAParams
@@ -32,13 +38,13 @@ describe('CRAParamForm', () => {
   })
 
   it('renders open double checkbox', () => {
-    render(<CRAParamForm {...baseProps} />)
+    render(<CRAParamForm {...baseProps} />, { wrapper })
     expect(screen.getByLabelText('开仓加倍')).toBeTruthy()
   })
 
   it('toggles open double checkbox', () => {
     const onChange = vi.fn()
-    render(<CRAParamForm {...baseProps} onChange={onChange} />)
+    render(<CRAParamForm {...baseProps} onChange={onChange} />, { wrapper })
     const checkbox = screen.getByLabelText('开仓加倍') as HTMLInputElement
     fireEvent.click(checkbox)
     expect(onChange).toHaveBeenCalled()

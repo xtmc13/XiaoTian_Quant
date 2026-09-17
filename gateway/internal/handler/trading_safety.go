@@ -6,12 +6,16 @@ import (
 	"sync/atomic"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xiaotian-quant/gateway/internal/config"
 )
 
 // liveTradingOverride allows runtime enable/disable of live trading.
-// 0 = use env var, 1 = force enabled, 2 = force disabled.
+// 0 = use env var / config.yaml, 1 = force enabled, 2 = force disabled.
 var liveTradingOverride int32
 
+// isLiveTradingEnabledRuntime 实盘总闸三态：运行时覆盖（管理员解锁/锁定）
+// > 环境变量 LIVE_TRADING_ENABLED > config.yaml trading.live_enabled。
+// 默认 false——任何一环未显式开启即视为未开启。
 func isLiveTradingEnabledRuntime() bool {
 	switch atomic.LoadInt32(&liveTradingOverride) {
 	case 1:
@@ -19,7 +23,10 @@ func isLiveTradingEnabledRuntime() bool {
 	case 2:
 		return false
 	default:
-		return os.Getenv("LIVE_TRADING_ENABLED") == "true"
+		if os.Getenv("LIVE_TRADING_ENABLED") == "true" {
+			return true
+		}
+		return config.Get().Trading.LiveEnabled
 	}
 }
 
@@ -30,6 +37,7 @@ func GetTradingSafetyStatus(c *gin.Context) {
 		"confirm_required":        isConfirmRequired(),
 		"paper_trading_default":   true,
 		"env_live_trading":        os.Getenv("LIVE_TRADING_ENABLED") == "true",
+		"config_live_trading":     config.Get().Trading.LiveEnabled,
 		"runtime_override_locked": atomic.LoadInt32(&liveTradingOverride) != 0,
 	})
 }

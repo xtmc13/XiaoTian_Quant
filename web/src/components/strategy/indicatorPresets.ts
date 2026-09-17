@@ -136,6 +136,9 @@ export const OPEN_INDICATORS: IndicatorDef[] = [
   },
 ]
 
+/** 现货版隐藏的有方向概念指标（顺势多/顺势空仅合约）。 */
+export const SPOT_EXCLUDED_INDICATORS: ReadonlySet<string> = new Set(['trend_long', 'trend_short'])
+
 export function getIndicatorDef(key: OpenIndicatorKey): IndicatorDef | undefined {
   return OPEN_INDICATORS.find((d) => d.key === key)
 }

@@ -119,6 +119,11 @@ export function StrategyDetailPanel({
             <div className="flex items-center gap-3 flex-wrap">
               <h2 className="text-lg font-bold text-foreground">{s.name}</h2>
               <StatusBadge status={s.status} />
+              {(s.execution_mode === 'live' || s.mode === 'live') && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-quant-red/10 text-quant-red border border-quant-red/30 font-semibold">
+                  实盘
+                </span>
+              )}
               {s.ai_generated && (
                 <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400 border border-purple-500/20">
                   AI 生成

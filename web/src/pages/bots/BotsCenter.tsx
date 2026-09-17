@@ -4,15 +4,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   LayoutGrid,
   Plus,
-  Play,
-  Square,
-  Pencil,
-  Trash2,
-  Wallet,
-  Activity,
-  PauseCircle,
+  Search,
   TrendingUp,
-  TrendingDown,
   Grid3x3,
   Layers,
   BarChart3,
@@ -24,11 +17,9 @@ import { cn, formatCurrency } from '@/lib/utils'
 import { gridApi, strategyApi, strategyConfigApi } from '@/lib/api'
 import type { GridBot, GridBotPayload } from '@/lib/api'
 import type { StrategyItem } from '@/types'
+import { RuntimePanel } from '@/components/strategy/RuntimePanel'
 import type { BotItem } from '@/hooks/useBotData'
-import { PageHeader } from '@/components/ui/PageHeader'
-import { KPICard } from '@/components/ui/KPICard'
 import { SectionCard } from '@/components/ui/SectionCard'
-import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -38,10 +29,12 @@ import { BotCreateModal } from '@/components/bots/BotCreateModal'
 import type { MartinConfig, WallStreetConfig } from '@/types'
 
 /* ── 统一机器人类型 ── */
-type BotKind = 'grid' | 'martin' | 'wallstreet' | 'add' | 'ai' | 'other'
+type BotKind = 'grid' | 'martin' | 'wallstreet' | 'add' | 'ai' | 'spot-strategy' | 'contract-strategy' | 'other'
 
 interface UnifiedBot {
   id: string
+  /** 数据来源：grid=网格 / bot=策略机器人 / strategy=策略实例（kind=strategy）。 */
+  source: 'grid' | 'bot' | 'strategy'
   kind: BotKind
   name: string
   symbol: string
@@ -56,13 +49,16 @@ interface UnifiedBot {
   botItem?: BotItem
 }
 
-const KIND_META: Record<BotKind, { label: string; variant: 'info' | 'success' | 'warning' | 'error' | 'neutral' }> = {
-  grid: { label: '网格', variant: 'info' },
-  martin: { label: '马丁', variant: 'error' },
-  wallstreet: { label: '华尔街', variant: 'warning' },
-  add: { label: '补仓', variant: 'success' },
-  ai: { label: 'AI', variant: 'neutral' },
-  other: { label: '机器人', variant: 'neutral' },
+// 类型 pill 配色对齐效果图：网格紫 / 补仓蓝 / 马丁绿 / 华尔街青 / AI 青。
+const KIND_META: Record<BotKind, { label: string; pill: string }> = {
+  grid: { label: '网格', pill: 'bg-purple-500/15 text-purple-400' },
+  martin: { label: '马丁', pill: 'bg-emerald-500/15 text-emerald-400' },
+  wallstreet: { label: '华尔街', pill: 'bg-teal-500/15 text-teal-400' },
+  add: { label: '补仓', pill: 'bg-blue-500/15 text-blue-400' },
+  ai: { label: 'AI', pill: 'bg-cyan-500/15 text-cyan-400' },
+  'spot-strategy': { label: '现货策略', pill: 'bg-sky-500/15 text-sky-400' },
+  'contract-strategy': { label: '合约策略', pill: 'bg-orange-500/15 text-orange-400' },
+  other: { label: '机器人', pill: 'bg-quant-gold/15 text-quant-gold' },
 }
 
 /** 从 kind=bot 列表项推断统一类型：bot_type 优先，其次 category/strategy_type。 */
@@ -84,6 +80,17 @@ function inferKind(s: StrategyItem): BotKind {
 
 function isRunningStatus(status?: string, isRunning?: boolean): boolean {
   return status === 'running' || isRunning === true
+}
+
+function canDetailKind(kind: BotKind): boolean {
+  return kind === 'martin' || kind === 'wallstreet'
+}
+
+/** kind=strategy 来源（策略实例）的类型映射：现货/合约。 */
+function inferStrategyKind(s: StrategyItem): BotKind {
+  const stype = (s.strategy_type || '').toLowerCase()
+  if (stype === 'cra_spot' || s.market_type === 'spot') return 'spot-strategy'
+  return 'contract-strategy'
 }
 
 /* ── 网格创建表单（沿用 BotsGrid 的 GridBotForm 逻辑） ── */
@@ -215,21 +222,20 @@ function MartinWallstreetForm({
   )
 }
 
-/* ── 新建机器人：模板选择 ── */
+/* ── 新建机器人：模板选择（与右上角「新建机器人」一致） ── */
 const TEMPLATES: {
-  key: 'grid' | 'martin' | 'wallstreet' | 'add' | 'ai'
+  key: 'spot' | 'contract' | 'ai' | 'custom'
   title: string
   desc: string
   icon: React.ReactNode
 }[] = [
-  { key: 'grid', title: '网格交易', desc: '价格区间内自动低买高卖，适合震荡行情', icon: <Grid3x3 className="w-5 h-5" /> },
-  { key: 'martin', title: '马丁格尔', desc: '倍投补仓摊薄成本，循环止盈', icon: <TrendingUp className="w-5 h-5" /> },
-  { key: 'wallstreet', title: '华尔街', desc: '等比数量补仓 + 趋势指标过滤', icon: <BarChart3 className="w-5 h-5" /> },
-  { key: 'add', title: '智能补仓', desc: '补仓 ladder + 移动止盈的自定义机器人向导', icon: <Layers className="w-5 h-5" /> },
-  { key: 'ai', title: 'AI 自定义机器人', desc: '用自然语言描述策略，AI 生成参数', icon: <BrainCircuit className="w-5 h-5" /> },
+  { key: 'spot', title: '现货策略机器人', desc: '现货网格/补仓策略，开仓指标可选（MACD/顺势多等）', icon: <TrendingUp className="w-5 h-5" /> },
+  { key: 'contract', title: '合约策略机器人', desc: '支持杠杆/逐全仓、开仓指标选择器与补仓壳', icon: <BarChart3 className="w-5 h-5" /> },
+  { key: 'ai', title: 'AI 机器人', desc: 'AI 生成的策略机器人实例库', icon: <BrainCircuit className="w-5 h-5" /> },
+  { key: 'custom', title: 'AI 自定义机器人', desc: '用自然语言描述策略，AI 生成参数', icon: <Bot className="w-5 h-5" /> },
 ]
 
-/* ── 统一卡片 ── */
+/* ── 统一卡片（紧凑四行小卡，对齐效果图屏幕1） ── */
 function UnifiedBotCard({
   bot,
   actionLoadingId,
@@ -237,6 +243,7 @@ function UnifiedBotCard({
   onStop,
   onDelete,
   onEdit,
+  onDetail,
 }: {
   bot: UnifiedBot
   actionLoadingId: string | null
@@ -244,91 +251,106 @@ function UnifiedBotCard({
   onStop: (bot: UnifiedBot) => void
   onDelete: (bot: UnifiedBot) => void
   onEdit?: (bot: UnifiedBot) => void
+  /** 策略实例「详情」：RuntimePanel 弹层。 */
+  onDetail?: (bot: UnifiedBot) => void
 }) {
   const meta = KIND_META[bot.kind]
   const isLoading = actionLoadingId === bot.id
+  const isLive = bot.strategy?.execution_mode === 'live' || bot.strategy?.mode === 'live'
+  // 策略实例：详情（RuntimePanel）始终可用；马丁/华尔街详情=编辑（既有行为）。
+  const showDetail = bot.source === 'strategy' || canDetailKind(bot.kind)
+  // 行2：类型 pill + 标的 · 周期 · 杠杆（网格显示格数）。
+  const timeframe = bot.strategy?.timeframe
+  const leverage = bot.strategy?.leverage
+  const metaLine = [
+    bot.symbol || '-',
+    bot.kind === 'grid' && bot.grid ? `${bot.grid.grid_count}格` : (timeframe || null),
+    leverage && leverage > 1 ? `${leverage}x` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+  const canDetail = !!onEdit && canDetailKind(bot.kind)
+
+  const btnCls =
+    'flex-1 py-1 rounded bg-quant-bg border border-quant-border text-[11px] text-muted-foreground hover:text-foreground hover:border-quant-gold/30 transition-colors disabled:opacity-50'
+
   return (
-    <div className="rounded-xl border border-[#1c1c1c] bg-[#111] transition-all hover:border-[#333]">
-      <div className="p-4">
-        <div className="flex items-start justify-between mb-3">
-          <div className="flex items-center gap-2 min-w-0">
-            <span
-              className={cn(
-                'w-2 h-2 rounded-full flex-shrink-0',
-                bot.running ? 'bg-[#52c41a] animate-pulse' : 'bg-[#555]'
-              )}
-            />
-            <span className="text-sm font-medium text-[#e0e0e0] truncate">{bot.name || '未命名'}</span>
-          </div>
-          <div className="flex items-center gap-1.5 flex-shrink-0">
-            <Badge variant={meta.variant} className="text-[10px]">
-              {meta.label}
-            </Badge>
-            <Badge variant={bot.running ? 'success' : 'neutral'} dot>
-              {bot.running ? '运行中' : '已停止'}
-            </Badge>
-          </div>
-        </div>
-
-        <div className="flex items-center justify-between mb-3">
-          <Badge variant="info" className="text-[10px]">
-            {bot.symbol || '-'}
-          </Badge>
-          {bot.pnl != null && (
-            <span className={cn('text-sm font-semibold', bot.pnl >= 0 ? 'text-[#52c41a]' : 'text-[#f5222d]')}>
-              {bot.pnl >= 0 ? '+' : ''}
-              {formatCurrency(bot.pnl)}
-            </span>
-          )}
-        </div>
-
-        {bot.equity != null && (
-          <div className="rounded-lg bg-[#0a0a0a] border border-[#1c1c1c] p-2.5 mb-3">
-            <div className="text-[10px] text-[#888]">
-              权益: <span className="text-[#ccc]">${formatCurrency(bot.equity)}</span>
-            </div>
-          </div>
+    <div
+      className={cn(
+        'bg-quant-card border border-quant-border rounded-xl p-3 transition-all hover:border-quant-gold/20',
+        !bot.running && 'opacity-80'
+      )}
+    >
+      {/* 行1：名称 + 实盘/模拟盘徽标 */}
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-bold text-xs text-foreground truncate">{bot.name || '未命名'}</span>
+        {isLive ? (
+          <span className="px-1.5 py-0.5 rounded bg-quant-red/15 text-quant-red border border-quant-red/40 text-[10px] font-semibold shrink-0">
+            实盘
+          </span>
+        ) : (
+          <span className="px-1.5 py-0.5 rounded bg-quant-gold/15 text-quant-gold border border-quant-gold/40 text-[10px] shrink-0">
+            模拟盘
+          </span>
         )}
+      </div>
 
-        <div className="flex items-center gap-1.5">
-          {bot.running ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              isLoading={isLoading}
-              onClick={() => onStop(bot)}
-              leftIcon={<Square className="w-3 h-3 text-[#f5222d]" />}
-              className="text-[#f5222d] hover:bg-[#f5222d]/10"
-            >
+      {/* 行2：类型 pill + 标的 · 周期 · 杠杆 */}
+      <div className="text-muted-foreground mt-1 flex items-center gap-1.5 text-[10px] min-w-0">
+        <span className={cn('px-1 py-0.5 rounded shrink-0', meta.pill)}>{meta.label}</span>
+        <span className="truncate">{metaLine}</span>
+      </div>
+
+      {/* 行3：盈亏大字 + 状态 */}
+      <div className="flex items-center justify-between mt-2">
+        <span className={cn('text-sm font-bold', bot.pnl == null ? 'text-muted-foreground' : bot.pnl >= 0 ? 'text-quant-green' : 'text-quant-red')}>
+          {bot.pnl == null ? '--' : `${bot.pnl >= 0 ? '+' : ''}${formatCurrency(bot.pnl)}`}
+        </span>
+        <span className={cn('text-[10px]', bot.running ? 'text-quant-green' : 'text-muted-foreground')}>
+          {bot.running ? '● 运行中' : '○ 已停止'}
+        </span>
+      </div>
+
+      {/* 行4：操作按钮组（运行中=停止/详情，已停止=启动/删除） */}
+      <div className="flex gap-1 mt-2">
+        {bot.running ? (
+          <>
+            <button className={btnCls} disabled={isLoading} onClick={() => onStop(bot)}>
               停止
-            </Button>
-          ) : (
-            <Button
-              variant="ghost"
-              size="sm"
-              isLoading={isLoading}
-              onClick={() => onStart(bot)}
-              leftIcon={<Play className="w-3 h-3 text-[#52c41a]" />}
-              className="text-[#52c41a] hover:bg-[#52c41a]/10"
-            >
+            </button>
+            {showDetail ? (
+              <button
+                className={btnCls}
+                onClick={() => (bot.source === 'strategy' ? onDetail?.(bot) : onEdit?.(bot))}
+              >
+                详情
+              </button>
+            ) : (
+              <button className={btnCls} onClick={() => onDelete(bot)}>
+                删除
+              </button>
+            )}
+            {bot.source === 'strategy' && (
+              <button className={btnCls} onClick={() => onDelete(bot)}>
+                删除
+              </button>
+            )}
+          </>
+        ) : (
+          <>
+            <button className={btnCls} disabled={isLoading} onClick={() => onStart(bot)}>
               启动
-            </Button>
-          )}
-          {onEdit && (bot.kind === 'martin' || bot.kind === 'wallstreet') && (
-            <Button variant="ghost" size="sm" onClick={() => onEdit(bot)} leftIcon={<Pencil className="w-3 h-3" />}>
-              编辑
-            </Button>
-          )}
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => onDelete(bot)}
-            leftIcon={<Trash2 className="w-3 h-3 text-[#f5222d]" />}
-            className="text-[#f5222d] hover:bg-[#f5222d]/10"
-          >
-            删除
-          </Button>
-        </div>
+            </button>
+            {bot.source === 'strategy' && (
+              <button className={btnCls} onClick={() => onDetail?.(bot)}>
+                详情
+              </button>
+            )}
+            <button className={btnCls} onClick={() => onDelete(bot)}>
+              删除
+            </button>
+          </>
+        )}
       </div>
     </div>
   )
@@ -384,12 +406,20 @@ export function BotsCenter() {
   const [typeFilter, setTypeFilter] = useState<TypeFilter>(
     (location.state as { type?: TypeFilter } | null)?.type ?? 'all'
   )
+  // 内联统计 pill 筛选/排序（可点击）。机器人中心 = 唯一管理页：网格/马丁/华尔街/AI/现货/合约策略统一卡片。
+  const [botStatusFilter, setBotStatusFilter] = useState<'all' | 'running' | 'stopped'>('all')
+  const [botSort, setBotSort] = useState<{ key: 'equity' | 'pnl'; dir: 'desc' | 'asc' } | null>(null)
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null)
-  // 新建向导：'menu'=模板选择，其余为对应模板表单
-  const [wizard, setWizard] = useState<'menu' | 'grid' | 'martin' | 'wallstreet' | 'add' | 'ai' | null>(null)
+  // 工具条搜索（名称/标的）。
+  const [search, setSearch] = useState('')
+  // [+ 新建] 三卡选择层：现货/合约策略 → /create；机器人 → 模板向导。
+  // 新建向导：'menu'=模板选择，其余为对应模板表单（智能补仓 CRA 归策略侧，不在此）
+  const [wizard, setWizard] = useState<'menu' | 'spot' | 'contract' | 'ai' | 'custom' | null>(null)
   const [editingBot, setEditingBot] = useState<UnifiedBot | null>(null)
+  // 策略实例「详情」：RuntimePanel 弹层（5s 轮询，复用策略管理页运行面板）。
+  const [detailBot, setDetailBot] = useState<UnifiedBot | null>(null)
 
-  /* 数据两路合并：网格 + kind=bot 策略机器人 */
+  /* 数据三源合并：网格 + kind=bot 机器人 + kind=strategy 策略实例 */
   const { data: gridBots = [], isLoading: gridLoading } = useQuery({
     queryKey: ['grid-bots'],
     queryFn: gridApi.list,
@@ -400,10 +430,17 @@ export function BotsCenter() {
     queryFn: () => strategyApi.list({ kind: 'bot' }),
     refetchInterval: 5000,
   })
+  // 策略实例（kind=strategy：现货/合约策略统一在此管理，创建出来即实例）。
+  const { data: strategyItems = [], isLoading: strategyItemsLoading } = useQuery({
+    queryKey: ['strategies', 'strategy'],
+    queryFn: () => strategyApi.list({ kind: 'strategy' }),
+    refetchInterval: 5000,
+  })
 
   const unified: UnifiedBot[] = useMemo(() => {
     const fromGrid: UnifiedBot[] = gridBots.map((g: GridBot) => ({
       id: String(g.id),
+      source: 'grid',
       kind: 'grid',
       name: g.name,
       symbol: g.symbol,
@@ -418,6 +455,7 @@ export function BotsCenter() {
       const tc = (s.trading_config || {}) as Record<string, unknown>
       return {
         id: String(s.id),
+        source: 'bot',
         kind: inferKind(s),
         name: s.strategy_name || s.name,
         symbol: s.symbol || (tc.symbol as string) || '',
@@ -429,13 +467,43 @@ export function BotsCenter() {
         botItem: bi,
       }
     })
-    return [...fromGrid, ...fromStrategy]
-  }, [gridBots, strategyBots])
+    const fromStrategyItems: UnifiedBot[] = strategyItems.map((s: StrategyItem) => {
+      const tc = (s.trading_config || {}) as Record<string, unknown>
+      return {
+        id: String(s.id),
+        source: 'strategy',
+        kind: inferStrategyKind(s),
+        name: s.name,
+        symbol: s.symbol || (tc.symbol as string) || '',
+        status: s.status,
+        running: isRunningStatus(s.status),
+        equity: (s.initial_capital as number) || (tc.initial_capital as number) || undefined,
+        pnl: (s.total_pnl as number) ?? undefined,
+        strategy: s,
+      }
+    })
+    return [...fromGrid, ...fromStrategy, ...fromStrategyItems]
+  }, [gridBots, strategyBots, strategyItems])
 
-  const filtered = useMemo(
-    () => (typeFilter === 'all' ? unified : unified.filter((b) => b.kind === typeFilter)),
-    [unified, typeFilter]
-  )
+  const filtered = useMemo(() => {
+    let list = typeFilter === 'all' ? unified : unified.filter((b) => b.kind === typeFilter)
+    const q = search.trim().toLowerCase()
+    if (q) {
+      list = list.filter((b) => b.name.toLowerCase().includes(q) || (b.symbol || '').toLowerCase().includes(q))
+    }
+    if (botStatusFilter !== 'all') {
+      list = list.filter((b) => (botStatusFilter === 'running' ? b.running : !b.running))
+    }
+    if (botSort) {
+      list = [...list].sort((a, b) => {
+        const av = botSort.key === 'equity' ? a.equity || 0 : a.pnl || 0
+        const bv = botSort.key === 'equity' ? b.equity || 0 : b.pnl || 0
+        const diff = av - bv
+        return botSort.dir === 'desc' ? -diff : diff
+      })
+    }
+    return list
+  }, [unified, typeFilter, botStatusFilter, botSort, search])
 
   const running = unified.filter((b) => b.running).length
   const totalEquity = unified.reduce((sum, b) => sum + (b.equity || 0), 0)
@@ -482,7 +550,7 @@ export function BotsCenter() {
     if (editingBot?.id === bot.id) setEditingBot(null)
   }
 
-  const isLoading = gridLoading || strategyLoading
+  const isLoading = gridLoading || strategyLoading || strategyItemsLoading
 
   const FILTER_OPTIONS: { key: TypeFilter; label: string }[] = [
     { key: 'all', label: '全部' },
@@ -491,37 +559,98 @@ export function BotsCenter() {
     { key: 'wallstreet', label: '华尔街' },
     { key: 'add', label: '补仓' },
     { key: 'ai', label: 'AI' },
+    { key: 'spot-strategy', label: '现货策略' },
+    { key: 'contract-strategy', label: '合约策略' },
   ]
 
   return (
     <div className="h-full overflow-y-auto p-5">
       <div className="mx-auto max-w-[1600px] space-y-5">
-        <PageHeader
-          title="机器人中心"
-          subtitle="网格、马丁、华尔街、智能补仓与 AI 机器人统一管理（模拟盘）"
-          icon={<LayoutGrid className="w-5 h-5" />}
-          actions={
-            <Button variant="primary" size="sm" leftIcon={<Plus className="w-3 h-3" />} onClick={() => setWizard('menu')}>
-              新建机器人
-            </Button>
-          }
-        />
-
-        {/* KPI 行 */}
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-          <KPICard icon={<Activity className="h-4 w-4 text-[#52c41a]" />} label="运行中" value={String(running)} subValue={`共 ${unified.length} 个`} />
-          <KPICard icon={<PauseCircle className="h-4 w-4 text-[#faad14]" />} label="已停止" value={String(unified.length - running)} />
-          <KPICard icon={<Wallet className="h-4 w-4 text-[#1890ff]" />} label="总权益" value={`$${formatCurrency(totalEquity)}`} />
-          <KPICard
-            icon={totalPnl >= 0 ? <TrendingUp className="h-4 w-4 text-[#52c41a]" /> : <TrendingDown className="h-4 w-4 text-[#f5222d]" />}
-            label="累计盈亏"
-            value={`${totalPnl >= 0 ? '+' : ''}${formatCurrency(totalPnl)}`}
-            trend={totalPnl >= 0 ? 'up' : 'down'}
-            variant={totalPnl >= 0 ? 'success' : 'error'}
-            primary
-          />
+        {/* 工具条：标题 + 搜索 + 内联统计 pill（可点筛选/排序）+ 新建 */}
+        <div className="flex items-center gap-3 bg-quant-card border border-quant-border rounded-xl px-4 py-2 flex-wrap">
+          <span className="font-bold text-sm flex items-center gap-1.5">
+            <LayoutGrid className="w-4 h-4 text-quant-gold" /> 机器人中心
+          </span>
+          <div className="relative flex-1 min-w-[140px] max-w-xs">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="搜索名称 / 标的"
+              className="w-full bg-quant-bg border border-quant-border rounded-lg pl-8 pr-3 py-1.5 text-xs focus:outline-none focus:border-quant-gold"
+            />
+          </div>
+          {/* 内联统计（可点，但不占整行） */}
+          <div className="flex items-center gap-1 text-[11px] flex-wrap">
+            <button
+              onClick={() => setBotStatusFilter((prev) => (prev === 'running' ? 'all' : 'running'))}
+              className={cn(
+                'px-2 py-1 rounded transition-colors',
+                botStatusFilter === 'running'
+                  ? 'bg-quant-green/10 text-quant-green border border-quant-green/30 font-semibold'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              运行 {running}
+            </button>
+            <button
+              onClick={() => setBotStatusFilter((prev) => (prev === 'stopped' ? 'all' : 'stopped'))}
+              className={cn(
+                'px-2 py-1 rounded transition-colors',
+                botStatusFilter === 'stopped'
+                  ? 'bg-quant-gold/10 text-quant-gold border border-quant-gold/30 font-semibold'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              停止 {unified.length - running}
+            </button>
+            <span className="text-muted-foreground">·</span>
+            <button
+              onClick={() =>
+                setBotSort((prev) =>
+                  prev == null || prev.key !== 'equity'
+                    ? { key: 'equity', dir: 'desc' }
+                    : prev.dir === 'desc'
+                      ? { key: 'equity', dir: 'asc' }
+                      : null
+                )
+              }
+              className={cn(
+                'px-2 py-1 rounded transition-colors',
+                botSort?.key === 'equity' ? 'text-quant-gold font-semibold underline underline-offset-4' : 'text-quant-gold hover:opacity-80'
+              )}
+            >
+              投入 ${formatCurrency(totalEquity)}
+              {botSort?.key === 'equity' ? (botSort.dir === 'desc' ? ' ▼' : ' ▲') : ''}
+            </button>
+            <button
+              onClick={() =>
+                setBotSort((prev) =>
+                  prev == null || prev.key !== 'pnl'
+                    ? { key: 'pnl', dir: 'desc' }
+                    : prev.dir === 'desc'
+                      ? { key: 'pnl', dir: 'asc' }
+                      : null
+                )
+              }
+              className={cn(
+                'px-2 py-1 rounded transition-colors',
+                botSort?.key === 'pnl' ? 'font-semibold underline underline-offset-4' : 'hover:opacity-80',
+                totalPnl >= 0 ? 'text-quant-green' : 'text-quant-red'
+              )}
+            >
+              盈亏 {totalPnl >= 0 ? '+' : ''}${formatCurrency(totalPnl)}
+              {botSort?.key === 'pnl' ? (botSort.dir === 'desc' ? ' ▼' : ' ▲') : ''}
+            </button>
+          </div>
+          <span className="flex-1" />
+          <Button variant="primary" size="sm" leftIcon={<Plus className="w-3 h-3" />} onClick={() => setWizard('menu')}>
+            新建机器人
+          </Button>
         </div>
 
+        {/* 统一管理中心：网格/马丁/华尔街/补仓/AI/现货策略/合约策略 */}
+        <>
         {/* 类型筛选 chips */}
         <div className="flex flex-wrap items-center gap-2">
           {FILTER_OPTIONS.map((f) => (
@@ -550,21 +679,21 @@ export function BotsCenter() {
         {/* 卡片网格 */}
         <SectionCard title="机器人列表" headerAction={<span className="text-xs text-[#8a8a8a]">{filtered.length} 个</span>}>
           {isLoading ? (
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
               {Array.from({ length: 4 }).map((_, i) => (
-                <Skeleton key={i} className="h-36 rounded-xl" />
+                <Skeleton key={i} className="h-32 rounded-xl" />
               ))}
             </div>
           ) : filtered.length === 0 ? (
             <EmptyState
               icon={<Bot className="w-8 h-8" />}
               title={typeFilter === 'all' ? '暂无机器人' : `暂无${FILTER_OPTIONS.find((f) => f.key === typeFilter)?.label}类机器人`}
-              description="点击右上角「新建机器人」选择模板创建"
+              description="点击右上角「新建机器人」选择类型创建"
               actionLabel="新建机器人"
               onAction={() => setWizard('menu')}
             />
           ) : (
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
               {filtered.map((bot) => (
                 <UnifiedBotCard
                   key={`${bot.kind}-${bot.id}`}
@@ -580,21 +709,29 @@ export function BotsCenter() {
                     }
                     setEditingBot(b)
                   }}
+                  onDetail={(b) => setDetailBot(b)}
                 />
               ))}
             </div>
           )}
         </SectionCard>
+        </>
       </div>
 
-      {/* 新建向导：第一步模板选择 */}
+      {/* 新建入口：现货/合约策略 → /create；AI → 机器人页/参数向导 */}
       {wizard === 'menu' && (
         <ModalShell title="新建机器人" subtitle="选择机器人类型模板" onClose={() => setWizard(null)}>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {TEMPLATES.map((t) => (
               <button
                 key={t.key}
-                onClick={() => setWizard(t.key)}
+                onClick={() => {
+                  setWizard(null)
+                  if (t.key === 'spot') navigate('/create?market=spot')
+                  else if (t.key === 'contract') navigate('/create?market=contract')
+                  else if (t.key === 'ai') navigate('/bots/ai')
+                  else setWizard('custom')
+                }}
                 className="flex items-start gap-3 p-4 rounded-xl border border-quant-border text-left transition-all hover:border-quant-gold/30 hover:bg-quant-gold/5"
               >
                 <div className="w-10 h-10 rounded-lg bg-quant-gold/10 text-quant-gold flex items-center justify-center shrink-0">
@@ -609,37 +746,8 @@ export function BotsCenter() {
           </div>
         </ModalShell>
       )}
-      {/* 第二步：对应表单 */}
-      {wizard === 'grid' && (
-        <ModalShell title="新建网格机器人" subtitle="在价格区间内自动低买高卖" onClose={() => setWizard(null)}>
-          <GridCreateForm onDone={() => setWizard(null)} />
-        </ModalShell>
-      )}
-      {wizard === 'martin' && (
-        <ModalShell title="新建马丁机器人" subtitle="倍投补仓类策略（模拟盘）" wide onClose={() => setWizard(null)}>
-          <MartinWallstreetForm strategyType="martin" onDone={() => setWizard(null)} />
-        </ModalShell>
-      )}
-      {wizard === 'wallstreet' && (
-        <ModalShell title="新建华尔街机器人" subtitle="等比补仓类策略（模拟盘）" wide onClose={() => setWizard(null)}>
-          <MartinWallstreetForm strategyType="wallstreet" onDone={() => setWizard(null)} />
-        </ModalShell>
-      )}
-      {wizard === 'add' && (
-        <BotCreateModal
-          open
-          botType="dca"
-          aiPreset={null}
-          editBot={null}
-          onCancel={() => setWizard(null)}
-          onCreated={() => {
-            setWizard(null)
-            void queryClient.invalidateQueries({ queryKey: ['strategies'] })
-          }}
-          onUpdated={() => setWizard(null)}
-        />
-      )}
-      {wizard === 'ai' && (
+      {/* AI 自定义机器人参数向导 */}
+      {wizard === 'custom' && (
         <BotCreateModal
           open
           botType="custom"
@@ -654,6 +762,33 @@ export function BotsCenter() {
         />
       )}
 
+      {/* 策略实例详情：RuntimePanel + 资金三件套（策略管理页价值保留） */}
+      {detailBot?.strategy && (
+        <ModalShell title={detailBot.name} subtitle="实时运行状态" onClose={() => setDetailBot(null)}>
+          <div className="space-y-4">
+            <StrategyRuntimeSummary strategy={detailBot.strategy} />
+            <RuntimePanel strategy={detailBot.strategy} />
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-quant-border">
+              <button
+                className="px-4 py-2 rounded-lg border border-quant-border text-xs text-muted-foreground hover:text-foreground transition-colors"
+                onClick={() => setDetailBot(null)}
+              >
+                关闭
+              </button>
+              <button
+                className="px-4 py-2 rounded-lg bg-quant-gold text-white text-xs font-medium hover:opacity-90 transition-opacity"
+                onClick={() => {
+                  const m = detailBot.strategy?.market_type === 'spot' ? 'spot' : 'contract'
+                  navigate(`/create?market=${m}&id=${detailBot.id}`)
+                }}
+              >
+                编辑
+              </button>
+            </div>
+          </div>
+        </ModalShell>
+      )}
+
       {/* 编辑马丁/华尔街 */}
       {editingBot && (
         <ModalShell
@@ -665,6 +800,37 @@ export function BotsCenter() {
           <EditStrategyBotModal bot={editingBot} onDone={() => setEditingBot(null)} />
         </ModalShell>
       )}
+    </div>
+  )
+}
+
+/* ── 策略实例详情头部：资金三件套（初始资金/当前权益/收益率）+ 累计盈亏 ── */
+function StrategyRuntimeSummary({ strategy }: { strategy: StrategyItem }) {
+  const initial = strategy.initial_capital ?? 0
+  const equity = strategy.current_equity
+  const returnPct = initial > 0 && equity != null ? ((equity - initial) / initial) * 100 : null
+  const pnl = strategy.total_pnl ?? 0
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+      {[
+        { label: '初始资金', value: strategy.initial_capital != null ? `$${formatCurrency(strategy.initial_capital)}` : '-' },
+        { label: '当前权益', value: equity != null ? `$${formatCurrency(equity)}` : '-' },
+        {
+          label: '收益率',
+          value: returnPct != null ? `${returnPct >= 0 ? '+' : ''}${returnPct.toFixed(2)}%` : '—',
+          color: returnPct == null ? undefined : returnPct >= 0 ? 'text-quant-green' : 'text-quant-red',
+        },
+        {
+          label: '累计盈亏',
+          value: pnl !== 0 ? `${pnl >= 0 ? '+' : ''}$${formatCurrency(pnl)}` : '-',
+          color: pnl >= 0 ? 'text-quant-green' : 'text-quant-red',
+        },
+      ].map((k) => (
+        <div key={k.label} className="p-3 rounded-lg bg-quant-bg border border-quant-border">
+          <div className="text-[10px] text-muted-foreground">{k.label}</div>
+          <div className={cn('text-sm font-bold font-mono', k.color || 'text-foreground')}>{k.value}</div>
+        </div>
+      ))}
     </div>
   )
 }
