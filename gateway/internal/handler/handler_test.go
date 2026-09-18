@@ -26,6 +26,9 @@ func TestMain(m *testing.M) {
 	_ = os.Setenv("DB_PATH", filepath.Join(dir, "gateway.db"))
 	_ = os.Setenv("CONFIG_PATH", filepath.Join(dir, "test_handler_config.yaml"))
 	_ = os.Setenv("SECRET_KEY", "test-secret-key-not-for-production-use-only")
+	// 保险库隔离到临时目录：默认相对路径会在包目录下生成 runtime/credentials_vault.json
+	store.VaultFilePath = filepath.Join(dir, "credentials_vault.json")
+	store.VaultKeyPath = filepath.Join(dir, ".vault_key")
 	if err := store.InitDB(); err != nil {
 		panic(err)
 	}

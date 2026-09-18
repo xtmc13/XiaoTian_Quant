@@ -34,6 +34,8 @@ config/config.yaml
 # Data & logs
 /data/
 /runtime/
+# 各 Go 包目录下测试运行也可能生成 runtime/（vault/db 相对路径），一律忽略
+**/runtime/
 *.log
 logs/
 gateway/internal/data/data_export/

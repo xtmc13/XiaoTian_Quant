@@ -8,6 +8,20 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
+// TestMain 把凭证保险库隔离到系统临时目录：默认相对路径会在包目录下
+// 生成 runtime/credentials_vault.json 与 .vault_key，污染仓库工作区。
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "adapter_test")
+	if err != nil {
+		panic(err)
+	}
+	store.VaultFilePath = filepath.Join(dir, "credentials_vault.json")
+	store.VaultKeyPath = filepath.Join(dir, ".vault_key")
+	code := m.Run()
+	_ = os.RemoveAll(dir)
+	os.Exit(code)
+}
+
 func TestGetCredentialReadsFromConfigFallback(t *testing.T) {
 	// Ensure no env vars interfere.
 	for _, key := range []string{"GATE_API_KEY", "GATE_API_SECRET", "GATE_PASSPHRASE"} {
