@@ -180,6 +180,7 @@ func registerConfigRoutes(api *gin.RouterGroup) {
 	private.GET("/strategies/defaults", handler.GetStrategyDefaults)
 	private.GET("/strategies/contract-defaults", handler.GetContractDefaults)
 	private.POST("/exchange/save", handler.ExchangeSave)
+	private.PUT("/config/exchanges/credentials", handler.SaveExchangeCredentials)
 	private.POST("/exchange/test", handler.ExchangeTest)
 	private.POST("/exchange/default", handler.ExchangeDefault)
 	private.GET("/exchange/status", handler.ExchangeStatus)

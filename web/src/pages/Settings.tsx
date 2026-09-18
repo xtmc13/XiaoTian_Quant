@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { configApi, notifyRouteApi } from '@/lib/api'
+import { configApi, notifyRouteApi, riskApi } from '@/lib/api'
 import { useAppStore } from '@/stores/appStore'
 import { cn } from '@/lib/utils'
 import type { ExchangeTestResult } from '@/types'
@@ -327,6 +327,13 @@ export function Settings() {
     queryFn: () => configApi.get(),
   })
 
+  // 交易所"已配置"状态（保险库为准；密钥本身永不下发）。
+  const { data: exchangesConfigured } = useQuery({
+    queryKey: ['configured-exchanges'],
+    queryFn: () => configApi.exchangesConfigured(),
+    staleTime: 30000,
+  })
+
   /* ── Backend-backed form state ── */
   const [defaultExchange, setDefaultExchange] = useState('binance')
   const [exchanges, setExchanges] = useState<Record<string, ExchangeConfig>>({})
@@ -336,6 +343,8 @@ export function Settings() {
   const [profitProtection, setProfitProtection] = useState(false)
   const [maxOrders, setMaxOrders] = useState(5)
   const [dirty, setDirty] = useState(false)
+  // P0-1：密钥草稿——输入框只进草稿，留空保存=保持现有保险库凭证不变。
+  const [credDrafts, setCredDrafts] = useState<Record<string, { api_key?: string; secret?: string; passphrase?: string }>>({})
 
   /* ── Local settings (frontend-only) ── */
   const [notifyEmail, setNotifyEmail] = useState<NotifyConfig>(() =>
@@ -447,22 +456,49 @@ export function Settings() {
   /* ── Save mutation ── */
   const saveMut = useMutation({
     mutationFn: async () => {
+      // P0-1：有密钥草稿的交易所先写保险库（空字段=保留现有凭证）。
+      const credWrites: Promise<unknown>[] = []
+      for (const [name, draft] of Object.entries(credDrafts)) {
+        if (draft.api_key?.trim() || draft.secret?.trim() || draft.passphrase?.trim()) {
+          credWrites.push(
+            configApi.saveExchangeCredentials({
+              name,
+              api_key: draft.api_key?.trim() || '',
+              secret: draft.secret?.trim() || '',
+              passphrase: draft.passphrase?.trim() || '',
+            })
+          )
+        }
+      }
+      if (credWrites.length > 0) await Promise.all(credWrites)
+      // PUT /config：非敏感字段照常；密钥字段置空（后端也会剥离，双保险）。
+      const sanitizedExchanges: Record<string, Record<string, unknown>> = {}
+      for (const [name, cfg] of Object.entries(exchanges)) {
+        sanitizedExchanges[name] = { ...cfg, api_key: '', secret: '', passphrase: '' }
+      }
       const payload = {
         ...(backendConfig || {}),
         default_exchange: defaultExchange,
-        exchanges,
+        exchanges: sanitizedExchanges,
         default_ai_provider: defaultAIProvider,
         ai: aiProviders,
-        risk: {
-          ...(backendConfig?.risk || {}),
-          profit_protection_enabled: profitProtection,
-          max_concurrent_orders: maxOrders,
-        },
       }
-      return configApi.save(payload)
+      await configApi.save(payload)
+      // P0-2：风控三参数走 /api/risk/config，当前进程即时生效（与风险中心同源）。
+      const current = await riskApi.getConfig()
+      await riskApi.updateConfig({
+        max_concurrent_orders: maxOrders,
+        position_limit_pct: current?.position_limit_pct ?? 100,
+        profit_protection_enabled: profitProtection,
+        indicator_fail_open: current?.indicator_fail_open ?? true,
+      })
+      return { ok: true }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['config'] })
+      queryClient.invalidateQueries({ queryKey: ['configured-exchanges'] })
+      queryClient.invalidateQueries({ queryKey: ['risk-config'] })
+      setCredDrafts({})
       setDirty(false)
     },
   })
@@ -470,6 +506,7 @@ export function Settings() {
   /* ── Test mutations ── */
   const testExchangeMut = useMutation<ExchangeTestResult, Error, { name: string; cfg: ExchangeConfig }>({
     mutationFn: async ({ name, cfg }) => {
+      // P0-3：测试时优先用草稿里的新凭证；为空回退到保险库（服务端处理）。
       const result = await configApi.exchangeTest({
         id: name,
         name,
@@ -478,7 +515,8 @@ export function Settings() {
         passphrase: cfg.passphrase || '',
         enabled: true,
       })
-      if (result?.status === 'error') throw new Error(result?.detail || '连接失败')
+      // 后端失败分支统一为 success:false + HTTP 200，必须按 success 判定。
+      if (result?.success === false) throw new Error(result?.message || '连接失败')
       return result
     },
     onError: (err: Error, vars) => {
@@ -729,26 +767,47 @@ export function Settings() {
                       <div>
                         <label className="mb-1.5 block text-xs text-muted-foreground">API Key</label>
                         <PasswordInput
-                          value={cfg.api_key || ''}
-                          onChange={(v) => setExchangeField(ex.key, 'api_key', v)}
-                          placeholder="输入 API Key"
+                          value={credDrafts[ex.key]?.api_key || ''}
+                          onChange={(v) => {
+                            setCredDrafts((prev) => ({ ...prev, [ex.key]: { ...prev[ex.key], api_key: v } }))
+                            setDirty(true)
+                          }}
+                          placeholder={
+                            exchangesConfigured?.[ex.key]?.has_credentials
+                              ? '已配置（加密存储），留空保持不变'
+                              : '输入 API Key（首次配置）'
+                          }
                         />
                       </div>
                       <div>
                         <label className="mb-1.5 block text-xs text-muted-foreground">API Secret</label>
                         <PasswordInput
-                          value={cfg.secret || ''}
-                          onChange={(v) => setExchangeField(ex.key, 'secret', v)}
-                          placeholder="输入 API Secret"
+                          value={credDrafts[ex.key]?.secret || ''}
+                          onChange={(v) => {
+                            setCredDrafts((prev) => ({ ...prev, [ex.key]: { ...prev[ex.key], secret: v } }))
+                            setDirty(true)
+                          }}
+                          placeholder={
+                            exchangesConfigured?.[ex.key]?.has_credentials
+                              ? '已配置（加密存储），留空保持不变'
+                              : '输入 API Secret（首次配置）'
+                          }
                         />
                       </div>
                       {ex.needsPassphrase && (
                         <div>
                           <label className="mb-1.5 block text-xs text-muted-foreground">Passphrase</label>
                           <PasswordInput
-                            value={cfg.passphrase || ''}
-                            onChange={(v) => setExchangeField(ex.key, 'passphrase', v)}
-                            placeholder="输入 Passphrase"
+                            value={credDrafts[ex.key]?.passphrase || ''}
+                            onChange={(v) => {
+                              setCredDrafts((prev) => ({ ...prev, [ex.key]: { ...prev[ex.key], passphrase: v } }))
+                              setDirty(true)
+                            }}
+                            placeholder={
+                              exchangesConfigured?.[ex.key]?.has_credentials
+                                ? '已配置（加密存储），留空保持不变'
+                                : '输入 Passphrase（首次配置）'
+                            }
                           />
                         </div>
                       )}
@@ -769,7 +828,13 @@ export function Settings() {
                     </div>
                     <div className="flex items-center gap-2">
                       <button
-                        onClick={() => testExchangeMut.mutate({ name: ex.key, cfg })}
+                        onClick={() =>
+                          testExchangeMut.mutate({
+                            name: ex.key,
+                            // 草稿优先（用户刚输入的新凭证）；为空时后端回退保险库/提示缺凭证。
+                            cfg: { ...cfg, ...(credDrafts[ex.key] || {}) } as typeof cfg,
+                          })
+                        }
                         disabled={testExchangeMut.isPending && testExchangeMut.variables?.name === ex.key}
                         className="flex items-center gap-1.5 rounded-md border border-quant-border bg-quant-card px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-quant-gold/30 hover:text-foreground disabled:opacity-50"
                       >

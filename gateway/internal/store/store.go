@@ -123,6 +123,7 @@ func InitDB() error {
 	if err := db.QueryRow("SELECT COUNT(*) FROM xt_users WHERE username='admin'").Scan(&count); err != nil {
 		return fmt.Errorf("failed to check admin user: %w", err)
 	}
+	adminCreated := false
 	if count == 0 {
 		adminPass := randomHex(8)
 		hash := HashPassword(adminPass)
@@ -130,6 +131,7 @@ func InitDB() error {
 			"admin", hash, "Admin", "admin"); err != nil {
 			return fmt.Errorf("failed to create admin user: %w", err)
 		}
+		adminCreated = true
 		fmt.Fprintf(os.Stderr, "\n╔══════════════════════════════════════════════════════════╗\n")
 		fmt.Fprintf(os.Stderr, "║  Default admin created:  username=admin                  ║\n")
 		fmt.Fprintf(os.Stderr, "║  Temporary password:     %s               ║\n", adminPass)
@@ -167,6 +169,14 @@ func InitDB() error {
 	// Run schema migrations
 	if err := RunMigrations(); err != nil {
 		return fmt.Errorf("migration: %w", err)
+	}
+
+	// A3.4: 初始管理员首次登录强制改密（must_change_password 列由上面的
+	// SQL 迁移补齐，故只能在 RunMigrations 之后写入）。
+	if adminCreated {
+		if _, err := db.Exec("UPDATE xt_users SET must_change_password=1 WHERE username='admin'"); err != nil {
+			return fmt.Errorf("failed to flag default admin for password change: %w", err)
+		}
 	}
 
 	// Load in-memory stores from disk
@@ -585,6 +595,11 @@ func GetConfigPath() string {
 	return configPath
 }
 
+// ConfigFilePath 返回当前生效的 config.yaml 路径（测试/诊断用）。
+func ConfigFilePath() string {
+	return configPath
+}
+
 // SetConfigPath sets the config file path. Used by tests.
 func SetConfigPath(path string) {
 	configMu.Lock()
@@ -606,12 +621,54 @@ func SaveConfig(cfg map[string]any) error {
 	configMu.Lock()
 	defer configMu.Unlock()
 	configCache = deepCopyMap(cfg)
-	encrypted := encryptConfigSecrets(configCache)
+	// P0-1：落盘前把 exchanges 明文密钥收进保险库并抹空——config.yaml 永不
+	// 落明文密钥（enc: 前缀的既有加密值保持原样，兼容 XIAOTIAN_CONFIG_KEY 场景）。
+	persist := deepCopyMap(cfg)
+	vaultChanged := absorbExchangeSecretsIntoVault(persist)
+	encrypted := encryptConfigSecrets(persist)
 	data, err := yaml.Marshal(encrypted)
 	if err != nil {
 		return err
 	}
-	return writeConfigFile(data)
+	if err := writeConfigFile(data); err != nil {
+		return err
+	}
+	if vaultChanged {
+		return GetVault().SaveToFile(VaultFilePath)
+	}
+	return nil
+}
+
+// absorbExchangeSecretsIntoVault 把 persist.exchanges.* 中的明文密钥（非空且
+// 非 enc: 密文）存入保险库并把对应字段置空；返回是否有 vault 变更。
+func absorbExchangeSecretsIntoVault(persist map[string]any) bool {
+	exchanges, ok := persist["exchanges"].(map[string]any)
+	if !ok {
+		return false
+	}
+	changed := false
+	for name, val := range exchanges {
+		m, ok := val.(map[string]any)
+		if !ok {
+			continue
+		}
+		key := getString(m, "api_key", "")
+		secret := getString(m, "secret", "")
+		pass := getString(m, "passphrase", "")
+		if key == "" && secret == "" && pass == "" {
+			continue
+		}
+		// enc: 密文保持原样（不落明文、不动 vault）。
+		if (key != "" && isEncrypted(key)) || (secret != "" && isEncrypted(secret)) {
+			continue
+		}
+		_ = GetVault().Store(name, name, key, secret, pass)
+		m["api_key"] = ""
+		m["secret"] = ""
+		m["passphrase"] = ""
+		changed = true
+	}
+	return changed
 }
 
 // ── Strategy Configs ──
@@ -876,16 +933,18 @@ func VerifyJWT(tokenStr string) (jwt.MapClaims, error) {
 }
 
 func FindUserByUsername(username string) map[string]any {
-	row := db.QueryRow("SELECT id, username, password_hash, nickname, email, role, token_version, email_verified, is_active, created_at FROM xt_users WHERE username=? AND is_active=1", username)
-	var id, tokenVer, emailVerified, isActive int
-	var uname, pwHash, nickname, email, role, createdAt string
-	if err := row.Scan(&id, &uname, &pwHash, &nickname, &email, &role, &tokenVer, &emailVerified, &isActive, &createdAt); err != nil {
+	row := db.QueryRow("SELECT id, username, password_hash, nickname, email, role, token_version, email_verified, is_active, totp_enabled, must_change_password, last_login_ip, created_at FROM xt_users WHERE username=? AND is_active=1", username)
+	var id, tokenVer, emailVerified, isActive, totpEnabled, mustChange int
+	var uname, pwHash, nickname, email, role, lastLoginIP, createdAt string
+	if err := row.Scan(&id, &uname, &pwHash, &nickname, &email, &role, &tokenVer, &emailVerified, &isActive, &totpEnabled, &mustChange, &lastLoginIP, &createdAt); err != nil {
 		return nil
 	}
 	return map[string]any{
 		"id": id, "username": uname, "password_hash": pwHash,
 		"nickname": nickname, "email": email, "role": role, "token_version": tokenVer,
-		"email_verified": emailVerified, "is_active": isActive, "created_at": createdAt,
+		"email_verified": emailVerified, "is_active": isActive,
+		"totp_enabled": totpEnabled == 1, "must_change_password": mustChange == 1,
+		"last_login_ip": lastLoginIP, "created_at": createdAt,
 	}
 }
 

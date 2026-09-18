@@ -168,6 +168,11 @@ func GetExchanges(c *gin.Context) {
 				apiKey, _ := m["api_key"].(string)
 				secret, _ := m["secret"].(string)
 				item["has_credentials"] = apiKey != "" && secret != ""
+				// P0-1：明文已迁移进保险库——以 vault 为准回显"已配置"。
+				if !item["has_credentials"].(bool) {
+					_, _, _, verr := store.GetVault().GetOrReload(key)
+					item["has_credentials"] = verr == nil
+				}
 			}
 		}
 		result[key] = item

@@ -618,6 +618,8 @@ export const configApi = {
   get: () => api.get<RawConfig>('/config'),
   save: (data: RawConfig) => api.put<RawConfig>('/config', data),
   exchangeTest: (data: ExchangeSettings) => api.post<ExchangeTestResult>('/exchange/test', data),
+  saveExchangeCredentials: (data: { name: string; api_key?: string; secret?: string; passphrase?: string }) =>
+    api.put<{ success: boolean; name: string; has_credentials: boolean }>('/config/exchanges/credentials', data),
   exchangeSave: (data: ExchangeSettings) => api.post<ExchangeSaveResult>('/exchange/save', data),
   currencyGet: () => api.get<{ currency: string }>('/settings/currency'),
   currencySet: (currency: string) => api.put<{ currency: string }>('/settings/currency', { currency }),

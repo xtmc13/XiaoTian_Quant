@@ -78,6 +78,51 @@ func SaveGlobalStrategy(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
+// SaveExchangeCredentials 把交易所密钥写入加密保险库（P0-1 修复）：
+// 空字段=保留现有凭证（从 vault 读出合并），非空=更新；写后立即对运行进程生效
+// （GetCredential 优先读 vault）。config.yaml 永不落明文密钥。
+// PUT /api/config/exchanges/credentials {"name":"binance","api_key":"","secret":"","passphrase":""}
+func SaveExchangeCredentials(c *gin.Context) {
+	var data map[string]any
+	if err := c.ShouldBindJSON(&data); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid json"})
+		return
+	}
+	name := strings.ToLower(strings.TrimSpace(getString(data, "name", "")))
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "name required"})
+		return
+	}
+	newKey := strings.TrimSpace(getString(data, "api_key", ""))
+	newSecret := strings.TrimSpace(getString(data, "secret", ""))
+	newPass := strings.TrimSpace(getString(data, "passphrase", ""))
+
+	v := store.GetVault()
+	curKey, curSecret, curPass, _ := v.GetOrReload(name)
+	if newKey != "" {
+		curKey = newKey
+	}
+	if newSecret != "" {
+		curSecret = newSecret
+	}
+	if newPass != "" {
+		curPass = newPass
+	}
+	if curKey == "" || curSecret == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "api_key 与 secret 不能为空（留空表示保留现有凭证）"})
+		return
+	}
+	if err := v.Store(name, name, curKey, curSecret, curPass); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "保险库写入失败: " + err.Error()})
+		return
+	}
+	if err := v.SaveToFile(store.VaultFilePath); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "保险库持久化失败: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "name": name, "has_credentials": true})
+}
+
 func ExchangeSave(c *gin.Context) {
 	var data map[string]any
 	c.ShouldBindJSON(&data)
