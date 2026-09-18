@@ -227,11 +227,12 @@ export function CRAParamForm({ value, onChange, market, className }: CRAParamFor
 
   return (
     <div className={cn('space-y-4', className)}>
-      {/* ── 开仓设置 ── */}
+      {/* ── 开仓设置（盒式内联样式，与基础信息区块一致） ── */}
       <Section title="开仓设置">
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="text-[11px] text-muted-foreground mb-1.5 block">首单额度 (USDT)</label>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {/* 首单额度 */}
+          <div className="bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs flex items-center gap-2 min-w-0">
+            <span className="text-muted-foreground shrink-0">首单额度</span>
             <input
               type="number"
               min={1}
@@ -239,50 +240,30 @@ export function CRAParamForm({ value, onChange, market, className }: CRAParamFor
               step={10}
               value={value.firstOrderAmount}
               onChange={(e) => update('firstOrderAmount', Number(e.target.value))}
-              className={inputCls}
+              className="flex-1 min-w-0 bg-transparent focus:outline-none font-bold text-foreground placeholder:text-muted-foreground/60"
+              placeholder="100"
             />
+            <span className="text-muted-foreground shrink-0">USDT</span>
           </div>
+          {/* 杠杆倍数（合约） */}
           {isContract && (
-            <div>
-              <label className="text-[11px] text-muted-foreground mb-1.5 block">杠杆倍数</label>
+            <div className="bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs flex items-center gap-2 min-w-0">
+              <span className="text-muted-foreground shrink-0">杠杆倍数</span>
               <input
                 type="number"
                 min={1}
                 max={150}
                 value={value.leverage}
                 onChange={(e) => update('leverage', Number(e.target.value))}
-                className={inputCls}
+                className="flex-1 min-w-0 bg-transparent focus:outline-none font-bold text-foreground placeholder:text-muted-foreground/60"
+                placeholder="10"
               />
+              <span className="text-muted-foreground shrink-0">x</span>
             </div>
           )}
-        </div>
-
-        {isContract && (
-          <div>
-            <label className="text-[11px] text-muted-foreground mb-1.5 block">交易方向</label>
-            <div className="flex gap-1 rounded-lg border border-quant-border overflow-hidden">
-              {(['long', 'short', 'dual'] as const).map((d) => (
-                <button
-                  key={d}
-                  type="button"
-                  onClick={() => update('direction', d)}
-                  className={cn(
-                    'flex-1 py-2 text-xs font-medium transition-colors',
-                    value.direction === d
-                      ? 'bg-quant-gold/10 text-quant-gold'
-                      : 'text-muted-foreground hover:text-foreground'
-                  )}
-                >
-                  {d === 'long' ? '多' : d === 'short' ? '空' : '双向'}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="text-[11px] text-muted-foreground mb-1.5 block">首单加倍</label>
+          {/* 首单倍数 */}
+          <div className="bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs flex items-center gap-2 min-w-0">
+            <span className="text-muted-foreground shrink-0">首单倍数</span>
             <input
               type="number"
               min={1}
@@ -290,45 +271,94 @@ export function CRAParamForm({ value, onChange, market, className }: CRAParamFor
               step={0.1}
               value={value.firstOrderMultiplier}
               onChange={(e) => update('firstOrderMultiplier', Number(e.target.value))}
-              className={inputCls}
+              className="flex-1 min-w-0 bg-transparent focus:outline-none font-bold text-foreground placeholder:text-muted-foreground/60"
+              placeholder="1"
             />
+            <span className="text-muted-foreground shrink-0">x</span>
           </div>
-          <div>
-            <label className="text-[11px] text-muted-foreground mb-1.5 block">循环次数</label>
+          {/* 循环次数 */}
+          <div className="bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs flex items-center gap-2 min-w-0">
+            <span className="text-muted-foreground shrink-0">循环次数</span>
             <input
               type="number"
               min={1}
               value={value.loopCount}
               onChange={(e) => update('loopCount', Number(e.target.value))}
-              className={inputCls}
+              className="flex-1 min-w-0 bg-transparent focus:outline-none font-bold text-foreground placeholder:text-muted-foreground/60"
+              placeholder="100"
             />
           </div>
-        </div>
-
-        <div>
-          <label className="text-[11px] text-muted-foreground mb-1.5 block">循环类型</label>
-          <div className="flex gap-2">
-            {(
-              [
-                { key: 'single', label: '单次策略' },
-                { key: 'cycle', label: '循环策略' },
-              ] as const
-            ).map((m) => (
-              <button
-                key={m.key}
-                type="button"
-                onClick={() => update('tradeCountMode', m.key)}
-                className={cn(
-                  'flex-1 py-2 rounded-lg text-xs border transition-colors',
-                  value.tradeCountMode === m.key
-                    ? 'bg-quant-gold/10 border-quant-gold/20 text-quant-gold'
-                    : 'border-quant-border text-muted-foreground hover:text-foreground'
-                )}
-              >
-                {m.label}
-              </button>
-            ))}
+          {/* 循环类型（段选内嵌） */}
+          <div className="bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs flex items-center gap-2 min-w-0">
+            <span className="text-muted-foreground shrink-0">循环类型</span>
+            <div className="flex-1 flex gap-1">
+              {(
+                [
+                  { key: 'single', label: '单次' },
+                  { key: 'cycle', label: '循环' },
+                ] as const
+              ).map((m) => (
+                <button
+                  key={m.key}
+                  type="button"
+                  onClick={() => update('tradeCountMode', m.key)}
+                  className={cn(
+                    'flex-1 py-1 rounded text-[11px] border transition-colors',
+                    value.tradeCountMode === m.key
+                      ? 'bg-quant-gold/10 border-quant-gold/30 text-quant-gold font-semibold'
+                      : 'border-quant-border text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
           </div>
+          {/* 交易方向（合约，段选内嵌） */}
+          {isContract && (
+            <div className="bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs flex items-center gap-2 min-w-0">
+              <span className="text-muted-foreground shrink-0">交易方向</span>
+              <div className="flex-1 flex gap-1">
+                {(['long', 'short', 'dual'] as const).map((d) => (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => update('direction', d)}
+                    className={cn(
+                      'flex-1 py-1 rounded text-[11px] border transition-colors',
+                      value.direction === d
+                        ? 'bg-quant-gold/10 border-quant-gold/30 text-quant-gold font-semibold'
+                        : 'border-quant-border text-muted-foreground hover:text-foreground'
+                    )}
+                  >
+                    {d === 'long' ? '多' : d === 'short' ? '空' : '双向'}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {/* 开仓加倍（checkbox 保留，排进盒式单元） */}
+          <label className="bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs flex items-center gap-2 min-w-0 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={value.openDouble}
+              onChange={(e) => update('openDouble', e.target.checked)}
+              className="rounded"
+            />
+            <span className="text-muted-foreground">开仓加倍</span>
+          </label>
+          {/* 顺势而为（checkbox，合约） */}
+          {isContract && (
+            <label className="bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs flex items-center gap-2 min-w-0 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={value.followTrend}
+                onChange={(e) => update('followTrend', e.target.checked)}
+                className="rounded"
+              />
+              <span className="text-muted-foreground">顺势而为</span>
+            </label>
+          )}
         </div>
 
         {/* 开仓指标（现货/合约一致：策略=指标+方向，可弹窗调参） */}
@@ -365,29 +395,6 @@ export function CRAParamForm({ value, onChange, market, className }: CRAParamFor
               }}
             />
           </div>
-
-        <div className="flex flex-wrap gap-3">
-          <label className="flex items-center gap-2 text-xs text-muted-foreground">
-            <input
-              type="checkbox"
-              checked={value.openDouble}
-              onChange={(e) => update('openDouble', e.target.checked)}
-              className="rounded"
-            />
-            开仓加倍
-          </label>
-          {isContract && (
-            <label className="flex items-center gap-2 text-xs text-muted-foreground">
-              <input
-                type="checkbox"
-                checked={value.followTrend}
-                onChange={(e) => update('followTrend', e.target.checked)}
-                className="rounded"
-              />
-              顺势而为
-            </label>
-          )}
-        </div>
       </Section>
 
       {/* ── 补仓设置 ── */}
