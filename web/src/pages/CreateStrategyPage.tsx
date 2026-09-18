@@ -16,7 +16,7 @@ const STEPS = [
   { id: 'create-sec-presets', label: '快速预设' },
   { id: 'create-sec-basic', label: '基础信息' },
   { id: 'create-sec-params', label: '参数 · 指标与壳' },
-  { id: 'create-sec-exec', label: '执行设置' },
+  { id: 'create-sec-exec', label: '消息通知' },
 ] as const
 
 /**
@@ -75,9 +75,7 @@ export function CreateStrategyPage() {
     }
     form.setName(editingItem.name || '')
     if (editingItem.symbol) form.setSymbol(editingItem.symbol)
-    if (typeof editingItem.initial_capital === 'number') form.setInitialCapital(editingItem.initial_capital)
     if (Array.isArray(cfg.selected_exchanges)) form.setSelectedExchanges(cfg.selected_exchanges as string[])
-    form.setExecutionMode(editingItem.execution_mode === 'live' ? 'live' : 'paper')
     form.setCraParams(apiPayloadToCraParams(cfg))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editId, editingItem])

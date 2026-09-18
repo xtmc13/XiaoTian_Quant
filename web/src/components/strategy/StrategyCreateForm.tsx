@@ -11,12 +11,12 @@ import { DynamicParamField, STRAT_TYPES } from './StrategyFormFields'
 import { STRATEGY_PRESETS, type Preset } from './StrategyPresets'
 import { createDefaultCRAParams, isCRAStrategyType, CRA_FEATURE_KEYS } from '@/lib/strategyUtils'
 import type { StrategyParamDefs, ExchangeConfiguredStatus, AddPositionItem } from '@/types'
-import { CheckCircle2, Activity, AlertTriangle, Globe } from 'lucide-react'
+import { CheckCircle2, Globe } from 'lucide-react'
 
 /**
  * 策略创建表单复用层：hook 承载全部状态/校验/提交逻辑，
  * StrategyCreateFormSections 渲染四个锚点区块（快速预设/基础信息/参数·指标与壳/
- * 执行设置）。StrategyCreatePanel（弹窗壳）与 CreateStrategyPage（/create 独立页）
+ * 消息通知）。StrategyCreatePanel（弹窗壳）与 CreateStrategyPage（/create 独立页）
  * 共用同一份实现，避免逻辑双份漂移。
  *
  * 策略身份 = 市场（spot/contract）+ 指标选择 + 壳参数：strategyType 不再由用户
@@ -144,15 +144,11 @@ export interface StrategyCreateFormState {
   symbol: string
   setSymbol: Dispatch<SetStateAction<string>>
   timeframe: string
-  initialCapital: number
-  setInitialCapital: Dispatch<SetStateAction<number>>
   selectedExchanges: string[]
   setSelectedExchanges: Dispatch<SetStateAction<string[]>>
   showExchangeModal: boolean
   setShowExchangeModal: Dispatch<SetStateAction<boolean>>
   configuredExchanges: Record<string, ExchangeConfiguredStatus> | undefined
-  executionMode: 'paper' | 'live'
-  setExecutionMode: Dispatch<SetStateAction<'paper' | 'live'>>
   notifyChannels: string[]
   setNotifyChannels: Dispatch<SetStateAction<string[]>>
   saveAsDefault: boolean
@@ -236,10 +232,8 @@ export function useStrategyCreateForm(
   const [name, setName] = useState('')
   const [symbol, setSymbol] = useState('BTCUSDT')
   const [timeframe, setTimeframe] = useState('15m')
-  const [initialCapital, setInitialCapital] = useState(1000)
   const [selectedExchanges, setSelectedExchanges] = useState<string[]>([])
   const [showExchangeModal, setShowExchangeModal] = useState(false)
-  const [executionMode, setExecutionMode] = useState<'paper' | 'live'>('paper')
   const [notifyChannels, setNotifyChannels] = useState<string[]>(['browser'])
   const [saveAsDefault, setSaveAsDefault] = useState(false)
 
@@ -332,7 +326,6 @@ export function useStrategyCreateForm(
     setSymbol('BTCUSDT')
     setTimeframe(deriveTimeframeFromCRA(defaults))
     setSelectedExchanges([])
-    setExecutionMode('paper')
     setNotifyChannels(['browser'])
     if (isGridProfile(profile)) {
       const gridProfile = profile
@@ -470,7 +463,7 @@ export function useStrategyCreateForm(
         leverage: market === 'spot' ? 1 : craParams.leverage,
         trade_direction: market === 'spot' ? 'long' : craParams.direction,
         market_type: market === 'spot' ? 'spot' : 'swap',
-        execution_mode: executionMode, // paper 默认；live 需服务端 trading.live_enabled 开启
+        execution_mode: 'paper', // 表单已下线实盘入口，一律 paper（后端 live_enabled 总闸保留）
         notification_config: { channels: notifyChannels },
         strategy_type: strategyType,
         status: 'stopped',
@@ -479,7 +472,7 @@ export function useStrategyCreateForm(
         coin: symbol.trim().toUpperCase().replace('USDT', '').replace('USD', ''),
         direction: market === 'spot' ? 'long' : craParams.direction,
         mode: 'signal',
-        initial_capital: initialCapital,
+        initial_capital: 0, // 初始资金入口已下线，由运行期权益统计
       }
       // 编辑模式走 update，创建走 create。
       const res = editId
@@ -508,15 +501,11 @@ export function useStrategyCreateForm(
     symbol,
     setSymbol,
     timeframe,
-    initialCapital,
-    setInitialCapital,
     selectedExchanges,
     setSelectedExchanges,
     showExchangeModal,
     setShowExchangeModal,
     configuredExchanges,
-    executionMode,
-    setExecutionMode,
     notifyChannels,
     setNotifyChannels,
     saveAsDefault,
@@ -541,7 +530,7 @@ export function useStrategyCreateForm(
 const inputCls =
   'w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold'
 
-/** 四个锚点区块（快速预设/基础信息/参数·指标与壳/执行设置），弹窗与 /create 共用。 */
+/** 四个锚点区块（快速预设/基础信息/参数·指标与壳/消息通知），弹窗与 /create 共用。 */
 export function StrategyCreateFormSections({
   form,
   showPresets = true,
@@ -561,15 +550,11 @@ export function StrategyCreateFormSections({
     symbol,
     setSymbol,
     timeframe,
-    initialCapital,
-    setInitialCapital,
     selectedExchanges,
     setSelectedExchanges,
     showExchangeModal,
     setShowExchangeModal,
     configuredExchanges,
-    executionMode,
-    setExecutionMode,
     notifyChannels,
     setNotifyChannels,
     craParams,
@@ -674,42 +659,6 @@ export function StrategyCreateFormSections({
                 </span>
                 {selectedExchanges.length > 0 && <span className="text-quant-gold">✓</span>}
               </button>
-            </div>
-            {/* 初始资金 */}
-            <div>
-              <label className="text-[11px] text-muted-foreground mb-1.5 block">初始资金 (USDT)</label>
-              <input
-                type="number"
-                min={0}
-                value={initialCapital}
-                onChange={(e) => setInitialCapital(Number(e.target.value) || 0)}
-                className={inputCls}
-                placeholder="1000"
-              />
-            </div>
-            {/* 杠杆（仅合约；值与 CRAParamForm 同一状态） */}
-            {market === 'contract' && (
-              <div>
-                <label className="text-[11px] text-muted-foreground mb-1.5 block">杠杆（全仓）</label>
-                <input
-                  type="number"
-                  min={1}
-                  max={150}
-                  value={craParams.leverage}
-                  onChange={(e) =>
-                    setCraParams((prev) => ({ ...prev, leverage: Number(e.target.value) || 1 }))
-                  }
-                  className={inputCls}
-                  placeholder="10"
-                />
-              </div>
-            )}
-            {/* K线周期（由启用指标周期自动推导，只读） */}
-            <div>
-              <label className="text-[11px] text-muted-foreground mb-1.5 block">K线周期</label>
-              <div className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs text-foreground">
-                {timeframe}
-              </div>
             </div>
           </div>
         </div>
@@ -819,71 +768,9 @@ export function StrategyCreateFormSections({
         )}
       </div>
 
-      {/* 4 执行设置 */}
-      <SectionCard title="执行设置">
+      {/* 4 消息通知（实盘入口已下线：payload 恒 paper，后端 live_enabled 总闸保留） */}
+      <SectionCard title="消息通知">
         <div id="create-sec-exec" className="space-y-4 scroll-mt-20 -m-1 p-1">
-          {/* 模拟盘默认；实盘需服务端 trading.live_enabled 开启，否则后端 400。 */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <button
-              onClick={() => setExecutionMode('paper')}
-              className={cn(
-                'flex items-start gap-3 p-4 rounded-xl border transition-all text-left',
-                executionMode === 'paper'
-                  ? 'border-quant-gold bg-quant-gold/5'
-                  : 'border-quant-border hover:border-quant-gold/30'
-              )}
-            >
-              <div
-                className={cn(
-                  'w-10 h-10 rounded-lg flex items-center justify-center shrink-0',
-                  executionMode === 'paper' ? 'bg-quant-gold/10 text-quant-gold' : 'bg-quant-bg text-muted-foreground'
-                )}
-              >
-                <Activity className="w-5 h-5" />
-              </div>
-              <div>
-                <div className="text-xs font-semibold">模拟盘（默认）</div>
-                <div className="text-[10px] text-muted-foreground mt-1">
-                  撮合引擎模拟成交（paper），不产生真实交易所下单
-                </div>
-              </div>
-              {executionMode === 'paper' && <CheckCircle2 className="w-4 h-4 text-quant-gold ml-auto shrink-0" />}
-            </button>
-            <button
-              onClick={() => {
-                if (executionMode !== 'live' && !confirm('实盘将使用真实资金下单，确认开启？')) return
-                setExecutionMode('live')
-              }}
-              className={cn(
-                'flex items-start gap-3 p-4 rounded-xl border transition-all text-left',
-                executionMode === 'live'
-                  ? 'border-quant-red bg-quant-red/10'
-                  : 'border-quant-red/30 hover:border-quant-red/60 hover:bg-quant-red/5'
-              )}
-            >
-              <div
-                className={cn(
-                  'w-10 h-10 rounded-lg flex items-center justify-center shrink-0',
-                  executionMode === 'live' ? 'bg-quant-red/15 text-quant-red' : 'bg-quant-bg text-quant-red/70'
-                )}
-              >
-                <AlertTriangle className="w-5 h-5" />
-              </div>
-              <div>
-                <div className="text-xs font-semibold text-quant-red">实盘（真实资金）</div>
-                <div className="text-[10px] text-quant-red/80 mt-1">
-                  信号直连真实交易所下单；需服务端开启 trading.live_enabled，可能造成本金损失
-                </div>
-              </div>
-              {executionMode === 'live' && <CheckCircle2 className="w-4 h-4 text-quant-red ml-auto shrink-0" />}
-            </button>
-          </div>
-          {executionMode === 'live' && (
-            <div className="px-3 py-2 rounded-lg bg-quant-red/10 border border-quant-red/30 text-[11px] text-quant-red leading-relaxed">
-              实盘模式将使用真实资金下单。保存时若服务端未开启实盘开关（trading.live_enabled），请求将被拒绝。
-            </div>
-          )}
-
           <div>
             <div className="text-xs font-semibold mb-3">通知渠道</div>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">

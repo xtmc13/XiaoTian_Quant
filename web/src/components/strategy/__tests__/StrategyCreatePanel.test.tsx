@@ -223,8 +223,13 @@ describe('现货策略类型 → CRA 参数档案联动', () => {
     // CRA 参数跟随档案：首单额度 20、补仓次数 7
     expect((screen.getByDisplayValue('20') as HTMLInputElement).value).toBe('20')
     expect((screen.getByDisplayValue('7') as HTMLInputElement).value).toBe('7')
-    // 未联动字段保持默认（杠杆仅合约不渲染）
+    // 已下线入口不再渲染：杠杆 / 初始资金 / 实盘选项
     expect(screen.queryByText('杠杆（全仓）')).toBeFalsy()
+    expect(screen.queryByText('初始资金 (USDT)')).toBeFalsy()
+    expect(screen.queryByText('实盘（真实资金）')).toBeFalsy()
+    // 消息通知区块渲染
+    expect(screen.getByText('消息通知')).toBeTruthy()
+    expect(screen.getByText('通知渠道')).toBeTruthy()
   })
 
   it('合约市场切类型不联动档案（合约无类型选择器，仅验证不报错）', () => {
@@ -322,5 +327,45 @@ describe('现货网格模式（cra_spot → 网格参数组）', () => {
     expect(
       (useToastModule.toast as unknown as ReturnType<typeof vi.fn>).mock.calls.some((c) => c[0] === 'error')
     ).toBe(true)
+  })
+})
+
+describe('表单精简（初始资金/杠杆/实盘入口下线）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(useStrategyDataModule.useStrategyData).mockReturnValue({
+      create: vi.fn().mockResolvedValue({ id: 'x' }),
+    } as unknown as ReturnType<typeof useStrategyDataModule.useStrategyData>)
+    vi.mocked(configApi.exchangesConfigured).mockResolvedValue(mockConfigured)
+  })
+
+  it('合约场景：无杠杆格/初始资金格/K线周期格，消息通知区块在，无模拟盘/实盘选择器', () => {
+    render(<StrategyCreatePanel market="contract" onClose={vi.fn()} onSaved={vi.fn()} />, { wrapper })
+    expect(screen.queryByText('杠杆（全仓）')).toBeFalsy()
+    expect(screen.queryByText('杠杆倍数')).toBeTruthy() // CRAParamForm 开仓设置内的杠杆仍在（未动）
+    expect(screen.queryByText('初始资金 (USDT)')).toBeFalsy()
+    expect(screen.queryByText('K线周期')).toBeFalsy()
+    expect(screen.queryByText('模拟盘（默认）')).toBeFalsy()
+    expect(screen.queryByText('实盘（真实资金）')).toBeFalsy()
+    expect(screen.getByText('消息通知')).toBeTruthy()
+  })
+
+  it('提交 payload：execution_mode 恒 paper、initial_capital 为 0', async () => {
+    render(<StrategyCreatePanel market="spot" onClose={vi.fn()} onSaved={vi.fn()} />, { wrapper })
+    fireEvent.change(screen.getByPlaceholderText('输入策略名称'), { target: { value: '精简表单' } })
+    fireEvent.change(screen.getByPlaceholderText('40000'), { target: { value: '40000' } })
+    fireEvent.change(screen.getByPlaceholderText('50000'), { target: { value: '50000' } })
+    fireEvent.click(screen.getByText('点击选择'))
+    await waitFor(() => expect(screen.getByText('Binance')).toBeTruthy())
+    fireEvent.click(screen.getByText('Binance'))
+    fireEvent.click(screen.getByText('确认选择'))
+    fireEvent.click(screen.getByText('保存策略'))
+    const create = vi.mocked(useStrategyDataModule.useStrategyData).mock.results[0].value.create as ReturnType<
+      typeof vi.fn
+    >
+    await waitFor(() => expect(create).toHaveBeenCalled())
+    const payload = create.mock.calls[0][0] as Record<string, unknown>
+    expect(payload.execution_mode).toBe('paper')
+    expect(payload.initial_capital).toBe(0)
   })
 })
