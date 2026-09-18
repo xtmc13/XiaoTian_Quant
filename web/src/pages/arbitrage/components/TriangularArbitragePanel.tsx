@@ -26,6 +26,7 @@ import {
   ChevronUp,
   Save,
   Plus,
+  X,
 } from 'lucide-react'
 
 /* ── Local UI primitives ── */
@@ -419,32 +420,34 @@ export function TriangularArbitragePanel() {
         </button>
       </div>
 
-      {/* Config */}
+      {/* Config modal */}
       {showConfig && (
-        <SectionCard
-          title="三角套利配置"
-          headerAction={
-            editConfig ? (
-              <button
-                onClick={handleSaveConfig}
-                disabled={updateConfigMut.isPending}
-                className={cn(
-                  'flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-colors',
-                  updateConfigMut.isPending
-                    ? 'bg-muted text-muted-foreground cursor-not-allowed'
-                    : 'bg-quant-gold text-black hover:opacity-90'
-                )}
-              >
-                {updateConfigMut.isPending ? (
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                ) : (
-                  <Save className="w-3.5 h-3.5" />
-                )}
-                保存配置
-              </button>
-            ) : null
-          }
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+          onClick={() => setShowConfig(false)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') setShowConfig(false)
+          }}
+          tabIndex={-1}
         >
+          <div
+            role="document"
+            className="w-full max-w-4xl max-h-[90vh] flex flex-col rounded-2xl border border-quant-border bg-quant-card shadow-2xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-6 py-4 border-b border-quant-border shrink-0">
+              <h3 className="text-sm font-bold">三角套利配置</h3>
+              <button
+                onClick={() => setShowConfig(false)}
+                aria-label="关闭"
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-6">
           {!editConfig ? (
             <div className="text-sm text-muted-foreground text-center py-4">加载配置中...</div>
           ) : (
@@ -628,7 +631,35 @@ export function TriangularArbitragePanel() {
               </div>
             </div>
           )}
-        </SectionCard>
+            </div>
+            {/* Footer */}
+            <div className="flex items-center justify-end gap-2 px-6 py-4 border-t border-quant-border shrink-0">
+              <button
+                onClick={() => setShowConfig(false)}
+                className="px-4 py-2 rounded-lg border border-quant-border text-xs hover:bg-quant-hover transition-colors"
+              >
+                关闭
+              </button>
+              <button
+                onClick={handleSaveConfig}
+                disabled={updateConfigMut.isPending || !editConfig}
+                className={cn(
+                  'flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-medium transition-colors',
+                  updateConfigMut.isPending || !editConfig
+                    ? 'bg-muted text-muted-foreground cursor-not-allowed'
+                    : 'bg-quant-gold text-black hover:opacity-90'
+                )}
+              >
+                {updateConfigMut.isPending ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Save className="w-3.5 h-3.5" />
+                )}
+                保存配置
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Opportunities Table */}
@@ -779,16 +810,35 @@ export function TriangularArbitragePanel() {
         </div>
       </SectionCard>
 
-      {/* History */}
+      {/* History modal */}
       {showHistory && (
-        <SectionCard
-          title={
-            <button onClick={() => setShowHistory(false)} className="flex items-center gap-2">
-              历史记录 <ChevronUp className="w-4 h-4" />
-            </button>
-          }
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+          onClick={() => setShowHistory(false)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') setShowHistory(false)
+          }}
+          tabIndex={-1}
         >
-          <div className="space-y-2 max-h-80 overflow-y-auto">
+          <div
+            role="document"
+            className="w-full max-w-2xl max-h-[80vh] flex flex-col rounded-2xl border border-quant-border bg-quant-card shadow-2xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-6 py-4 border-b border-quant-border shrink-0">
+              <h3 className="text-sm font-bold">历史记录</h3>
+              <button
+                onClick={() => setShowHistory(false)}
+                aria-label="关闭"
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-6">
+              <div className="space-y-2">
             {!history || history.length === 0 ? (
               <div className="text-sm text-muted-foreground text-center py-4">无历史记录</div>
             ) : (
@@ -819,8 +869,10 @@ export function TriangularArbitragePanel() {
                 </div>
               ))
             )}
+              </div>
+            </div>
           </div>
-        </SectionCard>
+        </div>
       )}
     </div>
   )
