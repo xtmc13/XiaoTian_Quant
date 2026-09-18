@@ -78,6 +78,14 @@ func (w *WSClient) Connect() error {
 		} else {
 			log.Printf("[WS] Dial failed for %s: err=%v", w.cfg.URL, err)
 		}
+		// The retry chain normally starts from readLoop after a successful
+		// dial. If the very first dial fails (transient reset, cold network),
+		// kick off backoff retries here so the stream isn't silently dead.
+		select {
+		case <-w.stopCh:
+		default:
+			go w.tryReconnect()
+		}
 		return fmt.Errorf("ws dial: %w", err)
 	}
 
