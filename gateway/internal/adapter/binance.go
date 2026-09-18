@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"os"
-		"net/http"
+	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,6 +28,7 @@ const (
 
 	// Futures
 	BinanceFuturesRestURL  = "https://fapi.binance.com"
+	BinanceSapiRestURL     = "https://api.binance.com"
 	BinanceFuturesFapiPath = "/fapi/v2"
 )
 
@@ -92,7 +93,7 @@ func (b *BinanceAdapter) IsConnected() bool {
 
 // ── Callback Setters ──
 
-func (b *BinanceAdapter) OnTicker(fn func(tick model.Tick))          { b.onTicker = fn }
+func (b *BinanceAdapter) OnTicker(fn func(tick model.Tick))           { b.onTicker = fn }
 func (b *BinanceAdapter) OnOrderBook(fn func(ob model.OrderBookData)) { b.onOrderBook = fn }
 func (b *BinanceAdapter) OnTrade(fn func(trade model.TradeData))      { b.onTrade = fn }
 func (b *BinanceAdapter) OnKline(fn func(bar model.Bar))              { b.onKline = fn }
@@ -100,9 +101,9 @@ func (b *BinanceAdapter) OnKline(fn func(bar model.Bar))              { b.onKlin
 // ── URL Helpers ──
 
 func (b *BinanceAdapter) baseURL() string {
-		if env := os.Getenv("BINANCE_REST_URL"); env != "" {
-			return env
-		}
+	if env := os.Getenv("BINANCE_REST_URL"); env != "" {
+		return env
+	}
 	if b.testnet {
 		return BinanceTestURL
 	}
@@ -110,9 +111,9 @@ func (b *BinanceAdapter) baseURL() string {
 }
 
 func (b *BinanceAdapter) wsURL() string {
-		if env := os.Getenv("BINANCE_WS_URL"); env != "" {
-			return env
-		}
+	if env := os.Getenv("BINANCE_WS_URL"); env != "" {
+		return env
+	}
 	if b.testnet {
 		return BinanceTestWsURL
 	}
@@ -125,6 +126,49 @@ func (b *BinanceAdapter) sign(params url.Values) string {
 	mac := hmac.New(sha256.New, []byte(b.secretKey))
 	mac.Write([]byte(params.Encode()))
 	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// TransferFromFuturesToFunding 盈利保护划转：U 本位合约账户 → 资金账户
+// （sapi POST /sapi/v1/asset/transfer, type=UMFUTURE_MAIN）。签名与 fapi 同法
+// （HMAC-SHA256 + X-MBX-APIKEY）；检查响应 status=="OK"。
+func (b *BinanceAdapter) TransferFromFuturesToFunding(amount float64) error {
+	if amount <= 0 {
+		return fmt.Errorf("transfer amount must be positive")
+	}
+	if b.apiKey == "" || b.secretKey == "" {
+		return fmt.Errorf("binance credentials not configured")
+	}
+	params := url.Values{}
+	params.Set("type", "UMFUTURE_MAIN")
+	params.Set("asset", "USDT")
+	params.Set("amount", strconv.FormatFloat(amount, 'f', 6, 64))
+	params.Set("timestamp", fmt.Sprintf("%d", time.Now().UnixMilli()))
+	params.Set("recvWindow", "5000")
+	params.Set("signature", b.sign(params))
+
+	req, err := http.NewRequest("POST", BinanceSapiRestURL+"/sapi/v1/asset/transfer", strings.NewReader(params.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("X-MBX-APIKEY", b.apiKey)
+
+	resp, err := b.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	var result struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("transfer response parse: %v (%s)", err, string(body))
+	}
+	if result.Status != "OK" {
+		return fmt.Errorf("transfer rejected: %s", string(body))
+	}
+	return nil
 }
 
 // ── REST ──
@@ -487,8 +531,8 @@ func (b *BinanceAdapter) GetOpenOrders(symbol string) ([]map[string]any, error) 
 
 // AccountTrade represents a single executed trade from the exchange.
 type AccountTrade struct {
-	ID               string  `json:"id"`
-	OrderID          string  `json:"order_id"`
+	ID              string  `json:"id"`
+	OrderID         string  `json:"order_id"`
 	Symbol          string  `json:"symbol"`
 	Side            string  `json:"side"`
 	Price           float64 `json:"price"`
@@ -712,7 +756,7 @@ func (b *BinanceAdapter) StartMarketStream(symbols []string) error {
 	log.Printf("[Binance] Connecting market stream: %d symbols, url=%s", len(symbols), streamURL)
 
 	wsClient := exchange.NewWSClient(exchange.WSConfig{
-		URL:     streamURL,
+		URL: streamURL,
 		OnMessage: func(msg []byte) {
 			b.handleStreamMessage(msg)
 		},
@@ -1001,12 +1045,12 @@ func (ob *OrderBook) Spread() float64 {
 
 // FundingBalance holds a single funding wallet asset balance.
 type FundingBalance struct {
-	Asset         string  `json:"asset"`
-	Free          float64 `json:"free,string"`
-	Locked        float64 `json:"locked,string"`
-	Freeze        float64 `json:"freeze,string"`
-	Withdrawing   float64 `json:"withdrawing,string"`
-	BtcValuation  string  `json:"btcValuation"` // Scientific notation string like "9.990322679103085E-5"
+	Asset        string  `json:"asset"`
+	Free         float64 `json:"free,string"`
+	Locked       float64 `json:"locked,string"`
+	Freeze       float64 `json:"freeze,string"`
+	Withdrawing  float64 `json:"withdrawing,string"`
+	BtcValuation string  `json:"btcValuation"` // Scientific notation string like "9.990322679103085E-5"
 }
 
 // GetFundingWallet queries the Binance funding wallet (Earn / Staking / Liquid Swap).

@@ -346,11 +346,11 @@ describe('表单精简（初始资金/杠杆/实盘入口下线）', () => {
     expect(screen.queryByText('初始资金 (USDT)')).toBeFalsy()
     expect(screen.queryByText('K线周期')).toBeFalsy()
     expect(screen.queryByText('模拟盘（默认）')).toBeFalsy()
-    expect(screen.queryByText('实盘（真实资金）')).toBeFalsy()
+    expect(screen.queryByText('实盘（真实资金）')).toBeFalsy() // 创建即实盘：不再提供手动选择
     expect(screen.getByText('消息通知')).toBeTruthy()
   })
 
-  it('提交 payload：execution_mode 恒 paper、initial_capital 为 0', async () => {
+  it('提交 payload：execution_mode 创建即实盘（live 总闸已开）、initial_capital 为 0', async () => {
     render(<StrategyCreatePanel market="spot" onClose={vi.fn()} onSaved={vi.fn()} />, { wrapper })
     fireEvent.change(screen.getByPlaceholderText('输入策略名称'), { target: { value: '精简表单' } })
     fireEvent.change(screen.getByPlaceholderText('40000'), { target: { value: '40000' } })
@@ -365,7 +365,7 @@ describe('表单精简（初始资金/杠杆/实盘入口下线）', () => {
     >
     await waitFor(() => expect(create).toHaveBeenCalled())
     const payload = create.mock.calls[0][0] as Record<string, unknown>
-    expect(payload.execution_mode).toBe('paper')
+    expect(payload.execution_mode).toBe('live')
     expect(payload.initial_capital).toBe(0)
   })
 })

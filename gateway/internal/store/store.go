@@ -424,6 +424,49 @@ func LoadArbitrageConfig() map[string]any {
 	return nil
 }
 
+// SaveRiskSection merges the given keys into the risk section of config.yaml,
+// preserving all other risk keys (e.g. position_limit_pct 注释同级的其他配置)。
+// 供 PUT /api/risk/config 使用：写回后下次启动仍生效。
+func SaveRiskSection(patch map[string]any) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+	if configCache == nil {
+		configCache = make(map[string]any)
+	}
+	existing, _ := configCache["risk"].(map[string]any)
+	merged := make(map[string]any, len(existing)+len(patch))
+	for k, v := range existing {
+		merged[k] = v
+	}
+	for k, v := range patch {
+		merged[k] = v
+	}
+	configCache["risk"] = merged
+	encrypted := encryptConfigSecrets(configCache)
+	data, err := yaml.Marshal(encrypted)
+	if err != nil {
+		return err
+	}
+	return writeConfigFile(data)
+}
+
+// LoadRiskSection returns the persisted risk section config, if any.
+func LoadRiskSection() map[string]any {
+	configMu.RLock()
+	defer configMu.RUnlock()
+	if configCache == nil {
+		return nil
+	}
+	if v, ok := configCache["risk"].(map[string]any); ok {
+		cp := make(map[string]any, len(v))
+		for k, val := range v {
+			cp[k] = val
+		}
+		return cp
+	}
+	return nil
+}
+
 // SaveTriangularConfig persists the triangular arbitrage engine config to config.yaml.
 func SaveTriangularConfig(cfg map[string]any) error {
 	configMu.Lock()

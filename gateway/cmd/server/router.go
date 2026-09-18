@@ -53,6 +53,7 @@ func setupRoutes(r *gin.Engine, cfg *serverConfig) *gin.Engine {
 		registerPortfolioRoutes(api)
 		registerPairlistRoutes(api)
 		registerProtectionRoutes(api)
+		registerRiskConfigRoutes(api)
 		registerHyperoptRoutes(api)
 		registerRLRoutes(api)
 		registerTensorBoardRoutes(api)
@@ -415,6 +416,15 @@ func registerPairlistRoutes(api *gin.RouterGroup) {
 	private.GET("/pairlist/refresh", handler.RefreshPairlist)
 	private.GET("/pairlist/config", handler.GetPairlistConfig)
 	private.POST("/pairlist/config", handler.ConfigurePairlist)
+}
+
+// registerRiskConfigRoutes 风控参数 API：GET 任意登录用户；PUT 仅 admin
+// （private 组已带 AuthRequired，再叠加 AdminRequired）。
+func registerRiskConfigRoutes(api *gin.RouterGroup) {
+	private := api.Group("")
+	private.Use(middleware.AuthRequired())
+	private.GET("/risk/config", handler.GetRiskConfig)
+	private.PUT("/risk/config", middleware.AdminRequired(), handler.UpdateRiskConfig)
 }
 
 func registerProtectionRoutes(api *gin.RouterGroup) {

@@ -135,7 +135,10 @@ func (ctx *Context) Init(cfg *config.Config) error {
 		riskCfg.MaxDrawdownPct = cfg.Risk.MaxDrawdown
 	}
 	ctx.RiskManager = risk.NewManager(riskCfg)
-	ctx.Logger.Info("Risk manager initialized")
+	// 盈利保护开关：config.yaml risk.profit_protection_enabled 初始化，运行时由
+	// PUT /api/risk/config 通过 risk.SetProfitProtectionEnabled 调整。
+	risk.SetProfitProtectionEnabled(cfg.Risk.ProfitProtectionEnabled)
+	ctx.Logger.Info("Risk manager initialized", "profit_protection", cfg.Risk.ProfitProtectionEnabled)
 
 	// 6. Portfolio Manager
 	ctx.PortfolioManager = portfolio.GetManager()
@@ -608,26 +611,26 @@ func (ctx *Context) wireOrderManager() {
 		return err
 	}
 
-		// ── On Order Update ──
-		om.OnOrderUpdate = func(ord *model.OrderData) {
-			if ord.Status == model.StatusFilled {
-				ctx.updatePortfolioFromFill(ord)
-				// Record DCA entry if applicable
-				if ctx.DCAManager != nil && ord.Side == model.SideBuy {
-					ctx.DCAManager.RecordEntry(ord.Symbol, ord.AvgFillPrice, 0)
-				}
+	// ── On Order Update ──
+	om.OnOrderUpdate = func(ord *model.OrderData) {
+		if ord.Status == model.StatusFilled {
+			ctx.updatePortfolioFromFill(ord)
+			// Record DCA entry if applicable
+			if ctx.DCAManager != nil && ord.Side == model.SideBuy {
+				ctx.DCAManager.RecordEntry(ord.Symbol, ord.AvgFillPrice, 0)
 			}
-			// Publish to event bus for strategies
-			ctx.EventBus.Publish(event.Event{
-				Type:     event.TypeOrderUpdate,
-				Symbol:   ord.Symbol,
-				Data:     *ord,
-				Priority: event.PrioNormal,
-			})
 		}
-
-		ctx.Logger.Info("OrderManager pipeline wired")
+		// Publish to event bus for strategies
+		ctx.EventBus.Publish(event.Event{
+			Type:     event.TypeOrderUpdate,
+			Symbol:   ord.Symbol,
+			Data:     *ord,
+			Priority: event.PrioNormal,
+		})
 	}
+
+	ctx.Logger.Info("OrderManager pipeline wired")
+}
 
 // wireConditionalEngine connects the conditional order engine to price feeds and order execution.
 func (ctx *Context) wireConditionalEngine() {
@@ -777,6 +780,54 @@ func (ctx *Context) simulatePaperFill(ord *model.OrderData) (map[string]any, err
 
 // updatePortfolioFromFill updates balances and positions after a fill.
 // Supports both spot and contract (swap) trading.
+// profitTransferFn 包级函数变量：盈利保护的实际划转实现，测试可替换为 mock。
+var profitTransferFn = transferProfitToFunding
+
+// transferProfitToFunding 用币安凭证构造 adapter 并执行 合约→资金 划转。
+func transferProfitToFunding(amount float64) error {
+	creds := config.Get().Exchange.Binance
+	if creds.APIKey == "" || creds.APISecret == "" {
+		return fmt.Errorf("binance credentials not configured")
+	}
+	ad := adapter.NewBinanceAdapter(creds.APIKey, creds.APISecret, false)
+	return ad.TransferFromFuturesToFunding(amount)
+}
+
+// maybeProtectProfit 盈利保护：开关开启 + 实盘（非 paper）U 本位合约 + 单笔
+// 已实现利润 ≥1 USDT 时，异步把该笔利润划转到资金账户。失败仅记日志，绝不
+// 影响交易流程。频率策略：逐笔划转（止盈平仓为低频事件，实现简洁）。
+func (ctx *Context) maybeProtectProfit(ord *model.OrderData) {
+	if !risk.ProfitProtectionEnabled() {
+		return
+	}
+	if ord.MarketType != model.MarketSwap {
+		return
+	}
+	// paper 单（空/paper 交易所）绝不划转。
+	if ord.Exchange == "" || ord.Exchange == "paper" {
+		return
+	}
+	if ord.RealizedPnL < 1 {
+		return // 最小额保护：<1U 不划转，省手续费
+	}
+	amount := ord.RealizedPnL
+	go func() {
+		if err := profitTransferFn(amount); err != nil {
+			ctx.Logger.Warn("[ProfitProtection] 划转失败", "amount", amount, "err", err.Error())
+			return
+		}
+		ctx.Logger.Info("[ProfitProtection] 划转 USDT 合约→资金 ✓", "amount", amount)
+		if ctx.Notifier != nil {
+			ctx.Notifier.Send(notify.Message{
+				Title:   "盈利保护",
+				Content: fmt.Sprintf("已划转 %.2f USDT 合约账户→资金账户", amount),
+				Level:   "INFO",
+				Tags:    map[string]string{"symbol": ord.Symbol},
+			})
+		}
+	}()
+}
+
 func (ctx *Context) updatePortfolioFromFill(ord *model.OrderData) {
 	price := ord.AvgFillPrice
 	if price <= 0 {
@@ -798,6 +849,8 @@ func (ctx *Context) updatePortfolioFromFill(ord *model.OrderData) {
 	if ord.MarketType == model.MarketSwap {
 		// ── CONTRACT (SWAP) ──
 		ctx.updatePortfolioFromContractFill(ord, acct, price, qty)
+		// 盈利保护：实盘合约止盈利润自动划转资金账户（异步，绝不阻塞/回滚交易）。
+		ctx.maybeProtectProfit(ord)
 	} else {
 		// ── SPOT ──
 		ctx.updatePortfolioFromSpotFill(ord, acct, price, qty)

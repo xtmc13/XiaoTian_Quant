@@ -1,4 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
+import { useAuthStore } from '@/stores/authStore'
+import { riskApi, type RiskConfig } from '@/lib/api'
+import { toast } from '@/lib/useToast'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { protectionApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -110,6 +113,132 @@ const PROTECTION_TEMPLATES: ProtectionTemplate[] = [
 ]
 
 /* ── Page ── */
+/** 风控参数卡片：GET 回填 / PUT 保存（仅 admin 可保存）。 */
+function RiskParamsCard() {
+  const isAdmin = useAuthStore((s) => s.user?.role === 'admin')
+  const [maxConcurrent, setMaxConcurrent] = useState(5)
+  const [positionLimit, setPositionLimit] = useState(50)
+  const [profitProtection, setProfitProtection] = useState(false)
+  const [loaded, setLoaded] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    riskApi
+      .getConfig()
+      .then((cfg) => {
+        if (!cfg) return
+        setMaxConcurrent(cfg.max_concurrent_orders)
+        setPositionLimit(cfg.position_limit_pct)
+        setProfitProtection(cfg.profit_protection_enabled)
+        setLoaded(true)
+      })
+      .catch(() => {
+        /* 后端不可用时保持默认值，保存时仍会报错提示 */
+      })
+  }, [])
+
+  const handleSave = async () => {
+    if (!Number.isInteger(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > 50) {
+      toast('error', '最大挂单数必须是 1-50 的整数')
+      return
+    }
+    if (!(positionLimit >= 1 && positionLimit <= 10000)) {
+      toast('error', '单笔仓位上限必须在 1-10000 之间')
+      return
+    }
+    setSaving(true)
+    try {
+      await riskApi.updateConfig({
+        max_concurrent_orders: maxConcurrent,
+        position_limit_pct: positionLimit,
+        profit_protection_enabled: profitProtection,
+      })
+      toast('success', '风控参数已保存并即时生效')
+    } catch (e: unknown) {
+      toast('error', '保存失败: ' + (e instanceof Error ? e.message : String(e)))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const inputCls =
+    'w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold'
+
+  return (
+    <SectionCard
+      title="风控参数"
+      headerAction={
+        isAdmin ? (
+          <button
+            onClick={() => void handleSave()}
+            disabled={saving || !loaded}
+            className="px-4 py-1.5 rounded-lg bg-quant-gold text-white text-xs font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
+          >
+            {saving ? '保存中...' : '保存'}
+          </button>
+        ) : (
+          <span className="text-[10px] text-muted-foreground">只读（仅管理员可修改）</span>
+        )
+      }
+    >
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <label className="text-[11px] text-muted-foreground mb-1.5 block">最大挂单数（1-50）</label>
+          <input
+            type="number"
+            min={1}
+            max={50}
+            value={maxConcurrent}
+            disabled={!isAdmin}
+            onChange={(e) => setMaxConcurrent(parseInt(e.target.value, 10) || 0)}
+            className={inputCls}
+          />
+        </div>
+        <div>
+          <label className="text-[11px] text-muted-foreground mb-1.5 block">
+            单笔仓位上限 %（订单名义价值占账户权益比例上限）
+          </label>
+          <input
+            type="number"
+            min={1}
+            max={10000}
+            value={positionLimit}
+            disabled={!isAdmin}
+            onChange={(e) => setPositionLimit(Number(e.target.value) || 0)}
+            className={inputCls}
+          />
+        </div>
+        <div className="sm:col-span-2 flex items-center justify-between rounded-lg border border-quant-border bg-quant-bg px-3 py-2.5">
+          <div>
+            <div className="text-xs font-semibold">盈利保护</div>
+            <div className="text-[10px] text-muted-foreground mt-0.5">
+              实盘合约止盈后自动将利润划转到资金账户（最小 1 USDT）
+            </div>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={profitProtection}
+            disabled={!isAdmin}
+            onClick={() => setProfitProtection((v) => !v)}
+            className={
+              'w-10 h-5 rounded-full transition-colors relative shrink-0 disabled:opacity-50 ' +
+              (profitProtection ? 'bg-quant-gold' : 'bg-quant-border')
+            }
+          >
+            <span
+              className={
+                'absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ' +
+                (profitProtection ? 'left-5' : 'left-0.5')
+              }
+            />
+          </button>
+        </div>
+      </div>
+    </SectionCard>
+  )
+}
+
 export function RiskControl() {
   const queryClient = useQueryClient()
   const [activeProtections, setActiveProtections] = useState<ProtectionConfigItem[]>([])
@@ -197,6 +326,8 @@ export function RiskControl() {
           subtitle="配置交易保护机制，防止过度交易和重大亏损"
           actions={<Shield className="w-6 h-6 text-quant-gold" />}
         />
+
+        <RiskParamsCard />
 
         {/* Status Overview */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

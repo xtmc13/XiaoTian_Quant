@@ -1334,6 +1334,18 @@ export interface GridBotPayload {
   fee_rate?: number
 }
 
+// ── Risk config（风控参数：UI 可调，PUT 仅 admin） ──
+export interface RiskConfig {
+  max_concurrent_orders: number
+  position_limit_pct: number
+  profit_protection_enabled: boolean
+}
+
+export const riskApi = {
+  getConfig: () => api.get<RiskConfig>('/risk/config'),
+  updateConfig: (data: RiskConfig) => api.put<RiskConfig>('/risk/config', data),
+}
+
 export const gridApi = {
   list: () => api.get<{ bots: GridBot[] }>('/grid/bots').then((d) => d?.bots ?? []),
   create: (data: GridBotPayload) => api.post<GridBot>('/grid/bots', data),
