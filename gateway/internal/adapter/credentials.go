@@ -41,7 +41,7 @@ func GetCredential(exchangeName string) (apiKey, secret, passphrase string) {
 
 	// 加密保险库（env 未覆盖的字段从 vault 解密补齐）。
 	canonical := normalizeExchangeName(exchangeName)
-	if vkey, vsecret, vpass, err := store.GetVault().Get(canonical); err == nil {
+	if vkey, vsecret, vpass, err := store.GetVault().GetOrReload(canonical); err == nil {
 		if apiKey == "" {
 			apiKey = vkey
 		}

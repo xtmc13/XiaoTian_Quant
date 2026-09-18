@@ -49,13 +49,13 @@ func MigratePlaintextCredentialsToVault() ([]string, error) {
 		return nil, nil
 	}
 
-	// 主密钥：env 优先；未设且需要加密真实凭证 → 本机随机密钥（0600 落盘）。
+	// 主密钥：EnsureVaultReady 已在启动期锁定进程唯一密钥（env/本机随机）。
+	// 直调迁移（测试/未走 main）时防御性补一刀，文件已存在则为 no-op。
 	if os.Getenv("VAULT_MASTER_KEY") == "" {
 		if _, err := loadLocalVaultKey(); err != nil {
 			if _, err := ensureLocalVaultKey(); err != nil {
 				return nil, fmt.Errorf("vault local key: %w", err)
 			}
-			log.Printf("[vault] 使用本机随机保险库密钥，设置 VAULT_MASTER_KEY env 以便多机迁移")
 		}
 	}
 

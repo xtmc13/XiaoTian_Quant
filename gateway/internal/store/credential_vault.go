@@ -21,6 +21,7 @@ import (
 type CredentialVault struct {
 	mu        sync.RWMutex
 	masterKey []byte
+	keySource string                          // 原始主密钥（比对用，绝不落盘）
 	entries   map[string]*EncryptedCredential // key_alias -> encrypted data
 }
 
@@ -38,6 +39,7 @@ type EncryptedCredential struct {
 var (
 	vault     *CredentialVault
 	vaultOnce sync.Once
+	vaultMu   sync.Mutex // 保护 vault 指针（EnsureVaultReady 可重建单例）
 )
 
 // 保险库文件与本机随机主密钥的落盘位置（包级变量，测试可覆盖）。
@@ -53,17 +55,32 @@ var (
 // APP_ENV=production 未设主密钥时由 EnsureVaultReady 在启动期 fatal。
 func GetVault() *CredentialVault {
 	vaultOnce.Do(func() {
-		key := resolveVaultMasterKey()
-		vault = NewCredentialVault(key)
-		if err := vault.LoadFromFile(VaultFilePath); err != nil && !os.IsNotExist(err) {
-			log.Printf("[vault] 加载保险库文件失败（可能是密钥变化）: %v", err)
-		}
+		vault = newVaultResolved()
 	})
+	vaultMu.Lock()
+	defer vaultMu.Unlock()
 	return vault
 }
 
-// resolveVaultMasterKey：env → 本机密钥文件 → dev 兜底。
+// newVaultResolved 按当前解析出的主密钥创建保险库并尽力加载文件。
+func newVaultResolved() *CredentialVault {
+	v := NewCredentialVault(resolveVaultMasterKey())
+	if err := v.LoadFromFile(VaultFilePath); err != nil && !os.IsNotExist(err) {
+		log.Printf("[vault] 加载保险库文件失败（可能是密钥变化）: %v", err)
+	}
+	return v
+}
+
+// resolvedVaultKey 是进程内唯一生效的保险库主密钥，由 EnsureVaultReady 在
+// 启动早期解析并锁定（迁移与读取共用同一把钥匙——修复单例 dev 键加密、
+// 文件随机键解密的不一致）。
+var resolvedVaultKey string
+
+// resolveVaultMasterKey：已锁定值 → env → 本机密钥文件 → dev 兜底。
 func resolveVaultMasterKey() string {
+	if resolvedVaultKey != "" {
+		return resolvedVaultKey
+	}
 	if key := os.Getenv("VAULT_MASTER_KEY"); key != "" {
 		return key
 	}
@@ -103,16 +120,48 @@ func ensureLocalVaultKey() (string, error) {
 }
 
 // EnsureVaultReady 启动期调用（与 SECRET_KEY 同级的 isFatalInitErr 处理）：
-// APP_ENV=production 且未设 VAULT_MASTER_KEY → fatal；其余场景触发密钥解析与
-// 保险库文件加载。
+// APP_ENV=production 且未设 VAULT_MASTER_KEY → fatal；其余场景**先确保本机随机
+// 密钥文件存在**（未设 env 时），再锁定进程唯一主密钥并创建保险库单例——保证
+// 迁移加密与运行期读取使用同一把钥匙（顺序：键文件 → resolvedVaultKey → 单例）。
 func EnsureVaultReady() error {
 	if os.Getenv("VAULT_MASTER_KEY") == "" {
 		if env := os.Getenv("APP_ENV"); env == "production" || env == "release" {
 			return fmt.Errorf("VAULT_MASTER_KEY environment variable is required in production")
 		}
+		// 预生成本机随机密钥：单例与后续迁移共用（dev 兜底绝不加密真实凭证）。
+		if _, err := ensureLocalVaultKey(); err != nil {
+			return fmt.Errorf("vault local key: %w", err)
+		}
+		log.Printf("[vault] 使用本机随机保险库密钥，设置 VAULT_MASTER_KEY env 以便多机迁移")
 	}
+	key := os.Getenv("VAULT_MASTER_KEY")
+	if key == "" {
+		key, _ = loadLocalVaultKey()
+	}
+	resolvedVaultKey = key
+	// 纠正提前创建的单例：密钥不一致（如早期以 dev 兜底键初始化）时按锁定
+	// 密钥重建并重载文件——保证迁移加密与运行期读取同一把钥匙。
+	vaultMu.Lock()
+	if vault != nil && vault.keySource != resolvedVaultKey {
+		log.Printf("[vault] 保险库单例主密钥与启动解析不一致，按启动密钥重建")
+		vault = newVaultResolved()
+	}
+	vaultMu.Unlock()
 	GetVault()
 	return nil
+}
+
+// GetOrReload 先查内存；miss 时从 VaultFilePath 惰性重载一次再查——兜底
+// "另一进程写 vault 文件"的场景（同进程迁移单例内必中，重载为 no-op）。
+func (v *CredentialVault) GetOrReload(alias string) (apiKey, apiSecret, passphrase string, err error) {
+	apiKey, apiSecret, passphrase, err = v.Get(alias)
+	if err == nil {
+		return
+	}
+	if lerr := v.LoadFromFile(VaultFilePath); lerr != nil {
+		return
+	}
+	return v.Get(alias)
 }
 
 // ── 文件持久化 ──
@@ -175,6 +224,7 @@ func NewCredentialVault(masterKey string) *CredentialVault {
 	key := deriveKey(masterKey)
 	return &CredentialVault{
 		masterKey: key,
+		keySource: masterKey,
 		entries:   make(map[string]*EncryptedCredential),
 	}
 }
