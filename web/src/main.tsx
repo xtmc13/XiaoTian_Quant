@@ -34,6 +34,31 @@ const queryClient = new QueryClient({
 // registerSW()
 // listenInstallPrompt()
 
+// 发版后旧标签页引用的 chunk 哈希会失效（动态 import 拉取失败）——检测到后
+// 自动刷新一次加载新资源，避免停留在"页面加载异常"。sessionStorage 防止刷新循环。
+const CHUNK_RELOAD_KEY = 'xt-chunk-reload'
+function isChunkLoadError(msg: string): boolean {
+  return /dynamically imported module|Failed to fetch dynamically|error loading dynamically|ChunkLoadError|Loading chunk \d+ failed/i.test(
+    msg
+  )
+}
+function reloadOnceOnChunkError(msg: string) {
+  if (!isChunkLoadError(msg)) return
+  if (sessionStorage.getItem(CHUNK_RELOAD_KEY)) return
+  sessionStorage.setItem(CHUNK_RELOAD_KEY, '1')
+  window.location.reload()
+}
+window.addEventListener('unhandledrejection', (e) => {
+  reloadOnceOnChunkError(String((e.reason as Error)?.message ?? e.reason ?? ''))
+})
+window.addEventListener('error', (e) => {
+  reloadOnceOnChunkError(String(e.message ?? ''))
+  const target = e.target as HTMLScriptElement | null
+  if (target && target.tagName === 'SCRIPT' && target.src) reloadOnceOnChunkError('ChunkLoadError')
+})
+// 正常加载后清除标记，允许下次发版再自动刷新
+sessionStorage.removeItem(CHUNK_RELOAD_KEY)
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
