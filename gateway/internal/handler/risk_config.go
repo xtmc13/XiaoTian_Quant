@@ -9,8 +9,10 @@ import (
 )
 
 // RiskConfigPayload 是 GET/PUT /api/risk/config 的契约：
-// max_concurrent_orders（1-50 整数）、position_limit_pct（1-10000，订单名义价值
-// 占账户权益比例上限%）、profit_protection_enabled（盈利保护开关）、
+// max_concurrent_orders（1-50 整数）、position_limit_pct（百分比类，
+// 单笔订单名义价值占账户权益比例上限 %，C2.1 起限定 1-100——历史上
+// 曾被调到 2500% 导致风控形同虚设，PUT 越界一律 400）、
+// profit_protection_enabled（盈利保护开关）、
 // indicator_fail_open（自定义指标开仓检查失败时放行，默认 true）。
 type RiskConfigPayload struct {
 	MaxConcurrentOrders     int     `json:"max_concurrent_orders"`
@@ -44,8 +46,10 @@ func UpdateRiskConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": "max_concurrent_orders 必须在 1-50 之间"})
 		return
 	}
-	if body.PositionLimitPct < 1 || body.PositionLimitPct > 10000 {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "position_limit_pct 必须在 1-10000 之间"})
+	// C2.1: 百分比类参数限定 0-100。position_limit_pct 曾被调到 2500%
+	// 使仓位风控失效；>100 视为非法（0/负值无意义，等同关闭检查，拒绝）。
+	if body.PositionLimitPct <= 0 || body.PositionLimitPct > 100 {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "position_limit_pct 必须在 1-100 之间（百分比上限 100%）"})
 		return
 	}
 

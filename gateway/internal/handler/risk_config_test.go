@@ -40,7 +40,8 @@ func TestRiskConfigPutValidation(t *testing.T) {
 		{"max_concurrent 0", `{"max_concurrent_orders":0,"position_limit_pct":100,"profit_protection_enabled":false}`},
 		{"max_concurrent 51", `{"max_concurrent_orders":51,"position_limit_pct":100,"profit_protection_enabled":false}`},
 		{"position_limit 0", `{"max_concurrent_orders":5,"position_limit_pct":0,"profit_protection_enabled":false}`},
-		{"position_limit 10001", `{"max_concurrent_orders":5,"position_limit_pct":10001,"profit_protection_enabled":false}`},
+		{"position_limit 101", `{"max_concurrent_orders":5,"position_limit_pct":101,"profit_protection_enabled":false}`},
+		{"position_limit 2500（历史事故值）", `{"max_concurrent_orders":5,"position_limit_pct":2500,"profit_protection_enabled":false}`},
 	}
 	for _, tc := range cases {
 		w := httptest.NewRecorder()
@@ -76,7 +77,7 @@ func TestRiskConfigGetPutRoundtrip(t *testing.T) {
 	// 预置 risk 段其他键，验证合并写回不丢失。
 	assertTrue(t, store.SaveRiskSection(map[string]any{"daily_limit": 12345.0}) == nil, "seed risk section")
 
-	putBody := `{"max_concurrent_orders":3,"position_limit_pct":2500,"profit_protection_enabled":true}`
+	putBody := `{"max_concurrent_orders":3,"position_limit_pct":100,"profit_protection_enabled":true}`
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest("PUT", "/risk/config", strings.NewReader(putBody))
 	req.Header.Set("Content-Type", "application/json")
@@ -90,7 +91,7 @@ func TestRiskConfigGetPutRoundtrip(t *testing.T) {
 	var got RiskConfigPayload
 	assertTrue(t, json.Unmarshal(w.Body.Bytes(), &got) == nil, "GET JSON")
 	assertTrue(t, got.MaxConcurrentOrders == 3, "max_concurrent_orders roundtrip")
-	assertTrue(t, got.PositionLimitPct == 2500, "position_limit_pct roundtrip")
+	assertTrue(t, got.PositionLimitPct == 100, "position_limit_pct roundtrip")
 	assertTrue(t, got.ProfitProtectionEnabled, "profit_protection_enabled roundtrip")
 
 	// config.yaml risk 段：三个键已写回 + 其他键保留。
@@ -98,12 +99,12 @@ func TestRiskConfigGetPutRoundtrip(t *testing.T) {
 	assertTrue(t, sec != nil, "risk section persisted")
 	assertTrue(t, sec["daily_limit"] == 12345.0, "other risk keys preserved")
 	assertTrue(t, sec["max_concurrent_orders"] == 3, "yaml max_concurrent_orders")
-	assertTrue(t, sec["position_limit_pct"] == 2500.0, "yaml position_limit_pct")
+	assertTrue(t, sec["position_limit_pct"] == 100.0, "yaml position_limit_pct")
 	assertTrue(t, sec["profit_protection_enabled"] == true, "yaml profit_protection_enabled")
 
 	t.Cleanup(func() {
 		risk.SetProfitProtectionEnabled(false)
-		_ = store.SaveRiskSection(map[string]any{"max_concurrent_orders": 5, "position_limit_pct": 2500, "profit_protection_enabled": false})
+		_ = store.SaveRiskSection(map[string]any{"max_concurrent_orders": 5, "position_limit_pct": 100, "profit_protection_enabled": false})
 	})
 }
 

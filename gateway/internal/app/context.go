@@ -125,8 +125,17 @@ func (ctx *Context) Init(cfg *config.Config) error {
 	}
 	// position_limit_pct 等风控配置此前从未接线（恒用默认 50%），paper 时期
 	// 被 10 万假权益掩盖；权益改真实后暴露为 paper 单全被误杀。2026-09-16。
+	// C2.1（2026-09-19）：该值曾被调到 2500% 使仓位风控失效。启动期对遗留的
+	// 越界值（>100%）钳制回 100 并告警；运行时修改由 PUT /api/risk/config
+	// 的边界校验（1-100）兜底。
 	if cfg.Risk.PositionLimit > 0 {
-		riskCfg.MaxPositionPct = cfg.Risk.PositionLimit
+		if cfg.Risk.PositionLimit > 100 {
+			ctx.Logger.Warn("risk.position_limit_pct out of range, clamped to 100",
+				"configured", cfg.Risk.PositionLimit)
+			riskCfg.MaxPositionPct = 100
+		} else {
+			riskCfg.MaxPositionPct = cfg.Risk.PositionLimit
+		}
 	}
 	if cfg.Risk.NetExposureLimit > 0 {
 		riskCfg.MaxExposurePct = cfg.Risk.NetExposureLimit

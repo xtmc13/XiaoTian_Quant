@@ -144,8 +144,10 @@ function RiskParamsCard() {
       toast('error', '最大挂单数必须是 1-50 的整数')
       return
     }
-    if (!(positionLimit >= 1 && positionLimit <= 10000)) {
-      toast('error', '单笔仓位上限必须在 1-10000 之间')
+    // C2.1: 百分比类参数上限 100%（与后端 PUT /api/risk/config 校验一致；
+    // 历史上 2500% 的越界值曾使仓位风控失效）。
+    if (!(positionLimit >= 1 && positionLimit <= 100)) {
+      toast('error', '单笔仓位上限必须在 1-100 之间')
       return
     }
     setSaving(true)
@@ -199,12 +201,12 @@ function RiskParamsCard() {
         </div>
         <div>
           <label className="text-[11px] text-muted-foreground mb-1.5 block">
-            单笔仓位上限 %（订单名义价值占账户权益比例上限）
+            单笔仓位上限 %（订单名义价值占账户权益比例上限，1-100）
           </label>
           <input
             type="number"
             min={1}
-            max={10000}
+            max={100}
             value={positionLimit}
             disabled={!isAdmin}
             onChange={(e) => setPositionLimit(Number(e.target.value) || 0)}
