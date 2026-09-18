@@ -49,10 +49,17 @@ export function deriveStrategyType(market: 'spot' | 'contract'): string {
 
 /** 现货策略类型参数档案：选中类型即套用（联动逻辑同"快速预设"，可继续微调）。
  * addPositions 为 UI 百分比单位（craParamsToApiPayload 负责转小数）。 */
-export interface SpotTypeProfile {
-  firstOrderAmount: number
-  addPositions: AddPositionItem[]
+/** 现货网格参数状态（cra_spot 模式的语义来源；区间为用户输入字符串）。 */
+export interface SpotGridState {
+  priceLower: string
+  priceUpper: string
+  gridCount: number
+  perGridAmount: number
 }
+
+export type SpotTypeProfile =
+  | { kind: 'grid'; gridCount: number; perGridAmount: number }
+  | { kind: 'ladder'; firstOrderAmount: number; addPositions: AddPositionItem[] }
 
 function buildLadder(multipliers: number[], stepPct: number, callbackPct: number): AddPositionItem[] {
   // spread 等差：第 i 层 = i × 每层步长（%）；callback 各层一致。
@@ -60,20 +67,38 @@ function buildLadder(multipliers: number[], stepPct: number, callbackPct: number
 }
 
 export const SPOT_TYPE_PROFILES: Record<string, SpotTypeProfile> = {
-  cra_spot: { firstOrderAmount: 50, addPositions: buildLadder([1, 1, 1, 1, 1], 2, 0.3) },
-  martin_trend: { firstOrderAmount: 20, addPositions: buildLadder([1, 2, 4, 8, 16, 32, 64], 3, 0.5) },
-  wallstreet: { firstOrderAmount: 30, addPositions: buildLadder([1, 1, 2, 3, 5, 8, 13, 21], 2.5, 0.5) },
-  aggressive: { firstOrderAmount: 10, addPositions: buildLadder([1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 1.5, 0.3) },
+  // 现货网格：语义 = 网格参数（区间/格数/每格金额），由 SpotGridState 承载；
+  // 提交时生成等差 add_positions 映射（见 buildSpotGridLadder）。
+  cra_spot: { kind: 'grid', gridCount: 5, perGridAmount: 50 },
+  martin_trend: { kind: 'ladder', firstOrderAmount: 20, addPositions: buildLadder([1, 2, 4, 8, 16, 32, 64], 3, 0.5) },
+  wallstreet: { kind: 'ladder', firstOrderAmount: 30, addPositions: buildLadder([1, 1, 2, 3, 5, 8, 13, 21], 2.5, 0.5) },
+  aggressive: { kind: 'ladder', firstOrderAmount: 10, addPositions: buildLadder([1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 1.5, 0.3) },
 }
 
-/** 档案展开为 CRAParams 补丁（首单倍数恒 1；orderCount 跟随档数）。 */
-export function expandSpotProfile(profile: SpotTypeProfile): Partial<CRAParams> {
+export function isGridProfile(p: SpotTypeProfile | undefined): p is Extract<SpotTypeProfile, { kind: 'grid' }> {
+  return !!p && p.kind === 'grid'
+}
+
+/** ladder 档案展开为 CRAParams 补丁（首单倍数恒 1；orderCount 跟随档数）。网格档案走 SpotGridState。 */
+export function expandSpotProfile(profile: Extract<SpotTypeProfile, { kind: 'ladder' }>): Partial<CRAParams> {
   return {
     firstOrderAmount: profile.firstOrderAmount,
     firstOrderMultiplier: 1,
     addPositions: profile.addPositions,
     orderCount: profile.addPositions.length,
   }
+}
+
+/** 现货网格 ladder 生成（UI 百分比单位）：spread_i% = i × (upper-lower)/upper/格数 ×100，
+ * callback 0.3%，multiplier 1。提交时 craParamsToApiPayload 负责转小数。 */
+export function buildSpotGridLadder(lower: number, upper: number, grids: number): AddPositionItem[] {
+  const stepPct = ((upper - lower) / upper / grids) * 100
+  return Array.from({ length: grids - 1 }, (_, i) => ({
+    order: i + 1,
+    multiplier: 1,
+    spread: stepPct * (i + 1),
+    callback: 0.3,
+  }))
 }
 
 // Derive the strategy bar timeframe from enabled indicator periods.
@@ -141,6 +166,11 @@ export interface StrategyCreateFormState {
   dynamicParams: Record<string, unknown>
   setDynamicParams: Dispatch<SetStateAction<Record<string, unknown>>>
   totalAddPosition: number
+  /** 现货网格参数（cra_spot 模式）：区间/格数/每格金额，onChange 已同步 craParams。 */
+  spotGrid: SpotGridState
+  setSpotGrid: (patch: Partial<SpotGridState>) => void
+  /** 现货网格即时校验文案（null=通过）。 */
+  spotGridError: string | null
   isSubmitting: boolean
   handleSubmit: () => Promise<void>
 }
@@ -150,6 +180,8 @@ export interface StrategyCreateFormOptions {
   initialType?: string
   /** 编辑模式：存在时保存走 update 而非 create。 */
   editId?: string
+  /** 编辑回填：记录 config_json 解析结果（现货网格自定义键优先还原，CRA 键回退）。 */
+  initialConfig?: Record<string, unknown>
 }
 
 export function useStrategyCreateForm(
@@ -169,7 +201,12 @@ export function useStrategyCreateForm(
   const setStrategyType = (t: string) => {
     setTypeOverride(t)
     const profile = market === 'spot' ? SPOT_TYPE_PROFILES[t] : undefined
-    if (profile) setCraParams((prev) => ({ ...prev, ...expandSpotProfile(profile) }))
+    if (isGridProfile(profile)) {
+      // 现货网格档案 = 网格参数（格数/每格金额）；区间保留用户输入。
+      setSpotGrid({ gridCount: profile.gridCount, perGridAmount: profile.perGridAmount })
+    } else if (profile) {
+      setCraParams((prev) => ({ ...prev, ...expandSpotProfile(profile) }))
+    }
   }
   // 市场切换时清除改选，跟随新市场默认值
   useEffect(() => setTypeOverride(null), [market])
@@ -209,6 +246,45 @@ export function useStrategyCreateForm(
   // CRA params
   const [craParams, setCraParams] = useState<CRAParams>(() => createDefaultCRAParams(market))
   const [presetKey, setPresetKey] = useState<string | null>(null)
+
+  // 现货网格参数（cra_spot 的语义来源；onChange 同步推导 craParams ladder 与自定义键）
+  const [spotGrid, setSpotGridState] = useState<SpotGridState>({
+    priceLower: '',
+    priceUpper: '',
+    gridCount: 5,
+    perGridAmount: 50,
+  })
+
+  const setSpotGrid = (patch: Partial<SpotGridState>) => {
+    const next = { ...spotGrid, ...patch }
+    setSpotGridState(next)
+    // 同步映射进 craParams：每格金额→firstOrderAmount、格数→orderCount、
+    // 区间+格数→等差 add_positions（区间未填好前保留现状）。
+    const lo = parseFloat(next.priceLower)
+    const hi = parseFloat(next.priceUpper)
+    setCraParams((prev) => ({
+      ...prev,
+      firstOrderAmount: next.perGridAmount,
+      firstOrderMultiplier: 1,
+      orderCount: next.gridCount,
+      addPositions:
+        isFinite(lo) && lo > 0 && isFinite(hi) && hi > lo && next.gridCount >= 2
+          ? buildSpotGridLadder(lo, hi, next.gridCount)
+          : prev.addPositions,
+    }))
+  }
+
+  // 现货网格即时校验（提交时硬拦 + 表单内提示）
+  const spotGridError = useMemo(() => {
+    const lo = parseFloat(spotGrid.priceLower)
+    const hi = parseFloat(spotGrid.priceUpper)
+    if (!isFinite(lo) || lo <= 0) return '请输入有效的价格区间下限（正数）'
+    if (!isFinite(hi) || hi <= lo) return '价格区间上限必须大于下限'
+    if (!Number.isInteger(spotGrid.gridCount) || spotGrid.gridCount < 2 || spotGrid.gridCount > 200)
+      return '格数必须在 2-200 之间'
+    if (!(spotGrid.perGridAmount > 0)) return '每格金额必须大于 0'
+    return null
+  }, [spotGrid])
 
   // Dynamic params
   const [paramDefs, setParamDefs] = useState<StrategyParamDefs['params']>([])
@@ -258,7 +334,19 @@ export function useStrategyCreateForm(
     setSelectedExchanges([])
     setExecutionMode('paper')
     setNotifyChannels(['browser'])
-    setCraParams(profile ? { ...defaults, ...expandSpotProfile(profile) } : defaults)
+    if (isGridProfile(profile)) {
+      const gridProfile = profile
+      setSpotGridState({ priceLower: '', priceUpper: '', gridCount: gridProfile.gridCount, perGridAmount: gridProfile.perGridAmount })
+      setCraParams((prev) => ({
+        ...defaults,
+        firstOrderAmount: gridProfile.perGridAmount,
+        firstOrderMultiplier: 1,
+        orderCount: gridProfile.gridCount,
+        addPositions: prev.addPositions,
+      }))
+    } else {
+      setCraParams(profile ? { ...defaults, ...expandSpotProfile(profile) } : defaults)
+    }
     setPresetKey(null)
   }, [strategyType, market])
 
@@ -266,6 +354,24 @@ export function useStrategyCreateForm(
   useEffect(() => {
     setTimeframe(deriveTimeframeFromCRA(craParams))
   }, [craParams])
+
+  // 编辑回填（现货网格）：自定义键 price_lower/price_upper/grid_count/per_grid_amount
+  // 优先；缺省从 CRA 键回退（first_order_amount→每格金额、order_count→格数，
+  // 区间留空）。仅 mount 时执行一次；其余类型的回填由页面 effect 直填 craParams。
+  const initialConfig = options?.initialConfig
+  useEffect(() => {
+    if (!initialConfig || market !== 'spot') return
+    const type = initialType ?? deriveStrategyType(market)
+    if (type !== 'cra_spot') return
+    const num = (k: string) => (typeof initialConfig[k] === 'number' ? (initialConfig[k] as number) : undefined)
+    setSpotGridState({
+      priceLower: num('price_lower') != null ? String(num('price_lower')) : '',
+      priceUpper: num('price_upper') != null ? String(num('price_upper')) : '',
+      gridCount: num('grid_count') ?? num('order_count') ?? 5,
+      perGridAmount: num('per_grid_amount') ?? num('first_order_amount') ?? 50,
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const applyPreset = (preset: Preset) => {
     setPresetKey(preset.key)
@@ -314,6 +420,11 @@ export function useStrategyCreateForm(
       toast('error', '请至少选择一个交易所')
       return
     }
+    // 现货网格：区间/格数/每格金额即时校验（后端 validateSpotParams 兜底）。
+    if (market === 'spot' && strategyType === 'cra_spot' && spotGridError) {
+      toast('error', spotGridError)
+      return
+    }
 
     // ── P0-4 类型-参数防呆 ──
     const craType = isCRAStrategyType(strategyType)
@@ -344,6 +455,13 @@ export function useStrategyCreateForm(
       if (!craType && CRA_FEATURE_KEYS.some((k) => k in config)) {
         toast('error', '参数与策略类型不匹配：补仓/移动止盈参数仅适用于 cra_contract/cra_spot')
         return
+      }
+      // 现货网格：自定义键随 config 落库（编辑回填时自定义键优先还原）。
+      if (market === 'spot' && strategyType === 'cra_spot') {
+        config.price_lower = parseFloat(spotGrid.priceLower)
+        config.price_upper = parseFloat(spotGrid.priceUpper)
+        config.grid_count = spotGrid.gridCount
+        config.per_grid_amount = spotGrid.perGridAmount
       }
       const payload: Record<string, unknown> = {
         name: name.trim(),
@@ -412,6 +530,9 @@ export function useStrategyCreateForm(
     dynamicParams,
     setDynamicParams,
     totalAddPosition,
+    spotGrid,
+    setSpotGrid,
+    spotGridError,
     isSubmitting,
     handleSubmit,
   }
@@ -432,6 +553,9 @@ export function StrategyCreateFormSections({
     market,
     strategyType,
     setStrategyType,
+    spotGrid,
+    setSpotGrid,
+    spotGridError,
     name,
     setName,
     symbol,
@@ -601,8 +725,73 @@ export function StrategyCreateFormSections({
 
       {/* 3 参数 · 指标与壳 */}
       <div id="create-sec-params" className="scroll-mt-20">
+        {/* 现货网格（cra_spot）：网格参数组替代 CRA 补仓数字字段（语义来源） */}
+        {market === 'spot' && strategyType === 'cra_spot' && (
+          <SectionCard title="网格参数">
+            <div className="space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[11px] text-muted-foreground mb-1.5 block">区间下限</label>
+                  <input
+                    type="number"
+                    value={spotGrid.priceLower}
+                    onChange={(e) => setSpotGrid({ priceLower: e.target.value })}
+                    className={inputCls}
+                    placeholder="40000"
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] text-muted-foreground mb-1.5 block">区间上限</label>
+                  <input
+                    type="number"
+                    value={spotGrid.priceUpper}
+                    onChange={(e) => setSpotGrid({ priceUpper: e.target.value })}
+                    className={inputCls}
+                    placeholder="50000"
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] text-muted-foreground mb-1.5 block">格数 (2-200)</label>
+                  <input
+                    type="number"
+                    min={2}
+                    max={200}
+                    value={spotGrid.gridCount}
+                    onChange={(e) => setSpotGrid({ gridCount: parseInt(e.target.value, 10) || 2 })}
+                    className={inputCls}
+                    placeholder="5"
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] text-muted-foreground mb-1.5 block">每格金额 (USDT)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={spotGrid.perGridAmount}
+                    onChange={(e) => setSpotGrid({ perGridAmount: Number(e.target.value) || 1 })}
+                    className={inputCls}
+                    placeholder="50"
+                  />
+                </div>
+              </div>
+              {spotGridError ? (
+                <div className="text-[10px] text-quant-red">{spotGridError}</div>
+              ) : (
+                <div className="text-[10px] text-muted-foreground leading-relaxed">
+                  价格从上限跌到下限均分 {spotGrid.gridCount} 格逐格补仓；区间与格数将自动生成逐级补仓参数（网格语义）。
+                </div>
+              )}
+            </div>
+          </SectionCard>
+        )}
         {isCRAStrategyType(strategyType) ? (
-          <CRAParamForm value={craParams} onChange={setCraParams} market={market} />
+          <CRAParamForm
+            value={craParams}
+            onChange={setCraParams}
+            market={market}
+            openFields={market === 'spot' && strategyType === 'cra_spot' ? 'indicator-only' : 'full'}
+            hideAddPosition={market === 'spot' && strategyType === 'cra_spot'}
+          />
         ) : (
           <SectionCard title="参数">
             <div className="text-xs text-muted-foreground py-4 text-center">

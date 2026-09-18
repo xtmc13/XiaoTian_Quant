@@ -208,9 +208,14 @@ interface CRAParamFormProps {
   onChange: (next: CRAParams) => void
   market: MarketType
   className?: string
+  /** 开仓设置区渲染模式：indicator-only 只保留开仓指标块（现货网格模式的网格参数替代数字字段）。 */
+  openFields?: 'full' | 'indicator-only'
+  /** 隐藏补仓设置区（现货网格：ladder 由区间/格数自动生成）。 */
+  hideAddPosition?: boolean
 }
 
-export function CRAParamForm({ value, onChange, market, className }: CRAParamFormProps) {
+export function CRAParamForm({ value, onChange, market, className, openFields = 'full', hideAddPosition = false }: CRAParamFormProps) {
+  const showOpenFields = openFields === 'full'
   const [showAddPositionModal, setShowAddPositionModal] = useState(false)
   const [showMovingTPModal, setShowMovingTPModal] = useState(false)
 
@@ -229,6 +234,8 @@ export function CRAParamForm({ value, onChange, market, className }: CRAParamFor
     <div className={cn('space-y-4', className)}>
       {/* ── 开仓设置 ── */}
       <Section title="开仓设置">
+        {showOpenFields && (
+          <>
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="text-[11px] text-muted-foreground mb-1.5 block">首单额度 (USDT)</label>
@@ -330,6 +337,8 @@ export function CRAParamForm({ value, onChange, market, className }: CRAParamFor
             ))}
           </div>
         </div>
+          </>
+        )}
 
         {/* 开仓指标（现货/合约一致：策略=指标+方向，可弹窗调参） */}
         <div className="space-y-2">
@@ -366,6 +375,8 @@ export function CRAParamForm({ value, onChange, market, className }: CRAParamFor
             />
           </div>
 
+        {showOpenFields && (
+          <>
         <div className="flex flex-wrap gap-3">
           <label className="flex items-center gap-2 text-xs text-muted-foreground">
             <input
@@ -388,9 +399,12 @@ export function CRAParamForm({ value, onChange, market, className }: CRAParamFor
             </label>
           )}
         </div>
+          </>
+        )}
       </Section>
 
-      {/* ── 补仓设置 ── */}
+      {/* ── 补仓设置（现货网格模式隐藏：ladder 由区间/格数自动生成） ── */}
+      {!hideAddPosition && (
       <Section title="补仓设置">
         <div className="flex items-center gap-4">
           <label className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -477,6 +491,7 @@ export function CRAParamForm({ value, onChange, market, className }: CRAParamFor
           </div>
         )}
       </Section>
+      )}
 
       {/* ── 风控设置 ── */}
       <Section title="风控设置">

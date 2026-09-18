@@ -44,10 +44,20 @@ export function CreateStrategyPage() {
 
   const populatedFor = useRef<string | null>(null)
 
+  // 编辑回填：config_json 解析结果传给 hook（现货网格自定义键优先还原）。
+  const editConfig = (() => {
+    if (!editId || !editingItem) return undefined
+    try {
+      return JSON.parse(editingItem.config_json || '{}') as Record<string, unknown>
+    } catch {
+      return undefined
+    }
+  })()
+
   const form = useStrategyCreateForm(
     market,
     () => navigate('/bots'),
-    editId && editingItem ? { editId, initialType: editingItem.strategy_type } : undefined
+    editId && editingItem ? { editId, initialType: editingItem.strategy_type, initialConfig: editConfig } : undefined
   )
 
   // 编辑回填（现货/合约同一套原创建表单）：config_json → CRAParams（指标
