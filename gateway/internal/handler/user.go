@@ -117,6 +117,9 @@ func ChangePassword(c *gin.Context) {
 		return
 	}
 
+	// A3.4: 修改密码即完成强制改密要求，清除标记（tv 已在 UpdateUserPassword 内 +1）。
+	_ = store.SetMustChangePassword(user["id"].(int), false)
+
 	c.JSON(http.StatusOK, gin.H{"detail": "password changed"})
 }
 

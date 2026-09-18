@@ -119,9 +119,28 @@ func setGridPrice(t *testing.T, v float64) {
 	t.Cleanup(func() { gridPriceSource = orig })
 }
 
+// gridToken 签发测试用 JWT。A3.3/A3.4 起 AuthRequired 会查库校验
+// token_version 与 must_change_password，因此先确保对应 uid 的用户存在、
+// 未处于强制改密状态、tv=1（与 JWT 声明一致）。
 func gridToken(t *testing.T, uid int) string {
 	t.Helper()
-	tok, err := store.GenerateJWT(uid, "gridtester", "user", 1)
+	db := store.GetDB()
+	if db == nil {
+		t.Fatal("store db not initialized")
+	}
+	username := fmt.Sprintf("gridtester%d", uid)
+	if _, err := db.Exec(
+		`INSERT OR IGNORE INTO xt_users (id, username, password_hash, nickname, email, role, token_version) VALUES (?, ?, ?, ?, ?, ?, 1)`,
+		uid, username, store.HashPassword("grid-pass-123"), "Grid Tester", fmt.Sprintf("grid%d@test.local", uid), "user",
+	); err != nil {
+		t.Fatalf("ensure grid test user: %v", err)
+	}
+	if _, err := db.Exec(
+		`UPDATE xt_users SET must_change_password=0, token_version=1, is_active=1, totp_enabled=0 WHERE id=?`, uid,
+	); err != nil {
+		t.Fatalf("reset grid test user flags: %v", err)
+	}
+	tok, err := store.GenerateJWT(uid, username, "user", 1)
 	if err != nil {
 		t.Fatalf("generate jwt: %v", err)
 	}

@@ -113,8 +113,21 @@ func registerAuthRoutes(api *gin.RouterGroup) {
 		auth.POST("/register", handler.Register)
 		auth.POST("/send-code", handler.SendVerificationCode)
 		auth.POST("/reset-password", handler.ResetPassword)
+		auth.POST("/mfa/verify", handler.MFAVerify)
 		auth.GET("/me", middleware.AuthRequired(), handler.GetMe)
 		auth.POST("/refresh", middleware.AuthRequired(), handler.RefreshToken)
+		auth.POST("/logout", middleware.AuthRequired(), handler.Logout)
+		// A3.4: 与 /api/user/change-password 等价，强制改密期间的两个放行路径之一。
+		auth.POST("/change-password", middleware.AuthRequired(), handler.ChangePassword)
+	}
+
+	// ── MFA / TOTP 管理（A3.1，均需登录） ──
+	mfaG := auth.Group("/mfa")
+	mfaG.Use(middleware.AuthRequired())
+	{
+		mfaG.POST("/setup", handler.MFASetup)
+		mfaG.POST("/enable", handler.MFAEnable)
+		mfaG.POST("/disable", handler.MFADisable)
 	}
 }
 

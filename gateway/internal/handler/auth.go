@@ -11,16 +11,18 @@ import (
 )
 
 type LoginRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username        string `json:"username"`
+	Password        string `json:"password"`
+	TurnstileToken  string `json:"turnstile_token,omitempty"`
 }
 
 type RegisterRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-	Nickname string `json:"nickname"`
-	Email    string `json:"email"`
-	Code     string `json:"code"`
+	Username       string `json:"username"`
+	Password       string `json:"password"`
+	Nickname       string `json:"nickname"`
+	Email          string `json:"email"`
+	Code           string `json:"code"`
+	TurnstileToken string `json:"turnstile_token,omitempty"`
 }
 
 type SendCodeRequest struct {
@@ -29,8 +31,9 @@ type SendCodeRequest struct {
 }
 
 type LoginCodeRequest struct {
-	Email string `json:"email"`
-	Code  string `json:"code"`
+	Email          string `json:"email"`
+	Code           string `json:"code"`
+	TurnstileToken string `json:"turnstile_token,omitempty"`
 }
 
 type ResetPasswordRequest struct {
@@ -43,6 +46,11 @@ func Login(c *gin.Context) {
 	var req LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid request"})
+		return
+	}
+
+	// A3.2: 配置 TURNSTILE_SECRET_KEY 时强制人机验证（未配置则跳过）。
+	if requireTurnstile(c, req.TurnstileToken) {
 		return
 	}
 
@@ -69,14 +77,34 @@ func Login(c *gin.Context) {
 	username, _ := row["username"].(string)
 	role, _ := row["role"].(string)
 	tokenVersion, _ := row["token_version"].(int)
+	mfaEnabled, _ := row["totp_enabled"].(bool)
+	mustChange, _ := row["must_change_password"].(bool)
+
+	// A3.1: 已启用 MFA 的账户密码校验通过后进入第二步，下发短时效临时令牌。
+	if mfaEnabled {
+		mfaToken, err := store.GenerateMFAToken(userID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"detail": "Failed to generate MFA token"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"mfa_required": true,
+			"mfa_token":    mfaToken,
+		})
+		return
+	}
 
 	token, err := store.GenerateJWT(userID, username, role, tokenVersion)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "Failed to generate token"})
 		return
 	}
+
+	recordLoginSecurity(c, userID, false)
+
 	c.JSON(http.StatusOK, gin.H{
 		"access_token": token, "token_type": "bearer",
+		"must_change_password": mustChange,
 		"user": gin.H{
 			"id": row["id"], "username": row["username"],
 			"role": row["role"], "nickname": row["nickname"],
@@ -104,6 +132,11 @@ func Register(c *gin.Context) {
 	}
 	if req.Code == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": "Verification code is required"})
+		return
+	}
+
+	// A3.2: 配置 TURNSTILE_SECRET_KEY 时注册强制人机验证（未配置则跳过）。
+	if requireTurnstile(c, req.TurnstileToken) {
 		return
 	}
 
@@ -152,19 +185,42 @@ func GetMe(c *gin.Context) {
 	userID := c.GetInt("user_id")
 	username := c.GetString("username")
 	role := c.GetString("role")
-	c.JSON(http.StatusOK, gin.H{"id": userID, "username": username, "role": role})
+	flags, found := store.GetUserSecurityFlags(userID)
+	if !found {
+		c.JSON(http.StatusOK, gin.H{"id": userID, "username": username, "role": role})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"id": userID, "username": username, "role": role,
+		"totp_enabled":         flags.TOTPEnabled,
+		"must_change_password": flags.MustChangePassword,
+	})
 }
 
+// RefreshToken 用数据库里的当前 token_version 重新签发（旧 tv 的令牌
+// 在 A3.3 中间件校验中已被拒绝，这里天然只给合法请求发新令牌）。
 func RefreshToken(c *gin.Context) {
 	userID := c.GetInt("user_id")
 	username := c.GetString("username")
 	role := c.GetString("role")
-	token, err := store.GenerateJWT(userID, username, role, 1)
+	tv, err := store.GetUserTokenVersion(userID)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"detail": "user not found"})
+		return
+	}
+	token, err := store.GenerateJWT(userID, username, role, tv)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "Failed to generate token"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"access_token": token, "token_type": "bearer"})
+}
+
+// Logout 退出登录：JWT 无状态，服务端记录审计日志，客户端丢弃令牌即可。
+func Logout(c *gin.Context) {
+	username := c.GetString("username")
+	store.AddAuditLog(username, "logout", "")
+	c.JSON(http.StatusOK, gin.H{"detail": "logged out"})
 }
 
 func ListUsers(c *gin.Context) {
@@ -250,6 +306,11 @@ func LoginByCode(c *gin.Context) {
 
 	if req.Email == "" || req.Code == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": "email and code are required"})
+		return
+	}
+
+	// A3.2: 配置 TURNSTILE_SECRET_KEY 时登录强制人机验证（未配置则跳过）。
+	if requireTurnstile(c, req.TurnstileToken) {
 		return
 	}
 

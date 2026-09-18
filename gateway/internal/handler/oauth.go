@@ -260,9 +260,16 @@ func autoAuthUser(c *gin.Context, email, name, provider string) {
 	}
 
 	var userID int
+	tokenVersion := 1
 	if existingUser != nil {
 		if id, ok := existingUser["id"].(int); ok {
 			userID = id
+		}
+		// A3.3: 使用数据库中的当前 token_version，保证封禁/改密后旧令牌不失效于新令牌。
+		if row := store.FindUserByEmail(email); row != nil {
+			if tv, ok := row["token_version"].(int); ok {
+				tokenVersion = tv
+			}
 		}
 	} else {
 		// Auto-register with random password
@@ -271,7 +278,7 @@ func autoAuthUser(c *gin.Context, email, name, provider string) {
 	}
 
 	// Generate JWT and set cookie
-	if token, err := store.GenerateJWT(userID, name, "user", 1); err == nil {
+	if token, err := store.GenerateJWT(userID, name, "user", tokenVersion); err == nil {
 		c.SetCookie("token", token, 86400, "/", "", false, true)
 	}
 }

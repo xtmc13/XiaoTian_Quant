@@ -115,6 +115,11 @@ func AdminUserDisable(c *gin.Context) {
 		return
 	}
 
+	// A3.3: 封禁同时 token_version+1，使该用户既有 JWT 立即失效。
+	if uid, err := strconv.Atoi(userID); err == nil {
+		_ = store.RevokeUserTokens(uid)
+	}
+
 	store.AddAuditLog("admin", "user_disabled", "user_id="+userID)
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
