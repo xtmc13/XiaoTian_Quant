@@ -1,13 +1,10 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { authApi } from '@/lib/api'
+import { authApi, mfaApi, type AuthResult, type AuthUser } from '@/lib/api'
 
-interface User {
-  id?: number
-  username: string
-  role: string
-  nickname?: string
-  email?: string
+export interface User extends AuthUser {
+  must_change_password?: boolean
+  totp_enabled?: boolean
 }
 
 interface AuthState {
@@ -18,14 +15,34 @@ interface AuthState {
   error: string | null
   hydrated: boolean
   // actions
-  login: (username: string, password: string) => Promise<void>
-  loginByCode: (email: string, code: string) => Promise<void>
-  register: (data: { username: string; password: string; email: string; code: string; nickname?: string }) => Promise<void>
+  login: (username: string, password: string, turnstileToken?: string) => Promise<AuthResult>
+  mfaVerify: (mfaToken: string, code: string) => Promise<void>
+  loginByCode: (email: string, code: string, turnstileToken?: string) => Promise<AuthResult>
+  register: (data: { username: string; password: string; email: string; code: string; nickname?: string }, turnstileToken?: string) => Promise<AuthResult>
   sendCode: (email: string, codeType: string) => Promise<void>
   resetPassword: (email: string, code: string, password: string) => Promise<void>
   fetchUser: () => Promise<void>
   logout: () => void
   clearError: () => void
+}
+
+// applyAuthResult: 登录类接口的统一落库——只有拿到正式 access_token
+// 才算登录成功；mfa_required 的响应留给页面进入第二步。
+function applyAuthResult(
+  set: (partial: Partial<AuthState>) => void,
+  res: AuthResult
+): AuthResult {
+  if (res.access_token) {
+    localStorage.setItem('xt-token', res.access_token)
+    set({
+      token: res.access_token,
+      isAuthenticated: true,
+      user: res.user
+        ? { ...res.user, must_change_password: res.must_change_password }
+        : null,
+    })
+  }
+  return res
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -40,7 +57,7 @@ export const useAuthStore = create<AuthState>()(
       error: null,
       hydrated: true,
 
-      login: async (username, password) => {
+      login: async (username, password, turnstileToken) => {
         set({ isLoading: true, error: null })
         try {
           // E2E test bypass
@@ -52,12 +69,10 @@ export const useAuthStore = create<AuthState>()(
               isAuthenticated: true,
               user: { id: 1, username: 'e2e_user', role: 'user', nickname: 'E2E Tester' },
             })
-            return
+            return {}
           }
-          const res = await authApi.login(username, password)
-          const token = res.access_token
-          localStorage.setItem('xt-token', token)
-          set({ token, isAuthenticated: true, user: res.user })
+          const res = await authApi.login(username, password, turnstileToken)
+          return applyAuthResult(set, res)
         } catch (e: unknown) {
           const err = e instanceof Error ? e : new Error(String(e))
           set({ error: err.message || '登录失败' })
@@ -67,13 +82,25 @@ export const useAuthStore = create<AuthState>()(
         }
       },
 
-      loginByCode: async (email, code) => {
+      mfaVerify: async (mfaToken, code) => {
         set({ isLoading: true, error: null })
         try {
-          const res = await authApi.loginCode(email, code)
-          const token = res.access_token
-          localStorage.setItem('xt-token', token)
-          set({ token, isAuthenticated: true, user: res.user })
+          const res = await mfaApi.verify(mfaToken, code)
+          applyAuthResult(set, res)
+        } catch (e: unknown) {
+          const err = e instanceof Error ? e : new Error(String(e))
+          set({ error: err.message || '两步验证失败' })
+          throw e
+        } finally {
+          set({ isLoading: false })
+        }
+      },
+
+      loginByCode: async (email, code, turnstileToken) => {
+        set({ isLoading: true, error: null })
+        try {
+          const res = await authApi.loginCode(email, code, turnstileToken)
+          return applyAuthResult(set, res)
         } catch (e: unknown) {
           const err = e instanceof Error ? e : new Error(String(e))
           set({ error: err.message || '验证码登录失败' })
@@ -83,13 +110,11 @@ export const useAuthStore = create<AuthState>()(
         }
       },
 
-      register: async (data) => {
+      register: async (data, turnstileToken) => {
         set({ isLoading: true, error: null })
         try {
-          const res = await authApi.register(data)
-          const token = res.access_token
-          localStorage.setItem('xt-token', token)
-          set({ token, isAuthenticated: true, user: res.user })
+          const res = await authApi.register(data, turnstileToken)
+          return applyAuthResult(set, res)
         } catch (e: unknown) {
           const err = e instanceof Error ? e : new Error(String(e))
           set({ error: err.message || '注册失败' })
@@ -127,14 +152,28 @@ export const useAuthStore = create<AuthState>()(
 
       fetchUser: async () => {
         try {
-          const user = await authApi.me()
-          set({ user })
+          const me = await authApi.me()
+          set({
+            user: {
+              id: me.id,
+              username: me.username,
+              role: me.role,
+              totp_enabled: me.totp_enabled,
+              must_change_password: me.must_change_password,
+            },
+          })
         } catch {
           // silently fail; user may be viewing public pages
         }
       },
 
       logout: () => {
+        // 通知服务端记录审计日志（JWT 无状态，本地清除即完成登出）。
+        try {
+          void authApi.logout()
+        } catch {
+          /* ignore */
+        }
         localStorage.removeItem('xt-token')
         set({ token: null, user: null, isAuthenticated: false, error: null })
       },

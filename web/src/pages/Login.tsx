@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
 import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
-import { Zap, Eye, EyeOff, Loader2, AlertCircle, CheckCircle, Mail, ArrowRight } from 'lucide-react'
+import { TurnstileWidget, turnstileConfigured, type TurnstileWidgetHandle } from '@/components/TurnstileWidget'
+import { Zap, Eye, EyeOff, Loader2, AlertCircle, CheckCircle, Mail, ArrowRight, ShieldCheck } from 'lucide-react'
 
 type Tab = 'login' | 'register' | 'reset'
 
@@ -16,11 +17,25 @@ export function Login() {
   const navigate = useNavigate()
   const location = useLocation()
   const { t } = useI18n()
-  const { login, loginByCode, register, sendCode, resetPassword: doResetPassword, isAuthenticated, isLoading, error, clearError } = useAuthStore()
+  const { login, mfaVerify, loginByCode, register, sendCode, resetPassword: doResetPassword, isAuthenticated, isLoading, error, clearError } = useAuthStore()
 
   // ── Tab state ──
   const [tab, setTab] = useState<Tab>('login')
   const [successMsg, setSuccessMsg] = useState('')
+
+  // ── MFA second step (A3.1) ──
+  const [mfaToken, setMfaToken] = useState<string | null>(null)
+  const [mfaCode, setMfaCode] = useState('')
+
+  // ── Turnstile captcha (A3.2) ──
+  const showTurnstile = turnstileConfigured()
+  const turnstileRef = useRef<TurnstileWidgetHandle>(null)
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null)
+
+  const resetTurnstile = () => {
+    setTurnstileToken(null)
+    turnstileRef.current?.reset()
+  }
 
   // ── Login form ──
   const [username, setUsername] = useState('')
@@ -71,7 +86,22 @@ export function Login() {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!username.trim() || !password.trim()) return
-    try { await login(username, password) } catch { /* store sets error */ }
+    try {
+      const res = await login(username, password, turnstileToken || undefined)
+      if (res.mfa_required && res.mfa_token) {
+        // 进入两步验证第二步；正式令牌由 mfaVerify 下发。
+        setMfaToken(res.mfa_token)
+        setMfaCode('')
+      }
+    } catch { /* store sets error */ } finally {
+      resetTurnstile()
+    }
+  }
+
+  const handleMfaVerify = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!mfaToken || !mfaCode.trim()) return
+    try { await mfaVerify(mfaToken, mfaCode.trim()) } catch { /* store sets error */ }
   }
 
   const handleSendRegCode = async () => {
@@ -86,8 +116,10 @@ export function Login() {
     e.preventDefault()
     if (!regUsername.trim() || !regPassword.trim() || !regEmail.trim() || !regCode.trim()) return
     try {
-      await register({ username: regUsername, password: regPassword, email: regEmail, code: regCode, nickname: regUsername })
-    } catch { /* store sets error */ }
+      await register({ username: regUsername, password: regPassword, email: regEmail, code: regCode, nickname: regUsername }, turnstileToken || undefined)
+    } catch { /* store sets error */ } finally {
+      resetTurnstile()
+    }
   }
 
   const handleSendResetCode = async () => {
@@ -164,8 +196,43 @@ export function Login() {
           </div>
         )}
 
+        {/* ══════ MFA SECOND STEP (A3.1) ══════ */}
+        {mfaToken && (
+          <form onSubmit={handleMfaVerify} className="space-y-4">
+            <div className="flex items-center gap-2 rounded-lg border border-quant-gold/20 bg-quant-gold/5 px-3 py-2 text-xs text-quant-gold">
+              <ShieldCheck className="h-4 w-4 shrink-0" />
+              该账户已开启两步验证，请输入 authenticator 应用中的 6 位动态码（或备用码）
+            </div>
+            <div className="space-y-1.5">
+              <label className={labelCls}>两步验证码</label>
+              <input
+                type="text"
+                value={mfaCode}
+                onChange={(e) => setMfaCode(e.target.value.replace(/[^0-9A-Za-z-]/g, '').slice(0, 9))}
+                placeholder="6 位动态码 / XXXX-YYYY 备用码"
+                autoComplete="one-time-code"
+                maxLength={9}
+                className={cn(inputCls, 'text-center text-lg tracking-[0.3em]')}
+              />
+            </div>
+            <button type="submit" disabled={isLoading || !mfaCode.trim()} className={btnCls}>
+              {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
+              {isLoading ? t('common.loading') : '验证并登录'}
+            </button>
+            <p className="text-center text-[11px] text-muted-foreground">
+              <button
+                type="button"
+                onClick={() => { setMfaToken(null); setMfaCode(''); clearError() }}
+                className="text-quant-gold hover:underline"
+              >
+                返回重新输入密码
+              </button>
+            </p>
+          </form>
+        )}
+
         {/* ══════ LOGIN TAB ══════ */}
-        {tab === 'login' && (
+        {tab === 'login' && !mfaToken && (
           <form onSubmit={handleLogin} className="space-y-4">
             <div className="space-y-1.5">
               <label className={labelCls}>{t('auth.username')}</label>
@@ -192,6 +259,9 @@ export function Login() {
               {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
               {isLoading ? t('common.loading') : t('auth.loginBtn')}
             </button>
+
+            {/* Turnstile 人机验证（A3.2，仅配置 VITE_TURNSTILE_SITE_KEY 时渲染） */}
+            {showTurnstile && <TurnstileWidget ref={turnstileRef} onToken={setTurnstileToken} />}
 
             <p className="text-center text-[11px] text-muted-foreground">
               {t('auth.noAccount')}<button type="button" onClick={() => switchTab('register')} className="text-quant-gold hover:underline">{t('auth.register')}</button>
@@ -263,11 +333,14 @@ export function Login() {
             </div>
 
             <button type="submit"
-              disabled={isLoading || !regUsername.trim() || !regPassword.trim() || !regEmail.trim() || !regCode.trim()}
+              disabled={isLoading || !regUsername.trim() || !regPassword.trim() || !regEmail.trim() || !regCode.trim() || (showTurnstile && !turnstileToken)}
               className={btnCls}>
               {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
               {isLoading ? t('common.loading') : t('auth.registerBtn')}
             </button>
+
+            {/* Turnstile 人机验证（A3.2，仅配置 VITE_TURNSTILE_SITE_KEY 时渲染） */}
+            {showTurnstile && <TurnstileWidget ref={turnstileRef} onToken={setTurnstileToken} />}
 
             <p className="text-center text-[11px] text-muted-foreground">
               {t('auth.hasAccount')}<button type="button" onClick={() => switchTab('login')} className="text-quant-gold hover:underline">{t('auth.login')}</button>

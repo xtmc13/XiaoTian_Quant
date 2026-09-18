@@ -356,27 +356,36 @@ export const billingApi = {
 }
 
 // ── Auth ──
+export interface AuthUser {
+  id: number
+  username: string
+  role: string
+  nickname?: string
+  email?: string
+}
+
+// 登录/注册/验证码登录的统一响应：未开 MFA 时直接给 access_token；
+// 开 MFA 时进入第二步（mfa_required + mfa_token，换 /auth/mfa/verify）。
+export interface AuthResult {
+  access_token?: string
+  token_type?: string
+  mfa_required?: boolean
+  mfa_token?: string
+  must_change_password?: boolean
+  user?: AuthUser
+}
+
 export const authApi = {
-  login: (username: string, password: string) =>
-    api.post<{
-      access_token: string
-      token_type: string
-      user: { id: number; username: string; role: string; nickname: string }
-    }>('/auth/login', { username, password }),
+  login: (username: string, password: string, turnstileToken?: string) =>
+    api.post<AuthResult>('/auth/login', { username, password, turnstile_token: turnstileToken }),
 
-  loginCode: (email: string, code: string) =>
-    api.post<{
-      access_token: string
-      token_type: string
-      user: { id: number; username: string; role: string; nickname: string }
-    }>('/auth/login-code', { email, code }),
+  loginCode: (email: string, code: string, turnstileToken?: string) =>
+    api.post<AuthResult>('/auth/login-code', { email, code, turnstile_token: turnstileToken }),
 
-  register: (data: { username: string; password: string; email: string; code: string; nickname?: string }) =>
-    api.post<{
-      access_token: string
-      token_type: string
-      user: { id: number; username: string; role: string; nickname: string }
-    }>('/auth/register', data),
+  register: (
+    data: { username: string; password: string; email: string; code: string; nickname?: string },
+    turnstileToken?: string
+  ) => api.post<AuthResult>('/auth/register', { ...data, turnstile_token: turnstileToken }),
 
   sendCode: (email: string, code_type: string) =>
     api.post<{ detail: string; email: string }>('/auth/send-code', { email, code_type }),
@@ -384,7 +393,24 @@ export const authApi = {
   resetPassword: (email: string, code: string, password: string) =>
     api.post<{ detail: string }>('/auth/reset-password', { email, code, password }),
 
-  me: () => api.get<{ username: string; role: string }>('/auth/me'),
+  me: () =>
+    api.get<{ id: number; username: string; role: string; totp_enabled?: boolean; must_change_password?: boolean }>(
+      '/auth/me'
+    ),
+
+  changePassword: (oldPassword: string, newPassword: string) =>
+    api.post<{ detail: string }>('/auth/change-password', { old_password: oldPassword, new_password: newPassword }),
+
+  logout: () => api.post<{ detail: string }>('/auth/logout'),
+}
+
+// ── MFA / TOTP 两步验证（A3.1） ──
+export const mfaApi = {
+  setup: () => api.post<{ secret: string; otpauth_uri: string }>('/auth/mfa/setup'),
+  enable: (code: string) => api.post<{ detail: string; backup_codes: string[] }>('/auth/mfa/enable', { code }),
+  disable: (code: string) => api.post<{ detail: string }>('/auth/mfa/disable', { code }),
+  verify: (mfaToken: string, code: string) =>
+    api.post<AuthResult>('/auth/mfa/verify', { mfa_token: mfaToken, code }),
 }
 
 // ── User Profile ──

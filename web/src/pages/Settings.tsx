@@ -7,6 +7,7 @@ import type { ExchangeTestResult } from '@/types'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { SectionCard } from '@/components/ui/SectionCard'
 import { DataDownloadSection } from './settings/DataDownloadSection'
+import { MfaSection } from './settings/MfaSection'
 import {
   Globe,
   KeyRound,
@@ -1429,38 +1430,31 @@ export function Settings() {
             </SectionCard>
           )}
 
-          {/* ── SECURITY (local) ── */}
+          {/* ── SECURITY (MFA + local) ── */}
           {activeTab === 'security' && (
-            <SectionCard title="安全设置" bodyClassName="space-y-5">
-              <label className="flex items-center justify-between rounded-lg border border-quant-border bg-quant-bg p-4">
+            <>
+              <MfaSection />
+              <SectionCard title="安全设置" bodyClassName="space-y-5">
                 <div>
-                  <div className="text-sm font-medium text-foreground">两步验证 (2FA)</div>
-                  <div className="mt-0.5 text-xs text-muted-foreground">为账户登录增加额外的安全验证层</div>
+                  <label className="mb-1.5 block text-xs text-muted-foreground">会话超时 (分钟)</label>
+                  <NumberInput
+                    value={securitySettings.sessionTimeout}
+                    onChange={(v) => setSecuritySettings((p) => ({ ...p, sessionTimeout: v }))}
+                    min={5}
+                    max={1440}
+                  />
                 </div>
-                <Toggle
-                  value={securitySettings.twoFactor}
-                  onChange={(v) => setSecuritySettings((p) => ({ ...p, twoFactor: v }))}
-                />
-              </label>
-              <div>
-                <label className="mb-1.5 block text-xs text-muted-foreground">会话超时 (分钟)</label>
-                <NumberInput
-                  value={securitySettings.sessionTimeout}
-                  onChange={(v) => setSecuritySettings((p) => ({ ...p, sessionTimeout: v }))}
-                  min={5}
-                  max={1440}
-                />
-              </div>
-              <div>
-                <label className="mb-1.5 block text-xs text-muted-foreground">IP 白名单</label>
-                <TextInput
-                  value={securitySettings.ipWhitelist}
-                  onChange={(v) => setSecuritySettings((p) => ({ ...p, ipWhitelist: v }))}
-                  placeholder="192.168.1.0/24, 10.0.0.1"
-                />
-                <p className="mt-1 text-[11px] text-muted-foreground">逗号分隔，留空表示不限制</p>
-              </div>
-            </SectionCard>
+                <div>
+                  <label className="mb-1.5 block text-xs text-muted-foreground">IP 白名单</label>
+                  <TextInput
+                    value={securitySettings.ipWhitelist}
+                    onChange={(v) => setSecuritySettings((p) => ({ ...p, ipWhitelist: v }))}
+                    placeholder="192.168.1.0/24, 10.0.0.1"
+                  />
+                  <p className="mt-1 text-[11px] text-muted-foreground">逗号分隔，留空表示不限制</p>
+                </div>
+              </SectionCard>
+            </>
           )}
 
           {/* ── SYSTEM ── */}
