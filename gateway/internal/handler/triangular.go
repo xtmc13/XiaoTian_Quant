@@ -61,18 +61,16 @@ func startTriangularStreams(engine *arbitrage.TriangularEngine) {
 	if bus == nil {
 		return
 	}
-	client := engine.GetClient()
-	if client == nil {
-		return
-	}
-	client.WireToEventBus(bus)
-	_ = client.StartMarketStream(engine.GetConfig().Symbols)
+	engine.IterateClients(func(_ string, client arbitrage.ExchangeClient) {
+		client.WireToEventBus(bus)
+		_ = client.StartMarketStream(engine.GetConfig().Symbols)
+	})
 }
 
 func stopTriangularStreams(engine *arbitrage.TriangularEngine) {
-	if client := engine.GetClient(); client != nil {
+	engine.IterateClients(func(_ string, client arbitrage.ExchangeClient) {
 		_ = client.StopStream()
-	}
+	})
 }
 
 func restartTriangularStreams(engine *arbitrage.TriangularEngine) {
@@ -80,20 +78,20 @@ func restartTriangularStreams(engine *arbitrage.TriangularEngine) {
 	startTriangularStreams(engine)
 }
 
+// autoRegisterTriangularExchange registers a client for every configured
+// exchange that has credentials; missing ones are skipped silently.
 func autoRegisterTriangularExchange(engine *arbitrage.TriangularEngine) {
-	cfg := engine.GetConfig()
-	if cfg.Exchange == "" {
-		return
+	for _, exName := range engine.GetConfig().ExchangeList() {
+		apiKey, secret, passphrase, testnet := getExchangeCredentials(exName)
+		if apiKey == "" || secret == "" {
+			continue
+		}
+		client, err := createArbitrageClient(exName, apiKey, secret, passphrase, testnet)
+		if err != nil {
+			continue
+		}
+		engine.RegisterClient(exName, client)
 	}
-	apiKey, secret, passphrase, testnet := getExchangeCredentials(cfg.Exchange)
-	if apiKey == "" || secret == "" {
-		return
-	}
-	client, err := createArbitrageClient(cfg.Exchange, apiKey, secret, passphrase, testnet)
-	if err != nil {
-		return
-	}
-	engine.RegisterClient(client)
 }
 
 // ── Config ─────────────────────────────────────────────────────
@@ -110,6 +108,14 @@ func UpdateTriangularConfig(c *gin.Context) {
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+
+	// Normalize: migrate legacy single exchange into the exchanges list.
+	if len(body.Exchanges) == 0 && body.Exchange != "" {
+		body.Exchanges = []string{body.Exchange}
+	}
+	if len(body.Exchanges) > 0 {
+		body.Exchange = body.Exchanges[0]
 	}
 
 	wasRunning := triangularEngine != nil && triangularEngine.IsRunning()

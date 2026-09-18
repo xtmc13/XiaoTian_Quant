@@ -118,6 +118,7 @@ export interface TriangularLeg {
 
 export interface TriangularConfig {
   exchange: string
+  exchanges?: string[]
   symbols: string[]
   quote_asset: string
   min_profit_pct: number

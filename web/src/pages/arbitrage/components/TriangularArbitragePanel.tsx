@@ -119,6 +119,7 @@ const SUPPORTED_EXCHANGES = [
 
 const DEFAULT_TRIANGULAR_CONFIG: TriangularConfig = {
   exchange: 'binance',
+  exchanges: ['binance'],
   symbols: ['BTCUSDT', 'ETHUSDT', 'ETHBTC'],
   quote_asset: 'USDT',
   min_profit_pct: 0.3,
@@ -183,6 +184,17 @@ export function TriangularArbitragePanel() {
   /* ── Local state ── */
   const [editConfig, setEditConfig] = useState<TriangularConfig | null>(null)
   const [symbolsInput, setSymbolsInput] = useState<string>('BTCUSDT,ETHUSDT,ETHBTC')
+  // 交易所多选：null=未触碰，跟随已配置列表；触碰后跟随用户选择
+  const [selectedExchanges, setSelectedExchanges] = useState<string[] | null>(null)
+  useEffect(() => {
+    if (!showConfig) setSelectedExchanges(null)
+  }, [showConfig])
+  const effectiveExchanges =
+    selectedExchanges ??
+    (editConfig ? (editConfig.exchanges?.length ? editConfig.exchanges : [editConfig.exchange]) : [])
+  const toggleExchange = (key: string, checked: boolean) => {
+    setSelectedExchanges(checked ? [...effectiveExchanges, key] : effectiveExchanges.filter((k) => k !== key))
+  }
 
   useEffect(() => {
     if (configData) {
@@ -267,6 +279,8 @@ export function TriangularArbitragePanel() {
     const payload: TriangularConfig = {
       ...editConfig,
       symbols: symbols.length > 0 ? symbols : editConfig.symbols,
+      exchanges: effectiveExchanges,
+      exchange: effectiveExchanges[0] || editConfig.exchange,
     }
     updateConfigMut.mutate(payload)
   }
@@ -576,7 +590,7 @@ export function TriangularArbitragePanel() {
                     {SUPPORTED_EXCHANGES.map((ex) => {
                       const cfg = configuredExchanges[ex.key]
                       const ready = cfg?.enabled && cfg?.has_credentials
-                      const isSelected = editConfig.exchange === ex.key
+                      const isSelected = effectiveExchanges.includes(ex.key)
                       return (
                         <label
                           key={ex.key}
@@ -591,13 +605,10 @@ export function TriangularArbitragePanel() {
                         >
                           <div className="flex items-center gap-3">
                             <input
-                              type="radio"
-                              name="triangular-exchange"
+                              type="checkbox"
                               checked={isSelected}
                               disabled={!ready && !isSelected}
-                              onChange={() =>
-                                setEditConfig((p) => (p ? { ...p, exchange: ex.key } : p))
-                              }
+                              onChange={(e) => toggleExchange(ex.key, e.target.checked)}
                               className="h-4 w-4 accent-quant-gold"
                             />
                             <Globe className="h-4 w-4 text-muted-foreground" />
@@ -615,7 +626,7 @@ export function TriangularArbitragePanel() {
                           {isSelected ? (
                             <span className="inline-flex items-center gap-1 text-xs text-green-400">
                               <CheckCircle2 className="h-3.5 w-3.5" />
-                              当前选择
+                              已加入
                             </span>
                           ) : (
                             !ready && <span className="text-[10px] text-muted-foreground">未就绪</span>
@@ -627,7 +638,9 @@ export function TriangularArbitragePanel() {
                 ) : (
                   <div className="text-sm text-muted-foreground">加载交易所配置中...</div>
                 )}
-                <div className="mt-3 text-xs text-muted-foreground">选择交易所后点击「保存配置」生效</div>
+                <div className="mt-3 text-xs text-muted-foreground">
+                  勾选交易所后点击「保存配置」生效，已选 {effectiveExchanges.length} 个（多交易所同时监控，币种相同）
+                </div>
               </div>
             </div>
           )}

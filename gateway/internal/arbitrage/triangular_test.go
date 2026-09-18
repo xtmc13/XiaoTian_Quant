@@ -33,7 +33,7 @@ func TestTriangularEngineStartStop(t *testing.T) {
 		t.Error("expected error with no client")
 	}
 
-	engine.RegisterClient(&mockClient{name: "binance", price: 10000})
+	engine.RegisterClient("binance", &mockClient{name: "binance", price: 10000})
 	if err := engine.Start(); err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
@@ -97,14 +97,14 @@ func TestTriangularCycleDetection(t *testing.T) {
 	cfg.QuoteAsset = "USDT"
 	cfg.MinProfitPct = 0.1
 	engine := NewTriangularEngine(cfg)
-	engine.RegisterClient(&mockClient{name: "binance", price: 10000})
+	engine.RegisterClient("binance", &mockClient{name: "binance", price: 10000})
 
 	// Set up order books for a profitable cycle:
 	// USDT -> BTC (buy BTCUSDT at 10000)
 	// BTC -> ETH (buy ETHBTC at 0.049)
 	// ETH -> USDT (sell ETHUSDT at 509)
 	engine.stateMu.Lock()
-	engine.marketState["BTCUSDT"] = &triangularMarketState{
+	engine.marketState["binance:BTCUSDT"] = &triangularMarketState{
 		orderBook: model.OrderBookData{
 			Symbol: "BTCUSDT",
 			Asks:   [][2]float64{{10000, 10}},
@@ -112,7 +112,7 @@ func TestTriangularCycleDetection(t *testing.T) {
 		},
 		obTime: time.Now().UnixMilli(),
 	}
-	engine.marketState["ETHUSDT"] = &triangularMarketState{
+	engine.marketState["binance:ETHUSDT"] = &triangularMarketState{
 		orderBook: model.OrderBookData{
 			Symbol: "ETHUSDT",
 			Asks:   [][2]float64{{510, 100}},
@@ -120,7 +120,7 @@ func TestTriangularCycleDetection(t *testing.T) {
 		},
 		obTime: time.Now().UnixMilli(),
 	}
-	engine.marketState["ETHBTC"] = &triangularMarketState{
+	engine.marketState["binance:ETHBTC"] = &triangularMarketState{
 		orderBook: model.OrderBookData{
 			Symbol: "ETHBTC",
 			Asks:   [][2]float64{{0.049, 1000}},
@@ -154,10 +154,10 @@ func TestTriangularCycleBelowThreshold(t *testing.T) {
 	cfg.QuoteAsset = "USDT"
 	cfg.MinProfitPct = 5.0 // high threshold
 	engine := NewTriangularEngine(cfg)
-	engine.RegisterClient(&mockClient{name: "binance", price: 10000})
+	engine.RegisterClient("binance", &mockClient{name: "binance", price: 10000})
 
 	engine.stateMu.Lock()
-	engine.marketState["BTCUSDT"] = &triangularMarketState{
+	engine.marketState["binance:BTCUSDT"] = &triangularMarketState{
 		orderBook: model.OrderBookData{
 			Symbol: "BTCUSDT",
 			Asks:   [][2]float64{{10000, 10}},
@@ -165,7 +165,7 @@ func TestTriangularCycleBelowThreshold(t *testing.T) {
 		},
 		obTime: time.Now().UnixMilli(),
 	}
-	engine.marketState["ETHUSDT"] = &triangularMarketState{
+	engine.marketState["binance:ETHUSDT"] = &triangularMarketState{
 		orderBook: model.OrderBookData{
 			Symbol: "ETHUSDT",
 			Asks:   [][2]float64{{510, 100}},
@@ -173,7 +173,7 @@ func TestTriangularCycleBelowThreshold(t *testing.T) {
 		},
 		obTime: time.Now().UnixMilli(),
 	}
-	engine.marketState["ETHBTC"] = &triangularMarketState{
+	engine.marketState["binance:ETHBTC"] = &triangularMarketState{
 		orderBook: model.OrderBookData{
 			Symbol: "ETHBTC",
 			Asks:   [][2]float64{{0.049, 1000}},
@@ -194,7 +194,7 @@ func TestTriangularExecuteDryRun(t *testing.T) {
 	cfg.DryRun = true
 	cfg.OrderSize = 10000
 	engine := NewTriangularEngine(cfg)
-	engine.RegisterClient(&mockClient{name: "binance", price: 10000})
+	engine.RegisterClient("binance", &mockClient{name: "binance", price: 10000})
 
 	opp := arbitrageTriangularOpportunity()
 	engine.Execute(opp)
@@ -220,7 +220,7 @@ func TestTriangularBalanceCheckInsufficient(t *testing.T) {
 	cfg.DryRun = false
 	cfg.OrderSize = 1000000 // way more than mock balance
 	engine := NewTriangularEngine(cfg)
-	engine.RegisterClient(&mockClient{
+	engine.RegisterClient("binance", &mockClient{
 		name:     "binance",
 		price:    10000,
 		balances: []map[string]any{{"asset": "USDT", "free": "10000"}},
@@ -243,7 +243,7 @@ func TestTriangularGetStats(t *testing.T) {
 	cfg := DefaultTriangularEngineConfig()
 	cfg.DryRun = true
 	engine := NewTriangularEngine(cfg)
-	engine.RegisterClient(&mockClient{name: "binance", price: 10000})
+	engine.RegisterClient("binance", &mockClient{name: "binance", price: 10000})
 
 	opp := arbitrageTriangularOpportunity()
 	engine.Execute(opp)

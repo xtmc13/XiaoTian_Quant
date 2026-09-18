@@ -16,9 +16,11 @@ import (
 
 // ── Triangular Engine Config ────────────────────────────────────
 
-// TriangularEngineConfig controls single-exchange triangular arbitrage.
+// TriangularEngineConfig controls triangular arbitrage. Multiple exchanges
+// can be monitored simultaneously, each with the same symbol list.
 type TriangularEngineConfig struct {
-	Exchange           string   `json:"exchange"`
+	Exchange           string   `json:"exchange"`             // legacy: first exchange (kept for backward compat)
+	Exchanges          []string `json:"exchanges"`            // monitored exchanges, e.g. ["binance","okx"]
 	Symbols            []string `json:"symbols"`              // monitored symbols, e.g. BTCUSDT, ETHUSDT, ETHBTC
 	QuoteAsset         string   `json:"quote_asset"`          // starting asset for cycles, e.g. USDT
 	MinProfitPct       float64  `json:"min_profit_pct"`       // minimum net profit % to trigger
@@ -34,9 +36,31 @@ type TriangularEngineConfig struct {
 	MaxExecutionMs     int      `json:"max_execution_ms"`     // timeout for full cycle
 }
 
+// ExchangeList returns the effective list of monitored exchanges,
+// migrating the legacy single Exchange field.
+func (c TriangularEngineConfig) ExchangeList() []string {
+	if len(c.Exchanges) > 0 {
+		out := make([]string, 0, len(c.Exchanges))
+		for _, ex := range c.Exchanges {
+			if ex != "" {
+				out = append(out, ex)
+			}
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	if c.Exchange != "" {
+		return []string{c.Exchange}
+	}
+	return nil
+}
+
 // DefaultTriangularEngineConfig returns sensible defaults.
 func DefaultTriangularEngineConfig() TriangularEngineConfig {
 	return TriangularEngineConfig{
+		Exchange:           "binance",
+		Exchanges:          []string{"binance"},
 		Symbols:            []string{"BTCUSDT", "ETHUSDT", "ETHBTC"},
 		QuoteAsset:         "USDT",
 		MinProfitPct:       0.3,
@@ -145,10 +169,10 @@ type triangularMarketState struct {
 
 // ── Engine ──────────────────────────────────────────────────────
 
-// TriangularEngine monitors a single exchange for 3-cycle arbitrage opportunities.
+// TriangularEngine monitors one or more exchanges for 3-cycle arbitrage.
 type TriangularEngine struct {
 	config    TriangularEngineConfig
-	client    ExchangeClient
+	clients   map[string]ExchangeClient // exchange name -> client
 	positions []*TriangularTrade
 	history   []*TriangularTrade
 	mu        sync.RWMutex
@@ -157,10 +181,10 @@ type TriangularEngine struct {
 	running bool
 	lastOpp *TriangularOpportunity
 
-	marketState map[string]*triangularMarketState
+	marketState map[string]*triangularMarketState // key: "exchange:symbol"
 	stateMu     sync.RWMutex
-	obSubID     event.SubscriptionID
-	tickSubID   event.SubscriptionID
+	obSubIDs    []event.SubscriptionID
+	tickSubIDs  []event.SubscriptionID
 
 	repo *store.TriangularTradeRepo
 
@@ -173,6 +197,7 @@ type TriangularEngine struct {
 func NewTriangularEngine(cfg TriangularEngineConfig) *TriangularEngine {
 	e := &TriangularEngine{
 		config:      cfg,
+		clients:     make(map[string]ExchangeClient),
 		marketState: make(map[string]*triangularMarketState),
 	}
 	if store.GetDB() != nil {
@@ -200,18 +225,54 @@ func (e *TriangularEngine) restore() {
 	}
 }
 
-// RegisterClient registers the single exchange client for triangular arbitrage.
-func (e *TriangularEngine) RegisterClient(client ExchangeClient) {
+// RegisterClient registers an exchange client for triangular arbitrage.
+func (e *TriangularEngine) RegisterClient(exchange string, client ExchangeClient) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.client = client
+	if e.clients == nil {
+		e.clients = make(map[string]ExchangeClient)
+	}
+	e.clients[exchange] = client
 }
 
-// GetClient returns the registered exchange client.
+// UnregisterClient removes an exchange client and stops its stream.
+func (e *TriangularEngine) UnregisterClient(exchange string) bool {
+	e.mu.Lock()
+	client, ok := e.clients[exchange]
+	if ok {
+		delete(e.clients, exchange)
+	}
+	e.mu.Unlock()
+	if ok && client != nil {
+		_ = client.StopStream()
+	}
+	return ok
+}
+
+// GetClient returns the client for the given exchange, or the first registered.
 func (e *TriangularEngine) GetClient() ExchangeClient {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return e.client
+	for _, c := range e.clients {
+		return c
+	}
+	return nil
+}
+
+// ClientFor returns the client for a specific exchange, or nil.
+func (e *TriangularEngine) ClientFor(exchange string) ExchangeClient {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.clients[exchange]
+}
+
+// IterateClients safely iterates registered clients.
+func (e *TriangularEngine) IterateClients(fn func(exchange string, client ExchangeClient)) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	for name, c := range e.clients {
+		fn(name, c)
+	}
 }
 
 // GetConfig returns the engine configuration.
@@ -247,18 +308,23 @@ func (e *TriangularEngine) Start() error {
 		e.mu.Unlock()
 		return fmt.Errorf("already running")
 	}
-	if e.client == nil {
+	if len(e.clients) == 0 {
 		e.mu.Unlock()
 		return fmt.Errorf("no exchange client registered")
 	}
 	e.running = true
+	exchanges := e.config.ExchangeList()
 	e.mu.Unlock()
 
-	e.tickSubID = bus.Subscribe(e.config.Exchange, event.PrioNormal, e.handleTick, event.TypeTick)
-	e.obSubID = bus.Subscribe(e.config.Exchange, event.PrioNormal, e.handleOrderBook, event.TypeOrderBook)
+	for _, exName := range exchanges {
+		e.tickSubIDs = append(e.tickSubIDs, bus.Subscribe(exName, event.PrioNormal, e.handleTick, event.TypeTick))
+		e.obSubIDs = append(e.obSubIDs, bus.Subscribe(exName, event.PrioNormal, e.handleOrderBook, event.TypeOrderBook))
+	}
 
-	e.client.WireToEventBus(bus)
-	_ = e.client.StartMarketStream(e.config.Symbols)
+	e.IterateClients(func(_ string, client ExchangeClient) {
+		client.WireToEventBus(bus)
+		_ = client.StartMarketStream(e.GetConfig().Symbols)
+	})
 
 	return nil
 }
@@ -274,19 +340,23 @@ func (e *TriangularEngine) Stop() {
 	e.mu.Unlock()
 
 	if bus := app.Get().EventBus; bus != nil {
-		if e.tickSubID != 0 {
-			bus.Unsubscribe(e.tickSubID)
-			e.tickSubID = 0
+		for _, id := range e.tickSubIDs {
+			if id != 0 {
+				bus.Unsubscribe(id)
+			}
 		}
-		if e.obSubID != 0 {
-			bus.Unsubscribe(e.obSubID)
-			e.obSubID = 0
+		for _, id := range e.obSubIDs {
+			if id != 0 {
+				bus.Unsubscribe(id)
+			}
 		}
 	}
+	e.tickSubIDs = nil
+	e.obSubIDs = nil
 
-	if e.client != nil {
-		_ = e.client.StopStream()
-	}
+	e.IterateClients(func(_ string, client ExchangeClient) {
+		_ = client.StopStream()
+	})
 
 	e.stateMu.Lock()
 	e.marketState = make(map[string]*triangularMarketState)
@@ -365,7 +435,9 @@ func (e *TriangularEngine) GetStats() map[string]any {
 
 	return map[string]any{
 		"running":         e.running,
-		"exchange":        e.config.Exchange,
+		"exchange":        strings.Join(e.config.ExchangeList(), ","),
+		"exchanges":       e.config.ExchangeList(),
+		"exchange_count":  len(e.clients),
 		"active_cycles":   len(e.positions),
 		"total_trades":    len(e.history),
 		"total_profit":    Round(totalProfit, 4),
@@ -522,15 +594,16 @@ func (e *TriangularEngine) handleTick(evt event.Event) {
 	if !ok {
 		return
 	}
-	if !e.isWatchedSymbol(tick.Symbol) {
+	if !e.isWatchedSymbol(tick.Symbol) || tick.Exchange == "" {
 		return
 	}
 
+	key := tick.Exchange + ":" + tick.Symbol
 	e.stateMu.Lock()
-	state, ok := e.marketState[tick.Symbol]
+	state, ok := e.marketState[key]
 	if !ok {
 		state = &triangularMarketState{}
-		e.marketState[tick.Symbol] = state
+		e.marketState[key] = state
 	}
 	state.tick = tick
 	state.tickTime = time.Now().UnixMilli()
@@ -544,15 +617,16 @@ func (e *TriangularEngine) handleOrderBook(evt event.Event) {
 	if !ok {
 		return
 	}
-	if !e.isWatchedSymbol(ob.Symbol) {
+	if !e.isWatchedSymbol(ob.Symbol) || ob.Exchange == "" {
 		return
 	}
 
+	key := ob.Exchange + ":" + ob.Symbol
 	e.stateMu.Lock()
-	state, ok := e.marketState[ob.Symbol]
+	state, ok := e.marketState[key]
 	if !ok {
 		state = &triangularMarketState{}
-		e.marketState[ob.Symbol] = state
+		e.marketState[key] = state
 	}
 	state.orderBook = ob
 	state.obTime = time.Now().UnixMilli()
@@ -597,6 +671,7 @@ func (e *TriangularEngine) evaluate() {
 // ── Graph & Cycle Detection ─────────────────────────────────────
 
 type triangularEdge struct {
+	exchange  string
 	from      string
 	to        string
 	symbol    string
@@ -610,43 +685,47 @@ func (e *TriangularEngine) buildEdgesLocked() []triangularEdge {
 	defer e.stateMu.RUnlock()
 
 	var edges []triangularEdge
-	for _, symbol := range e.config.Symbols {
-		state, ok := e.marketState[symbol]
-		if !ok {
-			continue
-		}
-		if state.obTime == 0 || len(state.orderBook.Asks) == 0 || len(state.orderBook.Bids) == 0 {
-			continue
-		}
-		base, quote := SplitSymbol(symbol)
-		if base == "" || quote == "" {
-			continue
-		}
+	for _, exName := range e.config.ExchangeList() {
+		for _, symbol := range e.config.Symbols {
+			state, ok := e.marketState[exName+":"+symbol]
+			if !ok {
+				continue
+			}
+			if state.obTime == 0 || len(state.orderBook.Asks) == 0 || len(state.orderBook.Bids) == 0 {
+				continue
+			}
+			base, quote := SplitSymbol(symbol)
+			if base == "" || quote == "" {
+				continue
+			}
 
-		bestAsk := state.orderBook.Asks[0][0]
-		bestBid := state.orderBook.Bids[0][0]
-		if bestAsk <= 0 || bestBid <= 0 {
-			continue
-		}
+			bestAsk := state.orderBook.Asks[0][0]
+			bestBid := state.orderBook.Bids[0][0]
+			if bestAsk <= 0 || bestBid <= 0 {
+				continue
+			}
 
-		// quote -> base: BUY at ask (spend quote, receive base)
-		edges = append(edges, triangularEdge{
-			from:      quote,
-			to:        base,
-			symbol:    symbol,
-			side:      "BUY",
-			price:     bestAsk,
-			orderBook: state.orderBook,
-		})
-		// base -> quote: SELL at bid (spend base, receive quote)
-		edges = append(edges, triangularEdge{
-			from:      base,
-			to:        quote,
-			symbol:    symbol,
-			side:      "SELL",
-			price:     bestBid,
-			orderBook: state.orderBook,
-		})
+			// quote -> base: BUY at ask (spend quote, receive base)
+			edges = append(edges, triangularEdge{
+				exchange:  exName,
+				from:      quote,
+				to:        base,
+				symbol:    symbol,
+				side:      "BUY",
+				price:     bestAsk,
+				orderBook: state.orderBook,
+			})
+			// base -> quote: SELL at bid (spend base, receive quote)
+			edges = append(edges, triangularEdge{
+				exchange:  exName,
+				from:      base,
+				to:        quote,
+				symbol:    symbol,
+				side:      "SELL",
+				price:     bestBid,
+				orderBook: state.orderBook,
+			})
+		}
 	}
 	return edges
 }
@@ -673,8 +752,15 @@ func (e *TriangularEngine) findBestOpportunityLocked() *TriangularOpportunity {
 			if e2.to == e1.from {
 				continue
 			}
+			// Legs must stay on the same exchange.
+			if e2.exchange != e1.exchange {
+				continue
+			}
 			for _, e3 := range adj[e2.to] {
 				if e3.from != e2.to || e3.to != e1.from {
+					continue
+				}
+				if e3.exchange != e1.exchange {
 					continue
 				}
 				// Found a 3-cycle e1.from -> e1.to -> e2.to -> e1.from
@@ -769,7 +855,7 @@ func (e *TriangularEngine) evaluateCycleLocked(e1, e2, e3 triangularEdge, cycle 
 
 	return &TriangularOpportunity{
 		ID:           oppID,
-		Exchange:     cfg.Exchange,
+		Exchange:     e1.exchange,
 		Cycle:        cycle,
 		Legs:         triLegs,
 		StartAsset:   cycle[0],
@@ -967,13 +1053,13 @@ func (e *TriangularEngine) execute(opp TriangularOpportunity) {
 		return
 	}
 
-	client := e.GetClient()
+	client := e.ClientFor(opp.Exchange)
 	if client == nil {
 		trade.Status = "failed"
 		trade.ClosedAt = time.Now().UnixMilli()
 		e.recordTriangularTrade(trade)
 		if e.OnError != nil {
-			e.OnError(fmt.Errorf("exchange client missing for %s", tradeID))
+			e.OnError(fmt.Errorf("no exchange client for %s", opp.Exchange))
 		}
 		return
 	}
@@ -1055,9 +1141,9 @@ func extractOrderID(result map[string]any) string {
 
 // checkBalance verifies that the exchange holds sufficient starting asset.
 func (e *TriangularEngine) checkBalance(opp TriangularOpportunity) error {
-	client := e.GetClient()
+	client := e.ClientFor(opp.Exchange)
 	if client == nil {
-		return fmt.Errorf("missing exchange client")
+		return fmt.Errorf("missing exchange client for %s", opp.Exchange)
 	}
 
 	balances, err := client.GetBalance()
