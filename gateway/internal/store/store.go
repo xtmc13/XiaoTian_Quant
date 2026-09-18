@@ -524,15 +524,26 @@ func SaveExchangeConfig(id string, cfg map[string]any) {
 		exchanges = make(map[string]any)
 	}
 
-	// Defense in depth: never persist secrets, even if a caller accidentally passes them.
-	safe := make(map[string]any, len(cfg))
+	// Merge into the existing entry: non-secret fields are replaced outright,
+	// secrets are only overwritten when a new non-empty value is provided —
+	// settings forms blank password fields, and blanking must not wipe the
+	// credentials already on disk (previous behavior destroyed stored keys).
+	existing, _ := exchanges[id].(map[string]any)
+	merged := make(map[string]any, len(existing)+len(cfg))
+	for k, v := range existing {
+		merged[k] = v
+	}
 	for k, v := range cfg {
-		if !isSecretKey(k) {
-			safe[k] = v
+		if isSecretKey(k) {
+			if s, ok := v.(string); ok && s != "" {
+				merged[k] = v
+			}
+			continue
 		}
+		merged[k] = v
 	}
 
-	exchanges[id] = safe
+	exchanges[id] = merged
 	configCache["exchanges"] = exchanges
 	_ = writeConfigCacheLocked()
 }

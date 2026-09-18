@@ -454,6 +454,12 @@ func Restart(c *gin.Context) {
 					existingEx[name] = ex
 				}
 				for k, val := range exData {
+					// Blank secret fields from client forms must not wipe stored credentials.
+					if (k == "api_key" || k == "secret" || k == "passphrase" || k == "api_secret") {
+						if s, ok := val.(string); ok && s == "" {
+							continue
+						}
+					}
 					ex[k] = val
 				}
 			}
