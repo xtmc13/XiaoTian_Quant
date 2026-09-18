@@ -452,18 +452,18 @@ export function StrategyCreateFormSections({
         </SectionCard>
       )}
 
-      {/* 2 基础信息（两列紧凑盒式 grid，对齐效果图屏幕2；移动端单列） */}
+      {/* 2 基础信息（标签在上、input 在下，两列排布；移动端单列） */}
       <SectionCard title="基础信息">
         <div id="create-sec-basic" className="scroll-mt-20 -m-1 p-1">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {/* 策略类型（现货可选：现货网格/马丁趋势/华尔街/激进；合约自动=合约网格） */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {/* 策略类型（现货可选；合约自动=合约网格） */}
             {market === 'spot' && (
-              <div className="bg-quant-bg border border-quant-gold/50 rounded-lg px-3 py-2 text-xs flex items-center gap-2 min-w-0">
-                <span className="text-muted-foreground shrink-0">策略类型</span>
+              <div>
+                <label className="text-[11px] text-muted-foreground mb-1.5 block">策略类型</label>
                 <select
                   value={strategyType}
                   onChange={(e) => setStrategyType(e.target.value)}
-                  className="flex-1 min-w-0 bg-transparent focus:outline-none font-bold text-foreground bg-quant-bg"
+                  className={inputCls}
                 >
                   {STRAT_TYPES.spot.map((t) => (
                     <option key={t.value} value={t.value}>
@@ -474,60 +474,61 @@ export function StrategyCreateFormSections({
               </div>
             )}
             {/* 策略名称 */}
-            <div className="bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs flex items-center gap-2 min-w-0">
-              <span className="text-muted-foreground shrink-0">策略名称</span>
+            <div>
+              <label className="text-[11px] text-muted-foreground mb-1.5 block">策略名称</label>
               <input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                className="flex-1 min-w-0 bg-transparent focus:outline-none text-foreground placeholder:text-muted-foreground/60"
+                className={inputCls}
                 placeholder="输入策略名称"
               />
             </div>
-            {/* 交易对（主色蓝高亮格） */}
-            <div className="bg-quant-bg border border-quant-gold/50 rounded-lg px-3 py-2 text-xs flex items-center gap-2 min-w-0">
-              <span className="text-muted-foreground shrink-0">交易对</span>
+            {/* 交易对 */}
+            <div>
+              <label className="text-[11px] text-muted-foreground mb-1.5 block">交易对</label>
               <input
                 value={symbol}
                 onChange={(e) => setSymbol(e.target.value.toUpperCase())}
-                className="flex-1 min-w-0 bg-transparent focus:outline-none font-bold text-foreground"
+                className={inputCls}
                 placeholder="BTCUSDT"
               />
             </div>
             {/* 交易所选择 */}
-            <button
-              type="button"
-              onClick={() => setShowExchangeModal(true)}
-              className={cn(
-                'bg-quant-bg border rounded-lg px-3 py-2 text-xs flex items-center gap-2 text-left transition-colors min-w-0',
-                selectedExchanges.length > 0
-                  ? 'border-quant-gold/30 text-foreground'
-                  : 'border-quant-border text-muted-foreground hover:text-foreground'
-              )}
-            >
-              <Globe className="w-3.5 h-3.5 shrink-0" />
-              <span className="shrink-0">交易所</span>
-              <span className="flex-1 min-w-0 truncate">
-                {selectedExchanges.length > 0 ? selectedExchanges.join(', ') : '点击选择'}
-              </span>
-              {selectedExchanges.length > 0 && <span className="text-quant-gold shrink-0">✓</span>}
-            </button>
+            <div>
+              <label className="text-[11px] text-muted-foreground mb-1.5 block">选择交易所</label>
+              <button
+                type="button"
+                onClick={() => setShowExchangeModal(true)}
+                className={cn(
+                  'w-full flex items-center justify-between border rounded-lg px-3 py-2 text-xs transition-colors',
+                  selectedExchanges.length > 0
+                    ? 'border-quant-gold/30 bg-quant-gold/5 text-foreground'
+                    : 'border-quant-border text-muted-foreground hover:text-foreground'
+                )}
+              >
+                <span className="flex items-center gap-2">
+                  <Globe className="w-3.5 h-3.5" />
+                  {selectedExchanges.length > 0 ? selectedExchanges.join(', ') : '点击选择'}
+                </span>
+                {selectedExchanges.length > 0 && <span className="text-quant-gold">✓</span>}
+              </button>
+            </div>
             {/* 初始资金 */}
-            <div className="bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs flex items-center gap-2 min-w-0">
-              <span className="text-muted-foreground shrink-0">初始资金</span>
+            <div>
+              <label className="text-[11px] text-muted-foreground mb-1.5 block">初始资金 (USDT)</label>
               <input
                 type="number"
                 min={0}
                 value={initialCapital}
                 onChange={(e) => setInitialCapital(Number(e.target.value) || 0)}
-                className="flex-1 min-w-0 bg-transparent focus:outline-none font-bold text-foreground"
+                className={inputCls}
                 placeholder="1000"
               />
-              <span className="text-muted-foreground shrink-0">USDT</span>
             </div>
-            {/* 杠杆 + 逐全仓（仅合约；主色蓝高亮格）。值与 CRAParamForm 同一状态。 */}
+            {/* 杠杆（仅合约；值与 CRAParamForm 同一状态） */}
             {market === 'contract' && (
-              <div className="bg-quant-bg border border-quant-gold/50 rounded-lg px-3 py-2 text-xs flex items-center gap-2 min-w-0">
-                <span className="text-muted-foreground shrink-0">杠杆</span>
+              <div>
+                <label className="text-[11px] text-muted-foreground mb-1.5 block">杠杆（全仓）</label>
                 <input
                   type="number"
                   min={1}
@@ -536,15 +537,17 @@ export function StrategyCreateFormSections({
                   onChange={(e) =>
                     setCraParams((prev) => ({ ...prev, leverage: Number(e.target.value) || 1 }))
                   }
-                  className="w-16 bg-transparent focus:outline-none font-bold text-quant-gold"
+                  className={inputCls}
+                  placeholder="10"
                 />
-                <span className="text-muted-foreground shrink-0">x · 全仓</span>
               </div>
             )}
             {/* K线周期（由启用指标周期自动推导，只读） */}
-            <div className="bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs flex items-center gap-2 min-w-0">
-              <span className="text-muted-foreground shrink-0">K线周期</span>
-              <span className="flex-1 min-w-0 font-bold text-foreground">{timeframe}</span>
+            <div>
+              <label className="text-[11px] text-muted-foreground mb-1.5 block">K线周期</label>
+              <div className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs text-foreground">
+                {timeframe}
+              </div>
             </div>
           </div>
         </div>
