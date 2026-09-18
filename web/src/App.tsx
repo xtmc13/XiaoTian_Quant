@@ -149,7 +149,7 @@ function DocumentTitle() {
     '/bots/signal': '信号机器人 - 小天量化',
     '/bots/ai': 'AI机器人 - 小天量化',
     '/arbitrage/cross': '跨所套利 - 小天量化',
-    '/arbitrage/triangular': '三角套利 - 小天量化',
+    '/arbitrage/triangular': '币种套利 - 小天量化',
 
     // P0 new pages
     '/status': '系统状态 - 小天量化',

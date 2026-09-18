@@ -38,7 +38,7 @@ func wireTriangularCallbacks(engine *arbitrage.TriangularEngine) {
 	engine.OnOpportunity = func(opp arbitrage.TriangularOpportunity) {
 		broadcaster := notify.NewBroadcaster()
 		broadcaster.System("triangular_opportunity", fmt.Sprintf(
-			"Triangular profit %.2f%%: %s on %s",
+			"币种套利利润 %.2f%%: %s @ %s",
 			opp.NetProfitPct, strings.Join(opp.Cycle, " → "), opp.Exchange,
 		))
 	}
@@ -47,7 +47,7 @@ func wireTriangularCallbacks(engine *arbitrage.TriangularEngine) {
 		broadcaster := notify.NewBroadcaster()
 		if trade.Status == "dry_run" {
 			broadcaster.System("triangular_dry_run", fmt.Sprintf(
-				"Simulated triangular: %s profit=%.2f",
+				"币种套利模拟: %s 利润=%.2f",
 				strings.Join(trade.Cycle, " → "), trade.NetProfit,
 			))
 		} else {

@@ -232,7 +232,7 @@ export function TriangularArbitragePanel() {
       queryClient.invalidateQueries({ queryKey: ['triangular-positions'] })
       queryClient.invalidateQueries({ queryKey: ['triangular-history'] })
       queryClient.invalidateQueries({ queryKey: ['triangular-status'] })
-      useToastStore.getState().addToast({ type: 'success', message: '三角套利执行已提交', duration: 3000 })
+      useToastStore.getState().addToast({ type: 'success', message: '币种套利执行已提交', duration: 3000 })
     },
     onError: (err: Error) => {
       useToastStore.getState().addToast({ type: 'error', message: err.message || '执行失败', duration: 5000 })
@@ -289,7 +289,7 @@ export function TriangularArbitragePanel() {
     if (!editConfig) return
     if (!editConfig.dry_run) {
       const ok = await confirm({
-        title: '确认执行真实三角套利交易？',
+        title: '确认执行真实币种套利交易？',
         message: `${opp.cycle.join(' → ')}，预计净利润 ${opp.net_profit_pct.toFixed(4)}%`,
         confirmText: '执行',
         cancelText: '取消',
@@ -452,7 +452,7 @@ export function TriangularArbitragePanel() {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between px-6 py-4 border-b border-quant-border shrink-0">
-              <h3 className="text-sm font-bold">三角套利配置</h3>
+              <h3 className="text-sm font-bold">币种套利配置</h3>
               <button
                 onClick={() => setShowConfig(false)}
                 aria-label="关闭"
@@ -677,7 +677,7 @@ export function TriangularArbitragePanel() {
 
       {/* Opportunities Table */}
       <SectionCard
-        title="三角套利机会"
+        title="币种套利机会"
         headerAction={opportunity ? <span className="text-xs text-muted-foreground">最新扫描结果</span> : null}
       >
         {opportunity ? (
@@ -756,7 +756,7 @@ export function TriangularArbitragePanel() {
         ) : (
           <EmptyState
             icon={<Triangle className="w-10 h-10 text-muted-foreground" />}
-            title="暂无三角套利机会"
+            title="暂无币种套利机会"
             description={isRunning ? '引擎正在扫描中...' : '启动引擎后开始扫描'}
           />
         )}

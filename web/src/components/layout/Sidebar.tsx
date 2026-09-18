@@ -73,7 +73,7 @@ const navItems: NavItem[] = [
     icon: ArrowLeftRight,
     children: [
       { path: '/arbitrage/cross', label: '跨所套利' },
-      { path: '/arbitrage/triangular', label: '三角套利' },
+      { path: '/arbitrage/triangular', label: '币种套利' },
     ],
   },
 
