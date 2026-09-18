@@ -168,3 +168,47 @@ describe('StrategyCreatePanel 类型派生（无类型下拉）', () => {
     expect((create.mock.calls[0][0] as Record<string, unknown>).strategy_type).toBe('martin_trend')
   })
 })
+
+describe('现货策略类型 → CRA 参数档案联动', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(configApi.exchangesConfigured).mockResolvedValue(mockConfigured)
+  })
+
+  it('档案常量：马丁趋势 7 档倍投 ladder / 华尔街斐波那契 / 网格等差', async () => {
+    const { SPOT_TYPE_PROFILES } = await import('../StrategyCreateForm')
+    const martin = SPOT_TYPE_PROFILES.martin_trend
+    expect(martin.firstOrderAmount).toBe(20)
+    expect(martin.addPositions.map((a) => a.multiplier)).toEqual([1, 2, 4, 8, 16, 32, 64])
+    expect(martin.addPositions).toHaveLength(7)
+    expect(martin.addPositions[6].spread).toBe(21) // 3% × 7
+    expect(martin.addPositions[0].callback).toBe(0.5)
+    const ws = SPOT_TYPE_PROFILES.wallstreet
+    expect(ws.addPositions.map((a) => a.multiplier)).toEqual([1, 1, 2, 3, 5, 8, 13, 21])
+    expect(ws.addPositions).toHaveLength(8)
+    const grid = SPOT_TYPE_PROFILES.cra_spot
+    expect(grid.addPositions.map((a) => a.spread)).toEqual([2, 4, 6, 8, 10])
+    expect(SPOT_TYPE_PROFILES.aggressive.addPositions).toHaveLength(10)
+  })
+
+  it('spot 面板切「马丁趋势」→ 首单额度 20 / 补仓次数 7（CRA 参数跟随）', () => {
+    render(<StrategyCreatePanel market="spot" onClose={vi.fn()} onSaved={vi.fn()} />, { wrapper })
+    // 切换类型选择器
+    fireEvent.change(screen.getByDisplayValue('现货网格'), { target: { value: 'martin_trend' } })
+    // 联动提示可见
+    expect(screen.getByText('选择类型将套用对应参数档案，可继续微调')).toBeTruthy()
+    // CRA 参数跟随档案：首单额度 20、补仓次数 7
+    expect((screen.getByDisplayValue('20') as HTMLInputElement).value).toBe('20')
+    expect((screen.getByDisplayValue('7') as HTMLInputElement).value).toBe('7')
+    // 未联动字段保持默认（杠杆仅合约不渲染）
+    expect(screen.queryByText('杠杆（全仓）')).toBeFalsy()
+  })
+
+  it('合约市场切类型不联动档案（合约无类型选择器，仅验证不报错）', () => {
+    render(<StrategyCreatePanel market="contract" onClose={vi.fn()} onSaved={vi.fn()} />, { wrapper })
+    expect(screen.queryByText('策略类型')).toBeFalsy()
+    // 合约默认首单额度（createDefaultCRAParams(contract)=5）保持，不被档案污染
+    expect(screen.getAllByDisplayValue('5').length).toBeGreaterThan(0)
+    expect(screen.queryByDisplayValue('20')).toBeFalsy()
+  })
+})

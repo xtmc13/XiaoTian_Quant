@@ -10,7 +10,7 @@ import { ExchangeSelectModal } from './ExchangeSelectModal'
 import { DynamicParamField, STRAT_TYPES } from './StrategyFormFields'
 import { STRATEGY_PRESETS, type Preset } from './StrategyPresets'
 import { createDefaultCRAParams, isCRAStrategyType, CRA_FEATURE_KEYS } from '@/lib/strategyUtils'
-import type { StrategyParamDefs, ExchangeConfiguredStatus } from '@/types'
+import type { StrategyParamDefs, ExchangeConfiguredStatus, AddPositionItem } from '@/types'
 import { CheckCircle2, Activity, AlertTriangle, Globe } from 'lucide-react'
 
 /**
@@ -45,6 +45,35 @@ export function marketTypeFromType(strategyType: string): 'spot' | 'contract' {
 /** 策略类型自动派生：策略身份 = 市场 + 指标 + 壳参数（类型下拉已移除）。 */
 export function deriveStrategyType(market: 'spot' | 'contract'): string {
   return market === 'contract' ? 'cra_contract' : 'cra_spot'
+}
+
+/** 现货策略类型参数档案：选中类型即套用（联动逻辑同"快速预设"，可继续微调）。
+ * addPositions 为 UI 百分比单位（craParamsToApiPayload 负责转小数）。 */
+export interface SpotTypeProfile {
+  firstOrderAmount: number
+  addPositions: AddPositionItem[]
+}
+
+function buildLadder(multipliers: number[], stepPct: number, callbackPct: number): AddPositionItem[] {
+  // spread 等差：第 i 层 = i × 每层步长（%）；callback 各层一致。
+  return multipliers.map((m, i) => ({ order: i + 1, multiplier: m, spread: stepPct * (i + 1), callback: callbackPct }))
+}
+
+export const SPOT_TYPE_PROFILES: Record<string, SpotTypeProfile> = {
+  cra_spot: { firstOrderAmount: 50, addPositions: buildLadder([1, 1, 1, 1, 1], 2, 0.3) },
+  martin_trend: { firstOrderAmount: 20, addPositions: buildLadder([1, 2, 4, 8, 16, 32, 64], 3, 0.5) },
+  wallstreet: { firstOrderAmount: 30, addPositions: buildLadder([1, 1, 2, 3, 5, 8, 13, 21], 2.5, 0.5) },
+  aggressive: { firstOrderAmount: 10, addPositions: buildLadder([1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 1.5, 0.3) },
+}
+
+/** 档案展开为 CRAParams 补丁（首单倍数恒 1；orderCount 跟随档数）。 */
+export function expandSpotProfile(profile: SpotTypeProfile): Partial<CRAParams> {
+  return {
+    firstOrderAmount: profile.firstOrderAmount,
+    firstOrderMultiplier: 1,
+    addPositions: profile.addPositions,
+    orderCount: profile.addPositions.length,
+  }
 }
 
 // Derive the strategy bar timeframe from enabled indicator periods.
@@ -136,7 +165,12 @@ export function useStrategyCreateForm(
   const derivedType = useMemo(() => deriveStrategyType(market), [market])
   const [typeOverride, setTypeOverride] = useState<string | null>(null)
   const strategyType = typeOverride ?? initialType ?? derivedType
-  const setStrategyType = (t: string) => setTypeOverride(t)
+  // 现货改选类型 → 同时套用对应参数档案（合约类型不联动；编辑回填不走这里）。
+  const setStrategyType = (t: string) => {
+    setTypeOverride(t)
+    const profile = market === 'spot' ? SPOT_TYPE_PROFILES[t] : undefined
+    if (profile) setCraParams((prev) => ({ ...prev, ...expandSpotProfile(profile) }))
+  }
   // 市场切换时清除改选，跟随新市场默认值
   useEffect(() => setTypeOverride(null), [market])
   const { create } = useStrategyData()
@@ -212,16 +246,19 @@ export function useStrategyCreateForm(
       .finally(() => setParamDefsLoading(false))
   }, [strategyType])
 
-  // Reset fields when strategyType/market changes
+  // Reset fields when strategyType/market changes。现货有参数档案的类型：默认
+  // 值之上套用档案（与 setStrategyType 联动一致）；编辑回填由页面 effect 直填
+  // 在本 effect 之后执行，天然覆盖。
   useEffect(() => {
     const defaults = createDefaultCRAParams(market)
+    const profile = market === 'spot' ? SPOT_TYPE_PROFILES[strategyType] : undefined
     setName('')
     setSymbol('BTCUSDT')
     setTimeframe(deriveTimeframeFromCRA(defaults))
     setSelectedExchanges([])
     setExecutionMode('paper')
     setNotifyChannels(['browser'])
-    setCraParams(defaults)
+    setCraParams(profile ? { ...defaults, ...expandSpotProfile(profile) } : defaults)
     setPresetKey(null)
   }, [strategyType, market])
 
@@ -471,6 +508,7 @@ export function StrategyCreateFormSections({
                     </option>
                   ))}
                 </select>
+                <div className="text-[10px] text-muted-foreground mt-1">选择类型将套用对应参数档案，可继续微调</div>
               </div>
             )}
             {/* 策略名称 */}
