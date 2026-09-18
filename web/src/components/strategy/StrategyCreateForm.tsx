@@ -463,7 +463,7 @@ export function useStrategyCreateForm(
         leverage: market === 'spot' ? 1 : craParams.leverage,
         trade_direction: market === 'spot' ? 'long' : craParams.direction,
         market_type: market === 'spot' ? 'spot' : 'swap',
-        execution_mode: 'paper', // 表单已下线实盘入口，一律 paper（后端 live_enabled 总闸保留）
+        execution_mode: 'live', // 创建即实盘（用户明确要求）；后端 live_enabled 总闸已在配置开启
         notification_config: { channels: notifyChannels },
         strategy_type: strategyType,
         status: 'stopped',
