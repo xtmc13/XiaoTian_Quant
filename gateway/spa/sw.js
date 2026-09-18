@@ -2,13 +2,15 @@
  * Service Worker for XiaoTianQuant PWA
  *
  * Caching strategy:
- *   - Static assets (JS/CSS/HTML): Cache-first, stale-while-revalidate
+ *   - Documents (HTML navigations): Network-first — never serve a stale
+ *     index.html that references deleted chunks (blank-page poisoning).
+ *   - Static assets (JS/CSS/fonts): Cache-first — content-hashed, immutable.
  *   - API responses: Network-first, fallback to cache
  *   - Images: Cache-first with 30-day TTL
  *   - WebSocket upgrades: Pass-through (no caching)
  */
 
-const CACHE_VERSION = 'v3'
+const CACHE_VERSION = 'v4'
 const STATIC_CACHE = `xt-static-${CACHE_VERSION}`
 const API_CACHE = `xt-api-${CACHE_VERSION}`
 const IMG_CACHE = `xt-img-${CACHE_VERSION}`
@@ -62,7 +64,9 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(apiStrategy(request))
   } else if (isImage(request)) {
     event.respondWith(imageStrategy(request))
-  } else if (isStatic(request, url)) {
+  } else if (isDocument(request, url)) {
+    event.respondWith(documentStrategy(request))
+  } else if (isStaticAsset(request, url)) {
     event.respondWith(staticStrategy(request))
   }
 })
@@ -77,20 +81,39 @@ function isImage(request) {
   return request.destination === 'image'
 }
 
-function isStatic(request, url) {
+function isDocument(request, url) {
+  return request.destination === 'document' || url.pathname.endsWith('.html')
+}
+
+function isStaticAsset(request, url) {
   return (
     request.destination === 'script' ||
     request.destination === 'style' ||
-    request.destination === 'document' ||
+    request.destination === 'font' ||
     url.pathname.endsWith('.js') ||
     url.pathname.endsWith('.css') ||
-    url.pathname.endsWith('.html') ||
-    url.pathname.endsWith('.json') ||
     url.pathname.endsWith('.woff2')
   )
 }
 
 /* ── Strategies ── */
+
+/** Network-first for documents: index.html must always be fresh,
+ *  otherwise a stale copy references deleted chunks and the app blanks out. */
+async function documentStrategy(request) {
+  const cache = await caches.open(STATIC_CACHE)
+  try {
+    const response = await fetch(request)
+    if (response.ok) {
+      cache.put(request, response.clone())
+    }
+    return response
+  } catch (err) {
+    const cached = await cache.match(request)
+    if (cached) return cached
+    throw err
+  }
+}
 
 /** Cache-first for static assets: fast load, background update. */
 async function staticStrategy(request) {

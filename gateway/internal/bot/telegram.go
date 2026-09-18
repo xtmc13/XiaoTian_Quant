@@ -139,6 +139,27 @@ type Bot struct {
 }
 
 // New creates a new Telegram bot.
+// telegramAPIBase 可替换为测试服务器。
+var telegramAPIBase = "https://api.telegram.org"
+
+// tradingCommandSet 交易类命令：会改变交易状态/下单/黑名单，未配置 ChatID
+// 时一律禁用（P0-3：无鉴权防护）。
+var tradingCommandSet = map[string]bool{
+	"/pause": true, "/stop": true,
+	"/resume": true, "/start_trading": true,
+	"/forcebuy": true, "/forcesell": true, "/forceshort": true,
+	"/enter": true, "/exit": true,
+	"/blacklist": true, "/unblacklist": true,
+}
+
+// tradingCommandsEnabled：ChatID 已配置才允许交易类命令。
+func (b *Bot) tradingCommandsEnabled() bool {
+	return b.config.ChatID != 0
+}
+
+// tradingCommandDisabledReply 统一拒绝文案。
+const tradingCommandDisabledReply = "机器人未配置 ChatID，交易命令已禁用"
+
 func New(cfg BotConfig, provider BotStateProvider, cmds Commands) *Bot {
 	if cfg.Token == "" {
 		return nil
@@ -347,6 +368,16 @@ func (b *Bot) handleCallback(callback map[string]any, chatID int64) {
 		param = parts[1]
 	}
 
+	// P0-3：交易类回调同样受 ChatID 门约束。
+	if (action == "pause" || action == "resume" || action == "close") && !b.tradingCommandsEnabled() {
+		log.Printf("[telegram] 交易回调 %s 已禁用：未配置 ChatID", action)
+		b.apiCall("sendMessage", map[string]any{
+			"chat_id": chatID,
+			"text":    tradingCommandDisabledReply,
+		})
+		return
+	}
+
 	var response string
 	switch action {
 	case "refresh":
@@ -427,6 +458,16 @@ func (b *Bot) handleCommand(text string, chatID int64) {
 	}
 	cmd := strings.ToLower(parts[0])
 	args := parts[1:]
+
+	// P0-3：未配置 ChatID 时交易类命令直接拒绝（只读命令不受限）。
+	if tradingCommandSet[cmd] && !b.tradingCommandsEnabled() {
+		log.Printf("[telegram] 交易命令 %s 已禁用：未配置 ChatID", cmd)
+		b.apiCall("sendMessage", map[string]any{
+			"chat_id": chatID,
+			"text":    tradingCommandDisabledReply,
+		})
+		return
+	}
 
 	var response string
 	var keyboard *InlineKeyboardMarkup
@@ -919,7 +960,7 @@ func (b *Bot) apiCall(method string, params map[string]any) error {
 }
 
 func (b *Bot) apiCallRaw(method string, params map[string]any) (map[string]any, error) {
-	u := fmt.Sprintf("https://api.telegram.org/bot%s/%s", b.config.Token, method)
+	u := fmt.Sprintf("%s/bot%s/%s", telegramAPIBase, b.config.Token, method)
 
 	// Build URL with query params
 	values := url.Values{}

@@ -39,6 +39,23 @@ func GetCredential(exchangeName string) (apiKey, secret, passphrase string) {
 		return
 	}
 
+	// 加密保险库（env 未覆盖的字段从 vault 解密补齐）。
+	canonical := normalizeExchangeName(exchangeName)
+	if vkey, vsecret, vpass, err := store.GetVault().Get(canonical); err == nil {
+		if apiKey == "" {
+			apiKey = vkey
+		}
+		if secret == "" {
+			secret = vsecret
+		}
+		if passphrase == "" {
+			passphrase = vpass
+		}
+		if apiKey != "" && secret != "" {
+			return
+		}
+	}
+
 	// Fallback: read from persisted config (decrypted in-memory cache).
 	cfg := store.GetConfig()
 	if cfg == nil {
@@ -49,7 +66,6 @@ func GetCredential(exchangeName string) (apiKey, secret, passphrase string) {
 		return
 	}
 
-	canonical := normalizeExchangeName(exchangeName)
 	if ex, ok := exchanges[canonical].(map[string]any); ok {
 		if v := getString(ex, "api_key", ""); v != "" && apiKey == "" {
 			apiKey = v

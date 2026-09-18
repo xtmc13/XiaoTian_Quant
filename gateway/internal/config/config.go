@@ -19,6 +19,7 @@ type Config struct {
 	Portfolio PortfolioConfig `yaml:"portfolio"`
 	Strategy  StrategyConfig  `yaml:"strategy"`
 	Trading   TradingConfig   `yaml:"trading"`
+	Webhook   WebhookConfig   `yaml:"webhook"`
 	Backtest  BacktestConfig  `yaml:"backtest"`
 	AI        AIConfig        `yaml:"ai"`
 	Notify    NotifyConfig    `yaml:"notify"`
@@ -75,6 +76,13 @@ type PortfolioConfig struct {
 type StrategyConfig struct {
 	MaxStrategies int  `yaml:"max_strategies"`
 	HotReload     bool `yaml:"hot_reload"`
+}
+
+// WebhookConfig webhook 信号下单配置。
+type WebhookConfig struct {
+	// DefaultQuantity：webhook 未传 quantity 时的兜底下单量。
+	// 默认 0 = 必须显式传 quantity，否则请求被拒绝（400 quantity required）。
+	DefaultQuantity float64 `yaml:"default_quantity"`
 }
 
 // TradingConfig 交易总闸配置。

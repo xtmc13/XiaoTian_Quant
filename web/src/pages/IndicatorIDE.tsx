@@ -1,11 +1,12 @@
 /**
- * Indicator IDE — XiaoTianQuant-style split-panel layout with I/O contract.
- * Code editor (left) + Chart/Backtest workspace (right).
+ * Indicator IDE — 量化丁格布局复刻
+ * 左栏：代码编辑器（上）+ AI 协作面板（下），可拖拽分栏；
+ * 右栏：图表窗口（工具条 + K 线图）。
  */
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
-import { cn, formatCurrency } from '@/lib/utils'
+import { cn } from '@/lib/utils'
 import { marketApi, indicatorApi, strategyApi, communityApi } from '@/lib/api'
 import { TRADING_INTERVALS } from '@/lib/constants'
 import type { TickerSnapshot } from '@/types'
@@ -17,22 +18,13 @@ import {
   craParamsToApiPayload,
 } from '@/components/strategy/CRAParamForm'
 import { KlineChart } from '@/components/charts/KlineChart'
-import { EquityCurve } from '@/components/charts/EquityCurve'
 import { CodeEditor } from '@/components/ide/CodeEditor'
 import { ParamPanel } from '@/components/ide/ParamPanel'
 import { ValidationBanner } from '@/components/ide/ValidationBanner'
-import { SectionCard } from '@/components/ui/SectionCard'
-import { KPICard } from '@/components/ui/KPICard'
 import type { KLineBar } from '@/lib/technicalIndicators'
 import {
   Play,
-  Save,
   Code,
-  BarChart3,
-  TrendingUp,
-  TrendingDown,
-  Target,
-  Activity,
   Zap,
   ChevronUp,
   ChevronDown,
@@ -43,14 +35,16 @@ import {
   Loader2,
   AlertCircle,
   X,
-  Sparkles,
-  PanelLeft,
+  Bot,
+  Send,
   Copy,
   Upload,
   BookOpen,
   GitBranch,
   PauseCircle,
   Wand2,
+  Eye,
+  Check,
 } from 'lucide-react'
 import {
   DEFAULT_INDICATOR_CODE,
@@ -83,75 +77,74 @@ interface SavedIndicator {
   pricing_type?: string
 }
 
+interface IdeChatMessage {
+  role: 'user' | 'bot'
+  content: string
+  status?: string
+  candidate?: { code: string; applied: boolean; dismissed: boolean }
+}
+
+const AI_STATUS_TEXT: Record<string, string> = {
+  generating: '正在生成指标代码...',
+  validating: '验证代码...',
+  auto_fixing: '自动修复中...',
+}
+
+const AI_GREETING: IdeChatMessage = {
+  role: 'bot',
+  content: '你好！描述你想要的指标，我来帮你生成代码。\n\n例如："做一个 MACD 金叉死叉带成交量过滤的指标"',
+}
+
+const QUICK_PROMPTS = [
+  { label: '解释代码', prompt: '解释当前指标代码的逻辑' },
+  { label: '调整参数', prompt: '帮我调整当前指标的参数' },
+  { label: '增加信号', prompt: '给当前指标增加一个交易信号' },
+  { label: '优化可视化', prompt: '优化当前指标的可视化效果' },
+]
+
 /* ── Main Page ───────────────────────────────────────────────────── */
 
 export function IndicatorIDE() {
-  // Selection
+  const [searchParams, setSearchParams] = useSearchParams()
   const [symbol, setSymbol] = useState('BTCUSDT')
   const [interval, setInterval] = useState('1h')
-  const [searchParams, setSearchParams] = useSearchParams()
-
-  // Code
+  // Code state
   const [code, setCode] = useState(DEFAULT_INDICATOR_CODE)
   const [codeDirty, setCodeDirty] = useState(false)
   const [selectedIndicatorId, setSelectedIndicatorId] = useState<number | null>(null)
-
-  // Parsed contract state
+  // Parsed params / validation
   const [parsed, setParsed] = useState<ParseResult>(() => parseParamsFromCode(DEFAULT_INDICATOR_CODE))
   const [paramValues, setParamValues] = useState<Record<string, unknown>>({})
   const [validationHints, setValidationHints] = useState<ValidationHint[]>([])
   const [validating, setValidating] = useState(false)
-
-  // UI
-  const [codeDrawerVisible, setCodeDrawerVisible] = useState(true)
-  const [codePanelExpanded, setCodePanelExpanded] = useState(true)
-  const [editorFullscreen, setEditorFullscreen] = useState(false)
+  // Chart
   const [chartFullscreen, setChartFullscreen] = useState(false)
-  const [workspaceTab, setWorkspaceTab] = useState<'chart' | 'backtest'>('chart')
   const [activeIndicators, setActiveIndicators] = useState<IndicatorConfig[]>([])
   const [chartIndicatorRunning, setChartIndicatorRunning] = useState(false)
-
-  // AI
+  // Left column split (code | AI), percentage of code section
+  const [splitPct, setSplitPct] = useState(55)
+  const leftColRef = useRef<HTMLDivElement>(null)
+  // AI chat
   const [aiPrompt, setAiPrompt] = useState('')
   const [aiGenerating, setAiGenerating] = useState(false)
-  const [aiPanelExpanded, setAiPanelExpanded] = useState(false)
-  const [aiStatus, setAiStatus] = useState<string>('') // generating | validating | auto_fixing | completed | error
-  const [aiStreamedCode, setAiStreamedCode] = useState<string>('')
-
-  // Experiment
+  const [aiStreamedCode, setAiStreamedCode] = useState('')
+  const [aiPanelExpanded, setAiPanelExpanded] = useState(true)
+  const [messages, setMessages] = useState<IdeChatMessage[]>([AI_GREETING])
+  const [preview, setPreview] = useState<{ code: string; msgIdx: number } | null>(null)
+  const chatScrollRef = useRef<HTMLDivElement>(null)
+  // Experiment (auto-tune)
   const [experimentRunning, setExperimentRunning] = useState(false)
   const [experimentResult, setExperimentResult] = useState<Record<string, unknown> | null>(null)
   const [experimentPanelExpanded, setExperimentPanelExpanded] = useState(false)
   const [optimizer, setOptimizer] = useState<'de' | 'tpe'>('de')
-
-  // Backtest
-  const [initialCapital, setInitialCapital] = useState(10000)
-  const [leverage, setLeverage] = useState(1)
-  const [commission, setCommission] = useState(0.05)
-  const [slippage, setSlippage] = useState(0.01)
-  const [startDate, setStartDate] = useState('')
-  const [endDate, setEndDate] = useState('')
-  const [running, setRunning] = useState(false)
-  const [backtestResult, setBacktestResult] = useState<Record<string, unknown> | null>(null)
-
-  // Indicator list
+  // Saved indicators
   const [indicators, setIndicators] = useState<SavedIndicator[]>([])
-
-  /* ── Select indicator ── */
-  const selectIndicator = useCallback((ind: SavedIndicator) => {
-    setSelectedIndicatorId(ind.id)
-    setCode(ind.code)
-    setCodeDirty(false)
-    setValidationHints([])
-  }, [])
-
   // Chart signals from indicator execution
   const [chartSignals, setChartSignals] = useState<
     Array<{ timestamp: number; price: number; side: 'buy' | 'sell'; text: string; color: string }>
   >([])
 
-  /* ── Load saved indicators ── */
-  useEffect(() => {
+  const reloadIndicators = useCallback(() => {
     indicatorApi
       .list()
       .then((res: unknown) => {
@@ -159,6 +152,19 @@ export function IndicatorIDE() {
         setIndicators(Array.isArray(list) ? list : [])
       })
       .catch(() => {})
+  }, [])
+
+  /* ── Load saved indicators ── */
+  useEffect(() => {
+    reloadIndicators()
+  }, [reloadIndicators])
+
+  /* ── Select indicator ── */
+  const selectIndicator = useCallback((ind: SavedIndicator) => {
+    setSelectedIndicatorId(ind.id)
+    setCode(ind.code)
+    setCodeDirty(false)
+    setValidationHints([])
   }, [])
 
   /* ── Auto-load indicator from URL ?id=xxx ── */
@@ -329,17 +335,11 @@ export function IndicatorIDE() {
         code,
       })
       setCodeDirty(false)
-      indicatorApi
-        .list()
-        .then((res: unknown) => {
-          const list = Array.isArray(res) ? res : (res as Record<string, unknown>)?.data || []
-          setIndicators(Array.isArray(list) ? list : [])
-        })
-        .catch(() => {})
+      reloadIndicators()
     } catch {
       /* ignore */
     }
-  }, [code, selectedIndicatorId, parsed, handleValidate])
+  }, [code, selectedIndicatorId, parsed, handleValidate, reloadIndicators])
 
   const handleDelete = useCallback(async () => {
     if (!selectedIndicatorId || !confirm('确认删除？')) return
@@ -349,17 +349,11 @@ export function IndicatorIDE() {
       setCode(DEFAULT_INDICATOR_CODE)
       setCodeDirty(false)
       setValidationHints([])
-      indicatorApi
-        .list()
-        .then((res: unknown) => {
-          const list = Array.isArray(res) ? res : (res as Record<string, unknown>)?.data || []
-          setIndicators(Array.isArray(list) ? list : [])
-        })
-        .catch(() => {})
+      reloadIndicators()
     } catch {
       /* ignore */
     }
-  }, [selectedIndicatorId])
+  }, [selectedIndicatorId, reloadIndicators])
 
   const handleSaveAs = useCallback(async () => {
     try {
@@ -369,17 +363,11 @@ export function IndicatorIDE() {
         code,
       })
       setCodeDirty(false)
-      indicatorApi
-        .list()
-        .then((res: unknown) => {
-          const list = Array.isArray(res) ? res : (res as Record<string, unknown>)?.data || []
-          setIndicators(Array.isArray(list) ? list : [])
-        })
-        .catch(() => {})
+      reloadIndicators()
     } catch {
       /* ignore */
     }
-  }, [code, parsed])
+  }, [code, parsed, reloadIndicators])
 
   const handlePublish = useCallback(async () => {
     if (!selectedIndicatorId) {
@@ -405,75 +393,144 @@ export function IndicatorIDE() {
     }
   }, [selectedIndicatorId, handleSave])
 
-  /* ── AI Generate (SSE Streaming) ── */
-  const handleAiGenerate = useCallback(async () => {
-    if (!aiPrompt.trim()) return
-    setAiGenerating(true)
-    setAiStatus('generating')
-    setAiStreamedCode('')
-    setValidationHints([])
-    let streamed = ''
-    try {
-      await indicatorApi.aiGenerateStream(
-        { prompt: aiPrompt, existingCode: code !== DEFAULT_INDICATOR_CODE ? code : '' },
-        {
-          onCodeChunk: (chunk) => {
-            streamed += chunk
-            setAiStreamedCode(streamed)
-          },
-          onStatus: (status) => {
-            setAiStatus(status)
-            if (
-              status === 'auto_fixing_round_1' ||
-              status === 'auto_fixing_round_2' ||
-              status === 'auto_fixing_round_3'
-            ) {
-              setAiStatus('auto_fixing')
-            }
-          },
-          onValidation: (result) => {
-            const r = result as unknown as { hints?: ValidationHint[] }
-            if (r?.hints) {
-              setValidationHints(r.hints)
-            }
-          },
-          onCodeReplace: (newCode) => {
-            setCode(newCode)
-            setCodeDirty(true)
-            setAiStreamedCode(newCode)
-          },
-          onDebug: (info) => {
-            console.warn('[AI Debug]', info)
-          },
-          onDone: () => {
-            setAiStatus('completed')
-            // If we have streamed code but no explicit replacement, use the streamed version
-            if (streamed && code === (code !== DEFAULT_INDICATOR_CODE ? code : DEFAULT_INDICATOR_CODE)) {
-              const cleaned = streamed
+  /* ── AI Chat (SSE Streaming) — 丁格 candidate 流程 ── */
+  const patchLastBot = useCallback((patch: Partial<IdeChatMessage>) => {
+    setMessages((prev) => {
+      const next = [...prev]
+      for (let i = next.length - 1; i >= 0; i--) {
+        if (next[i].role === 'bot') {
+          next[i] = { ...next[i], ...patch }
+          break
+        }
+      }
+      return next
+    })
+  }, [])
+
+  const handleSend = useCallback(
+    async (presetPrompt?: string) => {
+      const prompt = (presetPrompt ?? aiPrompt).trim()
+      if (!prompt || aiGenerating) return
+      setMessages((prev) => [...prev, { role: 'user', content: prompt }])
+      setAiPrompt('')
+      setMessages((prev) => [...prev, { role: 'bot', content: '', status: 'generating' }])
+      setAiGenerating(true)
+      setAiPanelExpanded(true)
+      setAiStreamedCode('')
+      setValidationHints([])
+      let streamed = ''
+      let replaced: string | null = null
+      try {
+        await indicatorApi.aiGenerateStream(
+          { prompt, existingCode: code !== DEFAULT_INDICATOR_CODE ? code : '' },
+          {
+            onCodeChunk: (chunk) => {
+              streamed += chunk
+              setAiStreamedCode(streamed)
+            },
+            onStatus: (status) => {
+              patchLastBot({
+                status: ['auto_fixing_round_1', 'auto_fixing_round_2', 'auto_fixing_round_3'].includes(status)
+                  ? 'auto_fixing'
+                  : status,
+              })
+            },
+            onValidation: (result) => {
+              const r = result as unknown as { hints?: ValidationHint[] }
+              if (r?.hints) {
+                setValidationHints(r.hints)
+              }
+            },
+            onCodeReplace: (newCode) => {
+              // 丁格式：不直接覆盖编辑器，先进入 candidate 卡片
+              replaced = newCode
+              setAiStreamedCode(newCode)
+            },
+            onDebug: (info) => {
+              console.warn('[AI Debug]', info)
+            },
+            onDone: () => {
+              const cleaned = (replaced ?? streamed)
                 .replace(/```python\n?/g, '')
                 .replace(/```\n?/g, '')
                 .trim()
-              if (cleaned) {
-                setCode(cleaned)
-                setCodeDirty(true)
-              }
-            }
-          },
-          onError: (err) => {
-            setAiStatus('error')
-            setValidationHints([{ severity: 'error', code: 'AI_GENERATE_ERROR', params: { msg: err } }])
-          },
-        }
+              patchLastBot({
+                status: 'completed',
+                content: cleaned ? '指标代码已生成，请预览后应用。' : '已完成。',
+                candidate: cleaned ? { code: cleaned, applied: false, dismissed: false } : undefined,
+              })
+            },
+            onError: (err) => {
+              setValidationHints([{ severity: 'error', code: 'AI_GENERATE_ERROR', params: { msg: err } }])
+              patchLastBot({ status: 'error', content: `生成失败：${err}` })
+            },
+          }
+        )
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : '生成失败'
+        setValidationHints([{ severity: 'error', code: 'AI_GENERATE_ERROR', params: { msg } }])
+        patchLastBot({ status: 'error', content: `生成失败：${msg}` })
+      } finally {
+        setAiGenerating(false)
+      }
+    },
+    [aiPrompt, code, aiGenerating, patchLastBot]
+  )
+
+  const applyCandidate = useCallback((idx: number) => {
+    setMessages((prev) => {
+      const msg = prev[idx]
+      if (!msg?.candidate || msg.candidate.applied) return prev
+      setCode(msg.candidate.code)
+      setCodeDirty(true)
+      setValidationHints([])
+      toast('success', 'AI 代码已应用到编辑器')
+      return prev.map((m, i) =>
+        i === idx && m.candidate ? { ...m, candidate: { ...m.candidate, applied: true } } : m
       )
-    } catch (e: unknown) {
-      setAiStatus('error')
-      setValidationHints([
-        { severity: 'error', code: 'AI_GENERATE_ERROR', params: { msg: e instanceof Error ? e.message : '生成失败' } },
-      ])
-    } finally {
-      setAiGenerating(false)
-    }
-  }, [aiPrompt, code])
+    })
+  }, [])
+
+  const dismissCandidate = useCallback((idx: number) => {
+    setMessages((prev) =>
+      prev.map((m, i) => (i === idx && m.candidate ? { ...m, candidate: { ...m.candidate, dismissed: true } } : m))
+    )
+  }, [])
+
+  const clearConversation = useCallback(() => {
+    if (aiGenerating) return
+    setMessages([AI_GREETING])
+  }, [aiGenerating])
+
+  /* ── Chat auto scroll ── */
+  useEffect(() => {
+    chatScrollRef.current?.scrollTo({ top: chatScrollRef.current.scrollHeight, behavior: 'smooth' })
+  }, [messages, aiStreamedCode, aiGenerating])
+
+  /* ── Split resizer ── */
+  const startResize = useCallback(
+    (e: React.PointerEvent) => {
+      e.preventDefault()
+      const startY = e.clientY
+      const startPct = splitPct
+      document.body.style.cursor = 'row-resize'
+      const move = (ev: PointerEvent) => {
+        const container = leftColRef.current
+        if (!container) return
+        const h = container.clientHeight || 1
+        const pct = startPct + ((ev.clientY - startY) / h) * 100
+        setSplitPct(Math.min(75, Math.max(30, pct)))
+      }
+      const up = () => {
+        window.removeEventListener('pointermove', move)
+        window.removeEventListener('pointerup', up)
+        document.body.style.cursor = ''
+      }
+      window.addEventListener('pointermove', move)
+      window.addEventListener('pointerup', up)
+    },
+    [splitPct]
+  )
 
   /* ── Experiment (Auto-tune) ── */
   const handleRunExperiment = useCallback(async () => {
@@ -488,9 +545,9 @@ export function IndicatorIDE() {
         optimizer,
         oos_ratio: 0.3,
         backtest_config: {
-          initial_balance: initialCapital,
-          commission: commission / 100,
-          slippage: slippage / 100,
+          initial_balance: 10000,
+          commission: 0.0005,
+          slippage: 0.0001,
         },
       }
       const res = await indicatorApi.experiment.run(payload)
@@ -504,72 +561,7 @@ export function IndicatorIDE() {
     } finally {
       setExperimentRunning(false)
     }
-  }, [code, symbol, interval, optimizer, parsed.params.length, initialCapital, commission, slippage])
-
-  /* ── Backtest ── */
-  const handleRunBacktest = useCallback(async () => {
-    setRunning(true)
-    setBacktestResult(null)
-    try {
-      const payload: Record<string, unknown> = {
-        code,
-        symbol,
-        interval,
-        klines: klines.map((k) => ({
-          time: k.timestamp,
-          open: k.open,
-          high: k.high,
-          low: k.low,
-          close: k.close,
-          volume: k.volume,
-        })),
-        backtest_config: {
-          initial_balance: initialCapital,
-          commission: commission / 100,
-          slippage: slippage / 100,
-        },
-      }
-      if (startDate) payload.start_date = startDate
-      if (endDate) payload.end_date = endDate
-      const result = await indicatorApi.backtest(payload)
-      setBacktestResult(result)
-    } catch (e: unknown) {
-      setBacktestResult({ error: e instanceof Error ? e.message : '回测失败' })
-    } finally {
-      setRunning(false)
-    }
-  }, [code, symbol, interval, klines, initialCapital, commission, slippage, startDate, endDate])
-
-  /* ── Backtest metrics ── */
-  const backtestMetrics = useMemo(() => {
-    if (!backtestResult || backtestResult.error) return null
-    const r = backtestResult as Record<string, unknown>
-    const totalReturnPct = Number(r.total_return_pct ?? 0)
-    const totalReturn = Number(r.total_return ?? 0)
-    const finalEquity = initialCapital + totalReturn
-    const maxDrawdownPct = Number(r.max_drawdown_pct ?? 0)
-    const sharpeRatio = Number(r.sharpe_ratio ?? 0)
-    const winRate = Number(r.win_rate ?? 0)
-    const profitFactor = Number(r.profit_factor ?? 0)
-    const t = 'up' as const
-    const d = 'down' as const
-    const n = 'neutral' as const
-    return [
-      {
-        label: '总收益率',
-        value: `${totalReturnPct >= 0 ? '+' : ''}${totalReturnPct.toFixed(2)}%`,
-        icon: TrendingUp,
-        trend: totalReturnPct >= 0 ? t : d,
-      },
-      { label: '最终权益', value: `$${formatCurrency(finalEquity)}`, icon: BarChart3, trend: n },
-      { label: '最大回撤', value: `${maxDrawdownPct.toFixed(2)}%`, icon: TrendingDown, trend: d },
-      { label: '夏普比率', value: sharpeRatio.toFixed(2), icon: Target, trend: n },
-      { label: '胜率', value: `${winRate.toFixed(1)}%`, icon: Target, trend: t },
-      { label: '盈亏比', value: profitFactor.toFixed(2), icon: Activity, trend: n },
-    ]
-  }, [backtestResult, initialCapital])
-
-  const isUp = change24h >= 0
+  }, [code, symbol, interval, optimizer, parsed.params.length])
 
   /* ── Create Strategy from Indicator ── */
   const [showCreateStrategy, setShowCreateStrategy] = useState(false)
@@ -606,701 +598,613 @@ export function IndicatorIDE() {
   }, [stratBase, stratCra, code, parsed.name])
 
   /* ═══════════════════════════════════════════════════════════════ */
-  /*  Render                                                          */
+  /*  Render — 左栏：代码 + AI ｜ 右栏：图表                            */
   /* ═══════════════════════════════════════════════════════════════ */
+
+  const isUp = change24h >= 0
 
   return (
     <>
-      <div className="h-full flex flex-col bg-quant-bg">
-        {/* ── Code rail (collapsed state) ── */}
-        {!codeDrawerVisible && !chartFullscreen && (
-          <div
-            onClick={() => setCodeDrawerVisible(true)}
-            className="absolute left-0 top-1/2 -translate-y-1/2 z-10 w-8 h-20 flex flex-col items-center justify-center gap-1 rounded-r-lg border border-l-0 border-quant-border bg-quant-bg-secondary cursor-pointer hover:bg-quant-bg-tertiary transition-colors"
-          >
-            <Code className="w-4 h-4 text-muted-foreground" />
-            <span className="text-[9px] text-muted-foreground" style={{ writingMode: 'vertical-rl' }}>
-              代码
-            </span>
-          </div>
-        )}
-
-        <div className="flex-1 flex min-h-0">
-          {/* ═══════════════════════════════════════════════════════════
-            LEFT: Code Panel
-        ═══════════════════════════════════════════════════════════ */}
-          {codeDrawerVisible && !chartFullscreen && (
-            <div
-              className={cn(
-                'flex flex-col border-r border-quant-border bg-quant-bg-secondary shrink-0 transition-all',
-                editorFullscreen ? 'w-full absolute inset-0 z-20' : 'w-[440px]'
-              )}
-            >
-              {/* ── Code panel header ── */}
-              <div className="flex items-center justify-between px-3 py-2 border-b border-quant-border shrink-0">
-                <div className="flex items-center gap-2">
-                  <Code className="w-4 h-4 text-muted-foreground" />
-                  {codeDirty && (
-                    <span className="px-1.5 py-0 rounded text-[9px] font-medium bg-amber-500/10 text-amber-400">
-                      已修改
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-0.5">
-                  {/* Template selector */}
-                  <select
-                    value=""
-                    onChange={(e) => {
-                      const tmpl = INDICATOR_TEMPLATES.find((t) => t.key === e.target.value)
-                      if (tmpl) {
-                        setCode(tmpl.code)
-                        setCodeDirty(true)
-                        setSelectedIndicatorId(null)
-                        setValidationHints([])
-                      }
-                      e.target.value = ''
-                    }}
-                    className="bg-quant-bg border border-quant-border rounded px-1.5 py-1 text-[10px] text-white outline-none focus:border-quant-gold mr-1"
-                    title="加载模板"
-                  >
-                    <option value="">模板 ▾</option>
-                    {INDICATOR_TEMPLATES.map((t) => (
-                      <option key={t.key} value={t.key}>
-                        {t.label}
-                      </option>
-                    ))}
-                  </select>
-                  {/* New */}
-                  <button
-                    onClick={() => {
-                      setCode(DEFAULT_INDICATOR_CODE)
-                      setSelectedIndicatorId(null)
-                      setCodeDirty(false)
-                      setValidationHints([])
-                    }}
-                    className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/5"
-                    title="新建"
-                    aria-label="新建"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                  </button>
-                  {/* Save */}
-                  <button
-                    onClick={handleSave}
-                    disabled={!codeDirty}
-                    className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/5 disabled:opacity-30"
-                    title="保存"
-                    aria-label="保存"
-                  >
-                    <Save className="w-3.5 h-3.5" />
-                  </button>
-                  {/* Delete */}
-                  <button
-                    onClick={handleDelete}
-                    disabled={!selectedIndicatorId}
-                    className="p-1.5 rounded text-muted-foreground hover:text-quant-red hover:bg-white/5 disabled:opacity-30"
-                    title="删除"
-                    aria-label="删除"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                  {/* Validate */}
-                  <button
-                    onClick={handleValidate}
-                    disabled={validating}
-                    className="p-1.5 rounded text-muted-foreground hover:text-quant-gold hover:bg-white/5 disabled:opacity-30"
-                    title="验证代码"
-                    aria-label="验证代码"
-                  >
-                    {validating ? (
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    ) : (
-                      <AlertCircle className="w-3.5 h-3.5" />
-                    )}
-                  </button>
-                  {/* Publish */}
-                  <button
-                    onClick={handlePublish}
-                    className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/5"
-                    title="发布到社区"
-                    aria-label="发布到社区"
-                  >
-                    <Upload className="w-3.5 h-3.5" />
-                  </button>
-                  {/* Create Strategy */}
-                  <button
-                    onClick={() => setShowCreateStrategy(true)}
-                    className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/5"
-                    title="从指标创建策略"
-                    aria-label="从指标创建策略"
-                  >
-                    <GitBranch className="w-3.5 h-3.5" />
-                  </button>
-                  {/* Save As */}
-                  <button
-                    onClick={handleSaveAs}
-                    className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/5"
-                    title="另存为"
-                    aria-label="另存为"
-                  >
-                    <Copy className="w-3.5 h-3.5" />
-                  </button>
-                  {/* Fullscreen */}
-                  <button
-                    onClick={() => setEditorFullscreen(!editorFullscreen)}
-                    className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/5"
-                    title={editorFullscreen ? '退出全屏' : '全屏编辑器'}
-                    aria-label={editorFullscreen ? '退出全屏' : '全屏编辑器'}
-                  >
-                    {editorFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
-                  </button>
-                  {/* Run/Stop on chart */}
-                  <button
-                    onClick={() => setChartIndicatorRunning(!chartIndicatorRunning)}
-                    className={cn(
-                      'p-1.5 rounded',
-                      chartIndicatorRunning
-                        ? 'text-quant-green bg-quant-green/10'
-                        : 'text-muted-foreground hover:text-foreground hover:bg-white/5'
-                    )}
-                    title={chartIndicatorRunning ? '停止' : '在图表上运行'}
-                    aria-label={chartIndicatorRunning ? '停止' : '在图表上运行'}
-                  >
-                    {chartIndicatorRunning ? <PauseCircle className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-                  </button>
-                  {/* Collapse */}
-                  <button
-                    onClick={() => setCodePanelExpanded(!codePanelExpanded)}
-                    className="p-1 rounded text-muted-foreground hover:text-foreground ml-1"
-                    aria-label={codePanelExpanded ? '收起代码面板' : '展开代码面板'}
-                  >
-                    {codePanelExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                  </button>
-                </div>
-              </div>
-
-              {/* ── Code panel body ── */}
-              {codePanelExpanded && (
-                <>
-                  {/* Guide bar */}
-                  <div className="flex items-center gap-1.5 px-3 py-1.5 text-[10px] text-muted-foreground border-b border-quant-border bg-quant-bg-tertiary">
-                    <BookOpen className="w-3 h-3" />
-                    <span>策略开发指南</span>
-                    <button
-                      onClick={() => window.open('/docs/strategy-guide', '_blank')}
-                      className="text-quant-gold hover:underline ml-auto text-[10px]"
-                    >
-                      查看文档 →
-                    </button>
-                  </div>
-
-                  {/* AI Panel toggle */}
-                  <div className="px-3 py-1.5 border-b border-quant-border bg-quant-bg-tertiary">
-                    <button
-                      onClick={() => setAiPanelExpanded(!aiPanelExpanded)}
-                      className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-                    >
-                      <Sparkles className="w-3 h-3 text-quant-gold" />
-                      AI 代码生成
-                      {aiPanelExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                    </button>
-                    {aiPanelExpanded && (
-                      <div className="mt-2 space-y-2">
-                        <textarea
-                          value={aiPrompt}
-                          onChange={(e) => setAiPrompt(e.target.value)}
-                          placeholder="描述你想要的策略，AI 将为你生成代码..."
-                          className="w-full bg-quant-bg border border-quant-border rounded-md px-3 py-2 text-xs text-white placeholder-muted-foreground outline-none focus:border-quant-gold resize-none h-16"
-                        />
-                        <button
-                          onClick={handleAiGenerate}
-                          disabled={aiGenerating || !aiPrompt.trim()}
-                          className="flex items-center gap-1.5 rounded-md bg-quant-gold px-3 py-1.5 text-xs font-medium text-black hover:opacity-90 disabled:opacity-50"
-                        >
-                          {aiGenerating ? (
-                            <Loader2 className="w-3 h-3 animate-spin" />
-                          ) : (
-                            <Sparkles className="w-3 h-3" />
-                          )}
-                          {aiGenerating
-                            ? aiStatus === 'generating'
-                              ? '生成中...'
-                              : aiStatus === 'validating'
-                                ? '验证中...'
-                                : aiStatus === 'auto_fixing'
-                                  ? '自动修复中...'
-                                  : '处理中...'
-                            : '生成代码'}
-                        </button>
-                        {/* Stream preview */}
-                        {aiGenerating && aiStreamedCode && (
-                          <div className="rounded border border-quant-border bg-quant-bg p-2">
-                            <div className="text-[9px] text-muted-foreground mb-1 flex items-center gap-1">
-                              <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                              {aiStatus === 'generating'
-                                ? '实时生成'
-                                : aiStatus === 'validating'
-                                  ? '验证代码'
-                                  : aiStatus === 'auto_fixing'
-                                    ? '自动修复'
-                                    : '处理中'}
-                            </div>
-                            <pre className="text-[10px] text-quant-green/80 font-mono whitespace-pre-wrap max-h-32 overflow-y-auto">
-                              {aiStreamedCode.slice(-400)}
-                            </pre>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Validation hints */}
-                  {validationHints.length > 0 && (
-                    <div className="px-3 pt-2 border-b border-quant-border bg-quant-bg-tertiary">
-                      <ValidationBanner hints={validationHints} />
-                    </div>
-                  )}
-
-                  {/* CodeMirror editor */}
-                  <div className="flex-1 min-h-0">
-                    <CodeEditor
-                      value={code}
-                      onChange={(v) => {
-                        setCode(v)
-                        setCodeDirty(true)
-                        setValidationHints([])
-                      }}
-                      theme="dark"
-                      placeholder="输入 Python 策略代码..."
-                    />
-                  </div>
-
-                  {/* Param panel */}
-                  {parsed.params.length > 0 && (
-                    <div className="px-3 py-2 border-t border-quant-border bg-quant-bg-tertiary shrink-0 max-h-40 overflow-y-auto">
-                      <ParamPanel
-                        params={parsed.params}
-                        values={paramValues}
-                        onChange={(name, value) => setParamValues((prev) => ({ ...prev, [name]: value }))}
-                      />
-                    </div>
-                  )}
-
-                  {/* Experiment panel */}
-                  {parsed.params.length > 0 && (
-                    <div className="px-3 py-2 border-t border-quant-border bg-quant-bg-tertiary shrink-0">
-                      <button
-                        onClick={() => setExperimentPanelExpanded(!experimentPanelExpanded)}
-                        className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors w-full"
-                      >
-                        <Wand2 className="w-3 h-3 text-quant-gold" />
-                        自动调参 (DE / TPE)
-                        {experimentPanelExpanded ? (
-                          <ChevronUp className="w-3 h-3" />
-                        ) : (
-                          <ChevronDown className="w-3 h-3" />
-                        )}
-                      </button>
-                      {experimentPanelExpanded && (
-                        <div className="mt-2 space-y-2">
-                          <div className="flex items-center gap-2">
-                            <select
-                              value={optimizer}
-                              onChange={(e) => setOptimizer(e.target.value as 'de' | 'tpe')}
-                              className="bg-quant-bg border border-quant-border rounded px-2 py-1 text-[11px] text-white outline-none focus:border-quant-gold"
-                            >
-                              <option value="de">差分进化 (DE)</option>
-                              <option value="tpe">贝叶斯优化 (TPE)</option>
-                            </select>
-                            <button
-                              onClick={handleRunExperiment}
-                              disabled={experimentRunning}
-                              className="flex items-center gap-1 rounded bg-quant-gold/20 px-2 py-1 text-[11px] font-medium text-quant-gold hover:bg-quant-gold/30 disabled:opacity-50"
-                            >
-                              {experimentRunning ? (
-                                <Loader2 className="w-3 h-3 animate-spin" />
-                              ) : (
-                                <Wand2 className="w-3 h-3" />
-                              )}
-                              {experimentRunning ? '优化中...' : '开始优化'}
-                            </button>
-                          </div>
-                          {!!experimentResult?.error && (
-                            <div className="text-[10px] text-red-400">{String(experimentResult.error)}</div>
-                          )}
-                          {experimentResult && (experimentResult.best_score as number) > 0 && (
-                            <div className="space-y-1">
-                              <div className="text-[10px] text-quant-green">
-                                最佳评分: {(experimentResult.best_score as number).toFixed(1)}
-                              </div>
-                              {!!(experimentResult.is_score as Record<string, unknown>)?.factor_scores && (
-                                <div className="grid grid-cols-3 gap-1">
-                                  {Object.entries(
-                                    (experimentResult.is_score as Record<string, unknown>).factor_scores as Record<
-                                      string,
-                                      number
-                                    >
-                                  ).map(([k, v]: [string, number]) => (
-                                    <div key={k} className="rounded bg-quant-bg px-1.5 py-0.5 text-[9px]">
-                                      <span className="text-muted-foreground">{k}</span>
-                                      <span className="ml-1 text-quant-gold font-mono">{v.toFixed(0)}</span>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                              {(experimentResult.oos_validation as Record<string, unknown>)?.passed === false && (
-                                <div className="text-[10px] text-amber-400">⚠ 样本外验证未通过（可能过拟合）</div>
-                              )}
-                              {!!(experimentResult.oos_validation as Record<string, unknown>)?.passed && (
-                                <div className="text-[10px] text-quant-green">✓ 样本外验证通过</div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </>
-              )}
-
-              {/* Hide drawer handle */}
-              <div className="flex items-center justify-center py-1 border-t border-quant-border shrink-0">
-                <button
-                  onClick={() => setCodeDrawerVisible(false)}
-                  className="p-1 rounded text-muted-foreground hover:text-foreground"
-                >
-                  <ChevronUp className="w-4 h-4 rotate-90" />
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* ═══════════════════════════════════════════════════════════
-            RIGHT: Workspace
-        ═══════════════════════════════════════════════════════════ */}
-          <div className="flex-1 flex flex-col min-w-0">
-            {/* Workspace toolbar */}
-            <div className="h-10 flex items-center justify-between px-3 border-b border-quant-border bg-quant-bg-secondary shrink-0">
-              <div className="flex items-center gap-2">
-                {!codeDrawerVisible && (
-                  <button
-                    onClick={() => setCodeDrawerVisible(true)}
-                    className="p-1 rounded text-muted-foreground hover:text-foreground"
-                    title="代码面板"
-                  >
-                    <PanelLeft className="w-4 h-4" />
-                  </button>
+      <div className="h-full flex bg-quant-bg relative">
+        {/* ═══════════════════════════════════════════════════════════
+          LEFT: Code editor (top) + AI panel (bottom)
+      ═══════════════════════════════════════════════════════════ */}
+        <div
+          ref={leftColRef}
+          className="w-[480px] shrink-0 flex flex-col border-r border-quant-border bg-quant-bg-secondary min-h-0"
+        >
+          {/* ── Code section ── */}
+          <div className="flex flex-col min-h-0 overflow-hidden" style={{ flexBasis: `${splitPct}%` }}>
+            {/* Toolbar */}
+            <div className="flex items-center justify-between gap-1 px-2 py-1.5 border-b border-quant-border shrink-0 flex-wrap">
+              <div className="flex items-center gap-1.5">
+                <Code className="w-3.5 h-3.5 text-muted-foreground" />
+                {codeDirty && (
+                  <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-amber-500/10 text-amber-400">
+                    已修改
+                  </span>
                 )}
-                {/* Tabs */}
-                <div className="flex rounded bg-quant-bg-tertiary p-0.5">
-                  {(['chart', 'backtest'] as const).map((t) => (
-                    <button
-                      key={t}
-                      onClick={() => setWorkspaceTab(t)}
-                      className={cn(
-                        'px-3 py-1 rounded text-xs font-medium transition-colors',
-                        workspaceTab === t
-                          ? 'bg-quant-card text-foreground'
-                          : 'text-muted-foreground hover:text-foreground'
-                      )}
-                    >
-                      {t === 'chart' ? '图表' : '回测'}
-                    </button>
-                  ))}
-                </div>
               </div>
-
-              <div className="flex items-center gap-2">
-                {/* Indicator selector */}
+              <div className="flex items-center gap-0.5">
                 <select
-                  value={selectedIndicatorId ?? ''}
+                  value=""
                   onChange={(e) => {
-                    const id = Number(e.target.value)
-                    const ind = indicators.find((i) => i.id === id)
-                    if (ind) selectIndicator(ind)
+                    const tmpl = INDICATOR_TEMPLATES.find((t) => t.key === e.target.value)
+                    if (tmpl) {
+                      setCode(tmpl.code)
+                      setCodeDirty(true)
+                      setSelectedIndicatorId(null)
+                      setValidationHints([])
+                    }
+                    e.target.value = ''
                   }}
-                  className="bg-quant-bg border border-quant-border rounded px-2 py-1 text-xs text-white outline-none focus:border-quant-gold max-w-[160px] truncate"
+                  className="bg-quant-bg border border-quant-border rounded px-1.5 py-1 text-[10px] text-white outline-none focus:border-quant-gold mr-1"
+                  title="加载模板"
                 >
-                  <option value="">选择指标...</option>
-                  {indicators.map((ind) => (
-                    <option key={ind.id} value={ind.id}>
-                      {ind.name}
+                  <option value="">模板 ▾</option>
+                  {INDICATOR_TEMPLATES.map((t) => (
+                    <option key={t.key} value={t.key}>
+                      {t.label}
                     </option>
                   ))}
                 </select>
-
-                {/* Symbol */}
-                <select
-                  value={symbol}
-                  onChange={(e) => setSymbol(e.target.value)}
-                  className="bg-quant-bg border border-quant-border rounded px-2 py-1 text-xs text-white outline-none focus:border-quant-gold"
-                >
-                  {['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'ADAUSDT', 'DOGEUSDT'].map((s) => (
-                    <option key={s} value={s}>
-                      {s.replace('USDT', '/USDT')}
-                    </option>
-                  ))}
-                </select>
-
-                {/* Timeframe */}
-                <div className="flex rounded bg-quant-bg-tertiary p-0.5">
-                  {TRADING_INTERVALS.map((int) => (
-                    <button
-                      key={int}
-                      onClick={() => setInterval(int)}
-                      className={cn(
-                        'px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors',
-                        interval === int
-                          ? 'bg-quant-gold/10 text-quant-gold'
-                          : 'text-muted-foreground hover:text-foreground'
-                      )}
-                    >
-                      {int}
-                    </button>
-                  ))}
-                </div>
-
                 <button
-                  onClick={() => setChartFullscreen(!chartFullscreen)}
-                  className="p-1 rounded text-muted-foreground hover:text-foreground"
-                  title={chartFullscreen ? '退出全屏' : '图表全屏'}
+                  onClick={() => {
+                    setCode(DEFAULT_INDICATOR_CODE)
+                    setSelectedIndicatorId(null)
+                    setCodeDirty(false)
+                    setValidationHints([])
+                  }}
+                  className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/5"
+                  title="新建"
+                  aria-label="新建"
                 >
-                  {chartFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+                  <Plus className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={handleSaveAs}
+                  className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/5"
+                  title="另存为"
+                  aria-label="另存为"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={handleDelete}
+                  disabled={!selectedIndicatorId}
+                  className="p-1.5 rounded text-muted-foreground hover:text-quant-red hover:bg-white/5 disabled:opacity-30"
+                  title="删除"
+                  aria-label="删除"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={handleValidate}
+                  disabled={validating}
+                  className="p-1.5 rounded text-muted-foreground hover:text-quant-gold hover:bg-white/5 disabled:opacity-30"
+                  title="验证代码"
+                  aria-label="验证代码"
+                >
+                  {validating ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <AlertCircle className="w-3.5 h-3.5" />
+                  )}
+                </button>
+                <button
+                  onClick={handlePublish}
+                  className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/5"
+                  title="发布到社区"
+                  aria-label="发布到社区"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => setChartIndicatorRunning(!chartIndicatorRunning)}
+                  className={cn(
+                    'p-1.5 rounded',
+                    chartIndicatorRunning
+                      ? 'text-quant-green bg-quant-green/10'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-white/5'
+                  )}
+                  title={chartIndicatorRunning ? '停止图表运行' : '在图表上运行'}
+                  aria-label={chartIndicatorRunning ? '停止图表运行' : '在图表上运行'}
+                >
+                  {chartIndicatorRunning ? <PauseCircle className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                </button>
+                <button
+                  onClick={handleSave}
+                  disabled={!codeDirty}
+                  className="ml-1 px-2.5 h-7 rounded-lg bg-quant-gold text-black text-[11px] font-medium hover:opacity-90 disabled:opacity-30 transition-opacity"
+                >
+                  保存
                 </button>
               </div>
             </div>
 
-            {/* Content */}
-            <div className="flex-1 flex min-h-0">
-              {/* ── Chart Tab ── */}
-              {workspaceTab === 'chart' && (
-                <div className="flex-1 flex flex-col min-h-0 p-2 gap-1.5">
-                  {/* Price bar */}
-                  <div className="flex items-center gap-4 px-2 py-1 rounded bg-quant-bg-secondary border border-quant-border shrink-0">
-                    <span className="font-bold text-sm">{symbol.replace('USDT', '/USDT')}</span>
-                    <span className={cn('font-mono text-sm font-bold', isUp ? 'text-quant-green' : 'text-quant-red')}>
-                      ${lastPrice.toFixed(2)}
-                    </span>
-                    <span className={cn('text-xs font-mono', isUp ? 'text-quant-green' : 'text-quant-red')}>
-                      {change24h >= 0 ? '+' : ''}
-                      {change24h.toFixed(2)}%
-                    </span>
-                    {chartIndicatorRunning && (
-                      <span className="text-[10px] text-quant-gold bg-quant-gold/10 px-1.5 py-0 rounded">
-                        指标运行中
-                      </span>
-                    )}
-                  </div>
+            {/* Guide bar */}
+            <div className="flex items-center gap-1.5 px-2 py-1 text-[10px] text-muted-foreground border-b border-quant-border bg-quant-bg-tertiary shrink-0">
+              <BookOpen className="w-3 h-3" />
+              <span>开发指南</span>
+              <span className="ml-auto flex items-center gap-2">
+                <span className={validationHints.length > 0 ? 'text-amber-400' : 'text-quant-green'}>
+                  {validationHints.length > 0 ? `${validationHints.length} 条提示` : '检查通过'}
+                </span>
+                <button onClick={handleValidate} className="text-muted-foreground hover:text-foreground">
+                  重新检查
+                </button>
+                <button
+                  onClick={() => window.open('/docs/strategy-guide', '_blank')}
+                  className="text-quant-gold hover:underline"
+                >
+                  查看文档 →
+                </button>
+              </span>
+            </div>
 
-                  {/* KLineChart */}
-                  <div className="flex-1 min-h-0 rounded-lg overflow-hidden border border-quant-border">
-                    <KlineChart
-                      data={klines}
-                      loading={klLoading}
-                      signals={chartSignals}
-                      activeIndicators={activeIndicators}
-                      onActiveIndicatorsChange={setActiveIndicators}
-                      theme="dark"
-                    />
+            {/* Validation hints */}
+            {validationHints.length > 0 && (
+              <div className="px-2 py-1.5 border-b border-quant-border max-h-20 overflow-y-auto shrink-0">
+                <ValidationBanner hints={validationHints} />
+              </div>
+            )}
+
+            {/* Editor + AI overlay */}
+            <div className="relative flex-1 min-h-0">
+              <CodeEditor
+                value={code}
+                onChange={(v) => {
+                  setCode(v)
+                  setCodeDirty(true)
+                  setValidationHints([])
+                }}
+                theme="dark"
+                placeholder="输入 Python 指标代码..."
+              />
+              {aiGenerating && (
+                <div className="absolute inset-0 z-10 bg-quant-bg/80 backdrop-blur-sm flex flex-col items-center justify-center gap-3">
+                  <Loader2 className="w-6 h-6 text-quant-gold animate-spin" />
+                  <span className="text-xs text-muted-foreground">AI 生成中</span>
+                  <div className="flex gap-1">
+                    {[0, 1, 2].map((i) => (
+                      <span
+                        key={i}
+                        className="w-1.5 h-1.5 rounded-full bg-quant-gold animate-bounce"
+                        style={{ animationDelay: `${i * 0.15}s` }}
+                      />
+                    ))}
                   </div>
                 </div>
               )}
+            </div>
 
-              {/* ── Backtest Tab ── */}
-              {workspaceTab === 'backtest' && (
-                <div className="flex-1 overflow-y-auto p-3 space-y-4">
-                  <SectionCard title="回测参数" bodyClassName="space-y-3">
-                    {/* Date */}
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="text-[10px] text-muted-foreground mb-1 block">开始日期</label>
-                        <input
-                          type="date"
-                          value={startDate}
-                          onChange={(e) => setStartDate(e.target.value)}
-                          className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1.5 text-xs text-white outline-none focus:border-quant-gold"
-                          aria-label="开始日期"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-[10px] text-muted-foreground mb-1 block">结束日期</label>
-                        <input
-                          type="date"
-                          value={endDate}
-                          onChange={(e) => setEndDate(e.target.value)}
-                          className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1.5 text-xs text-white outline-none focus:border-quant-gold"
-                          aria-label="结束日期"
-                        />
-                      </div>
-                    </div>
-                    {/* Capital + Leverage */}
-                    <div className="grid grid-cols-4 gap-3">
-                      <div>
-                        <label className="text-[10px] text-muted-foreground mb-1 block">初始资金</label>
-                        <input
-                          type="number"
-                          min={100}
-                          value={initialCapital}
-                          onChange={(e) => setInitialCapital(Number(e.target.value))}
-                          className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1.5 text-xs text-white outline-none focus:border-quant-gold"
-                          aria-label="初始资金"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-[10px] text-muted-foreground mb-1 block">杠杆</label>
-                        <input
-                          type="number"
-                          min={1}
-                          max={150}
-                          value={leverage}
-                          onChange={(e) => setLeverage(Number(e.target.value))}
-                          className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1.5 text-xs text-white outline-none focus:border-quant-gold"
-                          aria-label="杠杆倍数"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-[10px] text-muted-foreground mb-1 block">手续费 %</label>
-                        <input
-                          type="number"
-                          min={0}
-                          max={10}
-                          step={0.01}
-                          value={commission}
-                          onChange={(e) => setCommission(Number(e.target.value))}
-                          className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1.5 text-xs text-white outline-none focus:border-quant-gold"
-                          aria-label="手续费百分比"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-[10px] text-muted-foreground mb-1 block">滑点 %</label>
-                        <input
-                          type="number"
-                          min={0}
-                          max={10}
-                          step={0.01}
-                          value={slippage}
-                          onChange={(e) => setSlippage(Number(e.target.value))}
-                          className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1.5 text-xs text-white outline-none focus:border-quant-gold"
-                          aria-label="滑点百分比"
-                        />
-                      </div>
-                    </div>
-                    <button
-                      onClick={handleRunBacktest}
-                      disabled={running}
-                      className="flex items-center gap-1.5 rounded bg-quant-gold px-4 py-1.5 text-xs font-medium text-black hover:opacity-90 disabled:opacity-50"
-                    >
-                      {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
-                      {running ? '运行中...' : '运行回测'}
-                    </button>
-                  </SectionCard>
-
-                  {/* Error */}
-                  {!!backtestResult?.error && (
-                    <div className="flex items-center gap-2 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-400">
-                      <AlertCircle className="w-3.5 h-3.5" />
-                      {String(backtestResult.error)}
-                    </div>
+            {/* Params + auto-tune */}
+            {parsed.params.length > 0 && (
+              <div className="px-2 py-1.5 border-t border-quant-border max-h-28 overflow-y-auto shrink-0">
+                <ParamPanel
+                  params={parsed.params}
+                  values={paramValues}
+                  onChange={(name, value) => setParamValues((prev) => ({ ...prev, [name]: value }))}
+                />
+              </div>
+            )}
+            {parsed.params.length > 0 && (
+              <div className="px-2 py-1.5 border-t border-quant-border shrink-0">
+                <button
+                  onClick={() => setExperimentPanelExpanded(!experimentPanelExpanded)}
+                  className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors w-full"
+                >
+                  <Wand2 className="w-3 h-3 text-quant-gold" />
+                  自动调参 (DE / TPE)
+                  {experimentPanelExpanded ? (
+                    <ChevronUp className="w-3 h-3 ml-auto" />
+                  ) : (
+                    <ChevronDown className="w-3 h-3 ml-auto" />
                   )}
+                </button>
+                {experimentPanelExpanded && (
+                  <div className="mt-2 space-y-2 pb-1">
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={optimizer}
+                        onChange={(e) => setOptimizer(e.target.value as 'de' | 'tpe')}
+                        className="bg-quant-bg border border-quant-border rounded px-2 py-1 text-[11px] text-white outline-none focus:border-quant-gold"
+                      >
+                        <option value="de">差分进化 (DE)</option>
+                        <option value="tpe">贝叶斯优化 (TPE)</option>
+                      </select>
+                      <button
+                        onClick={handleRunExperiment}
+                        disabled={experimentRunning}
+                        className="flex items-center gap-1 rounded bg-quant-gold/20 px-2 py-1 text-[11px] font-medium text-quant-gold hover:bg-quant-gold/30 disabled:opacity-50"
+                      >
+                        {experimentRunning ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <Wand2 className="w-3 h-3" />
+                        )}
+                        {experimentRunning ? '优化中...' : '开始优化'}
+                      </button>
+                    </div>
+                    {!!experimentResult?.error && (
+                      <div className="text-[10px] text-red-400">{String(experimentResult.error)}</div>
+                    )}
+                    {experimentResult && (experimentResult.best_score as number) > 0 && (
+                      <div className="space-y-1">
+                        <div className="text-[10px] text-quant-green">
+                          最佳评分: {(experimentResult.best_score as number).toFixed(1)}
+                        </div>
+                        {(experimentResult.oos_validation as Record<string, unknown>)?.passed === false && (
+                          <div className="text-[10px] text-amber-400">⚠ 样本外验证未通过（可能过拟合）</div>
+                        )}
+                        {!!(experimentResult.oos_validation as Record<string, unknown>)?.passed && (
+                          <div className="text-[10px] text-quant-green">✓ 样本外验证通过</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
 
-                  {/* Results */}
-                  {backtestMetrics && (
-                    <>
-                      <div className="grid grid-cols-3 gap-3">
-                        {backtestMetrics.map((m) => (
-                          <KPICard
-                            key={m.label}
-                            icon={<m.icon className="w-3.5 h-3.5 text-muted-foreground" />}
-                            label={m.label}
-                            value={m.value}
-                            trend={m.trend}
-                          />
+          {/* ── Resizer ── */}
+          <div
+            className="h-2 shrink-0 bg-quant-border/40 hover:bg-quant-gold/40 cursor-row-resize flex items-center justify-center transition-colors"
+            onPointerDown={startResize}
+            title="拖拽调整分栏"
+          >
+            <span className="w-8 h-0.5 rounded bg-muted-foreground/40" />
+          </div>
+
+          {/* ── AI 协作 panel ── */}
+          <div className="flex-1 min-h-[220px] flex flex-col bg-quant-bg min-h-0">
+            <button
+              onClick={() => setAiPanelExpanded(!aiPanelExpanded)}
+              className="flex items-center gap-2 px-3 py-2 border-b border-quant-border bg-quant-bg-secondary shrink-0 w-full"
+            >
+              <span className="w-6 h-6 rounded-lg bg-quant-gold/20 flex items-center justify-center shrink-0">
+                <Bot className="w-3.5 h-3.5 text-quant-gold" />
+              </span>
+              <span className="text-xs font-semibold">AI 协作</span>
+              {messages.length > 1 && (
+                <span
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    clearConversation()
+                  }}
+                  className="text-[10px] text-muted-foreground hover:text-foreground ml-2"
+                >
+                  清空对话
+                </span>
+              )}
+              {aiPanelExpanded ? (
+                <ChevronUp className="w-3.5 h-3.5 ml-auto text-muted-foreground" />
+              ) : (
+                <ChevronDown className="w-3.5 h-3.5 ml-auto text-muted-foreground" />
+              )}
+            </button>
+            {aiPanelExpanded && (
+              <>
+                {/* Conversation */}
+                <div ref={chatScrollRef} className="flex-1 overflow-y-auto p-3 space-y-3 min-h-0">
+                  {messages.length <= 1 && !aiGenerating ? (
+                    <div className="h-full flex flex-col items-center justify-center gap-3 py-6">
+                      <Bot className="w-8 h-8 text-muted-foreground/40" />
+                      <div className="text-xs font-medium">AI 指标助手</div>
+                      <div className="text-[10px] text-muted-foreground">描述需求生成指标代码，或从快捷指令开始</div>
+                      <div className="grid grid-cols-2 gap-2 w-full max-w-[280px]">
+                        {QUICK_PROMPTS.map((q) => (
+                          <button
+                            key={q.label}
+                            onClick={() => handleSend(q.prompt)}
+                            className="px-2 py-1.5 rounded-full text-[10px] border border-quant-border text-muted-foreground hover:text-quant-gold hover:border-quant-gold/40 transition-colors"
+                          >
+                            {q.label}
+                          </button>
                         ))}
                       </div>
-                      {/* Equity Curve */}
-                      {Array.isArray(backtestResult?.equity_curve) &&
-                        (backtestResult.equity_curve as Array<{ timestamp: number; equity: number }>).length > 1 && (
-                          <SectionCard title="权益曲线">
-                            <EquityCurve
-                              data={backtestResult.equity_curve as Array<{ timestamp: number; equity: number }>}
-                              height={160}
-                            />
-                          </SectionCard>
-                        )}
-                      {backtestResult && Array.isArray(backtestResult.trades) && backtestResult.trades.length > 0 && (
-                        <SectionCard
-                          title={`交易记录 (${(backtestResult.trades as unknown as { length: number }).length}笔)`}
+                    </div>
+                  ) : (
+                    messages.map((msg, i) => (
+                      <div key={i} className={cn('flex flex-col', msg.role === 'user' ? 'items-end' : 'items-start')}>
+                        <div className="text-[9px] text-muted-foreground mb-0.5">{msg.role === 'user' ? '你' : 'AI'}</div>
+                        <div
+                          className={cn(
+                            'max-w-[90%] rounded-lg px-3 py-2 text-[11px] leading-relaxed whitespace-pre-wrap border',
+                            msg.role === 'user'
+                              ? 'bg-quant-gold/10 border-quant-gold/25 text-foreground'
+                              : 'bg-quant-bg-secondary border-quant-border'
+                          )}
                         >
-                          <div className="overflow-x-auto max-h-52">
-                            <table className="w-full text-[10px]">
-                              <thead>
-                                <tr className="text-muted-foreground text-left">
-                                  <th scope="col" className="px-2 py-1 font-medium">
-                                    #
-                                  </th>
-                                  <th scope="col" className="px-2 py-1 font-medium">
-                                    方向
-                                  </th>
-                                  <th scope="col" className="px-2 py-1 font-medium">
-                                    入场价
-                                  </th>
-                                  <th scope="col" className="px-2 py-1 font-medium">
-                                    出场价
-                                  </th>
-                                  <th scope="col" className="px-2 py-1 font-medium">
-                                    数量
-                                  </th>
-                                  <th scope="col" className="px-2 py-1 font-medium">
-                                    盈亏
-                                  </th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {(backtestResult.trades as Record<string, unknown>[]).map((t, i: number) => {
-                                  const side = String(t.side || t.Side || '')
-                                  const entryPrice = Number(t.entry_price ?? t.EntryPrice ?? 0)
-                                  const exitPrice = Number(t.exit_price ?? t.ExitPrice ?? 0)
-                                  const qty = Number(t.quantity ?? t.Quantity ?? t.qty ?? 0)
-                                  const pnl = Number(t.realized_pnl ?? t.RealizedPnL ?? t.pnl ?? 0)
-                                  return (
-                                    <tr key={i} className="border-t border-quant-border/40">
-                                      <td className="px-2 py-1 text-muted-foreground">{i + 1}</td>
-                                      <td className="px-2 py-1">
-                                        {side === 'buy' || side === 'BUY' || side === 'LONG' ? '买' : '卖'}
-                                      </td>
-                                      <td className="px-2 py-1 font-mono">${formatCurrency(entryPrice)}</td>
-                                      <td className="px-2 py-1 font-mono">${formatCurrency(exitPrice)}</td>
-                                      <td className="px-2 py-1 font-mono">{qty.toFixed(4)}</td>
-                                      <td
-                                        className={cn(
-                                          'px-2 py-1 font-mono font-bold',
-                                          pnl >= 0 ? 'text-quant-green' : 'text-quant-red'
-                                        )}
-                                      >
-                                        ${pnl.toFixed(2)}
-                                      </td>
-                                    </tr>
-                                  )
-                                })}
-                              </tbody>
-                            </table>
+                          {msg.content ||
+                            (msg.status ? AI_STATUS_TEXT[msg.status] ?? '处理中...' : '')}
+                          {msg.role === 'bot' && msg.status === 'generating' && aiStreamedCode && (
+                            <pre className="mt-2 pt-2 border-t border-quant-border/50 text-[10px] text-quant-green/80 font-mono whitespace-pre-wrap max-h-36 overflow-y-auto">
+                              {aiStreamedCode.slice(-400)}
+                            </pre>
+                          )}
+                        </div>
+                        {/* AI candidate 卡片 */}
+                        {msg.role === 'bot' && msg.candidate && !msg.candidate.dismissed && (
+                          <div
+                            className={cn(
+                              'mt-1.5 w-[90%] rounded-lg border p-2.5',
+                              msg.candidate.applied
+                                ? 'border-quant-green/30 bg-quant-green/5'
+                                : 'border-quant-gold/30 bg-quant-gold/5'
+                            )}
+                          >
+                            <div className="flex items-center justify-between text-[10px] mb-2">
+                              <span
+                                className={cn(
+                                  'flex items-center gap-1',
+                                  msg.candidate.applied ? 'text-quant-green' : 'text-quant-gold'
+                                )}
+                              >
+                                {msg.candidate.applied && <Check className="w-3 h-3" />}
+                                {msg.candidate.applied ? '已应用' : '待确认代码'}
+                              </span>
+                              <span className="text-muted-foreground">
+                                {msg.candidate.code.split('\n').length} 行 ·{' '}
+                                {validationHints.length > 0 ? `${validationHints.length} 条校验提示` : '校验通过'}
+                              </span>
+                            </div>
+                            {!msg.candidate.applied && (
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={() => setPreview({ code: msg.candidate!.code, msgIdx: i })}
+                                  className="flex items-center gap-1 px-2 py-1 rounded border border-quant-border text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                                >
+                                  <Eye className="w-3 h-3" /> 预览
+                                </button>
+                                <button
+                                  onClick={() => applyCandidate(i)}
+                                  className="flex items-center gap-1 px-2 py-1 rounded bg-quant-gold text-black text-[10px] font-medium hover:opacity-90 transition-opacity"
+                                >
+                                  <Check className="w-3 h-3" /> 应用
+                                </button>
+                                <button
+                                  onClick={() => dismissCandidate(i)}
+                                  className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                                >
+                                  放弃
+                                </button>
+                              </div>
+                            )}
                           </div>
-                        </SectionCard>
-                      )}
-                    </>
+                        )}
+                      </div>
+                    ))
                   )}
-
-                  {!running && !backtestResult && (
-                    <div className="py-12 flex items-center justify-center text-xs text-muted-foreground">
-                      配置参数后点击「运行回测」
+                  {aiGenerating && (
+                    <div className="flex flex-col items-start">
+                      <div className="text-[9px] text-muted-foreground mb-0.5">AI</div>
+                      <div className="rounded-lg px-3 py-2 text-[11px] bg-quant-bg-secondary border border-quant-border flex items-center gap-2">
+                        <Loader2 className="w-3 h-3 animate-spin text-quant-gold" /> AI 思考中
+                      </div>
                     </div>
                   )}
                 </div>
+                {/* Composer */}
+                <div className="p-3 border-t border-quant-border shrink-0">
+                  <textarea
+                    value={aiPrompt}
+                    onChange={(e) => setAiPrompt(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault()
+                        handleSend()
+                      }
+                    }}
+                    rows={3}
+                    placeholder="描述你想要的指标，例如：MACD 金叉死叉带成交量过滤..."
+                    className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold resize-none"
+                  />
+                  <div className="flex items-center justify-between mt-2">
+                    <span className="text-[9px] text-muted-foreground">Enter 发送 · Shift+Enter 换行</span>
+                    <button
+                      onClick={() => handleSend()}
+                      disabled={aiGenerating || !aiPrompt.trim()}
+                      className="flex items-center gap-1.5 px-4 h-8 rounded-lg bg-quant-gold text-white text-xs font-medium hover:opacity-90 disabled:opacity-50 transition-opacity"
+                    >
+                      {aiGenerating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                      发送
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* ═══════════════════════════════════════════════════════════
+          RIGHT: Chart window
+      ═══════════════════════════════════════════════════════════ */}
+        <div className="flex-1 flex flex-col min-w-0">
+          <div className="flex items-center justify-between px-3 py-2 border-b border-quant-border bg-quant-bg-secondary shrink-0">
+            <span className="text-xs font-semibold">图表窗口</span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowCreateStrategy(true)}
+                className="flex items-center gap-1.5 px-3 h-7 rounded-lg bg-quant-gold text-black text-[11px] font-medium hover:opacity-90 transition-opacity"
+              >
+                <GitBranch className="w-3.5 h-3.5" /> 转换为策略
+              </button>
+              <button
+                onClick={() => setChartFullscreen(!chartFullscreen)}
+                className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/5"
+                title={chartFullscreen ? '退出全屏' : '图表全屏'}
+                aria-label={chartFullscreen ? '退出全屏' : '图表全屏'}
+              >
+                {chartFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+              </button>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 px-3 py-2 border-b border-quant-border bg-quant-bg-secondary shrink-0 flex-wrap">
+            {/* Saved indicator selector */}
+            <select
+              value={selectedIndicatorId ?? ''}
+              onChange={(e) => {
+                const id = Number(e.target.value)
+                const ind = indicators.find((i) => i.id === id)
+                if (ind) selectIndicator(ind)
+              }}
+              className="bg-quant-bg border border-quant-border rounded px-2 py-1 text-xs text-white outline-none focus:border-quant-gold max-w-[150px] truncate"
+            >
+              <option value="">选择指标...</option>
+              {indicators.map((ind) => (
+                <option key={ind.id} value={ind.id}>
+                  {ind.name}
+                </option>
+              ))}
+            </select>
+            {/* Symbol */}
+            <select
+              value={symbol}
+              onChange={(e) => setSymbol(e.target.value)}
+              className="bg-quant-bg border border-quant-border rounded px-2 py-1 text-xs text-white outline-none focus:border-quant-gold"
+            >
+              {['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'ADAUSDT', 'DOGEUSDT'].map((s) => (
+                <option key={s} value={s}>
+                  {s.replace('USDT', '/USDT')}
+                </option>
+              ))}
+            </select>
+            {/* Timeframe */}
+            <div className="flex rounded bg-quant-bg-tertiary p-0.5">
+              {TRADING_INTERVALS.map((int) => (
+                <button
+                  key={int}
+                  onClick={() => setInterval(int)}
+                  className={cn(
+                    'px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors',
+                    interval === int
+                      ? 'bg-quant-gold/10 text-quant-gold'
+                      : 'text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  {int}
+                </button>
+              ))}
+            </div>
+            {/* Price */}
+            <span className="ml-auto flex items-center gap-2 text-xs">
+              <span className="font-mono font-bold">{symbol.replace('USDT', '/USDT')}</span>
+              <span className={cn('font-mono font-bold', isUp ? 'text-quant-green' : 'text-quant-red')}>
+                ${lastPrice.toFixed(2)}
+              </span>
+              <span className={cn('font-mono', isUp ? 'text-quant-green' : 'text-quant-red')}>
+                {change24h >= 0 ? '+' : ''}
+                {change24h.toFixed(2)}%
+              </span>
+              {chartIndicatorRunning && (
+                <span className="text-[10px] text-quant-gold bg-quant-gold/10 px-1.5 py-0 rounded">指标运行中</span>
               )}
+            </span>
+          </div>
+          <div className="flex-1 min-h-0 p-2">
+            <div className="h-full rounded-lg overflow-hidden border border-quant-border">
+              <KlineChart
+                data={klines}
+                loading={klLoading}
+                signals={chartSignals}
+                activeIndicators={activeIndicators}
+                onActiveIndicatorsChange={setActiveIndicators}
+                theme="dark"
+              />
             </div>
           </div>
         </div>
+
+        {/* ── Chart fullscreen overlay ── */}
+        {chartFullscreen && (
+          <div className="absolute inset-0 z-20 bg-quant-bg flex flex-col">
+            <div className="flex items-center justify-between px-3 py-2 border-b border-quant-border bg-quant-bg-secondary shrink-0">
+              <div className="flex items-center gap-4">
+                <span className="font-bold text-sm">{symbol.replace('USDT', '/USDT')}</span>
+                <span className={cn('font-mono text-sm font-bold', isUp ? 'text-quant-green' : 'text-quant-red')}>
+                  ${lastPrice.toFixed(2)}
+                </span>
+                <span className={cn('text-xs font-mono', isUp ? 'text-quant-green' : 'text-quant-red')}>
+                  {change24h >= 0 ? '+' : ''}
+                  {change24h.toFixed(2)}%
+                </span>
+                {chartIndicatorRunning && (
+                  <span className="text-[10px] text-quant-gold bg-quant-gold/10 px-1.5 py-0 rounded">指标运行中</span>
+                )}
+              </div>
+              <button
+                onClick={() => setChartFullscreen(false)}
+                className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/5"
+                title="退出全屏"
+                aria-label="退出全屏"
+              >
+                <Minimize2 className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="flex-1 min-h-0 p-2">
+              <div className="h-full rounded-lg overflow-hidden border border-quant-border">
+                <KlineChart
+                  data={klines}
+                  loading={klLoading}
+                  signals={chartSignals}
+                  activeIndicators={activeIndicators}
+                  onActiveIndicatorsChange={setActiveIndicators}
+                  theme="dark"
+                />
+              </div>
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* ── AI code preview modal ── */}
+      {preview && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+        >
+          <div className="w-full max-w-3xl max-h-[80vh] flex flex-col rounded-2xl border border-quant-border bg-quant-card shadow-2xl overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-3 border-b border-quant-border shrink-0">
+              <h3 className="text-sm font-bold flex items-center gap-2">
+                <Eye className="w-4 h-4 text-quant-gold" />
+                预览 AI 代码
+              </h3>
+              <button
+                onClick={() => setPreview(null)}
+                aria-label="关闭"
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <pre className="flex-1 overflow-auto p-4 text-[11px] font-mono text-quant-green/90 bg-quant-bg m-3 rounded-xl border border-quant-border">
+              {preview.code}
+            </pre>
+            <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-quant-border shrink-0">
+              <button
+                onClick={() => setPreview(null)}
+                className="px-4 py-2 rounded-lg border border-quant-border text-xs hover:bg-quant-hover transition-colors"
+              >
+                关闭
+              </button>
+              <button
+                onClick={() => {
+                  applyCandidate(preview.msgIdx)
+                  setPreview(null)
+                }}
+                className="px-4 py-2 rounded-lg bg-quant-gold text-white text-xs font-medium hover:opacity-90 transition-opacity flex items-center gap-1.5"
+              >
+                <Check className="w-3.5 h-3.5" /> 应用
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Create Strategy from Indicator Modal ── */}
       {showCreateStrategy && (

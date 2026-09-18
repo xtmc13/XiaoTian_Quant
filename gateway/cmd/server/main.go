@@ -50,6 +50,20 @@ func main() {
 	store.LoadConfig()
 	store.LoadStrategyConfigs()
 
+	// ── 凭证安全（P0-4）：启动期主密钥检查（production 未设 → fatal，与
+	// SECRET_KEY 同级）+ 明文真实密钥迁移进加密保险库并抹除 config.yaml 明文。 ──
+	if err := store.EnsureVaultReady(); err != nil {
+		if isFatalInitErr(err) {
+			log.Fatalf("FATAL: %v", err)
+		}
+		log.Printf("WARNING: vault init: %v", err)
+	}
+	if migrated, err := store.MigratePlaintextCredentialsToVault(); err != nil {
+		log.Printf("WARNING: credential migration: %v", err)
+	} else if len(migrated) > 0 {
+		log.Printf("[vault] migrated plaintext credentials for: %v", migrated)
+	}
+
 	// ── Grid bot runner: 7×24 real-market grid trading bots ──
 	// 价格源直接用 BinanceWS 内存价（零网络）；返回 0 时由 runner 跳过本轮。
 	gridRepo := store.NewGridRepo()
@@ -225,7 +239,7 @@ func isFatalInitErr(err error) bool {
 		return false
 	}
 	msg := err.Error()
-	return strings.Contains(msg, "SECRET_KEY") && strings.Contains(msg, "required in production")
+	return (strings.Contains(msg, "SECRET_KEY") || strings.Contains(msg, "VAULT_MASTER_KEY")) && strings.Contains(msg, "required in production")
 }
 
 // isLocalhost checks if an IP address is loopback.

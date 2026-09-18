@@ -55,7 +55,6 @@ const StrategyEditor = lazyPage(() => import('./pages/strategy/StrategyEditor'),
 const BotsSignal = lazyPage(() => import('./pages/bots/BotsSignal'), 'BotsSignal')
 const BotsAI = lazyPage(() => import('./pages/bots/BotsAI'), 'BotsAI')
 const BotsCenter = lazyPage(() => import('./pages/bots/BotsCenter'), 'BotsCenter')
-const MLDeploy = lazyPage(() => import('./pages/bots/MLDeploy'), 'MLDeploy')
 const CreateStrategyPage = lazyPage(() => import('./pages/CreateStrategyPage'), 'CreateStrategyPage')
 const TradingSpot = lazyPage(() => import('./pages/trading/TradingSpot'), 'TradingSpot')
 const TradingContract = lazyPage(() => import('./pages/trading/TradingContract'), 'TradingContract')
@@ -112,7 +111,7 @@ function DocumentTitle() {
     '/login': '登录 - 小天量化',
     '/dashboard': '仪表盘 - 小天量化',
     '/trading': '交易 - 小天量化',
-    '/strategy': '策略实验室 - 小天量化',
+    '/strategy': '策略管理 - 小天量化',
     '/ai': 'AI分析 - 小天量化',
     '/backtest': '回测 - 小天量化',
     '/bots': '机器人中心 - 小天量化',
@@ -149,7 +148,6 @@ function DocumentTitle() {
     '/ai/tensorboard': 'TensorBoard - 小天量化',
     '/bots/signal': '信号机器人 - 小天量化',
     '/bots/ai': 'AI机器人 - 小天量化',
-    '/bots/ml': 'ML 部署 - 小天量化',
     '/arbitrage/cross': '跨所套利 - 小天量化',
     '/arbitrage/triangular': '三角套利 - 小天量化',
 
@@ -432,14 +430,6 @@ export default function App() {
                     element={
                       <PageShell>
                         <BotsAI />
-                      </PageShell>
-                    }
-                  />
-                  <Route
-                    path="/bots/ml"
-                    element={
-                      <PageShell>
-                        <MLDeploy />
                       </PageShell>
                     }
                   />

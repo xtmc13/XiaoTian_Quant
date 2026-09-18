@@ -23,7 +23,7 @@ const routeTitles: Record<string, string> = {
   '/trading': '交易',
   '/trading/spot': '现货交易',
   '/trading/contract': '合约交易',
-  '/strategy': '策略工厂',
+  '/strategy': '策略管理',
   '/strategy/editor': '策略编辑器',
   '/ai': 'AI分析',
   '/ai/freqai': 'FreqAI',

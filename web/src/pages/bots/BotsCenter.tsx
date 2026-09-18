@@ -683,12 +683,6 @@ export function BotsCenter() {
               FreqAI →
             </button>
             <button
-              onClick={() => navigate('/bots/ml')}
-              className="px-3 py-1.5 rounded-full text-xs text-muted-foreground border border-quant-border hover:text-foreground transition-colors"
-            >
-              ML 部署 →
-            </button>
-            <button
               onClick={() => navigate('/model-management')}
               className="px-3 py-1.5 rounded-full text-xs text-muted-foreground border border-quant-border hover:text-foreground transition-colors"
             >

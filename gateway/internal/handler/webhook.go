@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"github.com/xiaotian-quant/gateway/internal/config"
 	"io"
 	"log"
 	"net/http"
@@ -42,9 +43,10 @@ func verifyWebhookSignature(c *gin.Context) bool {
 // TradingViewWebhook receives alerts from TradingView Pine Script strategies.
 //
 // TradingView setup:
-//   Alert → Webhook URL: http://your-server:8080/api/webhook/tv
-//   Message format (JSON):
-//     {"symbol":"BTCUSDT","action":"buy","price":"50000","quantity":"0.1","strategy":"TV_Strategy"}
+//
+//	Alert → Webhook URL: http://your-server:8080/api/webhook/tv
+//	Message format (JSON):
+//	  {"symbol":"BTCUSDT","action":"buy","price":"50000","quantity":"0.1","strategy":"TV_Strategy"}
 //
 // The webhook automatically places paper/real orders through the order manager.
 func TradingViewWebhook(c *gin.Context) {
@@ -60,7 +62,11 @@ func TradingViewWebhook(c *gin.Context) {
 
 	symbol := getString(body, "symbol", getString(body, "ticker", ""))
 	action := strings.ToLower(getString(body, "action", getString(body, "side", "")))
-	quantity := getFloat(body, "quantity", getFloat(body, "qty", 0.01))
+	quantity := resolveWebhookQuantity(body)
+	if quantity < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "quantity required"})
+		return
+	}
 
 	if symbol == "" || action == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "symbol and action required"})
@@ -146,14 +152,15 @@ func GenericWebhook(c *gin.Context) {
 	side := strings.ToUpper(getString(body, "side", "BUY"))
 	orderType := strings.ToUpper(getString(body, "type", "MARKET"))
 	price := getFloat(body, "price", 0)
-	quantity := getFloat(body, "quantity", 0.01)
+	quantity := resolveWebhookQuantity(body)
+	if quantity < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "quantity required"})
+		return
+	}
 
 	if symbol == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "symbol required"})
 		return
-	}
-	if quantity <= 0 {
-		quantity = 0.01
 	}
 
 	order := map[string]any{
@@ -186,4 +193,18 @@ func closeAllOrdersForSymbol(symbol string) {
 			}
 		}
 	}
+}
+
+// resolveWebhookQuantity 解析 webhook 请求的数量：显式 quantity/qty 优先；
+// 缺失或 <=0 时读 config.yaml webhook.default_quantity（默认 0=必须显式传），
+// 无有效值返回 -1（调用方 400）。不再硬编码 0.01 默认（P0-5）。
+func resolveWebhookQuantity(body map[string]any) float64 {
+	q := getFloat(body, "quantity", getFloat(body, "qty", 0))
+	if q > 0 {
+		return q
+	}
+	if def := config.Get().Webhook.DefaultQuantity; def > 0 {
+		return def
+	}
+	return -1
 }

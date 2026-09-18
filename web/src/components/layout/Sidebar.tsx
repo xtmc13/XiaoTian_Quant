@@ -44,7 +44,7 @@ const navItems: NavItem[] = [
     label: '策略实验室',
     icon: FlaskConical,
     children: [
-      { path: '/strategy', label: '概览与工具' },
+      { path: '/strategy', label: '策略管理' },
       { path: '/strategy/editor', label: '策略编辑器' },
       { path: '/backtest', label: '回测' },
       { path: '/indicator-ide', label: '指标 IDE' },

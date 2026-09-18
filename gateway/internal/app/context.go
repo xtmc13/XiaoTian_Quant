@@ -305,7 +305,12 @@ func (ctx *Context) wireOrderManager() {
 
 	// ── Risk Check ──
 	om.RiskCheck = func(req *order.Request) error {
-		riskCtx := ctx.buildRiskContext(req)
+		riskCtx, priceSynthetic := ctx.buildRiskContext(req)
+		// P0-1 合成价保护：行情不可用时实盘单直接拒绝（paper 单维持现状）。
+		if err := rejectIfSyntheticPrice(priceSynthetic, req.Exchange); err != nil {
+			ctx.Logger.Warn("实盘单拦截（合成价保护）", "symbol", req.Symbol, "exchange", req.Exchange)
+			return err
+		}
 		return ctx.RiskManager.Check(riskCtx)
 	}
 
@@ -320,7 +325,12 @@ func (ctx *Context) wireOrderManager() {
 		if req.MarketType == model.MarketSwap {
 			price := req.Price
 			if req.OrderType == model.TypeMarket || price <= 0 {
-				price = getLastPrice(req.Symbol)
+				var synthetic bool
+				price, synthetic = getLastPriceSource(req.Symbol)
+				// P0-1 合成价保护：不能用假价格给实盘单锁保证金。
+				if err := rejectIfSyntheticPrice(synthetic, req.Exchange); err != nil {
+					return err
+				}
 			}
 			notional := price * req.Quantity
 			leverage := req.Leverage
@@ -350,7 +360,13 @@ func (ctx *Context) wireOrderManager() {
 		base, quote := parseSymbolPair(req.Symbol)
 		cost := req.Price * req.Quantity
 		if req.OrderType == model.TypeMarket {
-			cost = getLastPrice(req.Symbol) * req.Quantity
+			var synthetic bool
+			var p float64
+			p, synthetic = getLastPriceSource(req.Symbol)
+			if err := rejectIfSyntheticPrice(synthetic, req.Exchange); err != nil {
+				return err
+			}
+			cost = p * req.Quantity
 		}
 
 		if req.Side == model.SideBuy {
@@ -520,19 +536,7 @@ func (ctx *Context) wireOrderManager() {
 				}
 			}
 
-			if err == nil && result != nil {
-				ctx.Logger.Info("Order submitted to exchange", "symbol", ord.Symbol, "side", ord.Side, "exchange", ord.Exchange, "id", result["orderId"])
-				return map[string]any{
-					"order_id": result["orderId"],
-					"status":   "NEW",
-					"filled":   0.0,
-					"exchange": ord.Exchange,
-				}, nil
-			}
-
-			if err != nil {
-				ctx.Logger.Warn("Exchange order failed, falling back to paper", "exchange", ord.Exchange, "error", err.Error())
-			}
+			return finalizeLiveSubmitResult(ctx.Logger, ord, result, err)
 		}
 
 		// Paper trading: simulate immediate fill
@@ -826,6 +830,27 @@ func (ctx *Context) maybeProtectProfit(ord *model.OrderData) {
 			})
 		}
 	}()
+}
+
+// finalizeLiveSubmitResult 实盘下单结果处置（P0-2）：成功→NEW；失败或空结果
+// （凭证缺失/未下单）→ REJECTED + 返回错误，绝不转 paper（消除"假成交"）。
+func finalizeLiveSubmitResult(log *logging.Logger, ord *model.OrderData, result map[string]any, err error) (map[string]any, error) {
+	if err == nil && result != nil {
+		log.Info("Order submitted to exchange", "symbol", ord.Symbol, "side", ord.Side, "exchange", ord.Exchange, "id", result["orderId"])
+		return map[string]any{
+			"order_id": result["orderId"],
+			"status":   "NEW",
+			"filled":   0.0,
+			"exchange": ord.Exchange,
+		}, nil
+	}
+	ord.Status = model.StatusRejected
+	if err != nil {
+		log.Warn("Live exchange order failed, rejecting (no paper fallback)", "exchange", ord.Exchange, "error", err.Error())
+		return nil, fmt.Errorf("exchange order failed: %w", err)
+	}
+	log.Warn("Live exchange order rejected: empty result (credentials missing?)", "exchange", ord.Exchange)
+	return nil, fmt.Errorf("live order rejected: exchange %s returned no result (credentials missing)", ord.Exchange)
 }
 
 func (ctx *Context) updatePortfolioFromFill(ord *model.OrderData) {
@@ -1167,50 +1192,81 @@ func syntheticPriceFor(symbol string) float64 {
 	return 10000.0 + float64(h%90000)
 }
 
-// getLastPrice fetches the latest price for a symbol. Resolution order:
-// in-memory WS price cache (zero network), short-timeout REST probe, then a
-// synthetic anchor so paper trading stays fully offline-capable. The old
-// implementation used http.Get (default client, no timeout), which hung for
-// minutes on a dead route and blocked paper order placement entirely.
-func getLastPrice(symbol string) float64 {
+// priceRestProbe 是二级价格探针（短超时 REST），抽成包级变量以便测试替换。
+var priceRestProbe = func(norm string) (float64, bool) {
+	resp, err := shortTimeoutHTTPClient.Get("https://api.binance.com/api/v3/ticker/price?symbol=" + norm)
+	if err != nil {
+		return 0, false
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	var result map[string]any
+	if json.Unmarshal(raw, &result) != nil {
+		return 0, false
+	}
+	priceStr, ok := result["price"].(string)
+	if !ok {
+		return 0, false
+	}
+	f, err := strconv.ParseFloat(priceStr, 64)
+	if err != nil || f <= 0 {
+		return 0, false
+	}
+	return f, true
+}
+
+// getLastPriceSource 与 getLastPrice 相同的三级兜底，但返回价格来源标记：
+// true = 合成价（锚点表/哈希价）。合成价是 paper 的离线兜底，但绝不服务实盘。
+func getLastPriceSource(symbol string) (float64, bool) {
 	norm := normalizeMarketSymbol(symbol)
 
 	// Tier 1: in-memory WS price cache.
 	if appCtx := Get(); appCtx != nil && appCtx.BinanceWS != nil {
 		if p := appCtx.BinanceWS.GetPrice(norm); p > 0 {
 			markMarketDataOK()
-			return p
+			return p, false
 		}
 	}
 
 	// Tier 2: short-timeout REST probe.
-	resp, err := shortTimeoutHTTPClient.Get("https://api.binance.com/api/v3/ticker/price?symbol=" + norm)
-	if err == nil {
-		raw, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		var result map[string]any
-		if json.Unmarshal(raw, &result) == nil {
-			if priceStr, ok := result["price"].(string); ok {
-				if f, err := strconv.ParseFloat(priceStr, 64); err == nil && f > 0 {
-					markMarketDataOK()
-					return f
-				}
-			}
-		}
+	if p, ok := priceRestProbe(norm); ok {
+		markMarketDataOK()
+		return p, false
 	}
 	markMarketDataFailed()
 
 	// Tier 3: synthetic anchor.
-	return syntheticPriceFor(symbol)
+	return syntheticPriceFor(symbol), true
+}
+
+func getLastPrice(symbol string) float64 {
+	p, _ := getLastPriceSource(symbol)
+	return p
+}
+
+// isPaperExchangeName：空/paper 视为模拟盘。
+func isPaperExchangeName(exchange string) bool {
+	return exchange == "" || exchange == "paper"
+}
+
+// rejectIfSyntheticPrice 合成价保护（P0-1）：行情不可用时三级兜底返回合成价，
+// 实盘单（非 paper）必须被拒绝——绝不能用假价格给真实订单定价/锁仓/算量；
+// paper 单维持现状（合成价正是 paper 的离线兜底）。
+func rejectIfSyntheticPrice(isSynthetic bool, exchange string) error {
+	if isSynthetic && !isPaperExchangeName(exchange) {
+		return fmt.Errorf("行情不可用，实盘单已拦截（合成价保护）")
+	}
+	return nil
 }
 
 // buildRiskContext assembles a complete risk context for an order request.
 // It enriches the request with live market data (bid/ask, volatility, funding
 // rate) so that all risk checks can be evaluated.
-func (ctx *Context) buildRiskContext(req *order.Request) *risk.Context {
+func (ctx *Context) buildRiskContext(req *order.Request) (*risk.Context, bool) {
 	price := req.Price
+	priceSynthetic := false
 	if req.OrderType == model.TypeMarket || price <= 0 {
-		price = getLastPrice(req.Symbol)
+		price, priceSynthetic = getLastPriceSource(req.Symbol)
 	}
 
 	// Enrich with live market data only while market data is actually
@@ -1266,7 +1322,7 @@ func (ctx *Context) buildRiskContext(req *order.Request) *risk.Context {
 		Leverage:      req.Leverage,
 		MarginMode:    req.MarginMode,
 		ClosePosition: req.ClosePosition,
-	}
+	}, priceSynthetic
 }
 
 // getBidAsk fetches the best bid/ask prices for a symbol from Binance public API.
@@ -1551,9 +1607,14 @@ func (ctx *Context) resolveSignalQuantity(signal model.Signal) float64 {
 	if usdtBal == nil || usdtBal.Free <= 0 {
 		return 0.01
 	}
-	price := getLastPrice(signal.Symbol)
+	price, synthetic := getLastPriceSource(signal.Symbol)
 	if price <= 0 {
 		return 0.01
+	}
+	// P0-1 合成价保护：行情不可用时实盘信号单不按假价格算量，返回 0 由上层跳过。
+	if rejectIfSyntheticPrice(synthetic, ctx.resolveExchange(signal.Symbol)) != nil {
+		ctx.Logger.Warn("实盘信号拦截（合成价保护）", "symbol", signal.Symbol)
+		return 0
 	}
 	stake := usdtBal.Free * 0.1 // 10% of free USDT
 	return stake / price

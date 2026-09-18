@@ -6,30 +6,33 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
+	"path/filepath"
 	"sync"
 )
 
 // CredentialVault provides Fernet-like encrypted storage for API keys.
 // Uses AES-256-GCM with a key derived from a master secret.
 type CredentialVault struct {
-	mu         sync.RWMutex
-	masterKey  []byte
-	entries    map[string]*EncryptedCredential // key_alias -> encrypted data
+	mu        sync.RWMutex
+	masterKey []byte
+	entries   map[string]*EncryptedCredential // key_alias -> encrypted data
 }
 
 // EncryptedCredential holds an encrypted API credential.
 type EncryptedCredential struct {
-	Alias       string `json:"alias"`
-	Exchange    string `json:"exchange"`
-	APIKey      string `json:"-"` // never serialized in plaintext
-	APISecret   string `json:"-"` // never serialized in plaintext
-	Passphrase  string `json:"-"` // optional
-	Encrypted   string `json:"encrypted"` // base64(AES-GCM(key+secret+passphrase))
-	CreatedAt   int64  `json:"created_at"`
+	Alias      string `json:"alias"`
+	Exchange   string `json:"exchange"`
+	APIKey     string `json:"-"`         // never serialized in plaintext
+	APISecret  string `json:"-"`         // never serialized in plaintext
+	Passphrase string `json:"-"`         // optional
+	Encrypted  string `json:"encrypted"` // base64(AES-GCM(key+secret+passphrase))
+	CreatedAt  int64  `json:"created_at"`
 }
 
 var (
@@ -37,21 +40,134 @@ var (
 	vaultOnce sync.Once
 )
 
+// 保险库文件与本机随机主密钥的落盘位置（包级变量，测试可覆盖）。
+// 仅存 AES-GCM 密文/随机密钥，无明文凭证。
+var (
+	VaultFilePath = filepath.Join("runtime", "credentials_vault.json")
+	VaultKeyPath  = filepath.Join("runtime", ".vault_key")
+)
+
 // GetVault returns the global credential vault.
-// Panics if VAULT_MASTER_KEY is not set (production safety).
+// 主密钥解析顺序：VAULT_MASTER_KEY env → 本机随机密钥文件（runtime/.vault_key）
+// → dev 兜底（仅测试/无任何真实凭证场景；加密真实凭证绝不使用兜底常量）。
+// APP_ENV=production 未设主密钥时由 EnsureVaultReady 在启动期 fatal。
 func GetVault() *CredentialVault {
 	vaultOnce.Do(func() {
-		key := os.Getenv("VAULT_MASTER_KEY")
-		if key == "" {
-			env := os.Getenv("APP_ENV")
-			if env == "production" || env == "release" {
-				panic("VAULT_MASTER_KEY environment variable is required in production")
-			}
-			key = "xiaotian-quant-default-vault-key" // dev fallback
-		}
+		key := resolveVaultMasterKey()
 		vault = NewCredentialVault(key)
+		if err := vault.LoadFromFile(VaultFilePath); err != nil && !os.IsNotExist(err) {
+			log.Printf("[vault] 加载保险库文件失败（可能是密钥变化）: %v", err)
+		}
 	})
 	return vault
+}
+
+// resolveVaultMasterKey：env → 本机密钥文件 → dev 兜底。
+func resolveVaultMasterKey() string {
+	if key := os.Getenv("VAULT_MASTER_KEY"); key != "" {
+		return key
+	}
+	if key, err := loadLocalVaultKey(); err == nil && key != "" {
+		return key
+	}
+	return "xiaotian-quant-default-vault-key" // dev fallback：禁止用于真实凭证加密
+}
+
+// loadLocalVaultKey 读取本机随机保险库密钥文件。
+func loadLocalVaultKey() (string, error) {
+	data, err := os.ReadFile(VaultKeyPath)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+// ensureLocalVaultKey 生成（或读取）本机随机主密钥，0600 权限落盘 runtime/.vault_key。
+// 用于"未设 env 主密钥且需要加密真实凭证"的场景，warn 日志提示多机迁移需设 env。
+func ensureLocalVaultKey() (string, error) {
+	if key, err := loadLocalVaultKey(); err == nil && key != "" {
+		return key, nil
+	}
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	key := hex.EncodeToString(buf)
+	if err := os.MkdirAll(filepath.Dir(VaultKeyPath), 0o700); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(VaultKeyPath, []byte(key), 0o600); err != nil {
+		return "", err
+	}
+	return key, nil
+}
+
+// EnsureVaultReady 启动期调用（与 SECRET_KEY 同级的 isFatalInitErr 处理）：
+// APP_ENV=production 且未设 VAULT_MASTER_KEY → fatal；其余场景触发密钥解析与
+// 保险库文件加载。
+func EnsureVaultReady() error {
+	if os.Getenv("VAULT_MASTER_KEY") == "" {
+		if env := os.Getenv("APP_ENV"); env == "production" || env == "release" {
+			return fmt.Errorf("VAULT_MASTER_KEY environment variable is required in production")
+		}
+	}
+	GetVault()
+	return nil
+}
+
+// ── 文件持久化 ──
+
+// vaultFileEntry 是落盘格式：只存 AES-GCM 密文 blob（主密钥不落盘）。
+type vaultFileEntry struct {
+	Alias     string `json:"alias"`
+	Exchange  string `json:"exchange"`
+	Encrypted string `json:"encrypted"`
+}
+
+// SaveToFile 把保险库条目（密文）持久化到 path。
+func (v *CredentialVault) SaveToFile(path string) error {
+	v.mu.RLock()
+	entries := make([]vaultFileEntry, 0, len(v.entries))
+	for _, e := range v.entries {
+		entries = append(entries, vaultFileEntry{Alias: e.Alias, Exchange: e.Exchange, Encrypted: e.Encrypted})
+	}
+	v.mu.RUnlock()
+	data, err := json.MarshalIndent(map[string]any{"entries": entries}, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// LoadFromFile 从 path 恢复保险库条目（密文原样载入内存，Get 时解密）。
+func (v *CredentialVault) LoadFromFile(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var file struct {
+		Entries []vaultFileEntry `json:"entries"`
+	}
+	if err := json.Unmarshal(data, &file); err != nil {
+		return err
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	for _, e := range file.Entries {
+		v.entries[e.Alias] = &EncryptedCredential{
+			Alias:     e.Alias,
+			Exchange:  e.Exchange,
+			Encrypted: e.Encrypted,
+		}
+	}
+	return nil
 }
 
 // NewCredentialVault creates a new credential vault.

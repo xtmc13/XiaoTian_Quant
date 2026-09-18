@@ -1,4 +1,4 @@
-import { useState, useCallback, memo } from 'react'
+import { useState, useEffect, useCallback, memo } from 'react'
 import { Cpu, Zap, Play, TrendingUp, Loader2, CheckCircle2, Trash2, ArrowUp, ArrowDown, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { mlApi } from '@/lib/api'
@@ -59,6 +59,28 @@ export function MLPanel({
   const [mlHorizon, setMlHorizon] = useState(5)
   const [mlTrainResult, setMlTrainResult] = useState<MLTrainResult | null>(null)
   const [mlDeploying, setMlDeploying] = useState('')
+  const [deployModelId, setDeployModelId] = useState('')
+  const [deploySymbol, setDeploySymbol] = useState('BTCUSDT')
+  const [deployConfidence, setDeployConfidence] = useState(0.3)
+  const [deployingForm, setDeployingForm] = useState(false)
+
+  useEffect(() => {
+    if (!deployModelId && mlModels.length > 0) setDeployModelId(mlModels[0].model_id)
+  }, [mlModels, deployModelId])
+
+  const handleDeployForm = useCallback(async () => {
+    if (!deployModelId) return
+    setDeployingForm(true)
+    try {
+      await mlApi.deploy({ model_id: deployModelId, symbol: deploySymbol, min_confidence: deployConfidence })
+      toast('success', `ML 策略已部署: ${deployModelId} → ${deploySymbol}`)
+    } catch (e: unknown) {
+      const err = e instanceof Error ? e : new Error(String(e))
+      toast('error', '部署失败: ' + (err.message || err))
+    } finally {
+      setDeployingForm(false)
+    }
+  }, [deployModelId, deploySymbol, deployConfidence])
 
   const deployMlStrategy = useCallback(async (modelId: string) => {
     setMlDeploying(modelId)
@@ -231,7 +253,48 @@ export function MLPanel({
 
       {/* Models Tab */}
       {mlTab === 'models' && (
-        <div className="space-y-2">
+        <div className="space-y-3">
+          {/* 部署为交易策略 */}
+          <div className="space-y-2 p-3 rounded-lg border border-quant-border bg-quant-bg-secondary">
+            <div className="text-[11px] font-medium text-foreground">部署为交易策略</div>
+            {mlModels.length > 0 ? (
+              <select value={deployModelId} onChange={e => setDeployModelId(e.target.value)}
+                className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1.5 text-xs outline-none focus:border-quant-gold">
+                {mlModels.map((m: MLModelInfo) => (
+                  <option key={m.model_id} value={m.model_id}>{m.model_id} ({m.model_type} · {m.task_type})</option>
+                ))}
+              </select>
+            ) : (
+              <div className="text-xs text-muted-foreground p-2 bg-quant-bg rounded">
+                暂无已训练模型，请先到「训练」标签训练模型
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-[10px] text-muted-foreground mb-0.5 block">交易对</label>
+                <input value={deploySymbol} onChange={e => setDeploySymbol(e.target.value.toUpperCase())}
+                  className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1.5 text-xs outline-none focus:border-quant-gold" aria-label="交易对" />
+              </div>
+              <div>
+                <label className="text-[10px] text-muted-foreground mb-0.5 block">最小置信度 (0~1)</label>
+                <input type="number" step={0.05} min={0} max={1} value={deployConfidence}
+                  onChange={e => setDeployConfidence(Number(e.target.value))}
+                  className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1.5 text-xs outline-none focus:border-quant-gold" aria-label="最小置信度" />
+              </div>
+            </div>
+            <button onClick={handleDeployForm} disabled={deployingForm || !deployModelId}
+              className={cn('w-full flex items-center justify-center gap-2 rounded-lg py-2 text-xs font-medium',
+                !deployModelId ? 'bg-quant-bg-tertiary text-muted-foreground cursor-not-allowed' :
+                deployingForm ? 'bg-quant-green/50 text-white cursor-wait' : 'bg-quant-green text-white hover:opacity-90')}>
+              {deployingForm ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
+              {deployingForm ? '部署中...' : '部署 ML 策略'}
+            </button>
+            <div className="text-[10px] text-muted-foreground">
+              模型在每个 K 线上预测价格方向，超过置信度阈值自动开仓，信号反转平仓，自带 5% 止损；每 24 小时自动重训练。
+            </div>
+          </div>
+
+          {/* 模型列表 */}
           {mlModels.map((m) => (
             <MlModelCard
               key={m.model_id}

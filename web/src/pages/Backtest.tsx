@@ -27,7 +27,6 @@ import {
   Clock,
   Zap,
   ArrowUpDown,
-  Search,
   Filter,
   X,
   LayoutDashboard,
@@ -35,6 +34,7 @@ import {
   ListFilter,
   AlertTriangle,
 } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import { cn, formatCurrency } from '@/lib/utils'
 import { backtestApi, indicatorApi } from '@/lib/api'
 import { INTERVAL_OPTIONS } from '@/lib/constants'
@@ -50,6 +50,7 @@ import { KPICard } from '@/components/ui/KPICard'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { SectionCard } from '@/components/ui/SectionCard'
 import { PageHeader } from '@/components/ui/PageHeader'
+import { Skeleton } from '@/components/ui/Skeleton'
 import { BacktestAssumptions } from '@/components/BacktestAssumptions'
 
 /* ── Types ───────────────────────────────────────────────────────── */
@@ -120,6 +121,32 @@ const PRESET_DATES = [
   { label: '最近1年', days: 365 },
   { label: '最近2年', days: 730 },
 ]
+
+const CRA_STRATEGIES = [
+  'martin_trend',
+  'wallstreet',
+  'macd_golden_long',
+  'macd_death_short',
+  'ema_follow_trend',
+  'ema_counter_trend',
+  'dual_burn',
+  'global_burn',
+  'trend_long',
+  'trend_short',
+  'counter_stable',
+  'head_tail_arb',
+]
+
+const CONTRACT_CRA_STRATEGIES = new Set([
+  'trend_long',
+  'trend_short',
+  'counter_stable',
+  'head_tail_arb',
+  'dual_burn',
+  'global_burn',
+  'macd_death_short',
+  'ema_counter_trend',
+])
 
 const RESULT_TABS = [
   { key: 'overview', label: '概览', icon: LayoutDashboard },
@@ -197,6 +224,16 @@ function CollapsibleSection({
         )}
       </button>
       {open && <div className="p-4 space-y-4">{children}</div>}
+    </div>
+  )
+}
+
+/* ── Form group label ── */
+function GroupLabel({ icon: Icon, children }: { icon: LucideIcon; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+      <Icon className="h-3.5 w-3.5 text-quant-gold/70" />
+      {children}
     </div>
   )
 }
@@ -554,13 +591,25 @@ function BacktestHistory({
       title="回测历史"
       headerAction={<span className="text-[10px] text-muted-foreground">{items.length}条记录</span>}
     >
-      <div className="space-y-1 max-h-48 overflow-y-auto">
+      <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
         {items.map((item) => (
           <div
             key={item.id}
-            className="flex items-center justify-between px-3 py-2 rounded-lg bg-quant-bg-secondary border border-quant-border hover:border-quant-gold/20 transition-colors"
+            className="flex items-center gap-2 rounded-lg border border-quant-border bg-quant-bg-secondary px-3 py-2 transition-colors hover:border-quant-gold/20 hover:bg-quant-hover"
           >
-            <button onClick={() => onLoad(item.params)} className="flex-1 text-left min-w-0">
+            <span
+              className={cn(
+                'flex h-6 w-6 shrink-0 items-center justify-center rounded-md',
+                item.totalReturn >= 0 ? 'bg-quant-green/10 text-quant-green' : 'bg-quant-red/10 text-quant-red'
+              )}
+            >
+              {item.totalReturn >= 0 ? (
+                <TrendingUp className="h-3 w-3" />
+              ) : (
+                <TrendingDown className="h-3 w-3" />
+              )}
+            </span>
+            <button onClick={() => onLoad(item.params)} className="min-w-0 flex-1 text-left">
               <div className="flex items-center gap-2 text-xs">
                 <span className="font-medium">{item.symbol}</span>
                 <span className="text-muted-foreground">{item.strategyType}</span>
@@ -578,10 +627,10 @@ function BacktestHistory({
             </button>
             <button
               onClick={() => onDelete(item.id)}
-              className="p-1 rounded text-muted-foreground hover:text-quant-red hover:bg-quant-red/10"
+              className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-quant-red/10 hover:text-quant-red"
               title="删除"
             >
-              ✕
+              <X className="h-3.5 w-3.5" />
             </button>
           </div>
         ))}
@@ -597,30 +646,6 @@ export function Backtest() {
   const [symbol, setSymbol] = useState('BTCUSDT')
   const [interval, setIntervalVal] = useState('1h')
   const [strategyType, setStrategyType] = useState('sma_cross')
-  const CRA_STRATEGIES = [
-    'martin_trend',
-    'wallstreet',
-    'macd_golden_long',
-    'macd_death_short',
-    'ema_follow_trend',
-    'ema_counter_trend',
-    'dual_burn',
-    'global_burn',
-    'trend_long',
-    'trend_short',
-    'counter_stable',
-    'head_tail_arb',
-  ]
-  const CONTRACT_CRA_STRATEGIES = new Set([
-    'trend_long',
-    'trend_short',
-    'counter_stable',
-    'head_tail_arb',
-    'dual_burn',
-    'global_burn',
-    'macd_death_short',
-    'ema_counter_trend',
-  ])
   const isCraStrategy = CRA_STRATEGIES.includes(strategyType)
   const isContractStrategy = CONTRACT_CRA_STRATEGIES.has(strategyType)
   const [initialBalance, setInitialBalance] = useState(10000)
@@ -736,7 +761,6 @@ export function Backtest() {
   const benchmarkData = useMemo(() => {
     if (!equityCurve.length) return undefined
     const firstEquity = equityCurve[0].equity
-    const firstTime = equityCurve[0].time
     if (firstEquity <= 0) return undefined
     // Sample benchmark: same initial investment, same proportional growth
     return equityCurve.map((p) => ({
@@ -744,13 +768,6 @@ export function Backtest() {
       value: firstEquity * (p.equity / firstEquity),
     }))
   }, [equityCurve])
-
-  const monthlyReturns = useMemo(() => {
-    if (report?.monthly_returns) {
-      return Object.entries(report.monthly_returns).map(([month, returnPct]) => ({ month, returnPct }))
-    }
-    return []
-  }, [report])
 
   const sortedTrades = useMemo(() => {
     let filtered = trades
@@ -856,7 +873,7 @@ export function Backtest() {
   }
 
   const inputCls =
-    'w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold'
+    'w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-xs text-foreground transition-colors [color-scheme:dark] focus:outline-none focus:border-quant-gold'
 
   const rating = report ? getRating(report) : null
 
@@ -864,47 +881,24 @@ export function Backtest() {
     <div className="h-full overflow-y-auto p-5">
       <div className="space-y-5 max-w-7xl mx-auto">
         <PageHeader
+          title="回测"
           subtitle="使用真实历史数据验证策略表现"
+          icon={<BarChart3 className="h-5 w-5" />}
           actions={
             <>
               {report && (
                 <button
                   onClick={handleExportCSV}
-                  className="flex items-center gap-1.5 rounded-lg border border-quant-border bg-quant-card px-3 py-2 text-sm text-muted-foreground transition-colors hover:border-quant-gold/30 hover:text-foreground"
+                  className="flex items-center gap-1.5 rounded-lg border border-quant-border bg-quant-card px-3 py-2 text-xs text-muted-foreground transition-colors hover:border-quant-gold/30 hover:text-foreground"
                 >
                   <Download className="h-3.5 w-3.5" />
                   导出 CSV
                 </button>
               )}
               <button
-                onClick={handleRun}
-                disabled={isRunning}
-                className={cn(
-                  'flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium transition-opacity',
-                  isRunning ? 'cursor-not-allowed bg-quant-gold/50' : 'bg-quant-gold text-[#0a0a0a] hover:opacity-90'
-                )}
-              >
-                {isRunning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
-                {isRunning ? '回测中...' : '开始回测'}
-              </button>
-              {isCraStrategy && (
-                <button
-                  onClick={() => setShowOptimizer(!showOptimizer)}
-                  className={cn(
-                    'flex items-center gap-1.5 rounded-lg border px-4 py-2 text-sm font-medium transition-colors',
-                    showOptimizer
-                      ? 'border-quant-gold/30 bg-quant-gold/10 text-quant-gold'
-                      : 'border-quant-gold/30 bg-quant-gold/10 text-quant-gold hover:bg-quant-gold/20'
-                  )}
-                >
-                  <Beaker className="h-3.5 w-3.5" />
-                  自动调参
-                </button>
-              )}
-              <button
                 onClick={() => setShowCompare(!showCompare)}
                 className={cn(
-                  'flex items-center gap-1.5 rounded-lg border px-4 py-2 text-sm font-medium transition-colors',
+                  'flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition-colors',
                   showCompare
                     ? 'border-quant-gold/30 bg-quant-gold/10 text-quant-gold'
                     : 'border-quant-border text-muted-foreground hover:text-foreground'
@@ -912,6 +906,35 @@ export function Backtest() {
               >
                 <GitBranch className="h-3.5 w-3.5" />
                 策略对比
+              </button>
+              {isCraStrategy && (
+                <button
+                  onClick={() => setShowOptimizer(!showOptimizer)}
+                  className={cn(
+                    'flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition-colors',
+                    showOptimizer
+                      ? 'border-quant-gold/30 bg-quant-gold/10 text-quant-gold'
+                      : 'border-quant-border text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  <Beaker className="h-3.5 w-3.5" />
+                  自动调参
+                </button>
+              )}
+              <button
+                onClick={handleRun}
+                disabled={isRunning}
+                className={cn(
+                  'flex items-center gap-1.5 rounded-lg bg-quant-gold px-4 py-2 text-xs font-semibold text-white transition-colors',
+                  isRunning ? 'cursor-not-allowed opacity-60' : 'hover:bg-quant-gold/90'
+                )}
+              >
+                {isRunning ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Play className="h-3.5 w-3.5" />
+                )}
+                {isRunning ? '回测中...' : '开始回测'}
               </button>
             </>
           }
@@ -934,66 +957,151 @@ export function Backtest() {
         />
 
         {/* ── Config Form ── */}
-        <SectionCard title="回测参数" bodyClassName="space-y-4">
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-            <div>
-              <label className="mb-1.5 block text-xs text-muted-foreground">交易对</label>
-              <input
-                value={symbol}
-                onChange={(e) => setSymbol(e.target.value.toUpperCase())}
-                className={inputCls}
-                placeholder="BTCUSDT"
-                aria-label="交易对"
-              />
-            </div>
-            <div>
-              <label className="mb-1.5 block text-xs text-muted-foreground">K线周期</label>
-              <select
-                value={interval}
-                onChange={(e) => setIntervalVal(e.target.value)}
-                aria-label="K线周期"
-                className={inputCls}
-              >
-                {INTERVAL_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label} ({opt.value})
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="mb-1.5 block text-xs text-muted-foreground">策略</label>
-              <select
-                value={strategyType}
-                onChange={(e) => setStrategyType(e.target.value)}
-                aria-label="策略类型"
-                className={inputCls}
-              >
-                {STRATEGIES.map((s) => (
-                  <option key={s.value} value={s.value}>
-                    {s.label}
-                  </option>
-                ))}
-              </select>
-              <p className="mt-1 text-[10px] text-muted-foreground">
-                {STRATEGIES.find((s) => s.value === strategyType)?.desc || ''}
-              </p>
+        <SectionCard title="回测参数" bodyClassName="space-y-5">
+          {/* 分组：策略选择 */}
+          <div className="space-y-3">
+            <GroupLabel icon={Target}>策略选择</GroupLabel>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+              <div>
+                <label className="mb-1 block text-[11px] text-muted-foreground">交易对</label>
+                <input
+                  value={symbol}
+                  onChange={(e) => setSymbol(e.target.value.toUpperCase())}
+                  className={inputCls}
+                  placeholder="BTCUSDT"
+                  aria-label="交易对"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] text-muted-foreground">K线周期</label>
+                <select
+                  value={interval}
+                  onChange={(e) => setIntervalVal(e.target.value)}
+                  aria-label="K线周期"
+                  className={inputCls}
+                >
+                  {INTERVAL_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label} ({opt.value})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] text-muted-foreground">策略</label>
+                <select
+                  value={strategyType}
+                  onChange={(e) => setStrategyType(e.target.value)}
+                  aria-label="策略类型"
+                  className={inputCls}
+                >
+                  {STRATEGIES.map((s) => (
+                    <option key={s.value} value={s.value}>
+                      {s.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-[10px] text-muted-foreground">
+                  {STRATEGIES.find((s) => s.value === strategyType)?.desc || ''}
+                </p>
+              </div>
             </div>
           </div>
 
+          {/* 分组：资金与回测区间 */}
+          <div className="space-y-3">
+            <GroupLabel icon={Clock}>资金与回测区间</GroupLabel>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+              <div>
+                <label className="mb-1 block text-[11px] text-muted-foreground">初始资金 (USDT)</label>
+                <input
+                  type="number"
+                  min={100}
+                  value={initialBalance}
+                  onChange={(e) => setInitialBalance(Number(e.target.value))}
+                  className={inputCls}
+                  aria-label="初始资金"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] text-muted-foreground">开始日期</label>
+                <input
+                  type="date"
+                  value={fromDate}
+                  onChange={(e) => {
+                    setFromDate(e.target.value)
+                    setActivePreset(null)
+                  }}
+                  className={inputCls}
+                  aria-label="开始日期"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] text-muted-foreground">结束日期</label>
+                <input
+                  type="date"
+                  value={toDate}
+                  onChange={(e) => {
+                    setToDate(e.target.value)
+                    setActivePreset(null)
+                  }}
+                  className={inputCls}
+                  aria-label="结束日期"
+                />
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="mr-1 self-center text-[10px] text-muted-foreground">快捷区间</span>
+              {PRESET_DATES.map((p) => (
+                <button
+                  key={p.label}
+                  onClick={() => handlePreset(p.label, p.days)}
+                  className={cn(
+                    'rounded-lg border px-2.5 py-1 text-[11px] transition-colors',
+                    activePreset === p.label
+                      ? 'border-quant-gold/30 bg-quant-gold/10 font-medium text-quant-gold'
+                      : 'border-quant-border bg-quant-bg-tertiary text-muted-foreground hover:border-quant-gold/30 hover:text-foreground'
+                  )}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Advanced CRA params */}
+          {isCraStrategy && (
+            <div className="space-y-3 border-t border-quant-border/60 pt-4">
+              <GroupLabel icon={SlidersHorizontal}>高级参数（CRA 量化）</GroupLabel>
+              <CollapsibleSection title="CRA 量化参数" count={4} defaultOpen>
+                <CRAParamForm
+                  value={craParams}
+                  onChange={setCraParams}
+                  market={isContractStrategy ? 'contract' : 'spot'}
+                />
+              </CollapsibleSection>
+            </div>
+          )}
+
           {/* Strategy Compare */}
           {showCompare && (
-            <div className="rounded-xl border border-quant-border bg-quant-bg-tertiary p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-quant-gold">选择要对比的策略（至少2个）</span>
+            <div className="space-y-3 rounded-xl border border-quant-border bg-quant-bg-tertiary p-4">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-2">
+                  <GitBranch className="h-3.5 w-3.5 shrink-0 text-quant-gold" />
+                  <span className="text-xs font-semibold text-quant-gold">策略对比</span>
+                  <span className="truncate text-[10px] text-muted-foreground">
+                    至少选择 2 个 · 已选 {compareStrategies.length} 个
+                  </span>
+                </div>
                 <button
                   onClick={handleRunCompare}
                   disabled={compareStrategies.length < 2}
                   className={cn(
-                    'px-3 py-1.5 rounded-lg text-xs font-medium transition-colors',
+                    'shrink-0 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors',
                     compareStrategies.length < 2
-                      ? 'bg-quant-bg-secondary text-muted-foreground cursor-not-allowed'
-                      : 'bg-quant-gold text-quant-bg hover:opacity-90'
+                      ? 'cursor-not-allowed bg-quant-bg-secondary text-muted-foreground'
+                      : 'bg-quant-gold text-white hover:bg-quant-gold/90'
                   )}
                 >
                   运行对比
@@ -1004,7 +1112,7 @@ export function Backtest() {
                   <label
                     key={s.value}
                     className={cn(
-                      'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs border cursor-pointer transition-colors',
+                      'flex cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs transition-colors',
                       compareStrategies.includes(s.value)
                         ? 'border-quant-gold/30 bg-quant-gold/10 text-quant-gold'
                         : 'border-quant-border text-muted-foreground hover:text-foreground'
@@ -1029,9 +1137,11 @@ export function Backtest() {
                   {Object.entries(compareResults).map(([st, r]) => (
                     <div
                       key={st}
-                      className="flex items-center justify-between p-2.5 rounded-lg border border-quant-border bg-quant-bg-secondary"
+                      className="flex items-center justify-between rounded-lg border border-quant-border bg-quant-bg-secondary p-2.5"
                     >
-                      <span className="text-xs font-medium">{STRATEGIES.find((s) => s.value === st)?.label || st}</span>
+                      <span className="text-xs font-medium">
+                        {STRATEGIES.find((s) => s.value === st)?.label || st}
+                      </span>
                       <div className="flex items-center gap-3 text-[11px]">
                         {r ? (
                           <>
@@ -1054,64 +1164,71 @@ export function Backtest() {
 
           {/* Optimizer */}
           {showOptimizer && (
-            <div className="rounded-xl border border-quant-border bg-quant-bg-tertiary p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-quant-gold">参数优化器</span>
+            <div className="space-y-3 rounded-xl border border-quant-border bg-quant-bg-tertiary p-4">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Beaker className="h-3.5 w-3.5 text-quant-gold" />
+                  <span className="text-xs font-semibold text-quant-gold">参数优化器</span>
+                </div>
                 <button
                   onClick={handleRunOptimizer}
-                  className="px-3 py-1.5 rounded-lg text-xs font-medium bg-quant-gold text-quant-bg hover:opacity-90"
+                  className="rounded-lg bg-quant-gold px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-quant-gold/90"
                 >
                   开始优化
                 </button>
               </div>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <div>
-                  <label className="mb-1 block text-[10px] text-muted-foreground">算法</label>
+                  <label className="mb-1 block text-[11px] text-muted-foreground">算法</label>
                   <select
                     value={optimizerConfig.method}
                     onChange={(e) =>
                       setOptimizerConfig((prev) => ({ ...prev, method: e.target.value as 'de' | 'tpe' }))
                     }
-                    className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1.5 text-xs outline-none focus:border-quant-gold"
+                    className={inputCls}
                   >
                     <option value="de">差分进化 (DE)</option>
                     <option value="tpe">贝叶斯 (TPE)</option>
                   </select>
                 </div>
                 <div>
-                  <label className="mb-1 block text-[10px] text-muted-foreground">代数</label>
+                  <label className="mb-1 block text-[11px] text-muted-foreground">代数</label>
                   <input
                     type="number"
                     min={5}
                     max={50}
                     value={optimizerConfig.generations}
-                    onChange={(e) => setOptimizerConfig((prev) => ({ ...prev, generations: Number(e.target.value) }))}
-                    className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1.5 text-xs outline-none focus:border-quant-gold"
+                    onChange={(e) =>
+                      setOptimizerConfig((prev) => ({ ...prev, generations: Number(e.target.value) }))
+                    }
+                    className={inputCls}
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-[10px] text-muted-foreground">种群</label>
+                  <label className="mb-1 block text-[11px] text-muted-foreground">种群</label>
                   <input
                     type="number"
                     min={10}
                     max={100}
                     value={optimizerConfig.population}
-                    onChange={(e) => setOptimizerConfig((prev) => ({ ...prev, population: Number(e.target.value) }))}
-                    className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1.5 text-xs outline-none focus:border-quant-gold"
+                    onChange={(e) =>
+                      setOptimizerConfig((prev) => ({ ...prev, population: Number(e.target.value) }))
+                    }
+                    className={inputCls}
                   />
                 </div>
               </div>
               {optimizerResult && (
-                <div className="p-3 rounded-lg border border-quant-gold/20 bg-quant-gold/5">
-                  <div className="text-xs font-medium text-quant-gold mb-2">优化结果</div>
+                <div className="rounded-lg border border-quant-gold/20 bg-quant-gold/5 p-3">
+                  <div className="mb-2 text-xs font-medium text-quant-gold">优化结果</div>
                   {!!optimizerResult.best_params && (
-                    <div className="space-y-1">
+                    <div className="space-y-2">
                       <div className="text-[11px] text-muted-foreground">最佳参数:</div>
                       <div className="flex flex-wrap gap-2">
                         {[...Object.entries(optimizerResult.best_params as Record<string, number>)].map(([k, v]) => (
                           <span
                             key={k}
-                            className="px-2 py-0.5 rounded bg-quant-bg-secondary text-[11px] text-foreground"
+                            className="rounded bg-quant-bg-secondary px-2 py-0.5 font-mono text-[11px] text-foreground"
                           >
                             {k}: {typeof v === 'number' ? v.toFixed(2) : String(v)}
                           </span>
@@ -1119,7 +1236,7 @@ export function Backtest() {
                       </div>
                       <button
                         onClick={() => applyOptimizerResult(optimizerResult)}
-                        className="mt-2 px-3 py-1.5 rounded-lg text-xs font-medium bg-quant-gold text-quant-bg hover:opacity-90"
+                        className="rounded-lg bg-quant-gold px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-quant-gold/90"
                       >
                         应用参数
                       </button>
@@ -1129,88 +1246,13 @@ export function Backtest() {
               )}
             </div>
           )}
-
-          {/* Advanced CRA params */}
-          {isCraStrategy && (
-            <div className="space-y-3">
-              <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                <SlidersHorizontal className="w-3.5 h-3.5" />
-                展开分组调整策略参数
-              </div>
-              <CollapsibleSection title="CRA 量化参数" count={4} defaultOpen>
-                <CRAParamForm
-                  value={craParams}
-                  onChange={setCraParams}
-                  market={isContractStrategy ? 'contract' : 'spot'}
-                />
-              </CollapsibleSection>
-            </div>
-          )}
-
-          {/* Date & Balance */}
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-            <div>
-              <label className="mb-1.5 block text-xs text-muted-foreground">初始资金 (USDT)</label>
-              <input
-                type="number"
-                min={100}
-                value={initialBalance}
-                onChange={(e) => setInitialBalance(Number(e.target.value))}
-                className={inputCls}
-                aria-label="初始资金"
-              />
-            </div>
-            <div>
-              <label className="mb-1.5 block text-xs text-muted-foreground">开始日期</label>
-              <input
-                type="date"
-                value={fromDate}
-                onChange={(e) => {
-                  setFromDate(e.target.value)
-                  setActivePreset(null)
-                }}
-                className={inputCls}
-                aria-label="开始日期"
-              />
-            </div>
-            <div>
-              <label className="mb-1.5 block text-xs text-muted-foreground">结束日期</label>
-              <input
-                type="date"
-                value={toDate}
-                onChange={(e) => {
-                  setToDate(e.target.value)
-                  setActivePreset(null)
-                }}
-                className={inputCls}
-                aria-label="结束日期"
-              />
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            <span className="text-[10px] text-muted-foreground mr-1 self-center">快捷:</span>
-            {PRESET_DATES.map((p) => (
-              <button
-                key={p.label}
-                onClick={() => handlePreset(p.label, p.days)}
-                className={cn(
-                  'px-2.5 py-1 rounded text-[11px] transition-colors',
-                  activePreset === p.label
-                    ? 'bg-quant-gold/15 text-quant-gold border border-quant-gold/30'
-                    : 'bg-quant-bg-tertiary text-muted-foreground border border-quant-border hover:border-quant-gold/30'
-                )}
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
         </SectionCard>
 
         {/* ── Info Bar ── */}
-        <div className="flex items-center gap-2 rounded-lg border border-quant-border bg-quant-bg-secondary px-4 py-2 text-xs text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-quant-border/60 bg-quant-bg-secondary px-4 py-2 text-[11px] text-muted-foreground">
           <Database className="h-3.5 w-3.5 text-quant-gold/70" />
           <span>
-            数据来源: <strong className="text-foreground">Binance 真实历史数据</strong>
+            数据来源: <span className="font-medium text-foreground">Binance 真实历史数据</span>
           </span>
           <span className="text-quant-border">|</span>
           <span>交易对、周期、日期范围可在上方配置</span>
@@ -1229,13 +1271,28 @@ export function Backtest() {
         {runMut.isError && (
           <div
             role="alert"
-            className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400"
+            className="flex items-start gap-2.5 rounded-xl border border-quant-red/30 bg-quant-red/10 px-4 py-3"
           >
-            <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-quant-red" />
             <div>
-              <p className="font-medium">回测执行失败</p>
-              <p className="mt-0.5 text-xs text-red-400/70">{(runMut.error as Error)?.message || '未知错误'}</p>
+              <p className="text-xs font-semibold text-quant-red">回测执行失败</p>
+              <p className="mt-0.5 text-[11px] text-quant-red/70">
+                {(runMut.error as Error)?.message || '未知错误'}
+              </p>
             </div>
+          </div>
+        )}
+
+        {/* ── Running skeleton ── */}
+        {isRunning && !report && (
+          <div className="space-y-4" aria-busy="true" aria-label="回测运行中">
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <Skeleton key={i} variant="card" className="h-[76px]" />
+              ))}
+            </div>
+            <Skeleton variant="card" className="h-80" />
+            <Skeleton variant="text" lines={3} />
           </div>
         )}
 
@@ -1244,26 +1301,32 @@ export function Backtest() {
           <>
             {/* Rating & Score */}
             {rating && (
-              <div className={cn('flex items-center gap-3 rounded-lg border px-4 py-2.5', rating.border, rating.bg)}>
-                <Gauge className={cn('h-4 w-4', rating.color)} />
+              <div
+                className={cn(
+                  'flex flex-wrap items-center gap-3 rounded-xl border px-4 py-3',
+                  rating.border,
+                  rating.bg
+                )}
+              >
+                <Gauge className={cn('h-4 w-4 shrink-0', rating.color)} />
                 <span className={cn('text-sm font-semibold', rating.color)}>策略评级: {rating.label}</span>
-                <span className="text-[11px] text-muted-foreground ml-auto">
+                <span className="ml-auto text-[11px] text-muted-foreground">
                   {fullResult?.start_date} — {fullResult?.end_date} · {fullResult?.source}
                 </span>
               </div>
             )}
 
             {/* Tab bar */}
-            <div className="flex gap-1 rounded-xl border border-quant-border bg-quant-bg-secondary p-1">
+            <div className="flex gap-1 rounded-xl border border-quant-border bg-quant-card p-1">
               {RESULT_TABS.map((tab) => (
                 <button
                   key={tab.key}
                   onClick={() => setActiveTab(tab.key)}
                   className={cn(
-                    'flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium transition-colors',
+                    'flex flex-1 items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-medium transition-colors',
                     activeTab === tab.key
                       ? 'bg-quant-gold/15 text-quant-gold'
-                      : 'text-muted-foreground hover:text-foreground'
+                      : 'text-muted-foreground hover:bg-quant-hover hover:text-foreground'
                   )}
                 >
                   <tab.icon className="h-3.5 w-3.5" />
@@ -1351,35 +1414,35 @@ export function Backtest() {
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                   <SectionCard title="交易统计">
                     <div className="grid grid-cols-2 gap-3 text-xs">
-                      <div className="flex justify-between p-2 rounded bg-quant-bg-secondary">
+                      <div className="flex items-center justify-between rounded-lg bg-quant-bg-secondary p-2.5">
                         <span className="text-muted-foreground">盈利交易</span>
                         <span className="text-quant-green font-mono">{report.winning_trades ?? '-'}</span>
                       </div>
-                      <div className="flex justify-between p-2 rounded bg-quant-bg-secondary">
+                      <div className="flex items-center justify-between rounded-lg bg-quant-bg-secondary p-2.5">
                         <span className="text-muted-foreground">亏损交易</span>
                         <span className="text-quant-red font-mono">{report.losing_trades ?? '-'}</span>
                       </div>
-                      <div className="flex justify-between p-2 rounded bg-quant-bg-secondary">
+                      <div className="flex items-center justify-between rounded-lg bg-quant-bg-secondary p-2.5">
                         <span className="text-muted-foreground">平均盈利</span>
                         <span className="text-quant-green font-mono">${toFixed(report.avg_win, 0)}</span>
                       </div>
-                      <div className="flex justify-between p-2 rounded bg-quant-bg-secondary">
+                      <div className="flex items-center justify-between rounded-lg bg-quant-bg-secondary p-2.5">
                         <span className="text-muted-foreground">平均亏损</span>
                         <span className="text-quant-red font-mono">${toFixed(report.avg_loss, 0)}</span>
                       </div>
-                      <div className="flex justify-between p-2 rounded bg-quant-bg-secondary">
+                      <div className="flex items-center justify-between rounded-lg bg-quant-bg-secondary p-2.5">
                         <span className="text-muted-foreground">最佳交易</span>
                         <span className="text-quant-green font-mono">${toFixed(report.best_trade, 0)}</span>
                       </div>
-                      <div className="flex justify-between p-2 rounded bg-quant-bg-secondary">
+                      <div className="flex items-center justify-between rounded-lg bg-quant-bg-secondary p-2.5">
                         <span className="text-muted-foreground">最差交易</span>
                         <span className="text-quant-red font-mono">${toFixed(report.worst_trade, 0)}</span>
                       </div>
-                      <div className="flex justify-between p-2 rounded bg-quant-bg-secondary">
+                      <div className="flex items-center justify-between rounded-lg bg-quant-bg-secondary p-2.5">
                         <span className="text-muted-foreground">最长连胜</span>
                         <span className="text-quant-green font-mono">{report.max_consec_wins ?? '-'}</span>
                       </div>
-                      <div className="flex justify-between p-2 rounded bg-quant-bg-secondary">
+                      <div className="flex items-center justify-between rounded-lg bg-quant-bg-secondary p-2.5">
                         <span className="text-muted-foreground">最长连亏</span>
                         <span className="text-quant-red font-mono">{report.max_consec_loss ?? '-'}</span>
                       </div>
@@ -1397,27 +1460,27 @@ export function Backtest() {
                         const exp = (wr / 100) * avgW - ((100 - wr) / 100) * avgL
                         return (
                           <>
-                            <div className="flex justify-between p-2 rounded bg-quant-bg-secondary">
+                            <div className="flex items-center justify-between rounded-lg bg-quant-bg-secondary p-2.5">
                               <span className="text-muted-foreground">期望值</span>
                               <span className={cn('font-mono', exp >= 0 ? 'text-quant-green' : 'text-quant-red')}>
                                 ${exp.toFixed(2)}
                               </span>
                             </div>
-                            <div className="flex justify-between p-2 rounded bg-quant-bg-secondary">
+                            <div className="flex items-center justify-between rounded-lg bg-quant-bg-secondary p-2.5">
                               <span className="text-muted-foreground">胜率</span>
                               <span className="font-mono text-foreground">{wr.toFixed(1)}%</span>
                             </div>
-                            <div className="flex justify-between p-2 rounded bg-quant-bg-secondary">
+                            <div className="flex items-center justify-between rounded-lg bg-quant-bg-secondary p-2.5">
                               <span className="text-muted-foreground">平均盈亏比</span>
                               <span className="font-mono text-foreground">
                                 {avgL > 0 ? (avgW / avgL).toFixed(2) : '-'}:1
                               </span>
                             </div>
-                            <div className="flex justify-between p-2 rounded bg-quant-bg-secondary">
+                            <div className="flex items-center justify-between rounded-lg bg-quant-bg-secondary p-2.5">
                               <span className="text-muted-foreground">盈利因子</span>
                               <span className="font-mono text-quant-green">{report.profit_factor.toFixed(2)}</span>
                             </div>
-                            <div className="flex justify-between p-2 rounded bg-quant-bg-secondary">
+                            <div className="flex items-center justify-between rounded-lg bg-quant-bg-secondary p-2.5">
                               <span className="text-muted-foreground">风险回报比</span>
                               <span className="font-mono text-foreground">
                                 {report.calmar_ratio ? report.calmar_ratio.toFixed(2) : '-'}
@@ -1459,30 +1522,32 @@ export function Backtest() {
             {activeTab === 'trades' && (
               <div className="space-y-5">
                 {/* Filters & Sorting */}
-                <div className="flex items-center gap-3 flex-wrap">
-                  <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                    <Filter className="h-3 w-3" />
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-1.5">
+                    <Filter className="h-3 w-3 text-muted-foreground" />
+                    <span className="mr-0.5 text-[11px] text-muted-foreground">筛选</span>
                     {(['all', 'win', 'loss'] as const).map((f) => (
                       <button
                         key={f}
                         onClick={() => setTradeFilter(f)}
                         className={cn(
-                          'px-2 py-1 rounded-md border transition-colors',
+                          'rounded-lg border px-2.5 py-1 text-[11px] transition-colors',
                           tradeFilter === f
-                            ? 'border-quant-gold/30 bg-quant-gold/10 text-quant-gold'
-                            : 'border-quant-border hover:border-quant-gold/20'
+                            ? 'border-quant-gold/30 bg-quant-gold/10 font-medium text-quant-gold'
+                            : 'border-quant-border text-muted-foreground hover:border-quant-gold/30 hover:text-foreground'
                         )}
                       >
                         {f === 'all' ? '全部' : f === 'win' ? '盈利' : '亏损'}
                       </button>
                     ))}
                   </div>
-                  <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                    <ArrowUpDown className="h-3 w-3" />
+                  <div className="flex items-center gap-1.5">
+                    <ArrowUpDown className="h-3 w-3 text-muted-foreground" />
                     <select
                       value={tradeSortKey}
                       onChange={(e) => setTradeSortKey(e.target.value as typeof tradeSortKey)}
-                      className="bg-quant-bg border border-quant-border rounded px-2 py-1 text-[11px] outline-none focus:border-quant-gold"
+                      aria-label="排序字段"
+                      className="rounded-lg border border-quant-border bg-quant-bg px-2 py-1 text-[11px] focus:outline-none focus:border-quant-gold"
                     >
                       <option value="time">按时间</option>
                       <option value="pnl">按盈亏</option>
@@ -1491,11 +1556,11 @@ export function Backtest() {
                     </select>
                     <button
                       onClick={() => setTradeSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}
-                      className="px-2 py-1 rounded border border-quant-border hover:border-quant-gold/20"
+                      className="rounded-lg border border-quant-border px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:border-quant-gold/30 hover:text-foreground"
                     >
                       {tradeSortDir === 'asc' ? '↑ 升序' : '↓ 降序'}
                     </button>
-                    <span className="ml-2">共 {sortedTrades.length} 笔</span>
+                    <span className="ml-1 text-[11px] text-muted-foreground">共 {sortedTrades.length} 笔</span>
                   </div>
                 </div>
 
@@ -1687,13 +1752,22 @@ export function Backtest() {
         )}
 
         {!report && !isRunning && !runMut.isError && (
-          <EmptyState
-            icon={<Activity className="h-6 w-6" />}
-            title="开始回测"
-            description="选择交易对、周期、策略和日期范围，使用 Binance 真实历史数据验证策略表现"
-            actionLabel="开始回测"
-            onAction={handleRun}
-          />
+          <div className="rounded-xl border border-dashed border-quant-border bg-quant-bg-secondary/40 px-5 py-10">
+            <EmptyState
+              icon={<Activity className="h-6 w-6" />}
+              title="开始你的第一次回测"
+              description="配置交易对、周期、策略与日期范围，使用 Binance 真实历史数据验证策略表现"
+              action={
+                <button
+                  onClick={handleRun}
+                  className="flex items-center gap-1.5 rounded-lg bg-quant-gold px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-quant-gold/90"
+                >
+                  <Play className="h-3.5 w-3.5" />
+                  开始回测
+                </button>
+              }
+            />
+          </div>
         )}
       </div>
     </div>
