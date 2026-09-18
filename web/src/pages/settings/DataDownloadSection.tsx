@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { SectionCard } from '@/components/ui/SectionCard'
 import { dataApi } from '@/lib/api'
@@ -28,6 +28,11 @@ export function DataDownloadSection() {
     queryKey: ['data-coverage'],
     queryFn: () => dataApi.coverage(),
   })
+  // 后端可能返回 symbols: null（无覆盖数据），统一兜底为空数组避免 .length 崩溃
+  const coverageSymbols = useMemo(
+    () => (Array.isArray(coverage?.symbols) ? coverage.symbols : []),
+    [coverage]
+  )
 
   const downloadMutation = useMutation({
     mutationFn: (config: { symbol: string; interval: string; from: number; to: number; exchange?: string }) =>
@@ -114,7 +119,7 @@ export function DataDownloadSection() {
         <div className="text-xs text-muted-foreground mb-2">已覆盖数据</div>
         {coverageLoading ? (
           <div className="text-xs text-muted-foreground py-4">加载中...</div>
-        ) : coverage && coverage.symbols.length > 0 ? (
+        ) : coverageSymbols.length > 0 ? (
           <div className="rounded-lg border border-quant-border overflow-hidden">
             <table className="w-full text-xs">
               <thead className="bg-quant-bg-secondary">
@@ -125,14 +130,14 @@ export function DataDownloadSection() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-quant-border">
-                {coverage.symbols
+                {coverageSymbols
                   .slice(0, 10)
                   .map((item: { symbol: string; intervals: string[]; from?: number; to?: number }) => (
                     <tr key={item.symbol}>
                       <td className="px-3 py-2 font-mono">{item.symbol}</td>
                       <td className="px-3 py-2">
                         <div className="flex flex-wrap gap-1">
-                          {item.intervals.map((i) => (
+                          {(item.intervals ?? []).map((i) => (
                             <span
                               key={i}
                               className="rounded bg-quant-gold/10 px-1.5 py-0.5 text-[10px] text-quant-gold"

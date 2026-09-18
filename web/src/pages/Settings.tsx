@@ -268,6 +268,8 @@ function SelectField({
   options: string[]
   label?: string
 }) {
+  // options 兜底：调用方传入 null（接口异常/旧缓存页面）时不至于 .map 崩溃
+  const safeOptions = Array.isArray(options) ? options : []
   return (
     <div className="relative">
       <select
@@ -276,7 +278,7 @@ function SelectField({
         aria-label={label}
         className="w-full appearance-none rounded-md border border-quant-border bg-quant-bg px-3 py-2 pr-8 text-sm text-white outline-none transition-colors focus:border-quant-gold"
       >
-        {options.map((opt) => (
+        {safeOptions.map((opt) => (
           <option key={opt} value={opt}>
             {opt}
           </option>
