@@ -141,6 +141,24 @@ def build_safe_builtins() -> Dict[str, Any]:
     return safe
 
 
+def build_safe_import():
+    """Restricted __import__ that blocks unsafe modules at runtime.
+
+    The AST check already rejects unsafe imports statically; this is a
+    second line of defense so that whitelisted modules (numpy, pandas,
+    talib, math, ...) remain importable inside the sandbox.
+    """
+    real_import = __builtins__['__import__'] if isinstance(__builtins__, dict) else __builtins__.__import__
+
+    def safe_import(name, globals=None, locals=None, fromlist=(), level=0):
+        root = (name or "").split(".")[0]
+        if root in UNSAFE_MODULES:
+            raise ImportError(f"Import of module '{name}' is not allowed")
+        return real_import(name, globals, locals, fromlist, level)
+
+    return safe_import
+
+
 # ── Memory Limit ─────────────────────────────────────────────────
 
 def apply_memory_limit(mb: int):
@@ -279,7 +297,7 @@ def safe_exec_with_validation(
         'np': np,
         'params': params or {},
         'output': None,
-        '__builtins__': build_safe_builtins(),
+        '__builtins__': {**build_safe_builtins(), '__import__': build_safe_import()},
         'call_indicator': call_indicator,
     }
 

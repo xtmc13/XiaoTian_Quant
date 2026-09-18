@@ -7,6 +7,14 @@ import sys
 from executor import safe_exec_with_validation
 from analyzer import analyze_indicator_code_quality
 
+try:
+    from typing import Any, Dict, List, Optional
+    from fastapi import FastAPI
+    from pydantic import BaseModel
+    _HAS_FASTAPI = True
+except ImportError:
+    _HAS_FASTAPI = False
+
 
 def main():
     parser = argparse.ArgumentParser(description="XiaoTianQuant Sandbox CLI")
@@ -41,3 +49,83 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# ── FastAPI server (uvicorn main:app) ─────────────────────────────
+# Optional: the CLI above works without fastapi installed.
+
+def _json_safe(obj):
+    """Convert numpy/pandas values into plain JSON-serializable types."""
+    import numpy as np
+    import pandas as pd
+    if isinstance(obj, dict):
+        return {str(k): _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, np.ndarray):
+        return _json_safe(obj.tolist())
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        val = float(obj)
+        return val if val == val and abs(val) != float("inf") else None
+    if isinstance(obj, (np.bool_,)):
+        return bool(obj)
+    if isinstance(obj, float):
+        return obj if obj == obj and abs(obj) != float("inf") else None
+    if isinstance(obj, (pd.Series, pd.DataFrame)):
+        return _json_safe(obj.to_dict("records") if isinstance(obj, pd.DataFrame) else obj.tolist())
+    return obj
+
+
+if _HAS_FASTAPI:
+    import re
+
+    app = FastAPI(title="XiaoTianQuant Sandbox")
+
+    class ExecuteRequest(BaseModel):
+        code: str
+        df_json: Optional[List[Dict[str, Any]]] = None
+        params: Optional[Dict[str, Any]] = None
+        timeout: int = 20
+
+    class AnalyzeRequest(BaseModel):
+        code: str
+
+    @app.get("/health")
+    def health():
+        return {"status": "ok"}
+
+    @app.post("/execute")
+    def execute(req: ExecuteRequest):
+        result = safe_exec_with_validation(
+            code=req.code, df_json=req.df_json, params=req.params, timeout=req.timeout
+        )
+        # Without an explicit df_json the executor validates against its own
+        # 200-row mock DataFrame. If the code's output has a different length,
+        # retry once with a mock DataFrame matched to the output length so
+        # ad-hoc validation of fixed-size snippets still succeeds.
+        if (
+            req.df_json is None
+            and result.get("error_type") == "LengthMismatch"
+            and result.get("output") is None
+        ):
+            m = re.search(r"data length \((\d+)\)", result.get("error", "") + result.get("msg", ""))
+            if m and int(m.group(1)) > 0:
+                from executor import generate_mock_df
+                df_json = generate_mock_df(int(m.group(1))).to_dict("records")
+                result = safe_exec_with_validation(
+                    code=req.code, df_json=df_json, params=req.params, timeout=req.timeout
+                )
+        return {
+            "success": result.get("success", False),
+            "msg": result.get("msg", ""),
+            "output": _json_safe(result.get("output")),
+            "error": result.get("error"),
+            "error_type": result.get("error_type"),
+        }
+
+    @app.post("/analyze")
+    def analyze(req: AnalyzeRequest):
+        hints = analyze_indicator_code_quality(req.code)
+        return {"success": True, "hints": _json_safe(hints)}
