@@ -451,21 +451,6 @@ export function TriangularArbitragePanel() {
             <div className="space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {renderConfigField(
-                  '交易所',
-                  <select
-                    value={editConfig.exchange}
-                    onChange={(e) => setEditConfig((p) => (p ? { ...p, exchange: e.target.value } : p))}
-                    className="w-full rounded-md border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white outline-none focus:border-quant-gold"
-                  >
-                    {SUPPORTED_EXCHANGES.map((ex) => (
-                      <option key={ex.key} value={ex.key}>
-                        {ex.label}
-                      </option>
-                    ))}
-                  </select>,
-                  'exchange'
-                )}
-                {renderConfigField(
                   '交易对（逗号分隔）',
                   <TextInput
                     value={symbolsInput}
@@ -578,22 +563,40 @@ export function TriangularArbitragePanel() {
                 </div>
               </div>
 
-              {/* Exchange readiness */}
+              {/* Exchange selection */}
               <div className="border-t border-quant-border pt-6">
                 <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-4">
-                  交易所状态
+                  交易所选择
                 </h3>
                 {configuredExchanges ? (
                   <div className="space-y-2">
                     {SUPPORTED_EXCHANGES.map((ex) => {
                       const cfg = configuredExchanges[ex.key]
                       const ready = cfg?.enabled && cfg?.has_credentials
+                      const isSelected = editConfig.exchange === ex.key
                       return (
-                        <div
+                        <label
                           key={ex.key}
-                          className="flex items-center justify-between rounded-md border border-quant-border px-3 py-2"
+                          className={cn(
+                            'flex items-center justify-between rounded-md border px-3 py-2 transition-colors',
+                            !ready && !isSelected
+                              ? 'border-quant-border opacity-50 cursor-not-allowed'
+                              : isSelected
+                                ? 'border-quant-gold/60 bg-quant-gold/5 cursor-pointer'
+                                : 'border-quant-border hover:border-quant-gold/40 cursor-pointer'
+                          )}
                         >
                           <div className="flex items-center gap-3">
+                            <input
+                              type="radio"
+                              name="triangular-exchange"
+                              checked={isSelected}
+                              disabled={!ready && !isSelected}
+                              onChange={() =>
+                                setEditConfig((p) => (p ? { ...p, exchange: ex.key } : p))
+                              }
+                              className="h-4 w-4 accent-quant-gold"
+                            />
                             <Globe className="h-4 w-4 text-muted-foreground" />
                             <div>
                               <div className="text-sm font-medium">{ex.label}</div>
@@ -606,21 +609,22 @@ export function TriangularArbitragePanel() {
                               </div>
                             </div>
                           </div>
-                          {ready ? (
+                          {isSelected ? (
                             <span className="inline-flex items-center gap-1 text-xs text-green-400">
                               <CheckCircle2 className="h-3.5 w-3.5" />
-                              可用
+                              当前选择
                             </span>
                           ) : (
-                            <span className="text-[10px] text-muted-foreground">未就绪</span>
+                            !ready && <span className="text-[10px] text-muted-foreground">未就绪</span>
                           )}
-                        </div>
+                        </label>
                       )
                     })}
                   </div>
                 ) : (
                   <div className="text-sm text-muted-foreground">加载交易所配置中...</div>
                 )}
+                <div className="mt-3 text-xs text-muted-foreground">选择交易所后点击「保存配置」生效</div>
               </div>
             </div>
           )}

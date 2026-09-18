@@ -274,6 +274,21 @@ func (e *Engine) RegisterExchange(name string, client ExchangeClient) {
 	e.clients[name] = client
 }
 
+// RemoveExchange removes an exchange client and stops its market stream.
+// Returns true if the exchange was registered.
+func (e *Engine) RemoveExchange(name string) bool {
+	e.mu.Lock()
+	client, ok := e.clients[name]
+	if ok {
+		delete(e.clients, name)
+	}
+	e.mu.Unlock()
+	if ok && client != nil {
+		_ = client.StopStream()
+	}
+	return ok
+}
+
 // IterateClients safely iterates registered clients.
 func (e *Engine) IterateClients(fn func(name string, client ExchangeClient)) {
 	e.mu.RLock()

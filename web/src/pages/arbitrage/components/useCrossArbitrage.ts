@@ -129,6 +129,18 @@ export function useCrossArbitrage() {
     },
   })
 
+  const unregisterExchangeMut = useMutation({
+    mutationFn: (name: string) => arbitrageApi.unregisterExchange(name),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['arbitrage-exchanges'] })
+      queryClient.invalidateQueries({ queryKey: ['arbitrage-status'] })
+      toast('success', '交易所已移出套利')
+    },
+    onError: (err: Error) => {
+      toast('error', err.message || '移除失败')
+    },
+  })
+
   const executeMut = useMutation({
     mutationFn: (data: {
       symbol: string
@@ -181,25 +193,51 @@ export function useCrossArbitrage() {
   const opportunity: ArbitrageOpportunity | null = opportunities?.[0] ?? null
 
   /* ── Handlers ── */
-  const handleSaveConfig = useCallback(() => {
-    if (!editConfig) return
-    const symbols = symbolsInput
-      .split(',')
-      .map((s) => s.trim().toUpperCase())
-      .filter(Boolean)
-    const payload: ArbitrageConfig = {
-      ...editConfig,
-      symbol: symbols[0] || editConfig.symbol,
-      symbols: symbols.length > 0 ? symbols : undefined,
-    }
-    updateConfigMut.mutate(payload)
-  }, [editConfig, symbolsInput, updateConfigMut])
+  const handleSaveConfig = useCallback(
+    async (selectedExchanges: string[]) => {
+      if (!editConfig) return
+      const symbols = symbolsInput
+        .split(',')
+        .map((s) => s.trim().toUpperCase())
+        .filter(Boolean)
+      const payload: ArbitrageConfig = {
+        ...editConfig,
+        symbol: symbols[0] || editConfig.symbol,
+        symbols: symbols.length > 0 ? symbols : undefined,
+      }
 
-  const handleRegisterExchange = useCallback(
-    (name: string) => {
-      registerExchangeMut.mutate({ name })
+      // 应用交易所选择差异：新勾选的注册，取消勾选的注销
+      const registered = new Set(exchangesMeta?.exchanges ?? [])
+      const target = new Set(selectedExchanges)
+      const failed: string[] = []
+      for (const name of new Set([...registered, ...target])) {
+        try {
+          if (target.has(name) && !registered.has(name)) {
+            await arbitrageApi.registerExchange({ name })
+          } else if (!target.has(name) && registered.has(name)) {
+            await arbitrageApi.unregisterExchange(name)
+          }
+        } catch (e) {
+          failed.push(`${name}: ${e instanceof Error ? e.message : '操作失败'}`)
+        }
+      }
+
+      try {
+        await arbitrageApi.updateConfig(payload)
+        queryClient.invalidateQueries({ queryKey: ['arbitrage-config'] })
+        queryClient.invalidateQueries({ queryKey: ['arbitrage-exchanges'] })
+        queryClient.invalidateQueries({ queryKey: ['arbitrage-status'] })
+        if (failed.length > 0) {
+          toast('error', `部分交易所未生效：${failed.join('；')}`)
+        } else {
+          toast('success', '配置已保存')
+        }
+        setShowConfig(false)
+      } catch (e) {
+        toast('error', e instanceof Error ? e.message : '保存失败')
+      }
     },
-    [registerExchangeMut]
+    [editConfig, symbolsInput, exchangesMeta, queryClient]
   )
 
   const handleExecute = useCallback(
@@ -287,11 +325,11 @@ export function useCrossArbitrage() {
     stopMutation,
     updateConfigMut,
     registerExchangeMut,
+    unregisterExchangeMut,
     executeMut,
     closePositionMut,
     failPositionMut,
     handleSaveConfig,
-    handleRegisterExchange,
     handleExecute,
     isPositionActive,
     handleClosePosition,

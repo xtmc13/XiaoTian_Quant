@@ -1,5 +1,6 @@
+import { useEffect, useState } from 'react'
 import { cn } from '@/lib/utils'
-import { RefreshCw, Save, Globe, CheckCircle2, Plus, X } from 'lucide-react'
+import { RefreshCw, Save, Globe, CheckCircle2, X } from 'lucide-react'
 import { TextInput, NumberInput, Toggle } from './ArbitrageUI'
 import type { ArbitrageConfig, ExchangeConfiguredStatus } from '@/types'
 
@@ -23,10 +24,8 @@ interface CrossArbitrageConfigProps {
   setSymbolsInput: (v: string) => void
   configuredExchanges: Record<string, ExchangeConfiguredStatus> | undefined
   exchangesMeta: { registered_count?: number; exchanges?: string[] } | undefined
-  onSave: () => void
-  onRegister: (name: string) => void
+  onSave: (selectedExchanges: string[]) => void
   isSaving: boolean
-  isRegistering: boolean
 }
 
 function ConfigField({ label, input, fieldKey }: { label: string; input: React.ReactNode; fieldKey?: string }) {
@@ -48,10 +47,19 @@ export function CrossArbitrageConfig({
   configuredExchanges,
   exchangesMeta,
   onSave,
-  onRegister,
   isSaving,
-  isRegistering,
 }: CrossArbitrageConfigProps) {
+  // null = 用户未改动，跟随引擎已注册列表；改动后跟随用户选择
+  const [touchedSelection, setTouchedSelection] = useState<string[] | null>(null)
+  useEffect(() => {
+    if (!open) setTouchedSelection(null)
+  }, [open])
+
+  const selected = touchedSelection ?? exchangesMeta?.exchanges ?? []
+  const toggleExchange = (key: string, checked: boolean) => {
+    setTouchedSelection(checked ? [...selected, key] : selected.filter((k) => k !== key))
+  }
+
   if (!open) return null
 
   if (!editConfig) {
@@ -248,14 +256,29 @@ export function CrossArbitrageConfig({
                 <div className="space-y-2">
                   {SUPPORTED_EXCHANGES.map((ex) => {
                     const cfg = configuredExchanges[ex.key]
-                    const registered = exchangesMeta?.exchanges?.includes(ex.key) ?? false
+                    const isSelected = selected.includes(ex.key)
                     const canRegister = cfg?.enabled && cfg?.has_credentials
+                    const disabled = !isSelected && !canRegister
                     return (
-                      <div
+                      <label
                         key={ex.key}
-                        className="flex items-center justify-between rounded-md border border-quant-border px-3 py-2"
+                        className={cn(
+                          'flex items-center justify-between rounded-md border px-3 py-2 transition-colors',
+                          disabled
+                            ? 'border-quant-border opacity-50 cursor-not-allowed'
+                            : isSelected
+                              ? 'border-quant-gold/60 bg-quant-gold/5 cursor-pointer'
+                              : 'border-quant-border hover:border-quant-gold/40 cursor-pointer'
+                        )}
                       >
                         <div className="flex items-center gap-3">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            disabled={disabled}
+                            onChange={(e) => toggleExchange(ex.key, e.target.checked)}
+                            className="h-4 w-4 accent-quant-gold"
+                          />
                           <Globe className="h-4 w-4 text-muted-foreground" />
                           <div>
                             <div className="text-sm font-medium">{ex.label}</div>
@@ -268,33 +291,13 @@ export function CrossArbitrageConfig({
                             </div>
                           </div>
                         </div>
-                        {registered ? (
+                        {isSelected && (
                           <span className="inline-flex items-center gap-1 text-xs text-green-400">
                             <CheckCircle2 className="h-3.5 w-3.5" />
                             已加入套利
                           </span>
-                        ) : canRegister ? (
-                          <button
-                            onClick={() => onRegister(ex.key)}
-                            disabled={isRegistering}
-                            className={cn(
-                              'inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium transition-colors',
-                              isRegistering
-                                ? 'bg-muted text-muted-foreground cursor-not-allowed'
-                                : 'bg-quant-gold text-black hover:opacity-90'
-                            )}
-                          >
-                            {isRegistering ? (
-                              <RefreshCw className="h-3 w-3 animate-spin" />
-                            ) : (
-                              <Plus className="h-3 w-3" />
-                            )}
-                            加入套利
-                          </button>
-                        ) : (
-                          <span className="text-[10px] text-muted-foreground">未就绪</span>
                         )}
-                      </div>
+                      </label>
                     )
                   })}
                 </div>
@@ -309,7 +312,7 @@ export function CrossArbitrageConfig({
                 )}
               {exchangesMeta && (
                 <div className="mt-3 text-xs text-muted-foreground">
-                  已加入套利交易所: {exchangesMeta.registered_count ?? 0} 个
+                  勾选交易所后点击「保存配置」生效，已选 {selected.length} 个
                 </div>
               )}
             </div>
@@ -325,7 +328,7 @@ export function CrossArbitrageConfig({
             关闭
           </button>
           <button
-            onClick={onSave}
+            onClick={() => onSave(selected)}
             disabled={isSaving}
             className={cn(
               'flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-medium transition-colors',

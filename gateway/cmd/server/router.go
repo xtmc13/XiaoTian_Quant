@@ -314,6 +314,7 @@ func registerArbitrageRoutes(api *gin.RouterGroup) {
 	private.GET("/arbitrage/history", handler.GetArbitrageHistory)
 	private.POST("/arbitrage/exchanges", handler.RegisterArbitrageExchange)
 	private.GET("/arbitrage/exchanges", handler.ListArbitrageExchanges)
+	private.DELETE("/arbitrage/exchanges/:name", handler.UnregisterArbitrageExchange)
 	private.POST("/arbitrage/execute", handler.ExecuteArbitrage)
 	private.POST("/arbitrage/positions/:id/close", handler.CloseArbitragePosition)
 	private.POST("/arbitrage/positions/:id/fail", handler.FailArbitragePosition)

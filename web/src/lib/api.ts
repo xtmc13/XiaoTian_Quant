@@ -806,6 +806,9 @@ export const arbitrageApi = {
   registerExchange: (data: Partial<ArbitrageExchange>) =>
     api.post<{ status: string; exchange: string }>('/arbitrage/exchanges', data),
 
+  unregisterExchange: (name: string) =>
+    api.del<{ status: string; exchange: string }>(`/arbitrage/exchanges/${name}`),
+
   execute: (data: {
     symbol: string
     buy_exchange: string

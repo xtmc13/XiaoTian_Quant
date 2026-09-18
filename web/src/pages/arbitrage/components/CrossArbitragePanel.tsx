@@ -63,9 +63,7 @@ export function CrossArbitragePanel() {
         configuredExchanges={configuredExchanges}
         exchangesMeta={exchangesMeta}
         onSave={handleSaveConfig}
-        onRegister={handleRegisterExchange}
-        isSaving={updateConfigMut.isPending}
-        isRegistering={registerExchangeMut.isPending}
+        isSaving={updateConfigMut.isPending || registerExchangeMut.isPending || unregisterExchangeMut.isPending}
       />
       <CrossArbitrageOpportunities
         opportunity={opportunity}

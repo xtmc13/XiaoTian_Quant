@@ -505,6 +505,17 @@ func ListArbitrageExchanges(c *gin.Context) {
 	})
 }
 
+// UnregisterArbitrageExchange removes an exchange from the arbitrage engine.
+func UnregisterArbitrageExchange(c *gin.Context) {
+	name := c.Param("name")
+	engine := GetArbEngine()
+	if !engine.RemoveExchange(name) {
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("exchange %s not registered", name)})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "unregistered", "exchange": name})
+}
+
 // ── Manual Execution ───────────────────────────────────────────
 
 // ExecuteArbitrage manually triggers an arbitrage execution.
