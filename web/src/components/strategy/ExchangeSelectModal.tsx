@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { cn } from '@/lib/utils'
-import { Globe, CheckCircle2, X } from 'lucide-react'
+import { Globe, CheckCircle2, Search, X } from 'lucide-react'
 import type { ExchangeConfiguredStatus } from '@/types'
 
 const SUPPORTED_EXCHANGES = [
@@ -24,10 +24,20 @@ interface ExchangeSelectModalProps {
 
 export function ExchangeSelectModal({ open, onClose, value, onChange, configuredExchanges }: ExchangeSelectModalProps) {
   const [draft, setDraft] = useState<string[]>(value)
+  const [search, setSearch] = useState('')
 
   useEffect(() => {
-    if (open) setDraft(value)
+    if (open) {
+      setDraft(value)
+      setSearch('')
+    }
   }, [open, value])
+
+  const filteredExchanges = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    if (!q) return SUPPORTED_EXCHANGES
+    return SUPPORTED_EXCHANGES.filter((ex) => ex.label.toLowerCase().includes(q) || ex.key.includes(q))
+  }, [search])
 
   if (!open) return null
 
@@ -75,10 +85,26 @@ export function ExchangeSelectModal({ open, onClose, value, onChange, configured
         </div>
 
         {/* Body */}
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto p-6 space-y-3">
+          {/* 搜索 + 已选摘要（对齐表单新风格） */}
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1 min-w-0">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="搜索交易所"
+                className="w-full bg-quant-bg border border-quant-border rounded-lg pl-8 pr-3 py-2 text-xs focus:outline-none focus:border-quant-gold placeholder:text-muted-foreground/60"
+              />
+            </div>
+            <span className="shrink-0 text-[11px] text-muted-foreground">
+              已选 <span className="text-foreground font-mono">{draft.length}</span> 个
+            </span>
+          </div>
+
           {configuredExchanges ? (
             <div className="space-y-2">
-              {SUPPORTED_EXCHANGES.map((ex) => {
+              {filteredExchanges.map((ex) => {
                 const cfg = configuredExchanges[ex.key]
                 const selected = draft.includes(ex.key)
                 const ready = cfg?.enabled && cfg?.has_credentials
@@ -117,6 +143,9 @@ export function ExchangeSelectModal({ open, onClose, value, onChange, configured
                   </button>
                 )
               })}
+              {filteredExchanges.length === 0 && (
+                <div className="text-xs text-muted-foreground text-center py-4">无匹配的交易所</div>
+              )}
             </div>
           ) : (
             <div className="text-sm text-muted-foreground text-center py-4">加载交易所配置中...</div>
@@ -129,10 +158,7 @@ export function ExchangeSelectModal({ open, onClose, value, onChange, configured
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between px-6 py-4 border-t border-quant-border shrink-0">
-          <div className="text-[11px] text-muted-foreground">
-            已选择 <span className="text-foreground font-mono">{draft.length}</span> 个交易所
-          </div>
+        <div className="flex items-center justify-end px-6 py-4 border-t border-quant-border shrink-0">
           <div className="flex items-center gap-2">
             <button
               type="button"

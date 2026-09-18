@@ -12,6 +12,7 @@ import {
   detectOpenIndicator,
   validateIndicatorValues,
   defaultIndicatorParams,
+  OPEN_INDICATORS,
 } from '../indicatorPresets'
 
 describe('indicatorPresets（纯函数）', () => {
@@ -46,9 +47,14 @@ describe('indicatorPresets（纯函数）', () => {
   })
 
   it('detectOpenIndicator: 新键优先，旧键回退', () => {
-    expect(
-      detectOpenIndicator({ open_indicator: 'trend_long', indicator_params: { trend_long: { fast: 10 } } }).indicator
-    ).toBe('trend_long')
+    // 存量顺势多/空已下线：回退显示 EMA交叉，并带方向提示
+    const legacy = detectOpenIndicator({ open_indicator: 'trend_long', indicator_params: { trend_long: { fast: 10 } } })
+    expect(legacy.indicator).toBe('ema_cross')
+    expect(legacy.directionHint).toBe('long')
+    expect(legacy.params.fast).toBe(10)
+    expect(detectOpenIndicator({ open_indicator: 'trend_short' }).directionHint).toBe('short')
+    // 合约/现货 picker 均不再含顺势多/顺势空预设
+    expect(OPEN_INDICATORS.some((d) => (d.key as string) === 'trend_long' || (d.key as string) === 'trend_short')).toBe(false)
     expect(detectOpenIndicator({ open_macd_enabled: true }).indicator).toBe('macd')
     expect(detectOpenIndicator({ open_trend_ema_enabled: true }).indicator).toBe('trend')
     expect(detectOpenIndicator({}).indicator).toBe('none')

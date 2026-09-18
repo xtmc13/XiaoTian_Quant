@@ -347,8 +347,6 @@ export function CRAParamForm({ value, onChange, market, className, openFields = 
               indicator={value.openIndicator}
               params={value.openIndicatorParams}
               custom={value.openIndicatorCustom}
-              direction={value.direction}
-              market={market}
               onChange={(sel) => {
                 // 选择器为唯一事实源：由选择派生引擎兼容键（旧 open_* 字段
                 // 同步写入，供周期推断等既有消费方使用），复合指标锁定方向。
@@ -364,12 +362,6 @@ export function CRAParamForm({ value, onChange, market, className, openFields = 
                   openCounterEmaPeriod: cfg.open_counter_ema_period as CRAParams['openCounterEmaPeriod'],
                   openTrendEmaEnabled: cfg.open_trend_ema_enabled,
                   openTrendEmaPeriod: cfg.open_trend_ema_period as CRAParams['openTrendEmaPeriod'],
-                  direction:
-                    sel.indicator === 'trend_long'
-                      ? 'long'
-                      : sel.indicator === 'trend_short'
-                        ? 'short'
-                        : value.direction,
                 })
               }}
             />
@@ -931,6 +923,8 @@ export function craParamsToApiPayload(p: CRAParams): ApiPayload {
 /** 将后端 API 返回的 snake_case 参数对象转换为 CRAParams（小数转百分比） */
 export function apiPayloadToCraParams(payload: Partial<ApiPayload>): CRAParams {
   const base = DEFAULT_CRA_PARAMS
+  // 预计算指标检测：存量顺势多/空记录回退 ema_cross 时带方向提示。
+  const detRef = { current: detectOpenIndicator(payload as Record<string, unknown>) }
   return {
     firstOrderPrice: payload.first_order_price ?? base.firstOrderPrice,
     firstOrderAmount: payload.first_order_amount ?? base.firstOrderAmount,
@@ -963,7 +957,7 @@ export function apiPayloadToCraParams(payload: Partial<ApiPayload>): CRAParams {
       drawback: decimalToPercent(t.drawback, PERCENTAGE_FIELD_THRESHOLDS.movingTPDrawback),
     })),
     ...(() => {
-      const det = detectOpenIndicator(payload as Record<string, unknown>)
+      const det = detRef.current
       // 新键（open_indicator）优先；缺省时按旧 enabled 键回退推导。
       if (det.indicator !== 'none') {
         return {
@@ -1008,6 +1002,6 @@ export function apiPayloadToCraParams(payload: Partial<ApiPayload>): CRAParams {
     followTrend: payload.follow_trend ?? base.followTrend,
     onlineOrderLimit: payload.online_order_limit ?? base.onlineOrderLimit,
     leverage: payload.leverage ?? base.leverage,
-    direction: payload.direction ?? base.direction,
+    direction: payload.direction ?? detRef.current?.directionHint ?? base.direction,
   }
 }

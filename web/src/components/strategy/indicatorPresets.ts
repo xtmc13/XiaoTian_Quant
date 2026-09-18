@@ -15,8 +15,6 @@ export type OpenIndicatorKey =
   | 'ema_cross'
   | 'rsi'
   | 'trend'
-  | 'trend_long'
-  | 'trend_short'
   | 'range'
   | 'custom'
 
@@ -37,8 +35,6 @@ export interface IndicatorDef {
   label: string
   desc: string
   fields: IndicatorFieldDef[]
-  /** 复合指标锁定方向（多/空），UI 显示不可改 */
-  lockedDirection?: 'long' | 'short'
 }
 
 export const PERIOD_OPTIONS = [
@@ -98,28 +94,6 @@ export const OPEN_INDICATORS: IndicatorDef[] = [
     ],
   },
   {
-    key: 'trend_long',
-    label: '顺势多',
-    desc: 'EMA 金叉且方向锁定做多',
-    lockedDirection: 'long',
-    fields: [
-      { key: 'fast', label: '快线周期', type: 'int', default: 12, min: 1, max: 500 },
-      { key: 'slow', label: '慢线周期', type: 'int', default: 26, min: 1, max: 500 },
-      { key: 'period', label: '监测周期', type: 'select', default: 'close', options: PERIOD_OPTIONS },
-    ],
-  },
-  {
-    key: 'trend_short',
-    label: '顺势空',
-    desc: 'EMA 死叉且方向锁定做空',
-    lockedDirection: 'short',
-    fields: [
-      { key: 'fast', label: '快线周期', type: 'int', default: 12, min: 1, max: 500 },
-      { key: 'slow', label: '慢线周期', type: 'int', default: 26, min: 1, max: 500 },
-      { key: 'period', label: '监测周期', type: 'select', default: 'close', options: PERIOD_OPTIONS },
-    ],
-  },
-  {
     key: 'range',
     label: '震荡',
     desc: 'RSI 中性区往返（高抛低吸）',
@@ -135,9 +109,6 @@ export const OPEN_INDICATORS: IndicatorDef[] = [
     fields: [],
   },
 ]
-
-/** 现货版隐藏的有方向概念指标（顺势多/顺势空仅合约）。 */
-export const SPOT_EXCLUDED_INDICATORS: ReadonlySet<string> = new Set(['trend_long', 'trend_short'])
 
 export function getIndicatorDef(key: OpenIndicatorKey): IndicatorDef | undefined {
   return OPEN_INDICATORS.find((d) => d.key === key)
@@ -212,12 +183,10 @@ export function buildOpenIndicatorConfig(
       cfg.indicator_params = { macd: { ...params } }
       break
     case 'ema_cross':
-    case 'trend_long':
-    case 'trend_short':
       // 引擎侧以"顺势 EMA"门槛承载双均线类指标。
       cfg.open_trend_ema_enabled = true
       cfg.open_trend_ema_period = period ?? 'close'
-      cfg.indicator_params = { [key]: { ...params } }
+      cfg.indicator_params = { ema_cross: { ...params } }
       break
     case 'trend':
       cfg.open_trend_ema_enabled = true
@@ -241,10 +210,22 @@ export function detectOpenIndicator(payload: Record<string, unknown>): {
   indicator: OpenIndicatorKey
   params: Record<string, IndicatorParamValue>
   custom: { code_id: number; name: string } | null
+  /** 存量顺势多/空记录的方向提示（记录未存 direction 时回填用）。 */
+  directionHint?: 'long' | 'short'
 } {
   const indicatorParams = (payload.indicator_params as Record<string, unknown> | undefined) ?? {}
   const openIndicator = (payload.open_indicator as string) || ''
   if (openIndicator) {
+    // 存量记录：顺势多/顺势空已下线，回退显示为 EMA交叉（方向沿记录原值）。
+    if (openIndicator === 'trend_long' || openIndicator === 'trend_short') {
+      const params = (indicatorParams[openIndicator] as Record<string, IndicatorParamValue> | undefined) ?? {}
+      return {
+        indicator: 'ema_cross',
+        params: { ...defaultIndicatorParams('ema_cross'), ...params },
+        custom: null,
+        directionHint: openIndicator === 'trend_long' ? 'long' : 'short',
+      }
+    }
     const params = (indicatorParams[openIndicator] as Record<string, IndicatorParamValue> | undefined) ?? {}
     const custom =
       openIndicator === 'custom'

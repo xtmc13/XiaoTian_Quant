@@ -438,8 +438,6 @@ export const SpotStrategyForm = forwardRef<SpotStrategyFormRef, SpotStrategyForm
               indicator={indicator}
               params={indicatorParams}
               custom={indicatorCustom}
-              direction="long"
-              market="spot"
               onChange={handleIndicatorChange}
             />
           </div>

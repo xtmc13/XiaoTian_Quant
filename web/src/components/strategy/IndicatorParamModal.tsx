@@ -19,7 +19,6 @@ interface IndicatorParamModalProps {
   indicatorKey: OpenIndicatorKey
   values: Record<string, IndicatorParamValue>
   custom: { code_id: number; name: string } | null
-  direction: 'long' | 'short' | 'dual'
   onClose: () => void
   onConfirm: (next: {
     values: Record<string, IndicatorParamValue>
@@ -37,7 +36,6 @@ export function IndicatorParamModal({
   indicatorKey,
   values,
   custom,
-  direction,
   onClose,
   onConfirm,
 }: IndicatorParamModalProps) {
@@ -64,7 +62,6 @@ export function IndicatorParamModal({
   if (!open || !def) return null
 
   const hint = validateIndicatorValues(indicatorKey, draft)
-  const lockedDirLabel = def.lockedDirection === 'long' ? '做多（锁定）' : '做空（锁定）'
 
   const handleConfirm = () => {
     onConfirm({ values: draft, custom: isCustom ? draftCustom : custom })
@@ -93,10 +90,7 @@ export function IndicatorParamModal({
             <Settings2 className="w-4 h-4 text-quant-gold" />
             <div>
               <h3 className="text-sm font-bold">{def.label} · 参数</h3>
-              <p className="text-[10px] text-muted-foreground mt-0.5">
-                {def.desc}
-                {def.lockedDirection && ` · 方向锁定${def.lockedDirection === 'long' ? '做多' : '做空'}`}
-              </p>
+              <p className="text-[10px] text-muted-foreground mt-0.5">{def.desc}</p>
             </div>
           </div>
           <button
@@ -110,19 +104,6 @@ export function IndicatorParamModal({
 
         {/* Body：字段竖排 */}
         <div className="flex-1 overflow-y-auto p-6 space-y-4">
-          {def.lockedDirection && (
-            <div>
-              <label className="text-[11px] text-muted-foreground mb-1.5 block">交易方向</label>
-              <div className={cn(inputCls, 'flex items-center justify-between text-muted-foreground')}>
-                <span>
-                  {direction === 'long' ? '做多' : direction === 'short' ? '做空' : '双向'} →{' '}
-                  <span className="text-foreground font-medium">{lockedDirLabel}</span>
-                </span>
-                <span className="text-[10px]">不可修改</span>
-              </div>
-            </div>
-          )}
-
           {def.fields.map((f) => (
             <div key={f.key}>
               <label htmlFor={`ind-param-${f.key}`} className="text-[11px] text-muted-foreground mb-1.5 block">

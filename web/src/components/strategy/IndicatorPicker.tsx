@@ -3,7 +3,6 @@ import { Settings2, Ban, FlaskConical } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
   OPEN_INDICATORS,
-  SPOT_EXCLUDED_INDICATORS,
   defaultIndicatorParams,
   type IndicatorParamValue,
   type OpenIndicatorKey,
@@ -20,10 +19,6 @@ interface IndicatorPickerProps {
   indicator: OpenIndicatorKey
   params: Record<string, IndicatorParamValue>
   custom: { code_id: number; name: string } | null
-  /** 当前表单方向（弹窗内展示锁定关系用） */
-  direction: 'long' | 'short' | 'dual'
-  /** 市场：spot 隐藏有方向概念的顺势多/顺势空（现货无 direction 语义） */
-  market?: 'spot' | 'contract'
   disabled?: boolean
   onChange: (next: IndicatorSelection) => void
 }
@@ -42,8 +37,7 @@ function summarizeParams(key: OpenIndicatorKey, params: Record<string, Indicator
  * 开仓指标选择器：一排可点选的指标卡。选中高亮；每个指标带"参数"按钮
  * 弹出 IndicatorParamModal 编辑参数；"未设置"表示使用壳默认（无开仓门槛）。
  */
-export function IndicatorPicker({ indicator, params, custom, direction, market = 'contract', disabled, onChange }: IndicatorPickerProps) {
-  const visibleIndicators = market === 'spot' ? OPEN_INDICATORS.filter((d) => !SPOT_EXCLUDED_INDICATORS.has(d.key)) : OPEN_INDICATORS
+export function IndicatorPicker({ indicator, params, custom, disabled, onChange }: IndicatorPickerProps) {
   const [paramModalKey, setParamModalKey] = useState<OpenIndicatorKey | null>(null)
 
   const select = (key: OpenIndicatorKey) => {
@@ -86,7 +80,7 @@ export function IndicatorPicker({ indicator, params, custom, direction, market =
           未设置
         </button>
 
-        {visibleIndicators.map((def) => {
+        {OPEN_INDICATORS.map((def) => {
           const active = indicator === def.key
           const summary = active ? summarizeParams(def.key, params) : ''
           return (
@@ -110,11 +104,6 @@ export function IndicatorPicker({ indicator, params, custom, direction, market =
                 <div className={cn('text-xs font-medium flex items-center gap-1', active ? 'text-quant-gold' : 'text-foreground')}>
                   {def.key === 'custom' && <FlaskConical className="w-3 h-3" />}
                   {def.label}
-                  {def.lockedDirection && (
-                    <span className="text-[9px] px-1 rounded bg-quant-bg-tertiary text-muted-foreground">
-                      {def.lockedDirection === 'long' ? '多' : '空'}
-                    </span>
-                  )}
                 </div>
                 <div className="text-[9px] text-muted-foreground mt-0.5">
                   {active && def.key === 'custom'
@@ -147,9 +136,6 @@ export function IndicatorPicker({ indicator, params, custom, direction, market =
         ) : (
           <>
             当前开仓指标：<span className="text-foreground font-medium">{activeDef?.label}</span>
-            {activeDef?.lockedDirection && (
-              <span className="ml-1 text-quant-gold">（方向已锁定{activeDef.lockedDirection === 'long' ? '做多' : '做空'}）</span>
-            )}
             {indicator === 'custom' && <span className="ml-1 text-quant-gold/80">· 实验功能：执行依赖指标沙箱</span>}
           </>
         )}
@@ -161,7 +147,6 @@ export function IndicatorPicker({ indicator, params, custom, direction, market =
         indicatorKey={paramModalKey ?? 'none'}
         values={paramModalKey === indicator ? params : defaultIndicatorParams(paramModalKey ?? 'none')}
         custom={custom}
-        direction={direction}
         onClose={() => setParamModalKey(null)}
         onConfirm={({ values: nextValues, custom: nextCustom }) => {
           if (paramModalKey == null) return

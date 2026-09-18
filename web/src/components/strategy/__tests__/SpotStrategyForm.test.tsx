@@ -45,8 +45,9 @@ describe('SpotStrategyForm（现货专用表单）', () => {
     expect(screen.getByText('每格金额')).toBeTruthy()
     expect(screen.getByText('手续费率')).toBeTruthy()
     expect(screen.getByText('循环模式')).toBeTruthy()
-    // 现货版指标选择器：隐藏顺势多/顺势空
+    // 顺势多/顺势空预设已整体下线（合约/现货均不显示）
     expect(screen.queryByText('顺势多')).toBeFalsy()
+    expect(screen.queryByText('顺势空')).toBeFalsy()
     expect(screen.getByText('MACD')).toBeTruthy()
   })
 
