@@ -668,12 +668,27 @@ export function BotsCenter() {
               <span className="ml-1.5 text-[10px] opacity-70">{countOf(f.key)}</span>
             </button>
           ))}
-          <button
-            onClick={() => navigate('/bots/ai')}
-            className="ml-auto px-3 py-1.5 rounded-full text-xs text-muted-foreground border border-quant-border hover:text-foreground transition-colors"
-          >
-            AI 机器人市场 →
-          </button>
+          {/* AI 相关入口（AI 研究导航组已精简，入口迁入机器人中心） */}
+          <span className="ml-auto flex items-center gap-2">
+            <button
+              onClick={() => navigate('/bots/ai')}
+              className="px-3 py-1.5 rounded-full text-xs text-muted-foreground border border-quant-border hover:text-foreground transition-colors"
+            >
+              AI 机器人市场 →
+            </button>
+            <button
+              onClick={() => navigate('/ai/freqai')}
+              className="px-3 py-1.5 rounded-full text-xs text-muted-foreground border border-quant-border hover:text-foreground transition-colors"
+            >
+              FreqAI →
+            </button>
+            <button
+              onClick={() => navigate('/model-management')}
+              className="px-3 py-1.5 rounded-full text-xs text-muted-foreground border border-quant-border hover:text-foreground transition-colors"
+            >
+              模型管理 →
+            </button>
+          </span>
         </div>
 
         {/* 卡片网格 */}

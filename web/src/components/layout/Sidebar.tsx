@@ -6,7 +6,6 @@ import { useAuthStore } from '@/stores/authStore'
 import {
   BarChart3,
   LineChart,
-  Cpu,
   Brain,
   BrainCircuit,
   FlaskConical,
@@ -67,17 +66,6 @@ const navItems: NavItem[] = [
   // AI 分析
   { path: '/ai', label: 'AI分析', icon: Brain },
 
-  // AI 研究
-  {
-    label: 'AI 研究',
-    icon: Cpu,
-    children: [
-      { path: '/ai/freqai', label: 'FreqAI' },
-      { path: '/ai/rl', label: 'RL 强化学习' },
-      { path: '/ai/tensorboard', label: 'TensorBoard' },
-      { path: '/model-management', label: '模型管理' },
-    ],
-  },
 
   // 套利
   {
