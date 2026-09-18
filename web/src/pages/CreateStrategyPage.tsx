@@ -125,31 +125,12 @@ export function CreateStrategyPage() {
           >
             <ArrowLeft className="w-3.5 h-3.5" /> 返回
           </button>
-          {/* 标题即市场：现货策略/合约策略切换即页面身份，编辑时加小徽标 */}
-          <div className="flex items-center gap-2">
-            <div className="flex bg-quant-card border border-quant-border rounded-lg p-1">
-              {(
-                [
-                  { key: 'spot', label: '现货策略' },
-                  { key: 'contract', label: '合约策略' },
-                ] as const
-              ).map((m) => (
-                <button
-                  key={m.key}
-                  onClick={() => setSearchParams(editId ? { market: m.key, id: editId } : { market: m.key }, { replace: true })}
-                  className={cn(
-                    'px-4 py-1.5 rounded-md text-sm font-bold transition-colors',
-                    market === m.key ? 'bg-quant-gold text-black' : 'text-muted-foreground hover:text-foreground'
-                  )}
-                >
-                  {m.label}
-                </button>
-              ))}
-            </div>
-            {editId && (
-              <span className="px-1.5 py-0.5 rounded bg-quant-gold/15 text-quant-gold border border-quant-gold/40 text-[10px]">编辑</span>
-            )}
-          </div>
+          {/* 标题即市场（纯文字，无切换开关）：市场由入口决定——机器人中心
+              点「现货策略机器人/合约策略机器人」进入；编辑时以记录自身市场为准。 */}
+          <span className="font-bold text-sm">
+            {editId ? '编辑' : '创建'}
+            {market === 'spot' ? '现货策略' : '合约策略'}
+          </span>
           <span className="flex-1" />
           <Button variant="primary" size="sm" isLoading={form.isSubmitting} onClick={handleSave}>
             {saveLabel}
