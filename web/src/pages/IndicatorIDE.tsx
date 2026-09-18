@@ -102,6 +102,42 @@ const QUICK_PROMPTS = [
   { label: '优化可视化', prompt: '优化当前指标的可视化效果' },
 ]
 
+/* ── AI 消息 Markdown 轻量渲染（代码块 + 行内代码） ── */
+function renderInline(text: string, keyPrefix: string) {
+  const bits = text.split(/`([^`]+)`/)
+  return bits.map((b, i) =>
+    i % 2 === 1 ? (
+      <code key={`${keyPrefix}-${i}`} className="px-1 rounded bg-quant-gold/10 text-quant-gold font-mono text-[10px]">
+        {b}
+      </code>
+    ) : (
+      <span key={`${keyPrefix}-${i}`}>{b}</span>
+    )
+  )
+}
+
+function AiMessageContent({ content }: { content: string }) {
+  const segments = content.split('```')
+  return (
+    <>
+      {segments.map((seg, i) => {
+        if (i % 2 === 1) {
+          const code = seg.replace(/^\w*\n/, '')
+          return (
+            <pre
+              key={i}
+              className="my-1 rounded bg-quant-bg p-2 text-[10px] font-mono text-quant-green/90 overflow-x-auto whitespace-pre-wrap"
+            >
+              {code}
+            </pre>
+          )
+        }
+        return <span key={i}>{renderInline(seg, String(i))}</span>
+      })}
+    </>
+  )
+}
+
 /* ── Main Page ───────────────────────────────────────────────────── */
 
 export function IndicatorIDE() {
@@ -119,8 +155,16 @@ export function IndicatorIDE() {
   const [validating, setValidating] = useState(false)
   // Chart
   const [chartFullscreen, setChartFullscreen] = useState(false)
+  const [editorFullscreen, setEditorFullscreen] = useState(false)
   const [activeIndicators, setActiveIndicators] = useState<IndicatorConfig[]>([])
   const [chartIndicatorRunning, setChartIndicatorRunning] = useState(false)
+  // Modals
+  const [publishModal, setPublishModal] = useState<{ open: boolean; pricingType: 'free' | 'paid'; price: number }>({
+    open: false,
+    pricingType: 'free',
+    price: 100,
+  })
+  const [saveAsModal, setSaveAsModal] = useState<{ open: boolean; name: string }>({ open: false, name: '' })
   // Left column split (code | AI), percentage of code section
   const [splitPct, setSplitPct] = useState(55)
   const leftColRef = useRef<HTMLDivElement>(null)
@@ -131,6 +175,7 @@ export function IndicatorIDE() {
   const [aiPanelExpanded, setAiPanelExpanded] = useState(true)
   const [messages, setMessages] = useState<IdeChatMessage[]>([AI_GREETING])
   const [preview, setPreview] = useState<{ code: string; msgIdx: number } | null>(null)
+  const [aiDebug, setAiDebug] = useState<{ event: string; data: Record<string, unknown> } | null>(null)
   const chatScrollRef = useRef<HTMLDivElement>(null)
   // Experiment (auto-tune)
   const [experimentRunning, setExperimentRunning] = useState(false)
@@ -356,20 +401,29 @@ export function IndicatorIDE() {
   }, [selectedIndicatorId, reloadIndicators])
 
   const handleSaveAs = useCallback(async () => {
+    setSaveAsModal({ open: true, name: parsed.name + ' (副本)' })
+  }, [parsed.name])
+
+  const confirmSaveAs = useCallback(async () => {
+    const name = saveAsModal.name.trim()
+    if (!name) return
     try {
       await indicatorApi.saveAs({
-        name: parsed.name + ' (副本)',
+        name,
         description: parsed.description,
         code,
       })
       setCodeDirty(false)
       reloadIndicators()
+      toast('success', `已另存为「${name}」`)
     } catch {
       /* ignore */
+    } finally {
+      setSaveAsModal((prev) => ({ ...prev, open: false }))
     }
-  }, [code, parsed, reloadIndicators])
+  }, [saveAsModal.name, code, parsed.description, reloadIndicators])
 
-  const handlePublish = useCallback(async () => {
+  const openPublishModal = useCallback(async () => {
     if (!selectedIndicatorId) {
       // 先保存再发布
       await handleSave()
@@ -379,19 +433,23 @@ export function IndicatorIDE() {
       if (!newest?.id) return
       setSelectedIndicatorId(newest.id)
     }
-    const pricingType = confirm('是否设置为付费指标？\n确定=付费，取消=免费') ? 'paid' : 'free'
-    const price = pricingType === 'paid' ? Number(prompt('请输入积分价格', '100') || '100') : 0
+    setPublishModal({ open: true, pricingType: 'free', price: 100 })
+  }, [selectedIndicatorId, handleSave])
+
+  const confirmPublish = useCallback(async () => {
     try {
       await communityApi.publish({
         indicatorId: selectedIndicatorId || 0,
-        pricingType,
-        price,
+        pricingType: publishModal.pricingType,
+        price: publishModal.pricingType === 'paid' ? publishModal.price : 0,
       })
       toast('success', '发布成功！')
     } catch (e: unknown) {
       toast('error', '发布失败: ' + (e instanceof Error ? e.message : '未知错误'))
+    } finally {
+      setPublishModal((prev) => ({ ...prev, open: false }))
     }
-  }, [selectedIndicatorId, handleSave])
+  }, [selectedIndicatorId, publishModal])
 
   /* ── AI Chat (SSE Streaming) — 丁格 candidate 流程 ── */
   const patchLastBot = useCallback((patch: Partial<IdeChatMessage>) => {
@@ -448,6 +506,7 @@ export function IndicatorIDE() {
             },
             onDebug: (info) => {
               console.warn('[AI Debug]', info)
+              setAiDebug(info)
             },
             onDone: () => {
               const cleaned = (replaced ?? streamed)
@@ -563,39 +622,73 @@ export function IndicatorIDE() {
     }
   }, [code, symbol, interval, optimizer, parsed.params.length])
 
-  /* ── Create Strategy from Indicator ── */
+  /* ── Create Strategy from Indicator（对齐合约策略创建：cra_contract + CRA 全套参数；
+     周期取 IDE 图表周期，杠杆/方向由开仓设置统一控制，不再单独成行） ── */
   const [showCreateStrategy, setShowCreateStrategy] = useState(false)
   const [stratBase, setStratBase] = useState({
     name: '',
     symbol: 'BTCUSDT',
-    interval: '1h',
-    leverage: 5,
-    direction: 'long' as 'long' | 'short' | 'dual',
   })
   const [stratCra, setStratCra] = useState<CRAParams>({
     ...DEFAULT_CRA_PARAMS,
     tradeCountMode: 'cycle',
   })
 
+  const openCreateStrategyModal = useCallback(() => {
+    // 开仓指标自动选为当前指标（自定义指标，保存后回填 code_id）；交易对默认当前图表
+    setStratCra((prev) => ({
+      ...prev,
+      openIndicator: 'custom',
+      openIndicatorCustom: { code_id: selectedIndicatorId ?? 0, name: parsed.name || '当前指标' },
+    }))
+    setStratBase((prev) => ({ ...prev, symbol }))
+    setShowCreateStrategy(true)
+  }, [selectedIndicatorId, parsed.name, symbol])
+
   const handleCreateStrategyFromIndicator = useCallback(async () => {
+    if (!stratCra.leverage || stratCra.leverage < 1) {
+      toast('error', '合约策略杠杆必须≥1')
+      return
+    }
     try {
+      // 先保存指标拿到 code_id，作为 cra_contract 的开仓指标引用
+      let indicatorId = selectedIndicatorId
+      if (!indicatorId || codeDirty) {
+        const saved = await indicatorApi.save({
+          id: indicatorId || 0,
+          name: parsed.name,
+          description: parsed.description,
+          code,
+        })
+        indicatorId = saved?.id || indicatorId
+        setCodeDirty(false)
+        reloadIndicators()
+      }
+      if (!indicatorId) {
+        toast('error', '指标保存失败，无法创建策略')
+        return
+      }
+      const craPayload = craParamsToApiPayload({
+        ...stratCra,
+        openIndicator: 'custom',
+        openIndicatorCustom: { code_id: indicatorId, name: parsed.name || '当前指标' },
+      })
       await strategyApi.create({
         name: stratBase.name || `${parsed.name}策略`,
         symbol: stratBase.symbol,
-        timeframe: stratBase.interval,
-        trade_direction: stratBase.direction,
+        timeframe: interval,
+        trade_direction: stratCra.direction,
         market_type: 'swap',
-        strategy_type: 'custom_indicator',
-        strategy_code: code,
+        strategy_type: 'cra_contract',
         status: 'stopped',
-        ...craParamsToApiPayload(stratCra),
+        ...craPayload,
       })
       setShowCreateStrategy(false)
-      toast('success', '策略创建成功！请到策略管理页面启动。')
+      toast('success', '合约策略创建成功！请到策略管理页面启动。')
     } catch (e: unknown) {
       toast('error', '创建策略失败: ' + (e instanceof Error ? e.message : String(e)))
     }
-  }, [stratBase, stratCra, code, parsed.name])
+  }, [stratBase, stratCra, code, codeDirty, selectedIndicatorId, parsed, reloadIndicators, interval])
 
   /* ═══════════════════════════════════════════════════════════════ */
   /*  Render — 左栏：代码 + AI ｜ 右栏：图表                            */
@@ -611,10 +704,16 @@ export function IndicatorIDE() {
       ═══════════════════════════════════════════════════════════ */}
         <div
           ref={leftColRef}
-          className="w-[480px] shrink-0 flex flex-col border-r border-quant-border bg-quant-bg-secondary min-h-0"
+          className="w-[480px] shrink-0 flex flex-col border-r border-quant-border bg-quant-bg-secondary min-h-0 relative"
         >
           {/* ── Code section ── */}
-          <div className="flex flex-col min-h-0 overflow-hidden" style={{ flexBasis: `${splitPct}%` }}>
+          <div
+            className={cn(
+              'flex flex-col min-h-0 overflow-hidden',
+              editorFullscreen && 'absolute inset-0 z-30 bg-quant-bg-secondary'
+            )}
+            style={editorFullscreen ? undefined : { flexBasis: `${splitPct}%` }}
+          >
             {/* Toolbar */}
             <div className="flex items-center justify-between gap-1 px-2 py-1.5 border-b border-quant-border shrink-0 flex-wrap">
               <div className="flex items-center gap-1.5">
@@ -692,12 +791,20 @@ export function IndicatorIDE() {
                   )}
                 </button>
                 <button
-                  onClick={handlePublish}
+                  onClick={openPublishModal}
                   className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/5"
                   title="发布到社区"
                   aria-label="发布到社区"
                 >
                   <Upload className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => setEditorFullscreen(!editorFullscreen)}
+                  className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/5"
+                  title={editorFullscreen ? '退出编辑器全屏' : '编辑器全屏'}
+                  aria-label={editorFullscreen ? '退出编辑器全屏' : '编辑器全屏'}
+                >
+                  {editorFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
                 </button>
                 <button
                   onClick={() => setChartIndicatorRunning(!chartIndicatorRunning)}
@@ -758,6 +865,7 @@ export function IndicatorIDE() {
                   setCodeDirty(true)
                   setValidationHints([])
                 }}
+                onSave={handleSave}
                 theme="dark"
                 placeholder="输入 Python 指标代码..."
               />
@@ -888,6 +996,27 @@ export function IndicatorIDE() {
             </button>
             {aiPanelExpanded && (
               <>
+                {/* AI QA debug card */}
+                {aiDebug && (
+                  <div className="mx-3 mt-3 rounded-lg border border-quant-border bg-quant-bg-secondary p-2.5 shrink-0">
+                    <div className="flex items-center gap-2 text-[10px] mb-1.5">
+                      <span className="px-1.5 py-0.5 rounded bg-quant-gold/10 text-quant-gold font-medium">AI QA</span>
+                      <span className="text-muted-foreground">{aiDebug.event}</span>
+                      <button
+                        onClick={() => setAiDebug(null)}
+                        aria-label="关闭"
+                        className="ml-auto text-muted-foreground hover:text-foreground"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                    <div className="text-[10px] text-muted-foreground leading-relaxed break-all">
+                      {typeof aiDebug.data?.human_summary === 'string'
+                        ? aiDebug.data.human_summary
+                        : JSON.stringify(aiDebug.data).slice(0, 300)}
+                    </div>
+                  </div>
+                )}
                 {/* Conversation */}
                 <div ref={chatScrollRef} className="flex-1 overflow-y-auto p-3 space-y-3 min-h-0">
                   {messages.length <= 1 && !aiGenerating ? (
@@ -919,8 +1048,13 @@ export function IndicatorIDE() {
                               : 'bg-quant-bg-secondary border-quant-border'
                           )}
                         >
-                          {msg.content ||
-                            (msg.status ? AI_STATUS_TEXT[msg.status] ?? '处理中...' : '')}
+                          {msg.content ? (
+                            <AiMessageContent content={msg.content} />
+                          ) : msg.status ? (
+                            AI_STATUS_TEXT[msg.status] ?? '处理中...'
+                          ) : (
+                            ''
+                          )}
                           {msg.role === 'bot' && msg.status === 'generating' && aiStreamedCode && (
                             <pre className="mt-2 pt-2 border-t border-quant-border/50 text-[10px] text-quant-green/80 font-mono whitespace-pre-wrap max-h-36 overflow-y-auto">
                               {aiStreamedCode.slice(-400)}
@@ -1028,7 +1162,7 @@ export function IndicatorIDE() {
             <span className="text-xs font-semibold">图表窗口</span>
             <div className="flex items-center gap-2">
               <button
-                onClick={() => setShowCreateStrategy(true)}
+                onClick={openCreateStrategyModal}
                 className="flex items-center gap-1.5 px-3 h-7 rounded-lg bg-quant-gold text-black text-[11px] font-medium hover:opacity-90 transition-opacity"
               >
                 <GitBranch className="w-3.5 h-3.5" /> 转换为策略
@@ -1161,6 +1295,132 @@ export function IndicatorIDE() {
         )}
       </div>
 
+      {/* ── Publish modal ── */}
+      {publishModal.open && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+        >
+          <div className="w-full max-w-md rounded-2xl border border-quant-border bg-quant-card shadow-2xl overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-quant-border">
+              <h3 className="text-sm font-bold flex items-center gap-2">
+                <Upload className="w-4 h-4 text-quant-gold" />
+                发布到指标市场
+              </h3>
+              <button
+                onClick={() => setPublishModal((prev) => ({ ...prev, open: false }))}
+                aria-label="关闭"
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div>
+                <label className="text-[11px] text-muted-foreground mb-1.5 block">定价类型</label>
+                <div className="flex gap-2">
+                  {(
+                    [
+                      { key: 'free', label: '免费' },
+                      { key: 'paid', label: '付费' },
+                    ] as const
+                  ).map((t) => (
+                    <button
+                      key={t.key}
+                      onClick={() => setPublishModal((prev) => ({ ...prev, pricingType: t.key }))}
+                      className={cn(
+                        'flex-1 py-2 rounded-lg text-xs font-medium border transition-colors',
+                        publishModal.pricingType === t.key
+                          ? 'bg-quant-gold/10 text-quant-gold border-quant-gold/30'
+                          : 'border-quant-border text-muted-foreground hover:text-foreground'
+                      )}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {publishModal.pricingType === 'paid' && (
+                <div>
+                  <label className="text-[11px] text-muted-foreground mb-1.5 block">积分价格</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={publishModal.price}
+                    onChange={(e) => setPublishModal((prev) => ({ ...prev, price: Number(e.target.value) }))}
+                    className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold"
+                  />
+                </div>
+              )}
+              <div className="text-[10px] text-muted-foreground">发布后其他用户可在指标市场查看和使用该指标。</div>
+            </div>
+            <div className="flex items-center justify-end gap-2 px-5 py-3.5 border-t border-quant-border">
+              <button
+                onClick={() => setPublishModal((prev) => ({ ...prev, open: false }))}
+                className="px-4 py-2 rounded-lg border border-quant-border text-xs hover:bg-quant-hover transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={confirmPublish}
+                className="px-4 py-2 rounded-lg bg-quant-gold text-white text-xs font-medium hover:opacity-90 transition-opacity flex items-center gap-1.5"
+              >
+                <Upload className="w-3.5 h-3.5" /> 发布
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Save As modal ── */}
+      {saveAsModal.open && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+        >
+          <div className="w-full max-w-md rounded-2xl border border-quant-border bg-quant-card shadow-2xl overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-quant-border">
+              <h3 className="text-sm font-bold flex items-center gap-2">
+                <Copy className="w-4 h-4 text-quant-gold" />
+                另存为
+              </h3>
+              <button
+                onClick={() => setSaveAsModal((prev) => ({ ...prev, open: false }))}
+                aria-label="关闭"
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-5">
+              <label className="text-[11px] text-muted-foreground mb-1.5 block">指标名称</label>
+              <input
+                value={saveAsModal.name}
+                onChange={(e) => setSaveAsModal((prev) => ({ ...prev, name: e.target.value }))}
+                onKeyDown={(e) => e.key === 'Enter' && confirmSaveAs()}
+                className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold"
+              />
+            </div>
+            <div className="flex items-center justify-end gap-2 px-5 py-3.5 border-t border-quant-border">
+              <button
+                onClick={() => setSaveAsModal((prev) => ({ ...prev, open: false }))}
+                className="px-4 py-2 rounded-lg border border-quant-border text-xs hover:bg-quant-hover transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={confirmSaveAs}
+                className="px-4 py-2 rounded-lg bg-quant-gold text-white text-xs font-medium hover:opacity-90 transition-opacity"
+              >
+                保存
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── AI code preview modal ── */}
       {preview && (
         <div
@@ -1252,49 +1512,20 @@ export function IndicatorIDE() {
                   />
                 </div>
               </div>
-              <div className="grid grid-cols-3 gap-4">
-                <div>
-                  <label className="text-[11px] text-muted-foreground mb-1.5 block">K线周期</label>
-                  <select
-                    value={stratBase.interval}
-                    onChange={(e) => setStratBase({ ...stratBase, interval: e.target.value })}
-                    className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold"
-                  >
-                    {TRADING_INTERVALS.map((i) => (
-                      <option key={i} value={i}>
-                        {i}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="text-[11px] text-muted-foreground mb-1.5 block">杠杆</label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={150}
-                    value={stratBase.leverage}
-                    onChange={(e) => setStratBase({ ...stratBase, leverage: Number(e.target.value) })}
-                    className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold"
-                  />
-                </div>
-                <div>
-                  <label className="text-[11px] text-muted-foreground mb-1.5 block">方向</label>
-                  <select
-                    value={stratBase.direction}
-                    onChange={(e) =>
-                      setStratBase({ ...stratBase, direction: e.target.value as typeof stratBase.direction })
-                    }
-                    className="w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold"
-                  >
-                    <option value="long">做多</option>
-                    <option value="short">做空</option>
-                    <option value="dual">双向</option>
-                  </select>
-                </div>
+              <div className="text-[10px] text-muted-foreground -mt-1">
+                策略周期跟随当前图表（{interval}）；杠杆与方向在下方「开仓设置」中调整
               </div>
 
-              {/* CRA 参数 */}
+              {/* 当前指标作为开仓指标 */}
+              <div className="rounded-lg border border-quant-gold/25 bg-quant-gold/5 px-3 py-2 text-[11px] flex items-center gap-2">
+                <GitBranch className="w-3.5 h-3.5 text-quant-gold shrink-0" />
+                <span>
+                  开仓指标：<span className="text-quant-gold font-medium">{parsed.name || '当前指标'}</span>
+                  （已自动选为开仓信号，可在下方「开仓设置」中更换为内置指标）
+                </span>
+              </div>
+
+              {/* CRA 参数（与合约策略创建页一致） */}
               <CRAParamForm value={stratCra} onChange={setStratCra} market="contract" />
             </div>
             <div className="flex items-center justify-end gap-2 px-6 py-4 border-t border-quant-border shrink-0">

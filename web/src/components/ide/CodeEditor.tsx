@@ -12,6 +12,7 @@ import { cn } from '@/lib/utils'
 interface CodeEditorProps {
   value: string
   onChange?: (value: string) => void
+  onSave?: () => void
   readOnly?: boolean
   className?: string
   placeholder?: string
@@ -21,6 +22,7 @@ interface CodeEditorProps {
 export function CodeEditor({
   value,
   onChange,
+  onSave,
   readOnly = false,
   className,
   placeholder: placeholderText,
@@ -30,6 +32,8 @@ export function CodeEditor({
   const viewRef = useRef<EditorView | null>(null)
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
+  const onSaveRef = useRef(onSave)
+  onSaveRef.current = onSave
   const initialValueRef = useRef(value)
   initialValueRef.current = value
 
@@ -40,7 +44,21 @@ export function CodeEditor({
     const extensions = [
       python(),
       history(),
-      keymap.of([...defaultKeymap, ...historyKeymap]),
+      keymap.of([
+        ...defaultKeymap,
+        ...historyKeymap,
+        {
+          key: 'Mod-s',
+          preventDefault: true,
+          run: () => {
+            if (onSaveRef.current) {
+              onSaveRef.current()
+              return true
+            }
+            return false
+          },
+        },
+      ]),
       EditorView.editable.of(!readOnly),
       EditorView.lineWrapping,
       EditorView.updateListener.of(update => {
