@@ -31,7 +31,7 @@ export function CrossArbitragePanel() {
     closePositionMut,
     failPositionMut,
     handleSaveConfig,
-    handleRegisterExchange,
+    unregisterExchangeMut,
     handleExecute,
     isPositionActive,
     handleClosePosition,
