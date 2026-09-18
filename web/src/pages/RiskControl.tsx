@@ -119,6 +119,7 @@ function RiskParamsCard() {
   const [maxConcurrent, setMaxConcurrent] = useState(5)
   const [positionLimit, setPositionLimit] = useState(50)
   const [profitProtection, setProfitProtection] = useState(false)
+  const [indicatorFailOpen, setIndicatorFailOpen] = useState(true)
   const [loaded, setLoaded] = useState(false)
   const [saving, setSaving] = useState(false)
 
@@ -130,6 +131,7 @@ function RiskParamsCard() {
         setMaxConcurrent(cfg.max_concurrent_orders)
         setPositionLimit(cfg.position_limit_pct)
         setProfitProtection(cfg.profit_protection_enabled)
+        setIndicatorFailOpen(cfg.indicator_fail_open ?? true)
         setLoaded(true)
       })
       .catch(() => {
@@ -152,6 +154,7 @@ function RiskParamsCard() {
         max_concurrent_orders: maxConcurrent,
         position_limit_pct: positionLimit,
         profit_protection_enabled: profitProtection,
+        indicator_fail_open: indicatorFailOpen,
       })
       toast('success', '风控参数已保存并即时生效')
     } catch (e: unknown) {
@@ -230,6 +233,32 @@ function RiskParamsCard() {
               className={
                 'absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ' +
                 (profitProtection ? 'left-5' : 'left-0.5')
+              }
+            />
+          </button>
+        </div>
+        <div className="sm:col-span-2 flex items-center justify-between rounded-lg border border-quant-border bg-quant-bg px-3 py-2.5">
+          <div>
+            <div className="text-xs font-semibold">自定义指标开仓失败放行</div>
+            <div className="text-[10px] text-muted-foreground mt-0.5">
+              关闭后，自定义指标开仓信号执行失败（沙箱不可用/代码出错）时将拦截开仓，而不是放行
+            </div>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={indicatorFailOpen}
+            disabled={!isAdmin}
+            onClick={() => setIndicatorFailOpen((v) => !v)}
+            className={
+              'w-10 h-5 rounded-full transition-colors relative shrink-0 disabled:opacity-50 ' +
+              (indicatorFailOpen ? 'bg-quant-gold' : 'bg-quant-border')
+            }
+          >
+            <span
+              className={
+                'absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ' +
+                (indicatorFailOpen ? 'left-5' : 'left-0.5')
               }
             />
           </button>

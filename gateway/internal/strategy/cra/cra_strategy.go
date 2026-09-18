@@ -11,6 +11,7 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/event"
 	"github.com/xiaotian-quant/gateway/internal/logging"
 	"github.com/xiaotian-quant/gateway/internal/model"
+	"github.com/xiaotian-quant/gateway/internal/risk"
 	"github.com/xiaotian-quant/gateway/internal/strategy"
 )
 
@@ -385,11 +386,25 @@ func (s *BaseCRAStrategy) checkTakeProfit(price float64) bool {
 
 func (s *BaseCRAStrategy) openIndicatorsConfirmed(side PositionSide) bool {
 	p := s.params
-	// 开仓指标选择器：'custom'（自定义指标）本期仅在解析层接受、不报错；
-	// 执行依赖指标沙箱（TODO(沙箱执行)），过渡期视为无开仓门槛直接放行。
-	// 其余无引擎门槛的选择（rsi/range 等）同样因 enabled 标志全 false 而放行。
+	// 开仓指标选择器：'custom'（自定义指标）经指标沙箱执行，以最后一根 K 线
+	// 的 buy/sell 信号作为开仓门槛（见 custom_indicator.go）。未配置 code_id 时
+	// 视为无门槛放行；沙箱/数据库执行失败时由风控开关 indicator_fail_open 决定
+	// 放行（fail-open，默认）还是拦截（fail-close）。
 	if strings.EqualFold(p.OpenIndicator, "custom") {
-		return true
+		cid, ok := customCodeID(p.IndicatorParams)
+		if !ok {
+			return true
+		}
+		confirmed, err := customOpenIndicatorConfirmed(s.symbol, cid, side, s.bars)
+		if err != nil {
+			if risk.IndicatorFailOpen() {
+				s.logger.Warn("custom open indicator check failed, allowing entry (fail-open)", "symbol", s.symbol, "code_id", cid, "err", err.Error())
+				return true
+			}
+			s.logger.Warn("custom open indicator check failed, blocking entry (fail-close)", "symbol", s.symbol, "code_id", cid, "err", err.Error())
+			return false
+		}
+		return confirmed
 	}
 	bars := s.indicatorBars()
 	if p.OpenMacdEnabled && !IndicatorConfirmed(bars, true, p.OpenMacdPeriod, "macd", side) {

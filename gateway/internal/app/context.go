@@ -138,6 +138,10 @@ func (ctx *Context) Init(cfg *config.Config) error {
 	// 盈利保护开关：config.yaml risk.profit_protection_enabled 初始化，运行时由
 	// PUT /api/risk/config 通过 risk.SetProfitProtectionEnabled 调整。
 	risk.SetProfitProtectionEnabled(cfg.Risk.ProfitProtectionEnabled)
+	// 自定义指标开仓失败放行开关：缺省（未配置）为放行。
+	if cfg.Risk.IndicatorFailOpen != nil {
+		risk.SetIndicatorFailOpen(*cfg.Risk.IndicatorFailOpen)
+	}
 	ctx.Logger.Info("Risk manager initialized", "profit_protection", cfg.Risk.ProfitProtectionEnabled)
 
 	// 6. Portfolio Manager

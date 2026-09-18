@@ -58,7 +58,7 @@ type CRAParams struct {
 	//（macd/ema_cross/rsi/trend/trend_long/trend_short/range/custom）；
 	// IndicatorParams 承载各指标的自定义数值参数（fast/slow/signal/period
 	// 等）。解析策略：新键优先，旧 open_* 键回退；引擎已认识的门槛仍走旧键，
-	// custom 等无门槛指标本期仅保存配置（TODO(沙箱执行)）。
+	// custom 由 custom_indicator.go 经指标沙箱执行开仓门槛。
 	OpenIndicator   string         `json:"open_indicator"`
 	IndicatorParams map[string]any `json:"indicator_params"`
 

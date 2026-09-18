@@ -51,6 +51,7 @@ describe('RiskControl 风控参数卡片', () => {
       max_concurrent_orders: 3,
       position_limit_pct: 2500,
       profit_protection_enabled: true,
+      indicator_fail_open: true,
     })
     vi.mocked(riskApi.updateConfig).mockResolvedValue({} as never)
   })
@@ -73,6 +74,7 @@ describe('RiskControl 风控参数卡片', () => {
       max_concurrent_orders: 3,
       position_limit_pct: 2500,
       profit_protection_enabled: true,
+      indicator_fail_open: true,
     })
     await waitFor(() =>
       expect(useToastModule.toast).toHaveBeenCalledWith('success', '风控参数已保存并即时生效')

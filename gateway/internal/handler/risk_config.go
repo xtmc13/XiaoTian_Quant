@@ -10,21 +10,25 @@ import (
 
 // RiskConfigPayload 是 GET/PUT /api/risk/config 的契约：
 // max_concurrent_orders（1-50 整数）、position_limit_pct（1-10000，订单名义价值
-// 占账户权益比例上限%）、profit_protection_enabled（盈利保护开关）。
+// 占账户权益比例上限%）、profit_protection_enabled（盈利保护开关）、
+// indicator_fail_open（自定义指标开仓检查失败时放行，默认 true）。
 type RiskConfigPayload struct {
 	MaxConcurrentOrders     int     `json:"max_concurrent_orders"`
 	PositionLimitPct        float64 `json:"position_limit_pct"`
 	ProfitProtectionEnabled bool    `json:"profit_protection_enabled"`
+	IndicatorFailOpen       bool    `json:"indicator_fail_open"`
 }
 
 // GetRiskConfig 返回当前生效的风控参数。来源 = 运行时内存（risk manager 启动时
-// 以 config.yaml risk 段初始化，PUT 后即为覆盖值），盈利保护开关为包级原子变量。
+// 以 config.yaml risk 段初始化，PUT 后即为覆盖值），盈利保护/指标失败放行开关
+// 为包级原子变量。
 func GetRiskConfig(c *gin.Context) {
 	cfg := risk.GetManager().Config()
 	c.JSON(http.StatusOK, RiskConfigPayload{
 		MaxConcurrentOrders:     cfg.MaxConcurrentOrders,
 		PositionLimitPct:        cfg.MaxPositionPct,
 		ProfitProtectionEnabled: risk.ProfitProtectionEnabled(),
+		IndicatorFailOpen:       risk.IndicatorFailOpen(),
 	})
 }
 
@@ -50,6 +54,7 @@ func UpdateRiskConfig(c *gin.Context) {
 		"max_concurrent_orders":     body.MaxConcurrentOrders,
 		"position_limit_pct":        body.PositionLimitPct,
 		"profit_protection_enabled": body.ProfitProtectionEnabled,
+		"indicator_fail_open":       body.IndicatorFailOpen,
 	}
 	if err := store.SaveRiskSection(patch); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "保存配置失败: " + err.Error()})
@@ -63,6 +68,7 @@ func UpdateRiskConfig(c *gin.Context) {
 	cur.MaxPositionPct = body.PositionLimitPct
 	mgr.UpdateConfig(cur)
 	risk.SetProfitProtectionEnabled(body.ProfitProtectionEnabled)
+	risk.SetIndicatorFailOpen(body.IndicatorFailOpen)
 
 	c.JSON(http.StatusOK, body)
 }

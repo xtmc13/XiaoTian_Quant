@@ -49,7 +49,10 @@ type RiskConfig struct {
 	MaxOrderSize float64 `yaml:"max_order_size_usdt"`
 	DailyLimit   float64 `yaml:"daily_limit"`
 	// ProfitProtectionEnabled 盈利保护：实盘合约止盈后自动把已实现利润划转资金账户。
-	ProfitProtectionEnabled bool    `yaml:"profit_protection_enabled"`
+	ProfitProtectionEnabled bool `yaml:"profit_protection_enabled"`
+	// IndicatorFailOpen 自定义指标开仓检查失败时的处理：true=放行（fail-open），
+	// false=拦截（fail-close）。指针类型：nil 表示配置未写，默认放行。
+	IndicatorFailOpen       *bool   `yaml:"indicator_fail_open"`
 	MaxConcurrentOrders     int     `yaml:"max_concurrent_orders"`
 	MaxPositions            int     `yaml:"max_positions"`
 	PositionLimit           float64 `yaml:"position_limit_pct"`

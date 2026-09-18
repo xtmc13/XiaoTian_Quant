@@ -1342,6 +1342,7 @@ export interface RiskConfig {
   max_concurrent_orders: number
   position_limit_pct: number
   profit_protection_enabled: boolean
+  indicator_fail_open: boolean
 }
 
 export const riskApi = {
