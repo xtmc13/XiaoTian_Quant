@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/store"
@@ -38,6 +39,18 @@ func verifyWebhookSignature(c *gin.Context) bool {
 	mac.Write(body)
 	expected := hex.EncodeToString(mac.Sum(nil))
 	return hmac.Equal([]byte(signature), []byte(expected))
+}
+
+var webhookSecretWarnOnce sync.Once
+
+// WarnIfWebhookSecretMissing 在未配置 WEBHOOK_SECRET 时打印一次启动警告（M8）：
+// webhook 下单通道将对互联网上所有人开放，生产环境必须配置。
+func WarnIfWebhookSecretMissing() {
+	if os.Getenv("WEBHOOK_SECRET") == "" {
+		webhookSecretWarnOnce.Do(func() {
+			log.Printf("[WARN] WEBHOOK_SECRET 未配置：/api/webhook/* 下单通道无签名校验，任何人均可触发下单。生产环境请务必配置 WEBHOOK_SECRET。")
+		})
+	}
 }
 
 // TradingViewWebhook receives alerts from TradingView Pine Script strategies.

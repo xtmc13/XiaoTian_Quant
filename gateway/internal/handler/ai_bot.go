@@ -30,6 +30,29 @@ func aiBotError(c *gin.Context, status int, message string) {
 	c.JSON(status, gin.H{"detail": message})
 }
 
+// aiBotMustGet 取当前用户可见的实例；不存在 404，存在但属他人（且非 admin）403。
+// 实例查询本身带 (id, user_id) 条件，这里用属主判别区分 404 与 403；
+// admin 按属主身份读取（可看全部）。
+func aiBotMustGet(c *gin.Context) (map[string]any, bool) {
+	uid := aiBotUserID(c)
+	item := store.GetAIBotInstanceByID(c.Param("id"), uid)
+	if item != nil {
+		return item, true
+	}
+	if owner, found := store.GetAIBotInstanceOwner(c.Param("id")); found {
+		if !ownsResource(c, int64(owner)) {
+			requireOwner(c, int64(owner)) // 非属主且非 admin → 403
+			return nil, false
+		}
+		// admin（或未注入的单用户模式）按属主身份读取。
+		if item = store.GetAIBotInstanceByID(c.Param("id"), owner); item != nil {
+			return item, true
+		}
+	}
+	aiBotError(c, http.StatusNotFound, "bot not found")
+	return nil, false
+}
+
 // ── Catalog ──
 
 func AIBotCatalogList(c *gin.Context) {
@@ -159,22 +182,16 @@ func AIBotInstanceCreate(c *gin.Context) {
 }
 
 func AIBotInstanceGet(c *gin.Context) {
-	userID := aiBotUserID(c)
-	id := c.Param("id")
-	item := store.GetAIBotInstanceByID(id, userID)
-	if item == nil {
-		aiBotError(c, http.StatusNotFound, "bot not found")
+	item, ok := aiBotMustGet(c)
+	if !ok {
 		return
 	}
 	c.JSON(http.StatusOK, item)
 }
 
 func AIBotInstanceUpdate(c *gin.Context) {
-	userID := aiBotUserID(c)
-	id := c.Param("id")
-	item := store.GetAIBotInstanceByID(id, userID)
-	if item == nil {
-		aiBotError(c, http.StatusNotFound, "bot not found")
+	item, ok := aiBotMustGet(c)
+	if !ok {
 		return
 	}
 
@@ -201,33 +218,27 @@ func AIBotInstanceUpdate(c *gin.Context) {
 }
 
 func AIBotInstanceDelete(c *gin.Context) {
-	userID := aiBotUserID(c)
-	id := c.Param("id")
-	item := store.GetAIBotInstanceByID(id, userID)
-	if item == nil {
-		aiBotError(c, http.StatusNotFound, "bot not found")
+	item, ok := aiBotMustGet(c)
+	if !ok {
 		return
 	}
 	if getString(item, "status", "stopped") == "running" {
 		aiBotError(c, http.StatusConflict, "请先停止机器人再删除")
 		return
 	}
-	store.DeleteAIBotInstance(id, userID)
-	c.JSON(http.StatusOK, gin.H{"id": id})
+	store.DeleteAIBotInstance(c.Param("id"), int(getInt64Of(item, "user_id")))
+	c.JSON(http.StatusOK, gin.H{"id": c.Param("id")})
 }
 
 func AIBotInstanceStart(c *gin.Context) {
-	userID := aiBotUserID(c)
-	id := c.Param("id")
-	item := store.GetAIBotInstanceByID(id, userID)
-	if item == nil {
-		aiBotError(c, http.StatusNotFound, "bot not found")
+	item, ok := aiBotMustGet(c)
+	if !ok {
 		return
 	}
 
 	// Build strategy config from AI bot instance and register to engine
 	strategyItem := aiBotToStrategyConfig(item)
-	if err := startAIBotInEngine(id, strategyItem); err != nil {
+	if err := startAIBotInEngine(c.Param("id"), strategyItem); err != nil {
 		aiBotError(c, http.StatusInternalServerError, fmt.Sprintf("启动策略引擎失败: %v", err))
 		return
 	}
@@ -241,17 +252,14 @@ func AIBotInstanceStart(c *gin.Context) {
 
 	// Record initial snapshot
 	initialBalance := getFloat(item, "initial_balance", 10000)
-	store.SaveAIBotSnapshot(id, initialBalance, 0, 0, 0)
+	store.SaveAIBotSnapshot(c.Param("id"), initialBalance, 0, 0, 0)
 
 	c.JSON(http.StatusOK, item)
 }
 
 func AIBotInstancePause(c *gin.Context) {
-	userID := aiBotUserID(c)
-	id := c.Param("id")
-	item := store.GetAIBotInstanceByID(id, userID)
-	if item == nil {
-		aiBotError(c, http.StatusNotFound, "bot not found")
+	item, ok := aiBotMustGet(c)
+	if !ok {
 		return
 	}
 	if getString(item, "status", "stopped") != "running" {
@@ -265,11 +273,8 @@ func AIBotInstancePause(c *gin.Context) {
 }
 
 func AIBotInstanceResume(c *gin.Context) {
-	userID := aiBotUserID(c)
-	id := c.Param("id")
-	item := store.GetAIBotInstanceByID(id, userID)
-	if item == nil {
-		aiBotError(c, http.StatusNotFound, "bot not found")
+	item, ok := aiBotMustGet(c)
+	if !ok {
 		return
 	}
 	if getString(item, "status", "stopped") != "paused" {
@@ -283,16 +288,13 @@ func AIBotInstanceResume(c *gin.Context) {
 }
 
 func AIBotInstanceStop(c *gin.Context) {
-	userID := aiBotUserID(c)
-	id := c.Param("id")
-	item := store.GetAIBotInstanceByID(id, userID)
-	if item == nil {
-		aiBotError(c, http.StatusNotFound, "bot not found")
+	item, ok := aiBotMustGet(c)
+	if !ok {
 		return
 	}
 
-	stopStrategyInEngine(id)
-	resetPaperState(id)
+	stopStrategyInEngine(c.Param("id"))
+	resetPaperState(c.Param("id"))
 
 	now := time.Now().Unix()
 	item["status"] = "stopped"
@@ -304,11 +306,8 @@ func AIBotInstanceStop(c *gin.Context) {
 }
 
 func AIBotInstanceClone(c *gin.Context) {
-	userID := aiBotUserID(c)
-	id := c.Param("id")
-	item := store.GetAIBotInstanceByID(id, userID)
-	if item == nil {
-		aiBotError(c, http.StatusNotFound, "bot not found")
+	item, ok := aiBotMustGet(c)
+	if !ok {
 		return
 	}
 
@@ -333,14 +332,11 @@ func AIBotInstanceClone(c *gin.Context) {
 // ── Analytics ──
 
 func AIBotInstanceAnalytics(c *gin.Context) {
-	userID := aiBotUserID(c)
-	id := c.Param("id")
-	item := store.GetAIBotInstanceByID(id, userID)
-	if item == nil {
-		aiBotError(c, http.StatusNotFound, "bot not found")
+	item, ok := aiBotMustGet(c)
+	if !ok {
 		return
 	}
-	snapshots := store.GetAIBotSnapshots(id, 90)
+	snapshots := store.GetAIBotSnapshots(c.Param("id"), 90)
 	if snapshots == nil {
 		snapshots = []map[string]any{}
 	}
@@ -351,11 +347,8 @@ func AIBotInstanceAnalytics(c *gin.Context) {
 }
 
 func AIBotInstanceTrades(c *gin.Context) {
-	userID := aiBotUserID(c)
-	id := c.Param("id")
-	item := store.GetAIBotInstanceByID(id, userID)
-	if item == nil {
-		aiBotError(c, http.StatusNotFound, "bot not found")
+	item, ok := aiBotMustGet(c)
+	if !ok {
 		return
 	}
 	limit := 50
@@ -364,7 +357,7 @@ func AIBotInstanceTrades(c *gin.Context) {
 			limit = parsed
 		}
 	}
-	trades := store.GetAIBotTrades(id, limit)
+	trades := store.GetAIBotTrades(c.Param("id"), limit)
 	if trades == nil {
 		trades = []map[string]any{}
 	}

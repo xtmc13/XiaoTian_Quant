@@ -62,7 +62,10 @@ func GetTensorBoardRun(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "run_id required"})
 		return
 	}
-
+	// H10: 已登记属主的 run 仅属主（或 admin）可读
+	if !checkMLResourceAccess(c, "run", runID) {
+		return
+	}
 	run, err := TensorBoardClient.GetRun(runID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -76,6 +79,10 @@ func DeleteTensorBoardRun(c *gin.Context) {
 	runID := c.Param("id")
 	if runID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "run_id required"})
+		return
+	}
+	// H10: 已登记属主的 run 仅属主（或 admin）可删
+	if !checkMLResourceAccess(c, "run", runID) {
 		return
 	}
 	if err := TensorBoardClient.DeleteRun(runID); err != nil {

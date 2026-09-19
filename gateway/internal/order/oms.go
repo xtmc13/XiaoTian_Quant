@@ -43,6 +43,10 @@ type Request struct {
 	TPPrice       float64           `json:"tp_price,omitempty"`
 	SLPrice       float64           `json:"sl_price,omitempty"`
 	ClosePosition bool              `json:"close_position,omitempty"`
+
+	// ── A2.2 limit-then-market ──
+	// LimitTimeoutMs > 0 时启用：限价单超时未完全成交则撤剩余并市价补单。
+	LimitTimeoutMs int64 `json:"limit_timeout_ms,omitempty"`
 }
 
 func (r *Request) Validate() error {
@@ -63,6 +67,12 @@ func (r *Request) Validate() error {
 	}
 	if r.Exchange == "" {
 		r.Exchange = "paper"
+	}
+	if r.LimitTimeoutMs < 0 {
+		return fmt.Errorf("limit_timeout_ms must be >= 0")
+	}
+	if r.LimitTimeoutMs > 0 && r.OrderType != model.TypeLimit {
+		return fmt.Errorf("limit_timeout_ms only applies to limit orders")
 	}
 	return nil
 }

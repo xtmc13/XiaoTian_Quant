@@ -33,6 +33,11 @@ var (
 // SetKlineFeeder 注入 K 线供给管（参考 SetGridService，main 启动时接线）。
 func SetKlineFeeder(f *market.KlineFeeder) { klineFeeder = f }
 
+// KlineFeederForEngine 返回已注入的 K 线供给管，供策略引擎接线
+// （多周期 A7.1 / 动态 universe A7.3 的动态订阅与 handler 侧共用同一实例；
+// feeder 内部引用计数，两侧独立记账互不干扰）。未注入时返回 nil。
+func KlineFeederForEngine() *market.KlineFeeder { return klineFeeder }
+
 // ensureKlineFeed 为配置 id 启动对应 symbol+timeframe 的 K 线轮询。
 // symbol 用引擎实际订阅的 wrapped.Symbol()，保证事件 topic 与策略订阅一致。
 // 返回供给管是否新起轮询（true=bus 侧即将回补历史 K 线；false=供给管已在跑，
@@ -97,6 +102,17 @@ func GetStrategyConfigs(c *gin.Context) {
 	items := make([]map[string]any, 0, len(configs))
 	for _, v := range configs {
 		items = append(items, v)
+	}
+
+	// 多用户越权防护：非 admin 只能看到本人 + 历史无属主(user_id=0)的配置。
+	if uid, injected := ctxUserID(c); injected && !ctxIsAdmin(c) {
+		kept := items[:0]
+		for _, it := range items {
+			if getInt64Of(it, "user_id") == 0 || getInt64Of(it, "user_id") == int64(uid) {
+				kept = append(kept, it)
+			}
+		}
+		items = kept
 	}
 
 	// bot 身份字段（bot_type/trading_config）不是 DB 列，DB 重建（ToMap）会
@@ -201,6 +217,9 @@ func GetStrategyConfig(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"detail": "not found"})
 		return
 	}
+	if !requireOwner(c, getInt64Of(item, "user_id")) {
+		return
+	}
 	hydrateBotFields(item)
 	result := copyMap(item)
 	if configJSON, ok := item["config_json"].(string); ok {
@@ -222,6 +241,9 @@ func GetStrategyRuntime(c *gin.Context) {
 	item := store.GetStrategyConfig(id)
 	if item == nil {
 		c.JSON(http.StatusNotFound, gin.H{"detail": "not found"})
+		return
+	}
+	if !requireOwner(c, getInt64Of(item, "user_id")) {
 		return
 	}
 
@@ -398,6 +420,7 @@ func CreateStrategyConfig(c *gin.Context) {
 
 	configJSON := "{}"
 	if config, ok := body["config"].(map[string]any); ok && len(config) > 0 {
+		mergeEngineSchedulingKeys(config, body)
 		data, _ := json.Marshal(config)
 		configJSON = string(data)
 	} else if cj, ok := body["config_json"].(string); ok && cj != "" {
@@ -407,10 +430,15 @@ func CreateStrategyConfig(c *gin.Context) {
 		// config/config_json：收进 config_json，避免用户参数丢失。
 		data, _ := json.Marshal(flat)
 		configJSON = string(data)
+	} else if flat := engineSchedulingKeys(body); len(flat) > 0 {
+		// 只有 timeframes/schedule 等引擎级键的场景
+		data, _ := json.Marshal(flat)
+		configJSON = string(data)
 	}
 
 	item := map[string]any{
 		"id":                sid,
+		"user_id":           getUserID(c),
 		"name":              strings.TrimSpace(name),
 		"category":          getString(body, "category", ""),
 		"strategy_type":     getString(body, "strategy_type", ""),
@@ -506,6 +534,9 @@ func UpdateStrategyConfig(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"detail": "not found"})
 		return
 	}
+	if !requireOwner(c, getInt64Of(item, "user_id")) {
+		return
+	}
 	// ── 实盘安全闸：Update 显式改 live 同样受总闸约束 ──
 	if strings.EqualFold(strings.TrimSpace(getString(body, "execution_mode", "")), "live") && !isLiveTradingEnabled() {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": "实盘未开启：请先在服务端配置 trading.live_enabled: true（或 LIVE_TRADING_ENABLED=true / 管理员运行时解锁）后重启网关"})
@@ -533,10 +564,20 @@ func UpdateStrategyConfig(c *gin.Context) {
 		item["strategy_mode"] = v
 	}
 	if config, ok := body["config"].(map[string]any); ok {
+		mergeEngineSchedulingKeys(config, body)
 		data, _ := json.Marshal(config)
 		item["config_json"] = string(data)
 	} else if cj, ok := body["config_json"].(string); ok {
 		item["config_json"] = cj
+	} else if flat := engineSchedulingKeys(body); len(flat) > 0 {
+		// 仅带引擎级键（timeframes/schedule）的更新：合并进既有 config_json
+		merged := map[string]any{}
+		if cj := getString(item, "config_json", ""); cj != "" {
+			_ = json.Unmarshal([]byte(cj), &merged)
+		}
+		mergeEngineSchedulingKeys(merged, body)
+		data, _ := json.Marshal(merged)
+		item["config_json"] = string(data)
 	}
 	// 编辑是修复历史残废记录（如 "222"）的入口：合并后同样做缺省补全。
 	var payloadConfig map[string]any
@@ -584,6 +625,28 @@ func UpdateStrategyConfig(c *gin.Context) {
 		resp["forced_paper"] = true
 	}
 	c.JSON(http.StatusOK, resp)
+}
+
+// mergeEngineSchedulingKeys 把请求顶层的引擎级键（A7.1 多周期 timeframes、
+// A7.2 调度 schedule、轮动候选池 symbols/universe 相关键）并入 config map，
+// 让 buildStrategyParams 透传给策略。已存在的键不覆盖。
+func mergeEngineSchedulingKeys(config, body map[string]any) {
+	for k, v := range engineSchedulingKeys(body) {
+		if _, exists := config[k]; !exists {
+			config[k] = v
+		}
+	}
+}
+
+// engineSchedulingKeys 提取请求体里的引擎级调度/universe 键。
+func engineSchedulingKeys(body map[string]any) map[string]any {
+	out := map[string]any{}
+	for _, k := range []string{"timeframes", "schedule", "watchlist", "universe_refresh_bars"} {
+		if v, ok := body[k]; ok && v != nil {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // flattenCRAParams collects CRA parameter keys that some entry points flatten
@@ -840,6 +903,14 @@ func fillStrategyFieldDefaults(item map[string]any, payloadConfig map[string]any
 
 func DeleteStrategyConfig(c *gin.Context) {
 	id := c.Param("id")
+	item := store.GetStrategyConfig(id)
+	if item == nil {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "not found"})
+		return
+	}
+	if !requireOwner(c, getInt64Of(item, "user_id")) {
+		return
+	}
 	if !store.DeleteStrategyConfig(id) {
 		c.JSON(http.StatusNotFound, gin.H{"detail": "not found"})
 		return
@@ -873,6 +944,11 @@ func BatchStartConfigs(c *gin.Context) {
 			results = append(results, batchItemResult{ID: sid, OK: false, Error: "策略不存在"})
 			continue
 		}
+		if !ownsResource(c, getInt64Of(item, "user_id")) {
+			failed++
+			results = append(results, batchItemResult{ID: sid, OK: false, Error: "无权操作该策略"})
+			continue
+		}
 		if err := startStrategyInEngine(sid, item); err != nil {
 			failed++
 			results = append(results, batchItemResult{ID: sid, Name: getString(item, "name", ""), OK: false, Error: err.Error()})
@@ -902,6 +978,11 @@ func BatchStopConfigs(c *gin.Context) {
 			results = append(results, batchItemResult{ID: sid, OK: false, Error: "策略不存在"})
 			continue
 		}
+		if !ownsResource(c, getInt64Of(item, "user_id")) {
+			failed++
+			results = append(results, batchItemResult{ID: sid, OK: false, Error: "无权操作该策略"})
+			continue
+		}
 		stopStrategyInEngine(sid)
 		item["status"] = "stopped"
 		item["updated_at"] = nowTS
@@ -924,6 +1005,9 @@ func BatchCloseConfigs(c *gin.Context) {
 		if item == nil {
 			continue
 		}
+		if !ownsResource(c, getInt64Of(item, "user_id")) {
+			continue
+		}
 		stopStrategyInEngine(sid)
 		item["status"] = "stopped"
 		item["closed_at"] = nowTS
@@ -941,7 +1025,11 @@ func BatchDeleteConfigs(c *gin.Context) {
 	ids := getStringSlice(body, "ids")
 	deleted := 0
 	for _, sid := range ids {
-		if store.GetStrategyConfig(sid) == nil {
+		item := store.GetStrategyConfig(sid)
+		if item == nil {
+			continue
+		}
+		if !ownsResource(c, getInt64Of(item, "user_id")) {
 			continue
 		}
 		stopStrategyInEngine(sid)
@@ -988,6 +1076,9 @@ func StartStrategyConfig(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"detail": "not found"})
 		return
 	}
+	if !requireOwner(c, getInt64Of(item, "user_id")) {
+		return
+	}
 	if err := startStrategyInEngine(id, item); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
 		return
@@ -1004,6 +1095,9 @@ func StopStrategyConfig(c *gin.Context) {
 	item := store.GetStrategyConfig(id)
 	if item == nil {
 		c.JSON(http.StatusNotFound, gin.H{"detail": "not found"})
+		return
+	}
+	if !requireOwner(c, getInt64Of(item, "user_id")) {
 		return
 	}
 	stopStrategyInEngine(id)
@@ -1064,11 +1158,19 @@ func startStrategyInEngine(id string, item map[string]any) error {
 
 	// Filter params to only those accepted by the strategy's parameter registry.
 	// CRA-style configs carry many frontend fields that indicator strategies do not declare.
+	// 引擎级键（symbol/timeframe/timeframes/schedule）始终保留：策略要靠它们
+	// 识别交易对、声明多周期供给（A7.1）与计划调度（A7.2）。
 	if registry := s.GetParameters(); registry != nil {
+		engineKeys := map[string]bool{"symbol": true, "timeframe": true, "timeframes": true, "schedule": true}
 		filtered := make(map[string]any)
 		for _, p := range registry.All() {
 			if v, ok := params[p.Name]; ok {
 				filtered[p.Name] = v
+			}
+		}
+		for k, v := range params {
+			if engineKeys[strings.ToLower(k)] {
+				filtered[k] = v
 			}
 		}
 		params = filtered
@@ -1331,7 +1433,26 @@ func GetStrategyLogs(c *gin.Context) {
 	fmtScan(c.Query("limit"), &limit)
 	logs := *store.GetLogsStore()
 	if sid != "" {
+		// 越权防护：已登录用户只能读本人(或无属主)策略的日志
+		if _, injected := ctxUserID(c); injected {
+			if item := store.GetStrategyConfig(sid); item != nil {
+				if !requireOwner(c, getInt64Of(item, "user_id")) {
+					return
+				}
+			}
+		}
 		logs = filterMap(logs, "strategy_id", sid)
+	} else if _, injected := ctxUserID(c); injected && !ctxIsAdmin(c) {
+		// 全量日志：过滤掉属他人策略的日志（策略已删除的宽松放行）
+		filtered := make([]map[string]any, 0, len(logs))
+		for _, l := range logs {
+			item := store.GetStrategyConfig(getString(l, "strategy_id", ""))
+			if item != nil && !ownsResource(c, getInt64Of(item, "user_id")) {
+				continue
+			}
+			filtered = append(filtered, l)
+		}
+		logs = filtered
 	}
 	if len(logs) > limit {
 		logs = logs[len(logs)-limit:]
@@ -1344,11 +1465,29 @@ func GetStrategyLogs(c *gin.Context) {
 
 func ClearStrategyLogs(c *gin.Context) {
 	sid := c.Query("strategy_id")
+	if _, injected := ctxUserID(c); injected && sid != "" {
+		// 越权防护：不能清他人策略的日志
+		if item := store.GetStrategyConfig(sid); item != nil {
+			if !requireOwner(c, getInt64Of(item, "user_id")) {
+				return
+			}
+		}
+	}
 	logs := store.GetLogsStore()
 	if sid != "" {
 		var filtered []map[string]any
 		for _, l := range *logs {
 			if getString(l, "strategy_id", "") != sid {
+				filtered = append(filtered, l)
+			}
+		}
+		*logs = filtered
+	} else if _, injected := ctxUserID(c); injected && !ctxIsAdmin(c) {
+		// 全量清空：只清本人(或无属主)策略的日志，保留他人日志
+		var filtered []map[string]any
+		for _, l := range *logs {
+			item := store.GetStrategyConfig(getString(l, "strategy_id", ""))
+			if item != nil && !ownsResource(c, getInt64Of(item, "user_id")) {
 				filtered = append(filtered, l)
 			}
 		}
@@ -1568,6 +1707,12 @@ func GetStrategyParamDefs(c *gin.Context) {
 	case "martingale", "dca":
 		s := strategies.NewMartingaleStrategy()
 		defs = s.ParamDefs()
+	case "universe_rotation":
+		defs = strategies.NewUniverseRotationStrategy().ParamDefs()
+	case "trend_long_mt":
+		defs = strategies.NewTrendLongStrategy().ParamDefs()
+	case "trend_short_mt":
+		defs = strategies.NewTrendShortStrategy().ParamDefs()
 	// AI Bot marketplace aliases (registered in cmd/server/main.go)
 	case "optimus", "mono_optimus", "noah":
 		s := strategies.NewGridTradingStrategy()

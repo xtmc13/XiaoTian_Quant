@@ -36,7 +36,9 @@ describe('ErrorBoundary', () => {
       </ErrorBoundary>
     )
     expect(screen.getByText('页面加载出错')).toBeTruthy()
-    expect(screen.getByText('Test error')).toBeTruthy()
+    // 错误详情收在 <details><pre>（message + 堆栈），用子串正则匹配
+    // （<pre> 文本为 "Test error\n <stack>"，精确全文匹配会失败）。
+    expect(screen.getByText(/Test error/)).toBeTruthy()
   })
 
   it('renders custom fallback when provided', () => {

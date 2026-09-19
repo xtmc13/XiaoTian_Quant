@@ -23,6 +23,7 @@ type OCOOrder struct {
 	StopLimit   float64 // stop-loss limit price (optional)
 	Status      string
 	ParentID    string // reference to entry order
+	UserID      uint64 // 属主用户（0=系统），H4 越权修复
 
 	// Child orders
 	LimitOrderID string
@@ -76,6 +77,7 @@ type BracketOrder struct {
 
 	Status       string
 	PlacedAt     int64
+	UserID       uint64 // 属主用户（0=系统），H4 越权修复
 }
 
 // Validate checks bracket parameters.
@@ -124,6 +126,7 @@ type IcebergOrder struct {
 	SlicesPlaced    int
 	SlicesFilled    int
 	Status          string
+	UserID          uint64 // 属主用户（0=系统），H4 越权修复
 
 	// Callback
 	PlaceSlice func(qty float64) (string, error) // returns order ID
@@ -221,6 +224,7 @@ func (am *AdvancedManager) PlaceOCO(oco *OCOOrder) (*OCOOrder, error) {
 			OrderType: model.TypeLimit,
 			Price:     oco.LimitPrice,
 			Quantity:  oco.Quantity,
+			UserID:    oco.UserID,
 		}
 		limitOrder, err := am.PlaceOrder(limitReq)
 		if err != nil {
@@ -240,6 +244,7 @@ func (am *AdvancedManager) PlaceOCO(oco *OCOOrder) (*OCOOrder, error) {
 			Price:     oco.StopLimit,
 			StopPrice: oco.StopPrice,
 			Quantity:  oco.Quantity,
+			UserID:    oco.UserID,
 		}
 		stopOrder, err := am.PlaceOrder(stopReq)
 		if err != nil {
@@ -357,6 +362,7 @@ func (am *AdvancedManager) PlaceBracket(bracket *BracketOrder) (*BracketOrder, e
 			OrderType: bracket.EntryType,
 			Price:     bracket.EntryPrice,
 			Quantity:  bracket.Quantity,
+			UserID:    bracket.UserID,
 		}
 		entryOrder, err := am.PlaceOrder(entryReq)
 		if err != nil {
@@ -398,6 +404,7 @@ func (am *AdvancedManager) HandleBracketEntry(bracketID string, fillPrice float6
 		OrderType: model.TypeLimit,
 		Price:     bracket.TakeProfit,
 		Quantity:  bracket.Quantity,
+		UserID:    bracket.UserID,
 	}
 	tpOrder, err := am.PlaceOrder(tpReq)
 	if err == nil {
@@ -411,6 +418,7 @@ func (am *AdvancedManager) HandleBracketEntry(bracketID string, fillPrice float6
 		OrderType: model.TypeStopLoss,
 		StopPrice: bracket.StopLoss,
 		Quantity:  bracket.Quantity,
+		UserID:    bracket.UserID,
 	}
 	slOrder, err := am.PlaceOrder(slReq)
 	if err == nil {

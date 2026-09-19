@@ -29,6 +29,7 @@ export const Switch = React.forwardRef<HTMLInputElement, SwitchProps>(function S
           ref={ref}
           type="checkbox"
           className="sr-only peer"
+          aria-label={props['aria-label'] ?? label ?? 'switch'}
           {...props}
           onChange={handleChange}
         />

@@ -64,10 +64,32 @@ func waitFor(t *testing.T, timeout time.Duration, cond func() bool, msg string) 
 }
 
 func newTestRunner(src PriceSource, repo *store.GridRepo) *Runner {
-	r := NewRunner(src, repo)
+	return newTestRunnerWithExec(src, repo, nil)
+}
+
+func newTestRunnerWithExec(src PriceSource, repo *store.GridRepo, exec ContractExecutor) *Runner {
+	r := NewRunner(src, repo, exec)
 	r.TickInterval = 5 * time.Millisecond
 	r.SnapshotInterval = 25 * time.Millisecond
 	return r
+}
+
+// longLegState 从持久化 state_json 解析 long 腿状态（BotEngine 双腿包装格式）。
+func longLegState(t *testing.T, stateJSON string) map[string]any {
+	t.Helper()
+	var state map[string]any
+	if err := json.Unmarshal([]byte(stateJSON), &state); err != nil {
+		t.Fatalf("state_json invalid: %v", err)
+	}
+	legs, ok := state["legs"].(map[string]any)
+	if !ok {
+		t.Fatalf("state missing legs wrapper: %v", state)
+	}
+	leg, ok := legs["long"].(map[string]any)
+	if !ok {
+		t.Fatalf("state missing long leg: %v", legs)
+	}
+	return leg
 }
 
 var botSeq int64
@@ -174,12 +196,10 @@ func TestRunnerStartBotFillsAndPersists(t *testing.T) {
 		t.Errorf("quote_balance = %v", got.QuoteBalance)
 	}
 
-	// state_json 是可恢复的完整状态：初始 BUY(100..104) 未成交仍在册，
-	// SELL 成交后在 105..109 重挂 BUY，共 10 个未成交挂单。
-	var state map[string]any
-	if err := json.Unmarshal([]byte(got.StateJSON), &state); err != nil {
-		t.Fatalf("state_json invalid: %v", err)
-	}
+	// state_json 是可恢复的完整状态（双腿包装格式，long 腿为唯一腿）：
+	// 初始 BUY(100..104) 未成交仍在册，SELL 成交后在 105..109 重挂 BUY，
+	// 共 10 个未成交挂单。
+	state := longLegState(t, got.StateJSON)
 	orders, ok := state["orders"].(map[string]any)
 	if !ok || len(orders) != 10 {
 		t.Errorf("state orders = %v, want 10 open orders", state["orders"])
@@ -247,10 +267,7 @@ func TestRunnerStopBotStopsFills(t *testing.T) {
 	if got.Status != "stopped" || got.StoppedAt == 0 {
 		t.Errorf("status=%q stopped_at=%d, want stopped/>0", got.Status, got.StoppedAt)
 	}
-	var state map[string]any
-	if err := json.Unmarshal([]byte(got.StateJSON), &state); err != nil {
-		t.Fatalf("state_json invalid: %v", err)
-	}
+	state := longLegState(t, got.StateJSON)
 	if tt, _ := state["total_trades"].(float64); int(tt) != 2 {
 		t.Errorf("final state total_trades = %v, want 2", state["total_trades"])
 	}
@@ -334,10 +351,7 @@ func TestRunnerResumeRunningBots(t *testing.T) {
 	if !approx(got.BaseQty, baseBefore-basePerSlot()) {
 		t.Errorf("base_qty = %v, want %v", got.BaseQty, baseBefore-basePerSlot())
 	}
-	var state map[string]any
-	if err := json.Unmarshal([]byte(got.StateJSON), &state); err != nil {
-		t.Fatalf("state_json invalid: %v", err)
-	}
+	state := longLegState(t, got.StateJSON)
 	if tt, _ := state["total_trades"].(float64); int(tt) != 3 {
 		t.Errorf("state total_trades = %v, want 3", state["total_trades"])
 	}
@@ -421,5 +435,127 @@ func TestRunnerResumeSkipsInvalidPrice(t *testing.T) {
 	runner.ResumeRunningBots(list)
 	if runner.IsRunning(rec.ID) {
 		t.Fatal("bot should be skipped when no live price")
+	}
+}
+
+// fakeContractExecutor 记录合约下单调用（ContractExecutor 的测试实现）。
+type fakeContractExecutor struct {
+	mu     sync.Mutex
+	calls  []contractCall
+	filled float64
+}
+
+type contractCall struct {
+	symbol       string
+	side         string
+	qty          float64
+	price        float64
+	leverage     float64
+	marginMode   string
+	positionSide string
+}
+
+func (f *fakeContractExecutor) PlaceContract(_ string, symbol, exchange string, userID int64, side string, qty, price, leverage float64, marginMode, positionSide string) (float64, float64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, contractCall{
+		symbol: symbol, side: side, qty: qty, price: price,
+		leverage: leverage, marginMode: marginMode, positionSide: positionSide,
+	})
+	filled := f.filled
+	if filled <= 0 {
+		filled = qty
+	}
+	return filled, price, nil
+}
+
+// TestRunnerNeutralPlacesContractOrders: neutral 模式双腿成交打进合约执行器——
+// long 腿成交 → positionSide LONG，short 腿成交 → positionSide SHORT，
+// 杠杆/保证金模式随机器人配置，成交落库带腿标识。
+func TestRunnerNeutralPlacesContractOrders(t *testing.T) {
+	repo := store.NewGridRepo()
+	src := &fakeSource{}
+	src.set(testStartPrice)
+	exec := &fakeContractExecutor{}
+	runner := newTestRunnerWithExec(src.Price, repo, exec)
+
+	rec := newBotRecord(t, repo, "bot-neutral")
+	rec.Mode = string(ModeNeutral)
+	rec.Leverage = 5
+	rec.MarginMode = "isolated"
+	if err := repo.Update(rec); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if err := runner.StartBot(rec, testStartPrice); err != nil {
+		t.Fatalf("StartBot: %v", err)
+	}
+	defer runner.StopBot(rec.ID, "stopped")
+
+	// 上行穿越 106：两腿各一档 SELL 成交 → 两次合约下单。
+	feedPrices(src, 106)
+	waitFor(t, 3*time.Second, func() bool {
+		trades, _ := repo.GetTrades(rec.ID, 0)
+		return len(trades) == 2
+	}, "2 leg fills persisted")
+
+	trades, err := repo.GetTrades(rec.ID, 0)
+	if err != nil {
+		t.Fatalf("GetTrades: %v", err)
+	}
+	legs := map[string]bool{}
+	for _, tr := range trades {
+		if tr.Quantity <= 0 || tr.Price != 106 {
+			t.Errorf("bad trade: %+v", tr)
+		}
+		legs[tr.Leg] = true
+	}
+	if !legs[LegLong] || !legs[LegShort] {
+		t.Errorf("trades legs = %v, want both long and short", legs)
+	}
+
+	exec.mu.Lock()
+	defer exec.mu.Unlock()
+	if len(exec.calls) != 2 {
+		t.Fatalf("contract calls = %d, want 2", len(exec.calls))
+	}
+	seen := map[string]string{}
+	for _, c := range exec.calls {
+		if c.leverage != 5 || c.marginMode != "isolated" {
+			t.Errorf("contract call params not propagated: %+v", c)
+		}
+		seen[c.positionSide] = c.side
+	}
+	if seen["LONG"] != "SELL" || seen["SHORT"] != "SELL" {
+		t.Errorf("position sides = %v, want LONG+SHORT both SELL on up-tick", seen)
+	}
+
+	// 聚合主表：base_qty 列为净头寸（short 腿为负）。
+	got := mustGetBot(t, repo, rec.ID)
+	if got.TotalTrades != 2 {
+		t.Errorf("total_trades = %d, want 2", got.TotalTrades)
+	}
+	if got.BaseQty >= 0 {
+		t.Errorf("base_qty(net) = %v, want < 0 after up-tick", got.BaseQty)
+	}
+}
+
+// TestRunnerContractModeRequiresExecutor: short/neutral 模式无合约执行器时
+// StartBot 必须报错（不允许静默降级绕过合约下单链路）。
+func TestRunnerContractModeRequiresExecutor(t *testing.T) {
+	repo := store.NewGridRepo()
+	src := &fakeSource{}
+	src.set(testStartPrice)
+	runner := newTestRunner(src.Price, repo)
+
+	for _, mode := range []Mode{ModeShort, ModeNeutral} {
+		rec := newBotRecord(t, repo, "bot-noexec-"+string(mode))
+		rec.Mode = string(mode)
+		if err := repo.Update(rec); err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		if err := runner.StartBot(rec, testStartPrice); err == nil {
+			t.Errorf("mode %s without executor should fail", mode)
+			runner.StopBot(rec.ID, "stopped")
+		}
 	}
 }

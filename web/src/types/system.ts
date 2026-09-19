@@ -19,6 +19,7 @@ export interface BillingPlan {
   name_en: string
   price: number
   credits: number | string
+  credits_per_30d?: number
   period_days: number
 }
 
@@ -30,11 +31,59 @@ export interface ChainInfo {
 
 export interface BillingOrder {
   order_id: string
+  user_id?: number
   status: string
   plan_id: string
   chain: string
+  address?: string
+  amount_usdt?: number
   tx_hash?: string
+  fail_reason?: string
+  attempts?: number
   created_at: number
+  updated_at?: number
+  confirmed_at?: number
+  expires_at?: number
+}
+
+// BillingVerification 订单最近一次链上核验快照（C4.1 GET /verification）。
+export interface BillingVerification {
+  order_id: string
+  chain?: string
+  tx_hash?: string
+  found?: boolean
+  valid?: boolean
+  confirmed?: boolean
+  confirmations?: number
+  required_confirmations?: number
+  block_number?: number
+  received_micro?: number
+  expected_micro?: number
+  fail_reason?: string
+  checked_at?: number
+}
+
+export interface BillingVerificationResponse {
+  order_id: string
+  status: string
+  // not_checked | pending_onchain | confirming | confirmed | invalid | paid
+  stage: string
+  chain: string
+  tx_hash?: string
+  fail_reason?: string
+  attempts?: number
+  verification?: BillingVerification | null
+}
+
+export interface BillingSubscription {
+  plan: string
+  vip_expires_at: number
+  credits: number
+}
+
+export interface StripeConfig {
+  enabled: boolean
+  publishable_key?: string
 }
 
 export interface RawConfig {

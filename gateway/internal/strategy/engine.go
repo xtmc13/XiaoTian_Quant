@@ -3,10 +3,11 @@ package strategy
 import (
 	"fmt"
 	"log"
+	"strings"
 	"sync"
-	"time"
 
 	"github.com/xiaotian-quant/gateway/internal/event"
+	"github.com/xiaotian-quant/gateway/internal/metrics"
 	"github.com/xiaotian-quant/gateway/internal/model"
 	"github.com/xiaotian-quant/gateway/internal/notify"
 	"github.com/xiaotian-quant/gateway/internal/order"
@@ -133,6 +134,19 @@ type Engine struct {
 
 	// DCAManager handles dollar-cost averaging for positions
 	dcaManager *order.DCAManager
+
+	// ── A7 扩展（engine_ext.go） ──
+	// feeder 供多周期/universe 动态订阅 K 线（引用计数，与 handler 侧独立记账）
+	feeder     SymbolFeeder
+	marketData *MarketData
+	feedHolds  map[string][]feedHold
+
+	uniMu     sync.Mutex
+	universes map[string]*universeState
+
+	scheduled map[string]*scheduledEntry
+	schedMu   sync.Mutex
+	schedOnce sync.Once
 }
 
 var (
@@ -148,6 +162,9 @@ func GetEngine(bus *event.EventBus) *Engine {
 			symbolMap:  make(map[string][]string),
 			subIDs:     make(map[string]event.SubscriptionID),
 			bus:        bus,
+			feedHolds:  make(map[string][]feedHold),
+			universes:  make(map[string]*universeState),
+			scheduled:  make(map[string]*scheduledEntry),
 		}
 	})
 	return engineInstance
@@ -192,11 +209,15 @@ func (e *Engine) Register(s Strategy) error {
 
 // Unregister removes a strategy and its subscriptions.
 func (e *Engine) Unregister(name string) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	// 扩展资源（feeder 引用 / universe 订阅 / 调度注册）的释放可能阻塞
+	// 等待 feeder goroutine 退出，而 feeder 正在 dispatch 里等引擎读锁
+	// （emitSignal/maybeRefreshUniverse）——必须先于引擎写锁完成，否则自死锁。
+	e.teardownExtensions(name)
 
+	e.mu.Lock()
 	s, ok := e.strategies[name]
 	if !ok {
+		e.mu.Unlock()
 		return fmt.Errorf("strategy %s not found", name)
 	}
 
@@ -216,9 +237,10 @@ func (e *Engine) Unregister(name string) error {
 		e.bus.Unsubscribe(subID)
 		delete(e.subIDs, name)
 	}
+	delete(e.strategies, name)
+	e.mu.Unlock()
 
 	s.Stop()
-	delete(e.strategies, name)
 	return nil
 }
 
@@ -230,7 +252,12 @@ func (e *Engine) Start(name string, params map[string]any) error {
 	if !ok {
 		return fmt.Errorf("strategy %s not found", name)
 	}
-	return s.Start(params)
+	if err := s.Start(params); err != nil {
+		return err
+	}
+	// 多周期供给 / 计划调度 / 动态 universe 的启用与资源记账
+	e.setupExtensions(name, s)
+	return nil
 }
 
 // Stop stops a registered strategy.
@@ -336,8 +363,21 @@ func (e *Engine) dispatch(s Strategy, evt event.Event) {
 		}
 	case event.TypeBar:
 		if bar, ok := evt.Data.(model.Bar); ok {
+			// 声明了主周期的策略只接收主周期 K 线：同 symbol 的其它周期
+			// 供给（多周期 feeder/universe 订阅）不会污染策略状态。
+			// 注意：注册进引擎的是 NamedStrategy 包装，可选接口断言必须先解包。
+			core := UnwrapStrategy(s)
+			if p, ok2 := core.(PrimaryTimeframer); ok2 {
+				if tf := strings.ToLower(strings.TrimSpace(p.PrimaryTimeframe())); tf != "" &&
+					bar.Interval != "" && !strings.EqualFold(bar.Interval, tf) {
+					break
+				}
+			}
 			LogFirstBar(s.Name(), bar)
 			signal, err = s.OnBar(bar, e.bus)
+			// 动态 universe：按主周期 K 线计数驱动刷新（OnBar 之后，拿到的
+			// 是最新状态；panic 已由订阅回调 recover）
+			e.maybeRefreshUniverse(s, core, bar)
 		}
 	case event.TypeOrderUpdate:
 		if order, ok := evt.Data.(model.OrderData); ok {
@@ -349,62 +389,15 @@ func (e *Engine) dispatch(s Strategy, evt event.Event) {
 		return
 	}
 	if signal != nil {
-		// 用包装后的策略名（=配置 id，如 7bb9a9a6）覆盖策略内部名（如
-		// cra_contract）。下游按 signal.Strategy 查配置/维护投入资金：
-		// 内部名查配置永远落空（投入资金累加从未生效），且多个同类型策略
-		// 按 strategy_type 兜底匹配会张冠李戴（222/333 同 cra_contract）。
+		// 用包装后的策略名（=配置 id）覆盖策略内部名（见 emitSignal 同样口径）
 		signal.Strategy = s.Name()
 	}
-	if signal != nil && e.OnSignal != nil {
-		// Check DCA for existing positions before emitting signal
-		if e.dcaManager != nil && (signal.Direction == "LONG" || signal.Direction == "BUY" || signal.Direction == "long" || signal.Direction == "buy") {
-			if dcaPos := e.dcaManager.GetPosition(signal.Symbol); dcaPos != nil && dcaPos.Active {
-				// DCA position exists — the strategy's own DCA logic handles add-position signals
-				// This hook ensures generic strategies (breakout, grid, etc.) can also use DCA
-				// when configured via the DCAConfig parameter.
-			}
-		}
-
-		// Check protection before emitting signal
-		if e.protectionMgr != nil {
-			ctx := protection.ProtectionContext{
-				Symbol:      signal.Symbol,
-				CurrentTime: time.Now(),
-			}
-			result := e.protectionMgr.CheckAll(ctx)
-			if result.Blocked {
-				log.Printf("[protection] signal blocked for %s: %s (resume: %v)",
-					signal.Symbol, result.Reason, result.ResumeTime)
-				// Notify protection trigger
-				if e.broadcaster != nil {
-					e.broadcaster.Protection("protection", signal.Symbol, "block", result.Reason, 0)
-					// WS broadcast protection
-					if e.wsHub != nil {
-						e.wsHub.BroadcastProtection("protection", signal.Symbol, "block", result.Reason)
-					}
-				}
-				return
-			}
-		}
-		e.OnSignal(*signal)
-		// Notify signal
-		if e.broadcaster != nil {
-			params := s.GetParameters()
-			var paramMap map[string]any
-			if params != nil {
-				paramMap = params.ToMap()
-			}
-			e.broadcaster.Signal(signal.Symbol, signal.Direction, s.Name(), 0, paramMap)
-			// WS broadcast signal
-			if e.wsHub != nil {
-				e.wsHub.BroadcastSignal(*signal)
-			}
-		}
-	}
+	e.emitSignal(s, signal, err)
 }
 
 // PublishSignal publishes a signal to the event bus.
 func PublishSignal(bus *event.EventBus, signal model.Signal) {
+	metrics.RecordSignal(signal.Strategy, signal.Direction)
 	bus.Publish(event.Event{
 		Type:     event.TypeSignal,
 		Symbol:   signal.Symbol,

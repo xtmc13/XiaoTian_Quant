@@ -1,8 +1,14 @@
 package exchange
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/xiaotian-quant/gateway/internal/model"
 )
 
@@ -108,5 +114,40 @@ func TestStreamHub(t *testing.T) {
 	}
 	if hub.Count() != 0 {
 		t.Fatal("hub should be empty")
+	}
+}
+
+// TestWSClientReconnectsAfterAbruptClose 回归测试：服务器粗暴断连后，
+// 客户端必须真正发起重连（而不是因旧状态未清理把新连接静默丢弃）。
+func TestWSClientReconnectsAfterAbruptClose(t *testing.T) {
+	var conns atomic.Int32
+	upgrader := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		conns.Add(1)
+		// 立即粗暴关闭，不给读循环任何消息
+		_ = conn.Close()
+	}))
+	defer srv.Close()
+
+	client := NewWSClient(WSConfig{
+		URL:            "ws" + strings.TrimPrefix(srv.URL, "http"),
+		ReconnectDelay: 10 * time.Millisecond,
+		MaxReconnects:  50,
+	})
+	if err := client.Connect(); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer client.Close()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for conns.Load() < 3 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if conns.Load() < 3 {
+		t.Fatalf("expected ≥3 connection attempts (initial + reconnects), got %d", conns.Load())
 	}
 }

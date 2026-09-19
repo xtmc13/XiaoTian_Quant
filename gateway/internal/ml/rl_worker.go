@@ -41,6 +41,7 @@ type RLJob struct {
 	StartedAt        *time.Time       `json:"started_at,omitempty"`
 	CompletedAt      *time.Time       `json:"completed_at,omitempty"`
 	TensorBoardRunID string           `json:"tensorboard_run_id,omitempty"`
+	UserID           int64            `json:"user_id"` // 属主用户（0=历史无属主），H6 越权修复
 }
 
 // RLJobProgress tracks training progress.
@@ -114,8 +115,9 @@ func getEnvInternal(key string) string {
 }
 
 // SubmitJob creates a new RL training job and adds it to the queue.
+// userID 记录任务属主（0=系统/历史无属主），H6 越权修复。
 func (q *RLTaskQueue) SubmitJob(algorithm, symbol, interval string, nActions int,
-	bars []map[string]any, config map[string]any) (*RLJob, error) {
+	bars []map[string]any, config map[string]any, userID int64) (*RLJob, error) {
 
 	jobID := fmt.Sprintf("rl_%s_%s_%d", algorithm, symbol, time.Now().Unix())
 
@@ -129,6 +131,7 @@ func (q *RLTaskQueue) SubmitJob(algorithm, symbol, interval string, nActions int
 		Bars:      bars,
 		Config:    config,
 		CreatedAt: time.Now(),
+		UserID:    userID,
 	}
 
 	// Store job metadata

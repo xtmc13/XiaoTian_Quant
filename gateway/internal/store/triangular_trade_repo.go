@@ -11,6 +11,7 @@ import (
 
 type TriangularTradeRecord struct {
 	ID          string  `json:"id"`
+	UserID      int64   `json:"user_id"`
 	Exchange    string  `json:"exchange"`
 	CycleJSON   string  `json:"cycle_json"`
 	LegsJSON    string  `json:"legs_json"`
@@ -48,13 +49,15 @@ func (r *TriangularTradeRepo) Create(t *TriangularTradeRecord) error {
 		t.LegsJSON = "[]"
 	}
 	_, err := db.Exec(
-		`INSERT INTO triangular_trades (id, exchange, cycle_json, legs_json, start_asset, start_qty, end_qty, gross_profit, net_profit, total_fees, status, opened_at, closed_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		t.ID, t.Exchange, t.CycleJSON, t.LegsJSON, t.StartAsset, t.StartQty, t.EndQty,
+		`INSERT INTO triangular_trades (id, user_id, exchange, cycle_json, legs_json, start_asset, start_qty, end_qty, gross_profit, net_profit, total_fees, status, opened_at, closed_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		t.ID, t.UserID, t.Exchange, t.CycleJSON, t.LegsJSON, t.StartAsset, t.StartQty, t.EndQty,
 		t.GrossProfit, t.NetProfit, t.TotalFees, t.Status, t.OpenedAt, t.ClosedAt,
 	)
 	return err
 }
+
+const triangularTradeColumns = `id, user_id, exchange, cycle_json, legs_json, start_asset, start_qty, end_qty, gross_profit, net_profit, total_fees, status, opened_at, closed_at`
 
 func (r *TriangularTradeRepo) GetByID(id string) (*TriangularTradeRecord, error) {
 	r.mu.RLock()
@@ -62,9 +65,9 @@ func (r *TriangularTradeRepo) GetByID(id string) (*TriangularTradeRecord, error)
 	if db == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
-	row := db.QueryRow(`SELECT id, exchange, cycle_json, legs_json, start_asset, start_qty, end_qty, gross_profit, net_profit, total_fees, status, opened_at, closed_at FROM triangular_trades WHERE id=?`, id)
+	row := db.QueryRow(`SELECT `+triangularTradeColumns+` FROM triangular_trades WHERE id=?`, id)
 	var t TriangularTradeRecord
-	err := row.Scan(&t.ID, &t.Exchange, &t.CycleJSON, &t.LegsJSON, &t.StartAsset, &t.StartQty, &t.EndQty, &t.GrossProfit, &t.NetProfit, &t.TotalFees, &t.Status, &t.OpenedAt, &t.ClosedAt)
+	err := row.Scan(&t.ID, &t.UserID, &t.Exchange, &t.CycleJSON, &t.LegsJSON, &t.StartAsset, &t.StartQty, &t.EndQty, &t.GrossProfit, &t.NetProfit, &t.TotalFees, &t.Status, &t.OpenedAt, &t.ClosedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +104,7 @@ func (r *TriangularTradeRepo) ListActive() ([]*TriangularTradeRecord, error) {
 	if db == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
-	query := `SELECT id, exchange, cycle_json, legs_json, start_asset, start_qty, end_qty, gross_profit, net_profit, total_fees, status, opened_at, closed_at FROM triangular_trades WHERE status IN ('pending','executing') ORDER BY opened_at DESC`
+	query := `SELECT ` + triangularTradeColumns + ` FROM triangular_trades WHERE status IN ('pending','executing') ORDER BY opened_at DESC`
 	rows, err := db.Query(query)
 	if err != nil {
 		return nil, err
@@ -116,7 +119,7 @@ func (r *TriangularTradeRepo) ListHistory(limit int) ([]*TriangularTradeRecord, 
 	if db == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
-	query := `SELECT id, exchange, cycle_json, legs_json, start_asset, start_qty, end_qty, gross_profit, net_profit, total_fees, status, opened_at, closed_at FROM triangular_trades WHERE status IN ('completed','failed','dry_run') ORDER BY opened_at DESC`
+	query := `SELECT ` + triangularTradeColumns + ` FROM triangular_trades WHERE status IN ('completed','failed','dry_run') ORDER BY opened_at DESC`
 	var args []any
 	if limit > 0 {
 		query += " LIMIT ?"
@@ -134,7 +137,7 @@ func scanTriangularTradeRows(rows *sql.Rows) ([]*TriangularTradeRecord, error) {
 	var result []*TriangularTradeRecord
 	for rows.Next() {
 		var t TriangularTradeRecord
-		if err := rows.Scan(&t.ID, &t.Exchange, &t.CycleJSON, &t.LegsJSON, &t.StartAsset, &t.StartQty, &t.EndQty, &t.GrossProfit, &t.NetProfit, &t.TotalFees, &t.Status, &t.OpenedAt, &t.ClosedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.UserID, &t.Exchange, &t.CycleJSON, &t.LegsJSON, &t.StartAsset, &t.StartQty, &t.EndQty, &t.GrossProfit, &t.NetProfit, &t.TotalFees, &t.Status, &t.OpenedAt, &t.ClosedAt); err != nil {
 			return nil, err
 		}
 		result = append(result, &t)

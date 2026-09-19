@@ -1,0 +1,28 @@
+# ═══════════════════════════════════════════════════════════════════
+# XiaoTian Quant — Prometheus 配置
+# 抓取 Go 网关自带的 /metrics 端点（gateway/cmd/server/router.go 挂载，
+# gateway/internal/metrics 提供 Prometheus 文本格式指标）。
+# 通过 docker-compose.observability.yml 以只读方式挂载到
+# /etc/prometheus/prometheus.yml。
+# ═══════════════════════════════════════════════════════════════════
+
+global:
+  scrape_interval: 15s      # 默认抓取间隔
+  evaluation_interval: 15s  # 告警规则评估间隔
+
+# 告警规则文件（与 prometheus.yml 同目录挂载）
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  # Go 网关。默认通过 compose 网络内服务名访问；
+  # 若网关运行在宿主机上（如 ./start-local.sh），用环境变量覆盖：
+  #   GATEWAY_SCRAPE_TARGET=host.docker.internal:8080
+  # （compose 已配置 host.docker.internal -> host-gateway 映射）
+  - job_name: gateway
+    scrape_interval: 10s
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['${GATEWAY_SCRAPE_TARGET:-gateway:8080}']
+        labels:
+          service: gateway

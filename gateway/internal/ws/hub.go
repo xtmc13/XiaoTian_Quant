@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/xiaotian-quant/gateway/internal/metrics"
 	"github.com/xiaotian-quant/gateway/internal/model"
 )
 
@@ -66,6 +67,7 @@ func (h *Hub) run() {
 			h.mu.Lock()
 			h.clients[client] = true
 			h.mu.Unlock()
+			metrics.IncWSConnections()
 			log.Printf("[ws] client connected, total: %d", h.ClientCount())
 
 		case client := <-h.unregister:
@@ -73,6 +75,7 @@ func (h *Hub) run() {
 			if _, ok := h.clients[client]; ok {
 				delete(h.clients, client)
 				close(client.send)
+				metrics.DecWSConnections()
 			}
 			h.mu.Unlock()
 			log.Printf("[ws] client disconnected, total: %d", h.ClientCount())

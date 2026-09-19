@@ -103,11 +103,16 @@ func (r *OrderRepo) List(filter map[string]any, limit int) ([]*OrderRecord, erro
 	var result []*OrderRecord
 	for rows.Next() {
 		var o OrderRecord
+		// xt_orders.created_at/updated_at 为历史 REAL 列，驱动可能返回 float64，
+		// 大时间戳会以科学计数法走字符串解析而失败——先收 float64 再显式转换。
+		var createdF, updatedF float64
 		if err := rows.Scan(&o.ID, &o.Symbol, &o.Side, &o.OrderType, &o.Price, &o.StopPrice, &o.Quantity, &o.Filled, &o.Status, &o.Exchange,
-			&o.UserID, &o.ClientOID, &o.AvgFillPrice, &o.CreatedAt, &o.UpdatedAt,
+			&o.UserID, &o.ClientOID, &o.AvgFillPrice, &createdF, &updatedF,
 			&o.MarketType, &o.PositionSide, &o.Leverage, &o.MarginMode, &o.TPPrice, &o.SLPrice, &o.ClosePosition); err != nil {
 			return nil, err
 		}
+		o.CreatedAt = int64(createdF)
+		o.UpdatedAt = int64(updatedF)
 		result = append(result, &o)
 	}
 	return result, nil
@@ -126,4 +131,33 @@ func (r *OrderRepo) Update(o *OrderRecord) error {
 func (r *OrderRepo) Delete(id string) error {
 	_, err := db.Exec("DELETE FROM xt_orders WHERE id=?", id)
 	return err
+}
+
+// ListRecent 返回 updated_at >= sinceMs 的订单（新→旧），偏差监控等扫描用。
+func (r *OrderRepo) ListRecent(sinceMs int64, limit int) ([]*OrderRecord, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	rows, err := db.Query(`SELECT id, symbol, side, order_type, price, stop_price, quantity, filled, status, exchange, user_id, client_oid, avg_fill_price, created_at, updated_at, market_type, position_side, leverage, margin_mode, tp_price, sl_price, close_position
+		FROM xt_orders WHERE updated_at >= ? ORDER BY updated_at DESC LIMIT ?`, sinceMs, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []*OrderRecord
+	for rows.Next() {
+		var o OrderRecord
+		// xt_orders.created_at/updated_at 为历史 REAL 列，驱动可能返回 float64，
+		// 大时间戳会以科学计数法走字符串解析而失败——先收 float64 再显式转换。
+		var createdF, updatedF float64
+		if err := rows.Scan(&o.ID, &o.Symbol, &o.Side, &o.OrderType, &o.Price, &o.StopPrice, &o.Quantity, &o.Filled, &o.Status, &o.Exchange,
+			&o.UserID, &o.ClientOID, &o.AvgFillPrice, &createdF, &updatedF,
+			&o.MarketType, &o.PositionSide, &o.Leverage, &o.MarginMode, &o.TPPrice, &o.SLPrice, &o.ClosePosition); err != nil {
+			return nil, err
+		}
+		o.CreatedAt = int64(createdF)
+		o.UpdatedAt = int64(updatedF)
+		result = append(result, &o)
+	}
+	return result, nil
 }

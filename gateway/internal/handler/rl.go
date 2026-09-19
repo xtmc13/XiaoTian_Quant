@@ -124,6 +124,13 @@ func RLTrain(c *gin.Context) {
 
 	// ── Algorithm routing ────────────────────────────────────────
 
+	// H6: 记录训练属主，模型/run 按属主隔离
+	trainUserID := getUserID(c)
+	registerMLResourceOwner("model", req.ModelID, trainUserID)
+	if req.UseTensorBoard {
+		registerMLResourceOwner("run", req.ModelID, trainUserID)
+	}
+
 	if ml.IsAdvancedAlgorithm(req.Algorithm) {
 		// Async: submit to Redis task queue for independent Python worker
 		config := map[string]any{
@@ -139,7 +146,7 @@ func RLTrain(c *gin.Context) {
 			"tensorboard_run_id": req.ModelID,
 		}
 
-		job, err := RLTaskQueue.SubmitJob(req.Algorithm, req.Symbol, req.Interval, req.NActions, bars, config)
+		job, err := RLTaskQueue.SubmitJob(req.Algorithm, req.Symbol, req.Interval, req.NActions, bars, config, trainUserID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -214,6 +221,11 @@ func GetRLJob(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
 		return
 	}
+	// H6: 非属主按 not found 处理（避免枚举）
+	if !ownsResource(c, job.UserID) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
+		return
+	}
 
 	c.JSON(http.StatusOK, job)
 }
@@ -223,6 +235,12 @@ func CancelRLJob(c *gin.Context) {
 	jobID := c.Param("id")
 	if jobID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "job_id required"})
+		return
+	}
+
+	// H6: 取消前校验任务归属
+	if job, err := RLTaskQueue.GetJob(jobID); err != nil || !ownsResource(c, job.UserID) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
 		return
 	}
 
@@ -374,6 +392,10 @@ func DeleteRLModel(c *gin.Context) {
 	modelID := c.Param("id")
 	if modelID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "model_id required"})
+		return
+	}
+	// H6: 已登记属主的模型仅属主（或 admin）可删
+	if !checkMLResourceAccess(c, "model", modelID) {
 		return
 	}
 	if err := MLClient.DeleteRLModel(modelID); err != nil {

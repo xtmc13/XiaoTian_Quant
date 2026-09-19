@@ -1,0 +1,95 @@
+version: "3.9"
+
+# ═══════════════════════════════════════════════════════════════════
+# XiaoTianQuant v3.0 — Observability Compose (Prometheus + Grafana)
+# ═══════════════════════════════════════════════════════════════════
+# 用途：可选监控栈，抓取网关 /metrics 并提供 Grafana 看板。
+# 不改动 gateway 服务本身，需与主 compose 文件叠加使用（共享 xiaotian
+# 网络，Prometheus 通过服务名 gateway 抓取 :8080/metrics）：
+#
+#   开发环境：
+#     docker compose -f docker-compose.yml -f docker-compose.observability.yml \
+#       --profile observability up -d
+#
+#   生产环境：
+#     docker compose -f docker-compose.prod.yml -f docker-compose.observability.yml \
+#       --profile observability up -d
+#
+# 说明：
+#   - 两个服务均归属 profile "observability"，不带 --profile 启动时不会运行。
+#   - 端口只绑定 127.0.0.1（Grafana :3000、Prometheus :9090），不对公网暴露。
+#   - 不引入 Alertmanager，保持轻量；告警在 Prometheus 内评估，
+#     可在 http://127.0.0.1:9090/alerts 或 Grafana 中查看。
+#   - 若网关不是通过 compose 运行（如宿主机 ./start-local.sh），
+#     用环境变量指向宿主机：
+#       GATEWAY_SCRAPE_TARGET=host.docker.internal:8080 \
+#       docker compose -f docker-compose.yml -f docker-compose.observability.yml \
+#         --profile observability up -d
+# ═══════════════════════════════════════════════════════════════════
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.0.0
+    container_name: xiaotian-prometheus
+    profiles:
+      - observability
+    ports:
+      - "127.0.0.1:9090:9090"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.enable-lifecycle"
+    environment:
+      # 抓取目标，默认走 compose 网络内的服务名；可在宿主机运行时覆盖
+      - GATEWAY_SCRAPE_TARGET=${GATEWAY_SCRAPE_TARGET:-gateway:8080}
+    volumes:
+      - ./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./ops/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    extra_hosts:
+      # 允许 GATEWAY_SCRAPE_TARGET 使用 host.docker.internal 指向宿主机
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    networks:
+      - xiaotian
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: xiaotian-grafana
+    profiles:
+      - observability
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      # 首次登录后请立即修改默认密码
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./ops/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./ops/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    networks:
+      - xiaotian
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  xiaotian:
+    driver: bridge

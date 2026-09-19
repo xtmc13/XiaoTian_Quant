@@ -6,7 +6,35 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xiaotian-quant/gateway/internal/middleware"
 )
+
+// followerIDFromJWT 从 JWT context 取当前用户 id（C4：follower_id 一律以 JWT 为准）。
+// 第二个返回值为 context 是否注入了用户；未注入（内部调用/单用户兼容）时
+// 调用方可回退到旧参数来源。
+func followerIDFromJWT(c *gin.Context) (int, bool) {
+	v, exists := c.Get(middleware.UserIDKey)
+	if !exists {
+		return 0, false
+	}
+	switch val := v.(type) {
+	case int:
+		return val, true
+	case int64:
+		return int(val), true
+	case float64:
+		return int(val), true
+	}
+	return 0, false
+}
+
+// followerIDOrLegacy 优先取 JWT 用户；未注入时回退 query/body 里的旧参数。
+func followerIDOrLegacy(c *gin.Context, legacy int) int {
+	if uid, ok := followerIDFromJWT(c); ok {
+		return uid
+	}
+	return legacy
+}
 
 // RegisterRoutes registers social trading HTTP endpoints.
 func RegisterRoutes(r *gin.RouterGroup, engine *Engine) {
@@ -33,6 +61,7 @@ func (h *handler) listProviders(c *gin.Context) {
 func (h *handler) followProvider(c *gin.Context) {
 	providerID, _ := strconv.Atoi(c.Param("id"))
 	followerID, _ := strconv.Atoi(c.Query("follower_id"))
+	followerID = followerIDOrLegacy(c, followerID)
 	if followerID == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "follower_id required"})
 		return
@@ -48,6 +77,7 @@ func (h *handler) followProvider(c *gin.Context) {
 func (h *handler) unfollowProvider(c *gin.Context) {
 	providerID, _ := strconv.Atoi(c.Param("id"))
 	followerID, _ := strconv.Atoi(c.Query("follower_id"))
+	followerID = followerIDOrLegacy(c, followerID)
 	if followerID == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "follower_id required"})
 		return
@@ -86,6 +116,11 @@ func (h *handler) publishSignal(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	// C4: provider_id 必须属于当前登录用户（前端以 user id 作为自营信号 provider）
+	if uid, ok := followerIDFromJWT(c); ok && req.ProviderID != uid {
+		c.JSON(http.StatusForbidden, gin.H{"error": "provider_id does not belong to current user"})
+		return
+	}
 	sig := Signal{
 		ID:           strconv.FormatInt(time.Now().UnixNano(), 10),
 		ProviderID:   req.ProviderID,
@@ -122,12 +157,18 @@ func (h *handler) saveFollowerConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if req.FollowerID == 0 || req.ProviderID == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "follower_id and provider_id required"})
+	if req.ProviderID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "provider_id required"})
+		return
+	}
+	// C4: follower_id 一律取自 JWT，忽略请求体
+	followerID := followerIDOrLegacy(c, req.FollowerID)
+	if followerID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "follower_id required"})
 		return
 	}
 	update := CopyConfig{
-		FollowerID:   req.FollowerID,
+		FollowerID:   followerID,
 		ProviderID:   req.ProviderID,
 		Enabled:      req.Enabled,
 		Multiplier:   req.Multiplier,
@@ -137,20 +178,21 @@ func (h *handler) saveFollowerConfig(c *gin.Context) {
 		AutoExecute:  req.AutoExecute,
 		Symbols:      req.Symbols,
 	}
-	if err := h.engine.UpdateFollowConfig(req.FollowerID, req.ProviderID, update); err != nil {
-		cfg := DefaultCopyConfig(req.FollowerID, req.ProviderID)
+	if err := h.engine.UpdateFollowConfig(followerID, req.ProviderID, update); err != nil {
+		cfg := DefaultCopyConfig(followerID, req.ProviderID)
 		cfg.AutoExecute = req.AutoExecute
 		if err := h.engine.Follow(cfg); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		_ = h.engine.UpdateFollowConfig(req.FollowerID, req.ProviderID, update)
+		_ = h.engine.UpdateFollowConfig(followerID, req.ProviderID, update)
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
 func (h *handler) getFollowerConfigs(c *gin.Context) {
 	followerID, _ := strconv.Atoi(c.Query("follower_id"))
+	followerID = followerIDOrLegacy(c, followerID)
 	if followerID == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "follower_id required"})
 		return

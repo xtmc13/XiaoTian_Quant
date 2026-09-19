@@ -73,10 +73,12 @@ describe('toastStore', () => {
   it('should clear all toasts', () => {
     const { result } = renderHook(() => useToastStore())
 
+    // 用独立消息：store 有 30s 同消息冷却（防轮询刷屏），复用前面用例的
+    // 消息会被冷却静默丢弃，导致条数断言失败。
     act(() => {
-      result.current.addToast({ message: 'Test 1', type: 'info' })
-      result.current.addToast({ message: 'Test 2', type: 'error' })
-      result.current.addToast({ message: 'Test 3', type: 'success' })
+      result.current.addToast({ message: 'Clear A', type: 'info' })
+      result.current.addToast({ message: 'Clear B', type: 'error' })
+      result.current.addToast({ message: 'Clear C', type: 'success' })
     })
 
     expect(result.current.toasts).toHaveLength(3)

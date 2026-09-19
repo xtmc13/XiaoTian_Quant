@@ -1,7 +1,7 @@
 // Central route prefetch map used by App.tsx (lazy routes) and Sidebar.tsx (hover preload).
 export const pageLoaders: Record<string, () => Promise<unknown>> = {
   '/dashboard': () => import('@/pages/Dashboard'),
-  '/trading': () => import('@/pages/Trading'),
+  '/trading': () => import('@/pages/trading/TradingSpot'),
   '/trading/spot': () => import('@/pages/trading/TradingSpot'),
   '/trading/contract': () => import('@/pages/trading/TradingContract'),
   '/strategy': () => import('@/pages/Strategy'),
@@ -14,7 +14,6 @@ export const pageLoaders: Record<string, () => Promise<unknown>> = {
   '/backtest': () => import('@/pages/Backtest'),
   '/bots': () => import('@/pages/bots/BotsCenter'),
   '/create': () => import('@/pages/CreateStrategyPage'),
-  '/ai-bots': () => import('@/pages/AIBots'),
   '/bots/signal': () => import('@/pages/bots/BotsSignal'),
   '/bots/ai': () => import('@/pages/bots/BotsAI'),
   '/settings': () => import('@/pages/Settings'),

@@ -118,6 +118,7 @@ type TriangularOpportunity struct {
 // TriangularTrade tracks an executed or simulated 3-leg cycle.
 type TriangularTrade struct {
 	ID          string          `json:"id"`
+	UserID      int64           `json:"user_id"` // 发起执行的用户（0=系统/历史无属主）
 	Exchange    string          `json:"exchange"`
 	Cycle       []string        `json:"cycle"`
 	Legs        []TriangularLeg `json:"legs"`
@@ -187,6 +188,9 @@ type TriangularEngine struct {
 	tickSubIDs  []event.SubscriptionID
 
 	repo *store.TriangularTradeRepo
+
+	// ownerUserID 记录下一笔执行的属主（由 Execute 类 handler 注入）。
+	ownerUserID int64
 
 	OnOpportunity func(opp TriangularOpportunity)
 	OnTrade       func(trade TriangularTrade)
@@ -373,6 +377,21 @@ func (e *TriangularEngine) IsRunning() bool {
 // Execute manually triggers execution of an opportunity.
 func (e *TriangularEngine) Execute(opp TriangularOpportunity) {
 	e.execute(opp)
+}
+
+// SetOwnerUserID 设置下一笔执行的属主（handler 在手动执行前注入，
+// 0 表示系统/未指定）。用于资源级越权防护的归属记录。
+func (e *TriangularEngine) SetOwnerUserID(uid int64) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.ownerUserID = uid
+}
+
+// OwnerUserID 返回当前设置的执行属主。
+func (e *TriangularEngine) OwnerUserID() int64 {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.ownerUserID
 }
 
 // GetLastOpportunity returns the most recent opportunity.
@@ -1168,6 +1187,10 @@ func (e *TriangularEngine) recordTriangularTrade(trade *TriangularTrade) {
 }
 
 func (e *TriangularEngine) recordTriangularTradeLocked(trade *TriangularTrade) {
+	// 无属主的新单子盖上当前执行属主（0=系统，保持现状）。
+	if trade.UserID == 0 {
+		trade.UserID = e.ownerUserID
+	}
 	if trade.IsActive() {
 		found := false
 		for _, t := range e.positions {
@@ -1212,6 +1235,7 @@ func triangularTradeToRecord(t *TriangularTrade) *store.TriangularTradeRecord {
 	legsJSON, _ := json.Marshal(t.Legs)
 	return &store.TriangularTradeRecord{
 		ID:          t.ID,
+		UserID:      t.UserID,
 		Exchange:    t.Exchange,
 		CycleJSON:   string(cycleJSON),
 		LegsJSON:    string(legsJSON),
@@ -1230,6 +1254,7 @@ func triangularTradeToRecord(t *TriangularTrade) *store.TriangularTradeRecord {
 func recordToTriangularTrade(r *store.TriangularTradeRecord) *TriangularTrade {
 	t := &TriangularTrade{
 		ID:          r.ID,
+		UserID:      r.UserID,
 		Exchange:    r.Exchange,
 		StartAsset:  r.StartAsset,
 		StartQty:    r.StartQty,

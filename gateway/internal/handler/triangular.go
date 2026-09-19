@@ -94,6 +94,22 @@ func autoRegisterTriangularExchange(engine *arbitrage.TriangularEngine) {
 	}
 }
 
+// triTradesForUser 按属主过滤三角套利仓位/历史：admin/未注入用户看全部，
+// 普通用户看本人 + 历史无属主(UserID=0)。
+func triTradesForUser(c *gin.Context, trades []*arbitrage.TriangularTrade) []*arbitrage.TriangularTrade {
+	uid, injected := ctxUserID(c)
+	if !injected || ctxIsAdmin(c) {
+		return trades
+	}
+	filtered := make([]*arbitrage.TriangularTrade, 0, len(trades))
+	for _, t := range trades {
+		if t.UserID == 0 || t.UserID == int64(uid) {
+			filtered = append(filtered, t)
+		}
+	}
+	return filtered
+}
+
 // ── Config ─────────────────────────────────────────────────────
 
 // GetTriangularConfig returns current triangular arbitrage configuration.
@@ -103,7 +119,11 @@ func GetTriangularConfig(c *gin.Context) {
 }
 
 // UpdateTriangularConfig updates triangular arbitrage configuration.
+// 引擎是全局系统资源（配置存 config.yaml）：仅 admin 可改（未注入用户保持单用户兼容）。
 func UpdateTriangularConfig(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 	var body arbitrage.TriangularEngineConfig
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -145,7 +165,11 @@ func UpdateTriangularConfig(c *gin.Context) {
 // ── Engine Control ─────────────────────────────────────────────
 
 // StartTriangular starts the triangular arbitrage monitoring engine.
+// 全局系统资源：仅 admin 可启停（未注入用户保持单用户兼容）。
 func StartTriangular(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 	engine := GetTriangularEngine()
 
 	wireTriangularCallbacks(engine)
@@ -160,7 +184,11 @@ func StartTriangular(c *gin.Context) {
 }
 
 // StopTriangular stops the triangular arbitrage engine.
+// 全局系统资源：仅 admin 可启停（未注入用户保持单用户兼容）。
 func StopTriangular(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 	engine := GetTriangularEngine()
 	engine.Stop()
 	stopTriangularStreams(engine)
@@ -198,9 +226,10 @@ func GetTriangularOpportunity(c *gin.Context) {
 // ── Positions & History ────────────────────────────────────────
 
 // GetTriangularPositions returns active triangular trades.
+// 按属主过滤：非 admin 只见本人 + 历史无属主仓位。
 func GetTriangularPositions(c *gin.Context) {
 	engine := GetTriangularEngine()
-	positions := engine.GetPositions()
+	positions := triTradesForUser(c, engine.GetPositions())
 	if positions == nil {
 		positions = []*arbitrage.TriangularTrade{}
 	}
@@ -208,6 +237,7 @@ func GetTriangularPositions(c *gin.Context) {
 }
 
 // GetTriangularHistory returns completed triangular trade history.
+// 按属主过滤：非 admin 只见本人 + 历史无属主记录。
 func GetTriangularHistory(c *gin.Context) {
 	limit := 50
 	if l := c.Query("limit"); l != "" {
@@ -216,7 +246,7 @@ func GetTriangularHistory(c *gin.Context) {
 		}
 	}
 	engine := GetTriangularEngine()
-	history := engine.GetHistory(limit)
+	history := triTradesForUser(c, engine.GetHistory(limit))
 	if history == nil {
 		history = []*arbitrage.TriangularTrade{}
 	}
@@ -238,6 +268,12 @@ func ExecuteTriangular(c *gin.Context) {
 	}
 
 	engine := GetTriangularEngine()
+	// 记录执行属主：新产生的套利记录归当前用户（0=系统，未注入时保持现状）。
+	if uid, injected := ctxUserID(c); injected {
+		engine.SetOwnerUserID(int64(uid))
+	} else {
+		engine.SetOwnerUserID(0)
+	}
 
 	// Build a minimal opportunity from the request.
 	opp := arbitrage.TriangularOpportunity{
@@ -259,9 +295,18 @@ func ExecuteTriangular(c *gin.Context) {
 }
 
 // CloseTriangularPosition manually closes an active triangular trade.
+// 存在但属他人（且非 admin）→ 403。
 func CloseTriangularPosition(c *gin.Context) {
 	id := c.Param("id")
 	engine := GetTriangularEngine()
+	for _, t := range engine.GetPositions() {
+		if t.ID == id {
+			if !requireOwner(c, t.UserID) {
+				return
+			}
+			break
+		}
+	}
 	if err := engine.ClosePosition(id); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -270,9 +315,18 @@ func CloseTriangularPosition(c *gin.Context) {
 }
 
 // FailTriangularPosition marks an active triangular trade as failed.
+// 存在但属他人（且非 admin）→ 403。
 func FailTriangularPosition(c *gin.Context) {
 	id := c.Param("id")
 	engine := GetTriangularEngine()
+	for _, t := range engine.GetPositions() {
+		if t.ID == id {
+			if !requireOwner(c, t.UserID) {
+				return
+			}
+			break
+		}
+	}
 	if err := engine.FailPosition(id); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return

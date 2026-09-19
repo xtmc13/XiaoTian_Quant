@@ -59,9 +59,9 @@ async function mockTradingApis(page: Page) {
   await page.route('**/api/portfolio/positions*', (route) => fulfillJson(route, { positions: [] }))
   await page.route('**/api/account/balance*', (route) => fulfillJson(route, { balances: [] }))
   await page.route('**/api/trades*', (route) => fulfillJson(route, { trades: [] }))
-  // ContractTrading fetches funding rate straight from Binance (not /api)
-  await page.route('https://fapi.binance.com/**', (route) =>
-    fulfillJson(route, { lastFundingRate: '0.0001', markPrice: '50099.5', nextFundingTime: 1758307200000 }),
+  // ContractTrading reads funding rate from the gateway (/api/market/funding)
+  await page.route('**/api/market/funding*', (route) =>
+    fulfillJson(route, { funding_rate: 0.0001, mark_price: 50099.5, next_funding_time: 1758307200000 }),
   )
 }
 

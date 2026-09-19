@@ -2,7 +2,9 @@ package strategies
 
 import (
 	"fmt"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/xiaotian-quant/gateway/internal/event"
 	"github.com/xiaotian-quant/gateway/internal/model"
@@ -26,6 +28,16 @@ type TrendLongStrategy struct {
 
 	bars       []model.Bar
 	inPosition bool
+
+	// ── A7.1 多周期 / A7.2 调度 ──
+	// timeframe 是主周期（params["timeframe"]，引擎按它过滤 OnBar 分发）；
+	// extraTF 是策略额外需要的周期（params["timeframes"]，逗号分隔或数组），
+	// 引擎为其供给 K 线，策略经 provider 读取高周期指标做方向过滤；
+	// schedule 声明后引擎到点触发 OnSchedule（本策略用它做高周期趋势重检）。
+	timeframe string
+	extraTF   []string
+	schedule  string
+	provider  strategy.BarProvider
 
 	params *strategy.ParamRegistry
 }
@@ -73,8 +85,91 @@ func (s *TrendLongStrategy) Start(params map[string]any) error {
 	if sym, ok := params["symbol"].(string); ok && sym != "" {
 		s.symbol = sym
 	}
+	s.applyEngineKeysLocked(params)
 	s.running = true
 	return nil
+}
+
+// applyEngineKeysLocked 读取引擎级键（A7.1 多周期 / A7.2 调度）。
+func (s *TrendLongStrategy) applyEngineKeysLocked(params map[string]any) {
+	if tf, ok := params["timeframe"].(string); ok && tf != "" {
+		s.timeframe = strings.ToLower(strings.TrimSpace(tf))
+	}
+	if v, ok := params["timeframes"]; ok {
+		s.extraTF = nil
+		switch t := v.(type) {
+		case string:
+			for _, part := range strings.Split(t, ",") {
+				if part = strings.ToLower(strings.TrimSpace(part)); part != "" {
+					s.extraTF = append(s.extraTF, part)
+				}
+			}
+		case []any:
+			for _, item := range t {
+				if str, ok2 := item.(string); ok2 {
+					if str = strings.ToLower(strings.TrimSpace(str)); str != "" {
+						s.extraTF = append(s.extraTF, str)
+					}
+				}
+			}
+		case []string:
+			for _, str := range t {
+				if str = strings.ToLower(strings.TrimSpace(str)); str != "" {
+					s.extraTF = append(s.extraTF, str)
+				}
+			}
+		}
+	}
+	if sched, ok := params["schedule"].(string); ok {
+		s.schedule = strings.TrimSpace(sched)
+	}
+}
+
+// Timeframes 声明额外周期（引擎为其供给 K 线，经 BarProvider 读取）。
+func (s *TrendLongStrategy) Timeframes() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]string(nil), s.extraTF...)
+}
+
+// PrimaryTimeframe 声明主周期：引擎只把该周期的 K 线分发进 OnBar。
+func (s *TrendLongStrategy) PrimaryTimeframe() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.timeframe
+}
+
+// Schedule 声明计划调度（params["schedule"]，如 "@every 4h" / "daily@00:00"）。
+func (s *TrendLongStrategy) Schedule() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.schedule
+}
+
+// SetBarProvider 注入多周期数据访问器（引擎 Start 后调用）。
+func (s *TrendLongStrategy) SetBarProvider(p strategy.BarProvider) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.provider = p
+}
+
+// higherTrendUp 用最高声明周期判断大级别趋势：最新收盘 > 该周期 EMA60。
+// 未声明多周期或数据不足时返回 true（不约束）。
+func (s *TrendLongStrategy) higherTrendUp() bool {
+	if s.provider == nil || len(s.extraTF) == 0 {
+		return true
+	}
+	tf := s.extraTF[len(s.extraTF)-1] // 周期列表假定升序，取最大周期
+	series := s.provider.GetSeries(s.symbol, tf)
+	if len(series) < 61 {
+		return true // 高周期数据未暖机完成前不约束
+	}
+	closes := make([]float64, len(series))
+	for i, b := range series {
+		closes[i] = b.Close
+	}
+	ema60 := ema(closes, 60)
+	return closes[len(closes)-1] > ema60
 }
 
 func (s *TrendLongStrategy) Stop() error {
@@ -169,6 +264,12 @@ func (s *TrendLongStrategy) OnBar(bar model.Bar, _ *event.EventBus) (*model.Sign
 	goldenCross := prevFast <= prevSlow && fastEMA > slowEMA
 	deathCross := prevFast >= prevSlow && fastEMA < slowEMA
 
+	// 多周期过滤：金叉出现在大级别（声明的最高周期）下跌趋势中时不进场，
+	// 只等顺大级别趋势的金叉（GetBar(symbol,"4h")/GetSeries 的示例用法）。
+	if goldenCross && !s.inPosition && !s.higherTrendUp() {
+		return nil, nil
+	}
+
 	if goldenCross && !s.inPosition {
 		s.inPosition = true
 		return &model.Signal{
@@ -189,6 +290,30 @@ func (s *TrendLongStrategy) OnBar(bar model.Bar, _ *event.EventBus) (*model.Sign
 			Strategy:  s.name,
 			Reason:    "ema death cross close",
 			Timestamp: bar.Time,
+		}, nil
+	}
+	return nil, nil
+}
+
+// OnSchedule 计划调度回调（A7.2）：到点用最近一根 K 线重检持仓逻辑——
+// 大级别趋势转空时平掉多单（比等死亡交叉更及时的保护）。
+func (s *TrendLongStrategy) OnSchedule(_ time.Time, _ *event.EventBus) (*model.Signal, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.running || !s.inPosition {
+		return nil, nil
+	}
+	if s.provider == nil || len(s.extraTF) == 0 {
+		return nil, nil
+	}
+	if !s.higherTrendUp() {
+		s.inPosition = false
+		return &model.Signal{
+			Symbol:    s.symbol,
+			Direction: "CLOSE",
+			Strength:  0.6,
+			Strategy:  s.name,
+			Reason:    "scheduled higher-timeframe trend guard exit",
 		}, nil
 	}
 	return nil, nil

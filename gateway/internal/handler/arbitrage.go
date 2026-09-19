@@ -108,6 +108,24 @@ func restartArbitrageStreams(engine *arbitrage.Engine) {
 	startArbitrageStreams(engine)
 }
 
+// ── Helpers ───────────────────────────────────────────────────
+
+// arbPairsForUser 按属主过滤跨所套利仓位/历史：admin/未注入用户看全部，
+// 普通用户看本人 + 历史无属主(UserID=0)。
+func arbPairsForUser(c *gin.Context, pairs []*arbitrage.TradePair) []*arbitrage.TradePair {
+	uid, injected := ctxUserID(c)
+	if !injected || ctxIsAdmin(c) {
+		return pairs
+	}
+	filtered := make([]*arbitrage.TradePair, 0, len(pairs))
+	for _, p := range pairs {
+		if p.UserID == 0 || p.UserID == int64(uid) {
+			filtered = append(filtered, p)
+		}
+	}
+	return filtered
+}
+
 // ── Config ─────────────────────────────────────────────────────
 
 // GetArbitrageConfig returns current arbitrage configuration.
@@ -119,8 +137,12 @@ func GetArbitrageConfig(c *gin.Context) {
 }
 
 // UpdateArbitrageConfig updates arbitrage configuration.
+// 引擎是全局系统资源（配置存 config.yaml）：仅 admin 可改（未注入用户保持单用户兼容）。
 // Only fields explicitly present in the request body are overwritten; missing fields keep their current values.
 func UpdateArbitrageConfig(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 	bodyBytes, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -274,7 +296,11 @@ func validateArbitrageConfig(cfg arbitrage.EngineConfig) error {
 // ── Engine Control ───────────────────────────────────────────
 
 // StartArbitrage starts the arbitrage monitoring engine.
+// 全局系统资源：仅 admin 可启停（未注入用户保持单用户兼容）。
 func StartArbitrage(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 	engine := GetArbEngine()
 
 	wireEngineCallbacks(engine)
@@ -292,7 +318,11 @@ func StartArbitrage(c *gin.Context) {
 }
 
 // StopArbitrage stops the arbitrage engine.
+// 全局系统资源：仅 admin 可启停（未注入用户保持单用户兼容）。
 func StopArbitrage(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 	engine := GetArbEngine()
 	engine.Stop()
 	stopArbitrageStreams(engine)
@@ -330,9 +360,10 @@ func GetArbitrageOpportunity(c *gin.Context) {
 // ── Positions & History ────────────────────────────────────────
 
 // GetArbitragePositions returns active trade pairs.
+// 按属主过滤：非 admin 只见本人 + 历史无属主仓位。
 func GetArbitragePositions(c *gin.Context) {
 	engine := GetArbEngine()
-	positions := engine.GetPositions()
+	positions := arbPairsForUser(c, engine.GetPositions())
 	if positions == nil {
 		positions = []*arbitrage.TradePair{}
 	}
@@ -340,6 +371,7 @@ func GetArbitragePositions(c *gin.Context) {
 }
 
 // GetArbitrageHistory returns completed trade history.
+// 按属主过滤：非 admin 只见本人 + 历史无属主记录。
 func GetArbitrageHistory(c *gin.Context) {
 	limit := 50
 	if l := c.Query("limit"); l != "" {
@@ -348,7 +380,7 @@ func GetArbitrageHistory(c *gin.Context) {
 		}
 	}
 	engine := GetArbEngine()
-	history := engine.GetHistory(limit)
+	history := arbPairsForUser(c, engine.GetHistory(limit))
 	if history == nil {
 		history = []*arbitrage.TradePair{}
 	}
@@ -429,8 +461,12 @@ func autoRegisterExchanges(engine *arbitrage.Engine) {
 }
 
 // RegisterArbitrageExchange registers an exchange for arbitrage.
+// 凭证读全局统一配置，引擎为全局系统资源：仅 admin 可注册（未注入用户保持单用户兼容）。
 // Credentials are read from the unified config store unless explicitly provided in the request.
 func RegisterArbitrageExchange(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 	var body struct {
 		Name       string `json:"name"`
 		APIKey     string `json:"api_key"`
@@ -506,7 +542,11 @@ func ListArbitrageExchanges(c *gin.Context) {
 }
 
 // UnregisterArbitrageExchange removes an exchange from the arbitrage engine.
+// 全局系统资源：仅 admin 可操作（未注入用户保持单用户兼容）。
 func UnregisterArbitrageExchange(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 	name := c.Param("name")
 	engine := GetArbEngine()
 	if !engine.RemoveExchange(name) {
@@ -555,6 +595,12 @@ func ExecuteArbitrage(c *gin.Context) {
 	}
 
 	engine := GetArbEngine()
+	// 记录执行属主：新产生的套利对子归当前用户（0=系统，未注入时保持现状）。
+	if uid, injected := ctxUserID(c); injected {
+		engine.SetOwnerUserID(int64(uid))
+	} else {
+		engine.SetOwnerUserID(0)
+	}
 
 	// Ensure both exchanges are registered before attempting execution.
 	registered := make(map[string]bool)
@@ -588,8 +634,18 @@ func ExecuteArbitrage(c *gin.Context) {
 }
 
 // CloseArbitragePosition manually closes an open arbitrage position.
+// 存在但属他人（且非 admin）→ 403。
 func CloseArbitragePosition(c *gin.Context) {
 	id := c.Param("id")
+	engine := GetArbEngine()
+	for _, p := range engine.GetPositions() {
+		if p.ID == id {
+			if !requireOwner(c, p.UserID) {
+				return
+			}
+			break
+		}
+	}
 	var body struct {
 		SellPrice float64 `json:"sell_price"`
 	}
@@ -598,7 +654,6 @@ func CloseArbitragePosition(c *gin.Context) {
 		return
 	}
 
-	engine := GetArbEngine()
 	if err := engine.ClosePosition(id, body.SellPrice); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -608,10 +663,19 @@ func CloseArbitragePosition(c *gin.Context) {
 }
 
 // FailArbitragePosition marks an open arbitrage position as failed.
+// 存在但属他人（且非 admin）→ 403。
 func FailArbitragePosition(c *gin.Context) {
 	id := c.Param("id")
 
 	engine := GetArbEngine()
+	for _, p := range engine.GetPositions() {
+		if p.ID == id {
+			if !requireOwner(c, p.UserID) {
+				return
+			}
+			break
+		}
+	}
 	if err := engine.FailPosition(id); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return

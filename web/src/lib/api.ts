@@ -23,7 +23,11 @@ import {
   type BillingPlan,
   type ChainInfo,
   type BillingOrder,
+  type BillingSubscription,
+  type BillingVerificationResponse,
+  type StripeConfig,
   type BacktestResult,
+  type BacktestReport,
   type BotConfig,
   type NotificationItem,
   type StrategyItem,
@@ -351,8 +355,18 @@ export const api = {
 export const billingApi = {
   plans: () => api.get<BillingPlan[]>('/billing/plans'),
   chains: () => api.get<ChainInfo[]>('/billing/chains'),
-  createOrder: (data: { plan_id: string; chain: string; tx_hash: string }) =>
+  subscription: () => api.get<BillingSubscription>('/billing/subscription'),
+  orders: () => api.get<{ orders: BillingOrder[] }>('/billing/orders'),
+  order: (id: string) => api.get<BillingOrder>(`/billing/orders/${id}`),
+  createOrder: (data: { plan_id: string; chain: string; tx_hash?: string }) =>
     api.post<BillingOrder>('/billing/orders', data),
+  submitTx: (id: string, tx_hash: string) =>
+    api.post<BillingOrder>(`/billing/orders/${id}/tx`, { tx_hash }),
+  verification: (id: string) =>
+    api.get<BillingVerificationResponse>(`/billing/orders/${id}/verification`),
+  stripeConfig: () => api.get<StripeConfig>('/billing/stripe/config'),
+  stripeCheckout: (data: { plan_id?: string; order_id?: string; success_url: string; cancel_url: string }) =>
+    api.post<{ checkout_url: string }>('/billing/stripe/checkout', data),
 }
 
 // ── Auth ──
@@ -585,6 +599,231 @@ export const backtestApi = {
   run: (config: BacktestRequest) => api.post<BacktestResult>('/backtest/run', config, { timeout: TIMEOUTS.backtest }),
   native: (config: BacktestRequest) =>
     api.post<BacktestResult>('/native/backtest', config, { timeout: TIMEOUTS.backtest }),
+}
+
+// ── 因子研究（A6.1） ──
+export interface FactorParamSchema {
+  name: string
+  type: string
+  default?: unknown
+  min?: number
+  max?: number
+  description?: string
+}
+
+export interface FactorMeta {
+  name: string
+  version: number
+  versions?: number[]
+  category: string
+  description?: string
+  params?: FactorParamSchema[]
+  default_params?: Record<string, unknown>
+}
+
+export interface FactorValue {
+  time: number
+  value: number
+}
+
+export interface FactorEvaluation {
+  factor_name: string
+  version: number
+  symbol: string
+  tf: string
+  forward_bars: number
+  samples: number
+  overall_ic: number
+  overall_rank_ic: number
+  ic_mean: number
+  ic_std: number
+  icir: number
+  rank_ic_mean: number
+  rank_ic_std: number
+  rank_icir: number
+  ic_positive_pct: number
+  ic_series: { time: number; ic: number; rank_ic: number }[]
+}
+
+export interface FactorLayer {
+  layer: number
+  count: number
+  avg_forward_ret: number
+  total_return: number
+  annualized_ret: number
+}
+
+export interface FactorLayersResult {
+  factor_name: string
+  version: number
+  symbol: string
+  tf: string
+  forward_bars: number
+  layer_count: number
+  lookback: number
+  layers: FactorLayer[]
+  long_short_total_return: number
+  monotonicity: number
+  samples: number
+  equity_curves: { time: number; equity: number }[][]
+}
+
+export interface FactorEvaluationRecord {
+  id: number
+  user_id: number
+  kind: string
+  factor_name: string
+  factor_version: number
+  category: string
+  symbol: string
+  tf: string
+  forward_bars: number
+  params_json: string
+  samples: number
+  result_json: string
+  created_at: number
+}
+
+export interface FactorEvaluateRequest {
+  name: string
+  symbol: string
+  tf?: string
+  from?: string
+  to?: string
+  limit?: number
+  forward_bars?: number
+  ic_window?: number
+  layer_count?: number
+  lookback?: number
+  params?: Record<string, unknown>
+  version?: number
+  save?: boolean
+}
+
+export const factorApi = {
+  list: () => api.get<{ factors: FactorMeta[]; categories: string[]; count: number }>('/factors'),
+  values: (name: string, query: { symbol: string; tf?: string; limit?: number; from?: string; to?: string; params?: string }) =>
+    api.get<{
+      factor: string
+      version: number
+      category: string
+      symbol: string
+      tf: string
+      bars_used: number
+      source: string
+      values: FactorValue[]
+      closes: { time: number; close: number }[]
+      default_params?: Record<string, unknown>
+    }>(`/factors/${encodeURIComponent(name)}/values`, { params: query }),
+  evaluate: (req: FactorEvaluateRequest) =>
+    api.post<{ evaluation: FactorEvaluation; bars_used: number; source: string }>('/factors/evaluate', req, { timeout: TIMEOUTS.backtest }),
+  layers: (req: FactorEvaluateRequest) =>
+    api.post<{ result: FactorLayersResult; bars_used: number; source: string }>('/factors/layers', req, { timeout: TIMEOUTS.backtest }),
+  evaluations: (factor?: string, limit = 100) =>
+    api.get<{ evaluations: FactorEvaluationRecord[] }>(
+      `/factors/evaluations${factor ? '?factor=' + encodeURIComponent(factor) + '&' : '?'}limit=${limit}`
+    ),
+}
+
+// ── 组合回测（A6.2） ──
+export interface PortfolioLegConfig {
+  strategy_type: string
+  symbol: string
+  weight: number
+  params?: Record<string, unknown>
+}
+
+export interface PortfolioBacktestRequest {
+  name: string
+  timeframe?: string
+  start?: string
+  end?: string
+  initial_capital?: number
+  rebalance?: 'none' | 'daily' | 'weekly' | 'monthly'
+  legs: PortfolioLegConfig[]
+}
+
+export interface PortfolioLegResult {
+  strategy_type: string
+  symbol: string
+  weight: number
+  initial_allocation: number
+  final_value: number
+  total_return_pct: number
+  contribution_pct: number
+  trades: number
+  win_rate: number
+  sharpe_ratio: number
+  max_drawdown_pct: number
+}
+
+export interface PortfolioDriftRecord {
+  time: number
+  trigger: string
+  weights_before: Record<string, number>
+  weights_after: Record<string, number>
+}
+
+export interface PortfolioBacktestResult {
+  id: string
+  name: string
+  report: BacktestReport & { equity_sampled?: { timestamp: number; equity: number }[] }
+  equity_curve: { timestamp: number; equity: number }[]
+  drift: PortfolioDriftRecord[]
+  legs: PortfolioLegResult[]
+  duration_ms: number
+}
+
+export interface PortfolioBacktestRecord {
+  id: string
+  user_id: number
+  name: string
+  timeframe: string
+  rebalance: string
+  start_time: number
+  end_time: number
+  initial_capital: number
+  final_equity: number
+  total_return_pct: number
+  max_drawdown_pct: number
+  sharpe_ratio: number
+  sortino_ratio: number
+  calmar_ratio: number
+  win_rate: number
+  profit_factor: number
+  total_trades: number
+  legs_json: string
+  result_json: string
+  duration_ms: number
+  created_at: number
+}
+
+export const portfolioBacktestApi = {
+  run: (req: PortfolioBacktestRequest) =>
+    api.post<PortfolioBacktestResult>('/backtests/portfolio', req, { timeout: TIMEOUTS.backtest }),
+  list: (limit = 50) => api.get<{ backtests: PortfolioBacktestRecord[] }>(`/backtests/portfolio?limit=${limit}`),
+  get: (id: string) =>
+    api.get<{
+      id: string
+      name: string
+      timeframe: string
+      rebalance: string
+      start_time: number
+      end_time: number
+      initial_capital: number
+      final_equity: number
+      metrics: Record<string, number>
+      legs: PortfolioLegConfig[]
+      result: {
+        report?: BacktestReport
+        equity_curve?: { timestamp: number; equity: number }[]
+        drift?: PortfolioDriftRecord[]
+        legs?: PortfolioLegResult[]
+      }
+      duration_ms: number
+      created_at: number
+    }>(`/backtests/portfolio/${encodeURIComponent(id)}`),
+  delete: (id: string) => api.del<{ status: string }>(`/backtests/portfolio/${encodeURIComponent(id)}`),
 }
 
 // ── AI ──
@@ -1314,6 +1553,10 @@ export interface GridBot {
   fee_rate: number
   status: 'stopped' | 'running'
   exchange?: string
+  /** A1.3：long=现货做多网格 / short=合约做空网格 / neutral=中性对冲双网格。 */
+  mode?: 'long' | 'short' | 'neutral'
+  leverage?: number
+  margin_mode?: string
   realized_pnl: number
   total_trades: number
   base_qty: number
@@ -1326,6 +1569,24 @@ export interface GridBot {
   is_running?: boolean
 }
 
+/** A1.3 网格单腿视图（neutral 双腿各自独立核算）。 */
+export interface GridLegOrder {
+  level: number
+  side: string
+  price: number
+  qty: number
+}
+
+export interface GridLegView {
+  leg: 'long' | 'short'
+  base_qty: number
+  quote_balance: number
+  realized_pnl: number
+  total_pnl: number
+  open_orders: number
+  orders: GridLegOrder[]
+}
+
 export interface GridTrade {
   id: number
   bot_id: string
@@ -1336,6 +1597,8 @@ export interface GridTrade {
   quote_qty: number
   fee: number
   pnl: number
+  /** A1.3：成交所属腿（long/short）。 */
+  leg?: string
   ts: number
 }
 
@@ -1351,6 +1614,10 @@ export interface GridSnapshot {
 
 export interface GridBotDetail extends GridBot {
   open_orders: number
+  legs?: GridLegView[]
+  /** A1.3 整体净头寸（多头腿为正、空头腿为负）。 */
+  net_position?: number
+  price?: number
   trades: GridTrade[]
   snapshots: GridSnapshot[]
 }
@@ -1363,6 +1630,10 @@ export interface GridBotPayload {
   grid_count: number
   investment: number
   fee_rate?: number
+  mode?: 'long' | 'short' | 'neutral'
+  exchange?: string
+  leverage?: number
+  margin_mode?: string
 }
 
 // ── Risk config（风控参数：UI 可调，PUT 仅 admin） ──
@@ -1386,6 +1657,151 @@ export const gridApi = {
   remove: (id: string) => api.del<{ deleted: boolean; id: string }>(`/grid/bots/${id}`),
   start: (id: string) => api.post<{ started: boolean; id: string; price: number }>(`/grid/bots/${id}/start`),
   stop: (id: string) => api.post<{ stopped: boolean; id: string }>(`/grid/bots/${id}/stop`),
+}
+
+// ── DCA 定投机器人（A1.2）──
+export interface DCABot {
+  id: string
+  name: string
+  symbol: string
+  exchange: string
+  quote_amount: number
+  interval_minutes: number
+  max_orders: number
+  period_budget: number
+  take_profit_pct: number
+  stop_loss_pct: number
+  trailing_enabled: boolean
+  status: 'stopped' | 'running' | 'finished'
+  filled_orders: number
+  total_invested: number
+  base_qty: number
+  avg_price: number
+  realized_pnl: number
+  last_buy_at: number
+  highest_price: number
+  created_at: number
+  updated_at: number
+  started_at?: number
+  stopped_at?: number
+  is_running?: boolean
+}
+
+export interface DCAOrder {
+  id: number
+  bot_id: string
+  side: string
+  price: number
+  quantity: number
+  quote_qty: number
+  reason: string
+  ts: number
+}
+
+export interface DCABotDetail extends DCABot {
+  orders: DCAOrder[]
+}
+
+export interface DCABotPayload {
+  name: string
+  symbol: string
+  exchange?: string
+  quote_amount: number
+  interval_minutes: number
+  max_orders?: number
+  period_budget?: number
+  take_profit_pct?: number
+  stop_loss_pct?: number
+  trailing_enabled?: boolean
+}
+
+export const dcaBotApi = {
+  list: () => api.get<{ bots: DCABot[] }>('/dca-bots/').then((d) => d?.bots ?? []),
+  create: (data: DCABotPayload) => api.post<DCABot>('/dca-bots/', data),
+  get: (id: string) => api.get<DCABotDetail>(`/dca-bots/${id}`),
+  update: (id: string, data: DCABotPayload) => api.put<DCABot>(`/dca-bots/${id}`, data),
+  remove: (id: string) => api.del<{ deleted: boolean; id: string }>(`/dca-bots/${id}`),
+  start: (id: string) => api.post<{ started: boolean; id: string; price: number }>(`/dca-bots/${id}/start`),
+  stop: (id: string) => api.post<{ stopped: boolean; id: string }>(`/dca-bots/${id}/stop`),
+}
+
+// ── 分层马丁格尔机器人（A1.3）──
+export interface LayeredMartinGroup {
+  id?: number
+  bot_id?: string
+  group_index?: number
+  quote_amount: number
+  multiplier: number
+  max_layers: number
+  budget_cap: number
+  layer?: number
+  total_invested?: number
+  base_qty?: number
+  avg_price?: number
+  entry_price?: number
+  highest_price?: number
+  pending_layer?: number
+  status?: string
+  created_at?: number
+  updated_at?: number
+}
+
+export interface LayeredMartinBot {
+  id: string
+  name: string
+  symbol: string
+  exchange: string
+  price_deviation_pct: number
+  take_profit_pct: number
+  stop_loss_pct: number
+  trailing_enabled: boolean
+  status: 'stopped' | 'running' | 'finished'
+  realized_pnl: number
+  total_trades: number
+  groups: LayeredMartinGroup[]
+  created_at: number
+  updated_at: number
+  started_at?: number
+  stopped_at?: number
+  is_running?: boolean
+}
+
+export interface LayeredMartinOrder {
+  id: number
+  bot_id: string
+  group_index: number
+  side: string
+  layer: number
+  price: number
+  quantity: number
+  quote_qty: number
+  reason: string
+  ts: number
+}
+
+export interface LayeredMartinBotDetail extends LayeredMartinBot {
+  orders: LayeredMartinOrder[]
+}
+
+export interface LayeredMartinBotPayload {
+  name: string
+  symbol: string
+  exchange?: string
+  price_deviation_pct: number
+  take_profit_pct?: number
+  stop_loss_pct?: number
+  trailing_enabled?: boolean
+  groups: { quote_amount: number; multiplier: number; max_layers: number; budget_cap: number }[]
+}
+
+export const layeredMartinApi = {
+  list: () => api.get<{ bots: LayeredMartinBot[] }>('/layered-martin-bots/').then((d) => d?.bots ?? []),
+  create: (data: LayeredMartinBotPayload) => api.post<LayeredMartinBot>('/layered-martin-bots/', data),
+  get: (id: string) => api.get<LayeredMartinBotDetail>(`/layered-martin-bots/${id}`),
+  update: (id: string, data: LayeredMartinBotPayload) => api.put<LayeredMartinBot>(`/layered-martin-bots/${id}`, data),
+  remove: (id: string) => api.del<{ deleted: boolean; id: string }>(`/layered-martin-bots/${id}`),
+  start: (id: string) => api.post<{ started: boolean; id: string; price: number }>(`/layered-martin-bots/${id}/start`),
+  stop: (id: string) => api.post<{ stopped: boolean; id: string }>(`/layered-martin-bots/${id}/stop`),
 }
 
 export { ApiError }

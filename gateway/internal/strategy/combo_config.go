@@ -18,6 +18,7 @@ type ComboMember struct {
 // ComboConfig holds the configuration for a strategy combo.
 type ComboConfig struct {
 	ID              string        `json:"id"`
+	UserID          int64         `json:"user_id"`
 	Name            string        `json:"name"`
 	Symbol          string        `json:"symbol"`
 	Members         []ComboMember `json:"members"`
@@ -128,6 +129,20 @@ func ListComboConfigs() []*ComboConfig {
 	result := make([]*ComboConfig, 0, len(comboRegistry))
 	for _, c := range comboRegistry {
 		result = append(result, c)
+	}
+	return result
+}
+
+// ListComboConfigsForUser 返回当前用户可见的组合：本人的 + 历史无属主
+// （UserID=0，单用户时代遗留）；admin（includeAll=true）看全部。
+func ListComboConfigsForUser(userID int64, includeAll bool) []*ComboConfig {
+	comboMu.RLock()
+	defer comboMu.RUnlock()
+	result := make([]*ComboConfig, 0, len(comboRegistry))
+	for _, c := range comboRegistry {
+		if includeAll || c.UserID == 0 || c.UserID == userID {
+			result = append(result, c)
+		}
 	}
 	return result
 }

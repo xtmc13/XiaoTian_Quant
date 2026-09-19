@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xiaotian-quant/gateway/internal/adapter"
 	"github.com/xiaotian-quant/gateway/internal/ai"
 	"github.com/xiaotian-quant/gateway/internal/market"
 	"github.com/xiaotian-quant/gateway/internal/store"
@@ -262,15 +263,15 @@ func MarketSnapshot(c *gin.Context) {
 	atrRaw := (high24h - low24h) * 0.25
 
 	result := gin.H{
-		"symbol":          symbol,
-		"price":           priceRaw,
-		"change_24h":      change24h,
-		"change_pct_24h":  change24h,
-		"volume_24h":      volumeRaw,
-		"high_24h":        high24h,
-		"low_24h":         low24h,
-		"atr":             atrRaw,
-		"status":          "ok",
+		"symbol":         symbol,
+		"price":          priceRaw,
+		"change_24h":     change24h,
+		"change_pct_24h": change24h,
+		"volume_24h":     volumeRaw,
+		"high_24h":       high24h,
+		"low_24h":        low24h,
+		"atr":            atrRaw,
+		"status":         "ok",
 	}
 
 	market.GetCache().Set(cacheKey, result, market.SnapshotTTL)
@@ -285,22 +286,22 @@ func handleSentimentSnapshot(c *gin.Context) {
 	dxy := fetchYahooQuote("DX-Y.NYB")
 
 	c.JSON(http.StatusOK, gin.H{
-		"fear_greed": fg.Value,
+		"fear_greed":       fg.Value,
 		"fear_greed_label": fg.Label,
-		"vix":        vix.Price,
-		"vix_change": vix.ChangePct,
-		"dxy":        dxy.Price,
-		"dxy_change": dxy.ChangePct,
-		"status":     "ok",
-		"source":     "alternative.me/YahooFinance",
+		"vix":              vix.Price,
+		"vix_change":       vix.ChangePct,
+		"dxy":              dxy.Price,
+		"dxy_change":       dxy.ChangePct,
+		"status":           "ok",
+		"source":           "alternative.me/YahooFinance",
 	})
 }
 
 type fearGreedResp struct {
 	Data []struct {
-		Value       string `json:"value"`
-		ValueText   string `json:"value_text"`
-		Timestamp   string `json:"timestamp"`
+		Value     string `json:"value"`
+		ValueText string `json:"value_text"`
+		Timestamp string `json:"timestamp"`
 	} `json:"data"`
 }
 
@@ -354,8 +355,8 @@ func fetchYahooQuote(symbol string) yahooQuote {
 		Chart struct {
 			Result []struct {
 				Meta struct {
-					RegularMarketPrice   float64 `json:"regularMarketPrice"`
-					ChartPreviousClose   float64 `json:"chartPreviousClose"`
+					RegularMarketPrice float64 `json:"regularMarketPrice"`
+					ChartPreviousClose float64 `json:"chartPreviousClose"`
 				} `json:"meta"`
 			} `json:"result"`
 		} `json:"chart"`
@@ -377,9 +378,9 @@ func fetchYahooQuote(symbol string) yahooQuote {
 // ── Indices ───────────────────────────────────────────────────────
 
 var indexSymbolMap = map[string]struct {
-	Flag   string
-	Name   string
-	Yahoo  string
+	Flag  string
+	Name  string
+	Yahoo string
 }{
 	"SPX":  {Flag: "🇺🇸", Name: "S&P 500", Yahoo: "^GSPC"},
 	"NDX":  {Flag: "🇺🇸", Name: "NASDAQ", Yahoo: "^IXIC"},
@@ -670,6 +671,19 @@ func SettingsExchangeTest(c *gin.Context) {
 	case "coinbase":
 		endpoint := "https://api.coinbase.com/v2/prices/BTC-USD/spot"
 		status, msg = testGenericExchange(exName, endpoint, "")
+	case "ibkr":
+		// IBKR 是本地 Client Portal 网关（会话 cookie 认证），按配置探测 /iserver/auth/status。
+		if !adapter.IBKRConfigured() {
+			msg = fmt.Sprintf("%s 未启用：请在 config.yaml 配置 exchanges.ibkr（enabled/host/port），并先启动本地 IB Gateway / Client Portal", exName)
+		} else {
+			ibkr := adapter.NewIBKRAdapter(adapter.LoadIBKRConfig())
+			if err := ibkr.Ping(); err != nil {
+				msg = fmt.Sprintf("%s 连接失败: %v", exName, err)
+			} else {
+				status = "ok"
+				msg = fmt.Sprintf("%s 连接测试通过", exName)
+			}
+		}
 	default:
 		// Generic connectivity test using public API endpoint
 		endpoint := "https://api.binance.com/api/v3/ticker/price?symbol=" + symbol

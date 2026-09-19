@@ -91,13 +91,14 @@ interface RouteRule {
 
 const EVENTS = ['signal', 'trade', 'risk', 'protection', 'system', 'backtest', 'hyperopt']
 const LEVELS = ['INFO', 'WARN', 'CRITICAL']
-const CHANNELS = ['log', 'email', 'lark', 'dingtalk', 'telegram', 'discord']
+const CHANNELS = ['log', 'email', 'lark', 'dingtalk', 'telegram', 'discord', 'sms']
 
 const CHANNEL_LABELS: Record<string, string> = {
   log: 'settings.routing.channel.log',
   email: 'settings.routing.channel.email',
   lark: 'settings.routing.channel.lark',
   dingtalk: 'settings.routing.channel.dingtalk',
+  sms: 'settings.routing.channel.sms',
 }
 
 const EVENT_LABELS: Record<string, string> = {

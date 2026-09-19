@@ -41,6 +41,8 @@ const dict = flatten({
     settings: 'Settings',
     portfolio: 'Portfolio',
     bots: 'Bots',
+    dcaBots: 'DCA Bots',
+    layeredMartin: 'Layered Martingale',
     strategy: 'Strategy',
     backtest: 'Backtest',
     hyperopt: 'Hyperopt',

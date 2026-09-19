@@ -2,7 +2,9 @@ package strategies
 
 import (
 	"fmt"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/xiaotian-quant/gateway/internal/event"
 	"github.com/xiaotian-quant/gateway/internal/model"
@@ -23,6 +25,12 @@ type TrendShortStrategy struct {
 
 	bars       []model.Bar
 	inPosition bool
+
+	// ── A7.1 多周期 / A7.2 调度（与 TrendLongStrategy 同口径） ──
+	timeframe string
+	extraTF   []string
+	schedule  string
+	provider  strategy.BarProvider
 
 	params *strategy.ParamRegistry
 }
@@ -70,8 +78,90 @@ func (s *TrendShortStrategy) Start(params map[string]any) error {
 	if sym, ok := params["symbol"].(string); ok && sym != "" {
 		s.symbol = sym
 	}
+	s.applyEngineKeysLocked(params)
 	s.running = true
 	return nil
+}
+
+// applyEngineKeysLocked 读取引擎级键（A7.1 多周期 / A7.2 调度）。
+func (s *TrendShortStrategy) applyEngineKeysLocked(params map[string]any) {
+	if tf, ok := params["timeframe"].(string); ok && tf != "" {
+		s.timeframe = strings.ToLower(strings.TrimSpace(tf))
+	}
+	if v, ok := params["timeframes"]; ok {
+		s.extraTF = nil
+		switch t := v.(type) {
+		case string:
+			for _, part := range strings.Split(t, ",") {
+				if part = strings.ToLower(strings.TrimSpace(part)); part != "" {
+					s.extraTF = append(s.extraTF, part)
+				}
+			}
+		case []any:
+			for _, item := range t {
+				if str, ok2 := item.(string); ok2 {
+					if str = strings.ToLower(strings.TrimSpace(str)); str != "" {
+						s.extraTF = append(s.extraTF, str)
+					}
+				}
+			}
+		case []string:
+			for _, str := range t {
+				if str = strings.ToLower(strings.TrimSpace(str)); str != "" {
+					s.extraTF = append(s.extraTF, str)
+				}
+			}
+		}
+	}
+	if sched, ok := params["schedule"].(string); ok {
+		s.schedule = strings.TrimSpace(sched)
+	}
+}
+
+// Timeframes 声明额外周期（引擎为其供给 K 线，经 BarProvider 读取）。
+func (s *TrendShortStrategy) Timeframes() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]string(nil), s.extraTF...)
+}
+
+// PrimaryTimeframe 声明主周期：引擎只把该周期的 K 线分发进 OnBar。
+func (s *TrendShortStrategy) PrimaryTimeframe() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.timeframe
+}
+
+// Schedule 声明计划调度（params["schedule"]）。
+func (s *TrendShortStrategy) Schedule() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.schedule
+}
+
+// SetBarProvider 注入多周期数据访问器（引擎 Start 后调用）。
+func (s *TrendShortStrategy) SetBarProvider(p strategy.BarProvider) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.provider = p
+}
+
+// higherTrendDown 用最高声明周期判断大级别趋势：最新收盘 < 该周期 EMA60。
+// 未声明多周期或数据不足时返回 true（不约束）。
+func (s *TrendShortStrategy) higherTrendDown() bool {
+	if s.provider == nil || len(s.extraTF) == 0 {
+		return true
+	}
+	tf := s.extraTF[len(s.extraTF)-1]
+	series := s.provider.GetSeries(s.symbol, tf)
+	if len(series) < 61 {
+		return true
+	}
+	closes := make([]float64, len(series))
+	for i, b := range series {
+		closes[i] = b.Close
+	}
+	return closes[len(closes)-1] < ema(closes, 60)
 }
 
 func (s *TrendShortStrategy) Stop() error {
@@ -166,6 +256,11 @@ func (s *TrendShortStrategy) OnBar(bar model.Bar, _ *event.EventBus) (*model.Sig
 	deathCross := prevFast >= prevSlow && fastEMA < slowEMA
 	goldenCross := prevFast <= prevSlow && fastEMA > slowEMA
 
+	// 多周期过滤：死叉出现在大级别上涨趋势中时不进场（GetSeries 示例用法）。
+	if deathCross && !s.inPosition && !s.higherTrendDown() {
+		return nil, nil
+	}
+
 	if deathCross && !s.inPosition {
 		s.inPosition = true
 		return &model.Signal{
@@ -186,6 +281,29 @@ func (s *TrendShortStrategy) OnBar(bar model.Bar, _ *event.EventBus) (*model.Sig
 			Strategy:  s.name,
 			Reason:    "ema golden cross close",
 			Timestamp: bar.Time,
+		}, nil
+	}
+	return nil, nil
+}
+
+// OnSchedule 计划调度回调（A7.2）：大级别趋势转多时平掉空单。
+func (s *TrendShortStrategy) OnSchedule(_ time.Time, _ *event.EventBus) (*model.Signal, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.running || !s.inPosition {
+		return nil, nil
+	}
+	if s.provider == nil || len(s.extraTF) == 0 {
+		return nil, nil
+	}
+	if !s.higherTrendDown() {
+		s.inPosition = false
+		return &model.Signal{
+			Symbol:    s.symbol,
+			Direction: "CLOSE",
+			Strength:  0.6,
+			Strategy:  s.name,
+			Reason:    "scheduled higher-timeframe trend guard exit",
 		}, nil
 	}
 	return nil, nil

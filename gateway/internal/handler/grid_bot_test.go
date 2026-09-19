@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xiaotian-quant/gateway/internal/grid"
 	"github.com/xiaotian-quant/gateway/internal/middleware"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
@@ -474,7 +475,7 @@ func TestGridBotDetailAggregatesTradesAndSnapshots(t *testing.T) {
 	id, _ := created["id"].(string)
 
 	for i := 0; i < 3; i++ {
-		if err := gridBotRepo.InsertTrade(id, i, "buy", 100, 0.5, 50, 0.05, 0.1, int64(1700000000000+i)); err != nil {
+		if err := gridBotRepo.InsertTrade(id, i, "buy", 100, 0.5, 50, 0.05, 0.1, "long", int64(1700000000000+i)); err != nil {
 			t.Fatalf("insert trade: %v", err)
 		}
 	}
@@ -564,4 +565,142 @@ func TestGridBotNotFound(t *testing.T) {
 		assertEq(t, w.Code, http.StatusNotFound, fmt.Sprintf("%s %s status", tc.method, tc.path))
 		assertErrBody(t, resp)
 	}
+}
+
+// TestGridBotModeCreateValidation: mode/leverage/margin_mode 校验与落库——
+// neutral/short 必须带合法杠杆；非法 mode/margin_mode 400。
+func TestGridBotModeCreateValidation(t *testing.T) {
+	r, _ := setupGridRouter(t)
+	token := gridToken(t, 1)
+
+	valid := func() map[string]any {
+		b := validGridBody()
+		b["mode"] = "neutral"
+		b["leverage"] = 5.0
+		b["margin_mode"] = "isolated"
+		return b
+	}
+	w, created := gridCreateBot(t, r, token, valid())
+	assertEq(t, w.Code, http.StatusOK, "create status")
+	assertStrEq(t, created["mode"], "neutral", "mode")
+	assertNumEq(t, created["leverage"], 5, "leverage")
+	assertStrEq(t, created["margin_mode"], "isolated", "margin_mode")
+	assertStrEq(t, created["exchange"], "paper", "default exchange")
+	id, _ := created["id"].(string)
+
+	// 缺省 mode → long，兼容存量行为。
+	b := validGridBody()
+	w, created = gridCreateBot(t, r, token, b)
+	assertEq(t, w.Code, http.StatusOK, "create status")
+	assertStrEq(t, created["mode"], "long", "default mode")
+
+	// 详情回读 mode 字段。
+	w, detail := gridDo(t, r, http.MethodGet, "/api/grid/bots/"+id, nil, token)
+	assertEq(t, w.Code, http.StatusOK, "detail status")
+	assertStrEq(t, detail["mode"], "neutral", "detail mode")
+
+	// 校验失败集。
+	bad := []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{"invalid mode", func(b map[string]any) { b["mode"] = "diagonal" }},
+		{"leverage too low", func(b map[string]any) { b["mode"] = "short"; b["leverage"] = 0.5 }},
+		{"leverage too high", func(b map[string]any) { b["mode"] = "neutral"; b["leverage"] = 200.0 }},
+		{"bad margin_mode", func(b map[string]any) { b["mode"] = "short"; b["leverage"] = 3.0; b["margin_mode"] = "spicy" }},
+	}
+	for _, tc := range bad {
+		t.Run(tc.name, func(t *testing.T) {
+			body := validGridBody()
+			tc.mutate(body)
+			w, resp := gridCreateBot(t, r, token, body)
+			assertEq(t, w.Code, http.StatusBadRequest, "status code")
+			assertErrBody(t, resp)
+		})
+	}
+}
+
+// TestGridBotNeutralDetailLegs: neutral 详情接口返回双腿各自的格子状态与
+// 盈亏 + 整体净头寸（从 state_json 解析，与 Runner 导出格式一致）。
+func TestGridBotNeutralDetailLegs(t *testing.T) {
+	r, fake := setupGridRouter(t)
+	setGridPrice(t, 105)
+	token := gridToken(t, 1)
+
+	b := validGridBody()
+	b["mode"] = "neutral"
+	b["leverage"] = 5.0
+	w, created := gridCreateBot(t, r, token, b)
+	assertEq(t, w.Code, http.StatusOK, "create status")
+	id, _ := created["id"].(string)
+
+	// 用真实 BotEngine 造一份双腿运行状态写回 state_json（等价于 Runner 落库）。
+	eng, _, err := grid.NewBotEngine(grid.Config{
+		Symbol: "BTCUSDT", Lower: 100, Upper: 110, GridCount: 10,
+		Investment: 1000, FeeRate: 0.001, CurrentPrice: 105,
+	}, grid.ModeNeutral)
+	if err != nil {
+		t.Fatalf("NewBotEngine: %v", err)
+	}
+	eng.OnPriceTick(106, 1)
+	raw, _ := json.Marshal(eng.ExportState())
+	if err := gridBotRepo.UpdateState(id, string(raw), eng.BaseQty(),
+		eng.QuoteBalance(), eng.RealizedPnL(), eng.TotalTrades()); err != nil {
+		t.Fatalf("UpdateState: %v", err)
+	}
+
+	w, detail := gridDo(t, r, http.MethodGet, "/api/grid/bots/"+id, nil, token)
+	assertEq(t, w.Code, http.StatusOK, "detail status")
+	rawLegs, ok := detail["legs"].([]any)
+	if !ok || len(rawLegs) != 2 {
+		t.Fatalf("detail legs = %v, want 2 leg views", detail["legs"])
+	}
+	byLeg := map[string]map[string]any{}
+	for _, item := range rawLegs {
+		lv, ok := item.(map[string]any)
+		if !ok {
+			t.Fatalf("leg view not an object: %v", item)
+		}
+		leg, _ := lv["leg"].(string)
+		byLeg[leg] = lv
+		orders, _ := lv["orders"].([]any)
+		if len(orders) != int(num(lv["open_orders"])) {
+			t.Errorf("leg %s open_orders=%v != len(orders)=%d", leg, lv["open_orders"], len(orders))
+		}
+	}
+	if num(byLeg["long"]["realized_pnl"]) <= 0 {
+		t.Errorf("long leg realized = %v, want > 0", byLeg["long"]["realized_pnl"])
+	}
+	if num(byLeg["short"]["base_qty"]) >= 0 {
+		t.Errorf("short leg base_qty = %v, want < 0", byLeg["short"]["base_qty"])
+	}
+	if got := num(detail["net_position"]); got != eng.NetPosition() {
+		t.Errorf("net_position = %v, want %v", detail["net_position"], eng.NetPosition())
+	}
+	assertNumEq(t, detail["base_qty"], eng.BaseQty(), "aggregate base_qty")
+
+	// open_orders 统计跨腿（running=false 时为 0；把状态置 running 再验）。
+	if err := gridBotRepo.UpdateStatus(id, "running"); err != nil {
+		t.Fatalf("UpdateStatus: %v", err)
+	}
+	fake.mu.Lock()
+	fake.running[id] = true
+	fake.mu.Unlock()
+	w, detail = gridDo(t, r, http.MethodGet, "/api/grid/bots/"+id, nil, token)
+	assertEq(t, w.Code, http.StatusOK, "detail status")
+	totalOpen := num(byLeg["long"]["open_orders"]) + num(byLeg["short"]["open_orders"])
+	assertNumEq(t, detail["open_orders"], totalOpen, "open_orders across legs")
+}
+
+func assertStrEq(t *testing.T, v any, want, msg string) {
+	t.Helper()
+	got, ok := v.(string)
+	if !ok || got != want {
+		t.Fatalf("%s: got %v, want %q", msg, v, want)
+	}
+}
+
+func num(v any) float64 {
+	f, _ := v.(float64)
+	return f
 }

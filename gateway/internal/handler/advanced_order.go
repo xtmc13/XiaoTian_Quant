@@ -11,6 +11,30 @@ import (
 
 var advancedOrderMgr = order.NewAdvancedManager()
 
+// advancedOrderUID 取当前登录用户 ID（未注入返回 0，保持单用户兼容）。
+func advancedOrderUID(c *gin.Context) uint64 {
+	uid, _ := ctxUserID(c)
+	return uint64(uid)
+}
+
+// advancedOrderOwned 校验高级订单归属：admin/未注入用户放行，
+// 非属主按不存在处理（避免枚举）。
+func advancedOrderOwned(c *gin.Context, ownerID uint64) bool {
+	if _, injected := ctxUserID(c); !injected {
+		return true
+	}
+	if ctxIsAdmin(c) {
+		return true
+	}
+	return ownerID == advancedOrderUID(c)
+}
+
+// advancedOrderRestricted 当前请求是否需按用户过滤（登录非 admin）。
+func advancedOrderRestricted(c *gin.Context) bool {
+	_, injected := ctxUserID(c)
+	return injected && !ctxIsAdmin(c)
+}
+
 func init() {
 	// Wire advanced manager to base order manager
 	om := order.GetOrderManager()
@@ -52,6 +76,7 @@ func PlaceOCO(c *gin.Context) {
 		StopPrice:  body.StopPrice,
 		StopLimit:  body.StopLimit,
 		ParentID:   body.ParentID,
+		UserID:     advancedOrderUID(c),
 	}
 
 	result, err := advancedOrderMgr.PlaceOCO(oco)
@@ -71,6 +96,11 @@ func PlaceOCO(c *gin.Context) {
 // CancelOCO cancels an OCO order.
 func CancelOCO(c *gin.Context) {
 	id := c.Param("id")
+	oco := advancedOrderMgr.GetOCO(id)
+	if oco == nil || !advancedOrderOwned(c, oco.UserID) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "OCO not found"})
+		return
+	}
 	if err := advancedOrderMgr.CancelOCO(id); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		return
@@ -82,7 +112,7 @@ func CancelOCO(c *gin.Context) {
 func GetOCO(c *gin.Context) {
 	id := c.Param("id")
 	oco := advancedOrderMgr.GetOCO(id)
-	if oco == nil {
+	if oco == nil || !advancedOrderOwned(c, oco.UserID) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "OCO not found"})
 		return
 	}
@@ -92,10 +122,18 @@ func GetOCO(c *gin.Context) {
 // ListOCO returns active OCO orders.
 func ListOCO(c *gin.Context) {
 	orders := advancedOrderMgr.ListActiveOCO()
-	if orders == nil {
-		orders = []*order.OCOOrder{}
+	filtered := make([]*order.OCOOrder, 0, len(orders))
+	if !advancedOrderRestricted(c) {
+		filtered = orders
+	} else {
+		uid := advancedOrderUID(c)
+		for _, o := range orders {
+			if o.UserID == uid {
+				filtered = append(filtered, o)
+			}
+		}
 	}
-	c.JSON(http.StatusOK, gin.H{"orders": orders, "count": len(orders)})
+	c.JSON(http.StatusOK, gin.H{"orders": filtered, "count": len(filtered)})
 }
 
 // ── Bracket Orders ─────────────────────────────────────────────
@@ -129,6 +167,7 @@ func PlaceBracket(c *gin.Context) {
 		TakeProfit: body.TakeProfit,
 		StopLoss:   body.StopLoss,
 		EntryType:  entryType,
+		UserID:     advancedOrderUID(c),
 	}
 
 	result, err := advancedOrderMgr.PlaceBracket(bracket)
@@ -147,6 +186,11 @@ func PlaceBracket(c *gin.Context) {
 // CancelBracket cancels a bracket order.
 func CancelBracket(c *gin.Context) {
 	id := c.Param("id")
+	bracket := advancedOrderMgr.GetBracket(id)
+	if bracket == nil || !advancedOrderOwned(c, bracket.UserID) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Bracket not found"})
+		return
+	}
 	if err := advancedOrderMgr.CancelBracket(id); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		return
@@ -158,7 +202,7 @@ func CancelBracket(c *gin.Context) {
 func GetBracket(c *gin.Context) {
 	id := c.Param("id")
 	bracket := advancedOrderMgr.GetBracket(id)
-	if bracket == nil {
+	if bracket == nil || !advancedOrderOwned(c, bracket.UserID) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Bracket not found"})
 		return
 	}
@@ -168,10 +212,18 @@ func GetBracket(c *gin.Context) {
 // ListBracket returns active bracket orders.
 func ListBracket(c *gin.Context) {
 	orders := advancedOrderMgr.ListActiveBracket()
-	if orders == nil {
-		orders = []*order.BracketOrder{}
+	filtered := make([]*order.BracketOrder, 0, len(orders))
+	if !advancedOrderRestricted(c) {
+		filtered = orders
+	} else {
+		uid := advancedOrderUID(c)
+		for _, o := range orders {
+			if o.UserID == uid {
+				filtered = append(filtered, o)
+			}
+		}
 	}
-	c.JSON(http.StatusOK, gin.H{"orders": orders, "count": len(orders)})
+	c.JSON(http.StatusOK, gin.H{"orders": filtered, "count": len(filtered)})
 }
 
 // ── Iceberg Orders ─────────────────────────────────────────────
@@ -198,6 +250,7 @@ func PlaceIceberg(c *gin.Context) {
 		VisibleQuantity: body.VisibleQuantity,
 		Price:           body.Price,
 		Variance:        body.Variance,
+		UserID:          advancedOrderUID(c),
 	}
 
 	result, err := advancedOrderMgr.PlaceIceberg(iceberg)
@@ -215,6 +268,11 @@ func PlaceIceberg(c *gin.Context) {
 // CancelIceberg cancels an iceberg order.
 func CancelIceberg(c *gin.Context) {
 	id := c.Param("id")
+	iceberg := advancedOrderMgr.GetIceberg(id)
+	if iceberg == nil || !advancedOrderOwned(c, iceberg.UserID) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Iceberg not found"})
+		return
+	}
 	if err := advancedOrderMgr.CancelIceberg(id); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		return
@@ -226,7 +284,7 @@ func CancelIceberg(c *gin.Context) {
 func GetIceberg(c *gin.Context) {
 	id := c.Param("id")
 	iceberg := advancedOrderMgr.GetIceberg(id)
-	if iceberg == nil {
+	if iceberg == nil || !advancedOrderOwned(c, iceberg.UserID) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Iceberg not found"})
 		return
 	}
@@ -236,10 +294,18 @@ func GetIceberg(c *gin.Context) {
 // ListIceberg returns active iceberg orders.
 func ListIceberg(c *gin.Context) {
 	orders := advancedOrderMgr.ListActiveIceberg()
-	if orders == nil {
-		orders = []*order.IcebergOrder{}
+	filtered := make([]*order.IcebergOrder, 0, len(orders))
+	if !advancedOrderRestricted(c) {
+		filtered = orders
+	} else {
+		uid := advancedOrderUID(c)
+		for _, o := range orders {
+			if o.UserID == uid {
+				filtered = append(filtered, o)
+			}
+		}
 	}
-	c.JSON(http.StatusOK, gin.H{"orders": orders, "count": len(orders)})
+	c.JSON(http.StatusOK, gin.H{"orders": filtered, "count": len(filtered)})
 }
 
 // ── Utility ────────────────────────────────────────────────────

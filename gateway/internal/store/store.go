@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"os"
 	"path/filepath"
@@ -67,8 +68,11 @@ func InitDB() error {
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return fmt.Errorf("failed to create data directory: %w", err)
 	}
+	// modernc.org/sqlite 的 DSN 参数走 _pragma=...（mattn 风格的 _journal_mode/
+	// _busy_timeout 会被静默忽略，等于裸跑 DELETE 日志 + 无 busy timeout，
+	// 并发写直接 SQLITE_BUSY）。
 	var err error
-	db, err = sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
+	db, err = sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
 	if err != nil {
 		return err
 	}
@@ -838,6 +842,10 @@ func LoadStrategyTemplates() {
 	if db != nil {
 		strategyTemplatesMigrated.Do(func() {
 			_ = strategyTemplateRepo.MigrateFromJSON(templatesPath, 0)
+			// A1.5: 注册系统预设模板（12 个 CTA/组合模板，幂等）。
+			if err := EnsureSystemTemplates(); err != nil {
+				log.Printf("[store] ensure system templates: %v", err)
+			}
 		})
 		items, err := strategyTemplateRepo.List(0, "", 0)
 		if err == nil {
@@ -1241,6 +1249,92 @@ func GetOrders(symbol string) []map[string]any {
 	return result
 }
 
+// GetOrdersForUser 返回当前用户可见的订单：本人的 + 历史无属主（user_id=0，
+// 单用户时代/webhook 系统单）的；admin（includeAll=true）看全部。
+// userID<=0 且 includeAll=false 时退化为 GetOrders 的全量行为（未注入用户的
+// 内部调用方兼容）。
+func GetOrdersForUser(symbol string, userID int64, includeAll bool) []map[string]any {
+	if userID <= 0 && !includeAll {
+		return GetOrders(symbol)
+	}
+	ordersMu.RLock()
+	defer ordersMu.RUnlock()
+	var result []map[string]any
+	for _, o := range orders {
+		if symbol != "" && o.Symbol != symbol {
+			continue
+		}
+		if !includeAll && int64(o.UserID) != userID && o.UserID != 0 {
+			continue
+		}
+		result = append(result, orderToMap(o))
+	}
+	if result == nil {
+		result = []map[string]any{}
+	}
+	return result
+}
+
+// getOrderMapUserID 从订单 map 读 user_id（uint64/int64/int/float64 均可，
+// 修复 getFloat 丢 uint64 导致订单属主恒为 0 的隐性 bug）。
+func getOrderMapUserID(m map[string]any) uint64 {
+	switch v := m["user_id"].(type) {
+	case uint64:
+		return v
+	case int64:
+		return uint64(v)
+	case int:
+		return uint64(v)
+	case float64:
+		return uint64(v)
+	}
+	return 0
+}
+
+// GetOrderOwnerID 返回订单属主（不存在返回 found=false）。
+func GetOrderOwnerID(id string) (int64, bool) {
+	ordersMu.RLock()
+	defer ordersMu.RUnlock()
+	if o, ok := orders[id]; ok {
+		return int64(o.UserID), true
+	}
+	if db == nil {
+		return 0, false
+	}
+	var userID int64
+	err := db.QueryRow(`SELECT user_id FROM xt_orders WHERE id=?`, id).Scan(&userID)
+	if err != nil {
+		return 0, false
+	}
+	return userID, true
+}
+
+// CancelOrderForUser 校验订单归属后取消（C1 越权修复）：
+// 非属主一律返回 "not found"，避免通过报错差异枚举他人订单。
+func CancelOrderForUser(id string, userID uint64) error {
+	ordersMu.RLock()
+	o, ok := orders[id]
+	ordersMu.RUnlock()
+	if ok {
+		if o.UserID != userID {
+			return fmt.Errorf("not found")
+		}
+		return CancelOrder(id)
+	}
+	// 内存未命中时回源 DB 并带上 user 条件
+	if db != nil {
+		res, err := db.Exec("UPDATE xt_orders SET status='CANCELLED', updated_at=? WHERE id=? AND user_id=?",
+			time.Now().UnixMilli(), id, userID)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			return nil
+		}
+	}
+	return fmt.Errorf("not found")
+}
+
 func PlaceOrder(order map[string]any) string {
 	ordersMu.Lock()
 	defer ordersMu.Unlock()
@@ -1257,7 +1351,7 @@ func PlaceOrder(order map[string]any) string {
 		Filled:        getFloat(order, "filled", 0),
 		Status:        getString(order, "status", "NEW"),
 		Exchange:      getString(order, "exchange", "BINANCE"),
-		UserID:        uint64(getFloat(order, "user_id", 0)),
+		UserID:        getOrderMapUserID(order),
 		ClientOID:     getString(order, "client_oid", ""),
 		AvgFillPrice:  getFloat(order, "avg_fill_price", 0),
 		CreatedAt:     int64(getFloat(order, "created_at", 0)),
@@ -1296,6 +1390,7 @@ func GetOrderByID(id string) map[string]any {
 	return nil
 }
 
+// CancelOrder 取消内存订单（系统路径用，不做归属校验）。
 func CancelOrder(id string) error {
 	ordersMu.Lock()
 	defer ordersMu.Unlock()
@@ -1533,11 +1628,21 @@ func ParseJSON(data []byte) (map[string]any, error) {
 
 // ── Agent Audit Log ──
 
-func GetAgentAuditLog(limit int) []map[string]any {
+// GetAgentAuditLog returns recent agent API call audit records.
+// userID > 0 时只返回该用户的记录（C3）；0 表示不过滤（admin/系统视角）。
+func GetAgentAuditLog(limit int, userID int64) []map[string]any {
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := db.Query(`SELECT id, token_id, name, endpoint, method, params_summary, status_code, ip, user_agent, timestamp FROM agent_audit_log ORDER BY timestamp DESC LIMIT ?`, limit)
+	query := `SELECT id, token_id, name, endpoint, method, params_summary, status_code, ip, user_agent, timestamp FROM agent_audit_log`
+	args := []any{}
+	if userID > 0 {
+		query += ` WHERE user_id = ?`
+		args = append(args, userID)
+	}
+	query += ` ORDER BY timestamp DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := db.Query(query, args...)
 	if err != nil {
 		return nil
 	}

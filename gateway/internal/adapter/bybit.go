@@ -36,8 +36,12 @@ type BybitAdapter struct {
 	httpClient *http.Client
 	mu        sync.RWMutex
 
-	streamHub *exchange.StreamHub
+	streamHub   *exchange.StreamHub
 	wsConnected bool
+
+	// 公开行情 WS 订阅确认状态（key: topic，如 tickers.BTCUSDT）
+	wsSubs   map[string]bool
+	wsSubsMu sync.Mutex
 
 	onTicker    func(tick model.Tick)
 	onOrderBook func(ob model.OrderBookData)
@@ -60,8 +64,10 @@ func NewBybitAdapter(apiKey, secret string, testnet bool) *BybitAdapter {
 	}
 }
 
-func (b *BybitAdapter) OnTicker(fn func(tick model.Tick))          { b.onTicker = fn }
+func (b *BybitAdapter) OnTicker(fn func(tick model.Tick))           { b.onTicker = fn }
 func (b *BybitAdapter) OnOrderBook(fn func(ob model.OrderBookData)) { b.onOrderBook = fn }
+func (b *BybitAdapter) OnTrade(fn func(trade model.TradeData))      { b.onTrade = fn }
+func (b *BybitAdapter) OnKline(fn func(bar model.Bar))              { b.onKline = fn }
 
 func (b *BybitAdapter) Name() string { return "bybit" }
 
@@ -389,72 +395,7 @@ func (b *BybitAdapter) GetTicker(symbol string) (map[string]any, error) {
 	}, nil
 }
 
-func (b *BybitAdapter) StartMarketStream(symbols []string) error {
-	if len(symbols) == 0 {
-		return nil
-	}
-
-	var args []string
-	for _, sym := range symbols {
-		upper := strings.ToUpper(sym)
-		args = append(args,
-			fmt.Sprintf("tickers.%s", upper),
-			fmt.Sprintf("books5.%s", upper),
-			fmt.Sprintf("trades.%s", upper),
-			fmt.Sprintf("kline.1.%s", upper),
-		)
-	}
-
-	wsURL := BybitWsPublicURL
-	if b.testnet {
-		wsURL = "wss://stream-testnet.bybit.com/v5/public/spot"
-	}
-
-	wsClient := exchange.NewWSClient(exchange.WSConfig{
-		URL:   wsURL,
-		PingInterval: 30 * time.Second,
-		PongTimeout:  10 * time.Second,
-		ReconnectDelay: 5 * time.Second,
-		OnMessage: func(msg []byte) {
-			b.handleMarketMessage(msg)
-		},
-		OnConnected: func() {
-			b.mu.Lock()
-			b.wsConnected = true
-			b.mu.Unlock()
-			log.Printf("[Bybit] Market stream connected, subscribing to %d symbols", len(symbols))
-			// Send subscription via JSON-RPC
-			b.mu.RLock()
-			streamHub := b.streamHub
-			b.mu.RUnlock()
-			if streamHub != nil {
-				for _, sym := range symbols {
-					msg := map[string]any{
-						"op": "subscribe",
-						"args": []any{
-							fmt.Sprintf("tickers.%s", strings.ToUpper(sym)),
-							fmt.Sprintf("books5.%s", strings.ToUpper(sym)),
-							fmt.Sprintf("trades.%s", strings.ToUpper(sym)),
-							fmt.Sprintf("kline.1.%s", strings.ToUpper(sym)),
-						},
-					}
-					streamHub.SendJSON("market", msg)
-				}
-			}
-		},
-		OnDisconnected: func(err error) {
-			b.mu.Lock()
-			b.wsConnected = false
-			b.mu.Unlock()
-			if err != nil {
-				log.Printf("[Bybit] Market stream disconnected: %v", err)
-			}
-		},
-	})
-
-	b.streamHub.Add("market", wsClient)
-	return wsClient.Connect()
-}
+// StartMarketStream 的实现在 bybit_ws.go（现货公开行情 WS）。
 
 func (b *BybitAdapter) StartUserStream() error {
 	wsURL := "wss://stream.bybit.com/v5/public/linear"
@@ -486,115 +427,6 @@ func (b *BybitAdapter) StartUserStream() error {
 
 	b.streamHub.Add("user", wsClient)
 	return wsClient.Connect()
-}
-
-func (b *BybitAdapter) handleMarketMessage(msg []byte) {
-	var raw map[string]any
-	if err := json.Unmarshal(msg, &raw); err != nil {
-		return
-	}
-
-	// Bybit V5 WS messages have "topic" and "data" for pub channels
-	topic, _ := raw["topic"].(string)
-	data, ok := raw["data"].([]any)
-	if !ok || len(data) == 0 {
-		return
-	}
-
-	ts, _ := raw["ts"].(float64)
-
-	switch {
-	case strings.HasPrefix(topic, "tickers."):
-		ticker, ok := data[0].(map[string]any)
-		if !ok {
-			return
-		}
-		if b.onTicker != nil {
-			symbol := strings.TrimPrefix(topic, "tickers.")
-			b.onTicker(model.Tick{
-				Symbol:    symbol,
-				Bid:       parseBybitFloat(ticker["bid1Price"]),
-				Ask:       parseBybitFloat(ticker["ask1Price"]),
-				Last:      parseBybitFloat(ticker["lastPrice"]),
-				Volume:    parseBybitFloat(ticker["volume24h"]),
-				Timestamp: int64(ts),
-			})
-		}
-
-	case strings.HasPrefix(topic, "books5."):
-		obData, ok := data[0].(map[string]any)
-		if !ok {
-			return
-		}
-		bidsRaw, _ := obData["b"].([]any)
-		asksRaw, _ := obData["a"].([]any)
-		bids := parseBybitDepth(bidsRaw)
-		asks := parseBybitDepth(asksRaw)
-		if b.onOrderBook != nil {
-			symbol := strings.TrimPrefix(topic, "books5.")
-			b.onOrderBook(model.OrderBookData{
-				Symbol:    symbol,
-				Bids:      bids,
-				Asks:      asks,
-				Timestamp: int64(ts),
-			})
-		}
-
-	case strings.HasPrefix(topic, "trades."):
-		tradeData, ok := data[0].(map[string]any)
-		if !ok {
-			return
-		}
-		if b.onTrade != nil {
-			symbol := strings.TrimPrefix(topic, "trades.")
-			side := "BUY"
-			if s, _ := tradeData["S"].(string); s == "S" {
-				side = "SELL"
-			}
-			b.onTrade(model.TradeData{
-				Symbol:    symbol,
-				ID:        getString(tradeData, "id", ""),
-				Price:     parseBybitFloat(tradeData["p"]),
-				Quantity:  parseBybitFloat(tradeData["v"]),
-				Side:      side,
-				Timestamp: int64(ts),
-			})
-		}
-
-	case strings.HasPrefix(topic, "kline."):
-		klineData, ok := data[0].(map[string]any)
-		if !ok {
-			return
-		}
-		if b.onKline != nil {
-			symbol := strings.TrimPrefix(topic, "kline.")
-			b.onKline(model.Bar{
-				Symbol:   symbol,
-				Open:     parseBybitFloat(klineData["open"]),
-				High:     parseBybitFloat(klineData["high"]),
-				Low:      parseBybitFloat(klineData["low"]),
-				Close:    parseBybitFloat(klineData["close"]),
-				Volume:   parseBybitFloat(klineData["volume"]),
-				Interval: strings.TrimPrefix(topic, "kline."),
-				Time:     int64(ts),
-			})
-		}
-	}
-}
-
-func parseBybitDepth(raw []any) [][2]float64 {
-	depth := make([][2]float64, 0, len(raw))
-	for _, item := range raw {
-		arr, ok := item.([]any)
-		if !ok || len(arr) < 2 {
-			continue
-		}
-		depth = append(depth, [2]float64{
-			parseBybitFloat(arr[0]),
-			parseBybitFloat(arr[1]),
-		})
-	}
-	return depth
 }
 
 func parseFloatSafe2(v any) (float64, error) {

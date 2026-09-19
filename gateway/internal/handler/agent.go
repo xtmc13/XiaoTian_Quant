@@ -3,51 +3,122 @@ package handler
 import (
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xiaotian-quant/gateway/internal/agent"
 	"github.com/xiaotian-quant/gateway/internal/ai"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
 func GetAgentTokens(c *gin.Context) {
-	tokens := *store.GetAgentTokensStore()
-	if tokens == nil {
-		tokens = []map[string]any{}
+	// C3: 弃用内存 JSON store，改走 repo 并按属主过滤；
+	// 列表只回 token 前缀（明文只在创建时返回一次）。
+	repo := store.NewAgentTokenRepo()
+	filter := map[string]any{}
+	if uid, restricted := agentTokenRestricted(c); restricted {
+		filter["user_id"] = uid
+	}
+	recs, err := repo.List(filter, 100)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
+		return
+	}
+	tokens := make([]map[string]any, 0, len(recs))
+	for _, t := range recs {
+		tokens = append(tokens, agentTokenToJSON(t, ""))
 	}
 	c.JSON(http.StatusOK, tokens)
+}
+
+// agentTokenRestricted 当前请求是否需按属主过滤（登录非 admin）。
+func agentTokenRestricted(c *gin.Context) (int64, bool) {
+	uid, injected := ctxUserID(c)
+	return int64(uid), injected && !ctxIsAdmin(c)
+}
+
+// agentTokenToJSON 把 repo 记录转成前端 AgentToken 结构；
+// plaintext 非空时（创建场景）填入明文 token，否则只给前缀。
+func agentTokenToJSON(t *store.AgentTokenRecord, plaintext string) map[string]any {
+	scopes := []string{}
+	for _, s := range strings.Split(t.Scopes, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			scopes = append(scopes, s)
+		}
+	}
+	token := t.TokenPrefix
+	if plaintext != "" {
+		token = plaintext
+	}
+	m := map[string]any{
+		"id":         strconv.Itoa(t.ID),
+		"name":       t.Name,
+		"token":      token,
+		"scopes":     scopes,
+		"created_at": time.UnixMilli(t.CreatedAt).UTC().Format(time.RFC3339),
+		"expires_at": nil,
+		"last_used":  nil,
+	}
+	if t.ExpiresAt > 0 {
+		m["expires_at"] = time.UnixMilli(t.ExpiresAt).UTC().Format(time.RFC3339)
+	}
+	if t.LastUsedAt > 0 {
+		m["last_used"] = time.UnixMilli(t.LastUsedAt).UTC().Format(time.RFC3339)
+	}
+	return m
 }
 
 func CreateAgentToken(c *gin.Context) {
 	var data map[string]any
 	c.ShouldBindJSON(&data)
-	token := map[string]any{
-		"id":           "tok-" + fmt.Sprintf("%d", time.Now().UnixMilli()),
-		"name":         getString(data, "name", "Untitled"),
-		"token":        getString(data, "token", ""),
-		"scopes":       data["scopes"],
-		"created_at":   time.Now().Format(time.RFC3339),
-		"expires_at":   data["expires_at"],
-		"last_used":    nil,
+	name := getString(data, "name", "Untitled")
+	// scopes 兼容数组与逗号分隔字符串
+	scopes := "read"
+	switch v := data["scopes"].(type) {
+	case []any:
+		parts := []string{}
+		for _, s := range v {
+			if str, ok := s.(string); ok && str != "" {
+				parts = append(parts, str)
+			}
+		}
+		if len(parts) > 0 {
+			scopes = strings.Join(parts, ",")
+		}
+	case string:
+		if strings.TrimSpace(v) != "" {
+			scopes = v
+		}
 	}
-	*store.GetAgentTokensStore() = append(*store.GetAgentTokensStore(), token)
-	store.PersistAgentTokens()
-	c.JSON(http.StatusOK, token)
+	var userID int64
+	if uid, injected := ctxUserID(c); injected {
+		userID = int64(uid)
+	}
+	tokenValue, rec, err := agent.GetTokenManager().CreateTokenForUser(name, scopes, 10, int64(getFloat(data, "expires_in", 0)), userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, agentTokenToJSON(rec, tokenValue))
 }
 
 func DeleteAgentToken(c *gin.Context) {
 	id := c.Param("id")
-	tokens := store.GetAgentTokensStore()
-	for i, t := range *tokens {
-		if getString(t, "id", "") == id {
-			*tokens = append((*tokens)[:i], (*tokens)[i+1:]...)
-			store.PersistAgentTokens()
-			c.JSON(http.StatusOK, gin.H{"success": true})
+	repo := store.NewAgentTokenRepo()
+	if uid, restricted := agentTokenRestricted(c); restricted {
+		// C3: 带属主条件删除，非属主按 not found 处理
+		if err := repo.DeleteForUser(id, uid); err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"success": false, "detail": "Token not found"})
 			return
 		}
+	} else if err := repo.Delete(id); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "detail": "Token not found"})
+		return
 	}
-	c.JSON(http.StatusNotFound, gin.H{"success": false, "detail": "Token not found"})
+	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
 func CCSwitchStatus(c *gin.Context) {
@@ -186,7 +257,11 @@ func AgentChat(c *gin.Context) {
 // GetAgentAuditLog returns recent agent API call audit records.
 func GetAgentAuditLog(c *gin.Context) {
 	limit := 50
-	logs := store.GetAgentAuditLog(limit)
+	var userID int64
+	if uid, restricted := agentTokenRestricted(c); restricted {
+		userID = uid // C3: 普通用户只看自己的审计记录
+	}
+	logs := store.GetAgentAuditLog(limit, userID)
 	if logs == nil {
 		logs = []map[string]any{}
 	}

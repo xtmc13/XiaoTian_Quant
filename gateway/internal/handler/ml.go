@@ -89,6 +89,9 @@ func TrainModel(c *gin.Context) {
 	pipeline := ml.NewTrainingPipeline(MLClient, DataDownloader)
 	result, err := pipeline.Run(cfg)
 
+	// H6: 登记模型属主，后续按属主校验读/删
+	registerMLResourceOwner("model", result.ModelID, getUserID(c))
+
 	resp := TrainModelResponse{
 		Success:           result.Success,
 		ModelID:           result.ModelID,
@@ -271,6 +274,10 @@ func DeleteModel(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "model_id required"})
 		return
 	}
+	// H6: 已登记属主的模型仅属主（或 admin）可删
+	if !checkMLResourceAccess(c, "model", modelID) {
+		return
+	}
 	if err := MLClient.DeleteModel(modelID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -283,6 +290,10 @@ func GetModelInfo(c *gin.Context) {
 	modelID := c.Param("id")
 	if modelID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "model_id required"})
+		return
+	}
+	// H6: 已登记属主的模型仅属主（或 admin）可读
+	if !checkMLResourceAccess(c, "model", modelID) {
 		return
 	}
 	info, err := MLClient.GetModel(modelID)
@@ -482,6 +493,10 @@ func MLFeatureImportance(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "model_id required"})
 		return
 	}
+	// H6: 已登记属主的模型仅属主（或 admin）可读
+	if !checkMLResourceAccess(c, "model", modelID) {
+		return
+	}
 	importance, err := MLClient.FeatureImportance(modelID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -526,10 +541,14 @@ func MLDeployStrategy(c *gin.Context) {
 
 	// Update or create strategy config in store
 	item := store.GetStrategyConfig(req.StrategyID)
+	if item != nil && !requireOwner(c, getInt64Of(item, "user_id")) {
+		return
+	}
 	if item == nil {
 		// Create new strategy config for this ML model
 		item = map[string]any{
 			"id":            req.StrategyID,
+			"user_id":       getUserID(c),
 			"name":          "ML-" + req.ModelID,
 			"strategy_type": "ml",
 			"coin":          req.Symbol,

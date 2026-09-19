@@ -71,6 +71,9 @@ func StartDataDownload(c *gin.Context) {
 		return
 	}
 
+	// H9: 记录任务属主，查询时按属主校验
+	DataDownloader.SetJobOwner(jobID, getUserID(c))
+
 	c.JSON(http.StatusOK, gin.H{
 		"status": "started",
 		"job_id": jobID,
@@ -92,6 +95,11 @@ func GetDownloadJob(c *gin.Context) {
 
 	job := DataDownloader.GetJob(jobID)
 	if job == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
+		return
+	}
+	// H9: 非属主按 not found 处理（避免枚举）
+	if !ownsResource(c, job.UserID) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
 		return
 	}

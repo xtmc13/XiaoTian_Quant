@@ -36,6 +36,10 @@ type OKXAdapter struct {
 	streamHub   *exchange.StreamHub
 	wsConnected bool
 
+	// 公开行情 WS 订阅确认状态（key: channel:instId，value: 是否已确认）
+	wsSubs   map[string]bool
+	wsSubsMu sync.Mutex
+
 	onTicker    func(tick model.Tick)
 	onOrderBook func(ob model.OrderBookData)
 	onTrade     func(trade model.TradeData)
@@ -287,52 +291,7 @@ func (o *OKXAdapter) GetOpenOrders(symbol string) ([]map[string]any, error) {
 }
 
 // ── WebSocket Market Streams ──
-
-func (o *OKXAdapter) StartMarketStream(symbols []string) error {
-	wsClient := exchange.NewWSClient(exchange.WSConfig{
-		URL: OKXWsPubURL,
-		OnMessage: func(msg []byte) {
-			o.handlePublicMessage(msg)
-		},
-		OnConnected: func() {
-			o.mu.Lock()
-			o.wsConnected = true
-			o.mu.Unlock()
-			o.subscribePublic(symbols)
-		},
-		OnDisconnected: func(err error) {
-			o.mu.Lock()
-			o.wsConnected = false
-			o.mu.Unlock()
-			log.Printf("[OKX] Public stream disconnected: %v", err)
-		},
-	})
-
-	o.streamHub.Add("public", wsClient)
-	return wsClient.Connect()
-}
-
-func (o *OKXAdapter) subscribePublic(symbols []string) {
-	client := o.streamHub.Get("public")
-	if client == nil {
-		return
-	}
-
-	var args []map[string]string
-	for _, sym := range symbols {
-		instID := toOKXInstID(sym)
-		args = append(args, map[string]string{"channel": "tickers", "instId": instID})
-		args = append(args, map[string]string{"channel": "books5", "instId": instID})
-		args = append(args, map[string]string{"channel": "trades", "instId": instID})
-		args = append(args, map[string]string{"channel": "candle1m", "instId": instID})
-	}
-
-	msg := map[string]any{
-		"op":   "subscribe",
-		"args": args,
-	}
-	client.SendJSON(msg)
-}
+// 公开行情 WS 实现见 okx_ws.go（订阅/心跳/重连/订阅状态查询）。
 
 func (o *OKXAdapter) StartUserStream() error {
 	ts := fmt.Sprintf("%.0f", float64(time.Now().Unix()))
@@ -362,102 +321,6 @@ func (o *OKXAdapter) StartUserStream() error {
 
 	o.streamHub.Add("private", wsClient)
 	return wsClient.Connect()
-}
-
-func (o *OKXAdapter) handlePublicMessage(msg []byte) {
-	var raw map[string]any
-	if err := json.Unmarshal(msg, &raw); err != nil {
-		return
-	}
-
-	arg, _ := raw["arg"].(map[string]any)
-	if arg == nil {
-		return
-	}
-
-	channel, _ := arg["channel"].(string)
-	instID, _ := arg["instId"].(string)
-	symbol := fromOKXInstID(instID)
-
-	data, _ := raw["data"].([]any)
-	if data == nil {
-		return
-	}
-
-	switch channel {
-	case "tickers":
-		if len(data) > 0 && o.onTicker != nil {
-			if d, ok := data[0].(map[string]any); ok {
-				o.onTicker(model.Tick{
-					Symbol:    symbol,
-					Last:      parseFloat(fmt.Sprint(d["last"])),
-					Bid:       parseFloat(fmt.Sprint(d["bidPx"])),
-					Ask:       parseFloat(fmt.Sprint(d["askPx"])),
-					Volume:    parseFloat(fmt.Sprint(d["vol24h"])),
-					Timestamp: time.Now().UnixMilli(),
-				})
-			}
-		}
-	case "books5":
-		if len(data) > 0 && o.onOrderBook != nil {
-			if d, ok := data[0].(map[string]any); ok {
-				ob := model.OrderBookData{Symbol: symbol, Timestamp: time.Now().UnixMilli()}
-				if bids, ok := d["bids"].([]any); ok {
-					for _, b := range bids {
-						if arr, ok2 := b.([]any); ok2 && len(arr) >= 2 {
-							ob.Bids = append(ob.Bids, [2]float64{
-								parseFloat(fmt.Sprint(arr[0])),
-								parseFloat(fmt.Sprint(arr[1])),
-							})
-						}
-					}
-				}
-				if asks, ok := d["asks"].([]any); ok {
-					for _, a := range asks {
-						if arr, ok2 := a.([]any); ok2 && len(arr) >= 2 {
-							ob.Asks = append(ob.Asks, [2]float64{
-								parseFloat(fmt.Sprint(arr[0])),
-								parseFloat(fmt.Sprint(arr[1])),
-							})
-						}
-					}
-				}
-				o.onOrderBook(ob)
-			}
-		}
-	case "trades":
-		for _, t := range data {
-			if d, ok := t.(map[string]any); ok && o.onTrade != nil {
-				side := "BUY"
-				if s, _ := d["side"].(string); s == "sell" {
-					side = "SELL"
-				}
-				o.onTrade(model.TradeData{
-					Symbol:    symbol,
-					ID:        fmt.Sprint(d["tradeId"]),
-					Price:     parseFloat(fmt.Sprint(d["px"])),
-					Quantity:  parseFloat(fmt.Sprint(d["sz"])),
-					Side:      side,
-					Timestamp: time.Now().UnixMilli(),
-				})
-			}
-		}
-	case "candle1m":
-		if len(data) > 0 && o.onKline != nil {
-			if d, ok := data[0].(map[string]any); ok {
-				o.onKline(model.Bar{
-					Symbol:   symbol,
-					Open:     parseFloat(fmt.Sprint(d["o"])),
-					High:     parseFloat(fmt.Sprint(d["h"])),
-					Low:      parseFloat(fmt.Sprint(d["l"])),
-					Close:    parseFloat(fmt.Sprint(d["c"])),
-					Volume:   parseFloat(fmt.Sprint(d["vol"])),
-					Interval: "1m",
-					Time:     int64(parseFloat(fmt.Sprint(d["ts"]))),
-				})
-			}
-		}
-	}
 }
 
 func (o *OKXAdapter) handlePrivateMessage(msg []byte) {

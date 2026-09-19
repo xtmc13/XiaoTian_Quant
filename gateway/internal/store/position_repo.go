@@ -10,6 +10,7 @@ import (
 
 type PositionRecord struct {
 	ID            string  `json:"id"`
+	UserID        int64   `json:"user_id"`
 	Symbol        string  `json:"symbol"`
 	Side          string  `json:"side"`
 	Quantity      float64 `json:"quantity"`
@@ -41,17 +42,19 @@ func (r *PositionRepo) Create(p *PositionRecord) error {
 	p.UpdatedAt = now
 	p.CostBasis = p.Quantity * p.AvgEntryPrice
 	_, err := db.Exec(
-		`INSERT INTO positions (id, symbol, side, quantity, avg_entry_price, current_price, unrealized_pnl, realized_pnl, cost_basis, exchange, status, opened_at, closed_at, updated_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		p.ID, p.Symbol, p.Side, p.Quantity, p.AvgEntryPrice, p.CurrentPrice, p.UnrealizedPnL, p.RealizedPnL, p.CostBasis, p.Exchange, p.Status, p.OpenedAt, p.ClosedAt, p.UpdatedAt,
+		`INSERT INTO positions (id, user_id, symbol, side, quantity, avg_entry_price, current_price, unrealized_pnl, realized_pnl, cost_basis, exchange, status, opened_at, closed_at, updated_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		p.ID, p.UserID, p.Symbol, p.Side, p.Quantity, p.AvgEntryPrice, p.CurrentPrice, p.UnrealizedPnL, p.RealizedPnL, p.CostBasis, p.Exchange, p.Status, p.OpenedAt, p.ClosedAt, p.UpdatedAt,
 	)
 	return err
 }
 
+const positionColumns = `id, user_id, symbol, side, quantity, avg_entry_price, current_price, unrealized_pnl, realized_pnl, cost_basis, exchange, status, opened_at, closed_at, updated_at`
+
 func (r *PositionRepo) GetByID(id string) (*PositionRecord, error) {
-	row := db.QueryRow(`SELECT id, symbol, side, quantity, avg_entry_price, current_price, unrealized_pnl, realized_pnl, cost_basis, exchange, status, opened_at, closed_at, updated_at FROM positions WHERE id=?`, id)
+	row := db.QueryRow(`SELECT `+positionColumns+` FROM positions WHERE id=?`, id)
 	var p PositionRecord
-	err := row.Scan(&p.ID, &p.Symbol, &p.Side, &p.Quantity, &p.AvgEntryPrice, &p.CurrentPrice, &p.UnrealizedPnL, &p.RealizedPnL, &p.CostBasis, &p.Exchange, &p.Status, &p.OpenedAt, &p.ClosedAt, &p.UpdatedAt)
+	err := row.Scan(&p.ID, &p.UserID, &p.Symbol, &p.Side, &p.Quantity, &p.AvgEntryPrice, &p.CurrentPrice, &p.UnrealizedPnL, &p.RealizedPnL, &p.CostBasis, &p.Exchange, &p.Status, &p.OpenedAt, &p.ClosedAt, &p.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -59,9 +62,9 @@ func (r *PositionRepo) GetByID(id string) (*PositionRecord, error) {
 }
 
 func (r *PositionRepo) List(filter map[string]any, limit int) ([]*PositionRecord, error) {
-	query := "SELECT id, symbol, side, quantity, avg_entry_price, current_price, unrealized_pnl, realized_pnl, cost_basis, exchange, status, opened_at, closed_at, updated_at FROM positions"
+	query := "SELECT " + positionColumns + " FROM positions"
 	allowedCols := map[string]bool{
-		"id": true, "symbol": true, "side": true, "exchange": true, "status": true,
+		"id": true, "user_id": true, "symbol": true, "side": true, "exchange": true, "status": true,
 		"opened_at": true, "closed_at": true, "updated_at": true,
 	}
 	args, where := buildFilter(filter, allowedCols)
@@ -81,7 +84,7 @@ func (r *PositionRepo) List(filter map[string]any, limit int) ([]*PositionRecord
 	var result []*PositionRecord
 	for rows.Next() {
 		var p PositionRecord
-		if err := rows.Scan(&p.ID, &p.Symbol, &p.Side, &p.Quantity, &p.AvgEntryPrice, &p.CurrentPrice, &p.UnrealizedPnL, &p.RealizedPnL, &p.CostBasis, &p.Exchange, &p.Status, &p.OpenedAt, &p.ClosedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.UserID, &p.Symbol, &p.Side, &p.Quantity, &p.AvgEntryPrice, &p.CurrentPrice, &p.UnrealizedPnL, &p.RealizedPnL, &p.CostBasis, &p.Exchange, &p.Status, &p.OpenedAt, &p.ClosedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		result = append(result, &p)

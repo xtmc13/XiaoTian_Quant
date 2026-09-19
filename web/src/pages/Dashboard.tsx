@@ -1076,7 +1076,7 @@ export function Dashboard() {
               <SectionCard title={t('dashboard.arb.equity-curve')}>
                 <div className="h-[260px]">
                   <EquityChart
-                    data={arbPerf?.equity_curve.map((d) => ({ time: d.time * 1000, value: d.value }))}
+                    data={arbPerf?.equity_curve?.map((d) => ({ time: d.time * 1000, value: d.value }))}
                     isLoading={arbLoading}
                   />
                 </div>
@@ -1084,7 +1084,7 @@ export function Dashboard() {
               <SectionCard title={t('dashboard.arb.daily-pnl-dist')}>
                 <div className="h-[260px]">
                   <PnLBarChart
-                    data={arbPerf?.daily_pnl.map((d) => ({ time: d.time, value: d.value }))}
+                    data={arbPerf?.daily_pnl?.map((d) => ({ time: d.time, value: d.value }))}
                     isLoading={arbLoading}
                   />
                 </div>

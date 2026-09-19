@@ -257,9 +257,9 @@ type MarketMakingStrategy struct {
 	running bool
 	mu      sync.RWMutex
 
-	spreadBps     float64
-	orderSize     float64
-	maxPosition   float64
+	spreadBps      float64
+	orderSize      float64
+	maxPosition    float64
 	cancelInterval int64 // bars between re-quoting
 
 	position  float64
@@ -293,9 +293,9 @@ func (s *MarketMakingStrategy) Symbol() string { return s.symbol }
 
 func (s *MarketMakingStrategy) Params() map[string]any {
 	return map[string]any{
-		"symbol":      s.symbol,
-		"spread_bps":  s.spreadBps,
-		"order_size":  s.orderSize,
+		"symbol":       s.symbol,
+		"spread_bps":   s.spreadBps,
+		"order_size":   s.orderSize,
 		"max_position": s.maxPosition,
 	}
 }

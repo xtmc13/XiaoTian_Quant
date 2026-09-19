@@ -11,9 +11,9 @@ import (
 )
 
 type LoginRequest struct {
-	Username        string `json:"username"`
-	Password        string `json:"password"`
-	TurnstileToken  string `json:"turnstile_token,omitempty"`
+	Username       string `json:"username"`
+	Password       string `json:"password"`
+	TurnstileToken string `json:"turnstile_token,omitempty"`
 }
 
 type RegisterRequest struct {

@@ -25,6 +25,8 @@ type martinConfig struct {
 	LoopCount            int     `json:"loop_count" binding:"min=0,max=100"`
 	EnableAddPosition    bool    `json:"enable_add_position"`
 	FlashCrashProtection float64 `json:"flash_crash_protection" binding:"min=0.5,max=20"`
+	MaxLayers            int     `json:"max_layers" binding:"min=0,max=20"`
+	MaxTotalBudget       float64 `json:"max_total_budget" binding:"min=0"`
 	Symbol               string  `json:"symbol" binding:"required"`
 	Exchange             string  `json:"exchange" binding:"required"`
 	Status               string  `json:"status"`
@@ -69,6 +71,8 @@ type wallStreetConfig struct {
 	LoopCount            int     `json:"loop_count" binding:"min=0,max=100"`
 	EnableAddPosition    bool    `json:"enable_add_position"`
 	FlashCrashProtection float64 `json:"flash_crash_protection" binding:"min=0.5,max=20"`
+	MaxLayers            int     `json:"max_layers" binding:"min=0,max=20"`
+	MaxTotalBudget       float64 `json:"max_total_budget" binding:"min=0"`
 	Symbol               string  `json:"symbol" binding:"required"`
 	Exchange             string  `json:"exchange" binding:"required"`
 	Status               string  `json:"status"`
@@ -117,6 +121,8 @@ type strategyBotConfig struct {
 	LoopCount            int     `json:"loop_count" binding:"min=0,max=100"`
 	EnableAddPosition    bool    `json:"enable_add_position"`
 	FlashCrashProtection float64 `json:"flash_crash_protection" binding:"min=0.5,max=20"`
+	MaxLayers            int     `json:"max_layers" binding:"min=0,max=20"`
+	MaxTotalBudget       float64 `json:"max_total_budget" binding:"min=0"`
 	Symbol               string  `json:"symbol" binding:"required"`
 	Exchange             string  `json:"exchange" binding:"required"`
 	Status               string  `json:"status"`
@@ -127,8 +133,13 @@ type strategyBotConstraint interface {
 }
 
 // strategyListHandler lists persisted configs of one strategy category.
+// 多用户越权防护：非 admin 仅列出本人 + 历史无属主(user_id=0)的配置。
 func strategyListHandler[T strategyBotConstraint](c *gin.Context, category string) {
-	items, err := store.NewStrategyConfigRepo().List(map[string]any{"category": category}, 0)
+	filter := map[string]any{"category": category}
+	if uid, injected := ctxUserID(c); injected && !ctxIsAdmin(c) {
+		filter["user_id"] = uid
+	}
+	items, err := store.NewStrategyConfigRepo().List(filter, 0)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": err.Error()})
 		return
@@ -201,6 +212,9 @@ func strategyUpdateHandler[T strategyBotConstraint](c *gin.Context, category str
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": err.Error()})
 		return
 	}
+	if !requireOwner(c, rec.UserID) {
+		return
+	}
 	var cfg T
 	if rec.ConfigJSON != "" {
 		if err := json.Unmarshal([]byte(rec.ConfigJSON), &cfg); err != nil {
@@ -234,7 +248,13 @@ func strategyUpdateHandler[T strategyBotConstraint](c *gin.Context, category str
 }
 
 // strategyDeleteHandler removes a persisted strategy config by ID.
+// 存在但属他人（且非 admin）→ 403；不存在按原行为返回成功（幂等删除）。
 func strategyDeleteHandler(c *gin.Context) {
+	if rec, err := store.NewStrategyConfigRepo().GetByID(c.Param("id")); err == nil && rec != nil {
+		if !requireOwner(c, rec.UserID) {
+			return
+		}
+	}
 	if err := store.NewStrategyConfigRepo().Delete(c.Param("id")); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": err.Error()})
 		return

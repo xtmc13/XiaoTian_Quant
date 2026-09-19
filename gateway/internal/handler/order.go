@@ -14,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/adapter"
+	"github.com/xiaotian-quant/gateway/internal/metrics"
 	"github.com/xiaotian-quant/gateway/internal/model"
 	"github.com/xiaotian-quant/gateway/internal/order"
 	"github.com/xiaotian-quant/gateway/internal/portfolio"
@@ -36,6 +37,7 @@ func InitOMSPipeline() {
 		now := time.Now()
 		blocked, result := ProtectionManager.IsBlocked(req.Symbol, now)
 		if blocked {
+			metrics.RecordRiskRejection()
 			return fmt.Errorf("风控阻断: %s", result.Reason)
 		}
 		return nil
@@ -99,7 +101,9 @@ func InitOMSPipeline() {
 		}
 
 		apiKey, secret, _ := adapter.GetCredential(exName)
-		if apiKey == "" || secret == "" {
+		// IBKR 走本地 Client Portal 网关 + 会话 cookie 认证，无 API key，
+		// 改用 enabled 配置判断（见下方 ibkr 分支）。
+		if exName != "ibkr" && (apiKey == "" || secret == "") {
 			return nil, fmt.Errorf("交易所 %s 未配置 API Key，请在设置中配置", exName)
 		}
 
@@ -138,8 +142,14 @@ func InitOMSPipeline() {
 		case "alpaca":
 			exch := adapter.NewAlpacaAdapter(apiKey, secret, false)
 			result, err = exch.PlaceOrder(ord.Symbol, side, orderType, ord.Price, ord.Quantity)
+		case "ibkr":
+			if !adapter.IBKRConfigured() {
+				return nil, fmt.Errorf("IBKR Client Portal 未启用，请在 config.yaml 的 exchanges.ibkr 配置 enabled: true 与网关地址")
+			}
+			exch := adapter.NewIBKRAdapter(adapter.LoadIBKRConfig())
+			result, err = exch.PlaceOrder(ord.Symbol, side, orderType, ord.Price, ord.Quantity)
 		default:
-			return nil, fmt.Errorf("不支持的交易所: %s（支持: binance, bybit, kraken, mexc, bitget, okx, gateio, coinbase, alpaca）", exName)
+			return nil, fmt.Errorf("不支持的交易所: %s（支持: binance, bybit, kraken, mexc, bitget, okx, gateio, coinbase, alpaca, ibkr）", exName)
 		}
 
 		if err != nil {
@@ -156,7 +166,7 @@ func InitOMSPipeline() {
 		}
 
 		apiKey, secret, _ := adapter.GetCredential(exName)
-		if apiKey == "" || secret == "" {
+		if exName != "ibkr" && (apiKey == "" || secret == "") {
 			return fmt.Errorf("交易所 %s 未配置 API Key", exName)
 		}
 
@@ -191,8 +201,14 @@ func InitOMSPipeline() {
 		case "alpaca":
 			exch := adapter.NewAlpacaAdapter(apiKey, secret, false)
 			_, err = exch.CancelOrder(ord.Symbol, ord.ID)
+		case "ibkr":
+			if !adapter.IBKRConfigured() {
+				return fmt.Errorf("IBKR Client Portal 未启用，请在 config.yaml 的 exchanges.ibkr 配置 enabled: true 与网关地址")
+			}
+			exch := adapter.NewIBKRAdapter(adapter.LoadIBKRConfig())
+			_, err = exch.CancelOrder(ord.Symbol, ord.ID)
 		default:
-			return fmt.Errorf("不支持的交易所: %s（支持: binance, bybit, kraken, mexc, bitget, okx, gateio, coinbase, alpaca）", exName)
+			return fmt.Errorf("不支持的交易所: %s（支持: binance, bybit, kraken, mexc, bitget, okx, gateio, coinbase, alpaca, ibkr）", exName)
 		}
 		return err
 	}
@@ -207,7 +223,13 @@ func init() {
 
 func GetOrders(c *gin.Context) {
 	symbol := c.Query("symbol")
-	allOrders := store.GetOrders(symbol)
+	// C1: 登录用户只返回本人 + 历史无属主订单；admin/未注入用户保持全量
+	var allOrders []map[string]any
+	if uid, injected := ctxUserID(c); injected && !ctxIsAdmin(c) {
+		allOrders = store.GetOrdersForUser(symbol, int64(uid), false)
+	} else {
+		allOrders = store.GetOrders(symbol)
+	}
 	var active []map[string]any
 	for _, o := range allOrders {
 		status := getString(o, "status", "")
@@ -262,6 +284,8 @@ func PlaceOrder(c *gin.Context) {
 		Price:     getFloat(body, "price", 0),
 		Quantity:  getFloat(body, "quantity", 0),
 		Exchange:  getString(body, "exchange", "paper"),
+		// C1: user_id 一律取自 JWT，忽略请求体，防止伪造属主
+		UserID: uint64(getUserID(c)),
 
 		// ── Contract fields ──
 		MarketType:    model.MarketType(getString(body, "market_type", "spot")),
@@ -271,10 +295,19 @@ func PlaceOrder(c *gin.Context) {
 		TPPrice:       getFloat(body, "tp_price", 0),
 		SLPrice:       getFloat(body, "sl_price", 0),
 		ClosePosition: getBool(body, "close_position", false),
+
+		// ── A2.2 limit-then-market ──
+		LimitTimeoutMs: getInt64(body, "limit_timeout_ms", 0),
 	}
 
 	if err := canPlaceLiveOrder(req.Exchange, getBool(body, "confirmed", false)); err != nil {
 		c.JSON(http.StatusForbidden, gin.H{"status": "error", "detail": err.Error()})
+		return
+	}
+
+	// A2.2: limit_timeout_ms > 0 → limit-then-market 执行（超时撤剩余并市价补单）。
+	if req.LimitTimeoutMs > 0 {
+		placeLimitThenMarket(c, req, body)
 		return
 	}
 
@@ -310,8 +343,65 @@ func PlaceOrder(c *gin.Context) {
 		"close_position": ord.ClosePosition,
 	}
 	store.PlaceOrder(storeOrder)
+	metrics.RecordOrder(string(ord.Side), string(ord.Status))
+	if ord.Filled > 0 {
+		metrics.RecordFill(string(ord.Side), ord.Filled)
+	}
 
 	c.JSON(http.StatusOK, normalizeOrder(storeOrder))
+}
+
+// placeLimitThenMarket A2.2：limit_timeout_ms>0 的下单走 limit-then-market。
+// 限价单挂出后由 order.LimitMarketTracker 监控，超时撤剩余并市价补单；
+// 响应带 execution_parts 区分 limit/market 两段成交明细。
+func placeLimitThenMarket(c *gin.Context, req *order.Request, body map[string]any) {
+	tracker := order.GetLimitMarketTracker()
+	ord, state, err := tracker.PlaceLimitThenMarket(req, time.Duration(req.LimitTimeoutMs)*time.Millisecond)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "detail": err.Error()})
+		return
+	}
+
+	storeOrder := map[string]any{
+		"id":               ord.ID,
+		"order_id":         ord.ID,
+		"symbol":           ord.Symbol,
+		"side":             string(ord.Side),
+		"order_type":       string(ord.OrderType),
+		"price":            ord.Price,
+		"quantity":         ord.Quantity,
+		"filled":           ord.Filled,
+		"status":           string(ord.Status),
+		"exchange":         ord.Exchange,
+		"user_id":          ord.UserID,
+		"client_oid":       ord.ClientOID,
+		"avg_fill_price":   ord.AvgFillPrice,
+		"created_at":       ord.CreatedAt,
+		"updated_at":       ord.UpdatedAt,
+		"market_type":      string(ord.MarketType),
+		"position_side":    string(ord.PositionSide),
+		"leverage":         ord.Leverage,
+		"margin_mode":      string(ord.MarginMode),
+		"tp_price":         ord.TPPrice,
+		"sl_price":         ord.SLPrice,
+		"close_position":   ord.ClosePosition,
+		"limit_timeout_ms": req.LimitTimeoutMs,
+	}
+	store.PlaceOrder(storeOrder)
+	metrics.RecordOrder(string(ord.Side), string(ord.Status))
+	if ord.Filled > 0 {
+		metrics.RecordFill(string(ord.Side), ord.Filled)
+	}
+
+	resp := normalizeOrder(storeOrder)
+	if state != nil {
+		resp["ltm_status"] = state.Status
+		resp["execution_parts"] = state.Parts()
+		if state.Deadline > 0 {
+			resp["ltm_deadline_at"] = time.UnixMilli(state.Deadline).UTC().Format(time.RFC3339)
+		}
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // normalizeOrder converts a raw store order map into the frontend-expected format.
@@ -702,7 +792,21 @@ func parseSymbolPair(symbol string) (base, quote string) {
 
 func CancelOrder(c *gin.Context) {
 	orderID := c.Param("order_id")
-	if err := store.CancelOrder(orderID); err != nil {
+	// 存在但属他人（且非 admin）→ 403；不存在 → 404（避免枚举）。
+	if _, injected := ctxUserID(c); injected && !ctxIsAdmin(c) {
+		if owner, found := store.GetOrderOwnerID(orderID); found && !ownsResource(c, owner) {
+			c.JSON(http.StatusForbidden, gin.H{"detail": "forbidden: not the resource owner"})
+			return
+		}
+	}
+	// C1: 校验订单归属，非属主按 not found 处理（避免枚举）
+	var err error
+	if uid, injected := ctxUserID(c); injected && !ctxIsAdmin(c) {
+		err = store.CancelOrderForUser(orderID, uint64(uid))
+	} else {
+		err = store.CancelOrder(orderID)
+	}
+	if err != nil {
 		status := http.StatusBadRequest
 		if strings.Contains(err.Error(), "not found") {
 			status = http.StatusNotFound
@@ -720,7 +824,13 @@ func OrderHistory(c *gin.Context) {
 		fmtScan(l, &limit)
 	}
 
-	allOrders := store.GetOrders("")
+	// C1: 登录用户只看本人 + 历史无属主订单；admin/未注入用户保持全量
+	var allOrders []map[string]any
+	if uid, injected := ctxUserID(c); injected && !ctxIsAdmin(c) {
+		allOrders = store.GetOrdersForUser("", int64(uid), false)
+	} else {
+		allOrders = store.GetOrders("")
+	}
 	var rawHistory []map[string]any
 	for _, o := range allOrders {
 		status := getString(o, "status", "")
@@ -752,12 +862,28 @@ func OrderHistory(c *gin.Context) {
 }
 
 func CancelAllOrders(c *gin.Context) {
-	allOrders := store.GetOrders("")
+	uid, injected := ctxUserID(c)
+	restricted := injected && !ctxIsAdmin(c)
+	// C1: 只取消当前用户的订单（admin/未注入用户保持原全量行为）
+	var allOrders []map[string]any
+	if restricted {
+		allOrders = store.GetOrdersForUser("", int64(uid), false)
+	} else {
+		allOrders = store.GetOrders("")
+	}
 	for _, o := range allOrders {
 		status := o["status"].(string)
 		if status != "CANCELLED" && status != "FILLED" && status != "REJECTED" {
 			id := o["id"].(string)
-			store.CancelOrder(id)
+			if restricted {
+				// 列表还包含无属主历史单，那些不随用户全撤
+				if getInt64Of(o, "user_id") != int64(uid) {
+					continue
+				}
+				store.CancelOrderForUser(id, uint64(uid))
+			} else {
+				store.CancelOrder(id)
+			}
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})

@@ -501,6 +501,19 @@ func (r *Runner) applySlippage(price float64, direction string) float64 {
 	return price * slipFactor
 }
 
+// MetricsFromEquity 从权益曲线 + 成交明细构建完整指标（不依赖 Runner 实例，
+// 供组合回测等复用 stats.go 的 Sharpe/回撤/胜率等口径）。
+func MetricsFromEquity(equity []EquityPoint, initialBalance, riskFreeRate float64, positions []Position, durationMs int64) *RunResult {
+	if initialBalance <= 0 {
+		initialBalance = 100000
+	}
+	if riskFreeRate <= 0 {
+		riskFreeRate = 0.02
+	}
+	r := &Runner{initialBalance: initialBalance, riskFreeRate: riskFreeRate, commission: 0.001}
+	return r.buildResult(positions, equity, durationMs)
+}
+
 func (r *Runner) buildResult(positions []Position, equity []EquityPoint, durationMs int64) *RunResult {
 	result := &RunResult{
 		EquityCurve: equity,

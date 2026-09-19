@@ -59,13 +59,13 @@ func feedRangeBars(s *BreakoutStrategy, bus *event.EventBus, n int, basePrice fl
 	for i := 0; i < n; i++ {
 		offset := float64(i) * 10.0
 		s.OnBar(model.Bar{
-			Symbol:   "BTCUSDT",
-			Open:     basePrice + offset,
-			High:     basePrice + offset + 60,
-			Low:      basePrice + offset - 60,
-			Close:    basePrice + offset + 30,
-			Volume:   100,
-			Time:     int64(i) * 3600000,
+			Symbol: "BTCUSDT",
+			Open:   basePrice + offset,
+			High:   basePrice + offset + 60,
+			Low:    basePrice + offset - 60,
+			Close:  basePrice + offset + 30,
+			Volume: 100,
+			Time:   int64(i) * 3600000,
 		}, bus)
 	}
 }
@@ -152,8 +152,8 @@ func TestBreakoutLongTakeProfit(t *testing.T) {
 	s.Start(map[string]any{
 		"lookback":        float64(5),
 		"buffer_pct":      float64(0.001),
-		"stop_loss_pct":   float64(0.10),  // far away
-		"take_profit_pct": float64(0.03),  // 3% profit target
+		"stop_loss_pct":   float64(0.10), // far away
+		"take_profit_pct": float64(0.03), // 3% profit target
 	})
 
 	// Fill buffer and trigger LONG entry at ~49200
@@ -188,8 +188,8 @@ func TestBreakoutLongStopLoss(t *testing.T) {
 	s.Start(map[string]any{
 		"lookback":        float64(5),
 		"buffer_pct":      float64(0.001),
-		"stop_loss_pct":   float64(0.02),   // 2% stop
-		"take_profit_pct": float64(0.20),   // far away
+		"stop_loss_pct":   float64(0.02), // 2% stop
+		"take_profit_pct": float64(0.20), // far away
 	})
 
 	// Trigger LONG entry
@@ -220,8 +220,8 @@ func TestBreakoutShortTakeProfit(t *testing.T) {
 	err := s.Start(map[string]any{
 		"lookback":        float64(5),
 		"buffer_pct":      float64(0.001),
-		"stop_loss_pct":   float64(0.20),   // far away
-		"take_profit_pct": float64(0.03),   // 3% profit
+		"stop_loss_pct":   float64(0.20), // far away
+		"take_profit_pct": float64(0.03), // 3% profit
 	})
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
@@ -262,8 +262,8 @@ func TestBreakoutShortStopLoss(t *testing.T) {
 	s.Start(map[string]any{
 		"lookback":        float64(5),
 		"buffer_pct":      float64(0.001),
-		"stop_loss_pct":   float64(0.02),    // 2% stop
-		"take_profit_pct": float64(0.20),    // far away
+		"stop_loss_pct":   float64(0.02), // 2% stop
+		"take_profit_pct": float64(0.20), // far away
 	})
 
 	// Trigger SHORT entry (breakdown)

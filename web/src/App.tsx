@@ -21,12 +21,11 @@ function lazyPage(factory: () => Promise<unknown>, name: string) {
 
 // Lazy-loaded: all feature pages
 const Dashboard = lazyPage(() => import('./pages/Dashboard'), 'Dashboard')
-const Trading = lazyPage(() => import('./pages/Trading'), 'Trading')
 const Strategy = lazyPage(() => import('./pages/Strategy'), 'Strategy')
 const AI = lazyPage(() => import('./pages/AI'), 'AI')
 const Backtest = lazyPage(() => import('./pages/Backtest'), 'Backtest')
-const Bots = lazyPage(() => import('./pages/Bots'), 'Bots')
-const AIBots = lazyPage(() => import('./pages/AIBots'), 'default')
+const PortfolioBacktest = lazyPage(() => import('./pages/PortfolioBacktest'), 'PortfolioBacktest')
+const FactorResearch = lazyPage(() => import('./pages/FactorResearch'), 'FactorResearch')
 const Settings = lazyPage(() => import('./pages/Settings'), 'Settings')
 const ExchangeAccount = lazyPage(() => import('./pages/ExchangeAccount'), 'ExchangeAccount')
 const IndicatorCommunity = lazyPage(() => import('./pages/IndicatorCommunity'), 'IndicatorCommunity')
@@ -55,6 +54,8 @@ const StrategyEditor = lazyPage(() => import('./pages/strategy/StrategyEditor'),
 const BotsSignal = lazyPage(() => import('./pages/bots/BotsSignal'), 'BotsSignal')
 const BotsAI = lazyPage(() => import('./pages/bots/BotsAI'), 'BotsAI')
 const BotsCenter = lazyPage(() => import('./pages/bots/BotsCenter'), 'BotsCenter')
+const DCABots = lazyPage(() => import('./pages/DCABots'), 'DCABots')
+const LayeredMartinBots = lazyPage(() => import('./pages/LayeredMartinBots'), 'LayeredMartinBots')
 const CreateStrategyPage = lazyPage(() => import('./pages/CreateStrategyPage'), 'CreateStrategyPage')
 const TradingSpot = lazyPage(() => import('./pages/trading/TradingSpot'), 'TradingSpot')
 const TradingContract = lazyPage(() => import('./pages/trading/TradingContract'), 'TradingContract')
@@ -114,7 +115,11 @@ function DocumentTitle() {
     '/strategy': '策略管理 - 小天量化',
     '/ai': 'AI分析 - 小天量化',
     '/backtest': '回测 - 小天量化',
+    '/backtest/portfolio': '组合回测 - 小天量化',
+    '/factor-research': '因子研究 - 小天量化',
     '/bots': '机器人中心 - 小天量化',
+    '/bots/dca': 'DCA 定投机器人 - 小天量化',
+    '/bots/layered-martin': '分层马丁格尔机器人 - 小天量化',
     '/create': '创建策略 - 小天量化',
     '/strategies': '机器人中心 - 小天量化',
     '/ai-bots': 'AI Bots - 小天量化',
@@ -324,6 +329,22 @@ export default function App() {
                       </PageShell>
                     }
                   />
+                  <Route
+                    path="/backtest/portfolio"
+                    element={
+                      <PageShell>
+                        <PortfolioBacktest />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/factor-research"
+                    element={
+                      <PageShell>
+                        <FactorResearch />
+                      </PageShell>
+                    }
+                  />
 
                   {/* AI Analysis (combined market + AI) */}
                   <Route
@@ -430,6 +451,23 @@ export default function App() {
                     element={
                       <PageShell>
                         <BotsAI />
+                      </PageShell>
+                    }
+                  />
+                  {/* DCA 定投机器人（A1.2）/ 分层马丁格尔机器人（A1.3） */}
+                  <Route
+                    path="/bots/dca"
+                    element={
+                      <PageShell>
+                        <DCABots />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/bots/layered-martin"
+                    element={
+                      <PageShell>
+                        <LayeredMartinBots />
                       </PageShell>
                     }
                   />

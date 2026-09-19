@@ -38,10 +38,17 @@ func GetTokenManager() *TokenManager {
 
 // CreateToken generates a new bearer token.
 func (tm *TokenManager) CreateToken(name, scopes string, rateLimitRPS int, expiresInSeconds int64) (string, error) {
+	tokenValue, _, err := tm.CreateTokenForUser(name, scopes, rateLimitRPS, expiresInSeconds, 0)
+	return tokenValue, err
+}
+
+// CreateTokenForUser 生成新 bearer token 并记录属主（C3 越权修复）：
+// userID > 0 时该 token 仅属主可见可删；返回明文仅一次。
+func (tm *TokenManager) CreateTokenForUser(name, scopes string, rateLimitRPS int, expiresInSeconds int64, userID int64) (string, *store.AgentTokenRecord, error) {
 	prefix := "qd_agent_"
 	buf := make([]byte, 16)
 	if _, err := rand.Read(buf); err != nil {
-		return "", err
+		return "", nil, err
 	}
 	tokenValue := prefix + hex.EncodeToString(buf)
 
@@ -52,7 +59,7 @@ func (tm *TokenManager) CreateToken(name, scopes string, rateLimitRPS int, expir
 		expiresAt = time.Now().UnixMilli() + expiresInSeconds*1000
 	}
 
-	err := tm.repo.Create(&store.AgentTokenRecord{
+	rec := &store.AgentTokenRecord{
 		Name:         name,
 		TokenHash:    tokenHash,
 		TokenPrefix:  prefix,
@@ -61,12 +68,13 @@ func (tm *TokenManager) CreateToken(name, scopes string, rateLimitRPS int, expir
 		IsActive:     1,
 		ExpiresAt:    expiresAt,
 		CreatedAt:    time.Now().UnixMilli(),
-	})
-	if err != nil {
-		return "", err
+		UserID:       userID,
+	}
+	if err := tm.repo.Create(rec); err != nil {
+		return "", nil, err
 	}
 
-	return tokenValue, nil
+	return tokenValue, rec, nil
 }
 
 // ValidateToken checks if a bearer token is valid and returns its record.

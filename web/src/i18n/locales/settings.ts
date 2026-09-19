@@ -120,6 +120,7 @@ const zhCN: Record<string, string> = {
   'settings.routing.channel.email': '邮件',
   'settings.routing.channel.lark': '飞书',
   'settings.routing.channel.dingtalk': '钉钉',
+  'settings.routing.channel.sms': '短信 (Twilio)',
 
   // ── 外观 ──
   'settings.appearance.title': '界面偏好',
@@ -280,6 +281,7 @@ const enUS: Record<string, string> = {
   'settings.routing.channel.email': 'Email',
   'settings.routing.channel.lark': 'Lark',
   'settings.routing.channel.dingtalk': 'DingTalk',
+  'settings.routing.channel.sms': 'SMS (Twilio)',
 
   // ── Appearance ──
   'settings.appearance.title': 'Interface Preferences',
@@ -440,6 +442,7 @@ const ja: Record<string, string> = {
   'settings.routing.channel.email': 'メール',
   'settings.routing.channel.lark': 'Lark（飛書）',
   'settings.routing.channel.dingtalk': 'DingTalk（钉钉）',
+  'settings.routing.channel.sms': 'SMS（Twilio）',
 
   // ── 外観 ──
   'settings.appearance.title': '画面設定',

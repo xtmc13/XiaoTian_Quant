@@ -76,6 +76,20 @@ func GetAIBotInstanceByID(id string, userID int) map[string]any {
 	return scanAIBotInstanceRow(row)
 }
 
+// GetAIBotInstanceOwner 返回实例属主 user_id（found=false 表示不存在）。
+// 供越权判别：区分"不存在"(404)与"存在但属他人"(403)。
+func GetAIBotInstanceOwner(id string) (int, bool) {
+	if db == nil {
+		return 0, false
+	}
+	var userID int
+	err := db.QueryRow(`SELECT user_id FROM ai_bot_instances WHERE id=?`, id).Scan(&userID)
+	if err != nil {
+		return 0, false
+	}
+	return userID, true
+}
+
 func SaveAIBotInstance(item map[string]any) {
 	id := getString(item, "id", "")
 	if id == "" {

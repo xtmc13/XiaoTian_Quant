@@ -2,6 +2,9 @@ version: "3.9"
 
 # ═══════════════════════════════════════════════════════════════════
 # XiaoTianQuant v3.0 — Development Compose
+# 可选监控栈（Grafana + Prometheus）：
+#   docker compose -f docker-compose.yml -f docker-compose.observability.yml --profile observability up -d
+# 详见 docs/OBSERVABILITY.md
 # ═══════════════════════════════════════════════════════════════════
 
 services:

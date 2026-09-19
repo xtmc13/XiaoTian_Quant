@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"math"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -12,13 +13,20 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xiaotian-quant/gateway/internal/adapter"
 	"github.com/xiaotian-quant/gateway/internal/app"
 	"github.com/xiaotian-quant/gateway/internal/config"
+	"github.com/xiaotian-quant/gateway/internal/dca"
 	"github.com/xiaotian-quant/gateway/internal/grid"
 	"github.com/xiaotian-quant/gateway/internal/handler"
+	"github.com/xiaotian-quant/gateway/internal/lmartin"
 	"github.com/xiaotian-quant/gateway/internal/market"
 	"github.com/xiaotian-quant/gateway/internal/metrics"
 	"github.com/xiaotian-quant/gateway/internal/middleware"
+	"github.com/xiaotian-quant/gateway/internal/notify"
+	"github.com/xiaotian-quant/gateway/internal/order"
+	"github.com/xiaotian-quant/gateway/internal/portfolio"
+	"github.com/xiaotian-quant/gateway/internal/reconcile"
 	"github.com/xiaotian-quant/gateway/internal/store"
 	"github.com/xiaotian-quant/gateway/internal/strategy"
 	"github.com/xiaotian-quant/gateway/internal/strategy/cra"
@@ -73,7 +81,11 @@ func main() {
 		}
 		return 0
 	}
-	gridRunner := grid.NewRunner(priceSource, gridRepo)
+	// Grid bot runner 的合约腿（short/neutral）下单与 DCA 共用 OMS 执行器
+	// （market_type=swap + position_side + leverage/margin_mode，paper 即时
+	// 成交，live 进单前过 canPlaceLiveOrder 实盘安全闸）。执行器按机器人类型
+	// 打 client_oid 前缀（A8.2 成交恢复按前缀把补录成交路由回引擎回填）。
+	gridRunner := grid.NewRunner(priceSource, gridRepo, handler.NewKindOMSBotExecutor("grid"))
 	// HTTP 层通过窄接口 GridService 操控 runner（创建/启动/停止机器人）。
 	handler.SetGridService(gridRunner)
 	// 启动即恢复 grid_bots 中 status='running' 的机器人，之后每 60s 复查，
@@ -82,12 +94,110 @@ func main() {
 		return gridRepo.List(map[string]any{"status": "running"}, 0)
 	}, 60*time.Second)
 
+	// ── DCA 定投机器人 runner（A1.2）：与 grid 同一调度/持久化模式，
+	// 下单走 OMS（paper 即时成交，live 过现有实盘安全闸）。 ──
+	dcaRepo := store.NewDCARepo()
+	dcaRunner := dca.NewRunner(priceSource, dcaRepo, handler.NewKindOMSBotExecutor("dca"))
+	handler.SetDCAService(dcaRunner)
+	go dcaRunner.RetryResume(func() ([]*store.DCABotRecord, error) {
+		return dcaRepo.List(map[string]any{"status": "running"}, 0)
+	}, 60*time.Second)
+
+	// ── 分层马丁格尔机器人 runner（A1.3）：多组独立马丁循环，
+	// 层数/组预算硬限 + 成交确认推进，下单同走 OMS。 ──
+	lmRepo := store.NewLayeredMartinRepo()
+	lmRunner := lmartin.NewRunner(priceSource, lmRepo, handler.NewKindOMSBotExecutor("lmartin"))
+	handler.SetLayeredMartinService(lmRunner)
+	go lmRunner.RetryResume(func() ([]*store.LayeredMartinBotRecord, error) {
+		return lmRepo.List(map[string]any{"status": "running"}, 0)
+	}, func(botID string) ([]*store.LayeredMartinGroupRecord, error) {
+		return lmRepo.GetGroups(botID)
+	}, 60*time.Second)
+
+	// ── A8 对账体系（持仓对账/成交恢复/资金费对账/实盘偏差监控）──
+	// 交易所访问工厂：有默认凭证的交易所构造适配器，供 reconcile 通过窄接口
+	// （PositionQuerier/OrderStatusQuerier/OrderTradesQuerier/FundingQuerier）
+	// 取用；未配置的交易所返回 nil，对应任务自动跳过。
+	reconcileExchangeFactory := func(name string) any {
+		// IBKR 走本地 Client Portal 网关 + 会话 cookie 认证，无 API key；
+		// 启用即可构造（adapter 内部处理认证维持/重认证）。
+		if name == "ibkr" {
+			if adapter.IBKRConfigured() {
+				return adapter.NewIBKRAdapter(adapter.LoadIBKRConfig())
+			}
+			return nil
+		}
+		apiKey, secret, passphrase := adapter.GetCredential(name)
+		if apiKey == "" || secret == "" {
+			return nil
+		}
+		switch name {
+		case "binance":
+			return adapter.NewBinanceAdapter(apiKey, secret, false)
+		case "bybit":
+			return adapter.NewBybitAdapter(apiKey, secret, false)
+		case "okx":
+			return adapter.NewOKXAdapter(apiKey, secret, passphrase, false)
+		case "mexc":
+			return adapter.NewMEXCAdapter(apiKey, secret)
+		case "gateio", "gate":
+			return adapter.NewGateIOAdapter(apiKey, secret)
+		case "kraken":
+			return adapter.NewKrakenAdapter(apiKey, secret)
+		case "bitget":
+			return adapter.NewBitgetAdapter(apiKey, secret, passphrase)
+		case "coinbase":
+			return adapter.NewCoinbaseAdapter(apiKey, secret)
+		case "alpaca":
+			return adapter.NewAlpacaAdapter(apiKey, secret, false)
+		}
+		return nil
+	}
+	reconcileSvc := reconcile.NewService(store.NewReconcileRepo(), reconcileExchangeFactory)
+	handler.SetReconcileService(reconcileSvc)
+	// A8.2 成交恢复 → 各引擎 ApplyFill 回填路由。
+	reconcile.RegisterFillApplier("dca", func(botID, side string, qty, price float64) error {
+		return dcaRunner.ApplyRecoveredFill(botID, side, qty, price)
+	})
+	reconcile.RegisterFillApplier("lmartin", func(botID, side string, qty, price float64) error {
+		return lmRunner.ApplyRecoveredFill(botID, side, qty, price)
+	})
+	reconcile.RegisterFillApplier("grid", func(botID, side string, qty, price float64) error {
+		return gridRunner.ApplyRecoveredFill(botID, side, qty, price)
+	})
+	reconcileSvc.Start()
+
+	// ── A2.2 limit-then-market 跟踪器：超时撤剩余 + 市价补单（paper/live 均支持）──
+	ltmTracker := order.GetLimitMarketTracker()
+	ltmTracker.SetNotifyHook(func(s *order.LMState, msg string) {
+		notify.GetManager().Send(notify.Message{
+			Title:   "limit-then-market 执行异常: " + s.Symbol,
+			Content: msg,
+			Level:   "WARN",
+			Tags:    map[string]string{"source": "ltm", "order_id": s.LimitOrderID},
+		})
+		notify.GetNotificationStore().Add("limit-then-market 执行异常", msg, "WARN", "order")
+	})
+	ltmTracker.Start()
+
+	// ── C2.2 撮合引擎资金校验：接组合账本（paper 账户）可用余额 ──
+	// 模拟做市单（userID=0）与未配置组合账本时自动豁免（+Inf）。
+	if appCtx.MatchingService != nil {
+		appCtx.MatchingService.SetBalanceProvider(portfolioBalanceProvider{})
+	}
+
 	// ── Register strategy factories for combo engine ──
 	registerStrategyFactories()
 
 	// ── K线供给管：轮询币安 REST，新闭合 K 线发布 model.Bar 事件到总线，
 	// 让吃 K 线（OnBar）的策略在实盘能收到真实 K 线。 ──
 	handler.SetKlineFeeder(market.NewKlineFeeder(appCtx.EventBus))
+
+	// ── 策略引擎接线：同一供给管注入引擎，供多周期（A7.1）/动态 universe（A7.3）
+	// 动态增删 symbol 的 K 线订阅（feeder 引用计数，与 handler 侧独立记账）。 ──
+	if eng := strategy.GetEngine(appCtx.EventBus); eng != nil {
+		eng.SetKlineFeeder(handler.KlineFeederForEngine())
+	}
 
 	// ── 启动即恢复 status=running 的策略（断点续跑），每 60s 复查 ──
 	go handler.ResumeRunningStrategiesLoop()
@@ -122,20 +232,32 @@ func main() {
 
 	appCtx.Logger.Info("XiaoTianQuant Gateway starting", "port", port)
 
+	// PROMETHEUS_ENABLED=false 时整个 HTTP 指标中间件跳过（/metrics 也不挂载）。
+	var httpHandler http.Handler = r
+	if metrics.Enabled() {
+		httpHandler = metrics.HTTPMiddleware(r)
+	}
+
 	srv := &http.Server{
 		Addr:    "0.0.0.0:" + port,
-		Handler: metrics.HTTPMiddleware(r),
+		Handler: httpHandler,
 	}
 
 	go func() {
-		// Grid bots must stop BEFORE appCtx.WaitForShutdown returns: that
-		// call runs Shutdown(), which closes the store — a StopAll after it
+		// Grid/DCA/分层马丁 bots must stop BEFORE appCtx.WaitForShutdown returns:
+		// that call runs Shutdown(), which closes the store — a StopAll after it
 		// would persist nothing. Both signal channels receive the same
 		// SIGINT/SIGTERM, so WaitForShutdown proceeds immediately after.
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 		<-sigCh
 		gridRunner.StopAll()
+		dcaRunner.StopAll()
+		lmRunner.StopAll()
+		// 对账/limit-then-market 后台任务先停（它们依赖 store 与 OMS），
+		// 与上方 bots 同理：必须在 appCtx.WaitForShutdown 关库之前完成。
+		reconcileSvc.Stop()
+		ltmTracker.Stop()
 		appCtx.WaitForShutdown()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -149,8 +271,7 @@ func main() {
 	}
 }
 
-// registerStrategyFactories registers all built-in strategy factories
-// and their frontend-friendly aliases for the combo engine.
+// registerStrategyFactories registers all built-in strategy factories// and their frontend-friendly aliases for the combo engine.
 func registerStrategyFactories() {
 	strategy.RegisterStrategyFactory("breakout", func() strategy.Strategy { return strategies.NewBreakoutStrategy() })
 	strategy.RegisterStrategyFactory("ema_cross", func() strategy.Strategy { return strategies.NewEMACrossStrategy() })
@@ -164,6 +285,9 @@ func registerStrategyFactories() {
 	strategy.RegisterStrategyFactory("arbitrage", func() strategy.Strategy { return strategies.NewArbitrageStrategy() })
 	strategy.RegisterStrategyFactory("market_making", func() strategy.Strategy { return strategies.NewMarketMakingStrategy() })
 	strategy.RegisterStrategyFactory("martingale", func() strategy.Strategy { return strategies.NewMartingaleStrategy() })
+	strategy.RegisterStrategyFactory("universe_rotation", func() strategy.Strategy { return strategies.NewUniverseRotationStrategy() })
+	strategy.RegisterStrategyFactory("trend_long_mt", func() strategy.Strategy { return strategies.NewTrendLongStrategy() })
+	strategy.RegisterStrategyFactory("trend_short_mt", func() strategy.Strategy { return strategies.NewTrendShortStrategy() })
 	strategy.RegisterStrategyFactory("wallstreet", func() strategy.Strategy { return strategies.NewWallstreetStrategy() })
 	strategy.RegisterStrategyFactory("wallstreet_v2", func() strategy.Strategy { return strategy.NewWallStreetStrategy() })
 
@@ -245,4 +369,24 @@ func isFatalInitErr(err error) bool {
 // isLocalhost checks if an IP address is loopback.
 func isLocalhost(ip string) bool {
 	return ip == "127.0.0.1" || ip == "::1" || ip == "localhost"
+}
+
+// portfolioBalanceProvider 把组合账本（paper 默认账户）的可用余额喂给撮合引擎
+// 做资金校验（C2.2）。组合账本未初始化时返回 +Inf（不校验，保持旧行为）。
+type portfolioBalanceProvider struct{}
+
+func (portfolioBalanceProvider) Available(userID uint64, asset string) float64 {
+	mgr := portfolio.GetManager()
+	if mgr == nil {
+		return math.Inf(1)
+	}
+	acct := mgr.GetAccount("default")
+	if acct == nil {
+		return math.Inf(1)
+	}
+	bal, ok := acct.Balances[strings.ToUpper(asset)]
+	if !ok || bal == nil {
+		return 0
+	}
+	return bal.Free
 }

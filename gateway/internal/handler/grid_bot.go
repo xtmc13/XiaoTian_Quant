@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/app"
+	"github.com/xiaotian-quant/gateway/internal/grid"
 	"github.com/xiaotian-quant/gateway/internal/middleware"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
@@ -65,7 +66,9 @@ func gridBotError(c *gin.Context, status int, message string) {
 	c.JSON(status, gin.H{"success": false, "message": message})
 }
 
-// gridBotMustGet 按 :id 取记录；不存在返回 404，出错 500。
+// gridBotMustGet 按 :id 取记录；不存在返回 404，出错 500；
+// 存在但属他人（且非 admin、已注入用户）返回 403（资源级越权防护）。
+// 未注入用户（单用户模式/内部调用）保持原行为放行。
 func gridBotMustGet(c *gin.Context) (*store.GridBotRecord, bool) {
 	rec, err := gridBotRepo.GetByID(c.Param("id"))
 	if err != nil {
@@ -76,7 +79,16 @@ func gridBotMustGet(c *gin.Context) (*store.GridBotRecord, bool) {
 		gridBotError(c, http.StatusNotFound, "grid bot not found")
 		return nil, false
 	}
+	if !requireOwner(c, rec.UserID) {
+		return nil, false
+	}
 	return rec, true
+}
+
+// gridBotRestricted 当前请求是否需按属主过滤（登录非 admin）。
+func gridBotRestricted(c *gin.Context) (int64, bool) {
+	uid, injected := ctxUserID(c)
+	return int64(uid), injected && !ctxIsAdmin(c)
 }
 
 func gridBotIsRunning(id string) bool {
@@ -89,17 +101,42 @@ func gridNormalizeSymbol(symbol string) string {
 	return strings.ToUpper(s)
 }
 
-// gridOpenOrders 从 state_json 解析当前挂单数（ExportState 的 orders 键数）。
+// gridOpenOrders 从 state_json 解析当前挂单数（ExportState 的 orders 键数；
+// A1.3 双腿格式跨腿累计，兼容裸单腿存量状态）。
 func gridOpenOrders(stateJSON string) int {
 	var state map[string]any
 	if err := json.Unmarshal([]byte(stateJSON), &state); err != nil {
 		return 0
 	}
-	orders, ok := state["orders"].(map[string]any)
-	if !ok {
-		return 0
+	return grid.CountOpenOrders(state)
+}
+
+// gridBotLegViews 从 record + 实时价解析双腿格子状态与独立盈亏
+// （详情接口展示用；不在运行的机器人也用持久化状态离线展示）。
+func gridBotLegViews(rec *store.GridBotRecord, price float64) []grid.LegView {
+	stateJSON := strings.TrimSpace(rec.StateJSON)
+	if stateJSON == "" || stateJSON == "{}" {
+		return nil
 	}
-	return len(orders)
+	var state map[string]any
+	if err := json.Unmarshal([]byte(stateJSON), &state); err != nil {
+		return nil
+	}
+	cfg := grid.Config{
+		Symbol:       rec.Symbol,
+		Lower:        rec.LowerPrice,
+		Upper:        rec.UpperPrice,
+		GridCount:    rec.GridCount,
+		Investment:   rec.Investment,
+		FeeRate:      rec.FeeRate,
+		CurrentPrice: price,
+		Mode:         grid.ParseMode(rec.Mode),
+	}
+	views, err := grid.LegViewsFromState(grid.ParseMode(rec.Mode), state, cfg, price)
+	if err != nil {
+		return nil
+	}
+	return views
 }
 
 // ── Request binding / validation ──
@@ -112,6 +149,10 @@ type gridBotParams struct {
 	GridCount  int     `json:"grid_count"`
 	Investment float64 `json:"investment"`
 	FeeRate    float64 `json:"fee_rate"`
+	Mode       string  `json:"mode"` // long / short / neutral（A1.3）
+	Exchange   string  `json:"exchange"`
+	Leverage   float64 `json:"leverage"`
+	MarginMode string  `json:"margin_mode"`
 }
 
 // validate 校验创建/修改共用参数，返回错误消息（空串表示通过）。
@@ -131,14 +172,43 @@ func (p *gridBotParams) validate() string {
 	if p.FeeRate < 0 {
 		return "fee_rate 不能为负数"
 	}
+	mode := strings.ToLower(strings.TrimSpace(p.Mode))
+	switch mode {
+	case "", "long":
+	case "short", "neutral":
+		if p.Leverage < 1 || p.Leverage > 125 {
+			return "合约网格 leverage 必须在 1-125 之间"
+		}
+		switch strings.ToLower(strings.TrimSpace(p.MarginMode)) {
+		case "", "cross", "isolated":
+		default:
+			return "margin_mode 必须为 cross 或 isolated"
+		}
+	default:
+		return "mode 必须为 long / short / neutral"
+	}
 	return ""
+}
+
+// gridContractMode 规范化模式字段：空→long；其余经校验后为 long/short/neutral。
+func gridContractMode(p gridBotParams) string {
+	m := strings.ToLower(strings.TrimSpace(p.Mode))
+	if m == "" {
+		return string(grid.ModeLong)
+	}
+	return string(grid.ParseMode(m))
 }
 
 // ── Handlers ──
 
 // GridBotList: GET /api/grid/bots → 当前用户的机器人列表（附 is_running）。
+// admin/未注入用户（单用户模式）看全部；普通用户仅看本人。
 func GridBotList(c *gin.Context) {
-	recs, err := gridBotRepo.List(map[string]any{"user_id": gridBotUserID(c)}, 0)
+	filter := map[string]any{}
+	if uid, restricted := gridBotRestricted(c); restricted {
+		filter["user_id"] = uid
+	}
+	recs, err := gridBotRepo.List(filter, 0)
 	if err != nil {
 		gridBotError(c, http.StatusInternalServerError, err.Error())
 		return
@@ -156,6 +226,9 @@ func GridBotList(c *gin.Context) {
 			"fee_rate":       rec.FeeRate,
 			"status":         rec.Status,
 			"exchange":       rec.Exchange,
+			"mode":           rec.Mode,
+			"leverage":       rec.Leverage,
+			"margin_mode":    rec.MarginMode,
 			"realized_pnl":   rec.RealizedPnL,
 			"total_trades":   rec.TotalTrades,
 			"base_qty":       rec.BaseQty,
@@ -197,6 +270,18 @@ func GridBotCreate(c *gin.Context) {
 		FeeRate:    feeRate,
 		Status:     "stopped",
 	}
+	rec.Mode = gridContractMode(body)
+	if strings.TrimSpace(body.Exchange) != "" {
+		rec.Exchange = strings.TrimSpace(body.Exchange)
+	}
+	rec.Leverage = body.Leverage
+	if rec.Leverage == 0 {
+		rec.Leverage = 1
+	}
+	rec.MarginMode = strings.ToLower(strings.TrimSpace(body.MarginMode))
+	if rec.MarginMode == "" {
+		rec.MarginMode = "cross"
+	}
 	if err := gridBotRepo.Create(rec); err != nil {
 		gridBotError(c, http.StatusInternalServerError, err.Error())
 		return
@@ -212,6 +297,9 @@ func GridBotCreate(c *gin.Context) {
 		"fee_rate":       rec.FeeRate,
 		"status":         rec.Status,
 		"exchange":       rec.Exchange,
+		"mode":           rec.Mode,
+		"leverage":       rec.Leverage,
+		"margin_mode":    rec.MarginMode,
 		"is_running":     false,
 		"initial_equity": rec.InitialEquity,
 		"created_at":     rec.CreatedAt,
@@ -247,6 +335,18 @@ func GridBotGet(c *gin.Context) {
 	if running {
 		openOrders = gridOpenOrders(rec.StateJSON)
 	}
+	price := gridPriceSource(rec.Symbol)
+	legs := gridBotLegViews(rec, price)
+	if legs == nil {
+		legs = []grid.LegView{}
+	}
+	netPosition := rec.BaseQty
+	if running && legs != nil {
+		netPosition = 0
+		for _, lv := range legs {
+			netPosition += lv.BaseQty
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"id":             rec.ID,
 		"name":           rec.Name,
@@ -258,6 +358,9 @@ func GridBotGet(c *gin.Context) {
 		"fee_rate":       rec.FeeRate,
 		"status":         rec.Status,
 		"exchange":       rec.Exchange,
+		"mode":           rec.Mode,
+		"leverage":       rec.Leverage,
+		"margin_mode":    rec.MarginMode,
 		"realized_pnl":   rec.RealizedPnL,
 		"total_trades":   rec.TotalTrades,
 		"base_qty":       rec.BaseQty,
@@ -270,6 +373,9 @@ func GridBotGet(c *gin.Context) {
 		"stopped_at":     rec.StoppedAt,
 		"is_running":     running,
 		"open_orders":    openOrders,
+		"legs":           legs,
+		"net_position":   netPosition,
+		"price":          price,
 		"trades":         trades,
 		"snapshots":      snapshots,
 	})
@@ -305,6 +411,18 @@ func GridBotUpdate(c *gin.Context) {
 	if body.FeeRate > 0 {
 		rec.FeeRate = body.FeeRate
 	}
+	rec.Mode = gridContractMode(body)
+	if strings.TrimSpace(body.Exchange) != "" {
+		rec.Exchange = strings.TrimSpace(body.Exchange)
+	}
+	rec.Leverage = body.Leverage
+	if rec.Leverage == 0 {
+		rec.Leverage = 1
+	}
+	rec.MarginMode = strings.ToLower(strings.TrimSpace(body.MarginMode))
+	if rec.MarginMode == "" {
+		rec.MarginMode = "cross"
+	}
 	if err := gridBotRepo.Update(rec); err != nil {
 		gridBotError(c, http.StatusInternalServerError, err.Error())
 		return
@@ -319,6 +437,9 @@ func GridBotUpdate(c *gin.Context) {
 		"investment":  rec.Investment,
 		"fee_rate":    rec.FeeRate,
 		"status":      rec.Status,
+		"mode":        rec.Mode,
+		"leverage":    rec.Leverage,
+		"margin_mode": rec.MarginMode,
 		"is_running":  false,
 		"updated_at":  rec.UpdatedAt,
 	})
@@ -336,7 +457,13 @@ func GridBotDelete(c *gin.Context) {
 			return
 		}
 	}
-	if err := gridBotRepo.Delete(rec.ID); err != nil {
+	if uid, restricted := gridBotRestricted(c); restricted {
+		// H1: 删除也带属主条件（mustGet 已校验过，双保险）
+		if err := gridBotRepo.DeleteForUser(rec.ID, uid); err != nil {
+			gridBotError(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+	} else if err := gridBotRepo.Delete(rec.ID); err != nil {
 		gridBotError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -344,7 +471,9 @@ func GridBotDelete(c *gin.Context) {
 }
 
 // GridBotStart: POST /api/grid/bots/:id/start → 仅 stopped 可启动；
-// 实时价无效 503，超出网格区间 400；initial_equity=investment 后交 Runner。
+// 实时价无效 503，超出网格区间 400；合约模式（short/neutral）先过
+// canPlaceLiveOrder 实盘安全闸（paper 直通，live 未开闸 403）；
+// initial_equity=investment 后交 Runner。
 func GridBotStart(c *gin.Context) {
 	rec, ok := gridBotMustGet(c)
 	if !ok {
@@ -357,6 +486,13 @@ func GridBotStart(c *gin.Context) {
 	if GridSvc == nil {
 		gridBotError(c, http.StatusInternalServerError, "grid runner 未初始化")
 		return
+	}
+	mode := grid.ParseMode(rec.Mode)
+	if mode != grid.ModeLong {
+		if err := canPlaceLiveOrder(rec.Exchange, true); err != nil {
+			gridBotError(c, http.StatusForbidden, err.Error())
+			return
+		}
 	}
 	price := gridPriceSource(rec.Symbol)
 	if price <= 0 {

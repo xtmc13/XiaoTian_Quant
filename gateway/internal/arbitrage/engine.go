@@ -76,6 +76,7 @@ func (o *Opportunity) NetSpreadPct(feeA, feeB float64) float64 {
 // TradePair tracks an arbitrage round-trip through its lifecycle.
 type TradePair struct {
 	ID            string  `json:"id"`
+	UserID        int64   `json:"user_id"` // 发起执行的用户（0=系统/历史无属主）
 	Symbol        string  `json:"symbol"`
 	BuyExchange   string  `json:"buy_exchange"`
 	SellExchange  string  `json:"sell_exchange"`
@@ -216,6 +217,9 @@ type Engine struct {
 	// Persistence
 	repo *store.ArbitrageTradeRepo
 
+	// ownerUserID 记录下一笔手动/自动执行的属主（由 Execute 类 handler 注入）。
+	ownerUserID int64
+
 	// Statistics
 	scanCount      atomic.Int64
 	executionCount atomic.Int64
@@ -327,6 +331,21 @@ func (e *Engine) Execute(opp Opportunity) {
 // ExecuteLive manually triggers a live execution regardless of the engine's DryRun config.
 func (e *Engine) ExecuteLive(opp Opportunity) {
 	e.execute(opp, false)
+}
+
+// SetOwnerUserID 设置下一笔执行的属主（handler 在手动/自动执行前注入，
+// 0 表示系统/未指定）。用于资源级越权防护的归属记录。
+func (e *Engine) SetOwnerUserID(uid int64) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.ownerUserID = uid
+}
+
+// OwnerUserID 返回当前设置的执行属主。
+func (e *Engine) OwnerUserID() int64 {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.ownerUserID
 }
 
 // SetDryRun sets the dry-run mode.
@@ -1335,6 +1354,10 @@ func (e *Engine) recordPair(pair *TradePair) {
 }
 
 func (e *Engine) recordPairLocked(pair *TradePair) {
+	// 无属主的新单子盖上当前执行属主（0=系统，保持现状）。
+	if pair.UserID == 0 {
+		pair.UserID = e.ownerUserID
+	}
 	if pair.IsActive() {
 		found := false
 		for _, p := range e.positions {
@@ -1456,6 +1479,7 @@ func extractFreeBalance(balances []map[string]any, asset string) float64 {
 func pairToRecord(pair *TradePair) *store.ArbitrageTradeRecord {
 	return &store.ArbitrageTradeRecord{
 		ID:            pair.ID,
+		UserID:        pair.UserID,
 		Symbol:        pair.Symbol,
 		BuyExchange:   pair.BuyExchange,
 		SellExchange:  pair.SellExchange,
@@ -1482,6 +1506,7 @@ func pairToRecord(pair *TradePair) *store.ArbitrageTradeRecord {
 func recordToPair(r *store.ArbitrageTradeRecord) *TradePair {
 	return &TradePair{
 		ID:            r.ID,
+		UserID:        r.UserID,
 		Symbol:        r.Symbol,
 		BuyExchange:   r.BuyExchange,
 		SellExchange:  r.SellExchange,

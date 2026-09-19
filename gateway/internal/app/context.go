@@ -550,6 +550,11 @@ func (ctx *Context) wireOrderManager() {
 					alpaca := adapter.NewAlpacaAdapter(apiKey, secret, false)
 					result, err = alpaca.PlaceOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity)
 				}
+			case "ibkr":
+				if adapter.IBKRConfigured() {
+					ibkr := adapter.NewIBKRAdapter(adapter.LoadIBKRConfig())
+					result, err = ibkr.PlaceOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity)
+				}
 			}
 
 			return finalizeLiveSubmitResult(ctx.Logger, ord, result, err)
@@ -623,6 +628,11 @@ func (ctx *Context) wireOrderManager() {
 			if apiKey != "" && secret != "" {
 				alpaca := adapter.NewAlpacaAdapter(apiKey, secret, false)
 				_, err = alpaca.CancelOrder(ord.Symbol, ord.ID)
+			}
+		case "ibkr":
+			if adapter.IBKRConfigured() {
+				ibkr := adapter.NewIBKRAdapter(adapter.LoadIBKRConfig())
+				_, err = ibkr.CancelOrder(ord.Symbol, ord.ID)
 			}
 		}
 		if err != nil {

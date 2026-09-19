@@ -37,8 +37,17 @@ const isChildActive = (location: ReturnType<typeof useLocation>, childPath: stri
 const navItems: NavItem[] = [
   { path: '/dashboard', labelKey: 'nav.dashboard', icon: BarChart3 },
 
-  // 第一页：纯机器人管理（网格/马丁/华尔街/AI 实例；新建走右上角模板向导）
-  { path: '/bots', labelKey: 'nav.bots', icon: LayoutGrid },
+  // 第一页：纯机器人管理（网格/马丁/华尔街/AI 实例；新建走右上角模板向导）。
+  // DCA 定投与分层马丁格尔为独立管理页（A1.2/A1.3），收在 Bots 菜单组下。
+  {
+    labelKey: 'nav.bots',
+    icon: LayoutGrid,
+    children: [
+      { path: '/bots', labelKey: 'nav.bots-center' },
+      { path: '/bots/dca', labelKey: 'nav.dca-bots' },
+      { path: '/bots/layered-martin', labelKey: 'nav.layered-martin' },
+    ],
+  },
 
   // 策略实验室（AI生成/回测/指标IDE 等研究工具）
   {
@@ -48,6 +57,8 @@ const navItems: NavItem[] = [
       { path: '/strategy', labelKey: 'nav.strategy' },
       { path: '/strategy/editor', labelKey: 'nav.strategy-editor' },
       { path: '/backtest', labelKey: 'nav.backtest' },
+      { path: '/backtest/portfolio', labelKey: 'nav.portfolio-backtest' },
+      { path: '/factor-research', labelKey: 'nav.factor-research' },
       { path: '/indicator-ide', labelKey: 'nav.indicator-ide' },
       { path: '/indicator-community', labelKey: 'nav.indicator-community' },
       { path: '/strategy-leaderboard', labelKey: 'nav.leaderboard' },

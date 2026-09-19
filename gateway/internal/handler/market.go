@@ -468,39 +468,7 @@ func RunBacktest(c *gin.Context) {
 	runner.LoadBars(symbol, bars)
 
 	// Select strategy
-	var strategy backtest.BacktestStrategy
-	switch strategyType {
-	case "breakout":
-		strategy = &breakoutBTStrategy{symbol: symbol, lookback: 20, bufferPct: 0.002, stopLossPct: 0.02, takeProfitPct: 0.04}
-	case "sma_cross":
-		strategy = &smaCrossStrategy{symbol: symbol, fastPeriod: 12, slowPeriod: 26}
-	case "martin_trend":
-		strategy = &martinTrendStrategy{symbol: symbol}
-	case "wallstreet":
-		strategy = &wallstreetStrategy{symbol: symbol}
-	case "macd_golden_long":
-		strategy = &macdGoldenLongStrategy{symbol: symbol}
-	case "macd_death_short":
-		strategy = &macdDeathShortStrategy{symbol: symbol}
-	case "ema_follow_trend":
-		strategy = &emaFollowTrendStrategy{symbol: symbol}
-	case "ema_counter_trend":
-		strategy = &emaCounterTrendStrategy{symbol: symbol}
-	case "dual_burn":
-		strategy = &dualBurnStrategy{symbol: symbol}
-	case "global_burn":
-		strategy = &globalBurnStrategy{symbol: symbol}
-	case "trend_long":
-		strategy = &trendLongStrategy{symbol: symbol}
-	case "trend_short":
-		strategy = &trendShortStrategy{symbol: symbol}
-	case "counter_stable":
-		strategy = &counterStableStrategy{symbol: symbol}
-	case "head_tail_arb":
-		strategy = &headTailArbStrategy{symbol: symbol}
-	default:
-		strategy = &smaCrossStrategy{symbol: symbol, fastPeriod: 12, slowPeriod: 26}
-	}
+	strategy := newBacktestStrategy(strategyType, symbol)
 
 	result, err := runner.Run(strategy)
 	if err != nil {
@@ -528,17 +496,17 @@ func RunBacktest(c *gin.Context) {
 			}
 		}
 		trades = append(trades, map[string]any{
-			"id":           fmt.Sprintf("trade-%d-%d", time.Now().UnixMilli(), i),
-			"symbol":       symbol,
-			"side":         t.Side,
-			"entry_price":  t.EntryPrice,
-			"exit_price":   t.ExitPrice,
-			"quantity":     t.Quantity,
-			"pnl":          store.RoundFloat(t.RealizedPnL, 2),
-			"pnl_pct":      store.RoundFloat(pnlPct, 2),
-			"entry_time":   t.EntryTime,
-			"exit_time":    t.ExitTime,
-			"reason":       t.ExitReason,
+			"id":          fmt.Sprintf("trade-%d-%d", time.Now().UnixMilli(), i),
+			"symbol":      symbol,
+			"side":        t.Side,
+			"entry_price": t.EntryPrice,
+			"exit_price":  t.ExitPrice,
+			"quantity":    t.Quantity,
+			"pnl":         store.RoundFloat(t.RealizedPnL, 2),
+			"pnl_pct":     store.RoundFloat(pnlPct, 2),
+			"entry_time":  t.EntryTime,
+			"exit_time":   t.ExitTime,
+			"reason":      t.ExitReason,
 		})
 	}
 
@@ -600,30 +568,30 @@ func RunBacktest(c *gin.Context) {
 			"to":              time.UnixMilli(bars[len(bars)-1].Time).Format("2006-01-02"),
 		},
 		"report": gin.H{
-			"initial_balance":   initialBalance,
-			"final_equity":      store.RoundFloat(finalEquity, 2),
-			"total_return_pct":  store.RoundFloat(result.TotalReturnPct, 2),
-			"max_drawdown_pct":  store.RoundFloat(result.MaxDrawdownPct, 2),
-			"sharpe_ratio":      store.RoundFloat(result.SharpeRatio, 2),
-			"sortino_ratio":     store.RoundFloat(result.SortinoRatio, 2),
-			"calmar_ratio":      store.RoundFloat(result.CalmarRatio, 2),
-			"win_rate_pct":      store.RoundFloat(result.WinRate, 1),
-			"total_trades":      result.TotalTrades,
-			"profit_factor":     store.RoundFloat(result.ProfitFactor, 2),
-			"recovery_factor":   store.RoundFloat(perfReport.RecoveryFactor, 2),
-			"winning_trades":    perfReport.WinningTrades,
-			"losing_trades":     perfReport.LosingTrades,
-			"avg_win":           store.RoundFloat(perfReport.AvgWin, 2),
-			"avg_loss":          store.RoundFloat(perfReport.AvgLoss, 2),
-			"best_trade":        store.RoundFloat(perfReport.BestTrade, 2),
-			"worst_trade":       store.RoundFloat(perfReport.WorstTrade, 2),
-			"max_consec_wins":   perfReport.MaxConsecWins,
-			"max_consec_loss":   perfReport.MaxConsecLoss,
-			"var_95":            store.RoundFloat(perfReport.VaR95*100, 2),
-			"cvar_95":           store.RoundFloat(perfReport.CVaR95*100, 2),
-			"volatility":        store.RoundFloat(perfReport.Volatility*100, 2),
-			"monthly_returns":   perfReport.MonthlyReturns,
-			"yearly_returns":    perfReport.YearlyReturns,
+			"initial_balance":  initialBalance,
+			"final_equity":     store.RoundFloat(finalEquity, 2),
+			"total_return_pct": store.RoundFloat(result.TotalReturnPct, 2),
+			"max_drawdown_pct": store.RoundFloat(result.MaxDrawdownPct, 2),
+			"sharpe_ratio":     store.RoundFloat(result.SharpeRatio, 2),
+			"sortino_ratio":    store.RoundFloat(result.SortinoRatio, 2),
+			"calmar_ratio":     store.RoundFloat(result.CalmarRatio, 2),
+			"win_rate_pct":     store.RoundFloat(result.WinRate, 1),
+			"total_trades":     result.TotalTrades,
+			"profit_factor":    store.RoundFloat(result.ProfitFactor, 2),
+			"recovery_factor":  store.RoundFloat(perfReport.RecoveryFactor, 2),
+			"winning_trades":   perfReport.WinningTrades,
+			"losing_trades":    perfReport.LosingTrades,
+			"avg_win":          store.RoundFloat(perfReport.AvgWin, 2),
+			"avg_loss":         store.RoundFloat(perfReport.AvgLoss, 2),
+			"best_trade":       store.RoundFloat(perfReport.BestTrade, 2),
+			"worst_trade":      store.RoundFloat(perfReport.WorstTrade, 2),
+			"max_consec_wins":  perfReport.MaxConsecWins,
+			"max_consec_loss":  perfReport.MaxConsecLoss,
+			"var_95":           store.RoundFloat(perfReport.VaR95*100, 2),
+			"cvar_95":          store.RoundFloat(perfReport.CVaR95*100, 2),
+			"volatility":       store.RoundFloat(perfReport.Volatility*100, 2),
+			"monthly_returns":  perfReport.MonthlyReturns,
+			"yearly_returns":   perfReport.YearlyReturns,
 			"diagnostics": gin.H{
 				"lookahead": diagnostics.Lookahead,
 				"recursive": diagnostics.Recursive,
@@ -632,6 +600,42 @@ func RunBacktest(c *gin.Context) {
 			},
 		},
 	})
+}
+
+// newBacktestStrategy 按策略类型构造单策略回测实例（RunBacktest 与组合回测共用）。
+func newBacktestStrategy(strategyType, symbol string) backtest.BacktestStrategy {
+	switch strategyType {
+	case "breakout":
+		return &breakoutBTStrategy{symbol: symbol, lookback: 20, bufferPct: 0.002, stopLossPct: 0.02, takeProfitPct: 0.04}
+	case "sma_cross":
+		return &smaCrossStrategy{symbol: symbol, fastPeriod: 12, slowPeriod: 26}
+	case "martin_trend":
+		return &martinTrendStrategy{symbol: symbol}
+	case "wallstreet":
+		return &wallstreetStrategy{symbol: symbol}
+	case "macd_golden_long":
+		return &macdGoldenLongStrategy{symbol: symbol}
+	case "macd_death_short":
+		return &macdDeathShortStrategy{symbol: symbol}
+	case "ema_follow_trend":
+		return &emaFollowTrendStrategy{symbol: symbol}
+	case "ema_counter_trend":
+		return &emaCounterTrendStrategy{symbol: symbol}
+	case "dual_burn":
+		return &dualBurnStrategy{symbol: symbol}
+	case "global_burn":
+		return &globalBurnStrategy{symbol: symbol}
+	case "trend_long":
+		return &trendLongStrategy{symbol: symbol}
+	case "trend_short":
+		return &trendShortStrategy{symbol: symbol}
+	case "counter_stable":
+		return &counterStableStrategy{symbol: symbol}
+	case "head_tail_arb":
+		return &headTailArbStrategy{symbol: symbol}
+	default:
+		return &smaCrossStrategy{symbol: symbol, fastPeriod: 12, slowPeriod: 26}
+	}
 }
 
 func NativeBacktest(c *gin.Context) {
@@ -687,6 +691,21 @@ func getFloat(m map[string]any, key string, def float64) float64 {
 		var f float64
 		fmt.Sscanf(v, "%f", &f)
 		return f
+	}
+	return def
+}
+
+// getInt64 读整数字段（JSON 数字可能是 float64，也可能是字符串）。
+func getInt64(m map[string]any, key string, def int64) int64 {
+	switch v := m[key].(type) {
+	case float64:
+		return int64(v)
+	case int64:
+		return v
+	case string:
+		var n int64
+		fmt.Sscanf(v, "%d", &n)
+		return n
 	}
 	return def
 }

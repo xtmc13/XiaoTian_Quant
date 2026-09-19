@@ -79,7 +79,7 @@ test.describe('Authenticated Pages - a11y', () => {
   })
 
   test('ai bots page has no critical a11y violations', async ({ authPage }) => {
-    await gotoAuthenticated(authPage, '/ai-bots')
+    await gotoAuthenticated(authPage, '/bots/ai')
 
     const accessibilityScanResults = await buildAxe(authPage).analyze()
 
@@ -105,10 +105,11 @@ test.describe('Authenticated Pages - a11y', () => {
 
 // Interactive components - modals, dropdowns, etc.
 test.describe('Interactive Components - a11y', () => {
-  test('strategy create modal is accessible', async ({ authPage }) => {
+  test('strategy create page is accessible', async ({ authPage }) => {
     await gotoAuthenticated(authPage, '/strategy')
-    await authPage.click('button:has-text("创建策略")')
-    await expect(authPage.locator('text=创建策略').first()).toBeVisible()
+    await authPage.getByRole('button', { name: /启动策略机器人/ }).first().click()
+    await authPage.waitForURL(/\/create/)
+    await expect(authPage).toHaveURL(/\/create/)
 
     const accessibilityScanResults = await buildAxe(authPage).analyze()
 

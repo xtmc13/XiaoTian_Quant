@@ -50,7 +50,12 @@ func GetProtectionConfig(c *gin.Context) {
 }
 
 // ConfigureProtection sets up protections from JSON configuration.
+// ProtectionManager 是进程级全局风控资源（无属主概念）：写操作仅 admin
+// （未注入用户保持单用户兼容），普通用户只读。
 func ConfigureProtection(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 	var body struct {
 		Protections []struct {
 			Name   string         `json:"name"`
@@ -88,7 +93,11 @@ func ConfigureProtection(c *gin.Context) {
 }
 
 // ResetProtection clears all protection blocks.
+// 全局风控资源：写操作仅 admin（未注入用户保持单用户兼容）。
 func ResetProtection(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 	if ProtectionManager == nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "protection manager not initialized"})
 		return

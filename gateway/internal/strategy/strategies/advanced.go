@@ -21,18 +21,18 @@ type ATRTrailingStopStrategy struct {
 	running bool
 	mu      sync.RWMutex
 
-	atrPeriod      int
-	atrMultiplier  float64
-	entryPeriod    int     // EMA period for trend direction
-	positionSize   float64
+	atrPeriod     int
+	atrMultiplier float64
+	entryPeriod   int // EMA period for trend direction
+	positionSize  float64
 
-	bars       []model.Bar
-	inPosition  bool
-	entryPrice  float64
+	bars         []model.Bar
+	inPosition   bool
+	entryPrice   float64
 	trailingStop float64
 	highestPrice float64
 	lowestPrice  float64
-	direction   string
+	direction    string
 
 	params *strategy.ParamRegistry
 }
@@ -85,20 +85,36 @@ func (s *ATRTrailingStopStrategy) Start(params map[string]any) error {
 
 func (s *ATRTrailingStopStrategy) GetParameters() *strategy.ParamRegistry { return s.params }
 func (s *ATRTrailingStopStrategy) ValidateParams() error {
-	if s.params == nil { return nil }
+	if s.params == nil {
+		return nil
+	}
 	return s.params.Validate()
 }
 func (s *ATRTrailingStopStrategy) ApplyParams(m map[string]any) error {
-	if s.params == nil { return nil }
-	if err := s.params.FromMap(m); err != nil { return err }
-	if p := s.params.Get("atr_period"); p != nil { s.atrPeriod = p.GetInt() }
-	if p := s.params.Get("atr_multiplier"); p != nil { s.atrMultiplier = p.GetFloat() }
-	if p := s.params.Get("entry_period"); p != nil { s.entryPeriod = p.GetInt() }
-	if p := s.params.Get("position_size"); p != nil { s.positionSize = p.GetFloat() }
+	if s.params == nil {
+		return nil
+	}
+	if err := s.params.FromMap(m); err != nil {
+		return err
+	}
+	if p := s.params.Get("atr_period"); p != nil {
+		s.atrPeriod = p.GetInt()
+	}
+	if p := s.params.Get("atr_multiplier"); p != nil {
+		s.atrMultiplier = p.GetFloat()
+	}
+	if p := s.params.Get("entry_period"); p != nil {
+		s.entryPeriod = p.GetInt()
+	}
+	if p := s.params.Get("position_size"); p != nil {
+		s.positionSize = p.GetFloat()
+	}
 	return nil
 }
 func (s *ATRTrailingStopStrategy) ParamDefs() []map[string]any {
-	if s.params == nil { return nil }
+	if s.params == nil {
+		return nil
+	}
 	return s.params.ToJSONDefs()
 }
 
@@ -110,9 +126,15 @@ func (s *ATRTrailingStopStrategy) Stop() error {
 	return nil
 }
 
-func (s *ATRTrailingStopStrategy) OnTick(tick model.Tick, bus *event.EventBus) (*model.Signal, error) { return nil, nil }
-func (s *ATRTrailingStopStrategy) OnOrderBook(ob model.OrderBookData, bus *event.EventBus) (*model.Signal, error) { return nil, nil }
-func (s *ATRTrailingStopStrategy) OnOrderUpdate(order model.OrderData, bus *event.EventBus) (*model.Signal, error) { return nil, nil }
+func (s *ATRTrailingStopStrategy) OnTick(tick model.Tick, bus *event.EventBus) (*model.Signal, error) {
+	return nil, nil
+}
+func (s *ATRTrailingStopStrategy) OnOrderBook(ob model.OrderBookData, bus *event.EventBus) (*model.Signal, error) {
+	return nil, nil
+}
+func (s *ATRTrailingStopStrategy) OnOrderUpdate(order model.OrderData, bus *event.EventBus) (*model.Signal, error) {
+	return nil, nil
+}
 
 func (s *ATRTrailingStopStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Signal, error) {
 	s.mu.Lock()
@@ -128,7 +150,9 @@ func (s *ATRTrailingStopStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*mo
 	}
 
 	closes := make([]float64, len(s.bars))
-	for i, b := range s.bars { closes[i] = b.Close }
+	for i, b := range s.bars {
+		closes[i] = b.Close
+	}
 
 	emaVal := ema(closes, s.entryPeriod)
 	atrVal := atr(s.bars, s.atrPeriod)
@@ -197,9 +221,9 @@ type DualThrustStrategy struct {
 	positionSize   float64
 
 	bars       []model.Bar
-	inPosition  bool
-	entryPrice  float64
-	direction   string
+	inPosition bool
+	entryPrice float64
+	direction  string
 
 	params *strategy.ParamRegistry
 }
@@ -252,20 +276,36 @@ func (s *DualThrustStrategy) Start(params map[string]any) error {
 
 func (s *DualThrustStrategy) GetParameters() *strategy.ParamRegistry { return s.params }
 func (s *DualThrustStrategy) ValidateParams() error {
-	if s.params == nil { return nil }
+	if s.params == nil {
+		return nil
+	}
 	return s.params.Validate()
 }
 func (s *DualThrustStrategy) ApplyParams(m map[string]any) error {
-	if s.params == nil { return nil }
-	if err := s.params.FromMap(m); err != nil { return err }
-	if p := s.params.Get("lookback_period"); p != nil { s.lookbackPeriod = p.GetInt() }
-	if p := s.params.Get("k1"); p != nil { s.k1 = p.GetFloat() }
-	if p := s.params.Get("k2"); p != nil { s.k2 = p.GetFloat() }
-	if p := s.params.Get("position_size"); p != nil { s.positionSize = p.GetFloat() }
+	if s.params == nil {
+		return nil
+	}
+	if err := s.params.FromMap(m); err != nil {
+		return err
+	}
+	if p := s.params.Get("lookback_period"); p != nil {
+		s.lookbackPeriod = p.GetInt()
+	}
+	if p := s.params.Get("k1"); p != nil {
+		s.k1 = p.GetFloat()
+	}
+	if p := s.params.Get("k2"); p != nil {
+		s.k2 = p.GetFloat()
+	}
+	if p := s.params.Get("position_size"); p != nil {
+		s.positionSize = p.GetFloat()
+	}
 	return nil
 }
 func (s *DualThrustStrategy) ParamDefs() []map[string]any {
-	if s.params == nil { return nil }
+	if s.params == nil {
+		return nil
+	}
 	return s.params.ToJSONDefs()
 }
 
@@ -277,9 +317,15 @@ func (s *DualThrustStrategy) Stop() error {
 	return nil
 }
 
-func (s *DualThrustStrategy) OnTick(tick model.Tick, bus *event.EventBus) (*model.Signal, error) { return nil, nil }
-func (s *DualThrustStrategy) OnOrderBook(ob model.OrderBookData, bus *event.EventBus) (*model.Signal, error) { return nil, nil }
-func (s *DualThrustStrategy) OnOrderUpdate(order model.OrderData, bus *event.EventBus) (*model.Signal, error) { return nil, nil }
+func (s *DualThrustStrategy) OnTick(tick model.Tick, bus *event.EventBus) (*model.Signal, error) {
+	return nil, nil
+}
+func (s *DualThrustStrategy) OnOrderBook(ob model.OrderBookData, bus *event.EventBus) (*model.Signal, error) {
+	return nil, nil
+}
+func (s *DualThrustStrategy) OnOrderUpdate(order model.OrderData, bus *event.EventBus) (*model.Signal, error) {
+	return nil, nil
+}
 
 func (s *DualThrustStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Signal, error) {
 	s.mu.Lock()
@@ -335,17 +381,27 @@ func (s *DualThrustStrategy) dualThrustRange() (upper, lower float64) {
 	minClose := window[0].Close
 
 	for _, b := range window[1:] {
-		if b.High > hh { hh = b.High }
-		if b.Low < ll { ll = b.Low }
-		if b.Close > maxClose { maxClose = b.Close }
-		if b.Close < minClose { minClose = b.Close }
+		if b.High > hh {
+			hh = b.High
+		}
+		if b.Low < ll {
+			ll = b.Low
+		}
+		if b.Close > maxClose {
+			maxClose = b.Close
+		}
+		if b.Close < minClose {
+			minClose = b.Close
+		}
 	}
 
 	// Range = max(HH-LC, HC-LL)
 	range1 := hh - minClose
 	range2 := maxClose - ll
 	tr := range1
-	if range2 > tr { tr = range2 }
+	if range2 > tr {
+		tr = range2
+	}
 
 	prevClose := s.bars[len(s.bars)-2].Close
 	upper = prevClose + s.k1*tr
@@ -380,11 +436,11 @@ type RenkoStrategy struct {
 	running bool
 	mu      sync.RWMutex
 
-	brickSize    float64 // fixed brick size in price units
-	reversalBricks int   // bricks needed for reversal
-	positionSize float64
+	brickSize      float64 // fixed brick size in price units
+	reversalBricks int     // bricks needed for reversal
+	positionSize   float64
 
-	bars       []model.Bar
+	bars        []model.Bar
 	renkoBricks []RenkoBrick
 	inPosition  bool
 	direction   string
@@ -418,10 +474,10 @@ func (s *RenkoStrategy) Symbol() string { return s.symbol }
 
 func (s *RenkoStrategy) Params() map[string]any {
 	return map[string]any{
-		"symbol":           s.symbol,
-		"brick_size":       s.brickSize,
-		"reversal_bricks":  s.reversalBricks,
-		"position_size":    s.positionSize,
+		"symbol":          s.symbol,
+		"brick_size":      s.brickSize,
+		"reversal_bricks": s.reversalBricks,
+		"position_size":   s.positionSize,
 	}
 }
 
@@ -443,19 +499,33 @@ func (s *RenkoStrategy) Start(params map[string]any) error {
 
 func (s *RenkoStrategy) GetParameters() *strategy.ParamRegistry { return s.params }
 func (s *RenkoStrategy) ValidateParams() error {
-	if s.params == nil { return nil }
+	if s.params == nil {
+		return nil
+	}
 	return s.params.Validate()
 }
 func (s *RenkoStrategy) ApplyParams(m map[string]any) error {
-	if s.params == nil { return nil }
-	if err := s.params.FromMap(m); err != nil { return err }
-	if p := s.params.Get("brick_size"); p != nil { s.brickSize = p.GetFloat() }
-	if p := s.params.Get("reversal_bricks"); p != nil { s.reversalBricks = p.GetInt() }
-	if p := s.params.Get("position_size"); p != nil { s.positionSize = p.GetFloat() }
+	if s.params == nil {
+		return nil
+	}
+	if err := s.params.FromMap(m); err != nil {
+		return err
+	}
+	if p := s.params.Get("brick_size"); p != nil {
+		s.brickSize = p.GetFloat()
+	}
+	if p := s.params.Get("reversal_bricks"); p != nil {
+		s.reversalBricks = p.GetInt()
+	}
+	if p := s.params.Get("position_size"); p != nil {
+		s.positionSize = p.GetFloat()
+	}
 	return nil
 }
 func (s *RenkoStrategy) ParamDefs() []map[string]any {
-	if s.params == nil { return nil }
+	if s.params == nil {
+		return nil
+	}
 	return s.params.ToJSONDefs()
 }
 
@@ -467,9 +537,15 @@ func (s *RenkoStrategy) Stop() error {
 	return nil
 }
 
-func (s *RenkoStrategy) OnTick(tick model.Tick, bus *event.EventBus) (*model.Signal, error) { return nil, nil }
-func (s *RenkoStrategy) OnOrderBook(ob model.OrderBookData, bus *event.EventBus) (*model.Signal, error) { return nil, nil }
-func (s *RenkoStrategy) OnOrderUpdate(order model.OrderData, bus *event.EventBus) (*model.Signal, error) { return nil, nil }
+func (s *RenkoStrategy) OnTick(tick model.Tick, bus *event.EventBus) (*model.Signal, error) {
+	return nil, nil
+}
+func (s *RenkoStrategy) OnOrderBook(ob model.OrderBookData, bus *event.EventBus) (*model.Signal, error) {
+	return nil, nil
+}
+func (s *RenkoStrategy) OnOrderUpdate(order model.OrderData, bus *event.EventBus) (*model.Signal, error) {
+	return nil, nil
+}
 
 func (s *RenkoStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Signal, error) {
 	s.mu.Lock()
@@ -593,6 +669,8 @@ func atr(bars []model.Bar, period int) float64 {
 }
 
 func max(a, b float64) float64 {
-	if a > b { return a }
+	if a > b {
+		return a
+	}
 	return b
 }

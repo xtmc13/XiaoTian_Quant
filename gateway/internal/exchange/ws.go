@@ -24,6 +24,11 @@ type WSConfig struct {
 	OnMessage       func(message []byte)
 	OnConnected     func()
 	OnDisconnected  func(err error)
+
+	// AppPing 非空时，心跳改用应用层文本帧发送该内容（如 OKX 的 "ping"、
+	// Bybit 的 {"op":"ping"}），而不是协议层 Ping 帧。交易所回复的 pong 以
+	// 普通文本消息回到 OnMessage，由调用方识别。
+	AppPing []byte
 }
 
 // WSClient manages a single WebSocket connection with automatic reconnection.
@@ -150,6 +155,11 @@ func (w *WSClient) readLoop(conn *websocket.Conn, doneCh chan struct{}) {
 				return
 			default:
 			}
+			// 必须先清理本代连接状态再重连：tryReconnect 同步调用 Connect，
+			// 而 defer 里的清理要等 readLoop 返回后才执行；若不在此清理，
+			// Connect 首行的 connected 检查会把新连接误判为重复连接直接丢弃，
+			// 重连链就此静默中断。
+			w.clearConn(conn)
 			w.tryReconnect()
 			return
 		}
@@ -173,10 +183,24 @@ func (w *WSClient) pingLoop(conn *websocket.Conn, doneCh chan struct{}) {
 		case <-ticker.C:
 			w.mu.Lock()
 			if w.connected && w.conn == conn {
-				conn.WriteMessage(websocket.PingMessage, nil)
+				if len(w.cfg.AppPing) > 0 {
+					conn.WriteMessage(websocket.TextMessage, w.cfg.AppPing)
+				} else {
+					conn.WriteMessage(websocket.PingMessage, nil)
+				}
 			}
 			w.mu.Unlock()
 		}
+	}
+}
+
+// clearConn 清理某代连接占用的共享状态（仅当该代仍是当前代时）。
+func (w *WSClient) clearConn(conn *websocket.Conn) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.conn == conn {
+		w.connected = false
+		w.conn = nil
 	}
 }
 

@@ -29,6 +29,8 @@ type MartinStrategy struct {
 	LoopCount            int
 	EnableAddPosition    bool
 	FlashCrashProtection float64
+	MaxLayers            int     // A1.4: 总层数硬上限（0=回退 OrderCount）
+	MaxTotalBudget       float64 // A1.4: 累计投入预算硬限（0=不限）
 
 	name    string
 	symbol  string
@@ -38,9 +40,11 @@ type MartinStrategy struct {
 
 	inPosition        bool
 	positionCount     int
+	pendingAddCount   int // 已发加仓信号、未成交确认的笔数（成交回报前不推进层数）
 	entryPrice        float64
 	avgEntryPrice     float64
 	totalQuantity     float64
+	totalInvested     float64 // 本轮循环累计投入（成交回报累计；A1.4 预算硬限）
 	lowestSinceEntry  float64
 	highestSinceEntry float64
 	pendingAdd        bool
@@ -50,6 +54,33 @@ type MartinStrategy struct {
 
 	flashDetector *FlashCrashDetector
 	params        *ParamRegistry
+}
+
+// MaxLayers 与 MaxTotalBudget（A1.4 安全硬限，对齐 QuantDinger）：
+// MaxLayers>0 时作为总买入订单数（首单+加仓）的硬上限；MaxTotalBudget>0
+// 时累计成交投入达到该值后拒绝再加仓。0 表示未设置（回退 OrderCount/不限）。
+
+// effectiveAddCap 返回允许的最大加仓笔数（不含首单）：默认 OrderCount-1，
+// max_layers>0 时收紧为 MaxLayers-1（max_layers 为含首单的总订单数硬上限）。
+func (s *MartinStrategy) effectiveAddCap() int {
+	cap_ := s.OrderCount - 1
+	if s.MaxLayers > 0 && s.MaxLayers-1 < cap_ {
+		cap_ = s.MaxLayers - 1
+	}
+	if cap_ < 0 {
+		cap_ = 0
+	}
+	return cap_
+}
+
+// addCount 返回已发出（含在途）的加仓信号数：positionCount 含首单（成交
+// 确认计数），pendingAddCount 为已发未成交的加仓数。
+func (s *MartinStrategy) addCount() int {
+	n := s.positionCount - 1 + s.pendingAddCount
+	if n < 0 {
+		n = 0
+	}
+	return n
 }
 
 // NewMartinStrategy creates a new MartinStrategy with sensible defaults.
@@ -84,6 +115,9 @@ func NewMartinStrategy() *MartinStrategy {
 	s.params.Register(IntParameter("loop_count", 100, 1, 10000, "buy"))
 	s.params.Register(BoolParameter("enable_add_position", true, "buy"))
 	s.params.Register(FloatParameter("flash_crash_protection", 0.02, 0.01, 0.10, 0.01, "protection"))
+	// A1.4 安全硬限：层数硬上限 + 总预算硬限（0=未设置）。
+	s.params.Register(IntParameter("max_layers", 0, 0, 20, "protection"))
+	s.params.Register(FloatParameter("max_total_budget", 0, 0, 100000000, 100, "protection"))
 
 	return s
 }
@@ -107,6 +141,8 @@ func (s *MartinStrategy) Params() map[string]any {
 		"loop_count":             s.LoopCount,
 		"enable_add_position":    s.EnableAddPosition,
 		"flash_crash_protection": s.FlashCrashProtection,
+		"max_layers":             s.MaxLayers,
+		"max_total_budget":       s.MaxTotalBudget,
 	}
 }
 
@@ -150,7 +186,9 @@ func (s *MartinStrategy) Stop() error {
 	s.running = false
 	s.inPosition = false
 	s.positionCount = 0
+	s.pendingAddCount = 0
 	s.totalQuantity = 0
+	s.totalInvested = 0
 	s.avgEntryPrice = 0
 	s.loopExecuted = 0
 	s.waterfallPaused = false
@@ -211,6 +249,12 @@ func (s *MartinStrategy) ApplyParams(m map[string]any) error {
 	if p := s.params.Get("flash_crash_protection"); p != nil {
 		s.FlashCrashProtection = p.GetFloat()
 	}
+	if p := s.params.Get("max_layers"); p != nil {
+		s.MaxLayers = p.GetInt()
+	}
+	if p := s.params.Get("max_total_budget"); p != nil {
+		s.MaxTotalBudget = p.GetFloat()
+	}
 	return nil
 }
 
@@ -225,6 +269,12 @@ func (s *MartinStrategy) ParamDefs() []map[string]any {
 func (s *MartinStrategy) CalculatePositions() []float64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.calculatePositionsLocked()
+}
+
+// calculatePositionsLocked 是无锁内部版：调用方必须已持有 s.mu
+// （OnBar 持写锁时直接调用，避免 RWMutex 写锁内重入读锁死锁）。
+func (s *MartinStrategy) calculatePositionsLocked() []float64 {
 	positions := make([]float64, s.OrderCount)
 	base := s.FirstOrderAmount
 	if s.DoubleFirstOrder {
@@ -334,6 +384,8 @@ func (s *MartinStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Signa
 		}
 		s.inPosition = true
 		s.positionCount = 0
+		s.pendingAddCount = 0
+		s.totalInvested = 0
 		s.entryPrice = bar.Close
 		s.avgEntryPrice = bar.Close
 		s.totalQuantity = 0
@@ -341,7 +393,7 @@ func (s *MartinStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Signa
 		s.highestSinceEntry = bar.Close
 		s.pendingAdd = false
 		s.triggerLowPrice = 0
-		positions := s.CalculatePositions()
+		positions := s.calculatePositionsLocked()
 		firstSize := positions[0]
 		s.logger.Info("martin first order", "price", bar.Close, "size", firstSize)
 		return &model.Signal{
@@ -365,7 +417,9 @@ func (s *MartinStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Signa
 	if s.checkTakeProfit(bar) {
 		s.inPosition = false
 		s.positionCount = 0
+		s.pendingAddCount = 0
 		s.totalQuantity = 0
+		s.totalInvested = 0
 		s.avgEntryPrice = 0
 		s.loopExecuted++
 		s.pendingAdd = false
@@ -378,8 +432,10 @@ func (s *MartinStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Signa
 			Reason:    "martin_trend take profit",
 		}, nil
 	}
-	if s.EnableAddPosition && s.positionCount < s.OrderCount-1 && !s.waterfallPaused {
-		targetPrice := s.entryPrice * (1 - s.AddPositionSpread*float64(s.positionCount))
+	// A1.4 硬限：层数硬上限（含在途）+ 总预算硬限；有在途加仓单时不发新
+	// 加仓信号（未成交不推进），层数推进发生在 OnOrderUpdate 成交回报。
+	if s.EnableAddPosition && s.pendingAddCount == 0 && s.addCount() < s.effectiveAddCap() && !s.waterfallPaused {
+		targetPrice := s.entryPrice * (1 - s.AddPositionSpread*float64(s.addCount()))
 		if bar.Low <= targetPrice {
 			if !s.pendingAdd {
 				s.pendingAdd = true
@@ -387,19 +443,29 @@ func (s *MartinStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Signa
 			}
 		}
 		if s.pendingAdd && bar.Close >= s.triggerLowPrice*(1+s.AddPositionCallback) {
-			s.pendingAdd = false
-			s.positionCount++
-			positions := s.CalculatePositions()
-			addSize := positions[s.positionCount]
-			s.logger.Info("martin add position", "count", s.positionCount, "price", bar.Close, "size", addSize)
-			return &model.Signal{
-				Symbol:    s.symbol,
-				Direction: "LONG",
-				Strength:  0.7,
-				Strategy:  s.name,
-				Reason:    fmt.Sprintf("martin_trend add position #%d", s.positionCount),
-				Qty:       addSize,
-			}, nil
+			nextIdx := s.addCount() + 1
+			positions := s.calculatePositionsLocked()
+			addSize := positions[0]
+			if nextIdx < len(positions) {
+				addSize = positions[nextIdx]
+			}
+			// 预算硬限：计划加仓金额会使累计投入超 max_total_budget → 拒绝。
+			if s.MaxTotalBudget > 0 && s.totalInvested+addSize > s.MaxTotalBudget+1e-9 {
+				s.logger.Warn("martin add position blocked by max_total_budget",
+					"invested", s.totalInvested, "planned", addSize, "cap", s.MaxTotalBudget)
+			} else {
+				s.pendingAdd = false
+				s.pendingAddCount++
+				s.logger.Info("martin add position", "count", s.addCount(), "price", bar.Close, "size", addSize)
+				return &model.Signal{
+					Symbol:    s.symbol,
+					Direction: "LONG",
+					Strength:  0.7,
+					Strategy:  s.name,
+					Reason:    fmt.Sprintf("martin_trend add position #%d", s.addCount()),
+					Qty:       addSize,
+				}, nil
+			}
 		}
 	}
 	return nil, nil
@@ -415,6 +481,10 @@ func (s *MartinStrategy) OnOrderUpdate(order model.OrderData, bus *event.EventBu
 	if order.Status == model.StatusFilled {
 		if order.Side == model.SideBuy {
 			filledValue := order.AvgFillPrice * order.Filled
+			if s.pendingAddCount > 0 {
+				s.pendingAddCount--
+			}
+			s.totalInvested += filledValue
 			if s.positionCount == 0 {
 				s.avgEntryPrice = order.AvgFillPrice
 				s.totalQuantity = order.Filled
@@ -425,12 +495,20 @@ func (s *MartinStrategy) OnOrderUpdate(order model.OrderData, bus *event.EventBu
 					s.avgEntryPrice = totalValue / s.totalQuantity
 				}
 			}
+			s.positionCount++ // 成交回报确认后才推进层数（A1.4）
 		} else if order.Side == model.SideSell {
 			s.inPosition = false
 			s.positionCount = 0
+			s.pendingAddCount = 0
 			s.totalQuantity = 0
+			s.totalInvested = 0
 			s.avgEntryPrice = 0
 			s.loopExecuted++
+		}
+	} else if order.IsDone() && order.Status != model.StatusFilled {
+		// Cancelled / rejected / expired：释放在途加仓，层数不推进（A1.4）。
+		if order.Side == model.SideBuy && s.pendingAddCount > 0 {
+			s.pendingAddCount--
 		}
 	}
 	return nil, nil

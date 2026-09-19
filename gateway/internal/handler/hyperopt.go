@@ -27,6 +27,7 @@ var (
 
 type hyperoptJob struct {
 	ID        string                `json:"id"`
+	UserID    int64                 `json:"user_id"`
 	Status    string                `json:"status"` // running, completed, failed, cancelled
 	Config    hyperoptJobConfig     `json:"config"`
 	Result    *hyperopt.Result      `json:"result,omitempty"`
@@ -169,6 +170,7 @@ func StartHyperopt(c *gin.Context) {
 	ctx, cancel := context.WithCancel(context.Background())
 	job := &hyperoptJob{
 		ID:        jobID,
+		UserID:    int64(getUserID(c)),
 		Status:    "running",
 		Config:    body,
 		Progress:  hyperoptProgress{Total: body.MaxEvals},
@@ -342,12 +344,12 @@ func StartHyperopt(c *gin.Context) {
 	})
 }
 
-// GetHyperoptJob returns the status of a hyperopt job.
-func GetHyperoptJob(c *gin.Context) {
+// hyperoptJobGet 取 job；不存在 404，属他人（且非 admin）403。
+func hyperoptJobGet(c *gin.Context) (*hyperoptJob, bool) {
 	jobID := c.Param("id")
 	if jobID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "job id required"})
-		return
+		return nil, false
 	}
 
 	hyperoptJobsMu.RLock()
@@ -356,6 +358,18 @@ func GetHyperoptJob(c *gin.Context) {
 
 	if !ok {
 		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
+		return nil, false
+	}
+	if !requireOwner(c, job.UserID) {
+		return nil, false
+	}
+	return job, true
+}
+
+// GetHyperoptJob returns the status of a hyperopt job.
+func GetHyperoptJob(c *gin.Context) {
+	job, ok := hyperoptJobGet(c)
+	if !ok {
 		return
 	}
 
@@ -419,15 +433,23 @@ func GetHyperoptJob(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
-// ListHyperoptJobs returns all hyperopt jobs.
+// ListHyperoptJobs returns hyperopt jobs visible to the current user
+// （本人的 + 历史无属主；admin/未注入用户看全部）。
 func ListHyperoptJobs(c *gin.Context) {
 	hyperoptJobsMu.RLock()
 	defer hyperoptJobsMu.RUnlock()
 
+	uid, injected := ctxUserID(c)
+	restricted := injected && !ctxIsAdmin(c)
+
 	jobs := make([]gin.H, 0, len(hyperoptJobs))
 	for _, job := range hyperoptJobs {
+		if restricted && job.UserID != 0 && job.UserID != int64(uid) {
+			continue
+		}
 		jobs = append(jobs, gin.H{
 			"id":               job.ID,
+			"user_id":          job.UserID,
 			"status":           job.Status,
 			"strategy_type":    job.Config.StrategyType,
 			"symbol":           job.Config.Symbol,
@@ -448,8 +470,7 @@ func ListHyperoptJobs(c *gin.Context) {
 // CancelHyperoptJob cancels a running hyperopt job.
 func CancelHyperoptJob(c *gin.Context) {
 	jobID := c.Param("id")
-	if jobID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "job id required"})
+	if _, ok := hyperoptJobGet(c); !ok {
 		return
 	}
 
@@ -462,19 +483,13 @@ func CancelHyperoptJob(c *gin.Context) {
 	}
 	hyperoptJobsMu.Unlock()
 
-	if !ok {
-		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
-		return
-	}
-
 	c.JSON(http.StatusOK, gin.H{"status": "cancelled", "job_id": jobID})
 }
 
 // DeleteHyperoptJob removes a hyperopt job from memory.
 func DeleteHyperoptJob(c *gin.Context) {
 	jobID := c.Param("id")
-	if jobID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "job id required"})
+	if _, ok := hyperoptJobGet(c); !ok {
 		return
 	}
 
@@ -572,6 +587,9 @@ func ExportHyperoptParams(c *gin.Context) {
 
 	if !ok {
 		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
+		return
+	}
+	if !requireOwner(c, job.UserID) {
 		return
 	}
 

@@ -11,6 +11,7 @@ import (
 
 type ArbitrageTradeRecord struct {
 	ID            string  `json:"id"`
+	UserID        int64   `json:"user_id"`
 	Symbol        string  `json:"symbol"`
 	BuyExchange   string  `json:"buy_exchange"`
 	SellExchange  string  `json:"sell_exchange"`
@@ -50,14 +51,16 @@ func (r *ArbitrageTradeRepo) Create(t *ArbitrageTradeRecord) error {
 		t.OpenedAt = time.Now().UnixMilli()
 	}
 	_, err := db.Exec(
-		`INSERT INTO arbitrage_trades (id, symbol, buy_exchange, sell_exchange, buy_price, sell_price, quantity, buy_order_id, sell_order_id, buy_filled_qty, buy_avg_price, buy_fee, sell_filled_qty, sell_avg_price, sell_fee, gross_profit, net_profit, fees, status, opened_at, closed_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		t.ID, t.Symbol, t.BuyExchange, t.SellExchange, t.BuyPrice, t.SellPrice, t.Quantity,
+		`INSERT INTO arbitrage_trades (id, user_id, symbol, buy_exchange, sell_exchange, buy_price, sell_price, quantity, buy_order_id, sell_order_id, buy_filled_qty, buy_avg_price, buy_fee, sell_filled_qty, sell_avg_price, sell_fee, gross_profit, net_profit, fees, status, opened_at, closed_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		t.ID, t.UserID, t.Symbol, t.BuyExchange, t.SellExchange, t.BuyPrice, t.SellPrice, t.Quantity,
 		t.BuyOrderID, t.SellOrderID, t.BuyFilledQty, t.BuyAvgPrice, t.BuyFee, t.SellFilledQty, t.SellAvgPrice, t.SellFee,
 		t.GrossProfit, t.NetProfit, t.Fees, t.Status, t.OpenedAt, t.ClosedAt,
 	)
 	return err
 }
+
+const arbitrageTradeColumns = `id, user_id, symbol, buy_exchange, sell_exchange, buy_price, sell_price, quantity, buy_order_id, sell_order_id, buy_filled_qty, buy_avg_price, buy_fee, sell_filled_qty, sell_avg_price, sell_fee, gross_profit, net_profit, fees, status, opened_at, closed_at`
 
 func (r *ArbitrageTradeRepo) GetByID(id string) (*ArbitrageTradeRecord, error) {
 	r.mu.RLock()
@@ -65,9 +68,9 @@ func (r *ArbitrageTradeRepo) GetByID(id string) (*ArbitrageTradeRecord, error) {
 	if db == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
-	row := db.QueryRow(`SELECT id, symbol, buy_exchange, sell_exchange, buy_price, sell_price, quantity, buy_order_id, sell_order_id, buy_filled_qty, buy_avg_price, buy_fee, sell_filled_qty, sell_avg_price, sell_fee, gross_profit, net_profit, fees, status, opened_at, closed_at FROM arbitrage_trades WHERE id=?`, id)
+	row := db.QueryRow(`SELECT `+arbitrageTradeColumns+` FROM arbitrage_trades WHERE id=?`, id)
 	var t ArbitrageTradeRecord
-	err := row.Scan(&t.ID, &t.Symbol, &t.BuyExchange, &t.SellExchange, &t.BuyPrice, &t.SellPrice, &t.Quantity, &t.BuyOrderID, &t.SellOrderID, &t.BuyFilledQty, &t.BuyAvgPrice, &t.BuyFee, &t.SellFilledQty, &t.SellAvgPrice, &t.SellFee, &t.GrossProfit, &t.NetProfit, &t.Fees, &t.Status, &t.OpenedAt, &t.ClosedAt)
+	err := row.Scan(&t.ID, &t.UserID, &t.Symbol, &t.BuyExchange, &t.SellExchange, &t.BuyPrice, &t.SellPrice, &t.Quantity, &t.BuyOrderID, &t.SellOrderID, &t.BuyFilledQty, &t.BuyAvgPrice, &t.BuyFee, &t.SellFilledQty, &t.SellAvgPrice, &t.SellFee, &t.GrossProfit, &t.NetProfit, &t.Fees, &t.Status, &t.OpenedAt, &t.ClosedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +108,7 @@ func (r *ArbitrageTradeRepo) ListActive() ([]*ArbitrageTradeRecord, error) {
 	if db == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
-	query := `SELECT id, symbol, buy_exchange, sell_exchange, buy_price, sell_price, quantity, buy_order_id, sell_order_id, buy_filled_qty, buy_avg_price, buy_fee, sell_filled_qty, sell_avg_price, sell_fee, gross_profit, net_profit, fees, status, opened_at, closed_at FROM arbitrage_trades WHERE status IN ('pending','open_buy','open','open_sell') ORDER BY opened_at DESC`
+	query := `SELECT ` + arbitrageTradeColumns + ` FROM arbitrage_trades WHERE status IN ('pending','open_buy','open','open_sell') ORDER BY opened_at DESC`
 	rows, err := db.Query(query)
 	if err != nil {
 		return nil, err
@@ -120,7 +123,7 @@ func (r *ArbitrageTradeRepo) ListHistory(limit int) ([]*ArbitrageTradeRecord, er
 	if db == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
-	query := `SELECT id, symbol, buy_exchange, sell_exchange, buy_price, sell_price, quantity, buy_order_id, sell_order_id, buy_filled_qty, buy_avg_price, buy_fee, sell_filled_qty, sell_avg_price, sell_fee, gross_profit, net_profit, fees, status, opened_at, closed_at FROM arbitrage_trades WHERE status IN ('completed','failed','dry_run') ORDER BY opened_at DESC`
+	query := `SELECT ` + arbitrageTradeColumns + ` FROM arbitrage_trades WHERE status IN ('completed','failed','dry_run') ORDER BY opened_at DESC`
 	var args []any
 	if limit > 0 {
 		query += " LIMIT ?"
@@ -138,7 +141,7 @@ func scanArbitrageTradeRows(rows *sql.Rows) ([]*ArbitrageTradeRecord, error) {
 	var result []*ArbitrageTradeRecord
 	for rows.Next() {
 		var t ArbitrageTradeRecord
-		if err := rows.Scan(&t.ID, &t.Symbol, &t.BuyExchange, &t.SellExchange, &t.BuyPrice, &t.SellPrice, &t.Quantity, &t.BuyOrderID, &t.SellOrderID, &t.BuyFilledQty, &t.BuyAvgPrice, &t.BuyFee, &t.SellFilledQty, &t.SellAvgPrice, &t.SellFee, &t.GrossProfit, &t.NetProfit, &t.Fees, &t.Status, &t.OpenedAt, &t.ClosedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.UserID, &t.Symbol, &t.BuyExchange, &t.SellExchange, &t.BuyPrice, &t.SellPrice, &t.Quantity, &t.BuyOrderID, &t.SellOrderID, &t.BuyFilledQty, &t.BuyAvgPrice, &t.BuyFee, &t.SellFilledQty, &t.SellAvgPrice, &t.SellFee, &t.GrossProfit, &t.NetProfit, &t.Fees, &t.Status, &t.OpenedAt, &t.ClosedAt); err != nil {
 			return nil, err
 		}
 		result = append(result, &t)

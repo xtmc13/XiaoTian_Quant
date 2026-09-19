@@ -10,6 +10,7 @@ import (
 )
 
 // GetNotifications returns recent notifications.
+// H7 越权防护：登录非 admin 用户只看到系统广播(user_id=0) + 本人的通知。
 func GetNotifications(c *gin.Context) {
 	limit := 50
 	if l := c.Query("limit"); l != "" {
@@ -26,7 +27,17 @@ func GetNotifications(c *gin.Context) {
 	unreadOnly := c.Query("unread") == "1"
 
 	store := notify.GetNotificationStore()
-	items := store.List(limit, offset, unreadOnly)
+	var items []*notify.Notification
+	var unreadCount, total int
+	if uid, restricted := notifyRestrictedUser(c); restricted {
+		items = store.ListForUser(limit, offset, unreadOnly, uid)
+		unreadCount = store.UnreadCountForUser(uid)
+		total = store.TotalForUser(uid)
+	} else {
+		items = store.List(limit, offset, unreadOnly)
+		unreadCount = store.UnreadCount()
+		total = store.Total()
+	}
 
 	if items == nil {
 		items = []*notify.Notification{}
@@ -50,12 +61,19 @@ func GetNotifications(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"notifications": notifications,
-		"unread_count":  store.UnreadCount(),
-		"total":         store.Total(),
+		"unread_count":  unreadCount,
+		"total":         total,
 	})
 }
 
+// notifyRestrictedUser 返回 (userID, 是否需按属主过滤)（登录非 admin）。
+func notifyRestrictedUser(c *gin.Context) (int64, bool) {
+	uid, injected := ctxUserID(c)
+	return int64(uid), injected && !ctxIsAdmin(c)
+}
+
 // MarkNotificationRead marks a notification as read.
+// H7：普通用户只能标记系统广播或本人通知。
 func MarkNotificationRead(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
@@ -65,7 +83,13 @@ func MarkNotificationRead(c *gin.Context) {
 	}
 
 	store := notify.GetNotificationStore()
-	if !store.MarkRead(id) {
+	var ok bool
+	if uid, restricted := notifyRestrictedUser(c); restricted {
+		ok = store.MarkReadForUser(id, uid)
+	} else {
+		ok = store.MarkRead(id)
+	}
+	if !ok {
 		c.JSON(http.StatusNotFound, gin.H{"error": "notification not found"})
 		return
 	}
@@ -74,16 +98,27 @@ func MarkNotificationRead(c *gin.Context) {
 }
 
 // MarkAllNotificationsRead marks all notifications as read.
+// H7：普通用户只标记系统广播或本人通知。
 func MarkAllNotificationsRead(c *gin.Context) {
 	store := notify.GetNotificationStore()
-	count := store.MarkAllRead()
+	var count int
+	if uid, restricted := notifyRestrictedUser(c); restricted {
+		count = store.MarkAllReadForUser(uid)
+	} else {
+		count = store.MarkAllRead()
+	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "marked": count})
 }
 
 // ClearNotifications removes all notifications.
+// H7：普通用户只能清除本人通知，系统广播保留。
 func ClearNotifications(c *gin.Context) {
 	store := notify.GetNotificationStore()
-	store.Clear()
+	if uid, restricted := notifyRestrictedUser(c); restricted {
+		store.ClearForUser(uid)
+	} else {
+		store.Clear()
+	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 

@@ -24,6 +24,18 @@ exchanges:
     enabled: false
     testnet: true
     futures: false
+  # IBKR（Interactive Brokers）本地 Client Portal Web API 网关。
+  # 需自行运行 IB Gateway 或 Client Portal（默认 https://localhost:5000），
+  # 浏览器登录一次后会话 cookie 即认证；无 API key/secret。
+  ibkr:
+    enabled: false        # 启用 IBKR 适配器
+    host: localhost       # Client Portal 网关地址
+    port: 5000            # Client Portal 网关端口
+    account_id: ""        # 账户 id（如 DU123456）；留空自动取第一个账户
+    paper_host: ""        # paper 网关地址，默认同 host（指向 paper 账户端口）
+    paper_port: 0         # paper 网关端口，默认同 port
+    paper: false          # true 时下单/撤单/订单查询走 paper 网关
+    ca_cert: ""           # 自签根证书 PEM 路径；留空 = InsecureSkipVerify
 
 # AI / LLM provider non-secret settings.
 ai_providers:

@@ -289,6 +289,8 @@ export interface MartinConfig {
   loop_count: number
   enable_add_position: boolean
   flash_crash_protection: number
+  max_layers?: number
+  max_total_budget?: number
   symbol?: string
   leverage?: number
   direction?: 'long' | 'short' | 'dual'
@@ -311,6 +313,8 @@ export interface WallStreetConfig {
   loop_count: number
   enable_add_position: boolean
   flash_crash_protection: number
+  max_layers?: number
+  max_total_budget?: number
   symbol?: string
   leverage?: number
   direction?: 'long' | 'short' | 'dual'

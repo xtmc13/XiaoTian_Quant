@@ -1,0 +1,17 @@
+# ═══════════════════════════════════════════════════════════════════
+# XiaoTian Quant — Grafana 数据源 provisioning
+# 指向 docker-compose.observability.yml 中的 prometheus 服务。
+# ═══════════════════════════════════════════════════════════════════
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    # compose 网络内通过服务名访问 prometheus
+    url: http://prometheus:9090
+    # 固定 uid，供看板 JSON 中的 datasource 引用
+    uid: prometheus
+    isDefault: true
+    editable: false

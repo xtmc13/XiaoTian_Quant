@@ -140,6 +140,7 @@ func GetTickInfo(c *gin.Context) {
 // tickBacktestJob tracks a running tick backtest job.
 type tickBacktestJob struct {
 	ID        string                    `json:"id"`
+	UserID    int64                     `json:"user_id"`
 	Status    string                    `json:"status"`
 	Result    *backtest.TickBacktestResult `json:"result,omitempty"`
 	Error     string                    `json:"error,omitempty"`
@@ -195,6 +196,7 @@ func RunTickBacktest(c *gin.Context) {
 	jobID := fmt.Sprintf("tick_bt_%d", tickBacktestNextID)
 	job := &tickBacktestJob{
 		ID:        jobID,
+		UserID:    int64(getUserID(c)),
 		Status:    "running",
 		StartedAt: time.Now().UnixMilli(),
 	}
@@ -243,19 +245,27 @@ func RunTickBacktest(c *gin.Context) {
 	})
 }
 
-// ListTickBacktestJobs lists tick backtest jobs.
+// ListTickBacktestJobs lists tick backtest jobs visible to the current user
+// （本人的 + 历史无属主；admin/未注入用户看全部）。
 func ListTickBacktestJobs(c *gin.Context) {
 	tickBacktestJobMu.Lock()
 	defer tickBacktestJobMu.Unlock()
 
+	uid, injected := ctxUserID(c)
+	restricted := injected && !ctxIsAdmin(c)
+
 	jobs := make([]*tickBacktestJob, 0, len(tickBacktestJobs))
 	for _, job := range tickBacktestJobs {
+		if restricted && job.UserID != 0 && job.UserID != int64(uid) {
+			continue
+		}
 		jobs = append(jobs, job)
 	}
 	c.JSON(http.StatusOK, gin.H{"jobs": jobs})
 }
 
 // GetTickBacktestJob returns a specific tick backtest job.
+// 存在但属他人（且非 admin）→ 403。
 func GetTickBacktestJob(c *gin.Context) {
 	id := c.Param("id")
 	if id == "" {
@@ -269,6 +279,9 @@ func GetTickBacktestJob(c *gin.Context) {
 
 	if !ok {
 		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
+		return
+	}
+	if !requireOwner(c, job.UserID) {
 		return
 	}
 

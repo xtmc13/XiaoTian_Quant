@@ -15,6 +15,7 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/store"
 	"github.com/xiaotian-quant/gateway/internal/ws"
 	"os"
+	"strings"
 )
 
 // serverConfig exposes only the fields needed by route setup.
@@ -69,9 +70,16 @@ func setupRoutes(r *gin.Engine, cfg *serverConfig) *gin.Engine {
 		registerOnChainRoutes(api)
 		registerAIBotRoutes(api)
 		registerGridRoutes(api)
+		registerDCABotRoutes(api)
+		registerLayeredMartinRoutes(api)
+		registerReconcileRoutes(api)
+		registerFactorResearchRoutes(api)
+		registerPortfolioBacktestRoutes(api)
 	}
 
 	// ── Webhooks ──
+	// M8: 未配置 WEBHOOK_SECRET 时启动警告（公开下单通道无签名校验）。
+	handler.WarnIfWebhookSecretMissing()
 	api.POST("/webhook/tv", handler.TradingViewWebhook)
 	api.POST("/webhook/generic", handler.GenericWebhook)
 
@@ -80,10 +88,12 @@ func setupRoutes(r *gin.Engine, cfg *serverConfig) *gin.Engine {
 	r.GET("/ws/v2", ws.HubHandler)
 	api.GET("/ws/stats", ws.Stats)
 
-	// ── Metrics ──
-	r.GET("/metrics", func(c *gin.Context) {
-		metrics.Handler(c.Writer, c.Request)
-	})
+	// ── Metrics（PROMETHEUS_ENABLED=false 时不挂载；可配 token 或 localhost-only）──
+	if metrics.Enabled() {
+		r.GET("/metrics", metricsAccessGuard(), func(c *gin.Context) {
+			metrics.Handler(c.Writer, c.Request)
+		})
+	}
 
 	// ── pprof (debug) ──
 	pprofGroup := r.Group("/debug/pprof")
@@ -139,10 +149,25 @@ func registerOAuthRoutes(api *gin.RouterGroup) {
 }
 
 func registerBillingRoutes(api *gin.RouterGroup) {
-	api.GET("/billing/plans", handler.BillingPlans)
-	api.GET("/billing/chains", handler.BillingChains)
-	api.POST("/billing/orders", handler.BillingCreateOrder)
-	api.GET("/billing/orders/:id", handler.BillingOrderStatus)
+	// M6: billing 订单涉及资金，全部要求登录；stripe webhook 例外——
+	// 它由 Stripe 服务端回调，用 HMAC-SHA256 验签替代 AuthRequired（见下方公开挂载）。
+	billingG := api.Group("/billing")
+	billingG.Use(middleware.AuthRequired())
+	{
+		billingG.GET("/plans", handler.BillingPlans)
+		billingG.GET("/chains", handler.BillingChains)
+		billingG.GET("/subscription", handler.BillingSubscription)
+		billingG.GET("/orders", handler.BillingListOrders)
+		billingG.POST("/orders", handler.BillingCreateOrder)
+		billingG.GET("/orders/:id", handler.BillingOrderStatus)
+		billingG.POST("/orders/:id/tx", handler.BillingSubmitTx)
+		billingG.GET("/orders/:id/verification", handler.BillingOrderVerification)
+		billingG.GET("/stripe/config", handler.BillingStripeConfig)
+		billingG.POST("/stripe/checkout", handler.BillingStripeCheckout)
+	}
+
+	// 公开路由：Stripe webhook（验签在 handler 内完成，不能挂 AuthRequired）。
+	api.POST("/billing/stripe/webhook", handler.BillingStripeWebhook)
 }
 
 func registerUserRoutes(api *gin.RouterGroup) {
@@ -185,15 +210,17 @@ func registerConfigRoutes(api *gin.RouterGroup) {
 	private := api.Group("")
 	private.Use(middleware.AuthRequired())
 	private.GET("/config", handler.GetConfig)
-	private.PUT("/config", handler.SaveConfig)
-	private.POST("/config", handler.SaveConfig)
+	// M5: 全局配置写操作收敛为 admin-only（含重启级配置、AI provider 设置）；
+	// 凭证写入同属敏感操作（C2 缓解，保险库按用户隔离留待第二波）。
+	private.PUT("/config", middleware.AdminRequired(), handler.SaveConfig)
+	private.POST("/config", middleware.AdminRequired(), handler.SaveConfig)
 	private.GET("/strategies/global", handler.GetGlobalStrategy)
 	private.GET("/strategies/param-defs", handler.GetStrategyParamDefs)
 	private.PUT("/strategies/global", handler.SaveGlobalStrategy)
 	private.GET("/strategies/defaults", handler.GetStrategyDefaults)
 	private.GET("/strategies/contract-defaults", handler.GetContractDefaults)
 	private.POST("/exchange/save", handler.ExchangeSave)
-	private.PUT("/config/exchanges/credentials", handler.SaveExchangeCredentials)
+	private.PUT("/config/exchanges/credentials", middleware.AdminRequired(), handler.SaveExchangeCredentials)
 	private.POST("/exchange/test", handler.ExchangeTest)
 	private.POST("/exchange/default", handler.ExchangeDefault)
 	private.GET("/exchange/status", handler.ExchangeStatus)
@@ -499,9 +526,11 @@ func registerSettingsRoutes(api *gin.RouterGroup) {
 		settingsG.POST("/defaults", handler.SettingsDefaultsSave)
 		settingsG.POST("/ui", handler.SettingsUISave)
 		settingsG.POST("/exchange/:id/test", handler.SettingsExchangeTest)
-		settingsG.PUT("/exchange/:id", handler.SettingsExchangeSave)
+		// C2 缓解：交易所/AI 凭证写操作收敛为 admin-only
+		// （保险库按用户隔离留待第二波）。
+		settingsG.PUT("/exchange/:id", middleware.AdminRequired(), handler.SettingsExchangeSave)
 		settingsG.POST("/ai/:id/test", handler.SettingsAITest)
-		settingsG.PUT("/ai/:id", handler.SettingsAISave)
+		settingsG.PUT("/ai/:id", middleware.AdminRequired(), handler.SettingsAISave)
 	}
 	private.GET("/settings/currency", handler.SettingsCurrencyGet)
 	private.PUT("/settings/currency", handler.SettingsCurrencySet)
@@ -578,7 +607,8 @@ func registerDashboardRoutes(api *gin.RouterGroup) {
 func registerHealthRoutes(api *gin.RouterGroup) {
 	api.GET("/health", handler.HealthCheck)
 	api.GET("/health/components", handler.ComponentHealth)
-	api.GET("/logs", handler.GetLogs)
+	// M4: 服务日志可能含敏感信息，至少要求登录。
+	api.GET("/logs", middleware.AuthRequired(), handler.GetLogs)
 }
 
 func registerIndicatorRoutes(api *gin.RouterGroup) {
@@ -619,9 +649,7 @@ func registerExperimentRoutes(api *gin.RouterGroup) {
 		experimentG.POST("/structured-tune", experiment.RunExperimentHandler)
 		experimentG.GET("/status/:id", experiment.ExperimentStatusHandler)
 	}
-	api.GET("/experiments", middleware.AuthRequired(), func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"items": []any{}, "total": 0})
-	})
+	api.GET("/experiments", middleware.AuthRequired(), experiment.ExperimentListHandler)
 }
 
 func registerCommunityRoutes(api *gin.RouterGroup) {
@@ -633,8 +661,10 @@ func registerCommunityRoutes(api *gin.RouterGroup) {
 		comm.POST("/purchase/:id", community.PurchaseIndicator)
 		comm.GET("/comments/:id", community.GetComments)
 		comm.POST("/comments/:id", community.AddComment)
-		comm.POST("/review/:id", community.ReviewIndicator)
-		comm.GET("/reviews/pending", community.PendingReviews)
+		// M3: 社区审核为管理操作，注释标注 "admin only" 但此前仅有 AuthRequired，
+		// 收敛为 AdminRequired 防止任意登录用户通过/拒绝上架、看待审队列。
+		comm.POST("/review/:id", middleware.AdminRequired(), community.ReviewIndicator)
+		comm.GET("/reviews/pending", middleware.AdminRequired(), community.PendingReviews)
 		comm.GET("/author/revenue", community.AuthorRevenue)
 		comm.GET("/strategies", community.MarketStrategies)
 		comm.GET("/strategies/leaderboard", community.StrategyLeaderboard)
@@ -724,5 +754,102 @@ func registerGridRoutes(api *gin.RouterGroup) {
 		private.DELETE("/bots/:id", handler.GridBotDelete)
 		private.POST("/bots/:id/start", handler.GridBotStart)
 		private.POST("/bots/:id/stop", handler.GridBotStop)
+	}
+}
+
+// registerDCABotRoutes DCA 定投机器人（A1.2）：CRUD + start/stop，挂 /api/dca-bots/。
+func registerDCABotRoutes(api *gin.RouterGroup) {
+	private := api.Group("/dca-bots")
+	private.Use(middleware.AuthRequired())
+	{
+		private.GET("/", handler.DCABotList)
+		private.POST("/", handler.DCABotCreate)
+		private.GET("/:id", handler.DCABotGet)
+		private.PUT("/:id", handler.DCABotUpdate)
+		private.DELETE("/:id", handler.DCABotDelete)
+		private.POST("/:id/start", handler.DCABotStart)
+		private.POST("/:id/stop", handler.DCABotStop)
+	}
+}
+
+// registerReconcileRoutes A8 对账体系：差异/偏差查询与人工确认 + 配置（全 AuthRequired）。
+func registerReconcileRoutes(api *gin.RouterGroup) {
+	private := api.Group("/reconcile")
+	private.Use(middleware.AuthRequired())
+	{
+		private.GET("/diffs", handler.ReconcileDiffsList)
+		private.POST("/diffs/:id/resolve", handler.ReconcileDiffResolve)
+		private.GET("/status", handler.ReconcileStatus)
+		private.GET("/deviations", handler.ReconcileDeviationsList)
+		private.POST("/deviations/:id/resolve", handler.ReconcileDeviationResolve)
+		private.GET("/config", handler.ReconcileConfigGet)
+		private.PUT("/config", middleware.AdminRequired(), handler.ReconcileConfigPut)
+	}
+}
+
+// registerLayeredMartinRoutes 分层马丁格尔机器人（A1.3）：CRUD + start/stop，
+// 挂 /api/layered-martin-bots/。
+func registerLayeredMartinRoutes(api *gin.RouterGroup) {
+	private := api.Group("/layered-martin-bots")
+	private.Use(middleware.AuthRequired())
+	{
+		private.GET("/", handler.LayeredMartinBotList)
+		private.POST("/", handler.LayeredMartinBotCreate)
+		private.GET("/:id", handler.LayeredMartinBotGet)
+		private.PUT("/:id", handler.LayeredMartinBotUpdate)
+		private.DELETE("/:id", handler.LayeredMartinBotDelete)
+		private.POST("/:id/start", handler.LayeredMartinBotStart)
+		private.POST("/:id/stop", handler.LayeredMartinBotStop)
+	}
+}
+
+// registerFactorResearchRoutes A6.1 因子研究：因子列表/取值/IC 评价/分层回测
+// （全 AuthRequired；评价结果带 user_id 落库 factors_evaluations）。
+func registerFactorResearchRoutes(api *gin.RouterGroup) {
+	private := api.Group("/factors")
+	private.Use(middleware.AuthRequired())
+	{
+		private.GET("", handler.GetFactors)
+		private.GET("/", handler.GetFactors)
+		private.GET("/evaluations", handler.ListFactorEvaluations)
+		private.POST("/evaluate", handler.EvaluateFactor)
+		private.POST("/layers", handler.FactorLayers)
+		private.GET("/:name/values", handler.GetFactorValues)
+	}
+}
+
+// registerPortfolioBacktestRoutes A6.2 组合回测：同步执行/历史/详情/删除
+// （全 AuthRequired；user_id 落库 xt_portfolio_backtests，详情/删除走属主校验）。
+func registerPortfolioBacktestRoutes(api *gin.RouterGroup) {
+	private := api.Group("/backtests")
+	private.Use(middleware.AuthRequired())
+	{
+		private.POST("/portfolio", handler.RunPortfolioBacktest)
+		private.GET("/portfolio", handler.ListPortfolioBacktests)
+		private.GET("/portfolio/:id", handler.GetPortfolioBacktest)
+		private.DELETE("/portfolio/:id", handler.DeletePortfolioBacktest)
+	}
+}
+
+// metricsAccessGuard /metrics 访问控制（A9.1，环境变量驱动，读取见 metrics 包）：
+//   - PROMETHEUS_LOCALHOST_ONLY=true：仅本机回环地址可访问；
+//   - PROMETHEUS_TOKEN 非空：要求 Authorization: Bearer <token> 或 ?token=<token>。
+func metricsAccessGuard() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if metrics.LocalhostOnly() && !isLocalhost(c.ClientIP()) {
+			c.AbortWithStatus(http.StatusForbidden)
+			return
+		}
+		if tok := metrics.Token(); tok != "" {
+			got := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
+			if got == "" {
+				got = c.Query("token")
+			}
+			if got != tok {
+				c.AbortWithStatus(http.StatusUnauthorized)
+				return
+			}
+		}
+		c.Next()
 	}
 }

@@ -1,8 +1,8 @@
 # 小天量化 XiaoTianQuant v3.0
 
-> AI 驱动的多资产量化交易平台 — Go 网关 + React 前端 + Rust 撮合引擎，事件驱动，回测实盘一体。
+> AI 驱动的多资产量化交易平台 — Go 网关 + React 前端 + 内置撮合引擎（纯 Go 默认，Rust FFI 可选），事件驱动，回测实盘一体。
 >
-> **v3.0 新增**: 三机器体系(策略/信号/AI) · ML 预测管线(Go 原生推理 + Python CLI 训练) · 配置API · 纯 Go 本地推理 · 社交交易 · 链上数据 · 高级订单(OCO/冰山/跟踪) · 套利监控 · Hyperopt 参数优化 · Protection 风控 · Pairlist 交易对筛选 · 策略社区 · Admin 面板 · Indicator IDE · Telegram/Discord Bot · 8 交易所 · i18n 多语言 · OAuth 登录 · Billing 会员 · 凭证加密 · Edge 分析 · TensorBoard 可视化
+> **v3.0 新增**: 三机器体系(策略/信号/AI) · ML 预测管线(Go 原生推理 + Python CLI 训练) · 配置API · 纯 Go 本地推理 · 社交交易 · 链上数据 · 高级订单(OCO/冰山/跟踪) · 套利监控 · Hyperopt 参数优化 · Protection 风控 · Pairlist 交易对筛选 · 策略社区 · Admin 面板 · Indicator IDE · Telegram/Discord Bot · 9 交易所适配器 · i18n 多语言 · OAuth 登录 · MFA 两步验证 · Billing 会员(USDT 链上核验 + Stripe) · 凭证加密 · TensorBoard 可视化
 
 ## 架构概览
 
@@ -13,26 +13,26 @@
 └───────────────────────────┬─────────────────────────────────┘
                             │ HTTP REST + WebSocket
 ┌───────────────────────────▼─────────────────────────────────┐
-│                  Go 网关 (Gin) — 244 API 端点                  │
+│                  Go 网关 (Gin) — 376 API 路由                  │
 │  ┌──────────┬──────────┬──────────┬──────────┬──────────┐  │
 │  │ 策略引擎  │ AI 服务  │ 回测引擎  │ 风控系统  │ 配置API  │  │
 │  ├──────────┼──────────┼──────────┼──────────┼──────────┤  │
-│  │ 订单管理  │ 持仓管理  │ 通知服务  │ 监控告警  │ 三机器   │  │
+│  │ 订单管理  │ 持仓管理  │ 通知服务  │ 监控告警  │ 机器人   │  │
 │  └──────────┴──────────┴──────────┴──────────┴──────────┘  │
-│          交易所适配器 (Binance/OKX深度 + 6家基础)             │
+│          交易所适配器 (Binance 深度 + 8 家基础 REST)        │
 │              SQLite · Redis (可选)                            │
 └───────────────────────────┬─────────────────────────────────┘
-                            │ FFI (CGo)
+                            │ 纯 Go 撮合（默认）· Rust FFI 可选
 ┌───────────────────────────▼─────────────────────────────────┐
-│               Rust 撮合引擎                                  │
-│         价格-时间优先订单簿 · 30-50K TPS · 订单簿深度快照      │
+│               Rust 撮合引擎（可选组件，不进主链路）            │
+│         价格-时间优先订单簿 · 限价/市价/部分成交              │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 | 层 | 语言 | 职责 |
 |---|------|------|
 | **Web 前端** | React 19 + TypeScript + Vite | 仪表盘、K 线图表、AI 策略生成、回测面板、交易下单、资产管理、三机器管理 |
-| **Go 网关** | Go 1.25 + Gin 框架 | REST API (244端点)、策略引擎、交易所适配、回测、风控、WebSocket 推送、通知、配置API |
+| **Go 网关** | Go 1.25 + Gin 框架 | REST API (376 路由)、策略引擎、交易所适配、回测、风控、WebSocket 推送、通知、配置API |
 | **Rust 引擎** | Rust (cdylib) | 高性能订单簿撮合，通过 FFI 被 Go 网关调用 |
 
 **辅助工具 (Python CLI)**：模型训练 (`sandbox/train.py`) 和指标沙箱执行 (`sandbox/main.py`)，非常驻服务，手动触发。
@@ -81,7 +81,7 @@ xiaotian_quant/
 │   │   │   ├── matching.go         #   撮合引擎 FFI 桥接 + 纯Go fallback
 │   │   │   ├── cgo_bridge.go       #   CGo 动态库加载
 │   │   │   └── helpers.go          #   通用辅助函数 (stubError 等)
-│   │   ├── bot/                    # 三机器管理 (策略/信号/AI)
+│   │   ├── bot/                    # Telegram/Discord 通知机器人
 │   │   ├── data/                   # 配置文件 (markets.json · indices.json)
 │   │   ├── agent/                  # Agent 网关 (MCP 协议)
 │   │   ├── ai/                     # AI 策略生成 · 多模型投票
@@ -97,7 +97,7 @@ xiaotian_quant/
 │   │   │   ├── ai.go               #   AI 分析/生成/回测
 │   │   │   ├── auth.go             #   认证 (登录/注册/JWT)
 │   │   │   ├── dashboard.go        #   仪表盘摘要
-│   │   │   ├── freqtrade.go        #   Freqtrade 兼容 API
+│   │   │   ├── billing.go          #   会员计费 (USDT 链上核验 + Stripe)
 │   │   │   ├── market.go           #   行情/K线/订单簿
 │   │   │   ├── order.go            #   订单管理
 │   │   │   ├── portfolio.go        #   持仓/资产
@@ -121,8 +121,11 @@ xiaotian_quant/
 │   │   │   ├── compiler.go         #   策略编译器
 │   │   │   ├── engine.go           #   策略引擎
 │   │   │   └── strategies/         #   内置策略
-│   │   │       ├── breakout.go     #     突破策略
-│   │   │       └── grid.go         #     网格策略
+│   │   │       ├── trend_long.go / trend_short.go  # 趋势多/空
+│   │   │       ├── breakout.go · grid.go           # 突破 · 网格
+│   │   │       ├── martingale.go · wallstreet.go   # 马丁格尔 · 华尔街
+│   │   │       ├── classic.go                      # EMA 交叉等经典策略
+│   │   │       └── advanced.go                     # ATR 追踪止损 · Dual Thrust · Renko
 │   │   └── watchdog/               # 健康检查
 │   ├── spa/                        # 前端构建产物 (go:embed 嵌入)
 │   ├── go.mod
@@ -132,7 +135,7 @@ xiaotian_quant/
 │   │   ├── pages/
 │   │   │   ├── Dashboard.tsx       #   仪表盘 — 总览KPI
 │   │   │   ├── Trading.tsx         #   交易页 — K线+订单簿+下单
-│   │   │   ├── AI.tsx              #   AI 策略生成与对话
+│   │   │   ├── AI/index.tsx        #   AI 策略生成与对话
 │   │   │   ├── Strategy.tsx        #   策略管理
 │   │   │   ├── Backtest.tsx        #   回测分析
 │   │   │   ├── Portfolio.tsx       #   资产管理
@@ -146,7 +149,7 @@ xiaotian_quant/
 │   │   ├── hooks/                  #   自定义 Hooks
 │   │   └── lib/                    #   工具函数 · API 客户端
 │   ├── package.json
-│   └── vite.config.ts
+│   └── vite.config.js
 ├── engine/                         # Rust 撮合引擎
 │   ├── Cargo.toml
 │   └── src/
@@ -159,7 +162,8 @@ xiaotian_quant/
 ├── docker-compose.yml              # Docker Compose 部署
 ├── .env.example                    # 环境变量模板
 ├── strategy_configs.json           # 策略配置示例
-└── IMPROVEMENT_PLAN.md             # 后续改进计划
+├── TODO.md                         # 当前任务与状态（权威）
+└── 对标QuantDinger补齐清单.md       # 改进计划（A/C 差距项清单）
 ```
 
 ## 快速开始
@@ -254,7 +258,7 @@ go run ./cmd/server  # → http://localhost:8080
 
 ## 配置
 
-通过环境变量或 YAML 配置文件 (`gateway.yaml`) 配置：
+通过环境变量或 YAML 配置文件 (`gateway/config.yaml`) 配置：
 
 ### 交易所
 
@@ -312,7 +316,7 @@ CACHE_ENABLED=true
 REDIS_URL=redis://localhost:6379
 ```
 
-完整配置项见 [.env.example](.env.example) 和 [gateway.yaml](gateway/gateway.yaml)。
+完整配置项见 [.env.example](.env.example) 和 [gateway/config.yaml](gateway/config.yaml)。
 
 ## 功能特性
 
@@ -327,17 +331,18 @@ REDIS_URL=redis://localhost:6379
 - **模拟交易**: 内置 Paper Trading，零成本测试
 
 ### 策略引擎
-- **12 种内置策略**: 网格交易 · 突破策略 · EMA 交叉 · MACD · RSI · 布林带 · ATR  trailing stop · Dual Thrust · Renko · 市场中性套利 · 做市商 · 马丁格尔
+- **16 种内置策略**: 网格交易 · 突破策略 · EMA 交叉 · MACD · RSI · 布林带 · ATR  trailing stop · Dual Thrust · Renko · 市场中性套利 · 做市商 · 马丁格尔 · 华尔街 · 趋势多/空 · ML 策略
 - **自定义策略**: Go 插件式策略运行时
 - **AI 生成**: LLM 辅助策略代码生成与修复
 - **策略组合 (Combo)**: 多策略信号聚合，组合管理
 - **策略生命周期**: 创建 → 回测 → 模拟 → 实盘 → 监控
 
-### 三机器体系
-- **策略机器人 (Freqtrade)**: 自主扫描 K 线，内置 13 种策略，独立决策执行
-- **信号机器人 (Cryptoleks)**: 接收外部信号(Webhook/API/IDE)，阶梯止盈/止损自动执行
-- **AI 机器人 (Alpha)**: LLM 驱动市场分析，波动市场智能过滤，带置信度评估
-- **统一执行层**: Rust SignalExecutor 统一处理仓位/止盈/止损，信号生成与执行解耦
+### 机器人中心
+- **统一管理页**: 现货策略 / 合约策略 / 网格 / 马丁 / 华尔街 / AI 机器人统一卡片管理，详情弹层含运行时面板与资金视图
+- **信号机器人**: 接收外部信号(Webhook/API/IDE)，阶梯止盈/止损自动执行
+- **AI 机器人市场**: 目录订阅 + 实例生命周期（对标 CryptoRobotics 的机器人商店）
+- **社交跟单**: 信号提供商广播，跟随者自动跟单
+- **统一执行层**: 纯 Go 执行器统一处理仓位/止盈/止损（Rust SignalExecutor 为可选实验组件，不进主链路）
 
 ### 回测系统
 - **事件驱动**: 精准模拟交易所行为
@@ -380,7 +385,7 @@ REDIS_URL=redis://localhost:6379
 | **指标 IDE** | Python 指标在线编写 · 实时验证 · 沙箱执行 · AI 生成 |
 | **回测** | 参数配置 · 结果图表 · 交易明细 · 指标分析 · Tick 级回测 |
 | **资产** | 持仓列表 · 盈亏明细 · 历史收益 · 多账户聚合 · 收益日历 |
-| **机器人** | 三机器体系: 策略机器人(自主扫描) · 信号机器人(跟单执行) · AI 机器人(智能过滤) |
+| **机器人** | 机器人中心：现货/合约策略 · 网格 · 马丁 · 华尔街 · AI 机器人统一卡片管理 + AI 机器人市场订阅 |
 | **风控中心** | 12 维度风控配置 · 熔断状态 · 交易对保护 |
 | **交易对筛选** | 多维度 Pairlist 过滤 · 成交量/波动率排序 |
 | **高级订单** | OCO · 冰山 · Bracket · 跟踪止损 一体化管理 |
@@ -396,7 +401,8 @@ REDIS_URL=redis://localhost:6379
 - **邮件** (SMTP)
 - **飞书/Lark** (Webhook + 签名)
 - **钉钉** (Webhook + 签名)
-- **Telegram** (Bot API)
+- **Telegram** (Bot API / long-polling)
+- **Discord** (Bot / Webhook)
 - **本地日志** (结构化 JSON/Text)
 
 ## API 端点 (主要)
@@ -466,6 +472,17 @@ REDIS_URL=redis://localhost:6379
 | GET | `/ai-models` | 可用的 AI 模型列表 |
 | GET | `/rate` | USD/CNY 汇率 |
 
+### 计费 `/api/billing` (需登录)
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/plans` | 会员套餐 |
+| GET | `/chains` | USDT 充值链与收款地址 |
+| POST | `/orders` | 创建订单 |
+| GET | `/orders` | 我的订单列表 |
+| GET | `/orders/:id` | 订单状态 |
+| POST | `/orders/:id/tx` | 提交转账哈希，自动链上核验 |
+| POST | `/stripe/checkout` | Stripe 收银台（配置密钥后可用） |
+
 ### WebSocket
 | 路径 | 说明 |
 |------|------|
@@ -496,13 +513,9 @@ REDIS_URL=redis://localhost:6379
 
 ## 路线图
 
-参见 [IMPROVEMENT_PLAN.md](IMPROVEMENT_PLAN.md)，包含：
+当前计划与进度见 [TODO.md](TODO.md) 与 [对标QuantDinger补齐清单.md](对标QuantDinger补齐清单.md)（A=QuantDinger 补齐项 / C=改进项，按批次执行）。
 
-| 优先级 | 模块 |
-|:------:|------|
-| 高 | WebSocket 断线重连增强 · 回测引擎接入真实数据 · Monaco 代码编辑器 |
-| 中 | 策略社区 · 券商账户连接 · 资产管理页面 · 移动端适配 |
-| 低 | 前后端分离 · 策略参数优化 (Hyperopt) · 多语言完整覆盖 · 通知中心 |
+进行中的方向：凭证保险库按用户隔离 · DCA/分层马丁机器人 · 因子研究与组合回测 · Grafana 监控看板 · 多交易所 WebSocket 行情。
 
 ## License
 

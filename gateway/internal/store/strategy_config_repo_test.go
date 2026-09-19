@@ -103,8 +103,15 @@ func TestStrategyTemplateRepoCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if len(items) != 1 {
-		t.Errorf("list len = %d", len(items))
+	// A1.5 起 List 含系统预设模板（user_id=0）：用户模板应在其中且唯一。
+	var mine int
+	for _, it := range items {
+		if it.UserID == 2 {
+			mine++
+		}
+	}
+	if mine != 1 {
+		t.Errorf("user templates in list = %d, want 1", mine)
 	}
 
 	deleted, err := repo.Delete(rec.ID, 2)
@@ -116,8 +123,14 @@ func TestStrategyTemplateRepoCRUD(t *testing.T) {
 	}
 
 	items, _ = repo.List(2, "contract", 0)
-	if len(items) != 0 {
-		t.Errorf("list after delete = %d", len(items))
+	mine = 0
+	for _, it := range items {
+		if it.UserID == 2 {
+			mine++
+		}
+	}
+	if mine != 0 {
+		t.Errorf("user templates after delete = %d, want 0", mine)
 	}
 }
 

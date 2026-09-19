@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/xiaotian-quant/gateway/internal/metrics"
 )
 
 // ── Notify Message ──
@@ -63,9 +65,9 @@ func GetManager() *Manager {
 		instance.Register(&LogChannel{enabled: true})
 		instance.Register(&EmailChannel{enabled: os.Getenv("SMTP_HOST") != ""})
 		instance.Register(&LarkChannel{
-			webhook:     os.Getenv("LARK_WEBHOOK"),
-			signingKey:  os.Getenv("LARK_SIGNING_KEY"),
-			enabled:     os.Getenv("LARK_WEBHOOK") != "",
+			webhook:    os.Getenv("LARK_WEBHOOK"),
+			signingKey: os.Getenv("LARK_SIGNING_KEY"),
+			enabled:    os.Getenv("LARK_WEBHOOK") != "",
 		})
 		instance.Register(&DingTalkChannel{
 			webhook: os.Getenv("DINGTALK_WEBHOOK"),
@@ -77,6 +79,7 @@ func GetManager() *Manager {
 			chatID:   os.Getenv("TELEGRAM_CHAT_ID"),
 			enabled:  os.Getenv("TELEGRAM_BOT_TOKEN") != "",
 		})
+		instance.Register(NewTwilioChannelFromEnv())
 
 		instance.wg.Add(1)
 		go instance.worker()
@@ -119,7 +122,10 @@ func (m *Manager) SendSync(msg Message) []error {
 			continue
 		}
 		if err := ch.Send(msg); err != nil {
+			metrics.RecordNotifySend(ch.Name(), "failure")
 			errs = append(errs, fmt.Errorf("%s: %w", ch.Name(), err))
+		} else {
+			metrics.RecordNotifySend(ch.Name(), "success")
 		}
 	}
 	return errs
@@ -149,8 +155,11 @@ func (m *Manager) worker() {
 			}
 			go func(ch Channel, msg Message) {
 				if err := ch.Send(msg); err != nil {
+					metrics.RecordNotifySend(ch.Name(), "failure")
 					log.Printf("[Notify] %s error: %v", ch.Name(), err)
+					return
 				}
+				metrics.RecordNotifySend(ch.Name(), "success")
 			}(ch, msg)
 		}
 		m.mu.RUnlock()

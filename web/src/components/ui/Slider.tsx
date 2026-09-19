@@ -3,6 +3,8 @@ import { cn } from '@/lib/utils'
 
 export interface SliderProps {
   label?: string
+  /** Accessible name for the range input when no visible label is rendered. */
+  ariaLabel?: string
   min: number
   max: number
   step?: number
@@ -16,6 +18,7 @@ export interface SliderProps {
 
 export const Slider = React.memo(function Slider({
   label,
+  ariaLabel,
   min,
   max,
   step = 1,
@@ -51,6 +54,7 @@ export const Slider = React.memo(function Slider({
           value={value}
           onChange={(e) => onChange(Number(e.target.value))}
           disabled={disabled}
+          aria-label={ariaLabel ?? label ?? 'value'}
           className={cn(
             'w-full h-1.5 rounded-full appearance-none cursor-pointer',
             'bg-[#2a2a2a] accent-[#1890ff]',

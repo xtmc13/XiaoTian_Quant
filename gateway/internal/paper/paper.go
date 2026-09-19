@@ -239,6 +239,10 @@ func (pe *PaperExchange) getOrCreateBook(symbol string) *goOrderBook {
 
 // ── Exchange Interface Implementation ──
 
+// PlaceOrder 下单。生产化行为（与真实交易所一致）：
+//   - 限价单/市价卖出：先锁定资金（买锁 quote，卖锁 base），不足直接拒绝
+//   - 市价买入：成本无法预判，撮合时按可用 quote 截断（部分成交），永不负余额
+//   - 成交即结算：锁定部分按实际成交额多退少补，撤单释放剩余锁定
 func (pe *PaperExchange) PlaceOrder(symbol, side, orderType string, price, quantity float64) (map[string]any, error) {
 	// Simulate latency
 	pe.simulateLatency()
@@ -260,13 +264,50 @@ func (pe *PaperExchange) PlaceOrder(symbol, side, orderType string, price, quant
 	}
 
 	if orderType == "MARKET" {
+		if order.Side == model.SideSell {
+			// 市价卖出：可用 base 不足时按可用截断（部分成交），一点没有才拒绝
+			// （杜绝纯下跌行情卖空记负余额，同时保留与交易所一致的 partiał-fill 行为）。
+			avail := pe.availableBase(pe.getBaseCurrency(symbol))
+			if avail <= 0 {
+				order.Status = model.StatusRejected
+				return map[string]any{
+					"order_id": "",
+					"status":   string(order.Status),
+					"filled":   0.0,
+					"trades":   []map[string]any{},
+				}, fmt.Errorf("insufficient balance: not enough %s to sell", symbol)
+			}
+			if avail < quantity {
+				order.Quantity = avail // 只卖持有的部分
+			}
+			if !pe.lockFunds(order) {
+				order.Status = model.StatusRejected
+				return map[string]any{
+					"order_id": "",
+					"status":   string(order.Status),
+					"filled":   0.0,
+					"trades":   []map[string]any{},
+				}, fmt.Errorf("insufficient balance for market sell")
+			}
+		}
 		return pe.executeMarketOrder(book, order)
 	}
 
+	// 限价单：挂出前先锁资金（锁不住=余额不足，拒绝，与交易所 -2010 一致）。
+	if !pe.lockFunds(order) {
+		order.Status = model.StatusRejected
+		return map[string]any{
+			"order_id": "",
+			"status":   string(order.Status),
+			"filled":   0.0,
+			"trades":   []map[string]any{},
+		}, fmt.Errorf("insufficient balance for limit order")
+	}
+
 	// Limit order: try to match first
-	trades := pe.matchOrder(book, order)
-	if len(trades) > 0 {
-		pe.applyTrades(trades)
+	fills := pe.matchOrder(book, order)
+	if len(fills) > 0 {
+		pe.applyFills(fills)
 	}
 
 	if !order.IsDone() {
@@ -288,7 +329,7 @@ func (pe *PaperExchange) PlaceOrder(symbol, side, orderType string, price, quant
 		"order_id": order.ID,
 		"status":   string(order.Status),
 		"filled":   order.Filled,
-		"trades":   tradesToMaps(trades),
+		"trades":   fillsToMaps(fills),
 	}, nil
 }
 
@@ -438,12 +479,19 @@ func (pe *PaperExchange) StartUserStream() error                   { return nil 
 // ── Matching Engine ──
 
 func (pe *PaperExchange) executeMarketOrder(book *goOrderBook, order *PaperOrder) (map[string]any, error) {
-	trades := pe.matchMarketOrder(book, order)
-	pe.applyTrades(trades)
+	fills := pe.matchMarketOrder(book, order)
+	pe.applyFills(fills)
 
 	order.Status = model.StatusFilled
 	if order.Filled < order.Quantity {
 		order.Status = model.StatusCancelled // Partial fill for market
+		// 未成交部分的锁定（仅卖出锁仓）要释放。
+		pe.unlockFunds(&PaperOrder{OrderData: model.OrderData{
+			Symbol:   order.Symbol,
+			Side:     order.Side,
+			Price:    order.Price,
+			Quantity: order.Quantity - order.Filled,
+		}})
 	}
 
 	pe.mu.Lock()
@@ -458,12 +506,19 @@ func (pe *PaperExchange) executeMarketOrder(book *goOrderBook, order *PaperOrder
 		"order_id": order.ID,
 		"status":   string(order.Status),
 		"filled":   order.Filled,
-		"trades":   tradesToMaps(trades),
+		"trades":   fillsToMaps(fills),
 	}, nil
 }
 
-func (pe *PaperExchange) matchOrder(book *goOrderBook, taker *PaperOrder) []model.TradeData {
-	var trades []model.TradeData
+// paperFill 一笔撮合成交：taker 视角的 trade + 双方订单引用（结算锁仓用）。
+type paperFill struct {
+	trade model.TradeData
+	taker *PaperOrder
+	maker *PaperOrder
+}
+
+func (pe *PaperExchange) matchOrder(book *goOrderBook, taker *PaperOrder) []paperFill {
+	var fills []paperFill
 
 	for taker.Remaining() > 0 {
 		var bestPrice float64
@@ -529,7 +584,7 @@ func (pe *PaperExchange) matchOrder(book *goOrderBook, taker *PaperOrder) []mode
 				} else {
 					trade.Side = "SELL"
 				}
-				trades = append(trades, trade)
+				fills = append(fills, paperFill{trade: trade, taker: taker, maker: maker})
 			}
 			level.orders = remaining
 		}
@@ -554,12 +609,15 @@ func (pe *PaperExchange) matchOrder(book *goOrderBook, taker *PaperOrder) []mode
 	book.asks = cleanAsks
 	book.mu.Unlock()
 
-	return trades
+	return fills
 }
 
-func (pe *PaperExchange) matchMarketOrder(book *goOrderBook, taker *PaperOrder) []model.TradeData {
-	// Market orders match at the best available price across all levels
-	var trades []model.TradeData
+func (pe *PaperExchange) matchMarketOrder(book *goOrderBook, taker *PaperOrder) []paperFill {
+	// Market orders match at the best available price across all levels.
+	// 市价买入按可用 quote 截断，杜绝余额不足时的负余额（部分成交，行为对齐交易所）。
+	// 注意：结算在撮合后（applyFills），循环内须自行累计已匹配金额。
+	var fills []paperFill
+	var spentQuote float64
 
 	for taker.Remaining() > 0 {
 		var bestPrice float64
@@ -577,6 +635,7 @@ func (pe *PaperExchange) matchMarketOrder(book *goOrderBook, taker *PaperOrder) 
 			break
 		}
 
+		capped := false
 		for _, level := range *levels {
 			if level.price != bestPrice {
 				continue
@@ -588,8 +647,27 @@ func (pe *PaperExchange) matchMarketOrder(book *goOrderBook, taker *PaperOrder) 
 					continue
 				}
 				tradeQty := math.Min(taker.Remaining(), maker.Remaining())
+
+				// 资金截断（仅市价买入需要：卖出已在上单前锁仓校验）。
+				if taker.Side == model.SideBuy {
+					avail := pe.availableQuote() - spentQuote
+					if avail <= 0 {
+						capped = true
+						break
+					}
+					maxAfford := avail / bestPrice
+					if tradeQty > maxAfford {
+						tradeQty = maxAfford
+					}
+					if tradeQty <= 0 {
+						capped = true
+						break
+					}
+				}
+
 				maker.Filled += tradeQty
 				taker.Filled += tradeQty
+				spentQuote += bestPrice * tradeQty
 
 				if maker.Remaining() <= 0 {
 					maker.Status = model.StatusFilled
@@ -611,35 +689,135 @@ func (pe *PaperExchange) matchMarketOrder(book *goOrderBook, taker *PaperOrder) 
 				} else {
 					trade.Side = "SELL"
 				}
-				trades = append(trades, trade)
+				fills = append(fills, paperFill{trade: trade, taker: taker, maker: maker})
 			}
 			level.orders = remaining
+			if capped {
+				break
+			}
+		}
+		if capped {
+			break
 		}
 	}
 
-	return trades
+	return fills
 }
 
 // ── Trade Application ──
 
-func (pe *PaperExchange) applyTrades(trades []model.TradeData) {
+// applyFills 应用撮合结果：更新持仓 + 结算资金（锁仓多退少补）+ 回调。
+// 全部成交都过结算，任何路径都不会把余额记成负数。
+// 注意：结算持 pe.mu，快照在锁外做（snapshotEquity 自带锁，不可重入）。
+func (pe *PaperExchange) applyFills(fills []paperFill) {
+	if len(fills) == 0 {
+		return
+	}
 	pe.mu.Lock()
-	defer pe.mu.Unlock()
-
-	for _, trade := range trades {
-		// Update position
-		pe.updatePosition(trade)
-
-		// Update balance
-		pe.updateBalance(trade)
-
+	for _, f := range fills {
+		pe.updatePosition(f.trade)
+		pe.settleFill(f)
 		if pe.onTrade != nil {
-			pe.onTrade(trade)
+			pe.onTrade(f.trade)
+		}
+	}
+	pe.mu.Unlock()
+
+	pe.snapshotEquity()
+}
+
+// availableQuote 当前可用 quote（USDT）余额。
+func (pe *PaperExchange) availableQuote() float64 {
+	pe.mu.RLock()
+	defer pe.mu.RUnlock()
+	if bal, ok := pe.balances["USDT"]; ok {
+		return bal.Free
+	}
+	return 0
+}
+
+// availableBase 当前可用 base 余额。
+func (pe *PaperExchange) availableBase(base string) float64 {
+	pe.mu.RLock()
+	defer pe.mu.RUnlock()
+	if bal, ok := pe.balances[base]; ok {
+		return bal.Free
+	}
+	return 0
+}
+
+// settleFill 单笔成交结算（在 pe.mu 保护下调用）：
+//   - 买入：Free 减少 成交额+手续费；限价买入已按限价锁仓 → 释放锁定并按成交价多退少补
+//   - 卖出：Free 增加 成交额-手续费；锁定 base（限价/市价卖出均已锁）→ 释放 Used
+func (pe *PaperExchange) settleFill(f paperFill) {
+	trade := f.trade
+	fee := trade.Price * trade.Quantity * pe.config.FeeRate
+	baseCur := pe.getBaseCurrency(trade.Symbol)
+
+	quote, ok := pe.balances["USDT"]
+	if !ok {
+		quote = &model.Balance{Currency: "USDT"}
+		pe.balances["USDT"] = quote
+	}
+	base, baseOK := pe.balances[baseCur]
+	if trade.Side == "BUY" {
+		cost := trade.Price*trade.Quantity + fee
+		if f.taker != nil && f.taker.OrderType == model.TypeLimit && f.taker.Price > 0 {
+			locked := f.taker.Price * trade.Quantity
+			quote.Used -= locked
+			quote.Free += locked - cost // 成交价优于限价 → 退还差额
+		} else {
+			quote.Free -= cost // 市价买入（已按可用截断）
+		}
+		if !baseOK {
+			base = &model.Balance{Currency: baseCur}
+			pe.balances[baseCur] = base
+		}
+		base.Free += trade.Quantity
+	} else {
+		proceeds := trade.Price*trade.Quantity - fee
+		quote.Free += proceeds
+		// taker 卖出（限价/市价都已锁 base）释放锁定。
+		if f.taker != nil && (f.taker.OrderType == model.TypeLimit || f.taker.OrderType == model.TypeMarket) {
+			if baseOK {
+				base.Used -= trade.Quantity
+			}
 		}
 	}
 
-	// Snapshot equity
-	pe.snapshotEquity()
+	// maker 侧结算：resting 限价单的锁定按成交价释放。
+	if f.maker != nil {
+		if f.maker.Side == model.SideBuy {
+			locked := f.maker.Price * trade.Quantity
+			makerCost := trade.Price*trade.Quantity + fee
+			quote.Used -= locked
+			quote.Free += locked - makerCost
+			makerBase, ok := pe.balances[pe.getBaseCurrency(f.maker.Symbol)]
+			if !ok {
+				makerBase = &model.Balance{Currency: pe.getBaseCurrency(f.maker.Symbol)}
+				pe.balances[pe.getBaseCurrency(f.maker.Symbol)] = makerBase
+			}
+			makerBase.Free += trade.Quantity
+		} else {
+			makerProceeds := trade.Price*trade.Quantity - fee
+			quote.Free += makerProceeds
+			makerBase, ok := pe.balances[pe.getBaseCurrency(f.maker.Symbol)]
+			if ok {
+				makerBase.Used -= trade.Quantity
+			}
+		}
+	}
+
+	// 数值防护：浮点尾差不允许把余额推成负。
+	for _, b := range pe.balances {
+		if b.Free < 0 && b.Free > -1e-9 {
+			b.Free = 0
+		}
+		if b.Used < 0 && b.Used > -1e-9 {
+			b.Used = 0
+		}
+		b.Total = b.Free + b.Used
+	}
 }
 
 func (pe *PaperExchange) updatePosition(trade model.TradeData) {
@@ -678,43 +856,6 @@ func (pe *PaperExchange) updatePosition(trade model.TradeData) {
 
 	if pe.onPosition != nil {
 		pe.onPosition(pos.PositionData)
-	}
-}
-
-func (pe *PaperExchange) updateBalance(trade model.TradeData) {
-	fee := trade.Price * trade.Quantity * pe.config.FeeRate
-
-	if trade.Side == "BUY" {
-		// Buying: decrease USDT, increase crypto
-		cost := trade.Price*trade.Quantity + fee
-		if bal, ok := pe.balances["USDT"]; ok {
-			bal.Free -= cost
-			bal.Total = bal.Free + bal.Used
-		}
-
-		currency := pe.getBaseCurrency(trade.Symbol)
-		if currency != "" {
-			if _, ok := pe.balances[currency]; !ok {
-				pe.balances[currency] = &model.Balance{Currency: currency}
-			}
-			pe.balances[currency].Free += trade.Quantity
-			pe.balances[currency].Total = pe.balances[currency].Free + pe.balances[currency].Used
-		}
-	} else {
-		// Selling: increase USDT, decrease crypto
-		proceeds := trade.Price*trade.Quantity - fee
-		if bal, ok := pe.balances["USDT"]; ok {
-			bal.Free += proceeds
-			bal.Total = bal.Free + bal.Used
-		}
-
-		currency := pe.getBaseCurrency(trade.Symbol)
-		if currency != "" {
-			if _, ok := pe.balances[currency]; ok {
-				pe.balances[currency].Free -= trade.Quantity
-				pe.balances[currency].Total = pe.balances[currency].Free + pe.balances[currency].Used
-			}
-		}
 	}
 }
 
@@ -779,10 +920,13 @@ func (pe *PaperExchange) getBaseCurrency(symbol string) string {
 
 // ── Equity Tracking ──
 
+// snapshotEquity 自包含加锁：先读快照所需数据，再单独写 equity 切片。
 func (pe *PaperExchange) snapshotEquity() {
-	totalEquity := pe.calculateTotalEquity()
+	pe.mu.RLock()
+	totalEquity := pe.calculateTotalEquityLocked()
 	available := pe.balances["USDT"].Free
 	margin := pe.balances["USDT"].Used
+	pe.mu.RUnlock()
 
 	snapshot := model.PortfolioSnapshot{
 		TotalEquity:      totalEquity,
@@ -791,6 +935,7 @@ func (pe *PaperExchange) snapshotEquity() {
 		Timestamp:        time.Now().UnixMilli(),
 	}
 
+	pe.mu.Lock()
 	pe.equity = append(pe.equity, snapshot)
 	if len(pe.equity) > 5000 {
 		pe.equity = pe.equity[len(pe.equity)-5000:]
@@ -806,12 +951,18 @@ func (pe *PaperExchange) snapshotEquity() {
 	if peak > 0 {
 		snapshot.Drawdown = (peak - totalEquity) / peak * 100
 	}
+	pe.mu.Unlock()
 }
 
+// calculateTotalEquity 当前总权益（GetEquity 独立入口）。
 func (pe *PaperExchange) calculateTotalEquity() float64 {
 	pe.mu.RLock()
 	defer pe.mu.RUnlock()
+	return pe.calculateTotalEquityLocked()
+}
 
+// calculateTotalEquityLocked 计算总权益（调用方须已持有 pe.mu 读/写锁）。
+func (pe *PaperExchange) calculateTotalEquityLocked() float64 {
 	// Start with USDT balance
 	total := 0.0
 	if bal, ok := pe.balances["USDT"]; ok {
@@ -888,4 +1039,13 @@ func tradesToMaps(trades []model.TradeData) []map[string]any {
 		})
 	}
 	return result
+}
+
+// fillsToMaps 把内部撮合明细转成对外成交列表。
+func fillsToMaps(fills []paperFill) []map[string]any {
+	trades := make([]model.TradeData, 0, len(fills))
+	for _, f := range fills {
+		trades = append(trades, f.trade)
+	}
+	return tradesToMaps(trades)
 }

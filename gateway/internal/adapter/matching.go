@@ -1,11 +1,12 @@
 //go:build !cgo
 // +build !cgo
 
-// (dev mock) Pure-Go fallback matching engine — NOT for production.
-// Activated only when CGO_ENABLED=0 (no Rust engine).
-// JSON output format is kept strictly identical to the Rust FFI version
-// (gateway/internal/adapter/../engine/src/ffi.rs) so that upper-layer
-// handlers can treat both engines interchangeably.
+// Pure-Go matching engine (price-time priority) — the non-cgo production path.
+// Activated when CGO_ENABLED=0 (no Rust engine); behavior is aligned with the
+// Rust FFI version (gateway/internal/adapter/../engine/src/ffi.rs): identical
+// JSON result/snapshot/trade format, plus exchange-like balance enforcement —
+// when a BalanceProvider is wired, orders are validated against available
+// funds (insufficient → reject or partial fill, never a negative balance).
 
 package adapter
 
@@ -13,6 +14,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -29,6 +31,24 @@ type MatchingEngine struct {
 	nextID   uint64
 	trades   []map[string]any
 	tradeSeq uint64
+
+	// balance 可选资金校验（nil = 不校验，兼容旧行为/模拟做市）。
+	balance BalanceProvider
+}
+
+// SetBalanceProvider 注入可用资金校验（生产由撮合服务接上层账本）。
+func (e *MatchingEngine) SetBalanceProvider(p BalanceProvider) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.balance = p
+}
+
+// available 取用户可用资产；无 provider 或模拟做市（userID=0）返回 +Inf。
+func (e *MatchingEngine) available(userID uint64, asset string) float64 {
+	if e.balance == nil || userID == 0 {
+		return math.Inf(1)
+	}
+	return e.balance.Available(userID, asset)
 }
 
 type orderLevel struct {
@@ -44,6 +64,26 @@ type order struct {
 	Filled    float64
 	UserID    uint64
 	Timestamp int64
+}
+
+// BalanceProvider 供给撮合引擎做可用资金校验（上层注入真实账本）。
+// asset 为币种（如 "USDT"/"BTC"），返回该用户当前可用数量。
+// 未注入时引擎保持原行为（不校验，模拟盘做市商 userID=0 永远豁免）。
+type BalanceProvider interface {
+	Available(userID uint64, asset string) float64
+}
+
+// quoteAssets 从交易对推导 base/quote 的后缀表（长后缀优先，避免 BTC 吃掉 BTCUSDT）。
+var quoteAssets = []string{"USDT", "USDC", "FDUSD", "TUSD", "BUSD", "DAI", "EUR", "GBP", "ETH", "BTC", "BNB"}
+
+func splitSymbolAssets(symbol string) (base, quote string) {
+	s := strings.ToUpper(symbol)
+	for _, q := range quoteAssets {
+		if strings.HasSuffix(s, q) && len(s) > len(q) {
+			return s[:len(s)-len(q)], q
+		}
+	}
+	return s, "USDT"
 }
 
 var (
@@ -68,12 +108,40 @@ func NewMatchingEngine(symbol string) *MatchingEngine {
 
 // SubmitOrder submits an order and returns the result in Rust FFI format:
 // {"status":"ok","order_id":<id>,"trades":[...]}
+//
+// 资金校验（注入 BalanceProvider 后生效，行为对齐真实交易所）：
+//   - 限价卖出 / 市价卖出：可用 base 持仓不足 → 拒绝（-2010 式）
+//   - 限价买入：可用 quote 不足支付 price*qty → 拒绝
+//   - 市价买入（price=0 无法预判成本）：撮合时按可用 quote 截断 → 部分成交
 func (e *MatchingEngine) SubmitOrder(side, orderType string, price, quantity float64, userID uint64) (map[string]any, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	if quantity <= 0 {
 		return nil, fmt.Errorf("quantity must be positive")
+	}
+
+	base, quote := splitSymbolAssets(e.symbol)
+
+	// ── 前置资金校验 ──
+	if orderType == "market" {
+		if side == "sell" {
+			// 市价卖出：持仓为零直接拒绝；不足部分撮合时截断（部分成交）。
+			if avail := e.available(userID, base); avail <= 0 {
+				return nil, fmt.Errorf("insufficient balance: no %s available to sell", base)
+			}
+		}
+	} else {
+		if side == "sell" {
+			if avail := e.available(userID, base); quantity > avail {
+				return nil, fmt.Errorf("insufficient balance: need %.8f %s, available %.8f", quantity, base, math.Max(avail, 0))
+			}
+		} else {
+			cost := price * quantity
+			if avail := e.available(userID, quote); cost > avail {
+				return nil, fmt.Errorf("insufficient balance: need %.8f %s, available %.8f", cost, quote, math.Max(avail, 0))
+			}
+		}
 	}
 
 	id := atomic.AddUint64(&e.nextID, 1)
@@ -162,6 +230,10 @@ func (e *MatchingEngine) matchLimit(taker *order) {
 }
 
 func (e *MatchingEngine) matchMarket(maker *order) {
+	base, quote := splitSymbolAssets(e.symbol)
+	var spentQuote float64 // 市价买入：按可用 quote 截断，杜绝负余额
+	var soldBase float64   // 市价卖出：按可用 base 截断（部分成交）
+
 	if maker.Side == "buy" {
 		for len(e.asks) > 0 && maker.Filled < maker.Quantity {
 			if len(e.asks[0].Orders) == 0 {
@@ -171,8 +243,20 @@ func (e *MatchingEngine) matchMarket(maker *order) {
 			counter := e.asks[0].Orders[0]
 			fillQty := math.Min(maker.Quantity-maker.Filled, counter.Quantity-counter.Filled)
 			tradePrice := e.asks[0].Price
+			// 资金截断：累计成交额不得超过可用 quote。
+			if avail := e.available(maker.UserID, quote); !math.IsInf(avail, 1) {
+				remainingQuote := avail - spentQuote
+				if remainingQuote <= 0 {
+					break
+				}
+				fillQty = math.Min(fillQty, remainingQuote/tradePrice)
+				if fillQty <= 0 {
+					break
+				}
+			}
 			maker.Filled += fillQty
 			counter.Filled += fillQty
+			spentQuote += tradePrice * fillQty
 			e.recordTrade(maker, counter, tradePrice, fillQty)
 			if counter.Filled >= counter.Quantity {
 				e.asks[0].Orders = e.asks[0].Orders[1:]
@@ -190,8 +274,20 @@ func (e *MatchingEngine) matchMarket(maker *order) {
 			counter := e.bids[0].Orders[0]
 			fillQty := math.Min(maker.Quantity-maker.Filled, counter.Quantity-counter.Filled)
 			tradePrice := e.bids[0].Price
+			// 持仓截断：累计卖出不得超过可用 base（纯下跌行情防负余额）。
+			if avail := e.available(maker.UserID, base); !math.IsInf(avail, 1) {
+				remainingBase := avail - soldBase
+				if remainingBase <= 0 {
+					break
+				}
+				fillQty = math.Min(fillQty, remainingBase)
+				if fillQty <= 0 {
+					break
+				}
+			}
 			maker.Filled += fillQty
 			counter.Filled += fillQty
+			soldBase += fillQty
 			e.recordTrade(maker, counter, tradePrice, fillQty)
 			if counter.Filled >= counter.Quantity {
 				e.bids[0].Orders = e.bids[0].Orders[1:]

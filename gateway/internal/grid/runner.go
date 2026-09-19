@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xiaotian-quant/gateway/internal/model"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
@@ -23,11 +24,23 @@ import (
 // 当前无有效行情（如 WS 断连），调用方应跳过本轮驱动。
 type PriceSource func(symbol string) float64
 
+// ContractExecutor 执行合约腿下单（short / neutral 模式）并回报确认成交量：
+// 生产实现走 order.OMS（market_type=swap + position_side + leverage +
+// margin_mode，paper 即时成交回报、live 走交易所适配器），测试用 fake。
+// 实盘单子进单前过 canPlaceLiveOrder 安全闸（在实现内部），不得绕过。
+type ContractExecutor interface {
+	// PlaceContract 下合约市价单：side=BUY/SELL，positionSide=LONG/SHORT
+	// （neutral 双仓对冲）。返回确认成交量；filledQty<=0 视为未成交。
+	// botID 用于订单 client_oid 标记（"grid:<botID>"），供 A8.2 成交恢复路由回填。
+	PlaceContract(botID, symbol, exchange string, userID int64, side string, qty, price, leverage float64, marginMode, positionSide string) (filledQty, avgPrice float64, err error)
+}
+
 // Runner 管理一组运行中的网格机器人。
 type Runner struct {
 	mu    sync.Mutex
 	price PriceSource
 	repo  *store.GridRepo
+	exec  ContractExecutor
 	bots  map[string]*botRuntime
 
 	// TickInterval 为取价驱动节拍，SnapshotInterval 为权益快照节拍；
@@ -39,32 +52,39 @@ type Runner struct {
 // botRuntime 是一个运行中 bot 的独占状态；engine 只允许其 tick goroutine 触碰。
 type botRuntime struct {
 	record *store.GridBotRecord
-	engine *Engine
+	engine *BotEngine
 	stopCh chan struct{}
 	done   chan struct{} // tick goroutine 退出时关闭
 }
 
 // NewRunner 创建网格机器人 Runner。priceSource 为注入式行情源
-// （生产用 BinanceWS.GetPrice，测试用假源），repo 负责持久化。
-func NewRunner(priceSource PriceSource, repo *store.GridRepo) *Runner {
+// （生产用 BinanceWS.GetPrice，测试用假源），repo 负责持久化，
+// exec 负责合约腿下单（生产接 OMS，测试用 fake；long 模式不用）。
+func NewRunner(priceSource PriceSource, repo *store.GridRepo, exec ContractExecutor) *Runner {
 	return &Runner{
 		price:            priceSource,
 		repo:             repo,
+		exec:             exec,
 		bots:             make(map[string]*botRuntime),
 		TickInterval:     2 * time.Second,
 		SnapshotInterval: 60 * time.Second,
 	}
 }
 
-// StartBot 启动一个机器人：state_json 非空则从保存状态恢复（LoadState），
-// 否则按 currentPrice 开网（NewEngine）；随后置 status=running、补记
-// started_at，并启动其独占 tick goroutine。
+// StartBot 启动一个机器人：state_json 非空则从保存状态恢复（LoadBotState，
+// 兼容 mode 引入前的裸单腿存量格式），否则按 currentPrice 开网（NewBotEngine）；
+// 随后置 status=running、补记 started_at，并启动其独占 tick goroutine。
+// short / neutral 合约模式要求 exec 非空，否则报错。
 func (r *Runner) StartBot(record *store.GridBotRecord, currentPrice float64) error {
 	if record == nil {
 		return errors.New("grid runner: nil bot record")
 	}
 	if currentPrice <= 0 {
 		return fmt.Errorf("grid runner: bot %s invalid start price %v", record.ID, currentPrice)
+	}
+	mode := ParseMode(record.Mode)
+	if mode != ModeLong && r.exec == nil {
+		return fmt.Errorf("grid runner: bot %s mode %s requires contract executor", record.ID, mode)
 	}
 
 	r.mu.Lock()
@@ -84,7 +104,7 @@ func (r *Runner) StartBot(record *store.GridBotRecord, currentPrice float64) err
 	}
 
 	var (
-		eng *Engine
+		eng *BotEngine
 		err error
 	)
 	stateJSON := strings.TrimSpace(record.StateJSON)
@@ -93,12 +113,12 @@ func (r *Runner) StartBot(record *store.GridBotRecord, currentPrice float64) err
 		if uerr := json.Unmarshal([]byte(stateJSON), &state); uerr != nil {
 			return fmt.Errorf("grid runner: bot %s state_json: %w", record.ID, uerr)
 		}
-		eng, err = LoadState(cfg, state)
+		eng, err = LoadBotState(cfg, mode, state)
 		if err != nil {
 			return fmt.Errorf("grid runner: bot %s load state: %w", record.ID, err)
 		}
 	} else {
-		eng, _, err = NewEngine(cfg)
+		eng, _, err = NewBotEngine(cfg, mode)
 		if err != nil {
 			return fmt.Errorf("grid runner: bot %s new engine: %w", record.ID, err)
 		}
@@ -235,8 +255,11 @@ func (r *Runner) runBot(rt *botRuntime) {
 			}
 			fills := rt.engine.OnPriceTick(price, time.Now().UnixMilli())
 			for _, f := range fills {
+				if r.exec != nil && rt.engine.Mode() != ModeLong {
+					r.placeContractLeg(rt, f, price)
+				}
 				if err := r.repo.InsertTrade(rt.record.ID, f.Level, string(f.Side),
-					f.Price, f.Qty, f.QuoteQty, f.Fee, f.Pnl, f.Ts); err != nil {
+					f.Price, f.Qty, f.QuoteQty, f.Fee, f.Pnl, f.Leg, f.Ts); err != nil {
 					log.Printf("grid runner: bot %s insert trade: %v", rt.record.ID, err)
 				}
 			}
@@ -269,7 +292,55 @@ func (r *Runner) persistState(rt *botRuntime) {
 	}
 }
 
+// placeContractLeg 把合约腿成交打进 OMS 合约链路（market_type=swap +
+// position_side + leverage/margin_mode）。成交是否推进以引擎撮合为准
+// （引擎成交即代表价位被穿越、resting 单应已成交），OMS 失败仅记日志。
+func (r *Runner) placeContractLeg(rt *botRuntime, f LegFill, refPrice float64) {
+	price := f.Price
+	if price <= 0 {
+		price = refPrice
+	}
+	positionSide := string(PositionSideOfLeg(f.Leg))
+	filled, _, err := r.exec.PlaceContract(rt.record.ID, rt.record.Symbol, rt.record.Exchange,
+		rt.record.UserID, string(f.Side), f.Qty, price, rt.record.Leverage,
+		rt.record.MarginMode, positionSide)
+	if err != nil {
+		log.Printf("grid runner: bot %s contract order leg=%s side=%s qty=%v: %v",
+			rt.record.ID, f.Leg, f.Side, f.Qty, err)
+		return
+	}
+	if filled <= 0 {
+		log.Printf("grid runner: bot %s contract order not filled leg=%s side=%s qty=%v",
+			rt.record.ID, f.Leg, f.Side, f.Qty)
+	}
+}
+
+// PositionSideOfLeg 映射腿到合约持仓方向：long 腿 → LONG，short 腿 → SHORT。
+func PositionSideOfLeg(leg string) model.PositionSide {
+	if leg == LegShort {
+		return model.PositionShort
+	}
+	return model.PositionLong
+}
+
 // normalizeSymbol 把 "BTC/USDT" 规范成 Binance WS 缓存键 "BTCUSDT"。
 func normalizeSymbol(symbol string) string {
 	return strings.ToUpper(strings.ReplaceAll(symbol, "/", ""))
+}
+
+// ApplyRecoveredFill A8.2 成交恢复：网格引擎的成交以引擎撮合为准（state_json
+// 恢复），这里把 OMS 合约腿被恢复出的成交补记进成交流水（level/pnl 未知置 0），
+// 并持久化一次引擎状态。bot 未运行返回错误，由下轮重试。
+func (r *Runner) ApplyRecoveredFill(botID, side string, qty, price float64) error {
+	r.mu.Lock()
+	rt, ok := r.bots[botID]
+	r.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("grid bot %s not running", botID)
+	}
+	if err := r.repo.InsertTrade(rt.record.ID, 0, strings.ToUpper(side), price, qty, qty*price, 0, 0, "recovered", time.Now().UnixMilli()); err != nil {
+		return fmt.Errorf("grid recovered trade record: %w", err)
+	}
+	r.persistState(rt)
+	return nil
 }

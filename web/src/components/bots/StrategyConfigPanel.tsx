@@ -30,6 +30,8 @@ interface StrategyConfigFormValues {
   loop_count: number
   enable_add_position: boolean
   flash_crash_protection: number
+  max_layers: number
+  max_total_budget: number
 }
 
 const DEFAULT_VALUES: StrategyConfigFormValues = {
@@ -49,6 +51,8 @@ const DEFAULT_VALUES: StrategyConfigFormValues = {
   loop_count: 999,
   enable_add_position: true,
   flash_crash_protection: 2.0,
+  max_layers: 0,
+  max_total_budget: 0,
 }
 
 const ORDER_COUNT_OPTIONS = [
@@ -125,6 +129,8 @@ export const StrategyConfigPanel: React.FC<StrategyConfigPanelProps> = ({
       loop_count: values.loop_count,
       enable_add_position: values.enable_add_position,
       flash_crash_protection: values.flash_crash_protection,
+      max_layers: values.max_layers,
+      max_total_budget: values.max_total_budget,
     }
 
     if (values.strategy_type === 'martin') {
@@ -347,21 +353,50 @@ export const StrategyConfigPanel: React.FC<StrategyConfigPanelProps> = ({
       {/* Protection */}
       <SectionCard title="风控设置">
         <div className="space-y-4">
-          <Input
-            label="防瀑布比例"
-            type="number"
-            step={0.1}
-            min={0}
-            max={10}
-            helperText="价格急跌超过此比例暂停开仓 (0 = 关闭)"
-            {...register('flash_crash_protection', {
-              required: true,
-              valueAsNumber: true,
-              min: { value: 0, message: '最小0%' },
-              max: { value: 10, message: '最大10%' },
-            })}
-            error={errors.flash_crash_protection?.message}
-          />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Input
+              label="防瀑布比例"
+              type="number"
+              step={0.1}
+              min={0}
+              max={10}
+              helperText="价格急跌超过此比例暂停开仓 (0 = 关闭)"
+              {...register('flash_crash_protection', {
+                required: true,
+                valueAsNumber: true,
+                min: { value: 0, message: '最小0%' },
+                max: { value: 10, message: '最大10%' },
+              })}
+              error={errors.flash_crash_protection?.message}
+            />
+            <Input
+              label="最大层数硬上限"
+              type="number"
+              min={0}
+              max={20}
+              helperText="总买入订单数（首单+加仓）硬上限，0 = 按做单数量"
+              {...register('max_layers', {
+                required: true,
+                valueAsNumber: true,
+                min: { value: 0, message: '最小0（不启用）' },
+                max: { value: 20, message: '最大20层' },
+              })}
+              error={errors.max_layers?.message}
+            />
+            <Input
+              label="总预算硬上限 (USDT)"
+              type="number"
+              min={0}
+              step={100}
+              helperText="累计成交投入达到该值后拒绝再加仓，0 = 不限"
+              {...register('max_total_budget', {
+                required: true,
+                valueAsNumber: true,
+                min: { value: 0, message: '不能为负数' },
+              })}
+              error={errors.max_total_budget?.message}
+            />
+          </div>
           <div className="flex flex-wrap gap-2">
             {flashCrashProtection > 0 && (
               <Badge variant="info" dot>防瀑布保护已启用: {flashCrashProtection}%</Badge>
@@ -371,6 +406,12 @@ export const StrategyConfigPanel: React.FC<StrategyConfigPanelProps> = ({
             )}
             {doubleFirstOrder && (
               <Badge variant="warning" dot>首单加倍</Badge>
+            )}
+            {(watch('max_layers') ?? 0) > 0 && (
+              <Badge variant="info" dot>层数硬上限: {watch('max_layers')} 层</Badge>
+            )}
+            {(watch('max_total_budget') ?? 0) > 0 && (
+              <Badge variant="warning" dot>预算硬上限: {watch('max_total_budget')} USDT</Badge>
             )}
           </div>
         </div>

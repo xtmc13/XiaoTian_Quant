@@ -10,9 +10,11 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/strategy"
 )
 
-// GetCombos lists all strategy combos.
+// GetCombos lists strategy combos visible to the current user
+// （本人的 + 历史无属主；admin/未注入用户看全部）。
 func GetCombos(c *gin.Context) {
-	configs := strategy.ListComboConfigs()
+	uid, injected := ctxUserID(c)
+	configs := strategy.ListComboConfigsForUser(int64(uid), !injected || ctxIsAdmin(c))
 	items := make([]map[string]any, 0, len(configs))
 	for _, cfg := range configs {
 		items = append(items, cfg.ToMap())
@@ -23,12 +25,23 @@ func GetCombos(c *gin.Context) {
 	c.JSON(http.StatusOK, items)
 }
 
-// GetCombo returns a single combo config by ID.
-func GetCombo(c *gin.Context) {
-	id := c.Param("id")
-	cfg := strategy.GetComboConfig(id)
+// comboMustGet 按 :id 取组合；不存在 404，属他人（且非 admin）403。
+func comboMustGet(c *gin.Context) (*strategy.ComboConfig, bool) {
+	cfg := strategy.GetComboConfig(c.Param("id"))
 	if cfg == nil {
 		c.JSON(http.StatusNotFound, gin.H{"detail": "not found"})
+		return nil, false
+	}
+	if !requireOwner(c, cfg.UserID) {
+		return nil, false
+	}
+	return cfg, true
+}
+
+// GetCombo returns a single combo config by ID.
+func GetCombo(c *gin.Context) {
+	cfg, ok := comboMustGet(c)
+	if !ok {
 		return
 	}
 	c.JSON(http.StatusOK, cfg.ToMap())
@@ -53,6 +66,7 @@ func CreateCombo(c *gin.Context) {
 
 	cfg := &strategy.ComboConfig{
 		ID:              shortUUID(),
+		UserID:          getUserID(c),
 		Name:            body.Name,
 		Symbol:          body.Symbol,
 		Members:         body.Members,
@@ -73,10 +87,8 @@ func CreateCombo(c *gin.Context) {
 
 // UpdateCombo modifies an existing combo config.
 func UpdateCombo(c *gin.Context) {
-	id := c.Param("id")
-	cfg := strategy.GetComboConfig(id)
-	if cfg == nil {
-		c.JSON(http.StatusNotFound, gin.H{"detail": "not found"})
+	cfg, ok := comboMustGet(c)
+	if !ok {
 		return
 	}
 
@@ -115,31 +127,27 @@ func UpdateCombo(c *gin.Context) {
 
 // DeleteCombo removes a combo config and stops it if running.
 func DeleteCombo(c *gin.Context) {
-	id := c.Param("id")
-	cfg := strategy.GetComboConfig(id)
-	if cfg == nil {
-		c.JSON(http.StatusNotFound, gin.H{"detail": "not found"})
+	cfg, ok := comboMustGet(c)
+	if !ok {
 		return
 	}
 
 	if cfg.Status == "running" {
 		eng := app.Get().StrategyEngine
 		if eng != nil {
-			_ = eng.Stop(id)
-			_ = eng.Unregister(id)
+			_ = eng.Stop(cfg.ID)
+			_ = eng.Unregister(cfg.ID)
 		}
 	}
 
-	strategy.DeleteComboConfig(id)
+	strategy.DeleteComboConfig(cfg.ID)
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
 // StartCombo registers (if needed) and starts a combo in the strategy engine.
 func StartCombo(c *gin.Context) {
-	id := c.Param("id")
-	cfg := strategy.GetComboConfig(id)
-	if cfg == nil {
-		c.JSON(http.StatusNotFound, gin.H{"detail": "not found"})
+	cfg, ok := comboMustGet(c)
+	if !ok {
 		return
 	}
 
@@ -149,8 +157,8 @@ func StartCombo(c *gin.Context) {
 		return
 	}
 
-	if eng.Get(id) != nil {
-		if err := eng.Start(id, nil); err != nil {
+	if eng.Get(cfg.ID) != nil {
+		if err := eng.Start(cfg.ID, nil); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
 			return
 		}
@@ -170,8 +178,8 @@ func StartCombo(c *gin.Context) {
 		return
 	}
 
-	if err := eng.Start(id, nil); err != nil {
-		_ = eng.Unregister(id)
+	if err := eng.Start(cfg.ID, nil); err != nil {
+		_ = eng.Unregister(cfg.ID)
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
 		return
 	}
@@ -182,10 +190,8 @@ func StartCombo(c *gin.Context) {
 
 // StopCombo stops a running combo.
 func StopCombo(c *gin.Context) {
-	id := c.Param("id")
-	cfg := strategy.GetComboConfig(id)
-	if cfg == nil {
-		c.JSON(http.StatusNotFound, gin.H{"detail": "not found"})
+	cfg, ok := comboMustGet(c)
+	if !ok {
 		return
 	}
 
@@ -195,7 +201,7 @@ func StopCombo(c *gin.Context) {
 		return
 	}
 
-	if err := eng.Stop(id); err != nil {
+	if err := eng.Stop(cfg.ID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
 		return
 	}
@@ -206,10 +212,8 @@ func StopCombo(c *gin.Context) {
 
 // GetComboSignals returns recent aggregated signals for a combo.
 func GetComboSignals(c *gin.Context) {
-	id := c.Param("id")
-	cfg := strategy.GetComboConfig(id)
-	if cfg == nil {
-		c.JSON(http.StatusNotFound, gin.H{"detail": "not found"})
+	cfg, ok := comboMustGet(c)
+	if !ok {
 		return
 	}
 
@@ -219,7 +223,7 @@ func GetComboSignals(c *gin.Context) {
 		return
 	}
 
-	s := eng.Get(id)
+	s := eng.Get(cfg.ID)
 	if s == nil {
 		c.JSON(http.StatusOK, []map[string]any{})
 		return

@@ -4,11 +4,16 @@ import { EmptyState } from '../ui/EmptyState'
 import { PackageOpen } from 'lucide-react'
 
 describe('EmptyState', () => {
-  it('renders title and default icon', () => {
-    render(<EmptyState title="No Data" />)
+  it('renders title and icon when provided', () => {
+    render(<EmptyState title="No Data" icon={<PackageOpen />} />)
     expect(screen.getByText('No Data')).toBeTruthy()
     // PackageOpen renders as an svg, not an img role
     expect(document.querySelector('svg')).toBeTruthy()
+  })
+
+  it('renders no icon when not provided', () => {
+    render(<EmptyState title="No Data" />)
+    expect(document.querySelector('svg')).toBeNull()
   })
 
   it('renders custom icon', () => {
@@ -36,9 +41,15 @@ describe('EmptyState', () => {
     expect(handleAction).toHaveBeenCalledTimes(1)
   })
 
-  it('does not render action button when onAction is missing', () => {
-    render(<EmptyState title="No Data" actionLabel="Create" />)
+  it('does not render action button when no action props are given', () => {
+    render(<EmptyState title="No Data" />)
     expect(screen.queryByText('Create')).toBeFalsy()
+    expect(document.querySelector('button')).toBeNull()
+  })
+
+  it('renders action button from actionLabel even without onAction', () => {
+    render(<EmptyState title="No Data" actionLabel="Create" />)
+    expect(screen.queryByText('Create')).toBeTruthy()
   })
 
   it('applies custom className', () => {

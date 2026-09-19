@@ -1,5 +1,9 @@
 import { test } from '@playwright/test'
 
+// 手动调试 spec：需要真实网关（:8080）与可用账号，默认套件中跳过。
+// 需要时显式开启：E2E_LIVE_BACKEND=1 npx playwright test e2e/gate-status.spec.ts
+test.skip(!process.env.E2E_LIVE_BACKEND, '需要真实后端（设置 E2E_LIVE_BACKEND=1 运行）')
+
 test('check gate status', async ({ page }) => {
   page.on('response', async (res) => {
     if (res.url().includes('/exchanges/configured')) {

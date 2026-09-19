@@ -15,7 +15,9 @@ import (
 )
 
 func minInt(a, b int) int {
-	if a < b { return a }
+	if a < b {
+		return a
+	}
 	return b
 }
 
@@ -33,16 +35,16 @@ type MLStrategy struct {
 	// ML config
 	modelID       string
 	mlClient      *ml.Client
-	predictor     *ml.Predictor  // local ONNX-style inference (no HTTP)
-	useLocal      bool           // true = use local Predictor, false = use HTTP
+	predictor     *ml.Predictor // local ONNX-style inference (no HTTP)
+	useLocal      bool          // true = use local Predictor, false = use HTTP
 	predictBars   int
 	minConfidence float64
 
 	// State
-	bars        []model.Bar
+	bars       []model.Bar
 	inPosition bool
 	entryPrice float64
-	direction   string
+	direction  string
 
 	// Retrain
 	retrainInterval time.Duration
@@ -78,10 +80,10 @@ func (s *MLStrategy) Symbol() string { return s.symbol }
 
 func (s *MLStrategy) Params() map[string]any {
 	return map[string]any{
-		"model_id":        s.modelID,
-		"symbol":          s.symbol,
-		"predict_bars":    s.predictBars,
-		"min_confidence":  s.minConfidence,
+		"model_id":         s.modelID,
+		"symbol":           s.symbol,
+		"predict_bars":     s.predictBars,
+		"min_confidence":   s.minConfidence,
 		"retrain_interval": s.retrainInterval.String(),
 	}
 }
@@ -431,4 +433,3 @@ func (c *MLCreator) ListAvailable() []string {
 	}
 	return ids
 }
-

@@ -111,6 +111,7 @@ export const AIRobotPanel: React.FC = () => {
               min={0}
               max={100}
               step={5}
+              ariaLabel="置信度门限"
             />
           </div>
 
@@ -124,6 +125,7 @@ export const AIRobotPanel: React.FC = () => {
               min={60}
               max={3600}
               step={60}
+              ariaLabel="扫描间隔（分钟）"
             />
           </div>
 
@@ -133,7 +135,7 @@ export const AIRobotPanel: React.FC = () => {
               <span className="text-sm text-[#ccc]">市场条件过滤</span>
               <Badge variant="info">Beta</Badge>
             </div>
-            <Switch checked={marketFilterEnabled} onCheckedChange={setMarketFilterEnabled} />
+            <Switch checked={marketFilterEnabled} onCheckedChange={setMarketFilterEnabled} aria-label="市场条件过滤" />
           </div>
 
           <Button variant="primary" className="w-full">

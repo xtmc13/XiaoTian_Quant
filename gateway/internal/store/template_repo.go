@@ -10,15 +10,15 @@ import (
 
 // StrategyTemplateRecord is the SQLite-backed representation of a strategy template.
 type StrategyTemplateRecord struct {
-	ID               string `json:"id"`
-	UserID           int64  `json:"user_id"`
-	Name             string `json:"name"`
-	Category         string `json:"category"`
-	StrategyType     string `json:"strategy_type"`
-	Description      string `json:"description"`
+	ID                string `json:"id"`
+	UserID            int64  `json:"user_id"`
+	Name              string `json:"name"`
+	Category          string `json:"category"`
+	StrategyType      string `json:"strategy_type"`
+	Description       string `json:"description"`
 	DefaultConfigJSON string `json:"default_config_json"`
-	CreatedAt        int64  `json:"created_at"`
-	UpdatedAt        int64  `json:"updated_at"`
+	CreatedAt         int64  `json:"created_at"`
+	UpdatedAt         int64  `json:"updated_at"`
 }
 
 // StrategyTemplateRepo provides typed CRUD for strategy_templates.
@@ -60,15 +60,17 @@ func (r *StrategyTemplateRepo) GetByID(id string) (*StrategyTemplateRecord, erro
 }
 
 // List returns templates for a user, optionally filtered by category.
+// user_id=0 的系统预设模板（A1.5）对所有用户可见；用户只能删自己的模板。
 func (r *StrategyTemplateRepo) List(userID int64, category string, limit int) ([]*StrategyTemplateRecord, error) {
 	query := `SELECT id, user_id, name, category, strategy_type, description,
-		default_config_json, created_at, updated_at FROM strategy_templates WHERE user_id=?`
+		default_config_json, created_at, updated_at FROM strategy_templates
+		WHERE (user_id=? OR user_id=0)`
 	args := []any{userID}
 	if category != "" {
 		query += " AND category=?"
 		args = append(args, category)
 	}
-	query += " ORDER BY updated_at DESC"
+	query += " ORDER BY user_id DESC, updated_at DESC"
 	if limit > 0 {
 		query += " LIMIT ?"
 		args = append(args, limit)
@@ -144,15 +146,15 @@ func StrategyTemplateRecordFromMap(m map[string]any) *StrategyTemplateRecord {
 // ToMap converts the record to the frontend-facing map shape.
 func (r *StrategyTemplateRecord) ToMap() map[string]any {
 	m := map[string]any{
-		"id":              r.ID,
-		"user_id":         r.UserID,
-		"name":            r.Name,
-		"category":        r.Category,
-		"strategy_type":   r.StrategyType,
-		"description":     r.Description,
-		"default_config":  json.RawMessage(r.DefaultConfigJSON),
-		"created_at":      float64(r.CreatedAt),
-		"updated_at":      float64(r.UpdatedAt),
+		"id":             r.ID,
+		"user_id":        r.UserID,
+		"name":           r.Name,
+		"category":       r.Category,
+		"strategy_type":  r.StrategyType,
+		"description":    r.Description,
+		"default_config": json.RawMessage(r.DefaultConfigJSON),
+		"created_at":     float64(r.CreatedAt),
+		"updated_at":     float64(r.UpdatedAt),
 	}
 	return m
 }

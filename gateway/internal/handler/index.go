@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xiaotian-quant/gateway/internal/metrics"
 	"github.com/xiaotian-quant/gateway/internal/portfolio"
+	"github.com/xiaotian-quant/gateway/internal/store"
 	"github.com/xiaotian-quant/gateway/spa"
 )
 
@@ -43,6 +45,46 @@ func StartBackgroundTasks() {
 		}
 	}
 	go StartAIBotSnapshotWorker(snapshotInterval)
+
+	// ── Billing 订单核验器（30s 轮询 pending/confirming/failed 订单）──
+	go StartBillingVerifier()
+
+	// ── Prometheus 业务指标上报（15s：权益/持仓数/运行中策略数/机器人数量）──
+	go func() {
+		metricsTicker := time.NewTicker(15 * time.Second)
+		defer metricsTicker.Stop()
+		for range metricsTicker.C {
+			if mgr := portfolio.GetManager(); mgr != nil {
+				metrics.SetEquity(mgr.TotalEquity())
+				metrics.SetPositionCount(len(mgr.GetPositions()))
+			}
+			running := 0
+			for _, item := range store.GetStrategyConfigs() {
+				if s, ok := item["status"].(string); ok && s == "running" {
+					running++
+				}
+			}
+			metrics.SetActiveStrategies(running)
+
+			// 运行中机器人数量（按类型）：记录 status=running 即为持久化真值。
+			if recs, err := store.NewGridRepo().List(map[string]any{"status": "running"}, 500); err == nil {
+				metrics.SetBotsRunning("grid", len(recs))
+			}
+			if recs, err := store.NewDCARepo().List(map[string]any{"status": "running"}, 500); err == nil {
+				metrics.SetBotsRunning("dca", len(recs))
+			}
+			if recs, err := store.NewLayeredMartinRepo().List(map[string]any{"status": "running"}, 500); err == nil {
+				metrics.SetBotsRunning("layered_martin", len(recs))
+			}
+			runningAI := 0
+			for _, item := range store.GetAIBotInstances(0) {
+				if s, ok := item["status"].(string); ok && s == "running" {
+					runningAI++
+				}
+			}
+			metrics.SetBotsRunning("ai", runningAI)
+		}
+	}()
 
 	// Periodic health checks
 	ticker := time.NewTicker(30 * time.Second)

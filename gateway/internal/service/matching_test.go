@@ -3,6 +3,7 @@ package service
 import (
 	"os"
 	"testing"
+	"time"
 
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
@@ -33,6 +34,32 @@ func TestMatchingServicePlaceOrder(t *testing.T) {
 	}
 	if result["store_order_id"] == nil {
 		t.Fatal("expected store_order_id in result")
+	}
+}
+
+// SimulateTrading 每轮先撤旧模拟单再挂新单：盘口不得随轮数无限堆积（重复展示回归）。
+func TestSimulateTradingDoesNotAccumulateLimitOrders(t *testing.T) {
+	ms := GetMatchingService()
+	symbol := "SIMDUP_TEST_SYMBOL"
+	t.Cleanup(func() { ms.GetEngine(symbol).Destroy() })
+
+	prices := []float64{50000, 50100, 49900, 50200}
+	for _, p := range prices {
+		ms.SimulateTrading(symbol, p)
+		time.Sleep(200 * time.Millisecond) // 等异步挂单完成
+	}
+
+	snap, err := ms.GetOrderBook(symbol, 50)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	bids := snap["bids"].([][]float64)
+	asks := snap["asks"].([][]float64)
+	if len(bids) > 2 || len(asks) > 2 {
+		t.Fatalf("模拟单重复堆积: bids=%d asks=%d（每轮应先撤旧单）", len(bids), len(asks))
+	}
+	if len(bids) == 0 || len(asks) == 0 {
+		t.Fatalf("最新一轮模拟单应仍在盘口: bids=%d asks=%d", len(bids), len(asks))
 	}
 }
 

@@ -53,7 +53,7 @@ func NewRouter() *Router {
 				Name:     "Critical Alerts",
 				Events:   []string{}, // all events
 				Levels:   []string{"CRITICAL"},
-				Channels: []string{"telegram", "discord", "lark", "dingtalk", "email"},
+				Channels: []string{"telegram", "discord", "lark", "dingtalk", "email", "sms"},
 				Enabled:  true,
 			},
 			{

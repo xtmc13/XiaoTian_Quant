@@ -27,6 +27,9 @@ type GridBotRecord struct {
 	Status        string  `json:"status"`
 	Exchange      string  `json:"exchange"`
 	FeeRate       float64 `json:"fee_rate"`
+	Mode          string  `json:"mode"`        // long / short / neutral（A1.3）
+	Leverage      float64 `json:"leverage"`    // 合约腿杠杆（short/neutral 生效）
+	MarginMode    string  `json:"margin_mode"` // cross / isolated
 	RealizedPnL   float64 `json:"realized_pnl"`
 	TotalTrades   int     `json:"total_trades"`
 	BaseQty       float64 `json:"base_qty"`
@@ -50,6 +53,7 @@ type GridTradeRecord struct {
 	QuoteQty float64 `json:"quote_qty"`
 	Fee      float64 `json:"fee"`
 	PnL      float64 `json:"pnl"`
+	Leg      string  `json:"leg"` // long / short（A1.3 双腿区分）
 	Ts       int64   `json:"ts"`
 }
 
@@ -72,7 +76,8 @@ type GridRepo struct {
 func NewGridRepo() *GridRepo { return &GridRepo{} }
 
 const gridBotColumns = `id, user_id, name, symbol, lower_price, upper_price, grid_count,
-	investment, status, exchange, fee_rate, realized_pnl, total_trades, base_qty,
+	investment, status, exchange, fee_rate, mode, leverage, margin_mode,
+	realized_pnl, total_trades, base_qty,
 	quote_balance, state_json, initial_equity, created_at, updated_at, started_at, stopped_at`
 
 // Create inserts a new grid bot. It assigns ID/timestamps and status defaults if missing.
@@ -101,13 +106,23 @@ func (r *GridRepo) Create(b *GridBotRecord) error {
 	if b.FeeRate == 0 {
 		b.FeeRate = 0.001
 	}
+	if b.Mode == "" {
+		b.Mode = "long"
+	}
+	if b.Leverage == 0 {
+		b.Leverage = 1
+	}
+	if b.MarginMode == "" {
+		b.MarginMode = "cross"
+	}
 	if b.StateJSON == "" {
 		b.StateJSON = "{}"
 	}
 	_, err := db.Exec(`INSERT INTO grid_bots (`+gridBotColumns+`)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		b.ID, b.UserID, b.Name, b.Symbol, b.LowerPrice, b.UpperPrice, b.GridCount,
-		b.Investment, b.Status, b.Exchange, b.FeeRate, b.RealizedPnL, b.TotalTrades,
+		b.Investment, b.Status, b.Exchange, b.FeeRate, b.Mode, b.Leverage, b.MarginMode,
+		b.RealizedPnL, b.TotalTrades,
 		b.BaseQty, b.QuoteBalance, b.StateJSON, b.InitialEquity, b.CreatedAt,
 		b.UpdatedAt, b.StartedAt, b.StoppedAt,
 	)
@@ -122,6 +137,18 @@ func (r *GridRepo) GetByID(id string) (*GridBotRecord, error) {
 		return nil, fmt.Errorf("database not initialized")
 	}
 	row := db.QueryRow(`SELECT `+gridBotColumns+` FROM grid_bots WHERE id=?`, id)
+	return scanGridBot(row)
+}
+
+// GetByIDForUser 按 (id, user_id) 取网格机器人（H1 越权修复）：
+// 非属主与不存在统一返回 (nil, nil)，避免通过报错差异枚举他人机器人。
+func (r *GridRepo) GetByIDForUser(id string, userID int64) (*GridBotRecord, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	row := db.QueryRow(`SELECT `+gridBotColumns+` FROM grid_bots WHERE id=? AND user_id=?`, id, userID)
 	return scanGridBot(row)
 }
 
@@ -172,10 +199,12 @@ func (r *GridRepo) Update(b *GridBotRecord) error {
 	b.UpdatedAt = time.Now().UnixMilli()
 	_, err := db.Exec(`UPDATE grid_bots SET user_id=?, name=?, symbol=?, lower_price=?,
 		upper_price=?, grid_count=?, investment=?, status=?, exchange=?, fee_rate=?,
+		mode=?, leverage=?, margin_mode=?,
 		realized_pnl=?, total_trades=?, base_qty=?, quote_balance=?, state_json=?,
 		initial_equity=?, created_at=?, updated_at=?, started_at=?, stopped_at=? WHERE id=?`,
 		b.UserID, b.Name, b.Symbol, b.LowerPrice, b.UpperPrice, b.GridCount,
-		b.Investment, b.Status, b.Exchange, b.FeeRate, b.RealizedPnL, b.TotalTrades,
+		b.Investment, b.Status, b.Exchange, b.FeeRate, b.Mode, b.Leverage, b.MarginMode,
+		b.RealizedPnL, b.TotalTrades,
 		b.BaseQty, b.QuoteBalance, b.StateJSON, b.InitialEquity, b.CreatedAt,
 		b.UpdatedAt, b.StartedAt, b.StoppedAt, b.ID,
 	)
@@ -191,6 +220,23 @@ func (r *GridRepo) Delete(id string) error {
 	}
 	_, err := db.Exec("DELETE FROM grid_bots WHERE id=?", id)
 	return err
+}
+
+// DeleteForUser 带属主条件删除（H1 越权修复）：非属主删不掉，按 not found 上报。
+func (r *GridRepo) DeleteForUser(id string, userID int64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	res, err := db.Exec("DELETE FROM grid_bots WHERE id=? AND user_id=?", id, userID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("not found")
+	}
+	return nil
 }
 
 // UpdateState persists the live engine state in a single-row UPDATE (hot path,
@@ -233,17 +279,20 @@ func (r *GridRepo) UpdateStatus(id string, status string) error {
 	return err
 }
 
-// InsertTrade records one grid fill.
-func (r *GridRepo) InsertTrade(botID string, level int, side string, price, qty, quoteQty, fee, pnl float64, ts int64) error {
+// InsertTrade records one grid fill. leg 区分双腿（long/short，A1.3）。
+func (r *GridRepo) InsertTrade(botID string, level int, side string, price, qty, quoteQty, fee, pnl float64, leg string, ts int64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if db == nil {
 		return fmt.Errorf("database not initialized")
 	}
+	if leg == "" {
+		leg = "long"
+	}
 	_, err := db.Exec(`INSERT INTO grid_bot_trades
-		(bot_id, level_index, side, price, quantity, quote_qty, fee, pnl, ts)
-		VALUES (?,?,?,?,?,?,?,?,?)`,
-		botID, level, side, price, qty, quoteQty, fee, pnl, ts,
+		(bot_id, level_index, side, price, quantity, quote_qty, fee, pnl, leg, ts)
+		VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		botID, level, side, price, qty, quoteQty, fee, pnl, leg, ts,
 	)
 	return err
 }
@@ -269,7 +318,7 @@ func (r *GridRepo) GetTrades(botID string, limit int) ([]*GridTradeRecord, error
 	if db == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
-	query := `SELECT id, bot_id, level_index, side, price, quantity, quote_qty, fee, pnl, ts
+	query := `SELECT id, bot_id, level_index, side, price, quantity, quote_qty, fee, pnl, leg, ts
 		FROM grid_bot_trades WHERE bot_id=? ORDER BY ts DESC, id DESC`
 	args := []any{botID}
 	if limit > 0 {
@@ -286,7 +335,7 @@ func (r *GridRepo) GetTrades(botID string, limit int) ([]*GridTradeRecord, error
 	for rows.Next() {
 		var t GridTradeRecord
 		if err := rows.Scan(&t.ID, &t.BotID, &t.Level, &t.Side, &t.Price, &t.Quantity,
-			&t.QuoteQty, &t.Fee, &t.PnL, &t.Ts); err != nil {
+			&t.QuoteQty, &t.Fee, &t.PnL, &t.Leg, &t.Ts); err != nil {
 			return nil, err
 		}
 		result = append(result, &t)
@@ -339,7 +388,8 @@ func scanGridBot(scanner interface {
 	var b GridBotRecord
 	err := scanner.Scan(
 		&b.ID, &b.UserID, &b.Name, &b.Symbol, &b.LowerPrice, &b.UpperPrice, &b.GridCount,
-		&b.Investment, &b.Status, &b.Exchange, &b.FeeRate, &b.RealizedPnL, &b.TotalTrades,
+		&b.Investment, &b.Status, &b.Exchange, &b.FeeRate, &b.Mode, &b.Leverage, &b.MarginMode,
+		&b.RealizedPnL, &b.TotalTrades,
 		&b.BaseQty, &b.QuoteBalance, &b.StateJSON, &b.InitialEquity, &b.CreatedAt,
 		&b.UpdatedAt, &b.StartedAt, &b.StoppedAt,
 	)

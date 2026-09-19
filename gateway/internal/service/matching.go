@@ -20,6 +20,14 @@ import (
 type MatchingService struct {
 	engines map[string]*adapter.MatchingEngine
 	mu      sync.RWMutex
+
+	// simOrderIDs 记录每个 symbol 最近一轮模拟做市单的引擎订单 id。
+	// SimulateTrading 每轮先撤旧单再挂新单——修复旧实现每 3s 叠加 4 张
+	// 限价单导致盘口（及 WS 订阅）无限堆积重复展示的问题。
+	simOrderIDs   map[string][]uint64
+	simOrderIDsMu sync.Mutex
+
+	balanceProvider adapter.BalanceProvider
 }
 
 var (
@@ -35,10 +43,26 @@ var dataFeedHTTPClient = &http.Client{Timeout: 3 * time.Second}
 func GetMatchingService() *MatchingService {
 	matchSvcOnce.Do(func() {
 		matchSvc = &MatchingService{
-			engines: make(map[string]*adapter.MatchingEngine),
+			engines:       make(map[string]*adapter.MatchingEngine),
+			simOrderIDs:   make(map[string][]uint64),
 		}
 	})
 	return matchSvc
+}
+
+// SetBalanceProvider 给引擎注入资金校验（生产由 app 上下文接上层账本）。
+// 已创建的引擎同步注入；引擎在构建时也会继承（见 GetEngine）。
+func (ms *MatchingService) SetBalanceProvider(p adapter.BalanceProvider) {
+	ms.mu.Lock()
+	ms.balanceProvider = p
+	engs := make([]*adapter.MatchingEngine, 0, len(ms.engines))
+	for _, e := range ms.engines {
+		engs = append(engs, e)
+	}
+	ms.mu.Unlock()
+	for _, e := range engs {
+		e.SetBalanceProvider(p)
+	}
 }
 
 // GetEngine returns or creates an engine for a symbol.
@@ -56,6 +80,9 @@ func (ms *MatchingService) GetEngine(symbol string) *adapter.MatchingEngine {
 		return eng
 	}
 	eng = adapter.NewMatchingEngine(symbol)
+	if ms.balanceProvider != nil {
+		eng.SetBalanceProvider(ms.balanceProvider)
+	}
 	ms.engines[symbol] = eng
 	return eng
 }
@@ -109,16 +136,27 @@ func (ms *MatchingService) GetOrderBook(symbol string, depth int) (map[string]an
 	return eng.Snapshot(depth)
 }
 
-// SimulateTrading runs a simple market simulation for real-time data feed.
+// SimulateTrading places a fresh set of simulated market-making orders around
+// the current price. Previous simulated orders for the symbol are cancelled
+// first so the book (and any WS orderbook consumers) shows exactly one set of
+// simulated levels instead of accumulating stale duplicates every tick.
 func (ms *MatchingService) SimulateTrading(symbol string, price float64) {
 	eng := ms.GetEngine(symbol)
+
+	// Cancel the previous round (ignore errors: filled or gone orders are fine).
+	ms.simOrderIDsMu.Lock()
+	prev := ms.simOrderIDs[symbol]
+	ms.simOrderIDsMu.Unlock()
+	for _, id := range prev {
+		_ = eng.CancelOrder(id)
+	}
 
 	go func() {
 		// Place simulated buy/sell orders around the current price
 		levels := []struct {
-			side     string
+			side      string
 			offsetPct float64
-			qty      float64
+			qty       float64
 		}{
 			{"buy", -0.001, 0.1},
 			{"buy", -0.002, 0.2},
@@ -126,13 +164,21 @@ func (ms *MatchingService) SimulateTrading(symbol string, price float64) {
 			{"sell", 0.002, 0.2},
 		}
 
+		var newIDs []uint64
 		for _, level := range levels {
 			px := price * (1 + level.offsetPct)
-			_, err := eng.SubmitOrder(level.side, "limit", px, level.qty, 0)
+			res, err := eng.SubmitOrder(level.side, "limit", px, level.qty, 0)
 			if err != nil {
 				log.Printf("[Matching] Simulated order error for %s: %v", symbol, err)
+				continue
+			}
+			if id, ok := res["order_id"].(uint64); ok {
+				newIDs = append(newIDs, id)
 			}
 		}
+		ms.simOrderIDsMu.Lock()
+		ms.simOrderIDs[symbol] = newIDs
+		ms.simOrderIDsMu.Unlock()
 	}()
 }
 

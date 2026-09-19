@@ -79,16 +79,22 @@ describe('OnChain', () => {
     await waitFor(() => {
       expect(screen.getByText('Bitcoin')).toBeTruthy()
     })
-    expect(screen.getByText('算力')).toBeTruthy()
+    // 指标异步加载：必须等待 React Query resolve 后再断言
+    await waitFor(() => {
+      expect(screen.getByText('算力')).toBeTruthy()
+    })
     expect(screen.getByText('450')).toBeTruthy()
   })
 
   it('displays BTC signal card', async () => {
     render(<OnChain />, { wrapper: Wrapper })
+    // 'BTC' 同时出现在信号卡与指标单位中，用 getAllByText
     await waitFor(() => {
-      expect(screen.getByText('BTC')).toBeTruthy()
+      expect(screen.getAllByText('BTC').length).toBeGreaterThan(0)
     })
-    expect(screen.getByText('看涨')).toBeTruthy()
+    await waitFor(() => {
+      expect(screen.getByText('看涨')).toBeTruthy()
+    })
     expect(screen.getByText('72%')).toBeTruthy()
   })
 
@@ -112,8 +118,9 @@ describe('OnChain', () => {
     })
     const ethTab = screen.getByText('Ethereum')
     fireEvent.click(ethTab)
+    // 'ETH' 同时出现在信号卡与指标单位中，用 getAllByText
     await waitFor(() => {
-      expect(screen.getByText('ETH')).toBeTruthy()
+      expect(screen.getAllByText('ETH').length).toBeGreaterThan(0)
     })
     expect(screen.getByText('中性')).toBeTruthy()
   })

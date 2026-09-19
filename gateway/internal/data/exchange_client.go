@@ -31,6 +31,7 @@ var nativeExchanges = map[string]bool{
 	"coinbase": true,
 	"kraken":   true,
 	"alpaca":   true,
+	"ibkr":     true,
 }
 
 // clientFactory creates a KlineClient for the given exchange.

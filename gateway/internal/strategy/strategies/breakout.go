@@ -170,7 +170,7 @@ func (s *BreakoutStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Sig
 	}
 
 	// Calculate lookback high/low
-	highest, lowest := s.rangeHighLow(len(s.bars)-2) // exclude current bar
+	highest, lowest := s.rangeHighLow(len(s.bars) - 2) // exclude current bar
 	if highest <= 0 || lowest <= 0 {
 		return nil, nil
 	}
@@ -298,8 +298,8 @@ type ArbitrageStrategy struct {
 	exchangeA    string
 	exchangeB    string
 
-	priceA  float64
-	priceB  float64
+	priceA    float64
+	priceB    float64
 	lastCheck int64
 
 	// Parameter registry

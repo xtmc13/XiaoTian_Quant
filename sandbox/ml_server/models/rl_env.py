@@ -47,7 +47,8 @@ class TradingEnv3Action(gym.Env if HAS_GYM else object):
 
     def reset(self, seed: Optional[int] = None, options: Optional[Dict] = None):
         """Reset environment to initial state."""
-        super().reset(seed=seed)
+        if HAS_GYM:
+            super().reset(seed=seed)
         self.balance = self.initial_balance
         self.position = 0  # -1=short, 0=neutral, 1=long
         self.entry_price = 0

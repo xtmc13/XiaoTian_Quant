@@ -14,6 +14,7 @@ import (
 
 // ExperimentRequest defines the input for an experiment run.
 type ExperimentRequest struct {
+	Name           string            `json:"name"`
 	Code           string            `json:"code"`
 	Symbol         string            `json:"symbol"`
 	Interval       string            `json:"interval"`
@@ -30,7 +31,9 @@ type ExperimentRequest struct {
 // ExperimentResult holds the complete output of an experiment.
 type ExperimentResult struct {
 	ExperimentID   string                 `json:"experiment_id"`
+	Name           string                 `json:"name"`
 	Status         string                 `json:"status"`
+	CreatedAt      time.Time              `json:"created_at"`
 	DurationMs     int64                  `json:"duration_ms"`
 	BestParams     map[string]any         `json:"best_params"`
 	BestScore      float64                `json:"best_score"`
@@ -44,6 +47,7 @@ type ExperimentResult struct {
 	Observations   []Observation          `json:"observations,omitempty"`
 	AllResults     []ParamScore           `json:"all_results,omitempty"`
 	OOSValidation  *OOSValidation         `json:"oos_validation,omitempty"`
+	UserID         int64                  `json:"user_id"` // 属主用户（0=历史无属主），H8 越权修复
 }
 
 // ParetoPoint represents a point on the Pareto front (return vs risk).
@@ -74,7 +78,9 @@ func RunExperiment(req ExperimentRequest) (*ExperimentResult, error) {
 	start := time.Now()
 	result := &ExperimentResult{
 		ExperimentID: fmt.Sprintf("exp_%d", time.Now().UnixMilli()),
+		Name:         req.Name,
 		Status:       "running",
+		CreatedAt:    time.Now(),
 	}
 
 	// Parse param space from code if not provided

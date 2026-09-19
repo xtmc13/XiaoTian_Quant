@@ -9,6 +9,7 @@ import (
 
 type BacktestRecord struct {
 	ID          string `json:"id"`
+	UserID      int64  `json:"user_id"`
 	Name        string `json:"name"`
 	Strategy    string `json:"strategy"`
 	Symbol      string `json:"symbol"`
@@ -33,17 +34,19 @@ func (r *BacktestRepo) Create(b *BacktestRecord) error {
 		b.CreatedAt = time.Now().UnixMilli()
 	}
 	_, err := db.Exec(
-		`INSERT INTO xt_backtests (id, name, strategy, symbol, start_time, end_time, duration_ms, status, report_json, created_at, completed_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-		b.ID, b.Name, b.Strategy, b.Symbol, b.StartTime, b.EndTime, b.DurationMs, b.Status, b.ReportJSON, b.CreatedAt, b.CompletedAt,
+		`INSERT INTO xt_backtests (id, user_id, name, strategy, symbol, start_time, end_time, duration_ms, status, report_json, created_at, completed_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		b.ID, b.UserID, b.Name, b.Strategy, b.Symbol, b.StartTime, b.EndTime, b.DurationMs, b.Status, b.ReportJSON, b.CreatedAt, b.CompletedAt,
 	)
 	return err
 }
 
+const backtestColumns = `id, user_id, name, strategy, symbol, start_time, end_time, duration_ms, status, report_json, created_at, completed_at`
+
 func (r *BacktestRepo) GetByID(id string) (*BacktestRecord, error) {
-	row := db.QueryRow(`SELECT id, name, strategy, symbol, start_time, end_time, duration_ms, status, report_json, created_at, completed_at FROM xt_backtests WHERE id=?`, id)
+	row := db.QueryRow(`SELECT `+backtestColumns+` FROM xt_backtests WHERE id=?`, id)
 	var b BacktestRecord
-	err := row.Scan(&b.ID, &b.Name, &b.Strategy, &b.Symbol, &b.StartTime, &b.EndTime, &b.DurationMs, &b.Status, &b.ReportJSON, &b.CreatedAt, &b.CompletedAt)
+	err := row.Scan(&b.ID, &b.UserID, &b.Name, &b.Strategy, &b.Symbol, &b.StartTime, &b.EndTime, &b.DurationMs, &b.Status, &b.ReportJSON, &b.CreatedAt, &b.CompletedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -51,9 +54,9 @@ func (r *BacktestRepo) GetByID(id string) (*BacktestRecord, error) {
 }
 
 func (r *BacktestRepo) List(filter map[string]any, limit int) ([]*BacktestRecord, error) {
-	query := "SELECT id, name, strategy, symbol, start_time, end_time, duration_ms, status, report_json, created_at, completed_at FROM xt_backtests"
+	query := "SELECT " + backtestColumns + " FROM xt_backtests"
 	allowedCols := map[string]bool{
-		"id": true, "name": true, "strategy": true, "symbol": true, "status": true,
+		"id": true, "user_id": true, "name": true, "strategy": true, "symbol": true, "status": true,
 		"created_at": true, "completed_at": true,
 	}
 	args, where := buildFilter(filter, allowedCols)
@@ -73,7 +76,7 @@ func (r *BacktestRepo) List(filter map[string]any, limit int) ([]*BacktestRecord
 	var result []*BacktestRecord
 	for rows.Next() {
 		var b BacktestRecord
-		if err := rows.Scan(&b.ID, &b.Name, &b.Strategy, &b.Symbol, &b.StartTime, &b.EndTime, &b.DurationMs, &b.Status, &b.ReportJSON, &b.CreatedAt, &b.CompletedAt); err != nil {
+		if err := rows.Scan(&b.ID, &b.UserID, &b.Name, &b.Strategy, &b.Symbol, &b.StartTime, &b.EndTime, &b.DurationMs, &b.Status, &b.ReportJSON, &b.CreatedAt, &b.CompletedAt); err != nil {
 			return nil, err
 		}
 		result = append(result, &b)

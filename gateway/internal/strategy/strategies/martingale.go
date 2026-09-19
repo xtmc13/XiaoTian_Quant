@@ -25,6 +25,8 @@ type MartingaleStrategy struct {
 	// Parameters (registered in ParamRegistry)
 	firstOrderAmount  float64
 	maxAddPositions   int
+	maxLayers         int       // A1.4: 总层数硬上限（首单+加仓，含在途）；0=回退 max_add_positions
+	maxTotalBudget    float64   // A1.4: 累计成交投入预算硬限；0=不限
 	stakeScale        []float64 // parsed from comma-separated string
 	priceDeviationPct float64
 	callbackPct       float64
@@ -39,6 +41,7 @@ type MartingaleStrategy struct {
 	inPosition        bool
 	positionCount     int     // filled buy orders count
 	pendingAddCount   int     // buy signals sent but not yet filled
+	totalInvested     float64 // 本轮循环累计成交投入（A1.4 预算硬限）
 	entryPrice        float64 // first order price
 	avgEntryPrice     float64 // weighted average entry price
 	totalQuantity     float64 // total filled quantity
@@ -83,6 +86,9 @@ func NewMartingaleStrategy() *MartingaleStrategy {
 	s.params.Register(strategy.FloatParameter("profit_callback_pct", 0.003, 0.0001, 0.005, 0.0001, "roi"))
 	s.params.Register(strategy.CategoricalParameter("loop_type", "loop", []string{"once", "loop"}, "buy"))
 	s.params.Register(strategy.IntParameter("max_loops", 100, 1, 10000, "buy"))
+	// A1.4 安全硬限：层数硬上限 + 总预算硬限（0=未设置）。
+	s.params.Register(strategy.IntParameter("max_layers", 0, 0, 20, "protection"))
+	s.params.Register(strategy.FloatParameter("max_total_budget", 0, 0, 100000000, 100, "protection"))
 	return s
 }
 
@@ -103,6 +109,8 @@ func (s *MartingaleStrategy) Params() map[string]any {
 		"profit_callback_pct": s.profitCallbackPct,
 		"loop_type":           s.loopType,
 		"max_loops":           s.maxLoops,
+		"max_layers":          s.maxLayers,
+		"max_total_budget":    s.maxTotalBudget,
 	}
 }
 
@@ -187,6 +195,12 @@ func (s *MartingaleStrategy) ApplyParams(m map[string]any) error {
 	if p := s.params.Get("max_loops"); p != nil {
 		s.maxLoops = p.GetInt()
 	}
+	if p := s.params.Get("max_layers"); p != nil {
+		s.maxLayers = p.GetInt()
+	}
+	if p := s.params.Get("max_total_budget"); p != nil {
+		s.maxTotalBudget = p.GetFloat()
+	}
 	return nil
 }
 
@@ -204,12 +218,43 @@ func (s *MartingaleStrategy) Stop() error {
 	s.inPosition = false
 	s.positionCount = 0
 	s.pendingAddCount = 0
+	s.totalInvested = 0
 	s.totalQuantity = 0
 	s.avgEntryPrice = 0
 	s.loopCount = 0
 	s.waterfallPaused = false
 	s.pendingAdd = false
 	return nil
+}
+
+// effectiveAddCap 返回允许的最大总订单数（首单+加仓，含在途）：默认
+// max_add_positions（该参数实际语义即总订单数上限），max_layers>0 时收紧
+// 为 MaxLayers（A1.4 层数硬上限）。加仓判定为 positionCount+pendingAddCount < cap。
+func (s *MartingaleStrategy) effectiveAddCap() int {
+	cap_ := s.maxAddPositions
+	if s.maxLayers > 0 && s.maxLayers < cap_ {
+		cap_ = s.maxLayers
+	}
+	if cap_ < 1 {
+		cap_ = 1
+	}
+	return cap_
+}
+
+// plannedAddSize 估算下一笔加仓的计价金额：firstOrderAmount × stakeScale
+// （stakeScale 短于层数时取末位重复），供 max_total_budget 硬限判定（A1.4）。
+func (s *MartingaleStrategy) plannedAddSize() float64 {
+	if s.firstOrderAmount <= 0 || len(s.stakeScale) == 0 {
+		return 0
+	}
+	idx := s.positionCount + s.pendingAddCount
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(s.stakeScale) {
+		idx = len(s.stakeScale) - 1
+	}
+	return s.firstOrderAmount * s.stakeScale[idx]
 }
 
 func (s *MartingaleStrategy) OnTick(tick model.Tick, bus *event.EventBus) (*model.Signal, error) {
@@ -307,6 +352,7 @@ func (s *MartingaleStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.S
 		s.inPosition = false
 		s.positionCount = 0
 		s.pendingAddCount = 0
+		s.totalInvested = 0
 		s.totalQuantity = 0
 		s.avgEntryPrice = 0
 		s.loopCount++
@@ -319,26 +365,32 @@ func (s *MartingaleStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.S
 		}, nil
 	}
 
-	// Check add-position (martingale averaging down)
-	if s.positionCount+s.pendingAddCount < s.maxAddPositions && !s.waterfallPaused {
-		// Target price for next add-position based on entry price
-		targetPrice := s.entryPrice * (1 - s.priceDeviationPct*float64(s.positionCount))
-		if bar.Low <= targetPrice {
-			if !s.pendingAdd {
-				s.pendingAdd = true
-				s.triggerLowPrice = bar.Low
+	// Check add-position (martingale averaging down). A1.4 硬限：层数硬上限
+	// （含在途）+ 总预算硬限；层数推进只在 OnOrderUpdate 成交回报发生。
+	if s.positionCount+s.pendingAddCount < s.effectiveAddCap() && !s.waterfallPaused {
+		// 预算硬限：计划加仓金额会使累计投入超 max_total_budget → 拒绝。
+		if s.maxTotalBudget > 0 && s.totalInvested+s.plannedAddSize() > s.maxTotalBudget+1e-9 {
+			// 到达预算上限：与到达层数上限同语义——停止加仓，仅保留止盈监控。
+		} else {
+			// Target price for next add-position based on entry price
+			targetPrice := s.entryPrice * (1 - s.priceDeviationPct*float64(s.positionCount))
+			if bar.Low <= targetPrice {
+				if !s.pendingAdd {
+					s.pendingAdd = true
+					s.triggerLowPrice = bar.Low
+				}
 			}
-		}
-		if s.pendingAdd && bar.Close >= s.triggerLowPrice*(1+s.callbackPct) {
-			s.pendingAdd = false
-			s.pendingAddCount++
-			return &model.Signal{
-				Symbol:    s.symbol,
-				Direction: "LONG",
-				Strength:  0.7,
-				Strategy:  s.name,
-				Reason:    fmt.Sprintf("martingale add position #%d", s.positionCount+1),
-			}, nil
+			if s.pendingAdd && bar.Close >= s.triggerLowPrice*(1+s.callbackPct) {
+				s.pendingAdd = false
+				s.pendingAddCount++
+				return &model.Signal{
+					Symbol:    s.symbol,
+					Direction: "LONG",
+					Strength:  0.7,
+					Strategy:  s.name,
+					Reason:    fmt.Sprintf("martingale add position #%d", s.positionCount+1),
+				}, nil
+			}
 		}
 	}
 
@@ -358,6 +410,7 @@ func (s *MartingaleStrategy) OnOrderUpdate(order model.OrderData, bus *event.Eve
 			if s.pendingAddCount > 0 {
 				s.pendingAddCount--
 			}
+			s.totalInvested += order.AvgFillPrice * order.Filled
 			filledValue := order.AvgFillPrice * order.Filled
 			if s.positionCount == 0 {
 				s.avgEntryPrice = order.AvgFillPrice
@@ -375,6 +428,7 @@ func (s *MartingaleStrategy) OnOrderUpdate(order model.OrderData, bus *event.Eve
 			s.inPosition = false
 			s.positionCount = 0
 			s.pendingAddCount = 0
+			s.totalInvested = 0
 			s.totalQuantity = 0
 			s.avgEntryPrice = 0
 			s.loopCount++

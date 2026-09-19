@@ -14,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/xiaotian-quant/gateway/internal/exchange"
+	"github.com/xiaotian-quant/gateway/internal/metrics"
 	"github.com/xiaotian-quant/gateway/internal/portfolio"
 	"github.com/xiaotian-quant/gateway/internal/service"
 	"github.com/xiaotian-quant/gateway/internal/store"
@@ -30,16 +31,16 @@ func init() {
 
 var (
 	pricesMu     sync.RWMutex
-	prices       = map[string]float64{}   // symbol → last price (real data only)
+	prices       = map[string]float64{}     // symbol → last price (real data only)
 	priceOHLCV   = map[string]*ohlcvCache{} // symbol → recent OHLCV tracking
-	realPriceFed = map[string]bool{}       // true = price set externally (real exchange)
+	realPriceFed = map[string]bool{}        // true = price set externally (real exchange)
 )
 
 type ohlcvCache struct {
-	high  float64
-	low   float64
-	vol   float64
-	open  float64
+	high    float64
+	low     float64
+	vol     float64
+	open    float64
 	resetAt int64 // unix second for daily reset
 }
 
@@ -77,6 +78,8 @@ func WSHandler(c *gin.Context) {
 		return
 	}
 	defer conn.Close()
+	metrics.IncWSConnections()
+	defer metrics.DecWSConnections()
 
 	tick := 0
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"runtime"
 	"sort"
 	"strings"
@@ -97,6 +98,72 @@ func (c *Counter) String() string {
 	return b.String()
 }
 
+// FloatCounter 浮点累加计数器（成交量等小数数量场景），输出为 counter 类型。
+type FloatCounter struct {
+	name   string
+	help   string
+	labels []string
+	values map[string]*int64 // milli 存储
+	mu     sync.RWMutex
+}
+
+func NewFloatCounter(name, help string, labels ...string) *FloatCounter {
+	return &FloatCounter{name: name, help: help, labels: labels, values: make(map[string]*int64)}
+}
+
+func (c *FloatCounter) Add(delta float64, labelValues ...string) {
+	key := c.key(labelValues)
+	c.mu.Lock()
+	v, ok := c.values[key]
+	if !ok {
+		v = new(int64)
+		c.values[key] = v
+	}
+	c.mu.Unlock()
+	atomic.AddInt64(v, int64(delta*1000))
+}
+
+func (c *FloatCounter) key(labelValues []string) string {
+	if len(c.labels) == 0 {
+		return "_"
+	}
+	parts := make([]string, 0, len(c.labels))
+	for i, l := range c.labels {
+		v := ""
+		if i < len(labelValues) {
+			v = labelValues[i]
+		}
+		parts = append(parts, fmt.Sprintf("%s=%q", l, v))
+	}
+	return strings.Join(parts, ",")
+}
+
+func (c *FloatCounter) String() string {
+	var b strings.Builder
+	if c.help != "" {
+		fmt.Fprintf(&b, "# HELP %s %s\n", c.name, c.help)
+	}
+	fmt.Fprintf(&b, "# TYPE %s counter\n", c.name)
+	c.mu.RLock()
+	keys := make([]string, 0, len(c.values))
+	for k := range c.values {
+		keys = append(keys, k)
+	}
+	c.mu.RUnlock()
+	sort.Strings(keys)
+	for _, k := range keys {
+		c.mu.RLock()
+		v := atomic.LoadInt64(c.values[k])
+		c.mu.RUnlock()
+		if k == "_" {
+			fmt.Fprintf(&b, "%s %.3f\n", c.name, float64(v)/1000.0)
+		} else {
+			fmt.Fprintf(&b, "%s{%s} %.3f\n", c.name, k, float64(v)/1000.0)
+		}
+	}
+	return b.String()
+}
+
 type Gauge struct {
 	name   string
 	help   string
@@ -124,6 +191,19 @@ func (g *Gauge) Set(val float64, labelValues ...string) {
 	}
 	g.mu.Unlock()
 	atomic.StoreInt64(v, int64(val*1000)) // store as milli
+}
+
+// Add 对仪表值做增量修改（WS 连接数等增减型场景）。
+func (g *Gauge) Add(delta float64, labelValues ...string) {
+	key := g.key(labelValues)
+	g.mu.Lock()
+	v, ok := g.values[key]
+	if !ok {
+		v = new(int64)
+		g.values[key] = v
+	}
+	g.mu.Unlock()
+	atomic.AddInt64(v, int64(delta*1000))
 }
 
 func (g *Gauge) key(labelValues []string) string {
@@ -169,13 +249,13 @@ func (g *Gauge) String() string {
 }
 
 type Histogram struct {
-	name   string
-	help   string
-	labels []string
+	name    string
+	help    string
+	labels  []string
 	buckets []float64
 	counts  map[string][]*int64
-	sums   map[string]*int64
-	mu     sync.RWMutex
+	sums    map[string]*int64
+	mu      sync.RWMutex
 }
 
 func NewHistogram(name, help string, buckets []float64, labels ...string) *Histogram {
@@ -272,17 +352,19 @@ func (h *Histogram) String() string {
 // ── Registry ──
 
 type Registry struct {
-	counters   map[string]*Counter
-	gauges     map[string]*Gauge
-	histograms map[string]*Histogram
-	mu         sync.RWMutex
+	counters      map[string]*Counter
+	floatCounters map[string]*FloatCounter
+	gauges        map[string]*Gauge
+	histograms    map[string]*Histogram
+	mu            sync.RWMutex
 }
 
 func NewRegistry() *Registry {
 	return &Registry{
-		counters:   make(map[string]*Counter),
-		gauges:     make(map[string]*Gauge),
-		histograms: make(map[string]*Histogram),
+		counters:      make(map[string]*Counter),
+		floatCounters: make(map[string]*FloatCounter),
+		gauges:        make(map[string]*Gauge),
+		histograms:    make(map[string]*Histogram),
 	}
 }
 
@@ -290,6 +372,12 @@ func (r *Registry) RegisterCounter(c *Counter) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.counters[c.name] = c
+}
+
+func (r *Registry) RegisterFloatCounter(c *FloatCounter) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.floatCounters[c.name] = c
 }
 
 func (r *Registry) RegisterGauge(g *Gauge) {
@@ -311,6 +399,10 @@ func (r *Registry) String() string {
 	for n := range r.counters {
 		cNames = append(cNames, n)
 	}
+	fcNames := make([]string, 0, len(r.floatCounters))
+	for n := range r.floatCounters {
+		fcNames = append(fcNames, n)
+	}
 	gNames := make([]string, 0, len(r.gauges))
 	for n := range r.gauges {
 		gNames = append(gNames, n)
@@ -322,12 +414,19 @@ func (r *Registry) String() string {
 	r.mu.RUnlock()
 
 	sort.Strings(cNames)
+	sort.Strings(fcNames)
 	sort.Strings(gNames)
 	sort.Strings(hNames)
 
 	for _, n := range cNames {
 		r.mu.RLock()
 		c := r.counters[n]
+		r.mu.RUnlock()
+		b.WriteString(c.String())
+	}
+	for _, n := range fcNames {
+		r.mu.RLock()
+		c := r.floatCounters[n]
 		r.mu.RUnlock()
 		b.WriteString(c.String())
 	}
@@ -348,6 +447,9 @@ func (r *Registry) String() string {
 
 // ── Go Runtime Metrics ──
 
+// startTime 进程启动时间，用于 uptime 指标。
+var startTime = time.Now()
+
 func runtimeMetrics() string {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
@@ -355,6 +457,15 @@ func runtimeMetrics() string {
 	fmt.Fprintf(&b, "# HELP go_goroutines Number of goroutines\n")
 	fmt.Fprintf(&b, "# TYPE go_goroutines gauge\n")
 	fmt.Fprintf(&b, "go_goroutines %d\n", runtime.NumGoroutine())
+	fmt.Fprintf(&b, "# HELP process_uptime_seconds Process uptime in seconds\n")
+	fmt.Fprintf(&b, "# TYPE process_uptime_seconds gauge\n")
+	fmt.Fprintf(&b, "process_uptime_seconds %.0f\n", time.Since(startTime).Seconds())
+	fmt.Fprintf(&b, "# HELP process_start_time_seconds Process start time (unix seconds)\n")
+	fmt.Fprintf(&b, "# TYPE process_start_time_seconds gauge\n")
+	fmt.Fprintf(&b, "process_start_time_seconds %d\n", startTime.Unix())
+	fmt.Fprintf(&b, "# HELP go_gc_cycles_total Number of completed GC cycles\n")
+	fmt.Fprintf(&b, "# TYPE go_gc_cycles_total counter\n")
+	fmt.Fprintf(&b, "go_gc_cycles_total %d\n", m.NumGC)
 	fmt.Fprintf(&b, "# HELP go_memstats_alloc_bytes Bytes allocated and still in use\n")
 	fmt.Fprintf(&b, "# TYPE go_memstats_alloc_bytes gauge\n")
 	fmt.Fprintf(&b, "go_memstats_alloc_bytes %d\n", m.HeapAlloc)
@@ -403,11 +514,17 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 // ── Middleware ──
 
+// HTTPMiddleware 包装 gin 引擎记录请求计数/延迟直方图（按 method+path+status 分桶）。
+// 指标只注册一次（sync.Once），重复调用安全。
+var httpMetricsOnce sync.Once
+
 func HTTPMiddleware(next http.Handler) http.Handler {
 	requestCounter := NewCounter("http_requests_total", "Total HTTP requests", "method", "path", "status")
-	requestDuration := NewHistogram("http_request_duration_seconds", "HTTP request duration", []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}, "method", "path")
-	globalRegistry.RegisterCounter(requestCounter)
-	globalRegistry.RegisterHistogram(requestDuration)
+	requestDuration := NewHistogram("http_request_duration_seconds", "HTTP request duration", []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}, "method", "path", "status")
+	httpMetricsOnce.Do(func() {
+		globalRegistry.RegisterCounter(requestCounter)
+		globalRegistry.RegisterHistogram(requestDuration)
+	})
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -419,8 +536,9 @@ func HTTPMiddleware(next http.Handler) http.Handler {
 		if len(path) > 100 {
 			path = path[:100]
 		}
-		requestCounter.Inc(r.Method, path, fmt.Sprintf("%d", ww.statusCode))
-		requestDuration.Observe(dur, r.Method, path)
+		status := fmt.Sprintf("%d", ww.statusCode)
+		requestCounter.Inc(r.Method, path, status)
+		requestDuration.Observe(dur, r.Method, path, status)
 	})
 }
 
@@ -444,33 +562,150 @@ func (w *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 }
 
 // ── Convenience ──
+// 包级单例注册：重复 Register 会替换 Registry 中的实例导致计数清零，
+// 因此这些便捷指标只注册一次，调用处仅 Inc/Set。
+
+var (
+	convenienceOnce sync.Once
+	ordersTotal     *Counter
+	signalsTotal    *Counter
+	equityGauge     *Gauge
+	positionsGauge  *Gauge
+	strategiesGauge *Gauge
+)
+
+func ensureConvenienceMetrics() {
+	convenienceOnce.Do(func() {
+		ordersTotal = NewCounter("orders_total", "Total orders placed", "side", "status")
+		signalsTotal = NewCounter("signals_total", "Total strategy signals", "strategy", "direction")
+		equityGauge = NewGauge("portfolio_equity_usdt", "Current portfolio equity in USDT")
+		positionsGauge = NewGauge("portfolio_positions", "Number of open positions")
+		strategiesGauge = NewGauge("strategies_active", "Number of active strategies")
+		globalRegistry.RegisterCounter(ordersTotal)
+		globalRegistry.RegisterCounter(signalsTotal)
+		globalRegistry.RegisterGauge(equityGauge)
+		globalRegistry.RegisterGauge(positionsGauge)
+		globalRegistry.RegisterGauge(strategiesGauge)
+	})
+}
 
 func RecordOrder(side, status string) {
-	c := NewCounter("orders_total", "Total orders placed", "side", "status")
-	globalRegistry.RegisterCounter(c)
-	c.Inc(side, status)
+	ensureConvenienceMetrics()
+	ordersTotal.Inc(side, status)
 }
 
 func RecordSignal(strategy, direction string) {
-	c := NewCounter("signals_total", "Total strategy signals", "strategy", "direction")
-	globalRegistry.RegisterCounter(c)
-	c.Inc(strategy, direction)
+	ensureConvenienceMetrics()
+	signalsTotal.Inc(strategy, direction)
 }
 
 func SetEquity(val float64) {
-	g := NewGauge("portfolio_equity_usdt", "Current portfolio equity in USDT")
-	globalRegistry.RegisterGauge(g)
-	g.Set(val)
+	ensureConvenienceMetrics()
+	equityGauge.Set(val)
 }
 
 func SetPositionCount(n int) {
-	g := NewGauge("portfolio_positions", "Number of open positions")
-	globalRegistry.RegisterGauge(g)
-	g.Set(float64(n))
+	ensureConvenienceMetrics()
+	positionsGauge.Set(float64(n))
 }
 
 func SetActiveStrategies(n int) {
-	g := NewGauge("strategies_active", "Number of active strategies")
-	globalRegistry.RegisterGauge(g)
-	g.Set(float64(n))
+	ensureConvenienceMetrics()
+	strategiesGauge.Set(float64(n))
+}
+
+// ── A9.1 Business Metrics ────────────────────────────────────────
+
+var (
+	businessOnce        sync.Once
+	fillsTotal          *FloatCounter
+	riskRejectionsTotal *Counter
+	notifySendsTotal    *Counter
+	wsConnectionsGauge  *Gauge
+	botsRunningGauge    *Gauge
+	reconcileDiffsTotal *Counter
+)
+
+func ensureBusinessMetrics() {
+	businessOnce.Do(func() {
+		fillsTotal = NewFloatCounter("fills_total", "Total filled quantity by side", "side")
+		riskRejectionsTotal = NewCounter("risk_order_rejections_total", "Orders rejected by risk control")
+		notifySendsTotal = NewCounter("notify_sends_total", "Notification deliveries by channel and result", "channel", "result")
+		wsConnectionsGauge = NewGauge("ws_connections", "Current WebSocket client connections")
+		botsRunningGauge = NewGauge("bots_running", "Running bots by type", "type")
+		reconcileDiffsTotal = NewCounter("reconcile_diffs_total", "Reconcile diffs detected by type and exchange", "type", "exchange")
+		globalRegistry.RegisterFloatCounter(fillsTotal)
+		globalRegistry.RegisterCounter(riskRejectionsTotal)
+		globalRegistry.RegisterCounter(notifySendsTotal)
+		globalRegistry.RegisterGauge(wsConnectionsGauge)
+		globalRegistry.RegisterGauge(botsRunningGauge)
+		globalRegistry.RegisterCounter(reconcileDiffsTotal)
+	})
+}
+
+// RecordFill 记录成交量（按方向累加数量）。
+func RecordFill(side string, qty float64) {
+	ensureBusinessMetrics()
+	if qty <= 0 {
+		return
+	}
+	fillsTotal.Add(qty, side)
+}
+
+// RecordRiskRejection 记录一次风控拒绝。
+func RecordRiskRejection() {
+	ensureBusinessMetrics()
+	riskRejectionsTotal.Inc()
+}
+
+// RecordNotifySend 记录某渠道一次投递结果（result=success|failure）。
+func RecordNotifySend(channel, result string) {
+	ensureBusinessMetrics()
+	notifySendsTotal.Inc(channel, result)
+}
+
+// SetWSConnections 设置当前 WS 连接数（ws 包连接/断开时调用）。
+func SetWSConnections(n int) {
+	ensureBusinessMetrics()
+	wsConnectionsGauge.Set(float64(n))
+}
+
+// IncWSConnections / DecWSConnections WS 连接数增删（/ws 旧端点逐连接调用）。
+func IncWSConnections() {
+	ensureBusinessMetrics()
+	wsConnectionsGauge.Add(1)
+}
+
+func DecWSConnections() {
+	ensureBusinessMetrics()
+	wsConnectionsGauge.Add(-1)
+}
+
+// SetBotsRunning 设置某类型运行中的机器人数量。
+func SetBotsRunning(botType string, n int) {
+	ensureBusinessMetrics()
+	botsRunningGauge.Set(float64(n), botType)
+}
+
+// RecordReconcileDiff 记录一次对账差异产生（diff_type, exchange）。
+func RecordReconcileDiff(diffType, exchange string) {
+	ensureBusinessMetrics()
+	reconcileDiffsTotal.Inc(diffType, exchange)
+}
+
+// ── Config ───────────────────────────────────────────────────────
+
+// Enabled Prometheus 指标开关：PROMETHEUS_ENABLED，默认 true。
+func Enabled() bool {
+	v := os.Getenv("PROMETHEUS_ENABLED")
+	return v != "false" && v != "0"
+}
+
+// Token 可选鉴权 token：PROMETHEUS_TOKEN，空 = 不鉴权。
+func Token() string { return os.Getenv("PROMETHEUS_TOKEN") }
+
+// LocalhostOnly 仅允许本机访问：PROMETHEUS_LOCALHOST_ONLY。
+func LocalhostOnly() bool {
+	v := os.Getenv("PROMETHEUS_LOCALHOST_ONLY")
+	return v == "true" || v == "1"
 }

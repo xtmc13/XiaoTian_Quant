@@ -34,9 +34,23 @@ type ServerConfig struct {
 }
 
 type ExchangeConfig struct {
-	Default string        `yaml:"default"`
-	Binance ExchangeCreds `yaml:"binance"`
-	OKX     ExchangeCreds `yaml:"okx"`
+	Default string            `yaml:"default"`
+	Binance ExchangeCreds     `yaml:"binance"`
+	OKX     ExchangeCreds     `yaml:"okx"`
+	IBKR    IBKRGatewayConfig `yaml:"ibkr"`
+}
+
+// IBKRGatewayConfig IBKR（Interactive Brokers）Client Portal Web API 连接配置。
+// 网关跑在本地（用户自启 IB Gateway / Client Portal），HTTPS 自签证书，
+// 认证走会话 cookie（浏览器登录一次），因此无 api_key/secret。
+type IBKRGatewayConfig struct {
+	Enabled   bool   `yaml:"enabled"`    // 启用 IBKR 适配器
+	Host      string `yaml:"host"`       // 网关地址，默认 localhost
+	Port      int    `yaml:"port"`       // 网关端口，默认 5000
+	AccountID string `yaml:"account_id"` // 账户 id（DU123456）；留空自动取第一个
+	PaperHost string `yaml:"paper_host"` // paper 网关地址，默认同 Host
+	PaperPort int    `yaml:"paper_port"` // paper 网关端口，默认同 Port
+	CACert    string `yaml:"ca_cert"`    // 自签根证书 PEM 路径；空 = InsecureSkipVerify
 }
 
 type ExchangeCreds struct {
@@ -207,6 +221,10 @@ func Default() *Config {
 		},
 		Exchange: ExchangeConfig{
 			Default: "binance",
+			IBKR: IBKRGatewayConfig{
+				Host: "localhost",
+				Port: 5000,
+			},
 		},
 		Risk: RiskConfig{
 			MaxOrderSize:            10000,
@@ -365,6 +383,17 @@ func Load(path string) (*Config, error) {
 	}
 	if v := os.Getenv("OKX_API_SECRET"); v != "" {
 		cfg.Exchange.OKX.APISecret = v
+	}
+	if v := os.Getenv("IBKR_HOST"); v != "" {
+		cfg.Exchange.IBKR.Host = v
+	}
+	if v := os.Getenv("IBKR_PORT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Exchange.IBKR.Port = n
+		}
+	}
+	if v := os.Getenv("IBKR_ACCOUNT_ID"); v != "" {
+		cfg.Exchange.IBKR.AccountID = v
 	}
 	if v := os.Getenv("DEEPSEEK_API_KEY"); v != "" {
 		setOrAppendProvider(cfg, "deepseek", "https://api.deepseek.com/v1", v, "deepseek-chat")

@@ -41,6 +41,8 @@ const dict = flatten({
     settings: '设置',
     portfolio: '持仓',
     bots: '机器人',
+    dcaBots: 'DCA 定投机器人',
+    layeredMartin: '分层马丁格尔',
     strategy: '策略',
     backtest: '回测',
     hyperopt: '参数优化',

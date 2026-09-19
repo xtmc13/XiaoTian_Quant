@@ -10,6 +10,7 @@ import (
 
 type TradeRecord struct {
 	ID          string  `json:"id"`
+	UserID      int64   `json:"user_id"`
 	OrderID     string  `json:"order_id"`
 	Symbol      string  `json:"symbol"`
 	Side        string  `json:"side"`
@@ -18,6 +19,7 @@ type TradeRecord struct {
 	Fee         float64 `json:"fee"`
 	FeeCurrency string  `json:"fee_currency"`
 	Exchange    string  `json:"exchange"`
+	ExecPhase   string  `json:"exec_phase,omitempty"` // limit|market|recovered（A2.2 区分补单两部分）
 	CreatedAt   int64   `json:"created_at"`
 }
 
@@ -35,17 +37,24 @@ func (r *TradeRepo) Create(t *TradeRecord) error {
 		t.CreatedAt = time.Now().UnixMilli()
 	}
 	_, err := db.Exec(
-		`INSERT INTO trades (id, order_id, symbol, side, price, quantity, fee, fee_currency, exchange, created_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?)`,
-		t.ID, t.OrderID, t.Symbol, t.Side, t.Price, t.Quantity, t.Fee, t.FeeCurrency, t.Exchange, t.CreatedAt,
+		`INSERT INTO trades (id, user_id, order_id, symbol, side, price, quantity, fee, fee_currency, exchange, exec_phase, created_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		t.ID, t.UserID, t.OrderID, t.Symbol, t.Side, t.Price, t.Quantity, t.Fee, t.FeeCurrency, t.Exchange, t.ExecPhase, t.CreatedAt,
 	)
 	return err
 }
 
+// Exists 判断指定 id 的成交是否已存在（成交恢复按交易所 trade id 去重用）。
+func (r *TradeRepo) Exists(id string) bool {
+	var n int
+	_ = db.QueryRow(`SELECT COUNT(1) FROM trades WHERE id=?`, id).Scan(&n)
+	return n > 0
+}
+
 func (r *TradeRepo) GetByID(id string) (*TradeRecord, error) {
-	row := db.QueryRow(`SELECT id, order_id, symbol, side, price, quantity, fee, fee_currency, exchange, created_at FROM trades WHERE id=?`, id)
+	row := db.QueryRow(`SELECT id, user_id, order_id, symbol, side, price, quantity, fee, fee_currency, exchange, COALESCE(exec_phase,''), created_at FROM trades WHERE id=?`, id)
 	var t TradeRecord
-	err := row.Scan(&t.ID, &t.OrderID, &t.Symbol, &t.Side, &t.Price, &t.Quantity, &t.Fee, &t.FeeCurrency, &t.Exchange, &t.CreatedAt)
+	err := row.Scan(&t.ID, &t.UserID, &t.OrderID, &t.Symbol, &t.Side, &t.Price, &t.Quantity, &t.Fee, &t.FeeCurrency, &t.Exchange, &t.ExecPhase, &t.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -53,9 +62,9 @@ func (r *TradeRepo) GetByID(id string) (*TradeRecord, error) {
 }
 
 func (r *TradeRepo) List(filter map[string]any, limit int) ([]*TradeRecord, error) {
-	query := "SELECT id, order_id, symbol, side, price, quantity, fee, fee_currency, exchange, created_at FROM trades"
+	query := "SELECT id, user_id, order_id, symbol, side, price, quantity, fee, fee_currency, exchange, COALESCE(exec_phase,''), created_at FROM trades"
 	allowedCols := map[string]bool{
-		"id": true, "order_id": true, "symbol": true, "side": true, "exchange": true, "created_at": true,
+		"id": true, "user_id": true, "order_id": true, "symbol": true, "side": true, "exchange": true, "created_at": true,
 	}
 	args, where := buildFilter(filter, allowedCols)
 	if where != "" {
@@ -75,7 +84,7 @@ func (r *TradeRepo) List(filter map[string]any, limit int) ([]*TradeRecord, erro
 	var result []*TradeRecord
 	for rows.Next() {
 		var t TradeRecord
-		if err := rows.Scan(&t.ID, &t.OrderID, &t.Symbol, &t.Side, &t.Price, &t.Quantity, &t.Fee, &t.FeeCurrency, &t.Exchange, &t.CreatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.UserID, &t.OrderID, &t.Symbol, &t.Side, &t.Price, &t.Quantity, &t.Fee, &t.FeeCurrency, &t.Exchange, &t.ExecPhase, &t.CreatedAt); err != nil {
 			return nil, err
 		}
 		result = append(result, &t)

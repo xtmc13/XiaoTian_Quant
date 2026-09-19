@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useMutation } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
 import type { EChartsType } from 'echarts'
 import { DataTable } from '@/components/DataTable'
 import type { BacktestResult, BacktestReport } from '@/types'
@@ -32,6 +33,7 @@ import {
   LayoutDashboard,
   LineChart,
   ListFilter,
+  PieChart,
   AlertTriangle,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
@@ -643,6 +645,7 @@ function BacktestHistory({
    Main Page
    ═══════════════════════════════════════════════════════════════════ */
 export function Backtest() {
+  const navigate = useNavigate()
   const [symbol, setSymbol] = useState('BTCUSDT')
   const [interval, setIntervalVal] = useState('1h')
   const [strategyType, setStrategyType] = useState('sma_cross')
@@ -906,6 +909,14 @@ export function Backtest() {
               >
                 <GitBranch className="h-3.5 w-3.5" />
                 策略对比
+              </button>
+              {/* A6.2 组合回测入口 */}
+              <button
+                onClick={() => navigate('/backtest/portfolio')}
+                className="flex items-center gap-1.5 rounded-lg border border-quant-border px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:border-quant-gold/30 hover:text-foreground"
+              >
+                <PieChart className="h-3.5 w-3.5" />
+                组合回测
               </button>
               {isCraStrategy && (
                 <button

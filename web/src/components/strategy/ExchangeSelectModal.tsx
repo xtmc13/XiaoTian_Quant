@@ -12,6 +12,7 @@ const SUPPORTED_EXCHANGES = [
   { key: 'coinbase', label: 'Coinbase', needsPassphrase: false, supportsTestnet: false },
   { key: 'kraken', label: 'Kraken', needsPassphrase: false, supportsTestnet: false },
   { key: 'bitget', label: 'Bitget', needsPassphrase: true, supportsTestnet: false },
+  { key: 'ibkr', label: 'IBKR', needsPassphrase: false, supportsTestnet: false },
 ] as const
 
 interface ExchangeSelectModalProps {

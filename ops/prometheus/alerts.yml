@@ -1,0 +1,86 @@
+# ═══════════════════════════════════════════════════════════════════
+# XiaoTian Quant — 告警规则
+# 仅使用 gateway/internal/metrics 真实暴露的指标：
+#   http_requests_total / http_request_duration_seconds /
+#   go_goroutines / go_memstats_* / portfolio_equity_usdt
+# 注意：本项目当前未引入 Alertmanager，告警只在 Prometheus UI
+# （/alerts）与 Grafana 中可见。
+# ═══════════════════════════════════════════════════════════════════
+
+groups:
+  - name: xiaotian-gateway
+    rules:
+      # 网关进程不可达（Prometheus up 探针为 0 持续 1 分钟）
+      - alert: GatewayDown
+        expr: up{job="gateway"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "XiaoTian 网关不可达"
+          description: "Prometheus 已连续 1 分钟无法抓取 {{ $labels.instance }} 的 /metrics，网关可能已宕机或网络中断。"
+
+      # 5xx 比例超过 5%（持续 5 分钟）。
+      # clamp_min 防止无流量时除零；无请求时该表达式为 0，不会误报。
+      - alert: GatewayHighErrorRate
+        expr: sum(rate(http_requests_total{status=~"5.."}[5m])) / clamp_min(sum(rate(http_requests_total[5m])), 0.001) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "XiaoTian 网关 5xx 比例过高"
+          description: "过去 5 分钟 5xx 比例约 {{ $value | humanizePercentage }}，超过 5% 阈值。"
+
+      # p90 请求延迟超过 1 秒（持续 5 分钟）。
+      # histogram_quantile 依赖 http_request_duration_seconds 的累积桶。
+      - alert: GatewayHighLatency
+        expr: histogram_quantile(0.9, sum by (le) (rate(http_request_duration_seconds_bucket[5m]))) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "XiaoTian 网关 p90 延迟过高"
+          description: "过去 5 分钟 p90 请求延迟约 {{ $value }} 秒，超过 1 秒阈值。"
+
+      # 堆内存占用超过 512MiB（持续 10 分钟）。
+      # 生产 compose 给 gateway 的内存上限为 1G，此处留一半余量，可按需调整。
+      - alert: GatewayHighMemory
+        expr: go_memstats_heap_inuse_bytes > 536870912
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "XiaoTian 网关堆内存占用过高"
+          description: "go_memstats_heap_inuse_bytes 已连续 10 分钟超过 512MiB（当前 {{ $value | humanize1024 }}），接近容器内存上限。"
+
+      # 组合/权益指标缺失：portfolio_equity_usdt 由后台任务每 15s 调
+      # metrics.SetEquity 上报（见 handler/index.go StartBackgroundTasks）。
+      # 长时间缺失说明后台上报循环或 /metrics 端点异常。
+      - alert: GatewayPortfolioMetricsMissing
+        expr: absent(portfolio_equity_usdt)
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: "XiaoTian 组合/权益指标未上报"
+          description: "15 分钟内未抓取到 portfolio_equity_usdt，说明 15s 业务指标上报循环或 /metrics 端点异常。"
+
+      # 风控拒绝突增：5 分钟内风控平均每秒拒绝超过 1 笔（OMS RiskCheck 拦截）。
+      - alert: GatewayRiskRejectionsBurst
+        expr: rate(risk_order_rejections_total[5m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "XiaoTian 风控拒绝突增"
+          description: "过去 5 分钟风控平均每秒拒绝约 {{ $value }} 笔订单，请检查 Protection 规则或市场异常。"
+
+      # 通知投递失败：某渠道 10 分钟内失败率超过 50% 且失败数 ≥ 3。
+      - alert: GatewayNotifyDeliveryFailures
+        expr: sum by (channel) (rate(notify_sends_total{result="failure"}[10m])) / clamp_min(sum by (channel) (rate(notify_sends_total[10m])), 0.001) > 0.5 and sum by (channel) (increase(notify_sends_total{result="failure"}[10m])) >= 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "XiaoTian 通知渠道投递失败率过高"
+          description: "渠道 {{ $labels.channel }} 过去 10 分钟投递失败率超过 50%，请检查渠道配置（webhook/token/短信凭证）。"

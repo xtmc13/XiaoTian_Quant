@@ -39,31 +39,36 @@ test.describe('Dashboard', () => {
   })
 
   test('navigation sidebar links work', async ({ authPage }) => {
-    const links = [
+    // 顶层面链接
+    const flat = [
       { label: '仪表盘', path: '/dashboard' },
-      { label: '策略', path: '/strategy' },
-      { label: '回测', path: '/backtest' },
+      { label: 'AI 分析', path: '/ai' },
     ]
-    for (const { label, path } of links) {
-      const link = authPage.locator('nav').getByText(label).first()
+    for (const { label, path } of flat) {
+      const link = authPage.locator('nav').getByText(label, { exact: true }).first()
       await link.scrollIntoViewIfNeeded()
       await link.click()
       await authPage.waitForURL(`**${path}`)
       await expect(authPage).toHaveURL(new RegExp(path))
     }
+    // 分组导航：策略实验室 → 策略管理（/strategy）
+    await authPage.locator('nav').getByText('策略实验室', { exact: true }).click()
+    await authPage.locator('nav').getByText('策略管理', { exact: true }).click()
+    await expect(authPage).toHaveURL(/\/strategy/)
   })
 })
 
 test.describe('Strategy Flow', () => {
   test('strategy list page renders', async ({ authPage }) => {
     await authPage.goto('/strategy')
-    await expect(authPage.locator('text=策略配置').first()).toBeVisible()
+    await expect(authPage.getByRole('main').getByText('策略管理', { exact: true })).toBeVisible()
+    await expect(authPage.getByText('策略列表')).toBeVisible()
   })
 
-  test('create strategy modal opens', async ({ authPage }) => {
+  test('launch-strategy entry navigates to /create', async ({ authPage }) => {
     await authPage.goto('/strategy')
-    await authPage.click('button:has-text("创建策略")')
-    await expect(authPage.locator('text=创建策略').first()).toBeVisible()
+    await authPage.getByRole('button', { name: /启动策略机器人/ }).first().click()
+    await expect(authPage).toHaveURL(/\/create/)
   })
 })
 

@@ -36,6 +36,7 @@ type DownloadJob struct {
 	Error     string `json:"error,omitempty"`
 	StartedAt int64  `json:"started_at"`
 	EndedAt   int64  `json:"ended_at,omitempty"`
+	UserID    int64  `json:"user_id"` // 属主用户（0=系统/历史无属主），H9 越权修复
 }
 
 // DownloadConfig configures download behavior.
@@ -318,6 +319,19 @@ func (d *Downloader) GetJob(id string) *DownloadJob {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.jobs[id]
+}
+
+// SetJobOwner records the owner of a download job (H9 越权修复)。
+// 任务创建后立即调用；已结束/不存在的任务忽略。
+func (d *Downloader) SetJobOwner(id string, userID int64) {
+	if userID <= 0 {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if job, ok := d.jobs[id]; ok {
+		job.UserID = userID
+	}
 }
 
 // ListJobs returns all download jobs.

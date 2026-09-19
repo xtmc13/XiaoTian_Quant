@@ -15,7 +15,7 @@ import {
 } from 'lucide-react'
 import { cn, formatCurrency } from '@/lib/utils'
 import { gridApi, strategyApi, strategyConfigApi } from '@/lib/api'
-import type { GridBot, GridBotPayload } from '@/lib/api'
+import type { GridBot, GridBotDetail, GridBotPayload, GridLegView } from '@/lib/api'
 import type { StrategyItem } from '@/types'
 import { RuntimePanel } from '@/components/strategy/RuntimePanel'
 import type { BotItem } from '@/hooks/useBotData'
@@ -94,6 +94,14 @@ function inferStrategyKind(s: StrategyItem): BotKind {
 }
 
 /* ── 网格创建表单（沿用 BotsGrid 的 GridBotForm 逻辑） ── */
+type GridMode = 'long' | 'short' | 'neutral'
+
+const GRID_MODE_META: Record<GridMode, { label: string; desc: string }> = {
+  long: { label: '做多网格（现货）', desc: '低位买入高位卖出，持有现货多头' },
+  short: { label: '做空网格（合约）', desc: '合约空头网格，高位开空低位平空' },
+  neutral: { label: '中性对冲（合约双腿）', desc: '多头腿+空头腿同时跑网格，整体净头寸可控' },
+}
+
 function GridCreateForm({ onDone }: { onDone: () => void }) {
   const queryClient = useQueryClient()
   const [name, setName] = useState('')
@@ -103,6 +111,11 @@ function GridCreateForm({ onDone }: { onDone: () => void }) {
   const [gridCount, setGridCount] = useState('20')
   const [investment, setInvestment] = useState('')
   const [feeRate, setFeeRate] = useState('0.001')
+  const [mode, setMode] = useState<GridMode>('long')
+  const [exchange, setExchange] = useState('paper')
+  const [leverage, setLeverage] = useState('5')
+  const [marginMode, setMarginMode] = useState<'cross' | 'isolated'>('cross')
+  const isContractMode = mode !== 'long'
 
   const createMutation = useMutation({
     mutationFn: (payload: GridBotPayload) => gridApi.create(payload),
@@ -135,7 +148,7 @@ function GridCreateForm({ onDone }: { onDone: () => void }) {
     if (!isFinite(grids) || grids < 2 || grids > 200) return toast('warning', '网格数必须在 2-200 之间')
     if (!isFinite(amount) || amount <= 0) return toast('warning', '投入金额必须大于 0')
     if (!isFinite(fee) || fee < 0) return toast('warning', '费率不能为负数')
-    createMutation.mutate({
+    const payload: GridBotPayload = {
       name: name.trim(),
       symbol: symbol.trim().toUpperCase(),
       lower_price: lower,
@@ -143,7 +156,16 @@ function GridCreateForm({ onDone }: { onDone: () => void }) {
       grid_count: grids,
       investment: amount,
       fee_rate: fee,
-    })
+      mode,
+    }
+    if (isContractMode) {
+      const lev = parseFloat(leverage)
+      if (!isFinite(lev) || lev < 1 || lev > 125) return toast('warning', '杠杆必须在 1-125 之间')
+      payload.exchange = exchange.trim() || 'paper'
+      payload.leverage = lev
+      payload.margin_mode = marginMode
+    }
+    createMutation.mutate(payload)
   }
 
   return (
@@ -151,6 +173,27 @@ function GridCreateForm({ onDone }: { onDone: () => void }) {
       <div>
         <label className="text-[11px] text-muted-foreground mb-1 block">名称</label>
         <input value={name} onChange={(e) => setName(e.target.value)} className={inputCls} placeholder="例如：BTC 震荡网格" />
+      </div>
+      <div>
+        <label className="text-[11px] text-muted-foreground mb-1 block">网格模式</label>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          {(Object.keys(GRID_MODE_META) as GridMode[]).map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setMode(m)}
+              className={cn(
+                'px-2 py-2 rounded-lg border text-left transition-colors',
+                mode === m
+                  ? 'border-quant-gold/50 bg-quant-gold/10 text-foreground'
+                  : 'border-quant-border text-muted-foreground hover:border-quant-gold/20'
+              )}
+            >
+              <div className="text-[11px] font-semibold">{GRID_MODE_META[m].label}</div>
+              <div className="text-[10px] mt-0.5 leading-snug opacity-80">{GRID_MODE_META[m].desc}</div>
+            </button>
+          ))}
+        </div>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div>
@@ -182,6 +225,25 @@ function GridCreateForm({ onDone }: { onDone: () => void }) {
           <label className="text-[11px] text-muted-foreground mb-1 block">费率（默认 0.001）</label>
           <input type="number" value={feeRate} onChange={(e) => setFeeRate(e.target.value)} className={inputCls} />
         </div>
+        {isContractMode && (
+          <>
+            <div>
+              <label className="text-[11px] text-muted-foreground mb-1 block">交易所（paper=模拟盘）</label>
+              <input value={exchange} onChange={(e) => setExchange(e.target.value)} className={inputCls} placeholder="paper" />
+            </div>
+            <div>
+              <label className="text-[11px] text-muted-foreground mb-1 block">杠杆 (1-125)</label>
+              <input type="number" value={leverage} onChange={(e) => setLeverage(e.target.value)} className={inputCls} />
+            </div>
+            <div>
+              <label className="text-[11px] text-muted-foreground mb-1 block">保证金模式</label>
+              <select value={marginMode} onChange={(e) => setMarginMode(e.target.value as 'cross' | 'isolated')} className={inputCls}>
+                <option value="cross">全仓 cross</option>
+                <option value="isolated">逐仓 isolated</option>
+              </select>
+            </div>
+          </>
+        )}
       </div>
       <div className="flex items-center gap-2 pt-1">
         <Button variant="primary" className="flex-1" isLoading={createMutation.isPending} onClick={handleSubmit}>
@@ -257,14 +319,18 @@ function UnifiedBotCard({
   const meta = KIND_META[bot.kind]
   const isLoading = actionLoadingId === bot.id
   const isLive = bot.strategy?.execution_mode === 'live' || bot.strategy?.mode === 'live'
-  // 策略实例：详情（RuntimePanel）始终可用；马丁/华尔街详情=编辑（既有行为）。
-  const showDetail = bot.source === 'strategy' || canDetailKind(bot.kind)
-  // 行2：类型 pill + 标的 · 周期 · 杠杆（网格显示格数）。
+  // 策略实例「详情」（RuntimePanel）/ 网格详情（双腿运行状态）始终可用；
+  // 马丁/华尔街详情=编辑（既有行为）。
+  const showDetail = bot.source === 'strategy' || bot.kind === 'grid' || canDetailKind(bot.kind)
+  // 行2：类型 pill + 标的 · 周期 · 杠杆（网格显示模式与格数）。
   const timeframe = bot.strategy?.timeframe
   const leverage = bot.strategy?.leverage
+  const gridMode = bot.grid?.mode && bot.grid.mode !== 'long' ? bot.grid.mode : null
   const metaLine = [
     bot.symbol || '-',
-    bot.kind === 'grid' && bot.grid ? `${bot.grid.grid_count}格` : (timeframe || null),
+    bot.kind === 'grid' && bot.grid
+      ? `${gridMode === 'neutral' ? '中性' : gridMode === 'short' ? '做空' : ''}${bot.grid.grid_count}格`
+      : (timeframe || null),
     leverage && leverage > 1 ? `${leverage}x` : null,
   ]
     .filter(Boolean)
@@ -273,6 +339,11 @@ function UnifiedBotCard({
 
   const btnCls =
     'flex-1 py-1 rounded bg-quant-bg border border-quant-border text-[11px] text-muted-foreground hover:text-foreground hover:border-quant-gold/30 transition-colors disabled:opacity-50'
+
+  const openDetail = () => {
+    if (bot.source === 'strategy' || bot.kind === 'grid') onDetail?.(bot)
+    else onEdit?.(bot)
+  }
 
   return (
     <div
@@ -319,10 +390,7 @@ function UnifiedBotCard({
               停止
             </button>
             {showDetail ? (
-              <button
-                className={btnCls}
-                onClick={() => (bot.source === 'strategy' ? onDetail?.(bot) : onEdit?.(bot))}
-              >
+              <button className={btnCls} onClick={openDetail}>
                 详情
               </button>
             ) : (
@@ -341,8 +409,8 @@ function UnifiedBotCard({
             <button className={btnCls} disabled={isLoading} onClick={() => onStart(bot)}>
               启动
             </button>
-            {bot.source === 'strategy' && (
-              <button className={btnCls} onClick={() => onDetail?.(bot)}>
+            {(bot.source === 'strategy' || bot.kind === 'grid') && (
+              <button className={btnCls} onClick={openDetail}>
                 详情
               </button>
             )}
@@ -388,11 +456,156 @@ function EditStrategyBotModal({ bot, onDone }: { bot: UnifiedBot; onDone: () => 
         add_position_callback: (tc.add_position_callback as number) || 0.1,
         take_profit_ratio: (tc.take_profit_ratio as number) || 1.3,
         profit_callback: (tc.profit_callback as number) || 0.1,
+        max_layers: (tc.max_layers as number) || 0,
+        max_total_budget: (tc.max_total_budget as number) || 0,
       }}
       onSubmit={(config) => updateMutation.mutate(config)}
       onCancel={onDone}
       isLoading={updateMutation.isPending}
     />
+  )
+}
+
+/* ── 网格详情：模式 / 净头寸 / 双腿格子状态与盈亏（A1.3） ── */
+const GRID_LEG_META: Record<string, { label: string; cls: string }> = {
+  long: { label: '多头腿', cls: 'text-quant-green' },
+  short: { label: '空头腿', cls: 'text-quant-red' },
+}
+
+function GridLegCard({ leg, price }: { leg: GridLegView; price?: number }) {
+  const meta = GRID_LEG_META[leg.leg] ?? { label: leg.leg, cls: 'text-foreground' }
+  return (
+    <div className="rounded-lg border border-quant-border bg-quant-bg p-3">
+      <div className="flex items-center justify-between">
+        <span className={cn('text-xs font-bold', meta.cls)}>{meta.label}</span>
+        <span className="text-[10px] text-muted-foreground">挂单 {leg.open_orders}</span>
+      </div>
+      <div className="grid grid-cols-2 gap-2 mt-2 text-[11px]">
+        <div>
+          <div className="text-[10px] text-muted-foreground">净持仓 (base)</div>
+          <div className="font-mono">{leg.base_qty.toFixed(6)}</div>
+        </div>
+        <div>
+          <div className="text-[10px] text-muted-foreground">保证金/余额 (quote)</div>
+          <div className="font-mono">{formatCurrency(leg.quote_balance)}</div>
+        </div>
+        <div>
+          <div className="text-[10px] text-muted-foreground">已实现盈亏</div>
+          <div className={cn('font-mono', leg.realized_pnl >= 0 ? 'text-quant-green' : 'text-quant-red')}>
+            {leg.realized_pnl >= 0 ? '+' : ''}
+            {formatCurrency(leg.realized_pnl)}
+          </div>
+        </div>
+        <div>
+          <div className="text-[10px] text-muted-foreground">总盈亏{price ? '' : ' (参考价 0)'}</div>
+          <div className={cn('font-mono', leg.total_pnl >= 0 ? 'text-quant-green' : 'text-quant-red')}>
+            {leg.total_pnl >= 0 ? '+' : ''}
+            {formatCurrency(leg.total_pnl)}
+          </div>
+        </div>
+      </div>
+      {leg.orders.length > 0 && (
+        <div className="mt-2 max-h-28 overflow-y-auto space-y-0.5">
+          {leg.orders.map((o) => (
+            <div key={o.level} className="flex justify-between text-[10px] font-mono text-muted-foreground">
+              <span className={o.side === 'BUY' ? 'text-quant-green' : 'text-quant-red'}>{o.side}</span>
+              <span>
+                @{o.price} × {o.qty > 0 ? o.qty.toFixed(6) : '市价量'}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function GridDetailModal({ bot, onClose }: { bot: UnifiedBot; onClose: () => void }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['grid-bot', bot.id],
+    queryFn: () => gridApi.get(bot.id),
+    refetchInterval: 5000,
+  })
+  const d = data as GridBotDetail | undefined
+  const legs = d?.legs ?? []
+  const multiLeg = legs.length > 1
+  return (
+    <ModalShell title={bot.name} subtitle="网格运行状态" onClose={onClose}>
+      {isLoading || !d ? (
+        <Skeleton className="h-40 rounded-xl" />
+      ) : (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            {[
+              { label: '模式', value: d.mode === 'neutral' ? '中性对冲' : d.mode === 'short' ? '做空网格' : '做多网格' },
+              {
+                label: '区间/格数',
+                value: `${d.lower_price} - ${d.upper_price} / ${d.grid_count}格`,
+              },
+              { label: '已实现盈亏', value: `${d.realized_pnl >= 0 ? '+' : ''}${formatCurrency(d.realized_pnl)}`, color: d.realized_pnl >= 0 ? 'text-quant-green' : 'text-quant-red' },
+              {
+                label: '净头寸',
+                value: d.net_position != null ? d.net_position.toFixed(6) : '-',
+                color: (d.net_position ?? 0) > 0 ? 'text-quant-green' : (d.net_position ?? 0) < 0 ? 'text-quant-red' : undefined,
+              },
+            ].map((k) => (
+              <div key={k.label} className="p-3 rounded-lg bg-quant-bg border border-quant-border">
+                <div className="text-[10px] text-muted-foreground">{k.label}</div>
+                <div className={cn('text-sm font-bold font-mono', k.color || 'text-foreground')}>{k.value}</div>
+              </div>
+            ))}
+          </div>
+          {(d.leverage ?? 1) > 1 && (
+            <div className="text-[10px] text-muted-foreground">
+              合约参数：杠杆 {d.leverage}x · {d.margin_mode === 'isolated' ? '逐仓' : '全仓'} · 交易所 {d.exchange || 'paper'}
+            </div>
+          )}
+          {multiLeg ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {legs.map((leg) => (
+                <GridLegCard key={leg.leg} leg={leg} price={d.price} />
+              ))}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {legs.length === 1 && <GridLegCard leg={legs[0]} price={d.price} />}
+              {d.trades.slice(0, 10).map((tr) => (
+                <div key={tr.id} className="flex justify-between text-[11px] font-mono text-muted-foreground">
+                  <span className={tr.side === 'BUY' ? 'text-quant-green' : 'text-quant-red'}>{tr.side}</span>
+                  <span>
+                    #{tr.level_index} @ {tr.price} × {tr.quantity.toFixed(6)}
+                  </span>
+                  <span className={tr.pnl >= 0 ? 'text-quant-green' : 'text-quant-red'}>
+                    {tr.pnl !== 0 ? `${tr.pnl >= 0 ? '+' : ''}${formatCurrency(tr.pnl)}` : '-'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+          {multiLeg && d.trades.length > 0 && (
+            <div>
+              <div className="text-[10px] text-muted-foreground mb-1">最近成交（腿）</div>
+              <div className="max-h-32 overflow-y-auto space-y-0.5">
+                {d.trades.slice(0, 20).map((tr) => (
+                  <div key={tr.id} className="flex justify-between text-[10px] font-mono text-muted-foreground">
+                    <span className={tr.leg === 'short' ? 'text-quant-red' : 'text-quant-green'}>
+                      {tr.leg === 'short' ? '空' : '多'}
+                    </span>
+                    <span className={tr.side === 'BUY' ? 'text-quant-green' : 'text-quant-red'}>{tr.side}</span>
+                    <span>
+                      #{tr.level_index} @ {tr.price} × {tr.quantity.toFixed(6)}
+                    </span>
+                    <span className={tr.pnl >= 0 ? 'text-quant-green' : 'text-quant-red'}>
+                      {tr.pnl !== 0 ? `${tr.pnl >= 0 ? '+' : ''}${formatCurrency(tr.pnl)}` : '-'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </ModalShell>
   )
 }
 
@@ -418,6 +631,8 @@ export function BotsCenter() {
   const [editingBot, setEditingBot] = useState<UnifiedBot | null>(null)
   // 策略实例「详情」：RuntimePanel 弹层（5s 轮询，复用策略管理页运行面板）。
   const [detailBot, setDetailBot] = useState<UnifiedBot | null>(null)
+  // 网格「详情」：双腿运行状态弹层（A1.3）。
+  const [gridDetailBot, setGridDetailBot] = useState<UnifiedBot | null>(null)
 
   /* 数据三源合并：网格 + kind=bot 机器人 + kind=strategy 策略实例 */
   const { data: gridBots = [], isLoading: gridLoading } = useQuery({
@@ -724,7 +939,7 @@ export function BotsCenter() {
                     }
                     setEditingBot(b)
                   }}
-                  onDetail={(b) => setDetailBot(b)}
+                  onDetail={(b) => (b.kind === 'grid' ? setGridDetailBot(b) : setDetailBot(b))}
                 />
               ))}
             </div>
@@ -778,8 +993,7 @@ export function BotsCenter() {
       )}
 
       {/* 策略实例详情：RuntimePanel + 资金三件套（策略管理页价值保留） */}
-      {detailBot?.strategy && (
-        <ModalShell title={detailBot.name} subtitle="实时运行状态" onClose={() => setDetailBot(null)}>
+      {detailBot?.strategy && (        <ModalShell title={detailBot.name} subtitle="实时运行状态" onClose={() => setDetailBot(null)}>
           <div className="space-y-4">
             <StrategyRuntimeSummary strategy={detailBot.strategy} />
             <RuntimePanel strategy={detailBot.strategy} />
@@ -803,6 +1017,9 @@ export function BotsCenter() {
           </div>
         </ModalShell>
       )}
+
+      {/* 网格详情：模式/净头寸/双腿格子状态与盈亏（A1.3） */}
+      {gridDetailBot && <GridDetailModal bot={gridDetailBot} onClose={() => setGridDetailBot(null)} />}
 
       {/* 编辑马丁/华尔街 */}
       {editingBot && (
