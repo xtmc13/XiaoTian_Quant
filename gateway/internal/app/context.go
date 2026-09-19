@@ -144,6 +144,9 @@ func (ctx *Context) Init(cfg *config.Config) error {
 		riskCfg.MaxDrawdownPct = cfg.Risk.MaxDrawdown
 	}
 	ctx.RiskManager = risk.NewManager(riskCfg)
+	// 发布为全局单例：HTTP 风控接口（/api/risk/config）与执行链路
+	// 必须读写到同一个实例，否则重启后配置值丢失（此前恒回默认 50%）。
+	risk.SetManager(ctx.RiskManager)
 	// 盈利保护开关：config.yaml risk.profit_protection_enabled 初始化，运行时由
 	// PUT /api/risk/config 通过 risk.SetProfitProtectionEnabled 调整。
 	risk.SetProfitProtectionEnabled(cfg.Risk.ProfitProtectionEnabled)

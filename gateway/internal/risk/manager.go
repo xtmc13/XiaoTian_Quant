@@ -444,6 +444,7 @@ func DefaultManagerConfig() ManagerConfig {
 var (
 	riskMgr     *Manager
 	riskMgrOnce sync.Once
+	riskMgrMu   sync.RWMutex
 )
 
 // GetManager returns the global risk manager.
@@ -451,7 +452,19 @@ func GetManager() *Manager {
 	riskMgrOnce.Do(func() {
 		riskMgr = NewManager(DefaultManagerConfig())
 	})
+	riskMgrMu.RLock()
+	defer riskMgrMu.RUnlock()
 	return riskMgr
+}
+
+// SetManager 把外部构建的 Manager 发布为全局单例，此后 GetManager 返回它。
+// 启动期 Context 按 config.yaml 初始化 RiskManager 后调用，保证 HTTP 风控
+// 接口（GET/PUT /api/risk/config）与交易执行用的是同一个实例与配置。
+func SetManager(m *Manager) {
+	riskMgrOnce.Do(func() {})
+	riskMgrMu.Lock()
+	defer riskMgrMu.Unlock()
+	riskMgr = m
 }
 
 // NewManager creates a risk manager with the given config.
