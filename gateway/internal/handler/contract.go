@@ -9,14 +9,17 @@ import (
 
 // ── Types ──
 
+// contractMarginInfo 数值字段全部可空：网关没有接入交易所账户级保证金数据源，
+// 无真实值时必须返回 null（前端显示 "--"），绝不编造（P1：合约页杠杆恒显 20 修复）。
+// direction/margin_mode 为面板默认配置语义，非账户实时值。
 type contractMarginInfo struct {
-	Leverage           float64 `json:"leverage"`
-	AvailableMargin    float64 `json:"available_margin"`
-	MarginRatio        float64 `json:"margin_ratio"`
-	LiquidationPrice   float64 `json:"liquidation_price"`
-	Direction          string  `json:"direction"`
-	MarginMode         string  `json:"margin_mode"`
-	MaxPositions       int     `json:"max_positions"`
+	Leverage         *float64 `json:"leverage"`
+	AvailableMargin  *float64 `json:"available_margin"`
+	MarginRatio      *float64 `json:"margin_ratio"`
+	LiquidationPrice *float64 `json:"liquidation_price"`
+	Direction        string   `json:"direction"`
+	MarginMode       string   `json:"margin_mode"`
+	MaxPositions     *int     `json:"max_positions"`
 }
 
 type liquidationPriceReq struct {
@@ -26,21 +29,22 @@ type liquidationPriceReq struct {
 }
 
 type contractParamsReq struct {
-	Leverage         float64 `json:"leverage" binding:"min=1,max=125"`
-	Direction        string  `json:"direction" binding:"oneof=long short both"`
-	MarginMode       string  `json:"margin_mode" binding:"oneof=isolated cross"`
-	OpenIndicator    string  `json:"open_indicator" binding:"oneof=macd_golden macd_death ema_counter ema_follow none"`
-	IndicatorTimeframe string `json:"indicator_timeframe" binding:"oneof=5m 15m 30m 1h 4h 8h"`
-	EnableTrendFollowing bool  `json:"enable_trend_following"`
-	MaxPositions     int     `json:"max_positions" binding:"min=1,max=50"`
+	Leverage             float64 `json:"leverage" binding:"min=1,max=125"`
+	Direction            string  `json:"direction" binding:"oneof=long short both"`
+	MarginMode           string  `json:"margin_mode" binding:"oneof=isolated cross"`
+	OpenIndicator        string  `json:"open_indicator" binding:"oneof=macd_golden macd_death ema_counter ema_follow none"`
+	IndicatorTimeframe   string  `json:"indicator_timeframe" binding:"oneof=5m 15m 30m 1h 4h 8h"`
+	EnableTrendFollowing bool    `json:"enable_trend_following"`
+	MaxPositions         int     `json:"max_positions" binding:"min=1,max=50"`
 }
 
 // ContractLeverageGet godoc
-// GET /contract/leverage
+// GET /contract/leverage —— 用户杠杆无持久化/交易所账户数据源，返回 null
+// （前端显示 "--"），绝不返回写死的 20（P1 修复）。
 func ContractLeverageGet(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success":  true,
-		"leverage": 20,
+		"leverage": nil,
 	})
 }
 
@@ -63,13 +67,14 @@ func ContractMarginInfo(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": contractMarginInfo{
-			Leverage:         20,
-			AvailableMargin:  0,
-			MarginRatio:      1.0,
-			LiquidationPrice: 0,
+			// 无交易所账户级数据源——数值全部 null（不编造）。
+			Leverage:         nil,
+			AvailableMargin:  nil,
+			MarginRatio:      nil,
+			LiquidationPrice: nil,
 			Direction:        "both",
 			MarginMode:       "cross",
-			MaxPositions:     10,
+			MaxPositions:     nil,
 		},
 	})
 }

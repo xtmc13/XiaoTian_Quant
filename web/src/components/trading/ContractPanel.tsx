@@ -27,21 +27,23 @@ function buildContractKPIs(status: ContractStatus): KPICardItem[] {
   return [
     {
       label: '杠杆倍数',
-      value: `${status.leverage}x`,
+      value: status.leverage != null ? `${status.leverage}x` : '--',
       icon: <Gauge className="w-4 h-4 text-[#1890ff]" />,
       variant: 'info',
     },
     {
       label: '可用保证金',
-      value: formatCurrency(status.available_margin),
+      value: status.available_margin != null ? formatCurrency(status.available_margin) : '--',
       icon: <Wallet className="w-4 h-4 text-[#52c41a]" />,
       variant: 'success',
     },
     {
       label: '保证金率',
-      value: `${(status.margin_ratio * 100).toFixed(1)}%`,
+      value: status.margin_ratio != null ? `${(status.margin_ratio * 100).toFixed(1)}%` : '--',
       icon:
-        status.margin_ratio > 0.5 ? (
+        status.margin_ratio == null ? (
+          <Gauge className="w-4 h-4 text-[#888]" />
+        ) : status.margin_ratio > 0.5 ? (
           <TrendingUp className="w-4 h-4 text-[#52c41a]" />
         ) : status.margin_ratio > 0.25 ? (
           <TrendingDown className="w-4 h-4 text-[#faad14]" />
@@ -49,15 +51,17 @@ function buildContractKPIs(status: ContractStatus): KPICardItem[] {
           <AlertTriangle className="w-4 h-4 text-[#f5222d]" />
         ),
       variant:
-        status.margin_ratio > 0.5
-          ? 'success'
-          : status.margin_ratio > 0.25
-            ? 'warning'
-            : 'error',
+        status.margin_ratio == null
+          ? 'default'
+          : status.margin_ratio > 0.5
+            ? 'success'
+            : status.margin_ratio > 0.25
+              ? 'warning'
+              : 'error',
     },
     {
       label: '强平价',
-      value: status.liquidation_price?.toFixed(2) || '—',
+      value: status.liquidation_price != null ? status.liquidation_price.toFixed(2) : '--',
       icon: <ShieldAlert className="w-4 h-4 text-[#f5222d]" />,
       variant: 'error',
     },
@@ -75,30 +79,29 @@ export const ContractPanel: React.FC = () => {
 
   const { data: status, isLoading } = useQuery<ContractStatus>({
     queryKey: ['contract', 'status'],
-    queryFn: () => contractApi.getMarginInfo().then((r) => {
-      const m = r.data;
-      return {
-        leverage: m.leverage,
-        available_margin: m.available_balance,
-        margin_ratio: m.margin_balance > 0 ? m.maintenance_margin / m.margin_balance : 0,
-        liquidation_price: m.liquidation_price,
-        wallet_balance: m.wallet_balance,
-        margin_balance: m.margin_balance,
-        maintenance_margin: m.maintenance_margin,
-        unrealized_pnl: m.unrealized_pnl,
-        margin_mode: m.margin_mode,
-      };
-    }),
+    queryFn: () =>
+      contractApi.getMarginInfo().then((r) => {
+        const m = r.data
+        // P1：后端无账户级数据源时数值为 null，如实透传（显示 "--"）。
+        return {
+          leverage: m.leverage ?? null,
+          available_margin: m.available_margin ?? null,
+          margin_ratio: m.margin_ratio ?? null,
+          liquidation_price: m.liquidation_price ?? null,
+          margin_mode: m.margin_mode,
+        }
+      }),
     refetchInterval: 10000,
   })
 
-  const alertLevel = status?.margin_ratio
-    ? status.margin_ratio > 0.5
-      ? 'safe'
-      : status.margin_ratio > 0.25
-        ? 'warning'
-        : 'danger'
-    : 'safe'
+  const alertLevel =
+    status?.margin_ratio == null
+      ? 'unknown'
+      : status.margin_ratio > 0.5
+        ? 'safe'
+        : status.margin_ratio > 0.25
+          ? 'warning'
+          : 'danger'
 
   return (
     <div className="space-y-5">

@@ -85,15 +85,13 @@ export interface SignalSource {
   }
 }
 
+// 与后端对齐（P1 假展示修复）：网关无交易所账户级数据源，数值无真实值时为
+// null，前端显示 "--"。wallet/margin/maintenance/unrealized 后端从未提供 → 移除。
 export interface ContractStatus {
-  leverage: number
-  available_margin: number
-  margin_ratio: number
-  liquidation_price?: number
-  wallet_balance: number
-  margin_balance: number
-  maintenance_margin: number
-  unrealized_pnl: number
+  leverage: number | null
+  available_margin: number | null
+  margin_ratio: number | null
+  liquidation_price: number | null
   margin_mode: 'isolated' | 'cross'
 }
 
@@ -108,15 +106,15 @@ export interface ContractParams {
   symbol?: string
 }
 
+// 与后端 contractMarginInfo 对齐（P1：合约页假展示数据修复）——网关无交易所
+// 账户级数据源，数值字段无真实值时为 null，前端显示 "--" 绝不显示 0/编造值。
 export interface ContractMarginInfo {
-  wallet_balance: number
-  available_balance: number
-  margin_balance: number
-  maintenance_margin: number
-  unrealized_pnl: number
-  realized_pnl_today: number
-  liquidation_price?: number
-  leverage: number
+  leverage: number | null
+  available_margin: number | null
+  margin_ratio: number | null
+  liquidation_price: number | null
+  max_positions: number | null
+  direction: string
   margin_mode: 'isolated' | 'cross'
 }
 

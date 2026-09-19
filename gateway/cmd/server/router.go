@@ -294,6 +294,7 @@ func registerMarketRoutes(api *gin.RouterGroup) {
 	private.POST("/native/backtest", handler.NativeBacktest)
 	api.GET("/symbols/search", handler.SymbolSearch)
 	api.GET("/market/snapshot", handler.MarketSnapshot)
+	api.GET("/market/funding", handler.MarketFunding)
 	api.GET("/status", handler.Status)
 }
 

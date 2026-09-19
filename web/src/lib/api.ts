@@ -479,28 +479,27 @@ export const marketApi = {
     api.get<MarketSnapshotResponse>(`/market/snapshot${symbol ? '?symbol=' + symbol : ''}`),
   symbolSearch: (q: string) => api.get<{ symbols: string[] }>(`/symbols/search?q=${q}`),
   status: () => api.get<{ status: string }>('/status'),
-  // Binance public API — funding rate & mark price
+  // 资金费率/标记价走后端薄代理 /market/funding（P1：不再前端直连
+  // fapi.binance.com；拿不到时返回 null，绝不静默 0——0 是假数据）。
   fundingRate: async (symbol: string) => {
     try {
-      const resp = await axios.get(`https://fapi.binance.com/fapi/v1/premiumIndex?symbol=${symbol}`)
-      const data = resp.data as Record<string, unknown>
+      const d = await api.get<{ funding_rate?: number | null; mark_price?: number | null; next_funding_time?: number }>(
+        '/market/funding',
+        { params: { symbol }, timeout: 12000 }
+      )
+      if (d == null || d.funding_rate == null) return null
       return {
-        fundingRate: parseFloat(String(data.lastFundingRate ?? 0)),
-        markPrice: parseFloat(String(data.markPrice ?? 0)),
-        nextFundingTime: Number(data.nextFundingTime ?? 0),
+        fundingRate: d.funding_rate,
+        markPrice: d.mark_price ?? null,
+        nextFundingTime: d.next_funding_time ?? 0,
       }
     } catch {
-      return { fundingRate: 0, markPrice: 0, nextFundingTime: 0 }
+      return null
     }
   },
   markPrice: async (symbol: string) => {
-    try {
-      const resp = await axios.get(`https://fapi.binance.com/fapi/v1/premiumIndex?symbol=${symbol}`)
-      const data = resp.data as Record<string, unknown>
-      return parseFloat(String(data.markPrice ?? 0))
-    } catch {
-      return 0
-    }
+    const d = await marketApi.fundingRate(symbol)
+    return d?.markPrice ?? null
   },
 }
 
@@ -1222,7 +1221,8 @@ export const aiRobotApi = {
 
 // ── Contract Trading ──
 export const contractApi = {
-  getLeverage: () => axiosInstance.get<{ leverage: number }>('/contract/leverage'),
+  // 杠杆无持久化/账户数据源：可能为 null（显示 "--"）
+  getLeverage: () => axiosInstance.get<{ leverage: number | null }>('/contract/leverage'),
   setLeverage: (leverage: number) => axiosInstance.post<{ success: boolean }>('/contract/leverage', { leverage }),
   getMarginInfo: () => axiosInstance.get<ContractMarginInfo>('/contract/margin'),
   getLiquidationPrice: (params: { entry_price: number; side: string; leverage: number }) =>

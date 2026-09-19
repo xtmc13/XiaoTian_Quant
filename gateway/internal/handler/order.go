@@ -856,10 +856,14 @@ func parseFloatFromAny(v any) float64 {
 	return 0
 }
 
+// publicProbeClient 给公开行情探针用：无超时的 http.Get 在断网时会挂死整个
+// 订单路径数分钟（P1 修复：加 10 秒超时）。
+var publicProbeClient = &http.Client{Timeout: 10 * time.Second}
+
 // getLastPrice fetches the latest price for a symbol from Binance public API.
 func getLastPrice(symbol string) float64 {
 	var result map[string]any
-	resp, err := http.Get("https://api.binance.com/api/v3/ticker/price?symbol=" + symbol)
+	resp, err := publicProbeClient.Get("https://api.binance.com/api/v3/ticker/price?symbol=" + symbol)
 	if err != nil {
 		return 0
 	}

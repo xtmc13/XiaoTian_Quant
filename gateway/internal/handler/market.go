@@ -19,6 +19,47 @@ import (
 
 var binanceClient = &http.Client{Timeout: 10 * time.Second}
 
+// fapiPremiumURL 资金费率/标记价上游端点（包级变量，测试可指向 httptest）。
+var fapiPremiumURL = "https://fapi.binance.com/fapi/v1/premiumIndex"
+
+// MarketFunding 资金费率/标记价薄代理（P1：前端不再直连 fapi.binance.com，
+// 拿不到时返回 null 字段 + 502，绝不静默 0——0 是假数据）。
+// GET /market/funding?symbol=BTCUSDT → {funding_rate, mark_price, next_funding_time}
+func MarketFunding(c *gin.Context) {
+	symbol := strings.ToUpper(strings.TrimSpace(c.Query("symbol")))
+	if symbol == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "symbol required"})
+		return
+	}
+	resp, err := binanceClient.Get(fapiPremiumURL + "?symbol=" + symbol)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"funding_rate": nil, "mark_price": nil, "next_funding_time": nil, "error": "upstream unreachable"})
+		return
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		c.JSON(http.StatusBadGateway, gin.H{"funding_rate": nil, "mark_price": nil, "next_funding_time": nil, "error": "upstream " + resp.Status})
+		return
+	}
+	var data struct {
+		LastFundingRate string `json:"lastFundingRate"`
+		MarkPrice       string `json:"markPrice"`
+		NextFundingTime int64  `json:"nextFundingTime"`
+	}
+	if err := json.Unmarshal(raw, &data); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"funding_rate": nil, "mark_price": nil, "next_funding_time": nil, "error": "parse"})
+		return
+	}
+	fr, _ := strconv.ParseFloat(data.LastFundingRate, 64)
+	mp, _ := strconv.ParseFloat(data.MarkPrice, 64)
+	c.JSON(http.StatusOK, gin.H{
+		"funding_rate":      fr,
+		"mark_price":        mp,
+		"next_funding_time": data.NextFundingTime,
+	})
+}
+
 func parseFloatField(v any) float64 {
 	switch val := v.(type) {
 	case float64:

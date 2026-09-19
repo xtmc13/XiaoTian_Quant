@@ -88,15 +88,24 @@ function toBitgetInstId(symbol: string): string {
   return symbol.replace(/[^a-zA-Z0-9]/g, '').toUpperCase()
 }
 
+// P1 修复：不再把无 WS 端点的交易所静默映射到币安（用户选 kraken 却看币安
+// 数据是误导）。只做同端点的等价名归一（okex→okx 等）；不支持的交易所原样
+// 返回，由 ExchangeKlineWs 显式报「行情暂不支持」。
+const EXCHANGE_ALIASES: Record<string, string> = {
+  okx: 'okx', okex: 'okx',
+  binance: 'binance',
+  bitget: 'bitget', bybit: 'bybit',
+  gate: 'gate', gateio: 'gate',
+}
+
 export function resolveExchangeId(id: string): string {
   const lower = (id || '').toLowerCase().replace(/[^a-z0-9]/g, '')
-  const aliases: Record<string, string> = {
-    okx: 'okx', okex: 'okx', binance: 'binance', bitget: 'bitget',
-    bybit: 'bybit', gate: 'gate', gateio: 'gate',
-    coinbase: 'binance', htx: 'binance', huobi: 'binance',
-    kraken: 'binance', kucoin: 'binance',
-  }
-  return aliases[lower] || 'binance'
+  return EXCHANGE_ALIASES[lower] || lower
+}
+
+/** 该交易所是否有真实 WS 行情端点。 */
+export function isExchangeSupported(id: string): boolean {
+  return EXCHANGE_WS[resolveExchangeId(id)] != null
 }
 
 const EXCHANGE_WS: Record<string, ExchangeConf> = {
@@ -220,7 +229,6 @@ const EXCHANGE_WS: Record<string, ExchangeConf> = {
 
 /* ── Main class ────────────────────────────────────────────────── */
 
-const FALLBACK_EXCHANGE = 'binance'
 
 export class ExchangeKlineWs {
   private _ws: WebSocket | null = null
@@ -272,10 +280,14 @@ export class ExchangeKlineWs {
     this._onReconnecting = callbacks.onReconnecting ?? null
     this._onReconnected = callbacks.onReconnected ?? null
 
-    const resolved = resolveExchangeId(exchangeId || 'binance')
-    this._exchangeId = resolved === FALLBACK_EXCHANGE && resolved !== 'binance'
-      ? FALLBACK_EXCHANGE
-      : resolved
+    this._exchangeId = resolveExchangeId(exchangeId || 'binance')
+    if (!EXCHANGE_WS[this._exchangeId]) {
+      // P1：不支持的交易所显式报错，绝不静默回退币安数据。
+      const err = new Error(`交易所 ${exchangeId} 行情暂不支持（支持：binance/okx/bitget/bybit/gate）`)
+      if (this._onError) this._onError(err)
+      else throw err
+      return
+    }
     this._openConnection()
   }
 
@@ -311,7 +323,12 @@ export class ExchangeKlineWs {
     this._openGen++
     const gen = this._openGen
 
-    const conf = EXCHANGE_WS[this._exchangeId] || EXCHANGE_WS.binance
+    const conf = EXCHANGE_WS[this._exchangeId]
+    if (!conf) {
+      // 构造期已拦截；此处双保险，绝不静默用币安数据冒充。
+      if (this._onError) this._onError(new Error(`交易所 ${this._exchangeId} 行情暂不支持`))
+      return
+    }
     this._exchangeConf = conf
     const interval = getInterval(this._exchangeId, this._timeframe)
     const url = conf.buildUrl(this._symbol, interval)

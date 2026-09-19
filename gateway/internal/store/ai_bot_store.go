@@ -305,7 +305,28 @@ func CancelAIBotSubscription(id int, userID int) {
 
 // ── Seed data ──
 
+// clearFakeSeedPerformance 清空种子 catalog 的编造业绩（P1：AI 机器人市场
+// 编造业绩修复）。catalog.performance_json 的唯一写者是本文件的种子逻辑
+// （全库无其他 UPDATE 写者），真实运行业绩独立存于 ai_bot_instances —— 故
+// is_builtin=1 且非空即种子编造，幂等清空是安全的，不会误清真实数据。
+func clearFakeSeedPerformance() {
+	if db == nil {
+		return
+	}
+	res, err := db.Exec(`UPDATE ai_bot_catalog SET performance_json = NULL, updated_at = ?
+		WHERE is_builtin = 1 AND performance_json IS NOT NULL AND performance_json != '' AND performance_json != 'null'`,
+		time.Now().Unix())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[AIBotStore] clear fake seed performance: %v\n", err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		fmt.Fprintf(os.Stderr, "[AIBotStore] 已清空 %d 条种子编造业绩（真实运行业绩见 ai_bot_instances）\n", n)
+	}
+}
+
 func SeedAIBotCatalog() {
+	clearFakeSeedPerformance()
 	count := 0
 	if err := db.QueryRow("SELECT COUNT(*) FROM ai_bot_catalog").Scan(&count); err != nil {
 		fmt.Fprintf(os.Stderr, "[AIBotStore] seed count error: %v\n", err)
@@ -320,78 +341,78 @@ func SeedAIBotCatalog() {
 			"id": "optimus", "name": "Optimus", "description": "稳定型现货机器人，适合非剧烈波动市场，ALT/BTC 或 ALT/USDT 交易对",
 			"strategy_type": "optimus", "market_type": "spot", "risk_level": "low",
 			"fee_model": "profit_share", "fee_percent": 10, "monthly_fee": 0,
-			"performance_json": `{"avg_monthly_profit":8.5,"win_rate":0.62,"sharpe":1.4,"max_drawdown":5.2}`,
-			"config_json": `{"timeframe":"1h","first_order_amount":100,"order_count":7,"add_position_spread":3,"take_profit_ratio":1.3}`,
+			"performance_json": nil,
+			"config_json":      `{"timeframe":"1h","first_order_amount":100,"order_count":7,"add_position_spread":3,"take_profit_ratio":1.3}`,
 		},
 		{
 			"id": "cyberbot", "name": "CyberBot", "description": "熊市防御型现货机器人，专为下跌行情设计",
 			"strategy_type": "cyberbot", "market_type": "spot", "risk_level": "medium",
 			"fee_model": "profit_share", "fee_percent": 12, "monthly_fee": 0,
-			"performance_json": `{"avg_monthly_profit":6.2,"win_rate":0.58,"sharpe":1.1,"max_drawdown":7.1}`,
-			"config_json": `{"timeframe":"1h","first_order_amount":100,"order_count":5,"add_position_spread":4,"take_profit_ratio":1.5}`,
+			"performance_json": nil,
+			"config_json":      `{"timeframe":"1h","first_order_amount":100,"order_count":5,"add_position_spread":4,"take_profit_ratio":1.5}`,
 		},
 		{
 			"id": "mono-optimus", "name": "Mono Optimus", "description": "Optimus 单币对优化版，简化配置",
 			"strategy_type": "mono_optimus", "market_type": "spot", "risk_level": "low",
 			"fee_model": "free", "fee_percent": 0, "monthly_fee": 0,
-			"performance_json": `{"avg_monthly_profit":5.8,"win_rate":0.65,"sharpe":1.5,"max_drawdown":4.1}`,
-			"config_json": `{"timeframe":"1h","first_order_amount":150,"order_count":5,"add_position_spread":2.5,"take_profit_ratio":1.2}`,
+			"performance_json": nil,
+			"config_json":      `{"timeframe":"1h","first_order_amount":150,"order_count":5,"add_position_spread":2.5,"take_profit_ratio":1.2}`,
 		},
 		{
 			"id": "mono-cyberbot", "name": "Mono CyberBot", "description": "CyberBot 单币对优化版",
 			"strategy_type": "mono_cyberbot", "market_type": "spot", "risk_level": "medium",
 			"fee_model": "free", "fee_percent": 0, "monthly_fee": 0,
-			"performance_json": `{"avg_monthly_profit":4.9,"win_rate":0.56,"sharpe":1.0,"max_drawdown":6.8}`,
-			"config_json": `{"timeframe":"1h","first_order_amount":150,"order_count":5,"add_position_spread":3.5,"take_profit_ratio":1.4}`,
+			"performance_json": nil,
+			"config_json":      `{"timeframe":"1h","first_order_amount":150,"order_count":5,"add_position_spread":3.5,"take_profit_ratio":1.4}`,
 		},
 		{
 			"id": "crypto-future", "name": "Crypto Future", "description": "合约自适应机器人，支持保守/稳健/激进三种风险偏好",
 			"strategy_type": "crypto_future", "market_type": "futures", "risk_level": "high",
 			"fee_model": "profit_share", "fee_percent": 15, "monthly_fee": 0,
-			"performance_json": `{"avg_monthly_profit":18.3,"win_rate":0.51,"sharpe":0.9,"max_drawdown":15.4}`,
-			"config_json": `{"timeframe":"15m","leverage":3,"risk_profile":"moderate","tp_sl_ratio":2.0}`,
+			"performance_json": nil,
+			"config_json":      `{"timeframe":"15m","leverage":3,"risk_profile":"moderate","tp_sl_ratio":2.0}`,
 		},
 		{
 			"id": "ai-alpha", "name": "AI Alpha", "description": "AI/机器学习驱动的现货+合约机器人，基于 AI 分析做趋势判断",
 			"strategy_type": "ai_alpha", "market_type": "spot", "risk_level": "medium",
 			"fee_model": "profit_share", "fee_percent": 28, "monthly_fee": 0,
-			"performance_json": `{"avg_monthly_profit":58.1,"win_rate":0.55,"sharpe":1.2,"max_drawdown":12.3}`,
-			"config_json": `{"timeframe":"1h","model":"ai_alpha_v1","confidence_threshold":0.72}`,
+			"performance_json": nil,
+			"config_json":      `{"timeframe":"1h","model":"ai_alpha_v1","confidence_threshold":0.72}`,
 		},
 		{
 			"id": "ai-alpha-futures", "name": "AI Alpha Futures", "description": "AI Alpha 合约版，基于机器学习进行多空判断",
 			"strategy_type": "ai_alpha_futures", "market_type": "futures", "risk_level": "high",
 			"fee_model": "profit_share", "fee_percent": 28, "monthly_fee": 0,
-			"performance_json": `{"avg_monthly_profit":42.7,"win_rate":0.53,"sharpe":1.0,"max_drawdown":18.6}`,
-			"config_json": `{"timeframe":"15m","leverage":2,"model":"ai_alpha_v1","confidence_threshold":0.75}`,
+			"performance_json": nil,
+			"config_json":      `{"timeframe":"15m","leverage":2,"model":"ai_alpha_v1","confidence_threshold":0.75}`,
 		},
 		{
 			"id": "terminator-volatility", "name": "Terminator Volatility", "description": "波动率/反转策略机器人，捕捉短期市场机会",
 			"strategy_type": "terminator_volatility", "market_type": "spot", "risk_level": "high",
 			"fee_model": "profit_share", "fee_percent": 18, "monthly_fee": 0,
-			"performance_json": `{"avg_monthly_profit":12.8,"win_rate":0.43,"sharpe":0.8,"max_drawdown":14.2}`,
-			"config_json": `{"timeframe":"5m","volatility_threshold":2.5,"holding_period":12}`,
+			"performance_json": nil,
+			"config_json":      `{"timeframe":"5m","volatility_threshold":2.5,"holding_period":12}`,
 		},
 		{
 			"id": "alt-volatility", "name": "ALT+ Volatility Bot", "description": "Altcoin 波动率套利机器人",
 			"strategy_type": "alt_volatility", "market_type": "spot", "risk_level": "high",
 			"fee_model": "profit_share", "fee_percent": 20, "monthly_fee": 0,
-			"performance_json": `{"avg_monthly_profit":22.4,"win_rate":0.48,"sharpe":0.85,"max_drawdown":16.7}`,
-			"config_json": `{"timeframe":"5m","altcoin_count":10,"volatility_threshold":3.0}`,
+			"performance_json": nil,
+			"config_json":      `{"timeframe":"5m","altcoin_count":10,"volatility_threshold":3.0}`,
 		},
 		{
 			"id": "trade-holder", "name": "Trade Holder", "description": "长期囤币/建仓机器人，适合长期 portfolio building",
 			"strategy_type": "trade_holder", "market_type": "spot", "risk_level": "low",
 			"fee_model": "monthly", "fee_percent": 0, "monthly_fee": 15,
-			"performance_json": `{"avg_monthly_profit":3.5,"win_rate":0.70,"sharpe":1.6,"max_drawdown":8.0}`,
-			"config_json": `{"timeframe":"1d","dca_amount":100,"dca_interval":"1w","take_profit_ratio":10.0}`,
+			"performance_json": nil,
+			"config_json":      `{"timeframe":"1d","dca_amount":100,"dca_interval":"1w","take_profit_ratio":10.0}`,
 		},
 		{
 			"id": "noah", "name": "Noah", "description": "高流动性币对机器人，针对 BTC/USDT、ETH/USDT 等主流交易对",
 			"strategy_type": "noah", "market_type": "spot", "risk_level": "low",
 			"fee_model": "monthly", "fee_percent": 0, "monthly_fee": 25,
-			"performance_json": `{"avg_monthly_profit":4.2,"win_rate":0.68,"sharpe":1.7,"max_drawdown":3.5}`,
-			"config_json": `{"timeframe":"30m","first_order_amount":200,"order_count":4,"take_profit_ratio":0.8}`,
+			"performance_json": nil,
+			"config_json":      `{"timeframe":"30m","first_order_amount":200,"order_count":4,"take_profit_ratio":0.8}`,
 		},
 	}
 	for _, bot := range bots {
@@ -413,6 +434,7 @@ func SeedAIBotCatalog() {
 
 // SeedAIBotSignalProviders inserts default signal provider catalog rows.
 func SeedAIBotSignalProviders() {
+	clearFakeSeedPerformance()
 	count := 0
 	if err := db.QueryRow("SELECT COUNT(*) FROM ai_bot_catalog WHERE strategy_type='signal_provider'").Scan(&count); err != nil {
 		return
@@ -422,12 +444,12 @@ func SeedAIBotSignalProviders() {
 	}
 	now := time.Now().Unix()
 	providers := []map[string]any{
-		{"id": "kuresofa", "name": "Kuresofa", "description": "80.98% 累计收益，订阅制信号源", "risk_level": "medium", "monthly_fee": 30, "performance_json": `{"total_profit":80.98,"win_rate":0.61,"sharpe":1.3,"max_drawdown":9.2}`, "config_json": `{"exchanges":["binance","bitget","mexc","xt"]}`},
-		{"id": "crypto-crescente", "name": "Crypto Crescente", "description": "稳健型信号源，累计收益 50.73%", "risk_level": "medium", "monthly_fee": 15, "performance_json": `{"total_profit":50.73,"win_rate":0.58,"sharpe":1.1,"max_drawdown":8.5}`, "config_json": `{"exchanges":["binance","bybit","kucoin","mexc","okx","xt"]}`},
-		{"id": "cryptoleks", "name": "Cryptoleks", "description": "优质 altcoin 信号源", "risk_level": "high", "monthly_fee": 25, "performance_json": `{"total_profit":29.09,"win_rate":0.54,"sharpe":0.9,"max_drawdown":14.1}`, "config_json": `{"exchanges":["binance","binance_futures","bitget","bybit"]}`},
-		{"id": "ai-alpha-signals", "name": "AI Alpha Signals", "description": "AI Alpha 信号频道，月均收益约 58.1%", "risk_level": "high", "fee_percent": 28, "performance_json": `{"avg_monthly_profit":58.1,"win_rate":0.55,"sharpe":1.2,"max_drawdown":12.3}`, "config_json": `{"exchanges":["binance","binance_futures"]}`},
-		{"id": "jumper-stars", "name": "Jumper Stars", "description": "高风险高收益信号源", "risk_level": "high", "fee_percent": 23, "performance_json": `{"avg_monthly_profit":261.0,"win_rate":0.48,"sharpe":0.7,"max_drawdown":25.3}`, "config_json": `{"exchanges":["binance","bybit"]}`},
-		{"id": "flash-signals", "name": "Flash Signals", "description": "短线快闪信号", "risk_level": "high", "fee_percent": 18, "performance_json": `{"avg_monthly_profit":2.32,"win_rate":0.52,"sharpe":0.95,"max_drawdown":6.4}`, "config_json": `{"exchanges":["binance","okx"]}`},
+		{"id": "kuresofa", "name": "Kuresofa", "description": "订阅制信号源", "risk_level": "medium", "monthly_fee": 30, "performance_json": nil, "config_json": `{"exchanges":["binance","bitget","mexc","xt"]}`},
+		{"id": "crypto-crescente", "name": "Crypto Crescente", "description": "稳健型订阅制信号源", "risk_level": "medium", "monthly_fee": 15, "performance_json": nil, "config_json": `{"exchanges":["binance","bybit","kucoin","mexc","okx","xt"]}`},
+		{"id": "cryptoleks", "name": "Cryptoleks", "description": "优质 altcoin 信号源", "risk_level": "high", "monthly_fee": 25, "performance_json": nil, "config_json": `{"exchanges":["binance","binance_futures","bitget","bybit"]}`},
+		{"id": "ai-alpha-signals", "name": "AI Alpha Signals", "description": "AI Alpha 信号频道", "risk_level": "high", "fee_percent": 28, "performance_json": nil, "config_json": `{"exchanges":["binance","binance_futures"]}`},
+		{"id": "jumper-stars", "name": "Jumper Stars", "description": "高风险高收益信号源", "risk_level": "high", "fee_percent": 23, "performance_json": nil, "config_json": `{"exchanges":["binance","bybit"]}`},
+		{"id": "flash-signals", "name": "Flash Signals", "description": "短线快闪信号", "risk_level": "high", "fee_percent": 18, "performance_json": nil, "config_json": `{"exchanges":["binance","okx"]}`},
 	}
 	for _, p := range providers {
 		feeModel := "monthly"
@@ -522,7 +544,7 @@ func scanAIBotInstanceRows(rows *sql.Rows) []map[string]any {
 			"name": name, "strategy_type": strategyType, "symbol": symbol,
 			"market_type": marketType, "status": status,
 			"execution_mode": executionMode, "config_json": configJSON,
-			"exchange_id": exchangeID,
+			"exchange_id":    exchangeID,
 			"unrealized_pnl": unrealizedPnl, "realized_pnl": realizedPnl,
 			"total_return_pct": totalReturnPct, "max_drawdown_pct": maxDrawdownPct,
 			"sharpe_ratio": sharpeRatio, "win_rate": winRate,
@@ -553,7 +575,7 @@ func scanAIBotInstanceRow(row *sql.Row) map[string]any {
 		"name": name, "strategy_type": strategyType, "symbol": symbol,
 		"market_type": marketType, "status": status,
 		"execution_mode": executionMode, "config_json": configJSON,
-		"exchange_id": exchangeID,
+		"exchange_id":    exchangeID,
 		"unrealized_pnl": unrealizedPnl, "realized_pnl": realizedPnl,
 		"total_return_pct": totalReturnPct, "max_drawdown_pct": maxDrawdownPct,
 		"sharpe_ratio": sharpeRatio, "win_rate": winRate,

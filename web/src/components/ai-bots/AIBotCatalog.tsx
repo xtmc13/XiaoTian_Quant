@@ -142,7 +142,7 @@ export const AIBotCatalog: React.FC<AIBotCatalogProps> = ({ onDeploy }) => {
                     <Bot className="w-5 h-5" />
                   </div>
                   <div>
-                    <h3 className="text-sm font-semibold text-white">{bot.name}</h3>
+                    <h3 className="text-sm font-semibold text-foreground">{bot.name}</h3>
                     <div className="flex items-center gap-2 mt-1">
                       <Badge variant={risk.variant} className="text-[10px]">{risk.label}</Badge>
                       <Badge variant="neutral" className="text-[10px] gap-1">
@@ -160,7 +160,13 @@ export const AIBotCatalog: React.FC<AIBotCatalogProps> = ({ onDeploy }) => {
                 <StatBox
                   icon={<TrendingUp className="w-3 h-3" />}
                   label="收益"
-                  value={perf.avg_monthly_profit !== undefined ? `+${perf.avg_monthly_profit}%` : perf.total_profit !== undefined ? `+${perf.total_profit}%` : '--'}
+                  value={
+                    perf.avg_monthly_profit !== undefined
+                      ? `+${perf.avg_monthly_profit}%`
+                      : perf.total_profit !== undefined
+                        ? `+${perf.total_profit}%`
+                        : '新上线·暂无业绩'
+                  }
                 />
                 <StatBox
                   icon={<Activity className="w-3 h-3" />}

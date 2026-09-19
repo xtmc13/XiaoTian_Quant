@@ -207,7 +207,8 @@ export function ContractTrading() {
 
   /* funding rate & mark price (after lastPrice is defined) */
   const {data:fundingData} = useQuery({queryKey:['funding',symbol], queryFn:()=>marketApi.fundingRate(symbol), refetchInterval:30000})
-  const fundingRate = fundingData?.fundingRate ?? 0
+  // P1：拿不到资金费率时为 null（显示 "--"），绝不显示 0。
+  const fundingRate = fundingData?.fundingRate ?? null
   const markPrice = fundingData?.markPrice ?? lastPrice
   const nextFundingTime = fundingData?.nextFundingTime ?? 0
 
@@ -479,7 +480,7 @@ export function ContractTrading() {
               <span className={cn("text-[10px] font-mono", isUp?"text-quant-green":"text-quant-red")}>
                 {isUp?'+':''}{changePct.toFixed(2)}%
               </span>
-              {fundingRate !== 0 && (
+              {fundingRate != null && (
                 <span className={cn("text-[10px] font-mono mt-0.5", fundingRate>0?"text-quant-red":"text-quant-green")}>
                   资金费率 {fundingRate>0?'+':''}{(fundingRate*100).toFixed(4)}%
                   {nextFundingTime>0 && <span className="text-muted-foreground ml-1">{formatTime(nextFundingTime)}</span>}
@@ -834,7 +835,7 @@ export function ContractTrading() {
                 </button>
                 <button onClick={()=>handlePlaceOrder('SELL')} disabled={submitting} className={cn(
                   "w-full py-3 rounded-lg text-sm font-bold transition-all duration-200 shadow-lg disabled:opacity-60",
-                  submitting?"bg-[#F6465D]":"bg-[#F6465D] hover:bg-[#F6465D]/90 active:scale-[0.98] text-white"
+                  submitting?"bg-[#F6465D]":"bg-[#F6465D] hover:bg-[#F6465D]/90 active:scale-[0.98] text-foreground"
                 )}>
                   {submitting?'提交中...':`开空 ${leverage}x`}
                 </button>

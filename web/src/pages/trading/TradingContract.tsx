@@ -299,7 +299,8 @@ export function TradingContract() {
     queryFn: () => marketApi.fundingRate(symbol),
     refetchInterval: 30000,
   })
-  const fundingRate = fundingData?.fundingRate ?? 0
+  // P1：拿不到资金费率时为 null（显示 "--"），绝不显示 0。
+  const fundingRate = fundingData?.fundingRate ?? null
   const markPrice = fundingData?.markPrice ?? lastPrice
   const nextFundingTime = fundingData?.nextFundingTime ?? 0
 
@@ -648,7 +649,7 @@ export function TradingContract() {
                 {isUp ? '+' : ''}
                 {changePct.toFixed(2)}%
               </span>
-              {fundingRate !== 0 && (
+              {fundingRate != null && (
                 <span
                   className={cn(
                     'text-[10px] font-mono mt-0.5',
@@ -1200,7 +1201,7 @@ export function TradingContract() {
                   disabled={submitting}
                   className={cn(
                     'w-full py-3 rounded-lg text-sm font-bold transition-all duration-200 shadow-lg disabled:opacity-60',
-                    submitting ? 'bg-[#F6465D]' : 'bg-[#F6465D] hover:bg-[#F6465D]/90 active:scale-[0.98] text-white'
+                    submitting ? 'bg-[#F6465D]' : 'bg-[#F6465D] hover:bg-[#F6465D]/90 active:scale-[0.98] text-foreground'
                   )}
                 >
                   {submitting ? '提交中...' : `开空 ${leverage}x`}
