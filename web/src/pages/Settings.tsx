@@ -710,15 +710,6 @@ export function Settings() {
             <>
               <SectionCard title="通用偏好" bodyClassName="space-y-5">
                 <div>
-                  <label className="mb-1.5 block text-xs text-muted-foreground">界面语言</label>
-                  <SelectField
-                    value={app.language}
-                    onChange={app.setLanguage}
-                    options={['zh-CN', 'en', 'ja']}
-                    label="界面语言"
-                  />
-                </div>
-                <div>
                   <label className="mb-1.5 block text-xs text-muted-foreground">时区</label>
                   <SelectField
                     value={dataSettings.timezone || 'Asia/Shanghai'}
@@ -1357,27 +1348,16 @@ export function Settings() {
           {/* ── APPEARANCE (local) ── */}
           {activeTab === 'appearance' && (
             <SectionCard title="界面偏好" bodyClassName="space-y-5">
-              <label className="flex items-center justify-between rounded-lg border border-quant-border bg-quant-bg p-4">
-                <div>
-                  <div className="text-sm font-medium text-foreground">暗色主题</div>
-                  <div className="mt-0.5 text-xs text-muted-foreground">切换深色/浅色界面主题</div>
-                </div>
-                <Toggle value={app.theme === 'dark'} onChange={(v) => app.setTheme(v ? 'dark' : 'light')} />
-              </label>
-              <label className="flex items-center justify-between rounded-lg border border-quant-border bg-quant-bg p-4">
-                <div>
-                  <div className="text-sm font-medium text-foreground">紧凑模式</div>
-                  <div className="mt-0.5 text-xs text-muted-foreground">减小间距以显示更多内容</div>
-                </div>
-                <Toggle value={app.layout === 'top'} onChange={(v) => app.setLayout(v ? 'top' : 'sidebar')} />
-              </label>
-              <label className="flex items-center justify-between rounded-lg border border-quant-border bg-quant-bg p-4">
-                <div>
-                  <div className="text-sm font-medium text-foreground">固定顶部导航</div>
-                  <div className="mt-0.5 text-xs text-muted-foreground">滚动时保持顶部栏固定</div>
-                </div>
-                <Toggle value={app.fixedHeader} onChange={app.setFixedHeader} />
-              </label>
+              <div>
+                <label className="mb-1.5 block text-xs text-muted-foreground">界面缩放</label>
+                <SelectField
+                  value={`${Math.round(app.uiScale * 100)}%`}
+                  onChange={(v) => app.setUiScale(Number(v.replace('%', '')) / 100)}
+                  options={['90%', '100%', '110%']}
+                  label="界面缩放"
+                />
+                <p className="mt-1.5 text-[10px] text-muted-foreground">等比缩放整个界面，刷新后保持</p>
+              </div>
               <label className="flex items-center justify-between rounded-lg border border-quant-border bg-quant-bg p-4">
                 <div>
                   <div className="text-sm font-medium text-foreground">侧边栏悬停展开</div>

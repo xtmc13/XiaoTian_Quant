@@ -4,6 +4,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import App from './App'
 import './index.css'
 import { registerSW, listenInstallPrompt } from './lib/pwa'
+import { bootstrapAppearance } from './stores/appStore'
+
+// 渲染前应用持久化的主题/缩放，避免刷新后外观回跳
+bootstrapAppearance()
 
 const queryClient = new QueryClient({
   defaultOptions: {
