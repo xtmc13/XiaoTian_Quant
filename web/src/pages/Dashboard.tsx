@@ -34,7 +34,6 @@ import { SectionCard } from '@/components/ui/SectionCard'
 import { DataTable } from '@/components/DataTable'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
-import { LogViewer } from '@/components/system/LogViewer'
 import { useFaviconIndicator } from '@/hooks/useFaviconIndicator'
 import type { ECharts } from 'echarts'
 import type { StrategyRanking } from '@/types'
@@ -1382,7 +1381,7 @@ export function Dashboard() {
           <div className="space-y-4">
             <RiskControlCard status={protectionStatus} isLoading={protectionLoading} />
             <MLStatusCard health={mlHealth} models={mlModelsData} isLoading={mlHealthLoading || mlModelsLoading} />
-            <LogPreviewCard />
+            <RunningBotsCard />
           </div>
         </div>
       </div>
@@ -1390,22 +1389,61 @@ export function Dashboard() {
   )
 }
 
-function LogPreviewCard() {
+function RunningBotsCard() {
   const navigate = useNavigate()
+  const { data: bots, isLoading } = useQuery({
+    queryKey: ['dash-running-bots'],
+    queryFn: () => strategyApi.list(),
+    refetchInterval: 5000,
+  })
+  const active = (bots ?? []).filter((b) => b.status === 'running' || b.status === 'detecting')
+  const preview = active.slice(0, 5)
+
   return (
     <SectionCard
-      title="最新日志"
+      title={`运行中机器人 (${active.length})`}
       headerAction={
         <button
-          onClick={() => navigate('/logs')}
+          onClick={() => navigate('/bots')}
           className="text-[10px] text-muted-foreground hover:text-white transition-colors"
         >
-          查看全部
+          进入机器人中心
         </button>
       }
     >
-      <div className="h-40">
-        <LogViewer lines={20} className="h-full text-[10px]" />
+      <div className="h-40 overflow-y-auto space-y-2 pr-1">
+        {isLoading ? (
+          <div className="text-xs text-muted-foreground py-6 text-center">加载中...</div>
+        ) : preview.length === 0 ? (
+          <div className="text-xs text-muted-foreground py-6 text-center">暂无运行中的机器人</div>
+        ) : (
+          <>
+            {preview.map((b) => (
+              <button
+                key={b.id}
+                onClick={() => navigate('/bots')}
+                className="w-full flex items-center justify-between gap-2 rounded-md bg-quant-bg-secondary px-3 py-2 hover:bg-quant-hover transition-colors text-left"
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="h-1.5 w-1.5 rounded-full bg-green-400 shrink-0 animate-pulse" />
+                  <span className="text-xs font-medium truncate">{b.name || b.strategy_name || '未命名'}</span>
+                  {b.symbol && <span className="text-[10px] text-muted-foreground shrink-0">{b.symbol}</span>}
+                </div>
+                <span
+                  className={cn(
+                    'text-[11px] font-semibold shrink-0',
+                    (b.total_pnl ?? 0) >= 0 ? 'text-green-400' : 'text-quant-red'
+                  )}
+                >
+                  {b.total_pnl != null ? `${b.total_pnl >= 0 ? '+' : ''}$${b.total_pnl.toFixed(2)}` : '—'}
+                </span>
+              </button>
+            ))}
+            {active.length > 5 && (
+              <div className="text-[10px] text-muted-foreground text-center">还有 {active.length - 5} 个运行中…</div>
+            )}
+          </>
+        )}
       </div>
     </SectionCard>
   )

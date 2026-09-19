@@ -20,15 +20,17 @@ function highlightLevel(line: string) {
 }
 
 export function LogViewer({ lines = 100, className }: LogViewerProps) {
-  const bottomRef = useRef<HTMLDivElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
   const { data, isLoading, error } = useQuery({
     queryKey: ['logs', lines],
     queryFn: () => logsApi.tail(lines),
     refetchInterval: 3000,
   })
 
+  // 只滚动日志容器本身，绝不带动页面滚动（scrollIntoView 会把整页拉到底部）
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const el = containerRef.current
+    if (el) el.scrollTop = el.scrollHeight
   }, [data])
 
   if (isLoading) {
@@ -52,7 +54,7 @@ export function LogViewer({ lines = 100, className }: LogViewerProps) {
   const logLines = data.split('\n').filter(Boolean)
 
   return (
-    <div className={cn('h-full overflow-auto font-mono text-[11px] leading-5 bg-quant-bg-secondary rounded-lg border border-quant-border p-3', className)}>
+    <div ref={containerRef} className={cn('h-full overflow-auto font-mono text-[11px] leading-5 bg-quant-bg-secondary rounded-lg border border-quant-border p-3', className)}>
       {logLines.length === 0 ? (
         <div className="text-muted-foreground">暂无日志</div>
       ) : (
@@ -62,7 +64,6 @@ export function LogViewer({ lines = 100, className }: LogViewerProps) {
           </div>
         ))
       )}
-      <div ref={bottomRef} />
     </div>
   )
 }
