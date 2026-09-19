@@ -47,7 +47,7 @@ export function TextInput({
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
-      className="w-full rounded-md border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white placeholder-muted-foreground outline-none transition-colors focus:border-quant-gold"
+      className="w-full rounded-md border border-quant-border bg-quant-bg px-3 py-2 text-sm text-foreground placeholder-muted-foreground outline-none transition-colors focus:border-quant-gold"
     />
   )
 }
@@ -76,7 +76,7 @@ export function NumberInput({
       value={value}
       onChange={(e) => onChange(Number(e.target.value))}
       placeholder={placeholder}
-      className="w-full rounded-md border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white placeholder-muted-foreground outline-none transition-colors focus:border-quant-gold"
+      className="w-full rounded-md border border-quant-border bg-quant-bg px-3 py-2 text-sm text-foreground placeholder-muted-foreground outline-none transition-colors focus:border-quant-gold"
     />
   )
 }

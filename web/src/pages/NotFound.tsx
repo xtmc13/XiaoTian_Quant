@@ -9,10 +9,10 @@ export function NotFound() {
       <div className="text-center max-w-md px-6">
         {/* 404 Illustration */}
         <div className="mb-8">
-          <div className="text-[120px] font-bold leading-none text-white/5 select-none">
+          <div className="text-[120px] font-bold leading-none text-foreground/5 select-none">
             404
           </div>
-          <div className="mt-[-48px] text-lg font-semibold text-white">
+          <div className="mt-[-48px] text-lg font-semibold text-foreground">
             页面未找到
           </div>
           <p className="mt-2 text-sm text-[#8a8a8a]">
@@ -24,7 +24,7 @@ export function NotFound() {
         <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
           <button
             onClick={() => navigate(-1)}
-            className="flex items-center gap-2 rounded-lg border border-[#1c1c1c] bg-[#111111] px-5 py-2.5 text-sm text-white transition-colors hover:bg-[#1c1c1c] hover:border-[#2a2a2a]"
+            className="flex items-center gap-2 rounded-lg border border-[#1c1c1c] bg-[#111111] px-5 py-2.5 text-sm text-foreground transition-colors hover:bg-[#1c1c1c] hover:border-[#2a2a2a]"
           >
             <ArrowLeft className="h-4 w-4" />
             返回上页
@@ -38,7 +38,7 @@ export function NotFound() {
           </button>
           <button
             onClick={() => navigate('/indicator-community')}
-            className="flex items-center gap-2 rounded-lg border border-[#1c1c1c] bg-[#111111] px-5 py-2.5 text-sm text-white transition-colors hover:bg-[#1c1c1c] hover:border-[#2a2a2a]"
+            className="flex items-center gap-2 rounded-lg border border-[#1c1c1c] bg-[#111111] px-5 py-2.5 text-sm text-foreground transition-colors hover:bg-[#1c1c1c] hover:border-[#2a2a2a]"
           >
             <Compass className="h-4 w-4" />
             策略市场
@@ -62,7 +62,7 @@ export function NotFound() {
               <button
                 key={item.path}
                 onClick={() => navigate(item.path)}
-                className="rounded-md bg-[#1c1c1c] px-2.5 py-1 text-[11px] text-[#8a8a8a] transition-colors hover:bg-[#262626] hover:text-white"
+                className="rounded-md bg-[#1c1c1c] px-2.5 py-1 text-[11px] text-[#8a8a8a] transition-colors hover:bg-[#262626] hover:text-foreground"
               >
                 {item.label}
               </button>

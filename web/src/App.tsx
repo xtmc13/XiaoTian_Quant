@@ -74,7 +74,7 @@ function RouteErrorBoundary({ children }: { children: React.ReactNode }) {
       fallback={
         <div className="h-full flex flex-col items-center justify-center bg-[#0a0a0a] text-center p-8">
           <div className="text-5xl mb-4 opacity-30">⚠</div>
-          <h3 className="text-lg font-semibold text-white mb-2">页面加载异常</h3>
+          <h3 className="text-lg font-semibold text-foreground mb-2">页面加载异常</h3>
           <p className="text-sm text-[#8a8a8a] mb-4 max-w-sm">该页面遇到了意外错误，可能是网络问题或资源加载失败。</p>
           <div className="flex gap-3">
             <button
@@ -85,7 +85,7 @@ function RouteErrorBoundary({ children }: { children: React.ReactNode }) {
             </button>
             <button
               onClick={() => navigate('/dashboard')}
-              className="rounded-lg border border-[#1c1c1c] bg-[#111111] px-4 py-2 text-sm text-white hover:bg-[#1c1c1c] transition-colors"
+              className="rounded-lg border border-[#1c1c1c] bg-[#111111] px-4 py-2 text-sm text-foreground hover:bg-[#1c1c1c] transition-colors"
             >
               回到首页
             </button>

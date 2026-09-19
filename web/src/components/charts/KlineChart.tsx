@@ -467,7 +467,7 @@ export const KlineChart = memo(function KlineChart({
       {editorTarget && template && (
         <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setEditorTarget(null)} onKeyDown={(e) => { if (e.key === 'Escape') setEditorTarget(null) }} tabIndex={-1}>
           <div role="document" className="w-80 rounded-xl border border-quant-border bg-quant-card p-5 space-y-4" onClick={e => e.stopPropagation()}>
-            <h3 className="text-sm font-bold text-white">编辑 {editorTarget.shortName}</h3>
+            <h3 className="text-sm font-bold text-foreground">编辑 {editorTarget.shortName}</h3>
             {template.paramSchema.map(field => (
               <div key={field.key}>
                 <label className="text-[11px] text-muted-foreground mb-1 block">{field.label}</label>
@@ -478,12 +478,12 @@ export const KlineChart = memo(function KlineChart({
                   min={field.min}
                   max={field.max}
                   step={field.step || 1}
-                  className="w-full rounded-md border border-quant-border bg-quant-bg px-3 py-1.5 text-xs text-white outline-none focus:border-quant-gold"
+                  className="w-full rounded-md border border-quant-border bg-quant-bg px-3 py-1.5 text-xs text-foreground outline-none focus:border-quant-gold"
                 />
               </div>
             ))}
             <div className="flex gap-2 pt-2">
-              <button onClick={() => setEditorTarget(null)} className="flex-1 rounded-md border border-quant-border px-3 py-1.5 text-xs text-muted-foreground hover:text-white">
+              <button onClick={() => setEditorTarget(null)} className="flex-1 rounded-md border border-quant-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground">
                 取消
               </button>
               <button onClick={applyEditor} className="flex-1 rounded-md bg-quant-gold px-3 py-1.5 text-xs font-medium text-black hover:opacity-90">

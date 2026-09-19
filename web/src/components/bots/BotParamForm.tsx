@@ -87,12 +87,12 @@ export function BotParamForm({ form, setForm, effectiveType }: BotParamFormProps
     <div className="space-y-4">
       {/* -- 基础策略参数 -- */}
       <div className="rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-4 space-y-4">
-        <div className="text-xs font-semibold text-white">基础策略参数</div>
+        <div className="text-xs font-semibold text-foreground">基础策略参数</div>
         <WizardField label="K线周期">
           <select
             value={(form.timeframe as string) || '1h'}
             onChange={(e) => setForm((f) => ({ ...f, timeframe: e.target.value }))}
-            className="w-full rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] px-3 py-2 text-sm text-white outline-none focus:border-[#4f6ed1]/40"
+            className="w-full rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] px-3 py-2 text-sm text-foreground outline-none focus:border-[#4f6ed1]/40"
           >
             <option value="1m">1分钟</option>
             <option value="5m">5分钟</option>

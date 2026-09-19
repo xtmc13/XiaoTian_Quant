@@ -1,10 +1,11 @@
 import { createContext, useContext, useState, useCallback, type ReactNode } from 'react'
 
-export type Lang = 'zh-CN' | 'en-US'
+export type Lang = 'zh-CN' | 'en-US' | 'ja'
 
 export const LANGS = [
   { code: 'zh-CN' as Lang, label: '中文', flag: '🇨🇳' },
   { code: 'en-US' as Lang, label: 'English', flag: '🇺🇸' },
+  { code: 'ja' as Lang, label: '日本語', flag: '🇯🇵' },
 ]
 
 interface I18nContextType {
@@ -20,6 +21,7 @@ const I18nContext = createContext<I18nContextType | null>(null)
 const translations: Record<Lang, Record<string, string>> = {
   'zh-CN': {},
   'en-US': {},
+  ja: {},
 }
 
 /** Register a locale dictionary */
@@ -51,12 +53,14 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 
   const setLang = useCallback((l: Lang) => {
     localStorage.setItem('xt-locale', l)
+    document.documentElement.lang = l
     setLangState(l)
   }, [])
 
   const t = useCallback(
     (key: string, fallback?: string) => {
-      return translations[lang][key] ?? fallback ?? key
+      // 非中文语言缺词条时回退中文，逐步覆盖期间页面不会露出 key
+      return translations[lang][key] ?? translations['zh-CN'][key] ?? fallback ?? key
     },
     [lang]
   )

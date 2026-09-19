@@ -233,7 +233,7 @@ function ProfitCalendar({ months, isLoading }: { months?: CalendarMonth[]; isLoa
           >
             <ChevronLeft className="h-3.5 w-3.5" />
           </button>
-          <span className="min-w-[80px] text-center text-xs font-medium tabular-nums text-white">
+          <span className="min-w-[80px] text-center text-xs font-medium tabular-nums text-foreground">
             {current.year}年{current.month}月
           </span>
           <button
@@ -289,7 +289,7 @@ function ProfitCalendar({ months, isLoading }: { months?: CalendarMonth[]; isLoa
               style={style}
               title={`${current.month_key}-${key}: ${val >= 0 ? '+' : ''}$${formatCurrency(val)}`}
             >
-              <span className="font-medium text-[#555555] group-hover:text-white">{day}</span>
+              <span className="font-medium text-[#555555] group-hover:text-foreground">{day}</span>
               {val !== 0 && (
                 <span className="mt-0.5 text-[8px] opacity-70">
                   {Math.abs(val) >= 1000 ? `${(val / 1000).toFixed(1)}k` : Math.round(val)}
@@ -465,10 +465,10 @@ export function Portfolio() {
                 <DataTable<PositionItem>
                   data={positions}
                   columns={[
-                    { key: 'symbol', title: '币种', render: (p) => <span className="font-semibold text-white">{p.symbol}</span> },
+                    { key: 'symbol', title: '币种', render: (p) => <span className="font-semibold text-foreground">{p.symbol}</span> },
                     { key: 'quantity', title: '持仓量', render: (p) => <span className="font-mono">{p.quantity.toFixed(4)}</span> },
                     { key: 'entry', title: '开仓价', render: (p) => <span className="font-mono text-muted-foreground">${formatCurrency(p.avg_entry_price)}</span> },
-                    { key: 'current', title: '当前价', render: (p) => <span className="font-mono text-white">${formatCurrency(p.current_price || 0)}</span> },
+                    { key: 'current', title: '当前价', render: (p) => <span className="font-mono text-foreground">${formatCurrency(p.current_price || 0)}</span> },
                     { key: 'unrealized', title: '未实现盈亏', render: (p) => {
                       const pnl = p.unrealized_pnl || 0
                       const pnlPct = p.avg_entry_price && p.avg_entry_price > 0 ? (pnl / (p.avg_entry_price * p.quantity)) * 100 : 0

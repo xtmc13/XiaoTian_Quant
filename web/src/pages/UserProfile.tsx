@@ -127,7 +127,7 @@ export function UserProfile() {
     )
   }
 
-  const inputCls = 'w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2.5 text-sm text-white placeholder-muted-foreground outline-none focus:border-quant-gold'
+  const inputCls = 'w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2.5 text-sm text-foreground placeholder-muted-foreground outline-none focus:border-quant-gold'
 
   return (
     <div className="h-full flex flex-col bg-quant-bg">
@@ -176,7 +176,7 @@ export function UserProfile() {
             {(profile?.nickname || profile?.username || '?')[0].toUpperCase()}
           </div>
           <div className="flex-1 min-w-0 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-            <span className="text-sm font-semibold text-white">{profile?.nickname || profile?.username}</span>
+            <span className="text-sm font-semibold text-foreground">{profile?.nickname || profile?.username}</span>
             <span className="flex items-center gap-1"><User className="h-3 w-3" />@{profile?.username}</span>
             <span className="flex items-center gap-1"><Mail className="h-3 w-3" />{profile?.email || '未设置'}</span>
             <span className="flex items-center gap-1"><Shield className="h-3 w-3" />{profile?.role === 'admin' ? '管理员' : '用户'}</span>
@@ -232,7 +232,7 @@ export function UserProfile() {
 
               {/* Referral */}
               <div className="border-t border-quant-border pt-4">
-                <h3 className="text-sm font-medium text-white mb-2 flex items-center gap-2">
+                <h3 className="text-sm font-medium text-foreground mb-2 flex items-center gap-2">
                   <ExternalLink className="h-4 w-4" /> 推荐链接
                 </h3>
                 <p className="text-xs text-muted-foreground mb-2">
@@ -242,7 +242,7 @@ export function UserProfile() {
                   <input type="text" readOnly
                     value={`${window.location.origin}/login?ref=${profile?.referral_code || ''}`}
                     className={cn(inputCls, 'text-xs')} />
-                  <button onClick={copyReferral} className="shrink-0 rounded-lg bg-quant-bg px-3 py-2 text-muted-foreground hover:text-white">
+                  <button onClick={copyReferral} className="shrink-0 rounded-lg bg-quant-bg px-3 py-2 text-muted-foreground hover:text-foreground">
                     <Copy className="h-4 w-4" />
                   </button>
                 </div>
@@ -286,7 +286,7 @@ export function UserProfile() {
               {NOTIFY_CHANNELS.map(ch => (
                 <div key={ch.key} className="flex items-center justify-between py-2 border-b border-quant-border last:border-0">
                   <div className="flex-1">
-                    <p className="text-sm text-white">{ch.label}</p>
+                    <p className="text-sm text-foreground">{ch.label}</p>
                     <p className="text-xs text-muted-foreground">{ch.desc}</p>
                   </div>
                   <button onClick={() => setNotifyChannels(s => ({ ...s, [ch.key]: !s[ch.key] }))}

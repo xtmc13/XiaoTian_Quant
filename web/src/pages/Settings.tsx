@@ -8,6 +8,7 @@ import { PageHeader } from '@/components/ui/PageHeader'
 import { SectionCard } from '@/components/ui/SectionCard'
 import { DataDownloadSection } from './settings/DataDownloadSection'
 import { MfaSection } from './settings/MfaSection'
+import { useI18n, LANGS } from '@/i18n'
 import {
   Globe,
   KeyRound,
@@ -93,28 +94,27 @@ const LEVELS = ['INFO', 'WARN', 'CRITICAL']
 const CHANNELS = ['log', 'email', 'lark', 'dingtalk', 'telegram', 'discord']
 
 const CHANNEL_LABELS: Record<string, string> = {
-  log: '日志',
-  email: '邮件',
-  lark: '飞书',
-  dingtalk: '钉钉',
-  telegram: 'Telegram',
-  discord: 'Discord',
+  log: 'settings.routing.channel.log',
+  email: 'settings.routing.channel.email',
+  lark: 'settings.routing.channel.lark',
+  dingtalk: 'settings.routing.channel.dingtalk',
 }
 
 const EVENT_LABELS: Record<string, string> = {
-  signal: '信号',
-  trade: '交易',
-  risk: '风控',
-  protection: '保护',
-  system: '系统',
-  backtest: '回测',
-  hyperopt: '超参优化',
+  signal: 'settings.routing.event.signal',
+  trade: 'settings.routing.event.trade',
+  risk: 'settings.routing.event.risk',
+  protection: 'settings.routing.event.protection',
+  system: 'settings.routing.event.system',
+  backtest: 'settings.routing.event.backtest',
+  hyperopt: 'settings.routing.event.hyperopt',
+  all: 'settings.routing.event.all',
 }
 
 const LEVEL_LABELS: Record<string, string> = {
-  INFO: '信息',
-  WARN: '警告',
-  CRITICAL: '严重',
+  INFO: 'settings.routing.level.info',
+  WARN: 'settings.routing.level.warn',
+  CRITICAL: 'settings.routing.level.critical',
 }
 
 const EXCHANGES = [
@@ -215,6 +215,7 @@ function PasswordInput({
   placeholder?: string
 }) {
   const [visible, setVisible] = useState(false)
+  const { t } = useI18n()
   return (
     <div className="relative">
       <input
@@ -222,12 +223,12 @@ function PasswordInput({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full rounded-md border border-quant-border bg-quant-bg px-3 py-2 pr-10 text-sm text-white placeholder-muted-foreground outline-none transition-colors focus:border-quant-gold"
+        className="w-full rounded-md border border-quant-border bg-quant-bg px-3 py-2 pr-10 text-sm text-foreground placeholder-muted-foreground outline-none transition-colors focus:border-quant-gold"
       />
       <button
         type="button"
         onClick={() => setVisible(!visible)}
-        aria-label={visible ? '隐藏密码' : '显示密码'}
+        aria-label={visible ? t('settings.security.hidePassword') : t('settings.security.showPassword')}
         className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
       >
         {visible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -253,7 +254,7 @@ function TextInput({
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
-      className="w-full rounded-md border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white placeholder-muted-foreground outline-none transition-colors focus:border-quant-gold"
+      className="w-full rounded-md border border-quant-border bg-quant-bg px-3 py-2 text-sm text-foreground placeholder-muted-foreground outline-none transition-colors focus:border-quant-gold"
     />
   )
 }
@@ -277,7 +278,7 @@ function SelectField({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         aria-label={label}
-        className="w-full appearance-none rounded-md border border-quant-border bg-quant-bg px-3 py-2 pr-8 text-sm text-white outline-none transition-colors focus:border-quant-gold"
+        className="w-full appearance-none rounded-md border border-quant-border bg-quant-bg px-3 py-2 pr-8 text-sm text-foreground outline-none transition-colors focus:border-quant-gold"
       >
         {safeOptions.map((opt) => (
           <option key={opt} value={opt}>
@@ -311,7 +312,7 @@ function NumberInput({
       value={value}
       onChange={(e) => onChange(Number(e.target.value))}
       placeholder={placeholder}
-      className="w-full rounded-md border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white placeholder-muted-foreground outline-none transition-colors focus:border-quant-gold"
+      className="w-full rounded-md border border-quant-border bg-quant-bg px-3 py-2 text-sm text-foreground placeholder-muted-foreground outline-none transition-colors focus:border-quant-gold"
     />
   )
 }
@@ -323,6 +324,7 @@ function NumberInput({
 export function Settings() {
   const queryClient = useQueryClient()
   const app = useAppStore()
+  const { t, lang, setLang } = useI18n()
 
   /* ── Backend config ── */
   const { data: backendConfig, isLoading: configLoading } = useQuery({
@@ -519,7 +521,7 @@ export function Settings() {
         enabled: true,
       })
       // 后端失败分支统一为 success:false + HTTP 200，必须按 success 判定。
-      if (result?.success === false) throw new Error(result?.message || '连接失败')
+      if (result?.success === false) throw new Error(result?.message || t('settings.connectFailedFallback'))
       return result
     },
     onError: (err: Error, vars) => {
@@ -574,23 +576,23 @@ export function Settings() {
 
     fetch('/api/logs?tail=100')
       .then((r) => (r.ok ? r.text() : ''))
-      .then((text) => setLogs(text || '暂无日志或后端未启用日志接口'))
-      .catch(() => setLogs('无法获取日志'))
+      .then((text) => setLogs(text || t('settings.system.noLogs')))
+      .catch(() => setLogs(t('settings.system.logsUnavailable')))
   }, [])
 
   /* ── Active tab ── */
   const [activeTab, setActiveTab] = useState('general')
 
   const tabs = [
-    { key: 'general', label: '通用', icon: Globe, local: true },
-    { key: 'exchange', label: '交易所', icon: Globe },
-    { key: 'ai', label: 'AI 模型', icon: BrainCircuit },
-    { key: 'notify', label: '通知', icon: Bell, local: true },
-    { key: 'notify-routing', label: '通知路由', icon: Route },
-    { key: 'appearance', label: '外观', icon: Palette, local: true },
-    { key: 'data', label: '数据', icon: Database, local: true },
-    { key: 'security', label: '安全', icon: Shield, local: true },
-    { key: 'system', label: '系统', icon: Info },
+    { key: 'general', label: t('settings.nav.general'), icon: Globe, local: true },
+    { key: 'exchange', label: t('settings.nav.exchange'), icon: Globe },
+    { key: 'ai', label: t('settings.nav.ai'), icon: BrainCircuit },
+    { key: 'notify', label: t('settings.nav.notify'), icon: Bell, local: true },
+    { key: 'notify-routing', label: t('settings.nav.notify-routing'), icon: Route },
+    { key: 'appearance', label: t('settings.nav.appearance'), icon: Palette, local: true },
+    { key: 'data', label: t('settings.nav.data'), icon: Database, local: true },
+    { key: 'security', label: t('settings.nav.security'), icon: Shield, local: true },
+    { key: 'system', label: t('settings.nav.system'), icon: Info },
   ] as const
 
   const isSaving = saveMut.isPending
@@ -603,7 +605,7 @@ export function Settings() {
     return (
       <div className="flex h-full items-center justify-center">
         <Loader2 className="h-6 w-6 animate-spin text-quant-gold" />
-        <span className="ml-2 text-sm text-muted-foreground">加载配置中...</span>
+        <span className="ml-2 text-sm text-muted-foreground">{t('settings.loadingConfig')}</span>
       </div>
     )
   }
@@ -617,7 +619,7 @@ export function Settings() {
           <div className="mb-3 flex items-center gap-3 rounded-lg border border-amber-500/20 bg-amber-500/10 px-4 py-3">
             <AlertTriangle className="h-5 w-5 shrink-0 text-amber-400" />
             <div className="flex-1 text-sm text-amber-200">
-              后端配置已修改，需要重启 Gateway 才能完全生效。
+              {t('settings.restartBanner')}
               <code className="ml-2 rounded bg-amber-500/20 px-1.5 py-0.5 text-xs font-mono text-amber-300">
                 docker compose restart gateway
               </code>
@@ -627,14 +629,14 @@ export function Settings() {
               className="flex items-center gap-1.5 rounded-md bg-amber-500/20 px-3 py-1.5 text-xs font-medium text-amber-300 transition-colors hover:bg-amber-500/30"
             >
               {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-              {copied ? '已复制' : '复制命令'}
+              {copied ? t('settings.copied') : t('settings.copyCmd')}
             </button>
           </div>
         )}
 
         {/* Page header */}
         <PageHeader
-          subtitle="管理交易所连接、AI 模型、通知通道与界面偏好"
+          subtitle={t('settings.subtitle')}
           actions={
             <div className="flex items-center gap-2">
               <button
@@ -661,7 +663,7 @@ export function Settings() {
                 className="flex items-center gap-1.5 rounded-md border border-quant-border bg-quant-card px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-quant-gold/30 hover:text-foreground"
               >
                 <RotateCcw className="h-3.5 w-3.5" />
-                重置
+                {t('settings.reset')}
               </button>
               <button
                 onClick={() => {
@@ -672,7 +674,7 @@ export function Settings() {
                 className="flex items-center gap-1.5 rounded-md bg-quant-gold px-3 py-1.5 text-xs font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-50"
               >
                 {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-                {isSaving ? '保存中...' : '保存'}
+                {isSaving ? t('settings.saving') : t('settings.save')}
               </button>
             </div>
           }
@@ -683,21 +685,21 @@ export function Settings() {
       <div className="flex-1 flex gap-5 pl-4 pr-6 min-h-0">
         {/* Left nav — independently scrollable */}
         <div className="w-36 shrink-0 space-y-0.5 overflow-y-auto">
-          {tabs.map((t) => (
+          {tabs.map((tab) => (
             <button
-              key={t.key}
-              onClick={() => setActiveTab(t.key)}
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key)}
               className={cn(
                 'flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors',
-                activeTab === t.key
+                activeTab === tab.key
                   ? 'bg-quant-gold/10 text-quant-gold'
                   : 'text-muted-foreground hover:bg-quant-card hover:text-foreground'
               )}
             >
-              <t.icon className="h-4 w-4 shrink-0" />
-              <span className="flex-1">{t.label}</span>
-              {'local' in t && t.local && (
-                <span className="rounded bg-quant-border px-1.5 py-0.5 text-[10px] text-white">本地</span>
+              <tab.icon className="h-4 w-4 shrink-0" />
+              <span className="flex-1">{tab.label}</span>
+              {'local' in tab && tab.local && (
+                <span className="rounded bg-quant-border px-1.5 py-0.5 text-[10px] text-foreground">{t('settings.localBadge')}</span>
               )}
             </button>
           ))}
@@ -708,14 +710,31 @@ export function Settings() {
           {/* ── GENERAL ── */}
           {activeTab === 'general' && (
             <>
-              <SectionCard title="通用偏好" bodyClassName="space-y-5">
+              <SectionCard title={t('settings.general.title')} bodyClassName="space-y-5">
                 <div>
-                  <label className="mb-1.5 block text-xs text-muted-foreground">时区</label>
+                  <label className="mb-1.5 block text-xs text-muted-foreground">{t('settings.general.language')}</label>
+                  <SelectField
+                    value={app.language}
+                    onChange={(v) => app.setLanguage(v)}
+                    options={['zh-CN', 'en', 'ja']}
+                    label={t('settings.general.language')}
+                  />
+                  <p className="mt-1.5 text-[10px] text-muted-foreground">{t('settings.general.languageHint')}</p>
+                </div>
+                <label className="flex items-center justify-between rounded-lg border border-quant-border bg-quant-bg p-4">
+                  <div>
+                    <div className="text-sm font-medium text-foreground">{t('settings.general.darkTheme')}</div>
+                    <div className="mt-0.5 text-xs text-muted-foreground">{t('settings.general.darkThemeHint')}</div>
+                  </div>
+                  <Toggle value={app.theme === 'dark'} onChange={(v) => app.setTheme(v ? 'dark' : 'light')} />
+                </label>
+                <div>
+                  <label className="mb-1.5 block text-xs text-muted-foreground">{t('settings.general.timezone')}</label>
                   <SelectField
                     value={dataSettings.timezone || 'Asia/Shanghai'}
                     onChange={(v) => setDataSettings((p) => ({ ...p, timezone: v }))}
                     options={TIMEZONES}
-                    label="时区"
+                    label={t('settings.general.timezone')}
                   />
                 </div>
               </SectionCard>
@@ -726,10 +745,10 @@ export function Settings() {
           {/* ── EXCHANGE ── */}
           {activeTab === 'exchange' && (
             <>
-              <SectionCard title="默认交易所" bodyClassName="space-y-4">
+              <SectionCard title={t('settings.exchange.defaultTitle')} bodyClassName="space-y-4">
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                   <div>
-                    <label className="mb-1.5 block text-xs text-muted-foreground">默认交易所</label>
+                    <label className="mb-1.5 block text-xs text-muted-foreground">{t('settings.exchange.defaultLabel')}</label>
                     <SelectField
                       value={defaultExchange}
                       onChange={(v) => {
@@ -737,7 +756,7 @@ export function Settings() {
                         setDirty(true)
                       }}
                       options={EXCHANGES.map((e) => e.label)}
-                      label="默认交易所"
+                      label={t('settings.exchange.defaultLabel')}
                     />
                   </div>
                 </div>
@@ -768,8 +787,8 @@ export function Settings() {
                           }}
                           placeholder={
                             exchangesConfigured?.[ex.key]?.has_credentials
-                              ? '已配置（加密存储），留空保持不变'
-                              : '输入 API Key（首次配置）'
+                              ? t('settings.exchange.credConfiguredPlaceholder')
+                              : t('settings.exchange.enterApiKeyPlaceholder')
                           }
                         />
                       </div>
@@ -783,8 +802,8 @@ export function Settings() {
                           }}
                           placeholder={
                             exchangesConfigured?.[ex.key]?.has_credentials
-                              ? '已配置（加密存储），留空保持不变'
-                              : '输入 API Secret（首次配置）'
+                              ? t('settings.exchange.credConfiguredPlaceholder')
+                              : t('settings.exchange.enterApiSecretPlaceholder')
                           }
                         />
                       </div>
@@ -799,8 +818,8 @@ export function Settings() {
                             }}
                             placeholder={
                               exchangesConfigured?.[ex.key]?.has_credentials
-                                ? '已配置（加密存储），留空保持不变'
-                                : '输入 Passphrase（首次配置）'
+                                ? t('settings.exchange.credConfiguredPlaceholder')
+                                : t('settings.exchange.enterPassphrasePlaceholder')
                             }
                           />
                         </div>
@@ -808,15 +827,15 @@ export function Settings() {
                       <div className="flex items-center gap-6 md:col-span-2">
                         <label className="flex items-center gap-2 text-xs text-muted-foreground">
                           <Toggle value={!!cfg.testnet} onChange={(v) => setExchangeField(ex.key, 'testnet', v)} />
-                          使用测试网
+                          {t('settings.exchange.useTestnet')}
                         </label>
                         <label className="flex items-center gap-2 text-xs text-muted-foreground">
                           <Toggle value={!!cfg.futures} onChange={(v) => setExchangeField(ex.key, 'futures', v)} />
-                          启用合约
+                          {t('settings.exchange.enableFutures')}
                         </label>
                         <label className="flex items-center gap-2 text-xs text-muted-foreground">
                           <Toggle value={!!cfg.enabled} onChange={(v) => setExchangeField(ex.key, 'enabled', v)} />
-                          启用交易所
+                          {t('settings.exchange.enableExchange')}
                         </label>
                       </div>
                     </div>
@@ -842,12 +861,12 @@ export function Settings() {
                           <Wifi className="h-3.5 w-3.5" />
                         )}
                         {testStatus === 'testing'
-                          ? '测试中...'
+                          ? t('settings.testing')
                           : testStatus === 'ok'
-                            ? '✅ 连接成功'
+                            ? t('settings.connectOk')
                             : testStatus === 'error'
-                              ? testErrors[ex.key] || '❌ 连接失败'
-                              : '测试连接'}
+                              ? testErrors[ex.key] || t('settings.connectFail')
+                              : t('settings.testConnection')}
                       </button>
                     </div>
                   </SectionCard>
@@ -862,10 +881,10 @@ export function Settings() {
           {/* ── AI ── */}
           {activeTab === 'ai' && (
             <>
-              <SectionCard title="默认 AI 提供商" bodyClassName="space-y-4">
+              <SectionCard title={t('settings.ai.defaultTitle')} bodyClassName="space-y-4">
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                   <div>
-                    <label className="mb-1.5 block text-xs text-muted-foreground">默认提供商</label>
+                    <label className="mb-1.5 block text-xs text-muted-foreground">{t('settings.ai.defaultLabel')}</label>
                     <SelectField
                       value={defaultAIProvider}
                       onChange={(v) => {
@@ -873,7 +892,7 @@ export function Settings() {
                         setDirty(true)
                       }}
                       options={AI_PROVIDERS.map((p) => p.label)}
-                      label="默认提供商"
+                      label={t('settings.ai.defaultLabel')}
                     />
                   </div>
                 </div>
@@ -899,16 +918,16 @@ export function Settings() {
                         <PasswordInput
                           value={cfg.api_key || ''}
                           onChange={(v) => setAIField(prov.key, 'api_key', v)}
-                          placeholder={`输入 ${prov.label} API Key`}
+                          placeholder={`${t('settings.ai.apiKeyPlaceholderPrefix')}${prov.label}${t('settings.ai.apiKeyPlaceholderSuffix')}`}
                         />
                       </div>
                       <div>
-                        <label className="mb-1.5 block text-xs text-muted-foreground">默认模型</label>
+                        <label className="mb-1.5 block text-xs text-muted-foreground">{t('settings.ai.defaultModel')}</label>
                         <SelectField
                           value={cfg.model || prov.models[0]}
                           onChange={(v) => setAIField(prov.key, 'model', v)}
                           options={[...prov.models]}
-                          label="默认模型"
+                          label={t('settings.ai.defaultModel')}
                         />
                       </div>
                     </div>
@@ -933,12 +952,12 @@ export function Settings() {
                           <Wifi className="h-3.5 w-3.5" />
                         )}
                         {testStatus === 'testing'
-                          ? '测试中...'
+                          ? t('settings.testing')
                           : testStatus === 'ok'
-                            ? '✅ 连接成功'
+                            ? t('settings.connectOk')
                             : testStatus === 'error'
-                              ? '❌ 连接失败'
-                              : '测试连接'}
+                              ? t('settings.connectFail')
+                              : t('settings.testConnection')}
                       </button>
                     </div>
                   </SectionCard>
@@ -950,14 +969,14 @@ export function Settings() {
           {/* ── NOTIFY (local) ── */}
           {activeTab === 'notify' && (
             <>
-              <SectionCard title="邮件通知" bodyClassName="space-y-4">
+              <SectionCard title={t('settings.notify.emailTitle')} bodyClassName="space-y-4">
                 <label className="flex items-center gap-2 text-xs text-muted-foreground">
                   <Toggle value={notifyEmail.enabled} onChange={(v) => setNotifyEmail((p) => ({ ...p, enabled: v }))} />
-                  启用邮件通知
+                  {t('settings.notify.enableEmail')}
                 </label>
                 {notifyEmail.enabled && (
                   <div>
-                    <label className="mb-1.5 block text-xs text-muted-foreground">收件邮箱</label>
+                    <label className="mb-1.5 block text-xs text-muted-foreground">{t('settings.notify.recipientEmail')}</label>
                     <TextInput
                       value={notifyEmail.address || ''}
                       onChange={(v) => setNotifyEmail((p) => ({ ...p, address: v }))}
@@ -966,13 +985,13 @@ export function Settings() {
                   </div>
                 )}
               </SectionCard>
-              <SectionCard title="Telegram 通知" bodyClassName="space-y-4">
+              <SectionCard title={t('settings.notify.telegramTitle')} bodyClassName="space-y-4">
                 <label className="flex items-center gap-2 text-xs text-muted-foreground">
                   <Toggle
                     value={notifyTelegram.enabled}
                     onChange={(v) => setNotifyTelegram((p) => ({ ...p, enabled: v }))}
                   />
-                  启用 Telegram 通知
+                  {t('settings.notify.enableTelegram')}
                 </label>
                 {notifyTelegram.enabled && (
                   <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -981,7 +1000,7 @@ export function Settings() {
                       <PasswordInput
                         value={notifyTelegram.botToken || ''}
                         onChange={(v) => setNotifyTelegram((p) => ({ ...p, botToken: v }))}
-                        placeholder="输入 Bot Token"
+                        placeholder={t('settings.notify.enterBotToken')}
                       />
                     </div>
                     <div>
@@ -989,36 +1008,36 @@ export function Settings() {
                       <TextInput
                         value={notifyTelegram.chatId || ''}
                         onChange={(v) => setNotifyTelegram((p) => ({ ...p, chatId: v }))}
-                        placeholder="输入 Chat ID"
+                        placeholder={t('settings.notify.enterChatId')}
                       />
                     </div>
                   </div>
                 )}
               </SectionCard>
-              <SectionCard title="钉钉通知" bodyClassName="space-y-4">
+              <SectionCard title={t('settings.notify.dingtalkTitle')} bodyClassName="space-y-4">
                 <label className="flex items-center gap-2 text-xs text-muted-foreground">
                   <Toggle
                     value={notifyDingtalk.enabled}
                     onChange={(v) => setNotifyDingtalk((p) => ({ ...p, enabled: v }))}
                   />
-                  启用钉钉通知
+                  {t('settings.notify.enableDingtalk')}
                 </label>
                 {notifyDingtalk.enabled && (
                   <div>
-                    <label className="mb-1.5 block text-xs text-muted-foreground">Webhook 地址</label>
+                    <label className="mb-1.5 block text-xs text-muted-foreground">{t('settings.notify.webhookAddress')}</label>
                     <PasswordInput
                       value={notifyDingtalk.webhook || ''}
                       onChange={(v) => setNotifyDingtalk((p) => ({ ...p, webhook: v }))}
-                      placeholder="输入钉钉 Webhook"
+                      placeholder={t('settings.notify.enterDingtalkWebhook')}
                     />
                   </div>
                 )}
               </SectionCard>
 
-              <SectionCard title="TradingView 信号接入">
+              <SectionCard title={t('settings.notify.tvTitle')}>
                 <div className="space-y-3">
                   <p className="text-xs text-muted-foreground">
-                    将 TradingView 的 Pine Script 指标信号通过 Webhook 推送到本系统自动下单
+                    {t('settings.notify.tvDesc')}
                   </p>
                   <div>
                     <label className="mb-1 block text-[10px] text-muted-foreground">Webhook URL</label>
@@ -1032,24 +1051,24 @@ export function Settings() {
                         }}
                         className="px-3 py-2 rounded-lg border border-quant-border text-xs hover:bg-white/5 shrink-0"
                       >
-                        复制
+                        {t('settings.copy')}
                       </button>
                     </div>
                   </div>
                   <div className="p-3 rounded-lg bg-quant-bg-secondary space-y-1.5">
-                    <p className="text-[10px] font-medium text-foreground">TradingView 设置步骤</p>
+                    <p className="text-[10px] font-medium text-foreground">{t('settings.notify.tvStepsTitle')}</p>
                     <ol className="text-[10px] text-muted-foreground space-y-0.5 list-decimal list-inside">
-                      <li>打开 TradingView 图表 → 创建闹钟 (Alert)</li>
-                      <li>Webhook URL 填入上方地址</li>
-                      <li>消息体填入 JSON 格式信号</li>
+                      <li>{t('settings.notify.tvStep1')}</li>
+                      <li>{t('settings.notify.tvStep2')}</li>
+                      <li>{t('settings.notify.tvStep3')}</li>
                     </ol>
                   </div>
                   <div className="p-3 rounded-lg bg-quant-bg-tertiary">
-                    <p className="text-[10px] text-muted-foreground mb-1">消息体示例</p>
+                    <p className="text-[10px] text-muted-foreground mb-1">{t('settings.notify.tvMessageExample')}</p>
                     <pre className="text-[10px] font-mono text-foreground/80 whitespace-pre-wrap">{`{"symbol":"BTCUSDT","action":"buy","price":"50000","quantity":"0.1","strategy":"TV_MA_Cross"}`}</pre>
                   </div>
                   <div className="text-[10px] text-muted-foreground">
-                    <span className="font-medium">action 取值:</span> buy(做多) / sell(做空) / exit(平仓)
+                    <span className="font-medium">{t('settings.notify.tvActionLabel')}</span> {t('settings.notify.tvActionValues')}
                   </div>
                 </div>
               </SectionCard>
@@ -1059,9 +1078,9 @@ export function Settings() {
           {/* ── NOTIFY ROUTING ── */}
           {activeTab === 'notify-routing' && (
             <>
-              <SectionCard title="通知路由规则" bodyClassName="space-y-4">
+              <SectionCard title={t('settings.routing.title')} bodyClassName="space-y-4">
                 <div className="flex items-center justify-between">
-                  <p className="text-xs text-muted-foreground">配置不同事件和级别通过哪些通道发送通知</p>
+                  <p className="text-xs text-muted-foreground">{t('settings.routing.desc')}</p>
                   <button
                     onClick={() => {
                       setEditingRule({
@@ -1077,22 +1096,22 @@ export function Settings() {
                     className="flex items-center gap-1.5 rounded-md bg-quant-gold px-3 py-1.5 text-xs font-medium text-black transition-opacity hover:opacity-90"
                   >
                     <Zap className="h-3.5 w-3.5" />
-                    新增规则
+                    {t('settings.routing.addRule')}
                   </button>
                 </div>
 
                 {isRuleFormOpen && editingRule && (
                   <div className="rounded-lg border border-quant-border bg-quant-bg p-4 space-y-4">
                     <div>
-                      <label className="mb-1.5 block text-xs text-muted-foreground">规则名称</label>
+                      <label className="mb-1.5 block text-xs text-muted-foreground">{t('settings.routing.ruleName')}</label>
                       <TextInput
                         value={editingRule.name}
                         onChange={(v) => setEditingRule((p) => (p ? { ...p, name: v } : p))}
-                        placeholder="例如：关键告警"
+                        placeholder={t('settings.routing.ruleNamePlaceholder')}
                       />
                     </div>
                     <div>
-                      <label className="mb-1.5 block text-xs text-muted-foreground">事件类型（空表示全部）</label>
+                      <label className="mb-1.5 block text-xs text-muted-foreground">{t('settings.routing.eventTypes')}</label>
                       <div className="flex flex-wrap gap-2">
                         {EVENTS.map((ev) => (
                           <label
@@ -1111,13 +1130,13 @@ export function Settings() {
                                 })
                               }}
                             />
-                            {EVENT_LABELS[ev] || ev}
+                            {t(EVENT_LABELS[ev] || ev)}
                           </label>
                         ))}
                       </div>
                     </div>
                     <div>
-                      <label className="mb-1.5 block text-xs text-muted-foreground">通知级别</label>
+                      <label className="mb-1.5 block text-xs text-muted-foreground">{t('settings.routing.levels')}</label>
                       <div className="flex flex-wrap gap-2">
                         {LEVELS.map((lv) => (
                           <label
@@ -1136,13 +1155,13 @@ export function Settings() {
                                 })
                               }}
                             />
-                            {LEVEL_LABELS[lv] || lv}
+                            {t(LEVEL_LABELS[lv] || lv)}
                           </label>
                         ))}
                       </div>
                     </div>
                     <div>
-                      <label className="mb-1.5 block text-xs text-muted-foreground">通知通道</label>
+                      <label className="mb-1.5 block text-xs text-muted-foreground">{t('settings.routing.channels')}</label>
                       <div className="flex flex-wrap gap-2">
                         {CHANNELS.map((ch) => (
                           <label
@@ -1163,7 +1182,7 @@ export function Settings() {
                                 })
                               }}
                             />
-                            {CHANNEL_LABELS[ch] || ch}
+                            {t(CHANNEL_LABELS[ch] || ch)}
                           </label>
                         ))}
                       </div>
@@ -1174,7 +1193,7 @@ export function Settings() {
                           value={editingRule.enabled}
                           onChange={(v) => setEditingRule((p) => (p ? { ...p, enabled: v } : p))}
                         />
-                        启用规则
+                        {t('settings.routing.enableRule')}
                       </label>
                     </div>
                     <div className="flex items-center gap-2">
@@ -1188,7 +1207,7 @@ export function Settings() {
                         ) : (
                           <Save className="h-3.5 w-3.5" />
                         )}
-                        {saveRuleMut.isPending ? '保存中...' : '保存'}
+                        {saveRuleMut.isPending ? t('settings.saving') : t('settings.save')}
                       </button>
                       <button
                         onClick={() => {
@@ -1197,7 +1216,7 @@ export function Settings() {
                         }}
                         className="flex items-center gap-1.5 rounded-md border border-quant-border bg-quant-card px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-quant-gold/30 hover:text-foreground"
                       >
-                        取消
+                        {t('settings.cancel')}
                       </button>
                     </div>
                   </div>
@@ -1206,10 +1225,10 @@ export function Settings() {
                 {notifyRoutesLoading ? (
                   <div className="flex items-center gap-2 py-4">
                     <Loader2 className="h-4 w-4 animate-spin text-quant-gold" />
-                    <span className="text-xs text-muted-foreground">加载中...</span>
+                    <span className="text-xs text-muted-foreground">{t('settings.loading')}</span>
                   </div>
                 ) : notifyRoutes.length === 0 ? (
-                  <div className="py-6 text-center text-xs text-muted-foreground">暂无路由规则，点击上方按钮添加</div>
+                  <div className="py-6 text-center text-xs text-muted-foreground">{t('settings.routing.empty')}</div>
                 ) : (
                   <div className="space-y-3">
                     {notifyRoutes.map((rule: RouteRule) => (
@@ -1225,7 +1244,7 @@ export function Settings() {
                                   : 'bg-quant-border text-muted-foreground'
                               )}
                             >
-                              {rule.enabled ? '已启用' : '已禁用'}
+                              {rule.enabled ? t('settings.enabled') : t('settings.disabled')}
                             </span>
                           </div>
                           <div className="flex items-center gap-2">
@@ -1236,25 +1255,25 @@ export function Settings() {
                               }}
                               className="rounded-md border border-quant-border bg-quant-card px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:border-quant-gold/30 hover:text-foreground"
                             >
-                              编辑
+                              {t('settings.edit')}
                             </button>
                             <button
                               onClick={() => {
-                                if (confirm('确定删除此规则？')) {
+                                if (confirm(t('settings.routing.deleteConfirm'))) {
                                   deleteRuleMut.mutate(rule.id)
                                 }
                               }}
                               disabled={deleteRuleMut.isPending && deleteRuleMut.variables === rule.id}
                               className="rounded-md border border-quant-border bg-quant-card px-2.5 py-1 text-xs text-red-400 transition-colors hover:border-red-400/30 hover:bg-red-400/10 disabled:opacity-50"
                             >
-                              删除
+                              {t('settings.delete')}
                             </button>
                           </div>
                         </div>
                         <div className="flex flex-wrap gap-1.5">
-                          {(rule.events.length === 0 ? ['全部事件'] : rule.events).map((ev) => (
-                            <span key={ev} className="rounded bg-quant-border px-1.5 py-0.5 text-[10px] text-white">
-                              {EVENT_LABELS[ev] || ev}
+                          {(rule.events.length === 0 ? ['all'] : rule.events).map((ev) => (
+                            <span key={ev} className="rounded bg-quant-border px-1.5 py-0.5 text-[10px] text-foreground">
+                              {t(EVENT_LABELS[ev] || ev)}
                             </span>
                           ))}
                         </div>
@@ -1271,7 +1290,7 @@ export function Settings() {
                                     : 'bg-blue-500/10 text-blue-400'
                               )}
                             >
-                              {LEVEL_LABELS[lv] || lv}
+                              {t(LEVEL_LABELS[lv] || lv)}
                             </span>
                           ))}
                         </div>
@@ -1281,7 +1300,7 @@ export function Settings() {
                               key={ch}
                               className="rounded bg-quant-gold/10 px-1.5 py-0.5 text-[10px] text-quant-gold"
                             >
-                              {CHANNEL_LABELS[ch] || ch}
+                              {t(CHANNEL_LABELS[ch] || ch)}
                             </span>
                           ))}
                         </div>
@@ -1291,8 +1310,8 @@ export function Settings() {
                 )}
               </SectionCard>
 
-              <SectionCard title="通道测试" bodyClassName="space-y-4">
-                <p className="text-xs text-muted-foreground">向指定通道发送一条测试消息，验证配置是否正确</p>
+              <SectionCard title={t('settings.routing.channelTest')} bodyClassName="space-y-4">
+                <p className="text-xs text-muted-foreground">{t('settings.routing.channelTestDesc')}</p>
                 <div className="flex flex-wrap gap-2">
                   {CHANNELS.map((ch) => {
                     const testStatus =
@@ -1329,13 +1348,13 @@ export function Settings() {
                         ) : (
                           <Wifi className="h-3.5 w-3.5" />
                         )}
-                        {CHANNEL_LABELS[ch] || ch}
+                        {t(CHANNEL_LABELS[ch] || ch)}
                         {testStatus === 'testing'
-                          ? '测试中...'
+                          ? t('settings.testing')
                           : testStatus === 'ok'
-                            ? '成功'
+                            ? t('settings.success')
                             : testStatus === 'error'
-                              ? '失败'
+                              ? t('settings.fail')
                               : ''}
                       </button>
                     )
@@ -1347,24 +1366,24 @@ export function Settings() {
 
           {/* ── APPEARANCE (local) ── */}
           {activeTab === 'appearance' && (
-            <SectionCard title="界面偏好" bodyClassName="space-y-5">
+            <SectionCard title={t('settings.appearance.title')} bodyClassName="space-y-5">
               <div>
-                <label className="mb-1.5 block text-xs text-muted-foreground">界面缩放</label>
+                <label className="mb-1.5 block text-xs text-muted-foreground">{t('settings.appearance.uiScale')}</label>
                 <SelectField
                   value={`${Math.round(app.uiScale * 100)}%`}
                   onChange={(v) => app.setUiScale(Number(v.replace('%', '')) / 100)}
                   options={['90%', '100%', '110%']}
-                  label="界面缩放"
+                  label={t('settings.appearance.uiScale')}
                 />
-                <p className="mt-1.5 text-[10px] text-muted-foreground">等比缩放整个界面，刷新后保持</p>
+                <p className="mt-1.5 text-[10px] text-muted-foreground">{t('settings.appearance.uiScaleHint')}</p>
               </div>
               <label className="flex items-center justify-between rounded-lg border border-quant-border bg-quant-bg p-4">
                 <div>
-                  <div className="text-sm font-medium text-foreground">侧边栏悬停展开</div>
+                  <div className="text-sm font-medium text-foreground">{t('settings.appearance.sidebarHover')}</div>
                   <div className="mt-0.5 text-xs text-muted-foreground">
                     {app.sidebarBehavior === 'hover'
-                      ? '鼠标靠近自动展开，移开收起'
-                      : '点击侧边栏手动展开/收起，有子菜单的项点击向下展开'}
+                      ? t('settings.appearance.sidebarHoverOn')
+                      : t('settings.appearance.sidebarHoverOff')}
                   </div>
                 </div>
                 <Toggle
@@ -1377,9 +1396,9 @@ export function Settings() {
 
           {/* ── DATA (local) ── */}
           {activeTab === 'data' && (
-            <SectionCard title="数据管理" bodyClassName="space-y-5">
+            <SectionCard title={t('settings.data.title')} bodyClassName="space-y-5">
               <div>
-                <label className="mb-1.5 block text-xs text-muted-foreground">K 线保留条数</label>
+                <label className="mb-1.5 block text-xs text-muted-foreground">{t('settings.data.klineLimit')}</label>
                 <NumberInput
                   value={dataSettings.klineLimit}
                   onChange={(v) => setDataSettings((p) => ({ ...p, klineLimit: v }))}
@@ -1389,8 +1408,8 @@ export function Settings() {
               </div>
               <label className="flex items-center justify-between rounded-lg border border-quant-border bg-quant-bg p-4">
                 <div>
-                  <div className="text-sm font-medium text-foreground">自动清理过期数据</div>
-                  <div className="mt-0.5 text-xs text-muted-foreground">定期清理超过保留条数的旧 K 线数据</div>
+                  <div className="text-sm font-medium text-foreground">{t('settings.data.autoCleanup')}</div>
+                  <div className="mt-0.5 text-xs text-muted-foreground">{t('settings.data.autoCleanupHint')}</div>
                 </div>
                 <Toggle
                   value={dataSettings.autoCleanup}
@@ -1399,8 +1418,8 @@ export function Settings() {
               </label>
               <label className="flex items-center justify-between rounded-lg border border-quant-border bg-quant-bg p-4">
                 <div>
-                  <div className="text-sm font-medium text-foreground">实时推送</div>
-                  <div className="mt-0.5 text-xs text-muted-foreground">通过 WebSocket 接收实时行情更新</div>
+                  <div className="text-sm font-medium text-foreground">{t('settings.data.realtime')}</div>
+                  <div className="mt-0.5 text-xs text-muted-foreground">{t('settings.data.realtimeHint')}</div>
                 </div>
                 <Toggle
                   value={dataSettings.realtime}
@@ -1414,9 +1433,9 @@ export function Settings() {
           {activeTab === 'security' && (
             <>
               <MfaSection />
-              <SectionCard title="安全设置" bodyClassName="space-y-5">
+              <SectionCard title={t('settings.security.title')} bodyClassName="space-y-5">
                 <div>
-                  <label className="mb-1.5 block text-xs text-muted-foreground">会话超时 (分钟)</label>
+                  <label className="mb-1.5 block text-xs text-muted-foreground">{t('settings.security.sessionTimeout')}</label>
                   <NumberInput
                     value={securitySettings.sessionTimeout}
                     onChange={(v) => setSecuritySettings((p) => ({ ...p, sessionTimeout: v }))}
@@ -1425,13 +1444,13 @@ export function Settings() {
                   />
                 </div>
                 <div>
-                  <label className="mb-1.5 block text-xs text-muted-foreground">IP 白名单</label>
+                  <label className="mb-1.5 block text-xs text-muted-foreground">{t('settings.security.ipWhitelist')}</label>
                   <TextInput
                     value={securitySettings.ipWhitelist}
                     onChange={(v) => setSecuritySettings((p) => ({ ...p, ipWhitelist: v }))}
                     placeholder="192.168.1.0/24, 10.0.0.1"
                   />
-                  <p className="mt-1 text-[11px] text-muted-foreground">逗号分隔，留空表示不限制</p>
+                  <p className="mt-1 text-[11px] text-muted-foreground">{t('settings.security.ipWhitelistHint')}</p>
                 </div>
               </SectionCard>
             </>
@@ -1442,20 +1461,20 @@ export function Settings() {
             <>
               <DataDownloadSection />
 
-              <SectionCard title="系统状态" bodyClassName="space-y-4">
+              <SectionCard title={t('settings.system.title')} bodyClassName="space-y-4">
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                   <div className="rounded-lg border border-quant-border bg-quant-bg p-4">
-                    <div className="text-xs text-muted-foreground">前端版本</div>
+                    <div className="text-xs text-muted-foreground">{t('settings.system.frontendVersion')}</div>
                     <div className="mt-1 text-sm font-medium text-foreground">
                       {import.meta.env.VITE_APP_VERSION || '2.0.0'}
                     </div>
                   </div>
                   <div className="rounded-lg border border-quant-border bg-quant-bg p-4">
-                    <div className="text-xs text-muted-foreground">后端版本</div>
+                    <div className="text-xs text-muted-foreground">{t('settings.system.backendVersion')}</div>
                     <div className="mt-1 text-sm font-medium text-foreground">{systemInfo.version || '-'}</div>
                   </div>
                   <div className="rounded-lg border border-quant-border bg-quant-bg p-4">
-                    <div className="text-xs text-muted-foreground">健康状态</div>
+                    <div className="text-xs text-muted-foreground">{t('settings.system.healthStatus')}</div>
                     <div
                       className={cn(
                         'mt-1 flex items-center gap-1.5 text-sm font-medium',
@@ -1467,35 +1486,35 @@ export function Settings() {
                       ) : (
                         <WifiOff className="h-3.5 w-3.5" />
                       )}
-                      {systemInfo.status === 'healthy' ? '健康' : systemInfo.status || '未知'}
+                      {systemInfo.status === 'healthy' ? t('settings.system.healthy') : systemInfo.status || t('settings.system.unknown')}
                     </div>
                   </div>
                 </div>
                 {systemInfo.buildTime && (
                   <div className="rounded-lg border border-quant-border bg-quant-bg p-4">
-                    <div className="text-xs text-muted-foreground">构建时间</div>
+                    <div className="text-xs text-muted-foreground">{t('settings.system.buildTime')}</div>
                     <div className="mt-1 text-sm font-medium text-foreground">{systemInfo.buildTime}</div>
                   </div>
                 )}
               </SectionCard>
 
-              <SectionCard title="日志" bodyClassName="space-y-4">
+              <SectionCard title={t('settings.system.logsTitle')} bodyClassName="space-y-4">
                 <div className="flex items-center justify-between">
-                  <div className="text-xs text-muted-foreground">Gateway 日志（最近 100 行）</div>
+                  <div className="text-xs text-muted-foreground">{t('settings.system.logsDesc')}</div>
                   <button
                     onClick={() => {
                       fetch('/api/logs?tail=100')
-                        .then((r) => (r.ok ? r.text() : '后端未启用日志接口'))
+                        .then((r) => (r.ok ? r.text() : t('settings.system.logsDisabled')))
                         .then(setLogs)
-                        .catch(() => setLogs('无法获取日志'))
+                        .catch(() => setLogs(t('settings.system.logsUnavailable')))
                     }}
                     className="flex items-center gap-1.5 rounded-md border border-quant-border bg-quant-card px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
                   >
-                    <Terminal className="h-3.5 w-3.5" /> 刷新日志
+                    <Terminal className="h-3.5 w-3.5" /> {t('settings.system.refreshLogs')}
                   </button>
                 </div>
                 <pre className="max-h-96 overflow-auto rounded-lg border border-quant-border bg-black/40 p-3 text-[11px] leading-relaxed text-muted-foreground">
-                  {logs || '点击刷新日志'}
+                  {logs || t('settings.system.clickToRefresh')}
                 </pre>
               </SectionCard>
             </>
@@ -1520,6 +1539,7 @@ function CurrencySelector() {
   const [currency, setCurrency] = useState('CNY')
   const [rates, setRates] = useState<Record<string, number>>({})
   const [saving, setSaving] = useState(false)
+  const { t } = useI18n()
 
   useEffect(() => {
     configApi
@@ -1543,9 +1563,9 @@ function CurrencySelector() {
   }
 
   return (
-    <SectionCard title="显示币种" bodyClassName="space-y-4">
+    <SectionCard title={t('settings.currency.title')} bodyClassName="space-y-4">
       <p className="text-xs text-muted-foreground">
-        选择资产估值和换算的显示币种。当前汇率从 open.er-api.com 获取，每小时更新。
+        {t('settings.currency.desc')}
       </p>
       <div className="flex flex-wrap gap-2">
         {CURRENCIES.map((c) => (
@@ -1571,7 +1591,7 @@ function CurrencySelector() {
       </div>
       {saving && (
         <p className="text-xs text-quant-gold flex items-center gap-1">
-          <Loader2 className="h-3 w-3 animate-spin" /> 保存中...
+          <Loader2 className="h-3 w-3 animate-spin" /> {t('settings.saving')}
         </p>
       )}
     </SectionCard>

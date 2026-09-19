@@ -8,6 +8,7 @@ import { useConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { KPICard } from '@/components/ui/KPICard'
 import { EmptyState } from '@/components/ui/EmptyState'
+import { useI18n } from '@/i18n'
 import type { TriangularConfig, TriangularOpportunity, TriangularTrade } from '@/types'
 import {
   Triangle,
@@ -70,7 +71,7 @@ function TextInput({
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
-      className="w-full rounded-md border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white placeholder-muted-foreground outline-none transition-colors focus:border-quant-gold"
+      className="w-full rounded-md border border-quant-border bg-quant-bg px-3 py-2 text-sm text-foreground placeholder-muted-foreground outline-none transition-colors focus:border-quant-gold"
     />
   )
 }
@@ -99,7 +100,7 @@ function NumberInput({
       value={value}
       onChange={(e) => onChange(Number(e.target.value))}
       placeholder={placeholder}
-      className="w-full rounded-md border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white placeholder-muted-foreground outline-none transition-colors focus:border-quant-gold"
+      className="w-full rounded-md border border-quant-border bg-quant-bg px-3 py-2 text-sm text-foreground placeholder-muted-foreground outline-none transition-colors focus:border-quant-gold"
     />
   )
 }
@@ -139,6 +140,7 @@ const DEFAULT_TRIANGULAR_CONFIG: TriangularConfig = {
 
 export function TriangularArbitragePanel() {
   const queryClient = useQueryClient()
+  const { t } = useI18n()
   const { confirm, Dialog } = useConfirmDialog()
   const [showHistory, setShowHistory] = useState(false)
   const [showConfig, setShowConfig] = useState(false)
@@ -219,10 +221,10 @@ export function TriangularArbitragePanel() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['triangular-config'] })
       queryClient.invalidateQueries({ queryKey: ['triangular-status'] })
-      useToastStore.getState().addToast({ type: 'success', message: '配置已保存', duration: 3000 })
+      useToastStore.getState().addToast({ type: 'success', message: t('arb.ui.toast-config-saved'), duration: 3000 })
     },
     onError: (err: Error) => {
-      useToastStore.getState().addToast({ type: 'error', message: err.message || '保存失败', duration: 5000 })
+      useToastStore.getState().addToast({ type: 'error', message: err.message || t('arb.ui.toast-save-failed'), duration: 5000 })
     },
   })
 
@@ -232,10 +234,10 @@ export function TriangularArbitragePanel() {
       queryClient.invalidateQueries({ queryKey: ['triangular-positions'] })
       queryClient.invalidateQueries({ queryKey: ['triangular-history'] })
       queryClient.invalidateQueries({ queryKey: ['triangular-status'] })
-      useToastStore.getState().addToast({ type: 'success', message: '币种套利执行已提交', duration: 3000 })
+      useToastStore.getState().addToast({ type: 'success', message: t('arb.tri.toast-execute-submitted'), duration: 3000 })
     },
     onError: (err: Error) => {
-      useToastStore.getState().addToast({ type: 'error', message: err.message || '执行失败', duration: 5000 })
+      useToastStore.getState().addToast({ type: 'error', message: err.message || t('arb.ui.toast-execute-failed'), duration: 5000 })
     },
   })
 
@@ -245,10 +247,10 @@ export function TriangularArbitragePanel() {
       queryClient.invalidateQueries({ queryKey: ['triangular-positions'] })
       queryClient.invalidateQueries({ queryKey: ['triangular-history'] })
       queryClient.invalidateQueries({ queryKey: ['triangular-status'] })
-      useToastStore.getState().addToast({ type: 'success', message: '持仓已平仓', duration: 3000 })
+      useToastStore.getState().addToast({ type: 'success', message: t('arb.ui.toast-position-closed'), duration: 3000 })
     },
     onError: (err: Error) => {
-      useToastStore.getState().addToast({ type: 'error', message: err.message || '平仓失败', duration: 5000 })
+      useToastStore.getState().addToast({ type: 'error', message: err.message || t('arb.ui.toast-close-failed'), duration: 5000 })
     },
   })
 
@@ -258,10 +260,10 @@ export function TriangularArbitragePanel() {
       queryClient.invalidateQueries({ queryKey: ['triangular-positions'] })
       queryClient.invalidateQueries({ queryKey: ['triangular-history'] })
       queryClient.invalidateQueries({ queryKey: ['triangular-status'] })
-      useToastStore.getState().addToast({ type: 'success', message: '持仓已标记为失败', duration: 3000 })
+      useToastStore.getState().addToast({ type: 'success', message: t('arb.ui.toast-position-failed'), duration: 3000 })
     },
     onError: (err: Error) => {
-      useToastStore.getState().addToast({ type: 'error', message: err.message || '标记失败', duration: 5000 })
+      useToastStore.getState().addToast({ type: 'error', message: err.message || t('arb.ui.toast-mark-failed'), duration: 5000 })
     },
   })
 
@@ -289,10 +291,12 @@ export function TriangularArbitragePanel() {
     if (!editConfig) return
     if (!editConfig.dry_run) {
       const ok = await confirm({
-        title: '确认执行真实币种套利交易？',
-        message: `${opp.cycle.join(' → ')}，预计净利润 ${opp.net_profit_pct.toFixed(4)}%`,
-        confirmText: '执行',
-        cancelText: '取消',
+        title: t('arb.tri.confirm-execute-title'),
+        message: t('arb.tri.confirm-execute-msg')
+          .replace('{cycle}', opp.cycle.join(' → '))
+          .replace('{profit}', opp.net_profit_pct.toFixed(4)),
+        confirmText: t('arb.ui.execute'),
+        cancelText: t('arb.ui.cancel'),
       })
       if (!ok) return
     }
@@ -307,10 +311,10 @@ export function TriangularArbitragePanel() {
 
   const handleClosePosition = async (pos: TriangularTrade) => {
     const ok = await confirm({
-      title: '平仓',
-      message: `确认将持仓 ${pos.cycle.join(' → ')} 平仓？`,
-      confirmText: '平仓',
-      cancelText: '取消',
+      title: t('arb.ui.close-position'),
+      message: t('arb.ui.confirm-close-msg').replace('{target}', pos.cycle.join(' → ')),
+      confirmText: t('arb.ui.close-position'),
+      cancelText: t('arb.ui.cancel'),
     })
     if (!ok) return
     closePositionMut.mutate(pos.id)
@@ -318,11 +322,11 @@ export function TriangularArbitragePanel() {
 
   const handleFailPosition = async (pos: TriangularTrade) => {
     const ok = await confirm({
-      title: '标记为失败',
-      message: `确认将持仓 ${pos.cycle.join(' → ')} 标记为失败？`,
+      title: t('arb.ui.mark-as-failed'),
+      message: t('arb.ui.confirm-fail-msg').replace('{target}', pos.cycle.join(' → ')),
       variant: 'danger',
-      confirmText: '标记失败',
-      cancelText: '取消',
+      confirmText: t('arb.ui.mark-fail'),
+      cancelText: t('arb.ui.cancel'),
     })
     if (!ok) return
     failPositionMut.mutate(pos.id)
@@ -342,8 +346,8 @@ export function TriangularArbitragePanel() {
       {/* Status & Controls */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <KPICard
-          label="引擎状态"
-          value={isRunning ? '运行中' : '已停止'}
+          label={t('arb.ui.engine-status')}
+          value={isRunning ? t('arb.ui.running') : t('arb.ui.stopped')}
           icon={
             isRunning ? (
               <Activity className="w-4 h-4 text-green-400" />
@@ -351,28 +355,28 @@ export function TriangularArbitragePanel() {
               <AlertCircle className="w-4 h-4 text-red-400" />
             )
           }
-          subValue={isRunning ? '监控中' : '点击启动'}
+          subValue={isRunning ? t('arb.ui.monitoring') : t('arb.ui.click-to-start')}
           trend={isRunning ? 'up' : 'down'}
         />
         <KPICard
-          label="扫描次数"
+          label={t('arb.tri.scans')}
           value={stats.checks ?? 0}
           icon={<Target className="w-4 h-4 text-quant-gold" />}
-          subValue="总扫描"
+          subValue={t('arb.ui.sub-total-scan')}
           trend="neutral"
         />
         <KPICard
-          label="循环数"
+          label={t('arb.tri.cycles')}
           value={stats.cycles ?? 0}
           icon={<Triangle className="w-4 h-4 text-quant-gold" />}
-          subValue="已检测"
+          subValue={t('arb.tri.sub-detected')}
           trend="up"
         />
         <KPICard
-          label="总利润"
+          label={t('arb.ui.total-profit')}
           value={stats.total_profit ? `$${(stats.total_profit as number).toFixed(2)}` : '$0.00'}
           icon={<DollarSign className="w-4 h-4 text-quant-gold" />}
-          subValue="累计"
+          subValue={t('arb.ui.cumulative')}
           trend="up"
         />
       </div>
@@ -391,7 +395,7 @@ export function TriangularArbitragePanel() {
             )}
           >
             {startMutation.isPending ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-            启动引擎
+            {t('arb.ui.start-engine')}
           </button>
         ) : (
           <button
@@ -405,7 +409,7 @@ export function TriangularArbitragePanel() {
             )}
           >
             {stopMutation.isPending ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Square className="w-4 h-4" />}
-            停止引擎
+            {t('arb.ui.stop-engine')}
           </button>
         )}
         <button
@@ -418,7 +422,7 @@ export function TriangularArbitragePanel() {
           )}
         >
           <Layers className="w-3.5 h-3.5" />
-          配置
+          {t('arb.ui.config')}
         </button>
         <button
           onClick={() => setShowHistory(!showHistory)}
@@ -430,7 +434,7 @@ export function TriangularArbitragePanel() {
           )}
         >
           <Clock className="w-3.5 h-3.5" />
-          历史
+          {t('arb.ui.history')}
         </button>
       </div>
 
@@ -452,10 +456,10 @@ export function TriangularArbitragePanel() {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between px-6 py-4 border-b border-quant-border shrink-0">
-              <h3 className="text-sm font-bold">币种套利配置</h3>
+              <h3 className="text-sm font-bold">{t('arb.tri.config-title')}</h3>
               <button
                 onClick={() => setShowConfig(false)}
-                aria-label="关闭"
+                aria-label={t('arb.ui.close')}
                 className="text-muted-foreground hover:text-foreground"
               >
                 <X className="w-4 h-4" />
@@ -463,12 +467,12 @@ export function TriangularArbitragePanel() {
             </div>
             <div className="flex-1 overflow-y-auto p-6">
           {!editConfig ? (
-            <div className="text-sm text-muted-foreground text-center py-4">加载配置中...</div>
+            <div className="text-sm text-muted-foreground text-center py-4">{t('arb.ui.loading-config')}</div>
           ) : (
             <div className="space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {renderConfigField(
-                  '交易对（逗号分隔）',
+                  t('arb.ui.symbols'),
                   <TextInput
                     value={symbolsInput}
                     onChange={(v) => setSymbolsInput(v)}
@@ -477,7 +481,7 @@ export function TriangularArbitragePanel() {
                   'symbols'
                 )}
                 {renderConfigField(
-                  '计价资产',
+                  t('arb.tri.quote-asset'),
                   <TextInput
                     value={editConfig.quote_asset}
                     onChange={(v) => setEditConfig((p) => (p ? { ...p, quote_asset: v.toUpperCase() } : p))}
@@ -486,7 +490,7 @@ export function TriangularArbitragePanel() {
                   'quote_asset'
                 )}
                 {renderConfigField(
-                  '最小净利润 (%)',
+                  t('arb.tri.min-profit'),
                   <NumberInput
                     value={editConfig.min_profit_pct}
                     onChange={(v) => setEditConfig((p) => (p ? { ...p, min_profit_pct: v } : p))}
@@ -496,7 +500,7 @@ export function TriangularArbitragePanel() {
                   'min_profit_pct'
                 )}
                 {renderConfigField(
-                  '订单金额',
+                  t('arb.tri.order-size'),
                   <NumberInput
                     value={editConfig.order_size}
                     onChange={(v) => setEditConfig((p) => (p ? { ...p, order_size: v } : p))}
@@ -506,7 +510,7 @@ export function TriangularArbitragePanel() {
                   'order_size'
                 )}
                 {renderConfigField(
-                  '最大持仓数',
+                  t('arb.ui.max-positions'),
                   <NumberInput
                     value={editConfig.max_positions}
                     onChange={(v) => setEditConfig((p) => (p ? { ...p, max_positions: Math.floor(v) } : p))}
@@ -516,7 +520,7 @@ export function TriangularArbitragePanel() {
                   'max_positions'
                 )}
                 {renderConfigField(
-                  '手续费率 (小数)',
+                  t('arb.tri.fee-rate'),
                   <NumberInput
                     value={editConfig.fee_rate}
                     onChange={(v) => setEditConfig((p) => (p ? { ...p, fee_rate: v } : p))}
@@ -526,7 +530,7 @@ export function TriangularArbitragePanel() {
                   'fee_rate'
                 )}
                 {renderConfigField(
-                  '最大滑点 (%)',
+                  t('arb.ui.max-slippage'),
                   <NumberInput
                     value={editConfig.max_slippage_pct}
                     onChange={(v) => setEditConfig((p) => (p ? { ...p, max_slippage_pct: v } : p))}
@@ -536,7 +540,7 @@ export function TriangularArbitragePanel() {
                   'max_slippage_pct'
                 )}
                 {renderConfigField(
-                  '最小订单数量',
+                  t('arb.ui.min-order-qty'),
                   <NumberInput
                     value={editConfig.min_order_qty}
                     onChange={(v) => setEditConfig((p) => (p ? { ...p, min_order_qty: v } : p))}
@@ -546,7 +550,7 @@ export function TriangularArbitragePanel() {
                   'min_order_qty'
                 )}
                 {renderConfigField(
-                  '执行超时 (ms)',
+                  t('arb.tri.exec-timeout'),
                   <NumberInput
                     value={editConfig.max_execution_ms}
                     onChange={(v) => setEditConfig((p) => (p ? { ...p, max_execution_ms: Math.floor(v) } : p))}
@@ -561,21 +565,21 @@ export function TriangularArbitragePanel() {
                       value={editConfig.auto_execute}
                       onChange={(v) => setEditConfig((p) => (p ? { ...p, auto_execute: v } : p))}
                     />
-                    自动执行
+                    {t('arb.ui.auto-execute')}
                   </label>
                   <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
                     <Toggle
                       value={editConfig.dry_run}
                       onChange={(v) => setEditConfig((p) => (p ? { ...p, dry_run: v } : p))}
                     />
-                    模拟运行
+                    {t('arb.ui.dry-run')}
                   </label>
                   <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
                     <Toggle
                       value={editConfig.adaptive_qty_enabled}
                       onChange={(v) => setEditConfig((p) => (p ? { ...p, adaptive_qty_enabled: v } : p))}
                     />
-                    自适应数量
+                    {t('arb.ui.adaptive-qty')}
                   </label>
                 </div>
               </div>
@@ -583,7 +587,7 @@ export function TriangularArbitragePanel() {
               {/* Exchange selection */}
               <div className="border-t border-quant-border pt-6">
                 <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-4">
-                  交易所选择
+                  {t('arb.ui.exchange-selection')}
                 </h3>
                 {configuredExchanges ? (
                   <div className="space-y-2">
@@ -617,29 +621,31 @@ export function TriangularArbitragePanel() {
                               <div className="text-[10px] text-muted-foreground">
                                 {cfg?.enabled
                                   ? cfg?.has_credentials
-                                    ? `已配置${cfg.testnet ? ' · 测试网' : ''}`
-                                    : '缺少凭证'
-                                  : '未启用'}
+                                    ? cfg.testnet
+                                      ? t('arb.ui.configured-testnet')
+                                      : t('arb.ui.configured')
+                                    : t('arb.ui.missing-credentials')
+                                  : t('arb.ui.not-enabled')}
                               </div>
                             </div>
                           </div>
                           {isSelected ? (
                             <span className="inline-flex items-center gap-1 text-xs text-green-400">
                               <CheckCircle2 className="h-3.5 w-3.5" />
-                              已加入
+                              {t('arb.ui.added')}
                             </span>
                           ) : (
-                            !ready && <span className="text-[10px] text-muted-foreground">未就绪</span>
+                            !ready && <span className="text-[10px] text-muted-foreground">{t('arb.ui.not-ready')}</span>
                           )}
                         </label>
                       )
                     })}
                   </div>
                 ) : (
-                  <div className="text-sm text-muted-foreground">加载交易所配置中...</div>
+                  <div className="text-sm text-muted-foreground">{t('arb.ui.loading-exchanges')}</div>
                 )}
                 <div className="mt-3 text-xs text-muted-foreground">
-                  勾选交易所后点击「保存配置」生效，已选 {effectiveExchanges.length} 个（多交易所同时监控，币种相同）
+                  {t('arb.tri.save-hint').replace('{count}', String(effectiveExchanges.length))}
                 </div>
               </div>
             </div>
@@ -651,7 +657,7 @@ export function TriangularArbitragePanel() {
                 onClick={() => setShowConfig(false)}
                 className="px-4 py-2 rounded-lg border border-quant-border text-xs hover:bg-quant-hover transition-colors"
               >
-                关闭
+                {t('arb.ui.close')}
               </button>
               <button
                 onClick={handleSaveConfig}
@@ -668,7 +674,7 @@ export function TriangularArbitragePanel() {
                 ) : (
                   <Save className="w-3.5 h-3.5" />
                 )}
-                保存配置
+                {t('arb.ui.save-config')}
               </button>
             </div>
           </div>
@@ -677,22 +683,22 @@ export function TriangularArbitragePanel() {
 
       {/* Opportunities Table */}
       <SectionCard
-        title="币种套利机会"
-        headerAction={opportunity ? <span className="text-xs text-muted-foreground">最新扫描结果</span> : null}
+        title={t('arb.tri.opportunities-title')}
+        headerAction={opportunity ? <span className="text-xs text-muted-foreground">{t('arb.ui.latest-scan')}</span> : null}
       >
         {opportunity ? (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-quant-border text-left text-xs text-muted-foreground">
-                  <th className="py-2 px-3 font-medium">循环路径</th>
-                  <th className="py-2 px-3 font-medium">交易所</th>
-                  <th className="py-2 px-3 font-medium text-right">起点数量</th>
-                  <th className="py-2 px-3 font-medium text-right">终点数量</th>
-                  <th className="py-2 px-3 font-medium text-right">净利润 %</th>
-                  <th className="py-2 px-3 font-medium text-right">总手续费</th>
-                  <th className="py-2 px-3 font-medium text-right">三腿滑点</th>
-                  <th className="py-2 px-3 font-medium text-center">操作</th>
+                  <th className="py-2 px-3 font-medium">{t('arb.tri.hdr-cycle')}</th>
+                  <th className="py-2 px-3 font-medium">{t('arb.tri.hdr-exchange')}</th>
+                  <th className="py-2 px-3 font-medium text-right">{t('arb.tri.hdr-start-qty')}</th>
+                  <th className="py-2 px-3 font-medium text-right">{t('arb.tri.hdr-end-qty')}</th>
+                  <th className="py-2 px-3 font-medium text-right">{t('arb.tri.hdr-net-profit')}</th>
+                  <th className="py-2 px-3 font-medium text-right">{t('arb.tri.hdr-total-fees')}</th>
+                  <th className="py-2 px-3 font-medium text-right">{t('arb.tri.hdr-leg-slippage')}</th>
+                  <th className="py-2 px-3 font-medium text-center">{t('arb.ui.hdr-action')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -746,7 +752,7 @@ export function TriangularArbitragePanel() {
                       ) : (
                         <Zap className="w-3 h-3" />
                       )}
-                      执行
+                      {t('arb.ui.execute')}
                     </button>
                   </td>
                 </tr>
@@ -756,17 +762,17 @@ export function TriangularArbitragePanel() {
         ) : (
           <EmptyState
             icon={<Triangle className="w-10 h-10 text-muted-foreground" />}
-            title="暂无币种套利机会"
-            description={isRunning ? '引擎正在扫描中...' : '启动引擎后开始扫描'}
+            title={t('arb.tri.no-opportunity')}
+            description={isRunning ? t('arb.ui.scanning') : t('arb.ui.start-to-scan')}
           />
         )}
       </SectionCard>
 
       {/* Active Positions */}
-      <SectionCard title="活跃持仓">
+      <SectionCard title={t('arb.ui.active-positions')}>
         <div className="space-y-2">
           {!positions || positions.length === 0 ? (
-            <div className="text-sm text-muted-foreground text-center py-4">无活跃持仓</div>
+            <div className="text-sm text-muted-foreground text-center py-4">{t('arb.ui.no-active-positions')}</div>
           ) : (
             positions.map((pos: TriangularTrade, i: number) => (
               <div key={pos.id || i} className="flex items-center justify-between p-3 rounded-md bg-quant-bg-secondary">
@@ -805,14 +811,14 @@ export function TriangularArbitragePanel() {
                         disabled={closePositionMut.isPending}
                         className="inline-flex items-center px-2 py-1 rounded text-[10px] font-medium bg-quant-gold text-black hover:opacity-90 disabled:opacity-50"
                       >
-                        平仓
+                        {t('arb.ui.close-position')}
                       </button>
                       <button
                         onClick={() => handleFailPosition(pos)}
                         disabled={failPositionMut.isPending}
                         className="inline-flex items-center px-2 py-1 rounded text-[10px] font-medium bg-red-500/20 text-red-400 hover:bg-red-500/30 disabled:opacity-50"
                       >
-                        失败
+                        {t('arb.ui.fail')}
                       </button>
                     </div>
                   )}
@@ -841,10 +847,10 @@ export function TriangularArbitragePanel() {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between px-6 py-4 border-b border-quant-border shrink-0">
-              <h3 className="text-sm font-bold">历史记录</h3>
+              <h3 className="text-sm font-bold">{t('arb.ui.history-record')}</h3>
               <button
                 onClick={() => setShowHistory(false)}
-                aria-label="关闭"
+                aria-label={t('arb.ui.close')}
                 className="text-muted-foreground hover:text-foreground"
               >
                 <X className="w-4 h-4" />
@@ -852,36 +858,36 @@ export function TriangularArbitragePanel() {
             </div>
             <div className="flex-1 overflow-y-auto p-6">
               <div className="space-y-2">
-            {!history || history.length === 0 ? (
-              <div className="text-sm text-muted-foreground text-center py-4">无历史记录</div>
-            ) : (
-              history.map((trade: TriangularTrade, i: number) => (
-                <div
-                  key={trade.id || i}
-                  className="flex items-center justify-between p-3 rounded-md bg-quant-bg-secondary"
-                >
-                  <div className="flex items-center gap-3">
-                    <CheckCircle2 className={cn('w-4 h-4', trade.net_profit > 0 ? 'text-green-400' : 'text-red-400')} />
-                    <div>
-                      <div className="text-sm font-medium">{trade.cycle.join(' → ')}</div>
-                      <div className="text-xs text-muted-foreground">
-                        {trade.exchange} · {trade.status}
+                {!history || history.length === 0 ? (
+                  <div className="text-sm text-muted-foreground text-center py-4">{t('arb.ui.no-history')}</div>
+                ) : (
+                  history.map((trade: TriangularTrade, i: number) => (
+                    <div
+                      key={trade.id || i}
+                      className="flex items-center justify-between p-3 rounded-md bg-quant-bg-secondary"
+                    >
+                      <div className="flex items-center gap-3">
+                        <CheckCircle2 className={cn('w-4 h-4', trade.net_profit > 0 ? 'text-green-400' : 'text-red-400')} />
+                        <div>
+                          <div className="text-sm font-medium">{trade.cycle.join(' → ')}</div>
+                          <div className="text-xs text-muted-foreground">
+                            {trade.exchange} · {trade.status}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div
+                          className={cn('text-sm font-semibold', trade.net_profit > 0 ? 'text-green-400' : 'text-red-400')}
+                        >
+                          {trade.net_profit > 0 ? '+' : ''}${trade.net_profit.toFixed(2)}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {trade.closed_at ? new Date(trade.closed_at).toLocaleString() : '-'}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                  <div className="text-right">
-                    <div
-                      className={cn('text-sm font-semibold', trade.net_profit > 0 ? 'text-green-400' : 'text-red-400')}
-                    >
-                      {trade.net_profit > 0 ? '+' : ''}${trade.net_profit.toFixed(2)}
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      {trade.closed_at ? new Date(trade.closed_at).toLocaleString() : '-'}
-                    </div>
-                  </div>
-                </div>
-              ))
-            )}
+                  ))
+                )}
               </div>
             </div>
           </div>

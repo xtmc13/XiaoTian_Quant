@@ -276,16 +276,16 @@ export const AIBotCreateWizard: React.FC<AIBotCreateWizardProps> = ({
             {step > 0 && (
               <button
                 onClick={handleBack}
-                className="flex h-8 w-8 items-center justify-center rounded-lg text-[#999999] transition-colors hover:bg-[#1c1c1c] hover:text-white"
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-[#999999] transition-colors hover:bg-[#1c1c1c] hover:text-foreground"
               >
                 <ArrowLeft className="h-4 w-4" />
               </button>
             )}
-            <h3 className="text-base font-semibold text-white">{isEdit ? '编辑 AI Bot' : '创建 AI Bot'}</h3>
+            <h3 className="text-base font-semibold text-foreground">{isEdit ? '编辑 AI Bot' : '创建 AI Bot'}</h3>
           </div>
           <button
             onClick={onClose}
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-[#999999] transition-colors hover:bg-[#1c1c1c] hover:text-white"
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-[#999999] transition-colors hover:bg-[#1c1c1c] hover:text-foreground"
           >
             <X className="h-4 w-4" />
           </button>
@@ -400,7 +400,7 @@ export const AIBotCreateWizard: React.FC<AIBotCreateWizardProps> = ({
                   <select
                     value={form.execution_mode}
                     onChange={(e) => updateForm('execution_mode', e.target.value)}
-                    className="w-full rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] px-3 py-2 text-sm text-white outline-none focus:border-[#1890ff]/40"
+                    className="w-full rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] px-3 py-2 text-sm text-foreground outline-none focus:border-[#1890ff]/40"
                   >
                     {EXEC_OPTIONS.map((o) => (
                       <option key={o.value} value={o.value}>{o.label}</option>
@@ -417,7 +417,7 @@ export const AIBotCreateWizard: React.FC<AIBotCreateWizardProps> = ({
                 <select
                   value={form.strategy_type}
                   onChange={(e) => updateForm('strategy_type', e.target.value)}
-                  className="w-full rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] px-3 py-2 text-sm text-white outline-none focus:border-[#1890ff]/40"
+                  className="w-full rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] px-3 py-2 text-sm text-foreground outline-none focus:border-[#1890ff]/40"
                 >
                   {STRATEGY_OPTIONS.map((o) => (
                     <option key={o.value} value={o.value}>{o.label}</option>
@@ -472,7 +472,7 @@ export const AIBotCreateWizard: React.FC<AIBotCreateWizardProps> = ({
                 <select
                   value={form.exchange_id || ''}
                   onChange={(e) => updateForm('exchange_id', e.target.value)}
-                  className="w-full rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] px-3 py-2 text-sm text-white outline-none focus:border-[#1890ff]/40"
+                  className="w-full rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] px-3 py-2 text-sm text-foreground outline-none focus:border-[#1890ff]/40"
                 >
                   <option value="">默认 / 未指定</option>
                   {exchanges.map((e) => (
@@ -488,7 +488,7 @@ export const AIBotCreateWizard: React.FC<AIBotCreateWizardProps> = ({
                   onBlur={() => validateJSON(form.config_json || '{}')}
                   placeholder='{"timeframe":"1h","first_order_amount":100}'
                   className={cn(
-                    "h-32 w-full resize-none rounded-lg border bg-[#0a0a0a] p-3 text-sm text-white placeholder-[#444] outline-none focus:border-[#1890ff]/40 font-mono",
+                    "h-32 w-full resize-none rounded-lg border bg-[#0a0a0a] p-3 text-sm text-foreground placeholder-[#444] outline-none focus:border-[#1890ff]/40 font-mono",
                     jsonError ? 'border-[#f5222d]' : 'border-[#1c1c1c]'
                   )}
                 />
@@ -581,7 +581,7 @@ function SourceCard({
       <div className={cn('w-8 h-8 rounded-lg flex items-center justify-center', active ? 'bg-[#1890ff]/20 text-[#1890ff]' : 'bg-[#1c1c1c] text-[#888]')}>
         {icon}
       </div>
-      <div className="text-sm font-medium text-white">{title}</div>
+      <div className="text-sm font-medium text-foreground">{title}</div>
       <div className="text-xs text-[#666] line-clamp-2">{desc}</div>
     </button>
   )
@@ -600,7 +600,7 @@ function ConfirmRow({ label, value }: { label: string; value: React.ReactNode })
   return (
     <div className="flex items-center justify-between text-sm">
       <span className="text-[#999]">{label}</span>
-      <span className="font-medium text-white">{value}</span>
+      <span className="font-medium text-foreground">{value}</span>
     </div>
   )
 }

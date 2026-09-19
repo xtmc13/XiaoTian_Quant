@@ -275,7 +275,7 @@ const IndicatorCard = React.memo(function IndicatorCard({
   const cover = (
     <div
       className={cn(
-        'relative shrink-0 bg-gradient-to-br flex flex-col items-center justify-center text-white overflow-hidden',
+        'relative shrink-0 bg-gradient-to-br flex flex-col items-center justify-center text-foreground overflow-hidden',
         getGradient(indicator.id),
         variant === 'grid' ? 'h-36 w-full' : 'h-20 w-20 rounded-lg'
       )}
@@ -304,7 +304,7 @@ const IndicatorCard = React.memo(function IndicatorCard({
           variant === 'grid' ? 'top-2 right-2' : 'bottom-1 right-1',
           indicator.pricing_type === 'free'
             ? 'bg-quant-green text-white'
-            : 'bg-gradient-to-r from-[#f5af19] to-[#f12711] text-white'
+            : 'bg-gradient-to-r from-[#f5af19] to-[#f12711] text-foreground'
         )}
       >
         {indicator.pricing_type === 'free' ? '免费' : `${indicator.price} 积分`}
@@ -312,7 +312,7 @@ const IndicatorCard = React.memo(function IndicatorCard({
 
       {/* Status tags */}
       {variant === 'grid' && isOwn && (
-        <div className="absolute bottom-2 left-2 px-2 py-0.5 rounded text-[10px] bg-black/60 text-white z-20">我的指标</div>
+        <div className="absolute bottom-2 left-2 px-2 py-0.5 rounded text-[10px] bg-black/60 text-foreground z-20">我的指标</div>
       )}
       {variant === 'grid' && !isOwn && isPurchased && (
         <div className="absolute bottom-2 left-2 px-2 py-0.5 rounded text-[10px] bg-quant-green/90 text-white z-20 flex items-center gap-1">
@@ -324,7 +324,7 @@ const IndicatorCard = React.memo(function IndicatorCard({
       {variant === 'grid' && (indicator.score || 0) > 0 && (
         <div
           className={cn(
-            'absolute top-2 left-2 flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold text-white z-20 shadow-md bg-gradient-to-r',
+            'absolute top-2 left-2 flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold text-foreground z-20 shadow-md bg-gradient-to-r',
             scoreBadgeClass(indicator.score)
           )}
         >
@@ -426,7 +426,7 @@ const IndicatorCard = React.memo(function IndicatorCard({
         {cover}
         {/* Hover hint */}
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-          <span className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/15 text-white text-[10px] font-medium backdrop-blur-sm">
+          <span className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/15 text-foreground text-[10px] font-medium backdrop-blur-sm">
             查看详情 <ArrowUpRight className="h-3 w-3" />
           </span>
         </div>
@@ -662,7 +662,7 @@ export function IndicatorCommunity() {
                   value={keywordInput}
                   onChange={(e) => handleKeywordChange(e.target.value)}
                   placeholder="搜索指标名称或描述..."
-                  className="w-full rounded-lg border border-quant-border bg-quant-bg-secondary pl-9 pr-8 py-2 text-xs text-white placeholder:text-muted-foreground/70 focus:outline-none focus:border-quant-gold"
+                  className="w-full rounded-lg border border-quant-border bg-quant-bg-secondary pl-9 pr-8 py-2 text-xs text-foreground placeholder:text-muted-foreground/70 focus:outline-none focus:border-quant-gold"
                 />
                 {keywordInput && (
                   <button
@@ -698,7 +698,7 @@ export function IndicatorCommunity() {
                 <select
                   value={sortBy}
                   onChange={(e) => handleSortChange(e.target.value as SortKey)}
-                  className="appearance-none rounded-lg border border-quant-border bg-quant-bg-secondary pl-3 pr-8 py-2 text-[11px] text-white focus:outline-none focus:border-quant-gold cursor-pointer"
+                  className="appearance-none rounded-lg border border-quant-border bg-quant-bg-secondary pl-3 pr-8 py-2 text-[11px] text-foreground focus:outline-none focus:border-quant-gold cursor-pointer"
                 >
                   {MARKET_SORTS.map((s) => (
                     <option key={s.key} value={s.key}>{s.label}</option>
@@ -822,7 +822,7 @@ export function IndicatorCommunity() {
                       <s.icon className="h-3.5 w-3.5" />
                       <span className="text-[10px]">{s.label}</span>
                     </div>
-                    <div className="mt-1 text-sm font-bold text-white">{s.value}</div>
+                    <div className="mt-1 text-sm font-bold text-foreground">{s.value}</div>
                   </div>
                 ))}
               </div>
@@ -868,7 +868,7 @@ export function IndicatorCommunity() {
           <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
             <div className="w-full max-w-sm rounded-xl border border-quant-border bg-quant-card shadow-2xl overflow-hidden">
               <div className="flex items-center justify-between px-5 py-4 border-b border-quant-border">
-                <h3 className="text-sm font-bold text-white">确认购买</h3>
+                <h3 className="text-sm font-bold text-foreground">确认购买</h3>
                 <button
                   onClick={() => setShowPurchaseModal(null)}
                   className="text-muted-foreground hover:text-foreground transition-colors"
@@ -878,7 +878,7 @@ export function IndicatorCommunity() {
               </div>
               <div className="px-5 py-4 space-y-3">
                 <div className="flex items-center gap-3 rounded-lg bg-quant-bg p-3">
-                  <div className={cn('h-10 w-10 shrink-0 rounded-lg bg-gradient-to-br flex items-center justify-center text-white text-xs font-bold', getGradient(showPurchaseModal.id))}>
+                  <div className={cn('h-10 w-10 shrink-0 rounded-lg bg-gradient-to-br flex items-center justify-center text-foreground text-xs font-bold', getGradient(showPurchaseModal.id))}>
                     {getInitials(showPurchaseModal.name)}
                   </div>
                   <div className="min-w-0 flex-1">

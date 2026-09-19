@@ -92,9 +92,9 @@ export const AIFollowConfigModal: React.FC<AIFollowConfigModalProps> = ({
         <div className="flex items-center justify-between border-b border-[#1c1c1c] px-5 py-4">
           <div className="flex items-center gap-2">
             <Bell className="w-4 h-4 text-[#1890ff]" />
-            <span className="text-sm font-semibold text-white">自动跟单配置</span>
+            <span className="text-sm font-semibold text-foreground">自动跟单配置</span>
           </div>
-          <button onClick={onClose} className="text-[#888] hover:text-white">
+          <button onClick={onClose} className="text-[#888] hover:text-foreground">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -160,7 +160,7 @@ export const AIFollowConfigModal: React.FC<AIFollowConfigModalProps> = ({
               value={symbols}
               onChange={(e) => setSymbols(e.target.value)}
               placeholder="BTCUSDT, ETHUSDT"
-              className="w-full rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] px-3 py-2 text-sm text-white placeholder-[#444] outline-none focus:border-[#1890ff]/40"
+              className="w-full rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] px-3 py-2 text-sm text-foreground placeholder-[#444] outline-none focus:border-[#1890ff]/40"
             />
           </div>
         </div>

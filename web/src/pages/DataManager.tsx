@@ -102,7 +102,7 @@ export function DataManager() {
                 {
                   key: 'symbol',
                   title: '交易对',
-                  render: (item) => <span className="text-sm text-white font-mono">{item.symbol}</span>,
+                  render: (item) => <span className="text-sm text-foreground font-mono">{item.symbol}</span>,
                 },
                 {
                   key: 'intervals',

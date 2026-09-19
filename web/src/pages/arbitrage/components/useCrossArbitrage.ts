@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { arbitrageApi, configApi } from '@/lib/api'
 import { toast } from '@/lib/useToast'
 import { useConfirmDialog } from '@/components/ui/ConfirmDialog'
+import { useI18n } from '@/i18n'
 import type { ArbitrageConfig, ArbitrageOpportunity, ArbitragePosition, ArbitrageHistoryItem } from '@/types'
 
 export const DEFAULT_CONFIG: ArbitrageConfig = {
@@ -23,6 +24,7 @@ export const DEFAULT_CONFIG: ArbitrageConfig = {
 
 export function useCrossArbitrage() {
   const queryClient = useQueryClient()
+  const { t } = useI18n()
   const { confirm, prompt, Dialog } = useConfirmDialog()
   const [showHistory, setShowHistory] = useState(false)
   const [showConfig, setShowConfig] = useState(false)
@@ -87,10 +89,10 @@ export function useCrossArbitrage() {
     mutationFn: arbitrageApi.start,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['arbitrage-status'] })
-      toast('success', '套利引擎已启动')
+      toast('success', t('arb.cross.toast-engine-started'))
     },
     onError: (err: Error) => {
-      toast('error', err.message || '启动失败')
+      toast('error', err.message || t('arb.cross.toast-start-failed'))
     },
   })
 
@@ -98,10 +100,10 @@ export function useCrossArbitrage() {
     mutationFn: arbitrageApi.stop,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['arbitrage-status'] })
-      toast('success', '套利引擎已停止')
+      toast('success', t('arb.cross.toast-engine-stopped'))
     },
     onError: (err: Error) => {
-      toast('error', err.message || '停止失败')
+      toast('error', err.message || t('arb.cross.toast-stop-failed'))
     },
   })
 
@@ -110,10 +112,10 @@ export function useCrossArbitrage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['arbitrage-config'] })
       queryClient.invalidateQueries({ queryKey: ['arbitrage-status'] })
-      toast('success', '配置已保存')
+      toast('success', t('arb.ui.toast-config-saved'))
     },
     onError: (err: Error) => {
-      toast('error', err.message || '保存失败')
+      toast('error', err.message || t('arb.ui.toast-save-failed'))
     },
   })
 
@@ -122,10 +124,10 @@ export function useCrossArbitrage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['arbitrage-exchanges'] })
       queryClient.invalidateQueries({ queryKey: ['arbitrage-status'] })
-      toast('success', '交易所已加入套利')
+      toast('success', t('arb.cross.toast-exchange-added'))
     },
     onError: (err: Error) => {
-      toast('error', err.message || '加入失败')
+      toast('error', err.message || t('arb.cross.toast-add-failed'))
     },
   })
 
@@ -134,10 +136,10 @@ export function useCrossArbitrage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['arbitrage-exchanges'] })
       queryClient.invalidateQueries({ queryKey: ['arbitrage-status'] })
-      toast('success', '交易所已移出套利')
+      toast('success', t('arb.cross.toast-exchange-removed'))
     },
     onError: (err: Error) => {
-      toast('error', err.message || '移除失败')
+      toast('error', err.message || t('arb.cross.toast-remove-failed'))
     },
   })
 
@@ -154,10 +156,10 @@ export function useCrossArbitrage() {
       queryClient.invalidateQueries({ queryKey: ['arbitrage-positions'] })
       queryClient.invalidateQueries({ queryKey: ['arbitrage-history'] })
       queryClient.invalidateQueries({ queryKey: ['arbitrage-status'] })
-      toast('success', '套利执行已提交')
+      toast('success', t('arb.cross.toast-execute-submitted'))
     },
     onError: (err: Error) => {
-      toast('error', err.message || '执行失败')
+      toast('error', err.message || t('arb.ui.toast-execute-failed'))
     },
   })
 
@@ -167,10 +169,10 @@ export function useCrossArbitrage() {
       queryClient.invalidateQueries({ queryKey: ['arbitrage-positions'] })
       queryClient.invalidateQueries({ queryKey: ['arbitrage-history'] })
       queryClient.invalidateQueries({ queryKey: ['arbitrage-status'] })
-      toast('success', '持仓已平仓')
+      toast('success', t('arb.ui.toast-position-closed'))
     },
     onError: (err: Error) => {
-      toast('error', err.message || '平仓失败')
+      toast('error', err.message || t('arb.ui.toast-close-failed'))
     },
   })
 
@@ -180,10 +182,10 @@ export function useCrossArbitrage() {
       queryClient.invalidateQueries({ queryKey: ['arbitrage-positions'] })
       queryClient.invalidateQueries({ queryKey: ['arbitrage-history'] })
       queryClient.invalidateQueries({ queryKey: ['arbitrage-status'] })
-      toast('success', '持仓已标记为失败')
+      toast('success', t('arb.ui.toast-position-failed'))
     },
     onError: (err: Error) => {
-      toast('error', err.message || '标记失败')
+      toast('error', err.message || t('arb.ui.toast-mark-failed'))
     },
   })
 
@@ -218,7 +220,7 @@ export function useCrossArbitrage() {
             await arbitrageApi.unregisterExchange(name)
           }
         } catch (e) {
-          failed.push(`${name}: ${e instanceof Error ? e.message : '操作失败'}`)
+          failed.push(`${name}: ${e instanceof Error ? e.message : t('arb.cross.op-failed')}`)
         }
       }
 
@@ -228,16 +230,16 @@ export function useCrossArbitrage() {
         queryClient.invalidateQueries({ queryKey: ['arbitrage-exchanges'] })
         queryClient.invalidateQueries({ queryKey: ['arbitrage-status'] })
         if (failed.length > 0) {
-          toast('error', `部分交易所未生效：${failed.join('；')}`)
+          toast('error', `${t('arb.cross.toast-partial-failed')}${failed.join('；')}`)
         } else {
-          toast('success', '配置已保存')
+          toast('success', t('arb.ui.toast-config-saved'))
         }
         setShowConfig(false)
       } catch (e) {
-        toast('error', e instanceof Error ? e.message : '保存失败')
+        toast('error', e instanceof Error ? e.message : t('arb.ui.toast-save-failed'))
       }
     },
-    [editConfig, symbolsInput, exchangesMeta, queryClient]
+    [editConfig, symbolsInput, exchangesMeta, queryClient, t]
   )
 
   const handleExecute = useCallback(
@@ -245,10 +247,14 @@ export function useCrossArbitrage() {
       if (!editConfig) return
       if (!editConfig.dry_run) {
         const ok = await confirm({
-          title: '确认执行真实套利交易？',
-          message: `${opp.symbol}：在 ${opp.buy_exchange} 买入，在 ${opp.sell_exchange} 卖出，预计价差 ${opp.spread_pct.toFixed(4)}%`,
-          confirmText: '执行',
-          cancelText: '取消',
+          title: t('arb.cross.confirm-execute-title'),
+          message: t('arb.cross.confirm-execute-msg')
+            .replace('{symbol}', opp.symbol)
+            .replace('{buy}', opp.buy_exchange)
+            .replace('{sell}', opp.sell_exchange)
+            .replace('{spread}', opp.spread_pct.toFixed(4)),
+          confirmText: t('arb.ui.execute'),
+          cancelText: t('arb.ui.cancel'),
         })
         if (!ok) return
       }
@@ -263,7 +269,7 @@ export function useCrossArbitrage() {
         quantity,
       })
     },
-    [editConfig, executeMut, confirm]
+    [editConfig, executeMut, confirm, t]
   )
 
   const isPositionActive = useCallback((s: string) => ['pending', 'open_buy', 'open', 'open_sell'].includes(s), [])
@@ -271,38 +277,38 @@ export function useCrossArbitrage() {
   const handleClosePosition = useCallback(
     async (pos: ArbitragePosition) => {
       const input = await prompt({
-        title: '平仓',
-        message: `确认将持仓 ${pos.symbol} 平仓？`,
-        inputLabel: '实际卖出价（USD）',
+        title: t('arb.ui.close-position'),
+        message: t('arb.ui.confirm-close-msg').replace('{target}', pos.symbol),
+        inputLabel: t('arb.ui.actual-sell-price'),
         defaultValue: pos.sell_price?.toFixed(2) ?? '',
         inputType: 'number',
-        confirmText: '平仓',
-        cancelText: '取消',
+        confirmText: t('arb.ui.close-position'),
+        cancelText: t('arb.ui.cancel'),
       })
       if (input === null) return
       const sellPrice = Number(input)
       if (Number.isNaN(sellPrice) || sellPrice <= 0) {
-        toast('error', '请输入有效的卖出价')
+        toast('error', t('arb.ui.invalid-sell-price'))
         return
       }
       closePositionMut.mutate({ id: pos.id, sell_price: sellPrice })
     },
-    [closePositionMut, prompt]
+    [closePositionMut, prompt, t]
   )
 
   const handleFailPosition = useCallback(
     async (pos: ArbitragePosition) => {
       const ok = await confirm({
-        title: '标记为失败',
-        message: `确认将持仓 ${pos.symbol} 标记为失败？`,
+        title: t('arb.ui.mark-as-failed'),
+        message: t('arb.ui.confirm-fail-msg').replace('{target}', pos.symbol),
         variant: 'danger',
-        confirmText: '标记失败',
-        cancelText: '取消',
+        confirmText: t('arb.ui.mark-fail'),
+        cancelText: t('arb.ui.cancel'),
       })
       if (!ok) return
       failPositionMut.mutate(pos.id)
     },
-    [failPositionMut, confirm]
+    [failPositionMut, confirm, t]
   )
 
   return {

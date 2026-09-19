@@ -5,7 +5,7 @@
  */
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams, useNavigate } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import { marketApi, indicatorApi, strategyApi, communityApi } from '@/lib/api'
 import { TRADING_INTERVALS } from '@/lib/constants'
@@ -14,9 +14,9 @@ import { toast } from '@/lib/useToast'
 import {
   CRAParamForm,
   type CRAParams,
-  DEFAULT_CRA_PARAMS,
   craParamsToApiPayload,
 } from '@/components/strategy/CRAParamForm'
+import { createDefaultCRAParams } from '@/lib/strategyUtils'
 import { KlineChart } from '@/components/charts/KlineChart'
 import { CodeEditor } from '@/components/ide/CodeEditor'
 import { ParamPanel } from '@/components/ide/ParamPanel'
@@ -142,6 +142,7 @@ function AiMessageContent({ content }: { content: string }) {
 
 export function IndicatorIDE() {
   const [searchParams, setSearchParams] = useSearchParams()
+  const navigate = useNavigate()
   const [symbol, setSymbol] = useState('BTCUSDT')
   const [interval, setInterval] = useState('1h')
   // Code state
@@ -629,10 +630,8 @@ export function IndicatorIDE() {
     name: '',
     symbol: 'BTCUSDT',
   })
-  const [stratCra, setStratCra] = useState<CRAParams>({
-    ...DEFAULT_CRA_PARAMS,
-    tradeCountMode: 'cycle',
-  })
+  // 与合约策略创建页同源默认参数（含 9 级补仓梯度 contract_martin 档位）
+  const [stratCra, setStratCra] = useState<CRAParams>(() => createDefaultCRAParams('contract'))
 
   const openCreateStrategyModal = useCallback(() => {
     // 开仓指标自动选为当前指标（自定义指标，保存后回填 code_id）；交易对默认当前图表
@@ -684,11 +683,12 @@ export function IndicatorIDE() {
         ...craPayload,
       })
       setShowCreateStrategy(false)
-      toast('success', '合约策略创建成功！请到策略管理页面启动。')
+      toast('success', '合约策略创建成功！')
+      navigate('/strategy')
     } catch (e: unknown) {
       toast('error', '创建策略失败: ' + (e instanceof Error ? e.message : String(e)))
     }
-  }, [stratBase, stratCra, code, codeDirty, selectedIndicatorId, parsed, reloadIndicators, interval])
+  }, [stratBase, stratCra, code, codeDirty, selectedIndicatorId, parsed, reloadIndicators, interval, navigate])
 
   /* ═══════════════════════════════════════════════════════════════ */
   /*  Render — 左栏：代码 + AI ｜ 右栏：图表                            */
@@ -737,7 +737,7 @@ export function IndicatorIDE() {
                     }
                     e.target.value = ''
                   }}
-                  className="bg-quant-bg border border-quant-border rounded px-1.5 py-1 text-[10px] text-white outline-none focus:border-quant-gold mr-1"
+                  className="bg-quant-bg border border-quant-border rounded px-1.5 py-1 text-[10px] text-foreground outline-none focus:border-quant-gold mr-1"
                   title="加载模板"
                 >
                   <option value="">模板 ▾</option>
@@ -916,7 +916,7 @@ export function IndicatorIDE() {
                       <select
                         value={optimizer}
                         onChange={(e) => setOptimizer(e.target.value as 'de' | 'tpe')}
-                        className="bg-quant-bg border border-quant-border rounded px-2 py-1 text-[11px] text-white outline-none focus:border-quant-gold"
+                        className="bg-quant-bg border border-quant-border rounded px-2 py-1 text-[11px] text-foreground outline-none focus:border-quant-gold"
                       >
                         <option value="de">差分进化 (DE)</option>
                         <option value="tpe">贝叶斯优化 (TPE)</option>
@@ -1186,7 +1186,7 @@ export function IndicatorIDE() {
                 const ind = indicators.find((i) => i.id === id)
                 if (ind) selectIndicator(ind)
               }}
-              className="bg-quant-bg border border-quant-border rounded px-2 py-1 text-xs text-white outline-none focus:border-quant-gold max-w-[150px] truncate"
+              className="bg-quant-bg border border-quant-border rounded px-2 py-1 text-xs text-foreground outline-none focus:border-quant-gold max-w-[150px] truncate"
             >
               <option value="">选择指标...</option>
               {indicators.map((ind) => (
@@ -1199,7 +1199,7 @@ export function IndicatorIDE() {
             <select
               value={symbol}
               onChange={(e) => setSymbol(e.target.value)}
-              className="bg-quant-bg border border-quant-border rounded px-2 py-1 text-xs text-white outline-none focus:border-quant-gold"
+              className="bg-quant-bg border border-quant-border rounded px-2 py-1 text-xs text-foreground outline-none focus:border-quant-gold"
             >
               {['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'ADAUSDT', 'DOGEUSDT'].map((s) => (
                 <option key={s} value={s}>

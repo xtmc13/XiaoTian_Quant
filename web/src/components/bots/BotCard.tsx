@@ -59,7 +59,7 @@ function ActionBtn({
 }) {
   const variants = {
     default:
-      'border-[#1c1c1c] bg-[#141414] text-[#888888] hover:bg-[#1c1c1c] hover:text-white',
+      'border-[#1c1c1c] bg-[#141414] text-[#888888] hover:bg-[#1c1c1c] hover:text-foreground',
     primary: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20',
     danger: 'border-red-500/20 bg-red-500/10 text-red-400 hover:bg-red-500/20',
   }
@@ -126,7 +126,7 @@ export const BotCard = memo(function BotCard({
         </div>
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <span className="truncate text-sm font-semibold text-white">
+            <span className="truncate text-sm font-semibold text-foreground">
               {bot.name || bot.strategy_name || '未命名机器人'}
             </span>
             <StatusBadge status={bot.status} />
@@ -155,7 +155,7 @@ export const BotCard = memo(function BotCard({
           <div className="text-[11px] text-[#8a8a8a]">未实现盈亏</div>
         </div>
         <div className="text-right">
-          <div className="font-mono text-sm font-semibold text-white">
+          <div className="font-mono text-sm font-semibold text-foreground">
             ${formatCurrency(bot.initial_capital || bot.trading_config?.initial_capital || 0)}
           </div>
           <div className="text-[11px] text-[#8a8a8a]">初始资金</div>
@@ -232,7 +232,7 @@ export function ConfigItem({ label, value }: { label: string; value: React.React
   return (
     <div className="rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] px-3 py-2">
       <div className="text-[11px] text-[#8a8a8a]">{label}</div>
-      <div className="mt-0.5 text-sm font-medium text-white">{value}</div>
+      <div className="mt-0.5 text-sm font-medium text-foreground">{value}</div>
     </div>
   )
 }
@@ -281,7 +281,7 @@ export function BotDetailView({
       {/* Back */}
       <button
         onClick={onBack}
-        className="flex items-center gap-1.5 text-sm text-[#999999] transition-colors hover:text-white"
+        className="flex items-center gap-1.5 text-sm text-[#999999] transition-colors hover:text-foreground"
       >
         <ArrowLeft className="h-4 w-4" />
         返回列表
@@ -300,7 +300,7 @@ export function BotDetailView({
               <Bot className="h-6 w-6" />
             </div>
             <div>
-              <h2 className="text-lg font-semibold text-white">
+              <h2 className="text-lg font-semibold text-foreground">
                 {bot.name || bot.strategy_name || '未命名机器人'}
               </h2>
               <div className="mt-1 flex items-center gap-2">
@@ -332,14 +332,14 @@ export function BotDetailView({
             )}
             <button
               onClick={() => onEdit(bot)}
-              className="flex items-center gap-1.5 rounded-lg border border-[#1c1c1c] bg-[#141414] px-3 py-2 text-xs font-medium text-[#888888] transition-colors hover:bg-[#1c1c1c] hover:text-white"
+              className="flex items-center gap-1.5 rounded-lg border border-[#1c1c1c] bg-[#141414] px-3 py-2 text-xs font-medium text-[#888888] transition-colors hover:bg-[#1c1c1c] hover:text-foreground"
             >
               <Pencil className="h-3.5 w-3.5" />
               编辑
             </button>
             <button
               onClick={() => onClone(bot)}
-              className="flex items-center gap-1.5 rounded-lg border border-[#1c1c1c] bg-[#141414] px-3 py-2 text-xs font-medium text-[#888888] transition-colors hover:bg-[#1c1c1c] hover:text-white"
+              className="flex items-center gap-1.5 rounded-lg border border-[#1c1c1c] bg-[#141414] px-3 py-2 text-xs font-medium text-[#888888] transition-colors hover:bg-[#1c1c1c] hover:text-foreground"
             >
               <Copy className="h-3.5 w-3.5" />
               克隆

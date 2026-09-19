@@ -148,7 +148,7 @@ export function Login() {
   }
 
   // ── Shared styles ──
-  const inputCls = 'w-full rounded-lg border border-quant-border bg-quant-bg-secondary px-3 py-2.5 text-sm text-white placeholder-muted-foreground outline-none transition-colors focus:border-quant-gold'
+  const inputCls = 'w-full rounded-lg border border-quant-border bg-quant-bg-secondary px-3 py-2.5 text-sm text-foreground placeholder-muted-foreground outline-none transition-colors focus:border-quant-gold'
   const labelCls = 'text-xs font-medium text-muted-foreground'
   const btnCls = 'flex w-full items-center justify-center gap-2 rounded-lg bg-quant-gold px-4 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed'
 
@@ -160,8 +160,8 @@ export function Login() {
           <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-quant-gold text-white shadow-lg shadow-quant-gold/20">
             <Zap className="h-6 w-6" />
           </div>
-          <h1 className="text-xl font-bold tracking-tight text-white">小天量化</h1>
-          <p className="text-xs text-muted-foreground">AI 驱动的量化交易平台</p>
+          <h1 className="text-xl font-bold tracking-tight text-foreground">小天量化</h1>
+          <p className="text-xs text-muted-foreground">{t('login.tagline')}</p>
         </div>
 
         {/* Tab switcher */}
@@ -172,7 +172,7 @@ export function Login() {
               onClick={() => switchTab(tabKey)}
               className={cn(
                 'flex-1 rounded-md py-1.5 text-xs font-medium transition-colors',
-                tab === tabKey ? 'bg-quant-gold text-black' : 'text-muted-foreground hover:text-white'
+                tab === tabKey ? 'bg-quant-gold text-black' : 'text-muted-foreground hover:text-foreground'
               )}
             >
               {tabKey === 'login' ? t('auth.login') : tabKey === 'register' ? t('auth.register') : t('auth.resetPassword')}
@@ -201,15 +201,15 @@ export function Login() {
           <form onSubmit={handleMfaVerify} className="space-y-4">
             <div className="flex items-center gap-2 rounded-lg border border-quant-gold/20 bg-quant-gold/5 px-3 py-2 text-xs text-quant-gold">
               <ShieldCheck className="h-4 w-4 shrink-0" />
-              该账户已开启两步验证，请输入 authenticator 应用中的 6 位动态码（或备用码）
+              {t('login.mfaNotice')}
             </div>
             <div className="space-y-1.5">
-              <label className={labelCls}>两步验证码</label>
+              <label className={labelCls}>{t('login.mfaCode')}</label>
               <input
                 type="text"
                 value={mfaCode}
                 onChange={(e) => setMfaCode(e.target.value.replace(/[^0-9A-Za-z-]/g, '').slice(0, 9))}
-                placeholder="6 位动态码 / XXXX-YYYY 备用码"
+                placeholder={t('login.mfaCodePlaceholder')}
                 autoComplete="one-time-code"
                 maxLength={9}
                 className={cn(inputCls, 'text-center text-lg tracking-[0.3em]')}
@@ -217,7 +217,7 @@ export function Login() {
             </div>
             <button type="submit" disabled={isLoading || !mfaCode.trim()} className={btnCls}>
               {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
-              {isLoading ? t('common.loading') : '验证并登录'}
+              {isLoading ? t('common.loading') : t('login.mfaVerifyBtn')}
             </button>
             <p className="text-center text-[11px] text-muted-foreground">
               <button
@@ -225,7 +225,7 @@ export function Login() {
                 onClick={() => { setMfaToken(null); setMfaCode(''); clearError() }}
                 className="text-quant-gold hover:underline"
               >
-                返回重新输入密码
+                {t('login.mfaBack')}
               </button>
             </p>
           </form>
@@ -245,10 +245,10 @@ export function Login() {
               <div className="relative">
                 <input type={showPassword ? 'text' : 'password'} value={password}
                   onChange={e => setPassword(e.target.value)}
-                  placeholder="输入密码" autoComplete="current-password"
+                  placeholder={t('auth.inputPassword')} autoComplete="current-password"
                   className={cn(inputCls, 'pr-10')} />
                 <button type="button" onClick={() => setShowPassword(!showPassword)}
-                  aria-label={showPassword ? '隐藏密码' : '显示密码'}
+                  aria-label={showPassword ? t('login.hidePassword') : t('login.showPassword')}
                   className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
                   {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
@@ -322,10 +322,10 @@ export function Login() {
               <div className="relative">
                 <input type={regShowPw ? 'text' : 'password'} value={regPassword}
                   onChange={e => setRegPassword(e.target.value)}
-                  placeholder="至少6个字符" autoComplete="new-password"
+                  placeholder={t('auth.minChars', '至少{count}个字符').replace('{count}', '6')} autoComplete="new-password"
                   className={cn(inputCls, 'pr-10')} />
                 <button type="button" onClick={() => setRegShowPw(!regShowPw)}
-                  aria-label={regShowPw ? '隐藏密码' : '显示密码'}
+                  aria-label={regShowPw ? t('login.hidePassword') : t('login.showPassword')}
                   className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
                   {regShowPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
@@ -378,10 +378,10 @@ export function Login() {
               <div className="relative">
                 <input type={resetShowPw ? 'text' : 'password'} value={newPassword}
                   onChange={e => setNewPassword(e.target.value)}
-                  placeholder="至少6个字符" autoComplete="new-password"
+                  placeholder={t('auth.minChars', '至少{count}个字符').replace('{count}', '6')} autoComplete="new-password"
                   className={cn(inputCls, 'pr-10')} />
                 <button type="button" onClick={() => setResetShowPw(!resetShowPw)}
-                  aria-label={resetShowPw ? '隐藏密码' : '显示密码'}
+                  aria-label={resetShowPw ? t('login.hidePassword') : t('login.showPassword')}
                   className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
                   {resetShowPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>

@@ -41,15 +41,17 @@ export default {
           DEFAULT: 'hsl(var(--card))',
           foreground: 'hsl(var(--card-foreground))',
         },
-        /* ── XiaoTianQuant Pure Black Palette ── */
+        /* ── XiaoTianQuant Theme-Aware Palette ──
+           深浅色由 .dark class 切换（见 index.css 的 CSS 变量），
+           RGB 三元组写法保留 Tailwind 透明度修饰符(/50 等)能力 */
         quant: {
-          bg: '#0a0a0a',
-          'bg-secondary': '#111111',
-          'bg-tertiary': '#141414',
-          card: '#1c1c1c',
-          hover: '#262626',
-          border: '#2a2a2a',
-          'border-light': '#303030',
+          bg: 'rgb(var(--quant-bg) / <alpha-value>)',
+          'bg-secondary': 'rgb(var(--quant-bg-secondary) / <alpha-value>)',
+          'bg-tertiary': 'rgb(var(--quant-bg-tertiary) / <alpha-value>)',
+          card: 'rgb(var(--quant-card) / <alpha-value>)',
+          hover: 'rgb(var(--quant-hover) / <alpha-value>)',
+          border: 'rgb(var(--quant-border) / <alpha-value>)',
+          'border-light': 'rgb(var(--quant-border-light) / <alpha-value>)',
           gold: '#3699FF',
           'gold-hover': '#5B8DEF',
           green: '#03A66D',

@@ -74,7 +74,7 @@ export const AIBotSubscriptions: React.FC<AIBotSubscriptionsProps> = ({
                       <td className="py-3 px-3">
                         <div className="flex items-center gap-2">
                           <Crown className="w-4 h-4 text-[#faad14]" />
-                          <span className="text-white font-medium">{bot?.name || sub.bot_instance_id}</span>
+                          <span className="text-foreground font-medium">{bot?.name || sub.bot_instance_id}</span>
                         </div>
                       </td>
                       <td className="py-3 px-3">

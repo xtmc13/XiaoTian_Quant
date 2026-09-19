@@ -172,7 +172,7 @@ export function ConfirmDialog({
               type={inputType}
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
-              className="w-full rounded-md border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white placeholder-muted-foreground outline-none transition-colors focus:border-quant-gold"
+              className="w-full rounded-md border border-quant-border bg-quant-bg px-3 py-2 text-sm text-foreground placeholder-muted-foreground outline-none transition-colors focus:border-quant-gold"
               autoFocus
               onKeyDown={(e) => {
                 if (e.key === 'Enter') onConfirm(inputValue)

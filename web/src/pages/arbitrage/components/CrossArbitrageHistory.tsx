@@ -1,6 +1,7 @@
 import { cn } from '@/lib/utils'
 import { CheckCircle2, X } from 'lucide-react'
 import type { ArbitrageHistoryItem } from '@/types'
+import { useI18n } from '@/i18n'
 
 interface CrossArbitrageHistoryProps {
   history: ArbitrageHistoryItem[] | undefined
@@ -8,6 +9,7 @@ interface CrossArbitrageHistoryProps {
 }
 
 export function CrossArbitrageHistory({ history, onClose }: CrossArbitrageHistoryProps) {
+  const { t } = useI18n()
   return (
     <div
       role="dialog"
@@ -25,15 +27,15 @@ export function CrossArbitrageHistory({ history, onClose }: CrossArbitrageHistor
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-6 py-4 border-b border-quant-border shrink-0">
-          <h3 className="text-sm font-bold">历史记录</h3>
-          <button onClick={onClose} aria-label="关闭" className="text-muted-foreground hover:text-foreground">
+          <h3 className="text-sm font-bold">{t('arb.ui.history-record')}</h3>
+          <button onClick={onClose} aria-label={t('arb.ui.close')} className="text-muted-foreground hover:text-foreground">
             <X className="w-4 h-4" />
           </button>
         </div>
         <div className="flex-1 overflow-y-auto p-6">
           <div className="space-y-2">
             {!history || history.length === 0 ? (
-              <div className="text-sm text-muted-foreground text-center py-4">无历史记录</div>
+              <div className="text-sm text-muted-foreground text-center py-4">{t('arb.ui.no-history')}</div>
             ) : (
               history.map((trade: ArbitrageHistoryItem, i: number) => (
                 <div key={trade.id || i} className="flex items-center justify-between p-3 rounded-md bg-quant-bg-secondary">

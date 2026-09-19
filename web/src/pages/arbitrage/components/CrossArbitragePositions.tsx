@@ -3,6 +3,7 @@ import { SectionCard } from '@/components/ui/SectionCard'
 import { ArrowLeftRight } from 'lucide-react'
 import type { ArbitragePosition } from '@/types'
 import type { UseMutationResult } from '@tanstack/react-query'
+import { useI18n } from '@/i18n'
 
 interface CrossArbitragePositionsProps {
   positions: ArbitragePosition[] | undefined
@@ -21,11 +22,12 @@ export function CrossArbitragePositions({
   closePositionMut,
   failPositionMut,
 }: CrossArbitragePositionsProps) {
+  const { t } = useI18n()
   return (
-    <SectionCard title="活跃持仓">
+    <SectionCard title={t('arb.ui.active-positions')}>
       <div className="space-y-2">
         {!positions || positions.length === 0 ? (
-          <div className="text-sm text-muted-foreground text-center py-4">无活跃持仓</div>
+          <div className="text-sm text-muted-foreground text-center py-4">{t('arb.ui.no-active-positions')}</div>
         ) : (
           positions.map((pos: ArbitragePosition, i: number) => (
             <div key={pos.id || i} className="flex items-center justify-between p-3 rounded-md bg-quant-bg-secondary">
@@ -52,14 +54,14 @@ export function CrossArbitragePositions({
                       disabled={closePositionMut.isPending}
                       className="inline-flex items-center px-2 py-1 rounded text-[10px] font-medium bg-quant-gold text-black hover:opacity-90 disabled:opacity-50"
                     >
-                      平仓
+                      {t('arb.ui.close-position')}
                     </button>
                     <button
                       onClick={() => onFailPosition(pos)}
                       disabled={failPositionMut.isPending}
                       className="inline-flex items-center px-2 py-1 rounded text-[10px] font-medium bg-red-500/20 text-red-400 hover:bg-red-500/30 disabled:opacity-50"
                     >
-                      失败
+                      {t('arb.ui.fail')}
                     </button>
                   </div>
                 )}

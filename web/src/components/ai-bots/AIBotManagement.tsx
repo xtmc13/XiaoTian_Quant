@@ -125,7 +125,7 @@ export const AIBotManagement: React.FC<AIBotManagementProps> = ({
       <KPIGrid items={kpiItems} isLoading={isLoading} />
 
       <div className="flex flex-col sm:flex-row gap-3 sm:items-center justify-between">
-        <h2 className="text-sm font-semibold text-white">机器人列表</h2>
+        <h2 className="text-sm font-semibold text-foreground">机器人列表</h2>
         <div className="flex items-center gap-2">
           {selectedIds.size > 0 && (
             <>
@@ -211,7 +211,7 @@ export const AIBotManagement: React.FC<AIBotManagementProps> = ({
                   <div className="flex items-center gap-2.5">
                     <span className={cn('w-2 h-2 rounded-full', status.dot)} />
                     <div>
-                      <div className="text-sm font-medium text-white">{bot.name}</div>
+                      <div className="text-sm font-medium text-foreground">{bot.name}</div>
                       <div className="text-[10px] text-[#666]">{bot.symbol} · {MARKET_LABEL[bot.market_type] || bot.market_type}</div>
                     </div>
                   </div>

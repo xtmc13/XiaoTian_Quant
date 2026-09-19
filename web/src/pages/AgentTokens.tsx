@@ -120,8 +120,8 @@ export function AgentTokens() {
   return (
     <div className="h-full overflow-y-auto p-5 space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold text-white">Agent 令牌管理</h1>
-        <button onClick={fetchData} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-white">
+        <h1 className="text-xl font-bold text-foreground">Agent 令牌管理</h1>
+        <button onClick={fetchData} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
           <RefreshCw className="h-3.5 w-3.5" />刷新
         </button>
       </div>
@@ -135,11 +135,11 @@ export function AgentTokens() {
         <div className="rounded-xl border border-quant-gold/30 bg-quant-gold/10 p-4">
           <div className="flex items-center justify-between mb-2">
             <p className="text-sm font-medium text-quant-gold flex items-center gap-2"><Key className="h-4 w-4" />新令牌（仅显示一次）</p>
-            <button onClick={() => setRevealedToken(null)} className="text-muted-foreground hover:text-white"><X className="h-4 w-4" /></button>
+            <button onClick={() => setRevealedToken(null)} className="text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
           </div>
           <div className="flex gap-2">
             <input type="text" readOnly value={revealedToken}
-              className="flex-1 rounded-lg border border-quant-gold/30 bg-quant-bg px-3 py-2 text-sm text-white font-mono" />
+              className="flex-1 rounded-lg border border-quant-gold/30 bg-quant-bg px-3 py-2 text-sm text-foreground font-mono" />
             <button onClick={() => { navigator.clipboard.writeText(revealedToken); showMsg('已复制') }}
               className="shrink-0 rounded-lg bg-quant-gold px-3 py-2 text-black hover:opacity-90">
               <Copy className="h-4 w-4" />
@@ -152,11 +152,11 @@ export function AgentTokens() {
       {/* Tabs */}
       <div className="flex gap-1 rounded-lg bg-quant-bg-secondary p-1">
         <button onClick={() => setTab('tokens')}
-          className={cn('flex-1 rounded-md py-2 text-xs font-medium transition-colors', tab === 'tokens' ? 'bg-quant-gold text-black' : 'text-muted-foreground hover:text-white')}>
+          className={cn('flex-1 rounded-md py-2 text-xs font-medium transition-colors', tab === 'tokens' ? 'bg-quant-gold text-black' : 'text-muted-foreground hover:text-foreground')}>
           令牌列表 ({tokens.length})
         </button>
         <button onClick={() => setTab('audit')}
-          className={cn('flex-1 rounded-md py-2 text-xs font-medium transition-colors', tab === 'audit' ? 'bg-quant-gold text-black' : 'text-muted-foreground hover:text-white')}>
+          className={cn('flex-1 rounded-md py-2 text-xs font-medium transition-colors', tab === 'audit' ? 'bg-quant-gold text-black' : 'text-muted-foreground hover:text-foreground')}>
           审计日志 ({auditLog.length})
         </button>
       </div>
@@ -165,7 +165,7 @@ export function AgentTokens() {
       {tab === 'tokens' && (
         <div className="space-y-3">
           <button onClick={() => { setShowCreate(true); setError('') }}
-            className="flex items-center gap-2 rounded-lg border border-dashed border-quant-border px-4 py-3 text-sm text-muted-foreground hover:text-white hover:border-quant-gold/50 w-full justify-center">
+            className="flex items-center gap-2 rounded-lg border border-dashed border-quant-border px-4 py-3 text-sm text-muted-foreground hover:text-foreground hover:border-quant-gold/50 w-full justify-center">
             <Plus className="h-4 w-4" />创建新令牌
           </button>
 
@@ -173,7 +173,7 @@ export function AgentTokens() {
             <div key={t.id} className="rounded-xl border border-quant-border bg-quant-bg-secondary p-4">
               <div className="flex items-start justify-between">
                 <div className="space-y-1">
-                  <h3 className="text-sm font-medium text-white flex items-center gap-2">
+                  <h3 className="text-sm font-medium text-foreground flex items-center gap-2">
                     <Key className="h-3.5 w-3.5 text-quant-gold" />{t.name}
                   </h3>
                   <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
@@ -217,7 +217,7 @@ export function AgentTokens() {
                     <td className="px-3 py-2 text-xs text-muted-foreground whitespace-nowrap">
                       {new Date(log.timestamp * 1000).toLocaleString()}
                     </td>
-                    <td className="px-3 py-2 text-xs text-white">{log.name || '-'}</td>
+                    <td className="px-3 py-2 text-xs text-foreground">{log.name || '-'}</td>
                     <td className="px-3 py-2 text-xs">
                       <span className={cn('px-1.5 py-0.5 rounded text-[10px] font-medium',
                         log.method === 'GET' ? 'bg-green-500/10 text-green-400' :
@@ -245,18 +245,18 @@ export function AgentTokens() {
         <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowCreate(false)}>
           <div className="w-full max-w-sm rounded-xl border border-quant-border bg-quant-bg p-6 space-y-4" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-white">创建 Agent 令牌</h3>
-              <button onClick={() => setShowCreate(false)} aria-label="关闭" className="text-muted-foreground hover:text-white"><X className="h-5 w-5" /></button>
+              <h3 className="text-lg font-semibold text-foreground">创建 Agent 令牌</h3>
+              <button onClick={() => setShowCreate(false)} aria-label="关闭" className="text-muted-foreground hover:text-foreground"><X className="h-5 w-5" /></button>
             </div>
             <div className="space-y-1.5">
               <label className="text-xs text-muted-foreground">名称</label>
               <input type="text" value={newName} onChange={e => setNewName(e.target.value)}
-                placeholder="给令牌起个名字" className="w-full rounded-lg border border-quant-border bg-quant-bg-secondary px-3 py-2 text-sm text-white outline-none focus:border-quant-gold" />
+                placeholder="给令牌起个名字" className="w-full rounded-lg border border-quant-border bg-quant-bg-secondary px-3 py-2 text-sm text-foreground outline-none focus:border-quant-gold" />
             </div>
             <div className="space-y-1.5">
               <label className="text-xs text-muted-foreground">权限范围</label>
               <select value={newScopes} onChange={e => setNewScopes(e.target.value)}
-                className="w-full rounded-lg border border-quant-border bg-quant-bg-secondary px-3 py-2 text-sm text-white outline-none focus:border-quant-gold">
+                className="w-full rounded-lg border border-quant-border bg-quant-bg-secondary px-3 py-2 text-sm text-foreground outline-none focus:border-quant-gold">
                 <option value="read">只读 (read)</option>
                 <option value="read,write">读写 (read,write)</option>
                 <option value="read,write,backtest">含回测 (backtest)</option>
@@ -265,7 +265,7 @@ export function AgentTokens() {
             </div>
             <div className="flex gap-2 pt-2">
               <button onClick={() => setShowCreate(false)}
-                className="flex-1 rounded-lg border border-quant-border px-4 py-2 text-sm text-muted-foreground hover:text-white">取消</button>
+                className="flex-1 rounded-lg border border-quant-border px-4 py-2 text-sm text-muted-foreground hover:text-foreground">取消</button>
               <button onClick={handleCreate} disabled={creating || !newName.trim()}
                 className="flex-1 rounded-lg bg-quant-gold px-4 py-2 text-sm font-medium text-black hover:opacity-90 disabled:opacity-50">
                 {creating ? '创建中...' : '创建'}

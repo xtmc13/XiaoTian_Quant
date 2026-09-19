@@ -70,7 +70,7 @@ export function MfaSection() {
   }
 
   const inputCls =
-    'w-full rounded-md border border-quant-border bg-quant-bg px-3 py-2 text-sm text-white placeholder-muted-foreground outline-none transition-colors focus:border-quant-gold'
+    'w-full rounded-md border border-quant-border bg-quant-bg px-3 py-2 text-sm text-foreground placeholder-muted-foreground outline-none transition-colors focus:border-quant-gold'
 
   return (
     <SectionCard title="两步验证 (TOTP)" bodyClassName="space-y-4">

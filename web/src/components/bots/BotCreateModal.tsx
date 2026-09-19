@@ -45,11 +45,11 @@ export function AiCreateDialog({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Sparkles className="h-5 w-5 text-[#4f6ed1]" />
-            <h3 className="text-base font-semibold text-white">AI 智能创建机器人</h3>
+            <h3 className="text-base font-semibold text-foreground">AI 智能创建机器人</h3>
           </div>
           <button
             onClick={onClose}
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-[#999999] transition-colors hover:bg-[#1c1c1c] hover:text-white"
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-[#999999] transition-colors hover:bg-[#1c1c1c] hover:text-foreground"
           >
             <X className="h-4 w-4" />
           </button>
@@ -62,20 +62,20 @@ export function AiCreateDialog({
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             placeholder="例如：我想在 BTC/USDT 上做一个低风险的网格策略，投入 5000 USDT，价格区间 25000-35000"
-            className="h-32 w-full resize-none rounded-xl border border-[#1c1c1c] bg-[#0a0a0a] p-3 text-sm text-white placeholder-[#444444] outline-none transition-colors focus:border-[#4f6ed1]/40"
+            className="h-32 w-full resize-none rounded-xl border border-[#1c1c1c] bg-[#0a0a0a] p-3 text-sm text-foreground placeholder-[#444444] outline-none transition-colors focus:border-[#4f6ed1]/40"
           />
         </div>
         <div className="mt-4 flex items-center justify-end gap-2">
           <button
             onClick={onClose}
-            className="rounded-lg border border-[#1c1c1c] bg-[#141414] px-4 py-2 text-sm font-medium text-[#888888] transition-colors hover:bg-[#1c1c1c] hover:text-white"
+            className="rounded-lg border border-[#1c1c1c] bg-[#141414] px-4 py-2 text-sm font-medium text-[#888888] transition-colors hover:bg-[#1c1c1c] hover:text-foreground"
           >
             取消
           </button>
           <button
             onClick={handleSubmit}
             disabled={!prompt.trim() || isGenerating}
-            className="flex items-center gap-1.5 rounded-lg bg-[#4f6ed1] px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+            className="flex items-center gap-1.5 rounded-lg bg-[#4f6ed1] px-4 py-2 text-sm font-medium text-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
           >
             {isGenerating && <RefreshCw className="h-3.5 w-3.5 animate-spin" />}
             {isGenerating ? '生成中...' : '生成策略'}
@@ -87,7 +87,7 @@ export function AiCreateDialog({
 }
 
 function ConfirmRow({ label, value }: { label: string; value?: React.ReactNode }) {
-  return (<div className="flex items-center justify-between text-sm"><span className="text-[#999999]">{label}</span><span className="font-medium text-white">{value}</span></div>)
+  return (<div className="flex items-center justify-between text-sm"><span className="text-[#999999]">{label}</span><span className="font-medium text-foreground">{value}</span></div>)
 }
 
 export function BotCreateModal({
@@ -201,18 +201,18 @@ export function BotCreateModal({
             {step > 0 && (
               <button
                 onClick={handleBack}
-                className="flex h-8 w-8 items-center justify-center rounded-lg text-[#999999] transition-colors hover:bg-[#1c1c1c] hover:text-white"
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-[#999999] transition-colors hover:bg-[#1c1c1c] hover:text-foreground"
               >
                 <ArrowLeft className="h-4 w-4" />
               </button>
             )}
-            <h3 className="text-base font-semibold text-white">
+            <h3 className="text-base font-semibold text-foreground">
               {isEdit ? '编辑机器人' : '创建机器人'}
             </h3>
           </div>
           <button
             onClick={onCancel}
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-[#999999] transition-colors hover:bg-[#1c1c1c] hover:text-white"
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-[#999999] transition-colors hover:bg-[#1c1c1c] hover:text-foreground"
           >
             <X className="h-4 w-4" />
           </button>
@@ -259,7 +259,7 @@ export function BotCreateModal({
                   {BOT_TYPES.find((b) => b.key === effectiveType)?.icon}
                 </div>
                 <div>
-                  <div className="text-sm font-semibold text-white">
+                  <div className="text-sm font-semibold text-foreground">
                     {BOT_TYPES.find((b) => b.key === effectiveType)?.label}
                   </div>
                   <div className="text-xs text-[#999999]">
@@ -284,7 +284,7 @@ export function BotCreateModal({
                   onChange={(e) => setForm((f) => ({ ...f, symbol: e.target.value }))}
                   placeholder="BTC/USDT"
                   aria-label="交易标的"
-                  className="w-full rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] px-3 py-2 text-sm text-white placeholder-[#444444] outline-none transition-colors focus:border-[#4f6ed1]/40"
+                  className="w-full rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] px-3 py-2 text-sm text-foreground placeholder-[#444444] outline-none transition-colors focus:border-[#4f6ed1]/40"
                 />
               </WizardField>
               <WizardField label="市场类型">
@@ -296,7 +296,7 @@ export function BotCreateModal({
                       className={cn(
                         'rounded-lg border px-3 py-2 text-xs font-medium transition-colors',
                         (form.market as string) === m
-                          ? 'border-white/20 bg-white/10 text-white'
+                          ? 'border-white/20 bg-white/10 text-foreground'
                           : 'border-[#1c1c1c] bg-[#141414] text-[#999999] hover:text-[#888888]'
                       )}
                     >
@@ -317,7 +317,7 @@ export function BotCreateModal({
                   onChange={(e) => setForm((f) => ({ ...f, capital: e.target.value }))}
                   placeholder="5000"
                   aria-label="初始资金 USDT"
-                  className="w-full rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] px-3 py-2 text-sm text-white placeholder-[#444444] outline-none focus:border-[#4f6ed1]/40"
+                  className="w-full rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] px-3 py-2 text-sm text-foreground placeholder-[#444444] outline-none focus:border-[#4f6ed1]/40"
                 />
               </WizardField>
               <WizardField label="执行模式">
@@ -333,7 +333,7 @@ export function BotCreateModal({
                       className={cn(
                         'rounded-lg border px-3 py-2 text-xs font-medium transition-colors',
                         (form.execution as string) === m.key
-                          ? 'border-white/20 bg-white/10 text-white'
+                          ? 'border-white/20 bg-white/10 text-foreground'
                           : 'border-[#1c1c1c] bg-[#141414] text-[#999999] hover:text-[#888888]'
                       )}
                     >
@@ -348,7 +348,7 @@ export function BotCreateModal({
                   onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
                   placeholder="我的策略 #1"
                   aria-label="机器人名称"
-                  className="w-full rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] px-3 py-2 text-sm text-white placeholder-[#444444] outline-none focus:border-[#4f6ed1]/40"
+                  className="w-full rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] px-3 py-2 text-sm text-foreground placeholder-[#444444] outline-none focus:border-[#4f6ed1]/40"
                 />
               </WizardField>
 
@@ -358,7 +358,7 @@ export function BotCreateModal({
 
           {step === 3 && (
             <div className="space-y-3">
-              <h4 className="text-sm font-semibold text-white">配置确认</h4>
+              <h4 className="text-sm font-semibold text-foreground">配置确认</h4>
               <div className="rounded-xl border border-[#1c1c1c] bg-[#0a0a0a] p-4 space-y-2">
                 <ConfirmRow label="策略类型" value={BOT_TYPES.find((b) => b.key === effectiveType)?.label} />
                 <ConfirmRow label="交易标的" value={(form.symbol as string) || '-'} />
@@ -379,7 +379,7 @@ export function BotCreateModal({
         <div className="flex items-center justify-end gap-2 border-t border-[#1c1c1c] px-6 py-4">
           <button
             onClick={onCancel}
-            className="rounded-lg border border-[#1c1c1c] bg-[#141414] px-4 py-2 text-sm font-medium text-[#888888] transition-colors hover:bg-[#1c1c1c] hover:text-white"
+            className="rounded-lg border border-[#1c1c1c] bg-[#141414] px-4 py-2 text-sm font-medium text-[#888888] transition-colors hover:bg-[#1c1c1c] hover:text-foreground"
           >
             取消
           </button>

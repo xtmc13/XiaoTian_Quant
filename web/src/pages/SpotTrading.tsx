@@ -425,7 +425,7 @@ export function SpotTrading() {
             {/* 方向选择 - 买入/卖出 */}
             <div className="flex gap-1.5">
               <button onClick={()=>setSide('BUY')} className={cn("flex-1 py-2.5 text-sm font-bold rounded-lg transition-all duration-200", side==='BUY'?"bg-[#0ECB81] hover:bg-[#0ECB81]/90 text-black shadow-lg shadow-[#0ECB81]/20":"bg-quant-bg hover:bg-[#0ECB81]/10 text-muted-foreground border border-quant-border hover:border-[#0ECB81]/50")}>买入</button>
-              <button onClick={()=>setSide('SELL')} className={cn("flex-1 py-2.5 text-sm font-bold rounded-lg transition-all duration-200", side==='SELL'?"bg-[#F6465D] hover:bg-[#F6465D]/90 text-white shadow-lg shadow-[#F6465D]/20":"bg-quant-bg hover:bg-[#F6465D]/10 text-muted-foreground border border-quant-border hover:border-[#F6465D]/50")}>卖出</button>
+              <button onClick={()=>setSide('SELL')} className={cn("flex-1 py-2.5 text-sm font-bold rounded-lg transition-all duration-200", side==='SELL'?"bg-[#F6465D] hover:bg-[#F6465D]/90 text-foreground shadow-lg shadow-[#F6465D]/20":"bg-quant-bg hover:bg-[#F6465D]/10 text-muted-foreground border border-quant-border hover:border-[#F6465D]/50")}>卖出</button>
             </div>
 
             {/* 价格输入 + 快捷按钮 */}
@@ -723,7 +723,7 @@ export function SpotTrading() {
               submitting&&"opacity-60 cursor-not-allowed",
               side==='BUY'
                 ?"bg-[#0ECB81] hover:bg-[#0ECB81]/90 active:scale-[0.98] text-black"
-                :"bg-[#F6465D] hover:bg-[#F6465D]/90 active:scale-[0.98] text-white"
+                :"bg-[#F6465D] hover:bg-[#F6465D]/90 active:scale-[0.98] text-foreground"
             )}>
               {submitting?'提交中...':`${side==='BUY'?'买入':'卖出'} ${symbol.replace('USDT','')}`}
             </button>

@@ -405,11 +405,11 @@ const handlePresetSize = (pct: number) => {
           /* Spot: dual buy/sell buttons */
           <div className="flex gap-2">
             <button onClick={() => { onSideChange('BUY'); onPlaceOrder('BUY'); }}
-              className="flex-1 py-3 rounded-md font-bold text-sm bg-[#2EBD85] text-white hover:opacity-90 active:scale-[0.98] transition-all">
+              className="flex-1 py-3 rounded-md font-bold text-sm bg-[#2EBD85] text-foreground hover:opacity-90 active:scale-[0.98] transition-all">
               买入
             </button>
             <button onClick={() => { onSideChange('SELL'); onPlaceOrder('SELL'); }}
-              className="flex-1 py-3 rounded-md font-bold text-sm bg-[#F6465D] text-white hover:opacity-90 active:scale-[0.98] transition-all">
+              className="flex-1 py-3 rounded-md font-bold text-sm bg-[#F6465D] text-foreground hover:opacity-90 active:scale-[0.98] transition-all">
               卖出
             </button>
           </div>

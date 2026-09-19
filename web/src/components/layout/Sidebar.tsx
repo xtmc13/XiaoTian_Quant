@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/stores/appStore'
+import { useI18n } from '@/i18n'
 import { useAuthStore } from '@/stores/authStore'
 import {
   BarChart3,
@@ -22,10 +23,10 @@ import {
 
 interface NavItem {
   path?: string
-  label: string
+  labelKey: string
   icon: React.ComponentType<{ className?: string }>
   adminOnly?: boolean
-  children?: { path: string; label: string }[]
+  children?: { path: string; labelKey: string }[]
 }
 
 // Helper: check if a child path is active
@@ -34,81 +35,81 @@ const isChildActive = (location: ReturnType<typeof useLocation>, childPath: stri
 }
 
 const navItems: NavItem[] = [
-  { path: '/dashboard', label: '仪表盘', icon: BarChart3 },
+  { path: '/dashboard', labelKey: 'nav.dashboard', icon: BarChart3 },
 
   // 第一页：纯机器人管理（网格/马丁/华尔街/AI 实例；新建走右上角模板向导）
-  { path: '/bots', label: '机器人中心', icon: LayoutGrid },
+  { path: '/bots', labelKey: 'nav.bots', icon: LayoutGrid },
 
   // 策略实验室（AI生成/回测/指标IDE 等研究工具）
   {
-    label: '策略实验室',
+    labelKey: 'nav.strategy-lab',
     icon: FlaskConical,
     children: [
-      { path: '/strategy', label: '策略管理' },
-      { path: '/strategy/editor', label: '策略编辑器' },
-      { path: '/backtest', label: '回测' },
-      { path: '/indicator-ide', label: '指标 IDE' },
-      { path: '/indicator-community', label: '指标市场' },
-      { path: '/strategy-leaderboard', label: '排行榜' },
+      { path: '/strategy', labelKey: 'nav.strategy' },
+      { path: '/strategy/editor', labelKey: 'nav.strategy-editor' },
+      { path: '/backtest', labelKey: 'nav.backtest' },
+      { path: '/indicator-ide', labelKey: 'nav.indicator-ide' },
+      { path: '/indicator-community', labelKey: 'nav.indicator-community' },
+      { path: '/strategy-leaderboard', labelKey: 'nav.leaderboard' },
     ],
   },
 
   // 交易
   {
-    label: '交易',
+    labelKey: 'nav.trading',
     icon: LineChart,
     children: [
-      { path: '/trading/spot', label: '现货交易' },
-      { path: '/trading/contract', label: '合约交易' },
+      { path: '/trading/spot', labelKey: 'nav.trading-spot' },
+      { path: '/trading/contract', labelKey: 'nav.trading-contract' },
     ],
   },
 
   // AI 分析
-  { path: '/ai', label: 'AI分析', icon: Brain },
+  { path: '/ai', labelKey: 'nav.ai', icon: Brain },
 
 
   // 套利
   {
-    label: '套利',
+    labelKey: 'nav.arbitrage',
     icon: ArrowLeftRight,
     children: [
-      { path: '/arbitrage/cross', label: '跨所套利' },
-      { path: '/arbitrage/triangular', label: '币种套利' },
+      { path: '/arbitrage/cross', labelKey: 'nav.arbitrage-cross' },
+      { path: '/arbitrage/triangular', labelKey: 'nav.arbitrage-triangular' },
     ],
   },
 
   // 资产与风控
   {
-    label: '资产与风控',
+    labelKey: 'nav.assets-risk',
     icon: PieChart,
     children: [
-      { path: '/portfolio', label: '资产监测' },
-      { path: '/risk-control', label: '风控中心' },
+      { path: '/portfolio', labelKey: 'nav.asset-monitor' },
+      { path: '/risk-control', labelKey: 'nav.risk-control' },
     ],
   },
 
   // 社区
   {
-    label: '社区',
+    labelKey: 'nav.community',
     icon: Share2,
-    children: [{ path: '/social-trading', label: '信号市场' }],
+    children: [{ path: '/social-trading', labelKey: 'nav.signal-market' }],
   },
 
   // 高级
   {
-    label: '高级',
+    labelKey: 'nav.advanced',
     icon: Layers,
     children: [
-      { path: '/pairlist', label: '交易对筛选' },
-      { path: '/advanced-orders', label: '高级订单' },
-      { path: '/hyperopt', label: '参数优化' },
-      { path: '/onchain', label: '链上数据' },
-      { path: '/author-dashboard', label: '作者后台' },
+      { path: '/pairlist', labelKey: 'nav.pairlist' },
+      { path: '/advanced-orders', labelKey: 'nav.advanced-orders' },
+      { path: '/hyperopt', labelKey: 'nav.hyperopt' },
+      { path: '/onchain', labelKey: 'nav.onchain' },
+      { path: '/author-dashboard', labelKey: 'nav.author-dashboard' },
     ],
   },
 
-  { path: '/users', label: '用户管理', icon: Users, adminOnly: true },
-  { path: '/agent-tokens', label: 'Agent令牌', icon: Key, adminOnly: true },
+  { path: '/users', labelKey: 'nav.user-mgmt', icon: Users, adminOnly: true },
+  { path: '/agent-tokens', labelKey: 'nav.agent-tokens', icon: Key, adminOnly: true },
 ]
 
 export function Sidebar() {
@@ -116,11 +117,12 @@ export function Sidebar() {
   const { sidebarCollapsed, setSidebarCollapsed, sidebarBehavior, toggleSidebar } = useAppStore()
   const { user } = useAuthStore()
   const isAdmin = user?.role === 'admin'
+  const { t } = useI18n()
 
   // Auto-expand groups whose child is currently active
   const initiallyExpanded = navItems
     .filter((item) => item.children?.some((child) => isChildActive(location, child.path)))
-    .map((item) => item.label)
+    .map((item) => item.labelKey)
     .join('|')
 
   const [expandedItem, setExpandedItem] = useState<string | null>(initiallyExpanded || null)
@@ -155,7 +157,7 @@ export function Sidebar() {
           className="flex items-center gap-2 text-quant-gold font-bold tracking-tight"
           onClick={(e) => e.stopPropagation()}
         >
-          <span className="w-7 h-7 bg-quant-gold rounded-md flex items-center justify-center text-white text-sm font-black shrink-0">
+          <span className="w-7 h-7 bg-quant-gold rounded-md flex items-center justify-center text-foreground text-sm font-black shrink-0">
             小
           </span>
           {!sidebarCollapsed && <span className="truncate">小天量化</span>}
@@ -171,19 +173,19 @@ export function Sidebar() {
               ? location.pathname === item.path
               : (item.children?.some((child) => isChildActive(location, child.path)) ?? false)
             const hasChildren = !!item.children
-            const isExpanded = expandedItem === item.label
+            const isExpanded = expandedItem === item.labelKey
 
             if (hasChildren) {
               return (
-                <div key={item.label}>
+                <div key={item.labelKey}>
                   {/* Parent item */}
                   <button
                     onClick={() => {
                       if (sidebarCollapsed) setSidebarCollapsed(false)
-                      setExpandedItem(isExpanded ? null : item.label)
+                      setExpandedItem(isExpanded ? null : item.labelKey)
                     }}
                     onMouseEnter={() => {
-                      if (isHover) setExpandedItem(item.label)
+                      if (isHover) setExpandedItem(item.labelKey)
                     }}
                     aria-expanded={isExpanded}
                     className={cn(
@@ -192,12 +194,12 @@ export function Sidebar() {
                         ? 'bg-quant-gold/10 text-quant-gold'
                         : 'text-muted-foreground hover:text-foreground hover:bg-white/5'
                     )}
-                    title={item.label}
+                    title={t(item.labelKey)}
                   >
                     <item.icon className="w-[18px] h-[18px] shrink-0" />
                     {!sidebarCollapsed && (
                       <>
-                        <span className="flex-1 text-left">{item.label}</span>
+                        <span className="flex-1 text-left">{t(item.labelKey)}</span>
                         <ChevronDown className={cn('w-3 h-3 transition-transform', isExpanded && 'rotate-180')} />
                       </>
                     )}
@@ -227,7 +229,7 @@ export function Sidebar() {
                             )}
                           >
                             <span className="w-1 h-1 rounded-full bg-current opacity-50" />
-                            {child.label}
+                            {t(child.labelKey)}
                           </Link>
                         )
                       })}
@@ -251,10 +253,10 @@ export function Sidebar() {
                     ? 'bg-quant-gold/10 text-quant-gold'
                     : 'text-muted-foreground hover:text-foreground hover:bg-white/5'
                 )}
-                title={sidebarCollapsed ? item.label : undefined}
+                title={sidebarCollapsed ? t(item.labelKey) : undefined}
               >
                 <item.icon className="w-[18px] h-[18px] shrink-0" />
-                {!sidebarCollapsed && <span>{item.label}</span>}
+                {!sidebarCollapsed && <span>{t(item.labelKey)}</span>}
               </Link>
             )
           })}

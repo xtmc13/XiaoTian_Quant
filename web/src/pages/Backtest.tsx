@@ -925,7 +925,7 @@ export function Backtest() {
                 onClick={handleRun}
                 disabled={isRunning}
                 className={cn(
-                  'flex items-center gap-1.5 rounded-lg bg-quant-gold px-4 py-2 text-xs font-semibold text-white transition-colors',
+                  'flex items-center gap-1.5 rounded-lg bg-quant-gold px-4 py-2 text-xs font-semibold text-foreground transition-colors',
                   isRunning ? 'cursor-not-allowed opacity-60' : 'hover:bg-quant-gold/90'
                 )}
               >
@@ -1172,7 +1172,7 @@ export function Backtest() {
                 </div>
                 <button
                   onClick={handleRunOptimizer}
-                  className="rounded-lg bg-quant-gold px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-quant-gold/90"
+                  className="rounded-lg bg-quant-gold px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-quant-gold/90"
                 >
                   开始优化
                 </button>
@@ -1236,7 +1236,7 @@ export function Backtest() {
                       </div>
                       <button
                         onClick={() => applyOptimizerResult(optimizerResult)}
-                        className="rounded-lg bg-quant-gold px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-quant-gold/90"
+                        className="rounded-lg bg-quant-gold px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-quant-gold/90"
                       >
                         应用参数
                       </button>
@@ -1760,7 +1760,7 @@ export function Backtest() {
               action={
                 <button
                   onClick={handleRun}
-                  className="flex items-center gap-1.5 rounded-lg bg-quant-gold px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-quant-gold/90"
+                  className="flex items-center gap-1.5 rounded-lg bg-quant-gold px-4 py-2 text-xs font-medium text-foreground transition-colors hover:bg-quant-gold/90"
                 >
                   <Play className="h-3.5 w-3.5" />
                   开始回测

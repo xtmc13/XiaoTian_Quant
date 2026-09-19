@@ -60,7 +60,7 @@ function getPodiumMeta(rank: number) {
   return {
     order: 'md:order-3',
     border: 'border-amber-700/40',
-    medal: 'bg-amber-700 text-white',
+    medal: 'bg-amber-700 text-foreground',
     Icon: Medal,
   }
 }

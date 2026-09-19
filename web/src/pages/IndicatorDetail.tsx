@@ -233,12 +233,12 @@ export function IndicatorDetail() {
               {indicator.pricing_type === 'free' ? (
                 <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-quant-green text-white">免费</span>
               ) : (
-                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-gradient-to-r from-[#f5af19] to-[#f12711] text-white">
+                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-gradient-to-r from-[#f5af19] to-[#f12711] text-foreground">
                   {indicator.price} 积分
                 </span>
               )}
               {indicator.score != null && (
-                <span className={cn('flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold text-white bg-gradient-to-r', scoreBadgeClass(indicator.score))}>
+                <span className={cn('flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold text-foreground bg-gradient-to-r', scoreBadgeClass(indicator.score))}>
                   <Trophy className="h-3 w-3" /> {indicator.score.toFixed(0)}
                 </span>
               )}

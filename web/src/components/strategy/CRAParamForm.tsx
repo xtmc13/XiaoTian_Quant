@@ -455,8 +455,6 @@ export function CRAParamForm({ value, onChange, market, className, openFields = 
             onClose={() => setShowAddPositionModal(false)}
             value={value.addPositions}
             onChange={(next) => update('addPositions', next)}
-            showEma={isContract}
-            emaDisabled={isContract && !value.addEmaEnabled}
             disabled={!value.enableAddPosition}
           />
         </div>
@@ -471,13 +469,6 @@ export function CRAParamForm({ value, onChange, market, className, openFields = 
                 period={value.addMacdPeriod}
                 onToggle={(v) => update('addMacdEnabled', v)}
                 onPeriodChange={(v) => update('addMacdPeriod', v)}
-              />
-              <PeriodSelect
-                label="补仓 EMA 监测"
-                enabled={value.addEmaEnabled}
-                period={value.addEmaPeriod}
-                onToggle={(v) => update('addEmaEnabled', v)}
-                onPeriodChange={(v) => update('addEmaPeriod', v)}
               />
             </div>
           </div>

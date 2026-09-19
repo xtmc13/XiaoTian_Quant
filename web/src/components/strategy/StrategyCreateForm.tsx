@@ -649,7 +649,7 @@ export function StrategyCreateFormSections({
                 className={cn(
                   'w-full flex items-center justify-between border rounded-lg px-3 py-2 text-xs transition-colors',
                   selectedExchanges.length > 0
-                    ? 'border-quant-gold/30 bg-quant-gold/5 text-foreground'
+                    ? 'border-quant-gold/30 bg-quant-gold/5 text-white'
                     : 'border-quant-border text-muted-foreground hover:text-foreground'
                 )}
               >

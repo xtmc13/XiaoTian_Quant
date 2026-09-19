@@ -7,8 +7,6 @@ interface AddPositionModalProps {
   onClose: () => void
   value: AddPositionItem[]
   onChange: (next: AddPositionItem[]) => void
-  showEma?: boolean
-  emaDisabled?: boolean
   disabled?: boolean
 }
 
@@ -17,8 +15,6 @@ export function AddPositionModal({
   onClose,
   value,
   onChange,
-  showEma = false,
-  emaDisabled = false,
   disabled = false,
 }: AddPositionModalProps) {
   if (!open) return null
@@ -59,13 +55,7 @@ export function AddPositionModal({
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-6">
-          <AddPositionTable
-            value={value}
-            onChange={onChange}
-            showEma={showEma}
-            emaDisabled={emaDisabled}
-            disabled={disabled}
-          />
+          <AddPositionTable value={value} onChange={onChange} disabled={disabled} />
         </div>
 
         {/* Footer */}

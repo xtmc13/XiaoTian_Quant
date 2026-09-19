@@ -57,15 +57,15 @@ export function SystemStatus() {
               </div>
               <div className="rounded-lg border border-quant-border bg-quant-bg-secondary p-3">
                 <div className="text-[10px] text-muted-foreground">版本</div>
-                <div className="text-sm text-white font-mono">{health.version}</div>
+                <div className="text-sm text-foreground font-mono">{health.version}</div>
               </div>
               <div className="rounded-lg border border-quant-border bg-quant-bg-secondary p-3">
                 <div className="text-[10px] text-muted-foreground">运行时间</div>
-                <div className="text-sm text-white font-mono">{health.uptime}</div>
+                <div className="text-sm text-foreground font-mono">{health.uptime}</div>
               </div>
               <div className="rounded-lg border border-quant-border bg-quant-bg-secondary p-3">
                 <div className="text-[10px] text-muted-foreground">日志级别</div>
-                <div className="text-sm text-white font-mono">{health.log_level}</div>
+                <div className="text-sm text-foreground font-mono">{health.log_level}</div>
               </div>
             </div>
           </SectionCard>
@@ -83,7 +83,7 @@ export function SystemStatus() {
                   render: (item) => (
                     <div className="flex items-center gap-2">
                       <span className="text-quant-gold">{COMPONENT_ICONS[item.name.toLowerCase()] || <Server className="w-4 h-4" />}</span>
-                      <span className="text-sm text-white">{item.name}</span>
+                      <span className="text-sm text-foreground">{item.name}</span>
                     </div>
                   ),
                 },

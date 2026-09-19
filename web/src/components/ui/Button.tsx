@@ -22,9 +22,9 @@ export const Button = React.memo(function Button({
 }: ButtonProps) {
   const variantClasses = {
     default: 'bg-[#2a2a2a] text-[#e0e0e0] border border-[#333] hover:bg-[#333] hover:border-[#444]',
-    primary: 'bg-[#1890ff] text-white border border-[#1890ff] hover:bg-[#40a9ff] hover:border-[#40a9ff]',
-    secondary: 'bg-[#52c41a] text-white border border-[#52c41a] hover:bg-[#73d13d] hover:border-[#73d13d]',
-    danger: 'bg-[#f5222d] text-white border border-[#f5222d] hover:bg-[#ff4d4f] hover:border-[#ff4d4f]',
+    primary: 'bg-[#1890ff] text-foreground border border-[#1890ff] hover:bg-[#40a9ff] hover:border-[#40a9ff]',
+    secondary: 'bg-[#52c41a] text-foreground border border-[#52c41a] hover:bg-[#73d13d] hover:border-[#73d13d]',
+    danger: 'bg-[#f5222d] text-foreground border border-[#f5222d] hover:bg-[#ff4d4f] hover:border-[#ff4d4f]',
     ghost: 'bg-transparent text-[#aaa] border border-transparent hover:bg-[#1c1c1c] hover:text-[#e0e0e0]',
     outline: 'bg-transparent text-[#1890ff] border border-[#1890ff] hover:bg-[#1890ff]/10',
   }

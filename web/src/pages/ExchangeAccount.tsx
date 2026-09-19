@@ -298,7 +298,7 @@ export function ExchangeAccount() {
                         {b.asset.slice(0, 2)}
                       </div>
                       <div className="flex-1 min-w-0">
-                        <div className="text-sm font-medium text-white">{b.asset}</div>
+                        <div className="text-sm font-medium text-foreground">{b.asset}</div>
                         <div className="text-[10px] text-muted-foreground">
                           {livePrice ? `$${formatCurrency(livePrice)}` : '—'}
                         </div>
@@ -306,11 +306,11 @@ export function ExchangeAccount() {
                       <span className="w-24 text-right text-xs font-mono text-muted-foreground">
                         {b.free.toLocaleString(undefined, { maximumFractionDigits: 4 })}
                       </span>
-                      <span className="w-24 text-right text-xs font-mono text-white">
+                      <span className="w-24 text-right text-xs font-mono text-foreground">
                         {b.total.toLocaleString(undefined, { maximumFractionDigits: 4 })}
                       </span>
                       <div className="w-24 text-right">
-                        <span className="text-xs font-mono text-white">{pct.toFixed(1)}%</span>
+                        <span className="text-xs font-mono text-foreground">{pct.toFixed(1)}%</span>
                         <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-quant-border">
                           <div
                             className="h-full rounded-full bg-quant-gold"
@@ -353,9 +353,9 @@ export function ExchangeAccount() {
                     key={sym}
                     className="flex items-center justify-between rounded-md px-2 py-1.5 hover:bg-white/[0.02] transition-colors"
                   >
-                    <span className="text-xs font-medium text-white">{sym.replace('USDT', '/USDT')}</span>
+                    <span className="text-xs font-medium text-foreground">{sym.replace('USDT', '/USDT')}</span>
                     <div className="text-right">
-                      <div className="text-xs font-mono text-white">${formatCurrency(data.price)}</div>
+                      <div className="text-xs font-mono text-foreground">${formatCurrency(data.price)}</div>
                       <div className={cn('text-[10px] font-mono', isUp ? 'text-quant-green' : 'text-quant-red')}>
                         {isUp ? '+' : ''}
                         {(data.change24h || 0).toFixed(2)}%
@@ -425,7 +425,7 @@ export function ExchangeAccount() {
                     {
                       key: 'symbol',
                       title: '币种',
-                      render: (p) => <span className="font-semibold text-white">{p.symbol}</span>,
+                      render: (p) => <span className="font-semibold text-foreground">{p.symbol}</span>,
                     },
                     {
                       key: 'quantity',
@@ -443,7 +443,7 @@ export function ExchangeAccount() {
                       key: 'current',
                       title: '当前价',
                       render: (p) => (
-                        <span className="font-mono text-white">
+                        <span className="font-mono text-foreground">
                           ${formatCurrency(p.current_price || prices[p.symbol]?.price || 0)}
                         </span>
                       ),
@@ -516,7 +516,7 @@ export function ExchangeAccount() {
                     {
                       key: 'symbol',
                       title: '币种',
-                      render: (o) => <span className="font-semibold text-white">{o.symbol}</span>,
+                      render: (o) => <span className="font-semibold text-foreground">{o.symbol}</span>,
                     },
                     {
                       key: 'side',
@@ -591,7 +591,7 @@ export function ExchangeAccount() {
                     {
                       key: 'symbol',
                       title: '币种',
-                      render: (o) => <span className="font-semibold text-white">{o.symbol}</span>,
+                      render: (o) => <span className="font-semibold text-foreground">{o.symbol}</span>,
                     },
                     {
                       key: 'side',

@@ -5,6 +5,13 @@ import App from './App'
 import './index.css'
 import { registerSW, listenInstallPrompt } from './lib/pwa'
 import { bootstrapAppearance } from './stores/appStore'
+import '@/i18n/locales/zh-CN'
+import '@/i18n/locales/en-US'
+import '@/i18n/locales/nav'
+import '@/i18n/locales/settings'
+import '@/i18n/locales/dashboard'
+import '@/i18n/locales/arb'
+import '@/i18n/locales/chrome'
 
 // 渲染前应用持久化的主题/缩放，避免刷新后外观回跳
 bootstrapAppearance()

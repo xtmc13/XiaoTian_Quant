@@ -49,7 +49,7 @@ describe('RiskControl 风控参数卡片', () => {
     vi.mocked(protectionApi.getConfig).mockResolvedValue({ protections: [] } as never)
     vi.mocked(riskApi.getConfig).mockResolvedValue({
       max_concurrent_orders: 3,
-      position_limit_pct: 2500,
+      position_limit_pct: 100,
       profit_protection_enabled: true,
       indicator_fail_open: true,
     })
@@ -60,9 +60,9 @@ describe('RiskControl 风控参数卡片', () => {
     render(<RiskControl />, { wrapper })
     expect(screen.getByText('风控参数')).toBeTruthy()
     expect(screen.getByText('盈利保护')).toBeTruthy()
-    // 回填：GET 返回 3 / 2500
+    // 回填：GET 返回 3 / 100
     await waitFor(() => expect((screen.getByDisplayValue('3') as HTMLInputElement).value).toBe('3'))
-    expect((screen.getByDisplayValue('2500') as HTMLInputElement).value).toBe('2500')
+    expect((screen.getByDisplayValue('100') as HTMLInputElement).value).toBe('100')
   })
 
   it('保存 → PUT riskApi.updateConfig（含回填值），成功 toast', async () => {
@@ -72,7 +72,7 @@ describe('RiskControl 风控参数卡片', () => {
     await waitFor(() => expect(riskApi.updateConfig).toHaveBeenCalled())
     expect(vi.mocked(riskApi.updateConfig).mock.calls[0][0]).toEqual({
       max_concurrent_orders: 3,
-      position_limit_pct: 2500,
+      position_limit_pct: 100,
       profit_protection_enabled: true,
       indicator_fail_open: true,
     })

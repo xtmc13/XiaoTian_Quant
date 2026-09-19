@@ -5,6 +5,7 @@ import { ArrowLeftRight, RefreshCw, Zap } from 'lucide-react'
 import type { ArbitrageConfig, ArbitrageOpportunity } from '@/types'
 import type { UseMutationResult } from '@tanstack/react-query'
 import { DEFAULT_CONFIG } from './useCrossArbitrage'
+import { useI18n } from '@/i18n'
 
 interface CrossArbitrageOpportunitiesProps {
   opportunity: ArbitrageOpportunity | null
@@ -37,6 +38,7 @@ function OpportunityRow({
   onExecute: (opp: ArbitrageOpportunity) => void
   executePending: boolean
 }) {
+  const { t } = useI18n()
   const feeA = editConfig?.fee_a ?? DEFAULT_CONFIG.fee_a
   const feeB = editConfig?.fee_b ?? DEFAULT_CONFIG.fee_b
   const orderSize = editConfig?.order_size ?? DEFAULT_CONFIG.order_size
@@ -69,20 +71,26 @@ function OpportunityRow({
       <td className="py-3 px-3 text-right">
         <div>${opportunity.buy_price?.toFixed(2) ?? '-'}</div>
         {opportunity.executable_buy_price ? (
-          <div className="text-[10px] text-muted-foreground">实 {opportunity.executable_buy_price.toFixed(2)}</div>
+          <div className="text-[10px] text-muted-foreground">
+            {t('arb.cross.exec-prefix')} {opportunity.executable_buy_price.toFixed(2)}
+          </div>
         ) : null}
       </td>
       <td className="py-3 px-3 text-right">
         <div>${opportunity.sell_price?.toFixed(2) ?? '-'}</div>
         {opportunity.executable_sell_price ? (
-          <div className="text-[10px] text-muted-foreground">实 {opportunity.executable_sell_price.toFixed(2)}</div>
+          <div className="text-[10px] text-muted-foreground">
+            {t('arb.cross.exec-prefix')} {opportunity.executable_sell_price.toFixed(2)}
+          </div>
         ) : null}
       </td>
       <td className="py-3 px-3 text-right">
         <span className={cn('font-medium', netSpreadPct >= 0 ? 'text-green-400' : 'text-red-400')}>
           {netSpreadPct.toFixed(4)}%
         </span>
-        <div className="text-[10px] text-muted-foreground">毛 {spreadPct.toFixed(4)}%</div>
+        <div className="text-[10px] text-muted-foreground">
+          {t('arb.cross.gross-prefix')} {spreadPct.toFixed(4)}%
+        </div>
       </td>
       <td className="py-3 px-3 text-right text-[10px] text-muted-foreground">
         <div className="text-red-400">+{slipBuy.toFixed(4)}%</div>
@@ -98,7 +106,9 @@ function OpportunityRow({
           ${estimatedProfit.toFixed(2)}
         </div>
         {!isViable && (
-          <div className="text-[10px] text-yellow-400">{opportunity.viable === false ? '深度不足' : '未达阈值'}</div>
+          <div className="text-[10px] text-yellow-400">
+            {opportunity.viable === false ? t('arb.cross.insufficient-depth') : t('arb.cross.below-threshold')}
+          </div>
         )}
       </td>
       <td className="py-3 px-3 text-center">
@@ -113,7 +123,7 @@ function OpportunityRow({
           )}
         >
           {executePending ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />}
-          执行
+          {t('arb.ui.execute')}
         </button>
       </td>
     </tr>
@@ -127,27 +137,28 @@ export function CrossArbitrageOpportunities({
   onExecute,
   executeMut,
 }: CrossArbitrageOpportunitiesProps) {
+  const { t } = useI18n()
   return (
     <SectionCard
-      title="套利机会"
-      headerAction={opportunity ? <span className="text-xs text-muted-foreground">最新扫描结果</span> : null}
+      title={t('arb.cross.opportunities-title')}
+      headerAction={opportunity ? <span className="text-xs text-muted-foreground">{t('arb.ui.latest-scan')}</span> : null}
     >
       {opportunity ? (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-quant-border text-left text-xs text-muted-foreground">
-                <th className="py-2 px-3 font-medium">交易对</th>
-                <th className="py-2 px-3 font-medium">买入所</th>
-                <th className="py-2 px-3 font-medium">卖出所</th>
-                <th className="py-2 px-3 font-medium text-right">买价/可执行</th>
-                <th className="py-2 px-3 font-medium text-right">卖价/可执行</th>
-                <th className="py-2 px-3 font-medium text-right">净价差 %</th>
-                <th className="py-2 px-3 font-medium text-right">滑点(买/卖)</th>
-                <th className="py-2 px-3 font-medium text-right">目标/调整数量</th>
-                <th className="py-2 px-3 font-medium text-right">最大可成交</th>
-                <th className="py-2 px-3 font-medium text-right">预估净利润</th>
-                <th className="py-2 px-3 font-medium text-center">操作</th>
+                <th className="py-2 px-3 font-medium">{t('arb.cross.hdr-symbol')}</th>
+                <th className="py-2 px-3 font-medium">{t('arb.cross.hdr-buy-ex')}</th>
+                <th className="py-2 px-3 font-medium">{t('arb.cross.hdr-sell-ex')}</th>
+                <th className="py-2 px-3 font-medium text-right">{t('arb.cross.hdr-buy-price')}</th>
+                <th className="py-2 px-3 font-medium text-right">{t('arb.cross.hdr-sell-price')}</th>
+                <th className="py-2 px-3 font-medium text-right">{t('arb.cross.hdr-net-spread')}</th>
+                <th className="py-2 px-3 font-medium text-right">{t('arb.cross.hdr-slippage')}</th>
+                <th className="py-2 px-3 font-medium text-right">{t('arb.cross.hdr-qty')}</th>
+                <th className="py-2 px-3 font-medium text-right">{t('arb.cross.hdr-max-exec')}</th>
+                <th className="py-2 px-3 font-medium text-right">{t('arb.cross.hdr-est-profit')}</th>
+                <th className="py-2 px-3 font-medium text-center">{t('arb.ui.hdr-action')}</th>
               </tr>
             </thead>
             <tbody>
@@ -163,8 +174,8 @@ export function CrossArbitrageOpportunities({
       ) : (
         <EmptyState
           icon={<ArrowLeftRight className="w-10 h-10 text-muted-foreground" />}
-          title="暂无套利机会"
-          description={isRunning ? '引擎正在扫描中...' : '启动引擎后开始扫描'}
+          title={t('arb.cross.no-opportunity')}
+          description={isRunning ? t('arb.ui.scanning') : t('arb.ui.start-to-scan')}
         />
       )}
     </SectionCard>

@@ -97,7 +97,7 @@ export function UserManage() {
   return (
     <div className="h-full overflow-y-auto p-5 space-y-6">
       <div className="flex items-center justify-end">
-        <button onClick={fetchData} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-white">
+        <button onClick={fetchData} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
           <RefreshCw className="h-3.5 w-3.5" />刷新
         </button>
       </div>
@@ -118,7 +118,7 @@ export function UserManage() {
             <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
               <c.icon className={cn('h-4 w-4', c.color)} />{c.label}
             </div>
-            <p className="text-2xl font-bold text-white">{c.value}</p>
+            <p className="text-2xl font-bold text-foreground">{c.value}</p>
           </div>
         ))}
       </div>
@@ -151,7 +151,7 @@ export function UserManage() {
               <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
                 <c.icon className="h-4 w-4 text-quant-gold" />{c.label}
               </div>
-              <p className="text-xl font-bold text-white">{c.value}</p>
+              <p className="text-xl font-bold text-foreground">{c.value}</p>
             </div>
           ))}
         </div>
@@ -166,7 +166,7 @@ export function UserManage() {
           ].map(c => (
             <div key={c.label} className="rounded-xl border border-quant-border bg-quant-bg-secondary p-4">
               <div className="text-xs text-muted-foreground mb-1">{c.label}</div>
-              <p className="text-xl font-bold text-white">{c.value}</p>
+              <p className="text-xl font-bold text-foreground">{c.value}</p>
             </div>
           ))}
         </div>
@@ -201,7 +201,7 @@ export function UserManage() {
             data={users}
             columns={[
               { key: 'id', title: 'ID', render: (u) => <span className="text-muted-foreground">{u.id}</span> },
-              { key: 'username', title: '用户名', render: (u) => <span className="text-white font-medium">{u.username}</span> },
+              { key: 'username', title: '用户名', render: (u) => <span className="text-foreground font-medium">{u.username}</span> },
               { key: 'email', title: '邮箱', render: (u) => <span className="text-muted-foreground">{u.email || '-'}</span> },
               { key: 'role', title: '角色', render: (u) => (
                 <span className={cn('px-2 py-0.5 rounded text-[10px] font-medium',
@@ -218,7 +218,7 @@ export function UserManage() {
               { key: 'created', title: '注册时间', render: (u) => <span className="text-muted-foreground text-xs">{u.created_at?.slice(0, 10)}</span> },
               { key: 'action', title: '操作', render: (u) => (
                 <button onClick={() => openEdit(u)}
-                  className="p-1.5 rounded text-muted-foreground hover:text-white hover:bg-white/10">
+                  className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/10">
                   <Edit3 className="h-3.5 w-3.5" />
                 </button>
               )},
@@ -233,24 +233,24 @@ export function UserManage() {
         <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setEditing(null)}>
           <div className="w-full max-w-md rounded-xl border border-quant-border bg-quant-bg p-6 space-y-4" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-white">编辑用户 — {editing.username}</h3>
-              <button onClick={() => setEditing(null)} className="text-muted-foreground hover:text-white"><X className="h-5 w-5" /></button>
+              <h3 className="text-lg font-semibold text-foreground">编辑用户 — {editing.username}</h3>
+              <button onClick={() => setEditing(null)} className="text-muted-foreground hover:text-foreground"><X className="h-5 w-5" /></button>
             </div>
 
             <div className="space-y-1.5">
               <label className="text-xs text-muted-foreground">昵称</label>
               <input type="text" value={editNickname} onChange={e => setEditNickname(e.target.value)}
-                className="w-full rounded-lg border border-quant-border bg-quant-bg-secondary px-3 py-2 text-sm text-white outline-none focus:border-quant-gold" />
+                className="w-full rounded-lg border border-quant-border bg-quant-bg-secondary px-3 py-2 text-sm text-foreground outline-none focus:border-quant-gold" />
             </div>
             <div className="space-y-1.5">
               <label className="text-xs text-muted-foreground">邮箱</label>
               <input type="email" value={editEmail} onChange={e => setEditEmail(e.target.value)}
-                className="w-full rounded-lg border border-quant-border bg-quant-bg-secondary px-3 py-2 text-sm text-white outline-none focus:border-quant-gold" />
+                className="w-full rounded-lg border border-quant-border bg-quant-bg-secondary px-3 py-2 text-sm text-foreground outline-none focus:border-quant-gold" />
             </div>
             <div className="space-y-1.5">
               <label className="text-xs text-muted-foreground">角色</label>
               <select value={editRole} onChange={e => setEditRole(e.target.value)}
-                className="w-full rounded-lg border border-quant-border bg-quant-bg-secondary px-3 py-2 text-sm text-white outline-none focus:border-quant-gold">
+                className="w-full rounded-lg border border-quant-border bg-quant-bg-secondary px-3 py-2 text-sm text-foreground outline-none focus:border-quant-gold">
                 <option value="user">用户</option>
                 <option value="manager">经理</option>
                 <option value="admin">管理员</option>
@@ -259,7 +259,7 @@ export function UserManage() {
             <div className="space-y-1.5">
               <label className="text-xs text-muted-foreground">状态</label>
               <select value={editActive} onChange={e => setEditActive(Number(e.target.value))}
-                className="w-full rounded-lg border border-quant-border bg-quant-bg-secondary px-3 py-2 text-sm text-white outline-none focus:border-quant-gold">
+                className="w-full rounded-lg border border-quant-border bg-quant-bg-secondary px-3 py-2 text-sm text-foreground outline-none focus:border-quant-gold">
                 <option value={1}>正常</option>
                 <option value={0}>禁用</option>
               </select>
@@ -267,7 +267,7 @@ export function UserManage() {
 
             <div className="flex gap-2 pt-2">
               <button onClick={() => setEditing(null)}
-                className="flex-1 rounded-lg border border-quant-border px-4 py-2 text-sm text-muted-foreground hover:text-white">
+                className="flex-1 rounded-lg border border-quant-border px-4 py-2 text-sm text-muted-foreground hover:text-foreground">
                 取消
               </button>
               <button onClick={handleSave} disabled={saving}

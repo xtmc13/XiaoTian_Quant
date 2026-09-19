@@ -172,7 +172,7 @@ export function SideToggle({ side, onChange, buyLabel = '买入', sellLabel = '�
         className={cn(
           'flex-1 py-2.5 text-sm font-bold rounded-lg transition-all duration-200',
           side === 'SELL'
-            ? 'bg-[#F6465D] hover:bg-[#F6465D]/90 text-white shadow-lg shadow-[#F6465D]/20'
+            ? 'bg-[#F6465D] hover:bg-[#F6465D]/90 text-foreground shadow-lg shadow-[#F6465D]/20'
             : 'bg-quant-bg hover:bg-[#F6465D]/10 text-muted-foreground border border-quant-border hover:border-[#F6465D]/50'
         )}
       >

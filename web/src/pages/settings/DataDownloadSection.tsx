@@ -16,7 +16,7 @@ const INTERVAL_OPTIONS = [
 ]
 
 const inputCls =
-  'w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-xs text-white placeholder-muted-foreground outline-none focus:border-quant-gold'
+  'w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2 text-xs text-foreground placeholder-muted-foreground outline-none focus:border-quant-gold'
 
 export function DataDownloadSection() {
   const [symbol, setSymbol] = useState('BTCUSDT')

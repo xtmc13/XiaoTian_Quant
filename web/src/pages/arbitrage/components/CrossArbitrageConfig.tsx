@@ -3,6 +3,7 @@ import { cn } from '@/lib/utils'
 import { RefreshCw, Save, Globe, CheckCircle2, X } from 'lucide-react'
 import { TextInput, NumberInput, Toggle } from './ArbitrageUI'
 import type { ArbitrageConfig, ExchangeConfiguredStatus } from '@/types'
+import { useI18n } from '@/i18n'
 
 const SUPPORTED_EXCHANGES = [
   { key: 'binance', label: 'Binance', needsPassphrase: false, supportsTestnet: true },
@@ -49,6 +50,7 @@ export function CrossArbitrageConfig({
   onSave,
   isSaving,
 }: CrossArbitrageConfigProps) {
+  const { t } = useI18n()
   // null = 用户未改动，跟随引擎已注册列表；改动后跟随用户选择
   const [touchedSelection, setTouchedSelection] = useState<string[] | null>(null)
   useEffect(() => {
@@ -75,7 +77,7 @@ export function CrossArbitrageConfig({
           className="w-full max-w-2xl rounded-2xl border border-quant-border bg-quant-card p-6 shadow-2xl"
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="text-sm text-muted-foreground text-center py-4">加载配置中...</div>
+          <div className="text-sm text-muted-foreground text-center py-4">{t('arb.ui.loading-config')}</div>
         </div>
       </div>
     )
@@ -103,8 +105,8 @@ export function CrossArbitrageConfig({
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-quant-border shrink-0">
-          <h3 className="text-sm font-bold">引擎配置</h3>
-          <button onClick={onClose} aria-label="关闭" className="text-muted-foreground hover:text-foreground">
+          <h3 className="text-sm font-bold">{t('arb.cross.config-title')}</h3>
+          <button onClick={onClose} aria-label={t('arb.ui.close')} className="text-muted-foreground hover:text-foreground">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -114,12 +116,12 @@ export function CrossArbitrageConfig({
           <div className="space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               <ConfigField
-                label="交易对（逗号分隔）"
+                label={t('arb.ui.symbols')}
                 input={<TextInput value={symbolsInput} onChange={setSymbolsInput} placeholder="BTCUSDT,ETHUSDT" />}
                 fieldKey="symbol"
               />
               <ConfigField
-                label="最小价差 (%)"
+                label={t('arb.cross.min-spread')}
                 input={
                   <NumberInput
                     value={editConfig.min_spread_pct}
@@ -131,7 +133,7 @@ export function CrossArbitrageConfig({
                 fieldKey="min_spread_pct"
               />
               <ConfigField
-                label="订单数量"
+                label={t('arb.cross.order-size')}
                 input={
                   <NumberInput
                     value={editConfig.order_size}
@@ -143,7 +145,7 @@ export function CrossArbitrageConfig({
                 fieldKey="order_size"
               />
               <ConfigField
-                label="最大持仓数"
+                label={t('arb.ui.max-positions')}
                 input={
                   <NumberInput
                     value={editConfig.max_positions}
@@ -155,7 +157,7 @@ export function CrossArbitrageConfig({
                 fieldKey="max_positions"
               />
               <ConfigField
-                label="买入所手续费 (小数)"
+                label={t('arb.cross.fee-a')}
                 input={
                   <NumberInput
                     value={editConfig.fee_a}
@@ -167,7 +169,7 @@ export function CrossArbitrageConfig({
                 fieldKey="fee_a"
               />
               <ConfigField
-                label="卖出所手续费 (小数)"
+                label={t('arb.cross.fee-b')}
                 input={
                   <NumberInput
                     value={editConfig.fee_b}
@@ -179,7 +181,7 @@ export function CrossArbitrageConfig({
                 fieldKey="fee_b"
               />
               <ConfigField
-                label="轮询间隔 (秒)"
+                label={t('arb.cross.poll-interval')}
                 input={
                   <NumberInput
                     value={editConfig.poll_interval}
@@ -191,7 +193,7 @@ export function CrossArbitrageConfig({
                 fieldKey="poll_interval"
               />
               <ConfigField
-                label="最大滑点 (%)"
+                label={t('arb.ui.max-slippage')}
                 input={
                   <NumberInput
                     value={editConfig.max_slippage_pct}
@@ -205,24 +207,24 @@ export function CrossArbitrageConfig({
               <div className="flex items-center gap-6 md:col-span-2 flex-wrap">
                 <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
                   <Toggle value={editConfig.auto_execute} onChange={(v) => updateField('auto_execute', v)} />
-                  自动执行
+                  {t('arb.ui.auto-execute')}
                 </label>
                 <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
                   <Toggle value={editConfig.dry_run} onChange={(v) => updateField('dry_run', v)} />
-                  模拟运行
+                  {t('arb.ui.dry-run')}
                 </label>
                 <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
                   <Toggle
                     value={editConfig.adaptive_qty_enabled}
                     onChange={(v) => updateField('adaptive_qty_enabled', v)}
                   />
-                  自适应数量
+                  {t('arb.ui.adaptive-qty')}
                 </label>
               </div>
               {editConfig.adaptive_qty_enabled && (
                 <>
                   <ConfigField
-                    label="最小订单数量"
+                    label={t('arb.ui.min-order-qty')}
                     input={
                       <NumberInput
                         value={editConfig.min_order_qty}
@@ -234,7 +236,7 @@ export function CrossArbitrageConfig({
                     fieldKey="min_order_qty"
                   />
                   <ConfigField
-                    label="最小订单金额 (USD)"
+                    label={t('arb.cross.min-order-value')}
                     input={
                       <NumberInput
                         value={editConfig.min_order_value}
@@ -251,7 +253,7 @@ export function CrossArbitrageConfig({
 
             {/* Exchange selection */}
             <div className="border-t border-quant-border pt-6">
-              <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-4">交易所选择</h3>
+              <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-4">{t('arb.ui.exchange-selection')}</h3>
               {configuredExchanges ? (
                 <div className="space-y-2">
                   {SUPPORTED_EXCHANGES.map((ex) => {
@@ -285,16 +287,18 @@ export function CrossArbitrageConfig({
                             <div className="text-[10px] text-muted-foreground">
                               {cfg?.enabled
                                 ? cfg?.has_credentials
-                                  ? `已配置${cfg.testnet ? ' · 测试网' : ''}`
-                                  : '缺少凭证'
-                                : '未启用'}
+                                  ? cfg.testnet
+                                    ? t('arb.ui.configured-testnet')
+                                    : t('arb.ui.configured')
+                                  : t('arb.ui.missing-credentials')
+                                : t('arb.ui.not-enabled')}
                             </div>
                           </div>
                         </div>
                         {isSelected && (
                           <span className="inline-flex items-center gap-1 text-xs text-green-400">
                             <CheckCircle2 className="h-3.5 w-3.5" />
-                            已加入套利
+                            {t('arb.ui.added-arb')}
                           </span>
                         )}
                       </label>
@@ -302,17 +306,15 @@ export function CrossArbitrageConfig({
                   })}
                 </div>
               ) : (
-                <div className="text-sm text-muted-foreground">加载交易所配置中...</div>
+                <div className="text-sm text-muted-foreground">{t('arb.ui.loading-exchanges')}</div>
               )}
               {configuredExchanges &&
                 !Object.values(configuredExchanges).some((c) => c.enabled && c.has_credentials) && (
-                  <div className="mt-3 text-xs text-yellow-400">
-                    系统中没有可用的交易所配置。请先在 Settings / 交易所账号 中配置 API Key。
-                  </div>
+                  <div className="mt-3 text-xs text-yellow-400">{t('arb.cross.no-exchange-warning')}</div>
                 )}
               {exchangesMeta && (
                 <div className="mt-3 text-xs text-muted-foreground">
-                  勾选交易所后点击「保存配置」生效，已选 {selected.length} 个
+                  {t('arb.cross.save-hint').replace('{count}', String(selected.length))}
                 </div>
               )}
             </div>
@@ -325,7 +327,7 @@ export function CrossArbitrageConfig({
             onClick={onClose}
             className="px-4 py-2 rounded-lg border border-quant-border text-xs hover:bg-quant-hover transition-colors"
           >
-            关闭
+            {t('arb.ui.close')}
           </button>
           <button
             onClick={() => onSave(selected)}
@@ -338,7 +340,7 @@ export function CrossArbitrageConfig({
             )}
           >
             {isSaving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-            保存配置
+            {t('arb.ui.save-config')}
           </button>
         </div>
       </div>

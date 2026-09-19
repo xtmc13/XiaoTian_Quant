@@ -56,7 +56,7 @@ function ParamField({ param, value, onChange }: { param: ParamDecl; value: unkno
         <select
           value={String(controlledValue)}
           onChange={(e) => onChange(parseTypedValue(param.type, e.target.value))}
-          className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1 text-[11px] text-white outline-none focus:border-quant-gold"
+          className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1 text-[11px] text-foreground outline-none focus:border-quant-gold"
         >
           {param.values.map((v, i) => (
             <option key={i} value={String(v)}>
@@ -82,7 +82,7 @@ function ParamField({ param, value, onChange }: { param: ParamDecl; value: unkno
             step={param.range.step}
             value={controlledValue}
             onChange={(e) => onChange(parseTypedValue(param.type, e.target.value))}
-            className="w-14 rounded border border-quant-border bg-quant-bg px-1.5 py-0.5 text-[10px] text-white text-right font-mono outline-none focus:border-quant-gold"
+            className="w-14 rounded border border-quant-border bg-quant-bg px-1.5 py-0.5 text-[10px] text-foreground text-right font-mono outline-none focus:border-quant-gold"
           />
         </div>
       ) : param.type === 'int' ? (
@@ -90,7 +90,7 @@ function ParamField({ param, value, onChange }: { param: ParamDecl; value: unkno
           type="number"
           value={controlledValue}
           onChange={(e) => onChange(parseInt(e.target.value, 10) || 0)}
-          className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1 text-[11px] text-white outline-none focus:border-quant-gold"
+          className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1 text-[11px] text-foreground outline-none focus:border-quant-gold"
         />
       ) : param.type === 'float' ? (
         <input
@@ -98,14 +98,14 @@ function ParamField({ param, value, onChange }: { param: ParamDecl; value: unkno
           step="any"
           value={controlledValue}
           onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
-          className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1 text-[11px] text-white outline-none focus:border-quant-gold"
+          className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1 text-[11px] text-foreground outline-none focus:border-quant-gold"
         />
       ) : (
         <input
           type="text"
           value={controlledValue}
           onChange={(e) => onChange(e.target.value)}
-          className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1 text-[11px] text-white outline-none focus:border-quant-gold"
+          className="w-full rounded border border-quant-border bg-quant-bg px-2 py-1 text-[11px] text-foreground outline-none focus:border-quant-gold"
         />
       )}
       {param.description && (

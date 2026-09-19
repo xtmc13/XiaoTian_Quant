@@ -152,7 +152,7 @@ export const AIBotProviderMarket: React.FC = () => {
                     {name.slice(0, 2).toUpperCase()}
                   </div>
                   <div>
-                    <h3 className="text-sm font-semibold text-white">{name}</h3>
+                    <h3 className="text-sm font-semibold text-foreground">{name}</h3>
                     <div className="text-[10px] text-[#666] mt-0.5">
                       {p.total_signals} 信号 · {p.follower_count} 关注
                     </div>
@@ -177,7 +177,7 @@ export const AIBotProviderMarket: React.FC = () => {
                     'flex-1 py-2 rounded-lg text-xs font-medium transition-colors border',
                     isFollowing
                       ? 'bg-[#1c1c1c] border-[#2a2a2a] text-[#888] hover:text-[#f5222d]'
-                      : 'bg-[#1890ff] border-[#1890ff] text-white hover:opacity-90'
+                      : 'bg-[#1890ff] border-[#1890ff] text-foreground hover:opacity-90'
                   )}
                 >
                   {isFollowing ? '已关注' : '关注'}

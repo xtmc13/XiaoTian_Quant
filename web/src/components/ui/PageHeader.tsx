@@ -27,7 +27,7 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
         {icon && <div className="text-[#888888]">{icon}</div>}
         <div>
         {title && (
-          <h1 className="text-xl font-semibold tracking-tight text-white sm:text-2xl">
+          <h1 className="text-xl font-semibold tracking-tight text-foreground sm:text-2xl">
             {title}
           </h1>
         )}

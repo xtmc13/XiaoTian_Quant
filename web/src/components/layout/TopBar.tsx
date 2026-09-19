@@ -19,37 +19,37 @@ import {
 import { useI18n, LANGS, type Lang } from '@/i18n'
 
 const routeTitles: Record<string, string> = {
-  '/dashboard': '仪表盘',
-  '/trading': '交易',
-  '/trading/spot': '现货交易',
-  '/trading/contract': '合约交易',
-  '/strategy': '策略管理',
-  '/strategy/editor': '策略编辑器',
-  '/ai': 'AI分析',
-  '/ai/freqai': 'FreqAI',
-  '/ai/rl': 'RL 强化学习',
-  '/ai/tensorboard': 'TensorBoard',
-  '/market': 'AI分析',
-  '/backtest': '回测验证',
-  '/bots': '机器人中心',
-  '/strategies': '策略库',
-  '/bots/signal': '信号机器人',
-  '/bots/ai': 'AI 机器人',
-  '/settings': '系统设置',
-  '/exchange-account': '交易所账户',
-  '/indicator-community': '指标社区',
-  '/indicator-ide': '指标 IDE',
-  '/portfolio': '资产监测',
-  '/profile': '个人中心',
-  '/users': '用户管理',
-  '/agent-tokens': 'Agent 令牌',
-  '/market-overview': '全球市场',
-  '/bot-wizard': 'Bot 向导',
-  '/social-trading': '社交交易',
-  '/onchain': '链上数据',
-  '/status': '系统状态',
-  '/data': '数据下载',
-  '/logs': '系统日志',
+  '/dashboard': 'topbar.route.dashboard',
+  '/trading': 'topbar.route.trading',
+  '/trading/spot': 'topbar.route.trading-spot',
+  '/trading/contract': 'topbar.route.trading-contract',
+  '/strategy': 'topbar.route.strategy',
+  '/strategy/editor': 'topbar.route.strategy-editor',
+  '/ai': 'topbar.route.ai',
+  '/ai/freqai': 'topbar.route.ai-freqai',
+  '/ai/rl': 'topbar.route.ai-rl',
+  '/ai/tensorboard': 'topbar.route.ai-tensorboard',
+  '/market': 'topbar.route.market',
+  '/backtest': 'topbar.route.backtest',
+  '/bots': 'topbar.route.bots',
+  '/strategies': 'topbar.route.strategies',
+  '/bots/signal': 'topbar.route.bots-signal',
+  '/bots/ai': 'topbar.route.bots-ai',
+  '/settings': 'topbar.route.settings',
+  '/exchange-account': 'topbar.route.exchange-account',
+  '/indicator-community': 'topbar.route.indicator-community',
+  '/indicator-ide': 'topbar.route.indicator-ide',
+  '/portfolio': 'topbar.route.portfolio',
+  '/profile': 'topbar.route.profile',
+  '/users': 'topbar.route.users',
+  '/agent-tokens': 'topbar.route.agent-tokens',
+  '/market-overview': 'topbar.route.market-overview',
+  '/bot-wizard': 'topbar.route.bot-wizard',
+  '/social-trading': 'topbar.route.social-trading',
+  '/onchain': 'topbar.route.onchain',
+  '/status': 'topbar.route.status',
+  '/data': 'topbar.route.data',
+  '/logs': 'topbar.route.logs',
 }
 
 import { NotificationItem } from '@/types'
@@ -64,7 +64,7 @@ export function TopBar() {
   const location = useLocation()
   const navigate = useNavigate()
   const { user, logout, isAuthenticated } = useAuthStore()
-  const { lang, setLang } = useI18n()
+  const { t, lang, setLang } = useI18n()
   const [time, setTime] = useState(new Date())
   const [equity, setEquity] = useState<number | null>(null)
   const [pnl, setPnl] = useState<number | null>(null)
@@ -145,13 +145,13 @@ export function TopBar() {
     const d = new Date(ts)
     const now = new Date()
     const diffMs = now.getTime() - d.getTime()
-    if (diffMs < 60000) return '刚刚'
-    if (diffMs < 3600000) return `${Math.floor(diffMs / 60000)}分钟前`
-    if (diffMs < 86400000) return `${Math.floor(diffMs / 3600000)}小时前`
-    return d.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
+    if (diffMs < 60000) return t('topbar.timeJustNow')
+    if (diffMs < 3600000) return t('topbar.timeMinutesAgo').replace('{count}', String(Math.floor(diffMs / 60000)))
+    if (diffMs < 86400000) return t('topbar.timeHoursAgo').replace('{count}', String(Math.floor(diffMs / 3600000)))
+    return d.toLocaleDateString(lang, { month: 'short', day: 'numeric' })
   }
 
-  const title = routeTitles[location.pathname] || '小天量化'
+  const title = routeTitles[location.pathname] ? t(routeTitles[location.pathname]) : '小天量化'
   const displayName = user?.username || 'User'
   const initial = displayName.charAt(0).toUpperCase()
 
@@ -162,11 +162,11 @@ export function TopBar() {
       <div className="flex items-center gap-4">
         <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <span className="w-1.5 h-1.5 rounded-full bg-quant-green animate-pulse" />
-          已连接
+          {t('topbar.connected')}
         </span>
         {equity !== null && (
           <span className="text-xs text-muted-foreground">
-            权益{' '}
+            {t('topbar.equity')}{' '}
             <b className="text-foreground font-mono">
               ${equity.toLocaleString(undefined, { minimumFractionDigits: 2 })}
             </b>
@@ -178,7 +178,7 @@ export function TopBar() {
           </span>
         )}
         <span className="font-mono text-xs text-muted-foreground tabular-nums">
-          {time.toLocaleTimeString('zh-CN', { hour12: false })}
+          {time.toLocaleTimeString(lang, { hour12: false })}
         </span>
 
         {/* ── Notification Bell ── */}
@@ -189,7 +189,7 @@ export function TopBar() {
               if (!notifOpen) fetchNotifications()
             }}
             className="relative p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-white/5 transition-colors"
-            aria-label="通知"
+            aria-label={t('topbar.notifications')}
           >
             <Bell className="h-4 w-4" />
             {unreadCount > 0 && (
@@ -203,13 +203,13 @@ export function TopBar() {
             <div className="absolute right-0 top-full mt-2 w-80 rounded-xl border border-quant-border bg-quant-card shadow-xl z-50 max-h-[480px] flex flex-col">
               {/* Header */}
               <div className="flex items-center justify-between px-4 py-3 border-b border-quant-border shrink-0">
-                <span className="text-sm font-semibold">通知</span>
+                <span className="text-sm font-semibold">{t('topbar.notifications')}</span>
                 <div className="flex items-center gap-1">
                   {unreadCount > 0 && (
                     <button
                       onClick={handleMarkAllRead}
                       className="p-1 rounded text-[10px] text-muted-foreground hover:text-foreground hover:bg-white/5 transition-colors"
-                      title="全部已读"
+                      title={t('topbar.markAllRead')}
                     >
                       <CheckCheck className="h-3.5 w-3.5" />
                     </button>
@@ -218,7 +218,7 @@ export function TopBar() {
                     <button
                       onClick={handleClear}
                       className="p-1 rounded text-[10px] text-muted-foreground hover:text-quant-red hover:bg-red-500/10 transition-colors"
-                      title="清除全部"
+                      title={t('topbar.clearAll')}
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
@@ -231,7 +231,7 @@ export function TopBar() {
                 {notifications.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-10 text-muted-foreground">
                     <Bell className="h-8 w-8 mb-2 opacity-30" />
-                    <span className="text-xs">暂无通知</span>
+                    <span className="text-xs">{t('topbar.noNotifications')}</span>
                   </div>
                 ) : (
                   notifications.map((n) => (
@@ -299,7 +299,7 @@ export function TopBar() {
                     className="w-full px-3 py-2 text-left text-xs text-muted-foreground hover:bg-quant-bg-secondary hover:text-foreground flex items-center gap-2 transition-colors"
                   >
                     <User className="h-3.5 w-3.5" />
-                    个人资料
+                    {t('topbar.profile')}
                   </button>
                   <button
                     onClick={() => {
@@ -309,7 +309,7 @@ export function TopBar() {
                     className="w-full px-3 py-2 text-left text-xs text-muted-foreground hover:bg-quant-bg-secondary hover:text-foreground flex items-center gap-2 transition-colors"
                   >
                     <CreditCard className="h-3.5 w-3.5" />
-                    订阅
+                    {t('topbar.subscription')}
                   </button>
                   <button
                     onClick={() => {
@@ -319,7 +319,7 @@ export function TopBar() {
                     className="w-full px-3 py-2 text-left text-xs text-muted-foreground hover:bg-quant-bg-secondary hover:text-foreground flex items-center gap-2 transition-colors"
                   >
                     <Building2 className="h-3.5 w-3.5" />
-                    交易所账户
+                    {t('topbar.exchangeAccount')}
                   </button>
                 </div>
 
@@ -327,12 +327,12 @@ export function TopBar() {
                   <div className="flex items-center justify-between">
                     <span className="text-xs text-muted-foreground flex items-center gap-1.5">
                       <Globe className="h-3.5 w-3.5" />
-                      语言
+                      {t('topbar.language')}
                     </span>
                     <select
                       value={lang}
                       onChange={(e) => setLang(e.target.value as Lang)}
-                      aria-label="切换语言"
+                      aria-label={t('topbar.switchLanguage')}
                       className="bg-quant-bg border border-quant-border rounded px-1.5 py-0.5 text-[10px] text-muted-foreground outline-none focus:border-quant-gold cursor-pointer"
                     >
                       {LANGS.map((l) => (
@@ -345,7 +345,7 @@ export function TopBar() {
                 </div>
 
                 <div className="px-3 py-1.5 border-b border-quant-border">
-                  <span className="text-[10px] text-muted-foreground">版本 v3.0.0</span>
+                  <span className="text-[10px] text-muted-foreground">{t('topbar.version')} v3.0.0</span>
                 </div>
 
                 <button
@@ -356,7 +356,7 @@ export function TopBar() {
                   className="w-full px-3 py-2 text-left text-xs text-muted-foreground hover:bg-quant-bg-secondary hover:text-foreground flex items-center gap-2 transition-colors"
                 >
                   <LogOut className="h-3.5 w-3.5" />
-                  退出登录
+                  {t('topbar.logout')}
                 </button>
               </div>
             </>

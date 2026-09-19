@@ -35,6 +35,7 @@ import { DataTable } from '@/components/DataTable'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import { useFaviconIndicator } from '@/hooks/useFaviconIndicator'
+import { useI18n } from '@/i18n'
 import type { ECharts } from 'echarts'
 import type { StrategyRanking } from '@/types'
 import type { DashboardSummary, PortfolioSummary, StrategyItem, ArbitragePerformance } from '@/types'
@@ -72,9 +73,10 @@ interface ModelInfo {
 /* ── Risk Control Card ── */
 function RiskControlCard({ status, isLoading }: { status?: ProtectionStatus; isLoading: boolean }) {
   const navigate = useNavigate()
+  const { t } = useI18n()
   if (isLoading) {
     return (
-      <SectionCard title="风控状态">
+      <SectionCard title={t('dashboard.risk.title')}>
         <div className="space-y-3">
           <Skeleton variant="text" lines={3} />
           <Skeleton variant="rect" height={48} />
@@ -90,9 +92,11 @@ function RiskControlCard({ status, isLoading }: { status?: ProtectionStatus; isL
 
   const ruleItems = [
     {
-      name: '全局交易保护',
+      name: t('dashboard.risk.global-protection'),
       status: isGloballyBlocked ? ('blocked' as const) : ('normal' as const),
-      detail: isGloballyBlocked ? status?.global_reason || '交易暂停' : '正常运行',
+      detail: isGloballyBlocked
+        ? status?.global_reason || t('dashboard.risk.trading-suspended')
+        : t('dashboard.risk.normal'),
     },
     ...pairBlocks.map(([pair, info]) => ({
       name: pair,
@@ -103,27 +107,27 @@ function RiskControlCard({ status, isLoading }: { status?: ProtectionStatus; isL
 
   return (
     <SectionCard
-      title="风控状态"
+      title={t('dashboard.risk.title')}
       headerAction={
         <button
           onClick={() => {
             navigate('/risk-control')
           }}
-          className="flex items-center gap-0.5 text-[10px] text-[#8a8a8a] transition-colors hover:text-white"
+          className="flex items-center gap-0.5 text-[10px] text-[#8a8a8a] transition-colors hover:text-foreground"
         >
-          查看风控中心 <ChevronRightIcon className="h-3 w-3" />
+          {t('dashboard.risk.view-center')} <ChevronRightIcon className="h-3 w-3" />
         </button>
       }
     >
       <div className="mb-3 grid grid-cols-3 gap-2">
         <div className="rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-2.5 text-center">
-          <div className="text-[10px] text-[#8a8a8a]">活跃规则</div>
+          <div className="text-[10px] text-[#8a8a8a]">{t('dashboard.risk.active-rules')}</div>
           <div className={cn('mt-1 text-sm font-semibold', blockedCount > 0 ? 'text-quant-red' : 'text-quant-green')}>
             {ruleItems.length}
           </div>
         </div>
         <div className="rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-2.5 text-center">
-          <div className="text-[10px] text-[#8a8a8a]">阻断交易对</div>
+          <div className="text-[10px] text-[#8a8a8a]">{t('dashboard.risk.blocked-pairs')}</div>
           <div
             className={cn('mt-1 text-sm font-semibold', pairBlocks.length > 0 ? 'text-quant-red' : 'text-quant-green')}
           >
@@ -131,7 +135,7 @@ function RiskControlCard({ status, isLoading }: { status?: ProtectionStatus; isL
           </div>
         </div>
         <div className="rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-2.5 text-center">
-          <div className="text-[10px] text-[#8a8a8a]">最近触发</div>
+          <div className="text-[10px] text-[#8a8a8a]">{t('dashboard.risk.last-triggered')}</div>
           <div className="mt-1 truncate text-sm font-semibold text-[#aaaaaa]" title={lastReason}>
             {lastReason}
           </div>
@@ -151,7 +155,7 @@ function RiskControlCard({ status, isLoading }: { status?: ProtectionStatus; isL
                   rule.status === 'normal' ? 'bg-quant-green' : 'bg-quant-red'
                 )}
               />
-              <span className="truncate text-xs text-white">{rule.name}</span>
+              <span className="truncate text-xs text-foreground">{rule.name}</span>
             </div>
             <span
               className={cn('shrink-0 text-[10px]', rule.status === 'normal' ? 'text-quant-green' : 'text-quant-red')}
@@ -160,7 +164,9 @@ function RiskControlCard({ status, isLoading }: { status?: ProtectionStatus; isL
             </span>
           </div>
         ))}
-        {ruleItems.length === 0 && <div className="py-4 text-center text-[11px] text-[#8a8a8a]">暂无风控数据</div>}
+        {ruleItems.length === 0 && (
+          <div className="py-4 text-center text-[11px] text-[#8a8a8a]">{t('dashboard.risk.no-data')}</div>
+        )}
       </div>
     </SectionCard>
   )
@@ -177,9 +183,10 @@ function MLStatusCard({
   isLoading: boolean
 }) {
   const navigate = useNavigate()
+  const { t } = useI18n()
   if (isLoading) {
     return (
-      <SectionCard title="ML 模型状态">
+      <SectionCard title={t('dashboard.ml.title')}>
         <div className="space-y-3">
           <Skeleton variant="text" lines={3} />
           <Skeleton variant="rect" height={48} />
@@ -207,25 +214,25 @@ function MLStatusCard({
 
   return (
     <SectionCard
-      title="ML 模型状态"
+      title={t('dashboard.ml.title')}
       headerAction={
         <button
           onClick={() => {
             navigate('/model-management')
           }}
-          className="flex items-center gap-0.5 text-[10px] text-[#8a8a8a] transition-colors hover:text-white"
+          className="flex items-center gap-0.5 text-[10px] text-[#8a8a8a] transition-colors hover:text-foreground"
         >
-          查看模型管理 <ChevronRightIcon className="h-3 w-3" />
+          {t('dashboard.ml.view-management')} <ChevronRightIcon className="h-3 w-3" />
         </button>
       }
     >
       <div className="mb-3 grid grid-cols-3 gap-2">
         <div className="rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-2.5 text-center">
-          <div className="text-[10px] text-[#8a8a8a]">模型数量</div>
-          <div className="mt-1 text-sm font-semibold text-white">{modelCount}</div>
+          <div className="text-[10px] text-[#8a8a8a]">{t('dashboard.ml.model-count')}</div>
+          <div className="mt-1 text-sm font-semibold text-foreground">{modelCount}</div>
         </div>
         <div className="rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-2.5 text-center">
-          <div className="text-[10px] text-[#8a8a8a]">最新状态</div>
+          <div className="text-[10px] text-[#8a8a8a]">{t('dashboard.ml.latest-status')}</div>
           <div
             className={cn(
               'mt-1 text-sm font-semibold',
@@ -236,18 +243,22 @@ function MLStatusCard({
                   : 'text-quant-red'
             )}
           >
-            {modelStatus === 'deployed' ? '已部署' : modelStatus === 'idle' ? '空闲' : '异常'}
+            {modelStatus === 'deployed'
+              ? t('dashboard.status.deployed')
+              : modelStatus === 'idle'
+                ? t('dashboard.status.idle')
+                : t('dashboard.status.error')}
           </div>
         </div>
         <div className="rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-2.5 text-center">
-          <div className="text-[10px] text-[#8a8a8a]">特征管道</div>
+          <div className="text-[10px] text-[#8a8a8a]">{t('dashboard.ml.feature-pipeline')}</div>
           <div
             className={cn(
               'mt-1 text-sm font-semibold',
               pipelineHealth === 'normal' ? 'text-quant-green' : 'text-quant-red'
             )}
           >
-            {pipelineHealth === 'normal' ? '正常' : '异常'}
+            {pipelineHealth === 'normal' ? t('dashboard.status.normal') : t('dashboard.status.error')}
           </div>
         </div>
       </div>
@@ -256,10 +267,10 @@ function MLStatusCard({
         <div className="flex items-center justify-between rounded-md border border-[#1c1c1c] bg-[#0a0a0a] px-2.5 py-1.5">
           <div className="flex items-center gap-2">
             <Brain className="h-3.5 w-3.5 text-[#888888]" />
-            <span className="text-xs text-white">ML 服务</span>
+            <span className="text-xs text-foreground">{t('dashboard.ml.service')}</span>
           </div>
           <span className={cn('rounded px-1.5 py-0.5 text-[10px] font-medium border', statusColor(pipelineHealth))}>
-            {isHealthy ? '在线' : '离线'}
+            {isHealthy ? t('dashboard.status.online') : t('dashboard.status.offline')}
           </span>
         </div>
 
@@ -267,13 +278,17 @@ function MLStatusCard({
           <div className="flex items-center justify-between rounded-md border border-[#1c1c1c] bg-[#0a0a0a] px-2.5 py-1.5">
             <div className="flex items-center gap-2 min-w-0">
               <Activity className="h-3.5 w-3.5 text-[#888888]" />
-              <span className="truncate text-xs text-white">{latestModel.model_id}</span>
+              <span className="truncate text-xs text-foreground">{latestModel.model_id}</span>
             </div>
-            <span className="shrink-0 text-[10px] text-[#8a8a8a]">{latestModel.feature_count} 特征</span>
+            <span className="shrink-0 text-[10px] text-[#8a8a8a]">
+              {latestModel.feature_count} {t('dashboard.ml.features')}
+            </span>
           </div>
         )}
 
-        {modelCount === 0 && <div className="py-4 text-center text-[11px] text-[#8a8a8a]">暂无训练好的模型</div>}
+        {modelCount === 0 && (
+          <div className="py-4 text-center text-[11px] text-[#8a8a8a]">{t('dashboard.ml.no-models')}</div>
+        )}
       </div>
     </SectionCard>
   )
@@ -292,10 +307,11 @@ function SetupGuideCard({
   hasRunningStrategies: boolean
 }) {
   const navigate = useNavigate()
+  const { t } = useI18n()
   const steps = [
-    { label: '连接交易所', done: hasExchanges, action: '去设置' },
-    { label: '创建首个策略', done: hasStrategies, action: '创建' },
-    { label: '启动自动交易', done: hasRunningStrategies, action: '启动' },
+    { label: t('dashboard.guide.step-connect'), done: hasExchanges, action: t('dashboard.guide.action-settings') },
+    { label: t('dashboard.guide.step-create'), done: hasStrategies, action: t('dashboard.guide.action-create') },
+    { label: t('dashboard.guide.step-launch'), done: hasRunningStrategies, action: t('dashboard.guide.action-launch') },
   ]
   const completed = steps.filter((s) => s.done).length
 
@@ -303,10 +319,14 @@ function SetupGuideCard({
     <SectionCard className="overflow-hidden">
       <div className="flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between">
         <div className="flex-1">
-          <div className="mb-1 text-xs font-medium uppercase tracking-wider text-quant-gold">快速开始</div>
-          <h3 className="text-lg font-semibold text-white">创建您的第一个量化策略</h3>
+          <div className="mb-1 text-xs font-medium uppercase tracking-wider text-quant-gold">
+            {t('dashboard.guide.quick-start')}
+          </div>
+          <h3 className="text-lg font-semibold text-foreground">{t('dashboard.guide.title')}</h3>
           <p className="mt-1 text-sm text-[#999999]">
-            完成 {completed}/{steps.length} 步即可开始量化交易。选择策略类型、配置参数、一键启动实盘。
+            {t('dashboard.guide.desc')
+              .replace('{done}', String(completed))
+              .replace('{total}', String(steps.length))}
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -314,10 +334,10 @@ function SetupGuideCard({
             onClick={() => {
               navigate('/indicator-community')
             }}
-            className="flex items-center gap-1.5 rounded-lg bg-[#1c1c1c] px-4 py-2 text-sm text-white transition-colors hover:bg-[#262626]"
+            className="flex items-center gap-1.5 rounded-lg bg-[#1c1c1c] px-4 py-2 text-sm text-foreground transition-colors hover:bg-[#262626]"
           >
             <LayoutGrid className="inline h-4 w-4" />
-            策略市场
+            {t('dashboard.guide.strategy-market')}
           </button>
           <button
             onClick={() => {
@@ -326,12 +346,12 @@ function SetupGuideCard({
             className="flex items-center gap-1.5 rounded-lg bg-white px-4 py-2 text-sm font-medium text-[#0a0a0a] transition-opacity hover:opacity-90"
           >
             <Plus className="inline h-4 w-4" />
-            创建策略
+            {t('dashboard.guide.create-strategy')}
           </button>
           <button
             onClick={onDismiss}
-            aria-label="关闭提示"
-            className="rounded-lg p-2 text-[#999999] transition-colors hover:bg-[#1c1c1c] hover:text-white"
+            aria-label={t('dashboard.guide.close-tip')}
+            className="rounded-lg p-2 text-[#999999] transition-colors hover:bg-[#1c1c1c] hover:text-foreground"
           >
             <X className="h-4 w-4" />
           </button>
@@ -357,9 +377,9 @@ function SetupGuideCard({
               {!step.done && (
                 <button
                   onClick={() => {
-                    if (step.action === '去设置') navigate('/settings')
-                    if (step.action === '创建') navigate('/strategy')
-                    if (step.action === '启动') navigate('/bots')
+                    if (step.action === t('dashboard.guide.action-settings')) navigate('/settings')
+                    if (step.action === t('dashboard.guide.action-create')) navigate('/strategy')
+                    if (step.action === t('dashboard.guide.action-launch')) navigate('/bots')
                   }}
                   className="rounded bg-white px-2 py-0.5 text-[10px] font-medium text-[#0a0a0a] transition-opacity hover:opacity-90"
                 >
@@ -384,6 +404,7 @@ function SetupGuideCard({
 /* ── Profit Calendar ── */
 function ProfitCalendar({ calendar, isLoading }: { calendar?: Record<string, number>; isLoading?: boolean }) {
   const [currentOffset, setCurrentOffset] = useState(0)
+  const { t } = useI18n()
 
   const now = new Date()
   const displayDate = new Date(now.getFullYear(), now.getMonth() - currentOffset, 1)
@@ -391,7 +412,7 @@ function ProfitCalendar({ calendar, isLoading }: { calendar?: Record<string, num
   const month = displayDate.getMonth() + 1
   const daysInMonth = new Date(year, month, 0).getDate()
   const firstDay = new Date(year, month - 1, 1).getDay()
-  const weeks = ['日', '一', '二', '三', '四', '五', '六']
+  const weeks = t('dashboard.calendar.weekdays').split(',')
 
   const { days, monthTotal, winDays, lossDays, maxAbs } = useMemo(() => {
     const d: CalendarDay[] = []
@@ -443,35 +464,37 @@ function ProfitCalendar({ calendar, isLoading }: { calendar?: Record<string, num
         <div className="flex items-center gap-2">
           <button
             onClick={() => setCurrentOffset((o) => o + 1)}
-            aria-label="上个月"
+            aria-label={t('dashboard.calendar.prev-month')}
             className="rounded p-1 text-muted-foreground transition-colors hover:bg-white/5"
           >
             <ChevronLeft className="h-3.5 w-3.5" />
           </button>
-          <span className="min-w-[80px] text-center text-xs font-medium tabular-nums text-white">
-            {year}年{month}月
+          <span className="min-w-[80px] text-center text-xs font-medium tabular-nums text-foreground">
+            {t('dashboard.calendar.year-month').replace('{y}', String(year)).replace('{m}', String(month))}
           </span>
           <button
             onClick={() => setCurrentOffset((o) => Math.max(0, o - 1))}
             disabled={currentOffset === 0}
-            aria-label="下个月"
+            aria-label={t('dashboard.calendar.next-month')}
             className="rounded p-1 text-muted-foreground transition-colors hover:bg-white/5 disabled:opacity-30"
           >
             <ChevronRight className="h-3.5 w-3.5" />
           </button>
           <button
             onClick={() => setCurrentOffset(0)}
-            className="rounded-md bg-[#1c1c1c] px-2 py-0.5 text-[10px] text-[#888888] transition-colors hover:text-white"
+            className="rounded-md bg-[#1c1c1c] px-2 py-0.5 text-[10px] text-[#888888] transition-colors hover:text-foreground"
           >
-            今天
+            {t('dashboard.calendar.today')}
           </button>
         </div>
         <div className="flex items-center gap-3 text-[10px]">
           <span className="flex items-center gap-1 text-quant-green">
-            <span className="inline-block h-2 w-2 rounded-sm bg-quant-green/20" />赢 {winDays}天
+            <span className="inline-block h-2 w-2 rounded-sm bg-quant-green/20" />
+            {t('dashboard.calendar.win-days').replace('{n}', String(winDays))}
           </span>
           <span className="flex items-center gap-1 text-quant-red">
-            <span className="inline-block h-2 w-2 rounded-sm bg-quant-red/20" />亏 {lossDays}天
+            <span className="inline-block h-2 w-2 rounded-sm bg-quant-red/20" />
+            {t('dashboard.calendar.loss-days').replace('{n}', String(lossDays))}
           </span>
           <span className={cn('font-mono font-semibold', monthTotal >= 0 ? 'text-quant-green' : 'text-quant-red')}>
             {monthTotal >= 0 ? '+' : ''}${formatCurrency(monthTotal)}
@@ -481,8 +504,8 @@ function ProfitCalendar({ calendar, isLoading }: { calendar?: Record<string, num
 
       {/* Weekday headers */}
       <div className="mb-1 grid grid-cols-7 gap-0.5">
-        {weeks.map((w) => (
-          <div key={w} className="py-1 text-center text-[10px] font-medium text-[#8a8a8a]">
+        {weeks.map((w, i) => (
+          <div key={`weekday-${i}`} className="py-1 text-center text-[10px] font-medium text-[#8a8a8a]">
             {w}
           </div>
         ))}
@@ -508,7 +531,7 @@ function ProfitCalendar({ calendar, isLoading }: { calendar?: Record<string, num
               style={style}
               title={`${d.date}: ${d.value >= 0 ? '+' : ''}$${formatCurrency(d.value)}`}
             >
-              <span className={cn('font-medium', !style && 'text-[#8a8a8a]', today && !style && 'text-white')}>
+              <span className={cn('font-medium', !style && 'text-[#8a8a8a]', today && !style && 'text-foreground')}>
                 {d.day}
               </span>
               {d.value !== 0 && (
@@ -670,29 +693,42 @@ function PnLBarChart({ data, isLoading }: { data?: { time: number; value: number
 
 /* ── Strategy Row ── */
 function StrategyRow({ s }: { s: StrategyItem }) {
+  const { t } = useI18n()
   const pnl = s.total_pnl || 0
   const isRunning = s.status === 'running'
   // CRA 参数展示
   const craParams = (s.trading_config || {}) as Record<string, unknown>
-  const direction = s.trade_direction === 'long' ? '多' : s.trade_direction === 'short' ? '空' : '双向'
+  const direction =
+    s.trade_direction === 'long'
+      ? t('dashboard.strategy.dir-long')
+      : s.trade_direction === 'short'
+        ? t('dashboard.strategy.dir-short')
+        : t('dashboard.strategy.dir-both')
   const tpMethod =
     craParams.take_profit_method === 'full'
-      ? '全仓止盈'
+      ? t('dashboard.strategy.tp-full')
       : craParams.take_profit_method === 'tail'
-        ? '尾单'
+        ? t('dashboard.strategy.tp-tail')
         : craParams.take_profit_method === 'head_tail'
-          ? '首尾'
+          ? t('dashboard.strategy.tp-head-tail')
           : craParams.take_profit_method === 'moving'
-            ? '移动'
+            ? t('dashboard.strategy.tp-moving')
             : ''
-  const stratDesc = craParams.order_count ? `${craParams.order_count}单·首${craParams.first_order_amount || '-'}U` : ''
+  const stratDesc = craParams.order_count
+    ? t('dashboard.strategy.order-desc')
+        .replace('{n}', String(craParams.order_count))
+        .replace('{a}', String(craParams.first_order_amount || '-'))
+    : ''
+  const paramsLine = t('dashboard.strategy.params-line')
+    .replace('{s}', String(craParams.add_position_spread || '-'))
+    .replace('{p}', String(craParams.take_profit_ratio || '-'))
   return (
     <div className="flex items-center gap-3 rounded-lg border border-transparent px-3 py-2.5 transition-colors hover:border-[#1c1c1c] hover:bg-white/[0.03]">
       <div
         className={cn('h-2 w-2 shrink-0 rounded-full', isRunning ? 'animate-pulse bg-quant-green' : 'bg-[#333333]')}
       />
       <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-medium text-white">{s.name}</div>
+        <div className="truncate text-sm font-medium text-foreground">{s.name}</div>
         <div className="text-[10px] text-[#8a8a8a]">
           {s.coin} · {s.leverage}x · {s.strategy_type}
           {!!craParams.trade_direction && (
@@ -713,8 +749,7 @@ function StrategyRow({ s }: { s: StrategyItem }) {
         </div>
         {stratDesc && (
           <div className="text-[9px] text-[#8a8a8a] mt-0.5">
-            {stratDesc} · 补差{String(craParams.add_position_spread || '-')}% · 止盈
-            {String(craParams.take_profit_ratio || '-')}%
+            {stratDesc} · {paramsLine}
           </div>
         )}
       </div>
@@ -730,17 +765,17 @@ function StrategyRow({ s }: { s: StrategyItem }) {
               : 'border border-[#1c1c1c] bg-[#111111] text-[#8a8a8a]'
           )}
         >
-          {isRunning ? '运行中' : s.status}
+          {isRunning ? t('dashboard.status.running') : s.status}
         </span>
         {!!craParams.open_indicator && (
           <div className="text-[9px] text-[#8a8a8a] mt-0.5">
             {craParams.open_indicator === 'macd_golden'
-              ? 'MACD金叉'
+              ? t('dashboard.strategy.open-macd-golden')
               : craParams.open_indicator === 'macd_death'
-                ? 'MACD死叉'
+                ? t('dashboard.strategy.open-macd-death')
                 : craParams.open_indicator === 'ema'
-                  ? 'EMA拐点'
-                  : '市价'}
+                  ? t('dashboard.strategy.open-ema')
+                  : t('dashboard.strategy.open-market')}
           </div>
         )}
       </div>
@@ -755,6 +790,7 @@ export function Dashboard() {
   })
 
   const navigate = useNavigate()
+  const { t } = useI18n()
 
   const { data: dash, isLoading: dashLoading } = useQuery<DashboardSummary>({
     queryKey: ['dashboard'],
@@ -882,48 +918,50 @@ export function Dashboard() {
             <>
               <KPICard
                 icon={<Wallet className="h-4 w-4 text-amber-400" />}
-                label="总资产估值"
+                label={t('dashboard.kpi.total-equity')}
                 value={`$${formatCurrency(totalEquity)}`}
                 subValue={totalPnl !== 0 ? `${totalPnl >= 0 ? '+' : ''}$${formatCurrency(totalPnl)}` : undefined}
-                subLabel="今日盈亏"
+                subLabel={t('dashboard.kpi.today-pnl')}
                 trend={totalPnl >= 0 ? 'up' : totalPnl < 0 ? 'down' : 'neutral'}
                 primary
               />
               <KPICard
                 icon={<Target className="h-4 w-4 text-[#888888]" />}
-                label="胜率"
+                label={t('dashboard.kpi.win-rate')}
                 value={winRate !== null ? `${winRate.toFixed(1)}%` : '--'}
-                subLabel="近30天"
+                subLabel={t('dashboard.kpi.last-30d')}
                 trend="up"
                 ringProgress={winRate ?? undefined}
               />
               <KPICard
                 icon={<BarChart3 className="h-4 w-4 text-[#888888]" />}
-                label="盈亏比"
+                label={t('dashboard.kpi.profit-factor')}
                 value={profitFactor !== null ? profitFactor.toFixed(2) : '--'}
-                subLabel="Profit Factor"
+                subLabel={t('dashboard.kpi.profit-factor-sub')}
                 trend="neutral"
               />
               <KPICard
                 icon={<TrendingDown className="h-4 w-4 text-red-400" />}
-                label="最大回撤"
+                label={t('dashboard.kpi.max-drawdown')}
                 value={maxDrawdown !== null ? `${maxDrawdown.toFixed(2)}%` : '--'}
-                subLabel="历史最大"
+                subLabel={t('dashboard.kpi.historical-max')}
                 trend="down"
               />
               <KPICard
                 icon={<Activity className="h-4 w-4 text-[#888888]" />}
-                label="总交易数"
+                label={t('dashboard.kpi.total-trades')}
                 value={totalTrades > 0 ? totalTrades.toLocaleString() : '--'}
-                subLabel="笔"
+                subLabel={t('dashboard.kpi.trades-unit')}
                 trend="neutral"
               />
               <KPICard
                 icon={<ZapOff className="h-4 w-4 text-emerald-400" />}
-                label="运行策略"
+                label={t('dashboard.kpi.running-strategies')}
                 value={String(runningStrats.length)}
-                subValue={strategies ? `${strategies.length} 个总策略` : undefined}
-                subLabel="在线"
+                subValue={
+                  strategies ? t('dashboard.kpi.total-strategies').replace('{n}', String(strategies.length)) : undefined
+                }
+                subLabel={t('dashboard.status.online')}
                 trend="up"
                 onNavigate={() => {
                   navigate('/bots')
@@ -936,11 +974,11 @@ export function Dashboard() {
         {/* ── Chart Row: Equity + PnL Bar ── */}
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <SectionCard
-            title="权益曲线"
+            title={t('dashboard.chart.equity')}
             headerAction={
               <div className="flex items-center gap-1 text-[10px] text-[#8a8a8a]">
                 <span className="inline-block h-1.5 w-1.5 rounded-full bg-quant-green" />
-                实时
+                {t('dashboard.chart.realtime')}
               </div>
             }
           >
@@ -950,16 +988,16 @@ export function Dashboard() {
           </SectionCard>
 
           <SectionCard
-            title="日盈亏分布"
+            title={t('dashboard.chart.daily-pnl-dist')}
             headerAction={
               <div className="flex items-center gap-2 text-[10px] text-[#8a8a8a]">
                 <span className="flex items-center gap-1">
                   <span className="inline-block h-1.5 w-1.5 rounded-sm bg-quant-green" />
-                  盈利
+                  {t('dashboard.chart.profit')}
                 </span>
                 <span className="flex items-center gap-1">
                   <span className="inline-block h-1.5 w-1.5 rounded-sm bg-quant-red" />
-                  亏损
+                  {t('dashboard.chart.loss')}
                 </span>
               </div>
             }
@@ -972,15 +1010,15 @@ export function Dashboard() {
 
         {/* ── Arbitrage Performance Section ── */}
         <SectionCard
-          title="套利绩效"
+          title={t('dashboard.arb.title')}
           headerAction={
             <button
               onClick={() => {
                 navigate('/arbitrage')
               }}
-              className="flex items-center gap-0.5 text-[10px] text-[#8a8a8a] transition-colors hover:text-white"
+              className="flex items-center gap-0.5 text-[10px] text-[#8a8a8a] transition-colors hover:text-foreground"
             >
-              套利监控 <ChevronRightIcon className="h-3 w-3" />
+              {t('dashboard.arb.view-monitor')} <ChevronRightIcon className="h-3 w-3" />
             </button>
           }
         >
@@ -993,33 +1031,40 @@ export function Dashboard() {
                 <>
                   <KPICard
                     icon={<Scale className="h-4 w-4 text-amber-400" />}
-                    label="累计套利盈亏"
+                    label={t('dashboard.arb.total-pnl')}
                     value={`$${formatCurrency(arbPerf?.total_pnl ?? 0)}`}
-                    subValue={`${arbPerf?.win_trades ?? 0} 盈 / ${arbPerf?.loss_trades ?? 0} 亏`}
-                    subLabel="盈亏笔数"
+                    subValue={t('dashboard.arb.win-loss-count')
+                      .replace('{w}', String(arbPerf?.win_trades ?? 0))
+                      .replace('{l}', String(arbPerf?.loss_trades ?? 0))}
+                    subLabel={t('dashboard.arb.pnl-count')}
                     trend={(arbPerf?.total_pnl ?? 0) >= 0 ? 'up' : 'down'}
                   />
                   <KPICard
                     icon={<BarChart4 className="h-4 w-4 text-[#888888]" />}
-                    label="套利交易笔数"
+                    label={t('dashboard.arb.total-trades')}
                     value={String(arbPerf?.total_trades ?? 0)}
-                    subValue={`费 $${formatCurrency(arbPerf?.total_fees ?? 0)}`}
-                    subLabel="总手续费"
+                    subValue={t('dashboard.arb.fee-value').replace(
+                      '{v}',
+                      `$${formatCurrency(arbPerf?.total_fees ?? 0)}`
+                    )}
+                    subLabel={t('dashboard.arb.total-fees')}
                     trend="neutral"
                   />
                   <KPICard
                     icon={<Percent className="h-4 w-4 text-[#888888]" />}
-                    label="套利胜率"
+                    label={t('dashboard.arb.win-rate')}
                     value={`${(arbPerf?.win_rate ?? 0).toFixed(1)}%`}
-                    subLabel={`最佳 ${formatCurrency(arbPerf?.max_win ?? 0)} / 最差 ${formatCurrency(arbPerf?.max_loss ?? 0)}`}
+                    subLabel={t('dashboard.arb.best-worst')
+                      .replace('{w}', formatCurrency(arbPerf?.max_win ?? 0))
+                      .replace('{l}', formatCurrency(arbPerf?.max_loss ?? 0))}
                     trend="up"
                     ringProgress={arbPerf?.win_rate ?? undefined}
                   />
                   <KPICard
                     icon={<TrendingUp className="h-4 w-4 text-emerald-400" />}
-                    label="平均单笔收益"
+                    label={t('dashboard.arb.avg-pnl')}
                     value={`$${formatCurrency(arbPerf?.avg_pnl ?? 0)}`}
-                    subLabel="每笔平均"
+                    subLabel={t('dashboard.arb.avg-per-trade')}
                     trend={(arbPerf?.avg_pnl ?? 0) >= 0 ? 'up' : 'down'}
                   />
                 </>
@@ -1028,7 +1073,7 @@ export function Dashboard() {
 
             {/* Charts */}
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-              <SectionCard title="套利累计收益曲线">
+              <SectionCard title={t('dashboard.arb.equity-curve')}>
                 <div className="h-[260px]">
                   <EquityChart
                     data={arbPerf?.equity_curve.map((d) => ({ time: d.time * 1000, value: d.value }))}
@@ -1036,7 +1081,7 @@ export function Dashboard() {
                   />
                 </div>
               </SectionCard>
-              <SectionCard title="套利日收益分布">
+              <SectionCard title={t('dashboard.arb.daily-pnl-dist')}>
                 <div className="h-[260px]">
                   <PnLBarChart
                     data={arbPerf?.daily_pnl.map((d) => ({ time: d.time, value: d.value }))}
@@ -1052,7 +1097,7 @@ export function Dashboard() {
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-4">
           {/* Left: Exchange + Calendar */}
           <div className="space-y-4">
-            <SectionCard title="资产分布">
+            <SectionCard title={t('dashboard.asset.title')}>
               {isLoading ? (
                 <div className="space-y-3">
                   <Skeleton variant="text" lines={4} />
@@ -1073,9 +1118,9 @@ export function Dashboard() {
                                   ex.connected ? 'bg-quant-green' : ex.configured ? 'bg-yellow-400' : 'bg-quant-red'
                                 )}
                               />
-                              <span className="text-white font-medium capitalize">{ex.name}</span>
+                              <span className="text-foreground font-medium capitalize">{ex.name}</span>
                             </span>
-                            <span className="font-mono text-white text-xs">
+                            <span className="font-mono text-foreground text-xs">
                               $
                               {(ex.balance || 0).toLocaleString(undefined, {
                                 minimumFractionDigits: 2,
@@ -1092,7 +1137,7 @@ export function Dashboard() {
                               return (
                                 <div className="ml-4 mt-1 space-y-1">
                                   <div className="flex items-center justify-between text-xs">
-                                    <span className="text-[#666666]">├ 现货</span>
+                                    <span className="text-[#666666]">├ {t('dashboard.asset.spot')}</span>
                                     <span className="font-mono text-[#aaaaaa]">
                                       $
                                       {(portfolio?.spot_balance || 0).toLocaleString(undefined, {
@@ -1105,7 +1150,9 @@ export function Dashboard() {
                                     </span>
                                   </div>
                                   <div className="flex items-center justify-between text-xs">
-                                    <span className="text-[#666666]">{lastVisible === 'futures' ? '└' : '├'} 合约</span>
+                                    <span className="text-[#666666]">
+                                      {lastVisible === 'futures' ? '└' : '├'} {t('dashboard.asset.futures')}
+                                    </span>
                                     <span className="font-mono text-[#aaaaaa]">
                                       $
                                       {(portfolio?.futures_balance || 0).toLocaleString(undefined, {
@@ -1133,7 +1180,7 @@ export function Dashboard() {
                                   {hasFunding && (
                                     <div className="flex items-center justify-between text-xs">
                                       <span className="text-[#666666]">
-                                        {lastVisible === 'funding' ? '└' : '├'} 资金
+                                        {lastVisible === 'funding' ? '└' : '├'} {t('dashboard.asset.funding')}
                                       </span>
                                       <span className="font-mono text-[#aaaaaa]">
                                         $
@@ -1149,7 +1196,7 @@ export function Dashboard() {
                                   )}
                                   {hasEarn && (
                                     <div className="flex items-center justify-between text-xs">
-                                      <span className="text-[#666666]">└ 理财</span>
+                                      <span className="text-[#666666]">└ {t('dashboard.asset.earn')}</span>
                                       <span className="font-mono text-[#aaaaaa]">
                                         $
                                         {(portfolio?.earn_balance || 0).toLocaleString(undefined, {
@@ -1169,7 +1216,7 @@ export function Dashboard() {
                           {!isBinance && ex.balance > 0 && (
                             <div className="ml-4 mt-1 space-y-1">
                               <div className="flex items-center justify-between text-xs">
-                                <span className="text-[#666666]">└ 现货</span>
+                                <span className="text-[#666666]">└ {t('dashboard.asset.spot')}</span>
                                 <span className="font-mono text-[#aaaaaa]">
                                   $
                                   {(ex.balance || 0).toLocaleString(undefined, {
@@ -1186,19 +1233,19 @@ export function Dashboard() {
                     }
                   )}
                   <div className="mt-2 flex items-center justify-between border-t border-[#1c1c1c] pt-3 text-sm">
-                    <span className="text-[#8a8a8a]">合计</span>
-                    <span className="font-mono font-semibold text-white">
+                    <span className="text-[#8a8a8a]">{t('dashboard.asset.total')}</span>
+                    <span className="font-mono font-semibold text-foreground">
                       ${totalEquity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       <span className="text-[#8a8a8a] ml-1 text-xs">≈ {formatConverted(totalEquity)}</span>
                     </span>
                   </div>
                 </div>
               ) : (
-                <EmptyState title="暂无交易所数据" description="在设置页面配置您的交易所 API" />
+                <EmptyState title={t('dashboard.asset.no-data')} description={t('dashboard.asset.no-data-desc')} />
               )}
             </SectionCard>
 
-            <SectionCard title="盈亏日历">
+            <SectionCard title={t('dashboard.calendar.title')}>
               <ProfitCalendar calendar={dash?.calendar} isLoading={dashLoading} />
             </SectionCard>
           </div>
@@ -1206,15 +1253,23 @@ export function Dashboard() {
           {/* Center: AI Agents + Equity Chart */}
           <div className="space-y-4">
             <SectionCard
-              title="AI 多智能体状态"
+              title={t('dashboard.ai.title')}
               headerAction={<span className="text-[10px] text-[#8a8a8a]">XiaoTianQuant v3.0</span>}
             >
               <div className="mb-3 grid grid-cols-3 gap-3">
                 {(
                   dash?.ai_agents || [
-                    { name: '市场情报', status: 'running', detail: '-- 条新信号' },
-                    { name: '策略生成', status: 'running', detail: '-- 个策略待审' },
-                    { name: '风控AI', status: 'normal', detail: '所有指标安全' },
+                    {
+                      name: t('dashboard.ai.agent-market'),
+                      status: 'running',
+                      detail: t('dashboard.ai.detail-signals').replace('{n}', '--'),
+                    },
+                    {
+                      name: t('dashboard.ai.agent-strategy'),
+                      status: 'running',
+                      detail: t('dashboard.ai.detail-pending').replace('{n}', '--'),
+                    },
+                    { name: t('dashboard.ai.agent-risk'), status: 'normal', detail: t('dashboard.ai.detail-safe') },
                   ]
                 ).map((agent: { name: string; status: string; detail: string }) => (
                   <div
@@ -1222,15 +1277,15 @@ export function Dashboard() {
                     className="rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-3 text-center transition-colors hover:border-[#2a2a2a]"
                   >
                     <div className="flex justify-center">
-                      {agent.name === '市场情报' ? (
+                      {agent.name === t('dashboard.ai.agent-market') || agent.name === '市场情报' ? (
                         <Search className="h-5 w-5 text-quant-gold" />
-                      ) : agent.name === '策略生成' ? (
+                      ) : agent.name === t('dashboard.ai.agent-strategy') || agent.name === '策略生成' ? (
                         <Zap className="h-5 w-5 text-quant-orange" />
                       ) : (
                         <Shield className="h-5 w-5 text-quant-green" />
                       )}
                     </div>
-                    <div className="mt-2 text-xs font-medium text-white">{agent.name}</div>
+                    <div className="mt-2 text-xs font-medium text-foreground">{agent.name}</div>
                     <div className="mt-1 flex items-center justify-center gap-1 text-[10px] text-[#8a8a8a]">
                       <span
                         className={cn(
@@ -1238,7 +1293,11 @@ export function Dashboard() {
                           agent.status === 'running' || agent.status === 'normal' ? 'bg-quant-green' : 'bg-quant-red'
                         )}
                       />
-                      {agent.status === 'running' ? '运行中' : agent.status === 'normal' ? '正常' : '异常'}
+                      {agent.status === 'running'
+                        ? t('dashboard.status.running')
+                        : agent.status === 'normal'
+                          ? t('dashboard.status.normal')
+                          : t('dashboard.status.error')}
                     </div>
                     <div className="mt-0.5 truncate text-[10px] text-[#8a8a8a]">{agent.detail}</div>
                   </div>
@@ -1252,7 +1311,7 @@ export function Dashboard() {
                   </div>
                 ))}
                 {!dash?.ai_logs?.length && (
-                  <div className="py-6 text-center text-[11px] text-[#8a8a8a]">等待AI智能体数据...</div>
+                  <div className="py-6 text-center text-[11px] text-[#8a8a8a]">{t('dashboard.ai.waiting-data')}</div>
                 )}
               </div>
             </SectionCard>
@@ -1261,7 +1320,7 @@ export function Dashboard() {
           {/* Right: Running Strategies + Ranking */}
           <div className="space-y-4">
             <SectionCard
-              title="运行中策略"
+              title={t('dashboard.strategy.title')}
               headerAction={
                 <span className="rounded bg-quant-gold/10 px-1.5 py-0.5 text-[10px] text-quant-gold">
                   {runningStrats.length}
@@ -1282,9 +1341,9 @@ export function Dashboard() {
                 </div>
               ) : (
                 <EmptyState
-                  title="暂无运行中的策略"
-                  description="在策略页面启动您的第一个策略"
-                  actionLabel="去策略页面"
+                  title={t('dashboard.strategy.no-running')}
+                  description={t('dashboard.strategy.no-running-desc')}
+                  actionLabel={t('dashboard.strategy.go-strategy')}
                   onAction={() => {
                     navigate('/strategy')
                   }}
@@ -1293,15 +1352,15 @@ export function Dashboard() {
             </SectionCard>
 
             <SectionCard
-              title="策略排行榜"
+              title={t('dashboard.ranking.title')}
               headerAction={
                 <button
                   onClick={() => {
                     navigate('/strategy')
                   }}
-                  className="flex items-center gap-0.5 text-[10px] text-[#8a8a8a] transition-colors hover:text-white"
+                  className="flex items-center gap-0.5 text-[10px] text-[#8a8a8a] transition-colors hover:text-foreground"
                 >
-                  全部 <ChevronRightIcon className="h-3 w-3" />
+                  {t('dashboard.ranking.view-all')} <ChevronRightIcon className="h-3 w-3" />
                 </button>
               }
             >
@@ -1343,20 +1402,22 @@ export function Dashboard() {
                     },
                     {
                       key: 'name',
-                      title: '策略',
+                      title: t('dashboard.ranking.col-strategy'),
                       render: (item) => (
                         <div className="min-w-0">
-                          <div className="truncate text-sm font-medium text-white">{item.name}</div>
+                          <div className="truncate text-sm font-medium text-foreground">{item.name}</div>
                           <div className="flex gap-2 text-[10px] text-[#8a8a8a]">
-                            <span>胜率 {(item.win_rate || 0).toFixed(1)}%</span>
-                            <span>夏普 {(item.sharpe || 0).toFixed(2)}</span>
+                            <span>
+                              {t('dashboard.ranking.win-rate').replace('{v}', (item.win_rate || 0).toFixed(1))}
+                            </span>
+                            <span>{t('dashboard.ranking.sharpe').replace('{v}', (item.sharpe || 0).toFixed(2))}</span>
                           </div>
                         </div>
                       ),
                     },
                     {
                       key: 'return',
-                      title: '收益',
+                      title: t('dashboard.ranking.col-return'),
                       width: '80px',
                       render: (item) => (
                         <div
@@ -1372,7 +1433,7 @@ export function Dashboard() {
                   ]}
                 />
               ) : (
-                <EmptyState title="暂无排行数据" description="运行策略后将显示排行榜" />
+                <EmptyState title={t('dashboard.ranking.no-data')} description={t('dashboard.ranking.no-data-desc')} />
               )}
             </SectionCard>
           </div>
@@ -1391,6 +1452,7 @@ export function Dashboard() {
 
 function RunningBotsCard() {
   const navigate = useNavigate()
+  const { t } = useI18n()
   const { data: bots, isLoading } = useQuery({
     queryKey: ['dash-running-bots'],
     queryFn: () => strategyApi.list(),
@@ -1401,21 +1463,21 @@ function RunningBotsCard() {
 
   return (
     <SectionCard
-      title={`运行中机器人 (${active.length})`}
+      title={t('dashboard.bots.title').replace('{n}', String(active.length))}
       headerAction={
         <button
           onClick={() => navigate('/bots')}
-          className="text-[10px] text-muted-foreground hover:text-white transition-colors"
+          className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
         >
-          进入机器人中心
+          {t('dashboard.bots.enter-center')}
         </button>
       }
     >
       <div className="h-40 overflow-y-auto space-y-2 pr-1">
         {isLoading ? (
-          <div className="text-xs text-muted-foreground py-6 text-center">加载中...</div>
+          <div className="text-xs text-muted-foreground py-6 text-center">{t('common.loading')}</div>
         ) : preview.length === 0 ? (
-          <div className="text-xs text-muted-foreground py-6 text-center">暂无运行中的机器人</div>
+          <div className="text-xs text-muted-foreground py-6 text-center">{t('dashboard.bots.none')}</div>
         ) : (
           <>
             {preview.map((b) => (
@@ -1426,7 +1488,7 @@ function RunningBotsCard() {
               >
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="h-1.5 w-1.5 rounded-full bg-green-400 shrink-0 animate-pulse" />
-                  <span className="text-xs font-medium truncate">{b.name || b.strategy_name || '未命名'}</span>
+                  <span className="text-xs font-medium truncate">{b.name || b.strategy_name || t('dashboard.bots.unnamed')}</span>
                   {b.symbol && <span className="text-[10px] text-muted-foreground shrink-0">{b.symbol}</span>}
                 </div>
                 <span
@@ -1440,7 +1502,9 @@ function RunningBotsCard() {
               </button>
             ))}
             {active.length > 5 && (
-              <div className="text-[10px] text-muted-foreground text-center">还有 {active.length - 5} 个运行中…</div>
+              <div className="text-[10px] text-muted-foreground text-center">
+                {t('dashboard.bots.more').replace('{n}', String(active.length - 5))}
+              </div>
             )}
           </>
         )}

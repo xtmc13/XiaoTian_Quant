@@ -1,12 +1,9 @@
 import type { AddPositionItem } from '@/types'
 import { DataTable } from '@/components/DataTable'
-import { Switch } from '@/components/ui/Switch'
 
 interface AddPositionTableProps {
   value: AddPositionItem[]
   onChange: (next: AddPositionItem[]) => void
-  showEma?: boolean
-  emaDisabled?: boolean
   disabled?: boolean
 }
 
@@ -16,8 +13,6 @@ const inputCls =
 export function AddPositionTable({
   value,
   onChange,
-  showEma = false,
-  emaDisabled = false,
   disabled = false,
 }: AddPositionTableProps) {
   const updateRow = (index: number, patch: Partial<AddPositionItem>) => {
@@ -87,23 +82,6 @@ export function AddPositionTable({
             />
           ),
         },
-        ...(showEma
-          ? [
-              {
-                key: 'emaEnabled',
-                title: 'EMA',
-                width: '70px',
-                render: (item: AddPositionItem, index: number) => (
-                  <Switch
-                    disabled={disabled || emaDisabled}
-                    checked={item.emaEnabled ?? false}
-                    onCheckedChange={(checked) => updateRow(index, { emaEnabled: checked })}
-                    className="scale-75 origin-left"
-                  />
-                ),
-              },
-            ]
-          : []),
       ]}
     />
   )

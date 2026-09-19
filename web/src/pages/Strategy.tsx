@@ -75,7 +75,7 @@ function GuideBar({ onDismiss }: { onDismiss: () => void }) {
             key={s.idx}
             className="flex-1 flex items-start gap-2.5 rounded-xl bg-quant-bg/60 border border-quant-border/40 p-3"
           >
-            <div className="w-6 h-6 rounded-full bg-gradient-to-br from-quant-gold to-purple-500 flex items-center justify-center text-[10px] font-bold text-white shrink-0">
+            <div className="w-6 h-6 rounded-full bg-gradient-to-br from-quant-gold to-purple-500 flex items-center justify-center text-[10px] font-bold text-foreground shrink-0">
               {s.idx}
             </div>
             <div className="min-w-0">
@@ -90,7 +90,7 @@ function GuideBar({ onDismiss }: { onDismiss: () => void }) {
           onClick={() => navigate('/create')}
           className="px-3 py-2 rounded-lg bg-quant-gold/10 text-quant-gold border border-quant-gold/20 text-xs font-medium hover:bg-quant-gold/20 transition-colors flex items-center gap-1.5"
         >
-          <Plus className="w-3.5 h-3.5" /> 创建策略
+          <Plus className="w-3.5 h-3.5" /> 启动策略机器人
         </button>
         <button
           onClick={onDismiss}
@@ -216,7 +216,7 @@ function StrategyManager() {
             onClick={() => navigate('/create')}
             className="px-3 py-2 rounded-lg bg-quant-gold text-black text-xs font-medium hover:opacity-90 transition-opacity flex items-center gap-1.5"
           >
-            <Plus className="w-3.5 h-3.5" /> 新建策略
+            <Plus className="w-3.5 h-3.5" /> 启动策略机器人
           </button>
         </div>
 

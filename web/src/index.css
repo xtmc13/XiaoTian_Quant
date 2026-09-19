@@ -3,6 +3,7 @@
 @tailwind utilities;
 
 @layer base {
+  /* ── XiaoTianQuant Light Theme (default) ── */
   :root {
     --background: 0 0% 100%;
     --foreground: 222.2 84% 4.9%;
@@ -24,6 +25,15 @@
     --input: 214.3 31.8% 91.4%;
     --ring: 222.2 84% 4.9%;
     --radius: 0.5rem;
+
+    /* quant surfaces — light (RGB triplets for alpha support) */
+    --quant-bg: 255 255 255;
+    --quant-bg-secondary: 245 245 245;
+    --quant-bg-tertiary: 250 250 250;
+    --quant-card: 255 255 255;
+    --quant-hover: 236 236 236;
+    --quant-border: 224 224 224;
+    --quant-border-light: 208 208 208;
   }
 
   /* ── XiaoTianQuant Pure Black Dark Theme ── */
@@ -47,10 +57,51 @@
     --border: 0 0% 16%;
     --input: 0 0% 16%;
     --ring: 210 100% 56%;
+
+    /* quant surfaces — dark */
+    --quant-bg: 10 10 10;
+    --quant-bg-secondary: 17 17 17;
+    --quant-bg-tertiary: 20 20 20;
+    --quant-card: 28 28 28;
+    --quant-hover: 38 38 38;
+    --quant-border: 42 42 42;
+    --quant-border-light: 48 48 48;
   }
 
   * {
     @apply border-border;
+  }
+
+  /* ── Light theme: 提亮硬编码的浅灰文字(原为深底设计) ── */
+  .light .text-\[\#888\],
+  .light .text-\[\#888888\],
+  .light .text-\[\#8a8a8a\],
+  .light .text-\[\#999999\] {
+    color: #666;
+  }
+  .light .text-\[\#ccc\],
+  .light .text-\[\#e0e0e0\] {
+    color: #888;
+  }
+
+  /* 浅色模式下把"半透明白"反转为"半透明黑"(原为深底上的高光) */
+  .light .bg-white\/5 {
+    background-color: rgb(0 0 0 / 0.05);
+  }
+  .light .bg-white\/10 {
+    background-color: rgb(0 0 0 / 0.08);
+  }
+  .light .border-white\/20 {
+    border-color: rgb(0 0 0 / 0.15);
+  }
+  .light .ring-white\/10 {
+    --tw-ring-color: rgb(0 0 0 / 0.1);
+  }
+  .light .ring-white\/20 {
+    --tw-ring-color: rgb(0 0 0 / 0.15);
+  }
+  .light .ring-white\/30 {
+    --tw-ring-color: rgb(0 0 0 / 0.2);
   }
 
   body {
