@@ -37,26 +37,30 @@ else
 
     echo "--- Building Rust matching engine (optional) ---"
     RUST_LIB_COPIED=false
-    if [ -d "$ROOT/engine" ] && command -v cargo &> /dev/null; then
-        cd "$ROOT/engine"
-        cargo build --release
-        # Copy the dynamic library next to the gateway binary so the loader can find it.
-        # Windows: xt_matching.dll; Linux: libxt_matching.so; macOS: libxt_matching.dylib
-        if cp "$ROOT/engine/target/release/xt_matching.dll" "$ROOT/dist/" 2>/dev/null || \
-           cp "$ROOT/engine/target/release/libxt_matching.so" "$ROOT/dist/" 2>/dev/null || \
-           cp "$ROOT/engine/target/release/libxt_matching.dylib" "$ROOT/dist/" 2>/dev/null; then
-            RUST_LIB_COPIED=true
-        fi
-        # Also copy import library / rlib to gateway/ for cgo linking fallback
-        cp "$ROOT/engine/target/release/libxt_matching.dll.a" "$ROOT/gateway/" 2>/dev/null || true
-        cp "$ROOT/engine/target/release/libxt_matching.rlib" "$ROOT/gateway/" 2>/dev/null || true
-        if [ "$RUST_LIB_COPIED" = true ]; then
-            echo "Rust engine library copied to $ROOT/dist/"
+    if [ "${BUILD_RUST:-0}" = "1" ]; then
+        if [ -d "$ROOT/engine" ] && command -v cargo &> /dev/null; then
+            cd "$ROOT/engine"
+            cargo build --release
+            # Copy the dynamic library next to the gateway binary so the loader can find it.
+            # Windows: xt_matching.dll; Linux: libxt_matching.so; macOS: libxt_matching.dylib
+            if cp "$ROOT/engine/target/release/xt_matching.dll" "$ROOT/dist/" 2>/dev/null || \
+               cp "$ROOT/engine/target/release/libxt_matching.so" "$ROOT/dist/" 2>/dev/null || \
+               cp "$ROOT/engine/target/release/libxt_matching.dylib" "$ROOT/dist/" 2>/dev/null; then
+                RUST_LIB_COPIED=true
+            fi
+            # Also copy import library / rlib to gateway/ for cgo linking fallback
+            cp "$ROOT/engine/target/release/libxt_matching.dll.a" "$ROOT/gateway/" 2>/dev/null || true
+            cp "$ROOT/engine/target/release/libxt_matching.rlib" "$ROOT/gateway/" 2>/dev/null || true
+            if [ "$RUST_LIB_COPIED" = true ]; then
+                echo "Rust engine library copied to $ROOT/dist/"
+            else
+                echo "Rust engine build skipped (no compatible library found)"
+            fi
         else
-            echo "Rust engine build skipped (no compatible library found)"
+            echo "Rust engine build skipped (no cargo or engine directory)"
         fi
     else
-        echo "Rust engine build skipped (no cargo or engine directory)"
+        echo "Rust engine build skipped (Rust is experimental/benchmark only, not in the main path; set BUILD_RUST=1 to build)"
     fi
 
     echo "--- Building Go gateway ---"

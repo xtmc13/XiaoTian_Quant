@@ -308,9 +308,11 @@ func BillingStripeWebhook(c *gin.Context) {
 
 // verifyStripeSignature 校验 Stripe-Signature 头（格式 t=...,v1=hex,...）：
 // HMAC-SHA256(secret, "t.payload") 与 v1 做常量时间比较，时间戳容忍 ±300 秒。
+// 与 stripe-go 官方实现一致：头部可能携带多个 v1（签名密钥轮换期间 Stripe
+// 会同时下发新旧密钥的签名），任一匹配即通过；v0 等其它 scheme 忽略。
 func verifyStripeSignature(header string, payload []byte, secret string) bool {
 	var ts string
-	var v1 string
+	var v1s []string
 	for _, part := range strings.Split(header, ",") {
 		kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
 		if len(kv) != 2 {
@@ -320,10 +322,10 @@ func verifyStripeSignature(header string, payload []byte, secret string) bool {
 		case "t":
 			ts = kv[1]
 		case "v1":
-			v1 = kv[1]
+			v1s = append(v1s, kv[1])
 		}
 	}
-	if ts == "" || v1 == "" {
+	if ts == "" || len(v1s) == 0 {
 		return false
 	}
 	t, err := strconv.ParseInt(ts, 10, 64)
@@ -337,9 +339,11 @@ func verifyStripeSignature(header string, payload []byte, secret string) bool {
 	mac.Write([]byte(ts + "."))
 	mac.Write(payload)
 	expected := mac.Sum(nil)
-	actual, err := hex.DecodeString(v1)
-	if err != nil || !hmac.Equal(expected, actual) {
-		return false
+	for _, v1 := range v1s {
+		actual, err := hex.DecodeString(v1)
+		if err == nil && hmac.Equal(expected, actual) {
+			return true
+		}
 	}
-	return true
+	return false
 }

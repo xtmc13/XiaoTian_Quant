@@ -27,6 +27,7 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/order"
 	"github.com/xiaotian-quant/gateway/internal/portfolio"
 	"github.com/xiaotian-quant/gateway/internal/reconcile"
+	"github.com/xiaotian-quant/gateway/internal/social"
 	"github.com/xiaotian-quant/gateway/internal/store"
 	"github.com/xiaotian-quant/gateway/internal/strategy"
 	"github.com/xiaotian-quant/gateway/internal/strategy/cra"
@@ -114,9 +115,9 @@ func main() {
 		return lmRepo.GetGroups(botID)
 	}, 60*time.Second)
 
-	// ── A8 对账体系（持仓对账/成交恢复/资金费对账/实盘偏差监控）──
+	// ── A8 对账体系（持仓对账/成交恢复/资金费对账/实盘偏差监控/回报PnL对账）──
 	// 交易所访问工厂：有默认凭证的交易所构造适配器，供 reconcile 通过窄接口
-	// （PositionQuerier/OrderStatusQuerier/OrderTradesQuerier/FundingQuerier）
+	// （PositionQuerier/OrderStatusQuerier/OrderTradesQuerier/FundingQuerier/ReportedPnLQuerier）
 	// 取用；未配置的交易所返回 nil，对应任务自动跳过。
 	reconcileExchangeFactory := func(name string) any {
 		// IBKR 走本地 Client Portal 网关 + 会话 cookie 认证，无 API key；
@@ -133,7 +134,9 @@ func main() {
 		}
 		switch name {
 		case "binance":
-			return adapter.NewBinanceAdapter(apiKey, secret, false)
+			// 桥接：reconcile 窄接口要求 reconcile.ReportedPnL 返回类型，
+			// 避免 reconcile 反向依赖 adapter（嵌入保留 GetPositions 等提升方法）。
+			return binanceReportedPnLBridge{adapter.NewBinanceAdapter(apiKey, secret, false)}
 		case "bybit":
 			return adapter.NewBybitAdapter(apiKey, secret, false)
 		case "okx":
@@ -166,6 +169,10 @@ func main() {
 		return gridRunner.ApplyRecoveredFill(botID, side, qty, price)
 	})
 	reconcileSvc.Start()
+
+	// ── P1-4 开放信号市场：利润分成每日结算引擎（T+锁定后可提现）──
+	settleEngine := social.NewSettlementEngine(social.NewMarketService())
+	settleEngine.Start()
 
 	// ── A2.2 limit-then-market 跟踪器：超时撤剩余 + 市价补单（paper/live 均支持）──
 	ltmTracker := order.GetLimitMarketTracker()
@@ -258,6 +265,7 @@ func main() {
 		// 与上方 bots 同理：必须在 appCtx.WaitForShutdown 关库之前完成。
 		reconcileSvc.Stop()
 		ltmTracker.Stop()
+		settleEngine.Stop()
 		appCtx.WaitForShutdown()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -374,6 +382,30 @@ func isLocalhost(ip string) bool {
 // portfolioBalanceProvider 把组合账本（paper 默认账户）的可用余额喂给撮合引擎
 // 做资金校验（C2.2）。组合账本未初始化时返回 +Inf（不校验，保持旧行为）。
 type portfolioBalanceProvider struct{}
+
+// binanceReportedPnLBridge 把 BinanceAdapter 的回报 PnL 查询桥接为 reconcile 窄接口
+// ReportedPnLQuerier 要求的 reconcile.ReportedPnL 返回类型（reconcile 不反向依赖
+// adapter）；内嵌 *adapter.BinanceAdapter，GetPositions 等提升方法不受影响。
+type binanceReportedPnLBridge struct{ *adapter.BinanceAdapter }
+
+func (b binanceReportedPnLBridge) GetRealizedPnLIncomes(symbol string, startMs, endMs int64) ([]reconcile.ReportedPnL, error) {
+	rows, err := b.BinanceAdapter.GetRealizedPnLIncomes(symbol, startMs, endMs)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]reconcile.ReportedPnL, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, reconcile.ReportedPnL{
+			Symbol:  r.Symbol,
+			Asset:   r.Asset,
+			Income:  r.Income,
+			Time:    r.Time,
+			TradeID: r.TradeID,
+			Info:    r.Info,
+		})
+	}
+	return out, nil
+}
 
 func (portfolioBalanceProvider) Available(userID uint64, asset string) float64 {
 	mgr := portfolio.GetManager()

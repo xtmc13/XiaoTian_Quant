@@ -121,7 +121,7 @@ High-performance price-time priority matching engine compiled as a cdylib.
 
 ### 5. External Integrations
 
-- **12 exchange adapters**: Binance, OKX, Bybit, Gate.io, MEXC, Kraken, Coinbase, Bitget, Alpaca, IBKR, MT5, Tushare
+- **10 exchange adapters**: Binance, OKX, Bybit, Gate.io, MEXC, Kraken, Coinbase, Bitget, Alpaca, IBKR
 - **3 AI providers**: OpenAI, DeepSeek, Anthropic
 - **4 notification channels**: Email, Feishu, DingTalk, Telegram
 - **Python sandbox**: ML inference, CCXT bridge, custom indicators

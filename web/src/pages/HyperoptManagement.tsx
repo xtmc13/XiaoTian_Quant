@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { SectionCard } from '@/components/ui/SectionCard'
 import { PageHeader } from '@/components/ui/PageHeader'
+import { EpochExplorer } from '@/components/hyperopt/EpochExplorer'
 import { KPICard } from '@/components/ui/KPICard'
 import {
   FlaskConical,
@@ -422,6 +423,7 @@ export function HyperoptManagement() {
             })}
           </div>
         )}
+        <EpochExplorer />
       </div>
     </div>
   )

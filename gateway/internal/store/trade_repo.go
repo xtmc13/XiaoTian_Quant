@@ -104,3 +104,40 @@ func (r *TradeRepo) Delete(id string) error {
 	_, err := db.Exec("DELETE FROM trades WHERE id=?", id)
 	return err
 }
+
+// ListAscBefore 按时间升序列出 endMs（含）之前的成交，可按 exchange/symbol 过滤。
+// 供回报 PnL 对账计算 FIFO 成本基础：窗口内平仓的盈亏依赖窗口前建仓的成交。
+// 专用查询（非通用列表），limit<=0 时使用调用方兜底上限。
+func (r *TradeRepo) ListAscBefore(exchange, symbol string, endMs int64, limit int) ([]*TradeRecord, error) {
+	if limit <= 0 {
+		limit = 20000
+	}
+	query := `SELECT id, user_id, order_id, symbol, side, price, quantity, fee, fee_currency, exchange, COALESCE(exec_phase,''), created_at FROM trades WHERE created_at<=?`
+	var args []any
+	args = append(args, endMs)
+	if exchange != "" {
+		query += ` AND exchange=?`
+		args = append(args, exchange)
+	}
+	if symbol != "" {
+		query += ` AND symbol=?`
+		args = append(args, symbol)
+	}
+	query += ` ORDER BY created_at ASC LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []*TradeRecord
+	for rows.Next() {
+		var t TradeRecord
+		if err := rows.Scan(&t.ID, &t.UserID, &t.OrderID, &t.Symbol, &t.Side, &t.Price, &t.Quantity, &t.Fee, &t.FeeCurrency, &t.Exchange, &t.ExecPhase, &t.CreatedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, &t)
+	}
+	return result, nil
+}

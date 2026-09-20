@@ -15,6 +15,8 @@ import {
   type ProtectionConfigItem,
   type HyperoptJob,
   type HyperoptSpace,
+  type HyperoptEpoch,
+  type HyperoptEpochApplyResult,
   type MLModelInfo,
   type MLTrainResult,
   type IndicatorItem,
@@ -553,6 +555,112 @@ export const tradesApi = {
     const qs = params ? '?' + new URLSearchParams(params).toString() : ''
     return api.get<{ trades: Trade[] }>(`/trades${qs}`).then((d) => d?.trades ?? [])
   },
+}
+
+// ── 策略版本快照 ──
+export interface StrategyVersionItem {
+  id: string
+  version: number
+  note: string
+  created_at: number
+}
+export interface StrategyVersionDetail extends StrategyVersionItem {
+  strategy_id: string
+  payload: Record<string, unknown>
+}
+export const strategyVersionApi = {
+  list: (strategyId: string) =>
+    api
+      .get<{ versions: StrategyVersionItem[] }>(`/strategies/configs/${strategyId}/versions`)
+      .then((d) => d?.versions ?? []),
+  create: (strategyId: string, note?: string) =>
+    api.post<StrategyVersionItem>(`/strategies/configs/${strategyId}/versions`, note ? { note } : {}),
+  get: (strategyId: string, version: number) =>
+    api.get<StrategyVersionDetail>(`/strategies/configs/${strategyId}/versions/${version}`),
+  restore: (strategyId: string, version: number) =>
+    api.post<{ status: string; restored_version: number }>(
+      `/strategies/configs/${strategyId}/versions/${version}/restore`
+    ),
+}
+
+// ── AI 策略复盘报告 ──
+export type AIReviewScopeType = 'strategy' | 'bot'
+export interface AIReviewReport {
+  id: string
+  user_id: number
+  scope_type: AIReviewScopeType
+  scope_id: string
+  period_start: number
+  period_end: number
+  trades_count: number
+  total_pnl: number
+  win_rate: number
+  max_drawdown: number
+  report_text: string
+  model: string
+  status: 'pending' | 'done' | 'failed'
+  error: string
+  created_at: number
+}
+export const aiReviewApi = {
+  generate: (data: { scope_type: AIReviewScopeType; scope_id: string; days?: number }) =>
+    api.post<{ status: string; msg?: string; report: AIReviewReport }>('/ai/review', data, { timeout: TIMEOUTS.ai }),
+  listReports: (params?: { scope_type?: string; scope_id?: string; limit?: number }) =>
+    api.get<{ reports: AIReviewReport[] }>('/ai/review/reports', { params }).then((d) => d?.reports ?? []),
+  getReport: (id: string) =>
+    api.get<{ report: AIReviewReport }>(`/ai/review/reports/${id}`).then((d) => d?.report),
+}
+
+// ── 社交市场：开放信号入驻 + 利润分成 + 提现 ──
+export interface SocialProviderApply {
+  id: number
+  user_id: number
+  name: string
+  description: string
+  monthly_fee: number
+  profit_share_pct?: number | null
+  fee_mode: 'monthly' | 'profit_share' | 'hybrid'
+  apply_status: 'pending' | 'approved' | 'rejected'
+  apply_note?: string
+  approved_at?: number
+  created_at: number
+}
+export interface SocialEarnings {
+  today: number
+  total: number
+  payable: number
+  withdrawn: number
+  pending_withdrawals: number
+  available: number
+}
+export interface SocialWithdrawal {
+  id: string
+  amount: number
+  chain: string
+  address: string
+  tx_hash: string
+  status: 'pending' | 'paid' | 'rejected'
+  admin_note: string
+  created_at: number
+  processed_at?: number
+}
+export const socialMarketApi = {
+  apply: (data: { name: string; description: string; monthly_fee: number; profit_share_pct?: number | null }) =>
+    api.post<{ provider: SocialProviderApply }>('/social/providers/apply', data),
+  myProvider: () =>
+    api.get<{ provider: SocialProviderApply | null }>('/social/providers/my').then((d) => d ?? { provider: null }),
+  earnings: () => api.get<{ earnings: SocialEarnings }>('/social/earnings'),
+  withdraw: (data: { amount: number; chain: string; address: string }) =>
+    api.post<{ status: string }>('/social/earnings/withdraw', data),
+  withdrawals: () => api.get<{ withdrawals: SocialWithdrawal[] }>('/social/earnings/withdrawals'),
+  adminWithdrawals: (status?: string) =>
+    api
+      .get<{ withdrawals: SocialWithdrawal[] }>('/social/admin/withdrawals', { params: { status } })
+      .then((d) => d?.withdrawals ?? []),
+  adminPayWithdrawal: (id: string, txHash: string) =>
+    api.post<{ status: string }>(`/social/admin/withdrawals/${id}/pay`, { tx_hash: txHash }),
+  adminRejectWithdrawal: (id: string, note: string) =>
+    api.post<{ status: string }>(`/social/admin/withdrawals/${id}/reject`, { note }),
 }
 
 // ── Strategies ──
@@ -1130,6 +1238,12 @@ export const hyperoptApi = {
   delete: (id: string) => api.del<{ success: boolean }>(`/hyperopt/jobs/${id}`),
   spaces: (strategy?: string) =>
     api.get<{ spaces: HyperoptSpace[] }>('/hyperopt/spaces', { params: { strategy } }).then((d) => d?.spaces ?? []),
+  epochs: (params?: Record<string, string>) =>
+    api
+      .get<{ epochs: HyperoptEpoch[]; count: number }>('/hyperopt/epochs', { params })
+      .then((d) => d?.epochs ?? []),
+  epoch: (id: string) => api.get<HyperoptEpoch>(`/hyperopt/epochs/${id}`),
+  applyEpoch: (id: string) => api.post<HyperoptEpochApplyResult>(`/hyperopt/epochs/${id}/apply`),
 }
 
 // ── Notifications ──

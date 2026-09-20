@@ -1,6 +1,7 @@
 package social
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -38,24 +39,82 @@ func followerIDOrLegacy(c *gin.Context, legacy int) int {
 
 // RegisterRoutes registers social trading HTTP endpoints.
 func RegisterRoutes(r *gin.RouterGroup, engine *Engine) {
-	h := &handler{engine: engine}
+	market := NewMarketService()
+	// 重启恢复：已上架的市场 provider 重新注册进引擎（offset id），否则 follow 找不到。
+	if approved, err := market.ListApprovedProviders(); err == nil {
+		for _, p := range approved {
+			engine.RegisterProvider(MarketEngineID(p.ID), p.MonthlyFee, p.IsPublic)
+		}
+	}
+	h := &handler{engine: engine, market: market}
+	hm := &marketHandler{engine: engine, market: market}
 
 	r.GET("/providers", h.listProviders)
+	r.POST("/providers/apply", hm.applyProvider)
+	r.GET("/providers/my", hm.myProvider)
+	r.POST("/providers/:id/approve", middleware.AdminRequired(), hm.approveProvider)
+	r.POST("/providers/:id/reject", middleware.AdminRequired(), hm.rejectProvider)
 	r.POST("/providers/:id/follow", h.followProvider)
 	r.POST("/providers/:id/unfollow", h.unfollowProvider)
 	r.GET("/signals", h.listSignals)
 	r.POST("/signals", h.publishSignal)
 	r.GET("/followers/configs", h.getFollowerConfigs)
 	r.POST("/followers/configs", h.saveFollowerConfig)
+
+	// 利润分成与提现（开放信号市场）。
+	r.GET("/earnings", hm.earnings)
+	r.POST("/earnings/withdraw", hm.withdraw)
+	r.GET("/earnings/withdrawals", hm.myWithdrawals)
+	r.GET("/admin/withdrawals", middleware.AdminRequired(), hm.adminWithdrawals)
+	r.POST("/admin/withdrawals/:id/pay", middleware.AdminRequired(), hm.adminPayWithdrawal)
+	r.POST("/admin/withdrawals/:id/reject", middleware.AdminRequired(), hm.adminRejectWithdrawal)
 }
 
 type handler struct {
 	engine *Engine
+	market *MarketService
 }
 
 func (h *handler) listProviders(c *gin.Context) {
 	providers := h.engine.GetPublicProviders()
-	c.JSON(http.StatusOK, gin.H{"providers": providers})
+	out := gin.H{"providers": providers}
+	// 合并开放市场已上架 provider（offset id，与引擎内 catalog provider 区分）。
+	if approved, err := h.market.ListApprovedProviders(); err == nil && len(approved) > 0 {
+		marketProviders := make([]gin.H, 0, len(approved))
+		for _, p := range approved {
+			followers := 0
+			if stats := h.engine.GetProviderStats(MarketEngineID(p.ID)); stats != nil {
+				followers = stats.FollowerCount
+			}
+			item := gin.H{
+				"id":               MarketEngineID(p.ID),
+				"name":             p.Name,
+				"description":      p.Description,
+				"monthly_fee":      p.MonthlyFee,
+				"fee_mode":         p.FeeMode,
+				"profit_share_pct": p.ProfitSharePct,
+				"follower_count":   followers,
+			}
+			marketProviders = append(marketProviders, item)
+		}
+		out["market_providers"] = marketProviders
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+// resolveMarketProvider 解析市场 provider（offset id）：不存在或未上架返回错误。
+func (h *handler) resolveMarketProvider(c *gin.Context, engineID int) (*ProviderApply, error) {
+	p, err := h.market.GetProvider(MarketDBID(engineID))
+	if err != nil {
+		if IsNotFound(err) {
+			return nil, fmt.Errorf("provider %d not found", engineID)
+		}
+		return nil, err
+	}
+	if p.ApplyStatus != ApplyApproved {
+		return nil, fmt.Errorf("provider %d is not approved", engineID)
+	}
+	return p, nil
 }
 
 func (h *handler) followProvider(c *gin.Context) {
@@ -66,10 +125,26 @@ func (h *handler) followProvider(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "follower_id required"})
 		return
 	}
+	var marketProvider *ProviderApply
+	if dbID := MarketDBID(providerID); dbID > 0 {
+		p, err := h.resolveMarketProvider(c, providerID)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		marketProvider = p
+	}
 	cfg := DefaultCopyConfig(followerID, providerID)
 	if err := h.engine.Follow(cfg); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+	// 市场 provider：建立订阅关系（profit_share/hybrid 免费订阅，月费走既有订阅流程）。
+	if marketProvider != nil {
+		if err := h.market.UpsertSubscription(marketProvider.ID, int64(followerID), marketProvider.FeeMode); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
@@ -83,6 +158,12 @@ func (h *handler) unfollowProvider(c *gin.Context) {
 		return
 	}
 	h.engine.Unfollow(followerID, providerID)
+	if dbID := MarketDBID(providerID); dbID > 0 {
+		if err := h.market.CancelSubscription(dbID, int64(followerID)); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 

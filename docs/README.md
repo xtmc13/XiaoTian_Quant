@@ -26,11 +26,11 @@ Rust 撮合引擎 (价格-时间优先订单簿)
 
 ### 核心特性
 
-- **多交易所**: Binance, OKX, Coinbase, Gate.io, MEXC, Bybit, Kraken
+- **多交易所**: Binance, OKX, Bybit, Bitget, MEXC, Gate.io, Kraken, Coinbase, Alpaca, IBKR
 - **AI 策略生成**: 多 LLM 投票 + 7 Agent 协作管道
 - **回测引擎**: 事件驱动, 真实数据, 缓存, 分解分析
-- **超参优化**: Grid Search + 9 种损失函数
-- **风控系统**: 12 维度检查 + 5 种保护机制 + 熔断器
+- **超参优化**: Grid Search + CMA-ES + TPE + 差分进化，16 种损失函数 (Sharpe/Sortino/Calmar 等)
+- **风控系统**: 15 维度检查 + 5 种保护机制 + 熔断器
 - **策略社区**: 发布/评论/评分/排行榜
 - **通知**: Email, 飞书, 钉钉, Telegram Bot (14 命令)
 - **多语言**: 中英双语

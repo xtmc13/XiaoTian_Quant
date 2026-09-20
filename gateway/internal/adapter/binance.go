@@ -1231,3 +1231,199 @@ func (b *BinanceAdapter) GetLockedEarn() ([]EarnPosition, error) {
 	}
 	return result, nil
 }
+
+// ── Reported PnL Reconciliation（交易所回报 PnL 对账，A8.5）────────────────
+//
+// 交易所结算口径的已实现盈亏查询，供 reconcile 包通过窄接口独立核对本地记账。
+// 依据 Binance U 本位合约文档：
+//   - GET /fapi/v1/income 支持 incomeType=REALIZED_PNL，返回账户结算口径已实现盈亏
+//     流水（逐笔平仓盈亏，不含手续费——手续费是独立的 COMMISSION 流水），
+//     按 time 升序返回，limit 最大 1000；翻页用 startTime 递增直至空页/短页。
+//   - GET /fapi/v2/balance 返回逐资产钱包余额口径（balance/crossUnPnl），
+//     用作净值对账辅助（balance + crossUnPnl ≈ 保证金净值）。
+
+// maxIncomePages 分页防御上限：正常远不会到达，防止异常服务端导致死循环。
+const maxIncomePages = 50
+
+// ReportedPnLIncome 交易所结算口径的单条已实现盈亏流水
+// （GET /fapi/v1/income incomeType=REALIZED_PNL，字段与资金费流水同构）。
+type ReportedPnLIncome struct {
+	Symbol     string  `json:"symbol"`
+	IncomeType string  `json:"incomeType"`
+	Asset      string  `json:"asset"`
+	Income     float64 `json:"income"`
+	Time       int64   `json:"time"`
+	TradeID    string  `json:"tradeId"`
+	Info       string  `json:"info"`
+}
+
+// fapiBaseURL returns the USDT-M futures REST base URL. Mirrors baseURL()'s
+// BINANCE_REST_URL escape hatch: tests/self-hosted gateways may override via
+// BINANCE_FAPI_URL so the reported-PnL methods can be aimed at an httptest server.
+func (b *BinanceAdapter) fapiBaseURL() string {
+	if env := os.Getenv("BINANCE_FAPI_URL"); env != "" {
+		return env
+	}
+	return BinanceFuturesRestURL
+}
+
+// fapiSignedGet performs a signed GET against an fapi base and returns the raw
+// body, failing on non-200. Same wire format as futuresRawRequest
+// (binance_reconcile.go) but takes an explicit base URL + credentials so it can
+// run against an httptest server; the HMAC-SHA256 signing mirrors BinanceAdapter.sign.
+func fapiSignedGet(client *http.Client, baseURL, apiKey, secret, path string, params url.Values) ([]byte, error) {
+	params.Set("timestamp", fmt.Sprintf("%d", time.Now().UnixMilli()))
+	params.Set("recvWindow", "5000")
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(params.Encode()))
+	params.Set("signature", hex.EncodeToString(mac.Sum(nil)))
+
+	u, _ := url.Parse(baseURL + path)
+	u.RawQuery = params.Encode()
+	req, err := http.NewRequest("GET", u.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-MBX-APIKEY", apiKey)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("binance fapi GET %s: status %d: %s", path, resp.StatusCode, truncateStr(string(raw), 200))
+	}
+	return raw, nil
+}
+
+// getFapiIncomeRows pages through GET /fapi/v1/income: fixed page size, advancing
+// startTime just past the newest row of each page until a short or empty page ends
+// the scan. Standalone (not method-bound) on purpose so httptest servers can
+// exercise pagination and termination.
+//
+// 已知口径 caveat：翻页游标取末行 time+1，同一毫秒内的后续流水行会被跳过；
+// Binance 该接口同一 (symbol,incomeType) 下 time 实际唯一，可接受。
+func getFapiIncomeRows(client *http.Client, baseURL, apiKey, secret, incomeType, symbol string, startMs, endMs int64, pageLimit int) ([]map[string]any, error) {
+	if pageLimit <= 0 || pageLimit > 1000 {
+		pageLimit = 1000
+	}
+	var rows []map[string]any
+	cursor := startMs
+	for page := 0; page < maxIncomePages; page++ {
+		params := url.Values{}
+		if symbol != "" {
+			params.Set("symbol", symbol)
+		}
+		params.Set("incomeType", incomeType)
+		if cursor > 0 {
+			params.Set("startTime", strconv.FormatInt(cursor, 10))
+		}
+		if endMs > 0 {
+			params.Set("endTime", strconv.FormatInt(endMs, 10))
+		}
+		params.Set("limit", strconv.Itoa(pageLimit))
+
+		raw, err := fapiSignedGet(client, baseURL, apiKey, secret, "/fapi/v1/income", params)
+		if err != nil {
+			return nil, err
+		}
+		dec := json.NewDecoder(strings.NewReader(string(raw)))
+		dec.UseNumber()
+		var batch []map[string]any
+		if err := dec.Decode(&batch); err != nil {
+			return nil, fmt.Errorf("parse fapi income: %w", err)
+		}
+		if len(batch) == 0 {
+			break // 空页：窗口内无更多流水
+		}
+		rows = append(rows, batch...)
+		if len(batch) < pageLimit {
+			break // 短页：区间内已无更多流水（再翻一页必为空，提前终止）
+		}
+		next := int64Of(batch[len(batch)-1]["time"]) + 1
+		if next <= cursor {
+			break // 防御：游标未推进
+		}
+		cursor = next
+	}
+	return rows, nil
+}
+
+// GetRealizedPnLIncomes fetches exchange-reported realized PnL (settlement view)
+// for the USDT-M futures account over [startMs, endMs]. symbol empty = all
+// contracts. Paginates /fapi/v1/income?incomeType=REALIZED_PNL at limit 1000,
+// advancing startTime until an empty/short page. Fee-neutral by definition of the
+// REALIZED_PNL income type (fees are separate COMMISSION entries).
+func (b *BinanceAdapter) GetRealizedPnLIncomes(symbol string, startMs, endMs int64) ([]ReportedPnLIncome, error) {
+	rows, err := getFapiIncomeRows(b.httpClient, b.fapiBaseURL(), b.apiKey, b.secretKey, "REALIZED_PNL", symbol, startMs, endMs, 1000)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ReportedPnLIncome, 0, len(rows))
+	for _, m := range rows {
+		out = append(out, ReportedPnLIncome{
+			Symbol:     strOf(m["symbol"]),
+			IncomeType: strOf(m["incomeType"]),
+			Asset:      strOf(m["asset"]),
+			Income:     floatOf(m["income"]),
+			Time:       int64Of(m["time"]),
+			TradeID:    strOf(m["tradeId"]),
+			Info:       strOf(m["info"]),
+		})
+	}
+	return out, nil
+}
+
+// FuturesWalletBalanceRow is one asset row of GET /fapi/v2/balance (wallet-balance
+// accounting view of the USDT-M futures account).
+type FuturesWalletBalanceRow struct {
+	Asset              string  `json:"asset"`
+	Balance            float64 `json:"balance"` // 钱包余额（含已结算盈亏，不含未实现）
+	CrossWalletBalance float64 `json:"crossWalletBalance"`
+	CrossUnPnl         float64 `json:"crossUnPnl"`
+	AvailableBalance   float64 `json:"availableBalance"`
+	MaxWithdrawAmount  float64 `json:"maxWithdrawAmount"`
+	UpdateTime         int64   `json:"updateTime"`
+}
+
+// GetFuturesWalletBalance queries GET /fapi/v2/balance for a single asset (USDT
+// when asset is empty). Wallet balance + crossUnPnl gives the equity-style net
+// value used as a secondary balance reconciliation reference. Returns nil, nil
+// when the asset is absent from the account.
+func (b *BinanceAdapter) GetFuturesWalletBalance(asset string) (*FuturesWalletBalanceRow, error) {
+	if asset == "" {
+		asset = "USDT"
+	}
+	params := url.Values{}
+	params.Set("asset", asset)
+	raw, err := fapiSignedGet(b.httpClient, b.fapiBaseURL(), b.apiKey, b.secretKey, "/fapi/v2/balance", params)
+	if err != nil {
+		return nil, err
+	}
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	dec.UseNumber()
+	var arr []map[string]any
+	if err := dec.Decode(&arr); err != nil {
+		return nil, fmt.Errorf("parse fapi v2 balance: %w", err)
+	}
+	for _, m := range arr {
+		if strOf(m["asset"]) != asset {
+			continue
+		}
+		return &FuturesWalletBalanceRow{
+			Asset:              asset,
+			Balance:            floatOf(m["balance"]),
+			CrossWalletBalance: floatOf(m["crossWalletBalance"]),
+			CrossUnPnl:         floatOf(m["crossUnPnl"]),
+			AvailableBalance:   floatOf(m["availableBalance"]),
+			MaxWithdrawAmount:  floatOf(m["maxWithdrawAmount"]),
+			UpdateTime:         int64Of(m["updateTime"]),
+		}, nil
+	}
+	return nil, nil
+}

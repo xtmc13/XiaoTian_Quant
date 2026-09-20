@@ -1,5 +1,7 @@
 # 小天量化 三机器体系 完整实现方案
 
+> **状态说明**: Rust SignalExecutor 已完成开发（`engine/src/executor/`），但经决策**不进主链路**；统一执行由纯 Go 的 OMSBotExecutor（`gateway/internal/handler/bot_executor.go`）承担。`engine/` 保留为实验与基准参照，不参与主构建（`build.sh` 需显式 `BUILD_RUST=1` 才构建 Rust 引擎）。
+
 > **设计原则**: 信号生成层与信号执行层完全解耦  
 > **核心模块**: Rust SignalExecutor 统一执行  
 > **三类机器人**: Freqtrade(自主) / Cryptoleks(信号) / AI Alpha(AI决策)

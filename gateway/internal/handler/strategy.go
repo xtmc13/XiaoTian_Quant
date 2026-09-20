@@ -617,6 +617,10 @@ func UpdateStrategyConfig(c *gin.Context) {
 	}
 
 	item["updated_at"] = float64(time.Now().UnixMilli())
+	// 版本快照钩子：写库前自动打"更新前"快照（失败仅记日志，不影响更新）。
+	// 必须放在 SetStrategyConfig 之前——SetStrategyConfig 在 db 可用时本身
+	// 就直写 strategy_configs，晚于它快照拍到的就是新状态。
+	autoSnapshotStrategyVersion(id, "自动快照（更新前）")
 	store.SetStrategyConfig(id, item)
 	store.PersistStrategyConfigs()
 	persistStrategyConfigToDB(item)

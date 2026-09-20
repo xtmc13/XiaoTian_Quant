@@ -1,8 +1,8 @@
 // Package reconcile 实现 A8 对账体系：持仓对账（A8.1）、成交恢复（A8.2）、
-// 资金费对账（A8.3）与实盘偏差监控（A8.4）。
+// 资金费对账（A8.3）、实盘偏差监控（A8.4）与交易所回报 PnL 对账（A8.5）。
 //
 // 设计要点：
-//   - 四个任务由 Service 统一调度（默认 60s 一轮，可用 env/设置表覆盖），
+//   - 五个任务由 Service 统一调度（默认 60s 一轮，可用 env/设置表覆盖），
 //     生命周期跟随进程：Start 拉起调度循环，Stop 优雅退出（与 cmd/server 的
 //     优雅关闭顺序对齐，先 Stop 再关 store）。
 //   - 交易所访问走窄接口（PositionQuerier / OrderStatusQuerier / FundingQuerier），
@@ -15,6 +15,7 @@
 package reconcile
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"strconv"
@@ -36,14 +37,16 @@ const (
 
 // Config 对账服务配置。字段读取顺序：设置表覆盖 > 环境变量 > 默认值。
 type Config struct {
-	Interval         time.Duration // 主调度周期
-	SlippagePct      float64       // 滑点阈值（百分比）
-	StuckTimeout     time.Duration // 未成交超时
-	AutoFixPositions bool          // 持仓漂移自动修正（本地拉平到交易所）
-	MinDrift         float64       // 漂移死区
-	FundingLookbackH int           // 资金费拉取窗口（小时）
-	FillRecoveryMax  int           // 每轮成交恢复订单上限
-	Enabled          bool          // 总开关（默认开）
+	Interval                time.Duration // 主调度周期
+	SlippagePct             float64       // 滑点阈值（百分比）
+	StuckTimeout            time.Duration // 未成交超时
+	AutoFixPositions        bool          // 持仓漂移自动修正（本地拉平到交易所）
+	MinDrift                float64       // 漂移死区
+	FundingLookbackH        int           // 资金费拉取窗口（小时）
+	FillRecoveryMax         int           // 每轮成交恢复订单上限
+	ReportedPnLWindowH      int           // 回报 PnL 对账窗口（小时）
+	ReportedPnLThresholdPct float64       // 回报 PnL 差异告警阈值（百分比）
+	Enabled                 bool          // 总开关（默认开）
 }
 
 // envOrDefaultInt/Float 读环境变量（不存在/非法返回默认）。
@@ -96,14 +99,16 @@ func envDurationSec(key string, def time.Duration) time.Duration {
 // LoadConfig 组装配置：env 打底，设置表（reconcile_settings）覆盖。
 func LoadConfig(repo *store.ReconcileRepo) *Config {
 	cfg := &Config{
-		Interval:         envDurationSec("RECONCILE_INTERVAL_SEC", DefaultInterval),
-		SlippagePct:      envFloat("RECONCILE_SLIPPAGE_PCT", DefaultSlippagePct),
-		StuckTimeout:     envDurationSec("RECONCILE_STUCK_TIMEOUT_SEC", DefaultStuckTimeout),
-		AutoFixPositions: envBool("RECONCILE_AUTO_FIX", false),
-		MinDrift:         envFloat("RECONCILE_MIN_DRIFT", DefaultMinDrift),
-		FundingLookbackH: envInt("RECONCILE_FUNDING_LOOKBACK_H", DefaultFundingLookback),
-		FillRecoveryMax:  envInt("RECONCILE_FILL_RECOVERY_MAX", DefaultFillRecoveryLimit),
-		Enabled:          envBool("RECONCILE_ENABLED", true),
+		Interval:                envDurationSec("RECONCILE_INTERVAL_SEC", DefaultInterval),
+		SlippagePct:             envFloat("RECONCILE_SLIPPAGE_PCT", DefaultSlippagePct),
+		StuckTimeout:            envDurationSec("RECONCILE_STUCK_TIMEOUT_SEC", DefaultStuckTimeout),
+		AutoFixPositions:        envBool("RECONCILE_AUTO_FIX", false),
+		MinDrift:                envFloat("RECONCILE_MIN_DRIFT", DefaultMinDrift),
+		FundingLookbackH:        envInt("RECONCILE_FUNDING_LOOKBACK_H", DefaultFundingLookback),
+		FillRecoveryMax:         envInt("RECONCILE_FILL_RECOVERY_MAX", DefaultFillRecoveryLimit),
+		ReportedPnLWindowH:      envInt("RECONCILE_REPORTED_PNL_WINDOW_H", DefaultReportedPnLWindowH),
+		ReportedPnLThresholdPct: envFloat("RECONCILE_REPORTED_PNL_PCT", DefaultReportedPnLThresholdPct),
+		Enabled:                 envBool("RECONCILE_ENABLED", true),
 	}
 	applySettingOverrides(repo, cfg)
 	return cfg
@@ -134,6 +139,16 @@ func applySettingOverrides(repo *store.ReconcileRepo, cfg *Config) {
 			cfg.AutoFixPositions = b
 		}
 	}
+	if v := repo.GetSetting("reported_pnl_window_h"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.ReportedPnLWindowH = n
+		}
+	}
+	if v := repo.GetSetting("reported_pnl_pct"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+			cfg.ReportedPnLThresholdPct = f
+		}
+	}
 	if v := repo.GetSetting("enabled"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
 			cfg.Enabled = b
@@ -144,14 +159,16 @@ func applySettingOverrides(repo *store.ReconcileRepo, cfg *Config) {
 // ConfigSnapshot 返回当前生效配置的 JSON 友好形态（GET /api/reconcile/status 用）。
 func (c *Config) ConfigSnapshot() map[string]any {
 	return map[string]any{
-		"interval_sec":       int64(c.Interval / time.Second),
-		"slippage_pct":       c.SlippagePct,
-		"stuck_timeout_sec":  int64(c.StuckTimeout / time.Second),
-		"auto_fix":           c.AutoFixPositions,
-		"min_drift":          c.MinDrift,
-		"funding_lookback_h": c.FundingLookbackH,
-		"fill_recovery_max":  c.FillRecoveryMax,
-		"enabled":            c.Enabled,
+		"interval_sec":          int64(c.Interval / time.Second),
+		"slippage_pct":          c.SlippagePct,
+		"stuck_timeout_sec":     int64(c.StuckTimeout / time.Second),
+		"auto_fix":              c.AutoFixPositions,
+		"min_drift":             c.MinDrift,
+		"funding_lookback_h":    c.FundingLookbackH,
+		"fill_recovery_max":     c.FillRecoveryMax,
+		"reported_pnl_window_h": c.ReportedPnLWindowH,
+		"reported_pnl_pct":      c.ReportedPnLThresholdPct,
+		"enabled":               c.Enabled,
 	}
 }
 
@@ -184,13 +201,14 @@ type TaskRun struct {
 	Timestamp int64  `json:"timestamp"`
 }
 
-// Service 对账调度器：按周期驱动四个对账任务。
+// Service 对账调度器：按周期驱动五个对账任务。
 type Service struct {
 	repo *store.ReconcileRepo
 	pos  *PositionReconciler
 	fill *FillRecoverer
 	fund *FundingReconciler
 	dev  *DeviationMonitor
+	pnl  *ReportedPnLChecker
 
 	cfgMu sync.RWMutex
 	cfg   *Config
@@ -220,6 +238,11 @@ func NewService(repo *store.ReconcileRepo, exchangeFor func(name string) any) *S
 	s.fill = NewFillRecoverer(repo, exchangeFor)
 	s.fund = NewFundingReconciler(repo, exchangeFor)
 	s.dev = NewDeviationMonitor(repo, s.CurrentConfig)
+	s.pnl = NewReportedPnLChecker(repo, exchangeFor, func() time.Duration {
+		return time.Duration(s.CurrentConfig().ReportedPnLWindowH) * time.Hour
+	}, func() float64 {
+		return s.CurrentConfig().ReportedPnLThresholdPct
+	})
 	return s
 }
 
@@ -267,7 +290,7 @@ func (s *Service) loop() {
 	}
 }
 
-// runAll 串行跑四个任务；单任务 panic/耗时异常不得影响其他任务与主循环。
+// runAll 串行跑五个任务；单任务 panic/耗时异常不得影响其他任务与主循环。
 func (s *Service) runAll() {
 	if !s.CurrentConfig().Enabled {
 		return
@@ -280,6 +303,7 @@ func (s *Service) runAll() {
 		{"fills", s.fill.Run},
 		{"funding", s.fund.Run},
 		{"deviations", s.dev.Run},
+		{"reported_pnl", s.pnl.Run},
 	}
 	for _, t := range tasks {
 		s.runTask(t.name, t.run)
@@ -338,6 +362,30 @@ func (s *Service) IsRunning() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.running
+}
+
+// RunReportedPnL 手动触发一次回报 PnL 对账（days>0 时覆盖默认窗口；admin 接口用）。
+// 与周期任务同一条 runTask 记账路径：panic 兜住、结果进 lastRun。
+func (s *Service) RunReportedPnL(days int) (msg string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("reported_pnl panic: %v", r)
+			s.setRun("reported_pnl", TaskRun{Name: "reported_pnl", OK: false, Message: err.Error(), Timestamp: time.Now().UnixMilli()})
+		}
+	}()
+	window := time.Duration(s.CurrentConfig().ReportedPnLWindowH) * time.Hour
+	if days > 0 {
+		window = time.Duration(days) * 24 * time.Hour
+	}
+	msg, err = s.pnl.RunWithWindow(window)
+	rec := TaskRun{Name: "reported_pnl", OK: err == nil, Timestamp: time.Now().UnixMilli()}
+	if err != nil {
+		rec.Message = err.Error()
+	} else if msg != "" {
+		rec.Message = msg
+	}
+	s.setRun("reported_pnl", rec)
+	return msg, err
 }
 
 // 供任务内部取仓库（测试可替换）。

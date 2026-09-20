@@ -10,6 +10,7 @@ import {
   StrategyCreateFormSections,
   CREATE_SECTION_IDS,
 } from '@/components/strategy/StrategyCreateForm'
+import { StrategyVersionHistory } from '@/components/strategy/StrategyVersionHistory'
 import { apiPayloadToCraParams } from '@/components/strategy/CRAParamForm'
 
 const STEPS = [
@@ -181,6 +182,8 @@ export function CreateStrategyPage() {
           {/* 右侧表单区：现货/合约统一用原创建表单（CRA 全套参数，合约多杠杆/逐全仓） */}
           <div className="flex-1 space-y-4 min-w-0">
             <StrategyCreateFormSections form={form} />
+            {/* 历史版本（仅编辑模式）：更新前自动快照，支持手动快照/查看 JSON/恢复 */}
+            {editId && <StrategyVersionHistory strategyId={editId} />}
             <div className="flex items-center justify-end gap-2 pb-4">
               <span className="text-[11px] text-muted-foreground mr-auto">
                 预估总投入: <span className="text-foreground font-mono">${form.totalAddPosition.toFixed(2)}</span>

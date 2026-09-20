@@ -370,6 +370,101 @@ func (r *ReconcileRepo) ListFundingMirror(exchange string, limit int) ([]*Reconc
 	return out, nil
 }
 
+// ── Reported PnL checks（A8.5 交易所回报 PnL 对账）──
+
+// ReportedPnLCheckRecord xt_reported_pnl_checks 行：一次窗口对账结果。
+type ReportedPnLCheckRecord struct {
+	ID           int64   `json:"id"`
+	UserID       int64   `json:"user_id"` // 0=全账户行（本系统每所一份全局凭证，回报口径为账户级）
+	CredentialID string  `json:"credential_id"`
+	Exchange     string  `json:"exchange"`
+	Symbol       string  `json:"symbol"` // 空串=全账户
+	WindowStart  int64   `json:"window_start"`
+	WindowEnd    int64   `json:"window_end"`
+	LocalPNL     float64 `json:"local_pnl"`
+	ReportedPNL  float64 `json:"reported_pnl"`
+	Diff         float64 `json:"diff"`
+	DiffPct      float64 `json:"diff_pct"`
+	Status       string  `json:"status"` // ok|mismatch|error
+	Detail       string  `json:"detail"`
+	CheckedAt    int64   `json:"checked_at"`
+}
+
+// InsertReportedPnLCheck 落一条回报 PnL 对账记录（每轮每所一行，保留历史轨迹，不做 upsert）。
+func (r *ReconcileRepo) InsertReportedPnLCheck(rec *ReportedPnLCheckRecord) (int64, error) {
+	if rec.CheckedAt == 0 {
+		rec.CheckedAt = time.Now().UnixMilli()
+	}
+	res, err := db.Exec(`INSERT INTO xt_reported_pnl_checks
+		(user_id, credential_id, exchange, symbol, window_start, window_end, local_pnl, reported_pnl, diff, diff_pct, status, detail, checked_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		rec.UserID, rec.CredentialID, rec.Exchange, rec.Symbol, rec.WindowStart, rec.WindowEnd,
+		rec.LocalPNL, rec.ReportedPNL, rec.Diff, rec.DiffPct, rec.Status, rec.Detail, rec.CheckedAt)
+	if err != nil {
+		return 0, err
+	}
+	id, _ := res.LastInsertId()
+	return id, nil
+}
+
+const reportedPnLCheckCols = `id, user_id, credential_id, exchange, symbol, window_start, window_end, local_pnl, reported_pnl, diff, diff_pct, status, detail, checked_at`
+
+func scanReportedPnLCheck(row interface{ Scan(...any) error }) (*ReportedPnLCheckRecord, error) {
+	var c ReportedPnLCheckRecord
+	err := row.Scan(&c.ID, &c.UserID, &c.CredentialID, &c.Exchange, &c.Symbol, &c.WindowStart, &c.WindowEnd,
+		&c.LocalPNL, &c.ReportedPNL, &c.Diff, &c.DiffPct, &c.Status, &c.Detail, &c.CheckedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+// ListReportedPnLChecks 列回报 PnL 对账记录：exchange/status 过滤、checked_at>=sinceMs（days 窗口），
+// userID>0 时只取该用户（+无属主全账户行）。新→旧。
+func (r *ReconcileRepo) ListReportedPnLChecks(userID int64, exchange, status string, sinceMs int64, limit, offset int) ([]*ReportedPnLCheckRecord, error) {
+	query := `SELECT ` + reportedPnLCheckCols + ` FROM xt_reported_pnl_checks WHERE 1=1`
+	var args []any
+	if userID > 0 {
+		query += ` AND (user_id=? OR user_id=0)`
+		args = append(args, userID)
+	}
+	if exchange != "" {
+		query += ` AND exchange=?`
+		args = append(args, exchange)
+	}
+	if status != "" {
+		query += ` AND status=?`
+		args = append(args, status)
+	}
+	if sinceMs > 0 {
+		query += ` AND checked_at>=?`
+		args = append(args, sinceMs)
+	}
+	query += ` ORDER BY checked_at DESC`
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+		if offset > 0 {
+			query += ` OFFSET ?`
+			args = append(args, offset)
+		}
+	}
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*ReportedPnLCheckRecord
+	for rows.Next() {
+		c, err := scanReportedPnLCheck(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, nil
+}
+
 // ── Settings ──
 
 // GetSetting 读配置值（不存在返回空串）。

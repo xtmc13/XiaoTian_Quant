@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
-import { Zap, History, Search } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { Zap, History, Search, Users } from 'lucide-react'
 import { aiApi, marketApi } from '@/lib/api'
 import { toast } from '@/lib/useToast'
 import type { AIAnalysisResult, AIModelAnalysis, TickerSnapshot } from '@/types'
@@ -9,6 +10,7 @@ import { HeatmapSection } from './components/HeatmapSection'
 import { EconomicCalendar } from './components/EconomicCalendar'
 import { AnalysisPlaceholder, AnalysisResultView } from './components/AnalysisPanel'
 import { WatchlistPanel } from './components/WatchlistPanel'
+import { AIReviewPanel } from '@/components/ai/AIReviewPanel'
 import { AddStockModal, HistoryModal } from './components/Modals'
 
 import { MARKET_NAMES } from './constants'
@@ -23,6 +25,8 @@ import type {
 } from './types'
 
 export function AI() {
+  const navigate = useNavigate()
+
   /* -- Market data states -- */
   const [loadingMarket, setLoadingMarket] = useState(false)
   const [loadingSentiment, setLoadingSentiment] = useState(false)
@@ -575,6 +579,12 @@ export function AI() {
             >
               <History className="w-3.5 h-3.5" /> 历史
             </button>
+            <button
+              onClick={() => navigate('/ai/discussion-room')}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-quant-card border border-quant-border text-foreground text-xs font-medium hover:border-quant-gold/40 transition-colors"
+            >
+              <Users className="w-3.5 h-3.5" /> 讨论室
+            </button>
           </div>
 
           <div className="flex-1 overflow-auto p-4 min-h-0">
@@ -624,6 +634,8 @@ export function AI() {
         onClose={() => setShowHistoryModal(false)}
         onSelect={handleLoadHistory}
       />
+
+      <AIReviewPanel />
     </div>
   )
 }

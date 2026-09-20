@@ -154,6 +154,28 @@ export interface HyperoptSpace {
   choices?: string[]
 }
 
+export interface HyperoptEpoch {
+  id: string
+  user_id: number
+  job_id: string
+  strategy_id: string
+  trial_id: number
+  params: Record<string, unknown>
+  metrics: Record<string, number>
+  loss: number
+  loss_name: string
+  applied: boolean
+  applied_at?: number
+  created_at: number
+}
+
+export interface HyperoptEpochApplyResult {
+  status: string
+  epoch_id: string
+  strategy_id: string
+  diff: Record<string, { old: unknown; new: unknown }>
+}
+
 export interface BacktestRequest {
   strategy_id?: string
   symbol: string

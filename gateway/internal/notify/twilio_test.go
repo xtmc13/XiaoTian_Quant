@@ -161,3 +161,91 @@ func TestSMSTextTruncation(t *testing.T) {
 		t.Fatalf("short message must not be truncated: %q", short)
 	}
 }
+
+// TestTwilioChannelRequestConstruction 补强请求构造断言：POST 方法、表单
+// Content-Type、完整 endpoint（含 account SID）、Basic Auth 与表单字段。
+func TestTwilioChannelRequestConstruction(t *testing.T) {
+	var gotMethod, gotCT, gotPath, gotAuth string
+	var gotForm url.Values
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotCT = r.Header.Get("Content-Type")
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		body, _ := io.ReadAll(r.Body)
+		gotForm, _ = url.ParseQuery(string(body))
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"sid":"SM_construction"}`))
+	}))
+	defer srv.Close()
+	twilioAPIBase = srv.URL
+	defer func() { twilioAPIBase = "" }()
+
+	ch := &TwilioChannel{accountSID: "AC_construction", authToken: "tk_secret",
+		fromNumber: "+15550001111", defaultTo: "+8613900000000", enabled: true}
+	if err := ch.Send(Message{Title: "Order Paid", Content: "plan monthly activated", Level: "INFO"}); err != nil {
+		t.Fatalf("send failed: %v", err)
+	}
+
+	if gotMethod != http.MethodPost {
+		t.Fatalf("must be POST, got %s", gotMethod)
+	}
+	if gotCT != "application/x-www-form-urlencoded" {
+		t.Fatalf("bad content-type: %q", gotCT)
+	}
+	wantPath := "/2010-04-01/Accounts/AC_construction/Messages.json"
+	if gotPath != wantPath {
+		t.Fatalf("bad endpoint: %q, want %q", gotPath, wantPath)
+	}
+	wantAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte("AC_construction:tk_secret"))
+	if gotAuth != wantAuth {
+		t.Fatalf("bad basic auth header: %q", gotAuth)
+	}
+	if gotForm.Get("To") != "+8613900000000" || gotForm.Get("From") != "+15550001111" {
+		t.Fatalf("bad to/from form: %+v", gotForm)
+	}
+	if body := gotForm.Get("Body"); !strings.Contains(body, "Order Paid") {
+		t.Fatalf("body form missing content: %q", body)
+	}
+}
+
+// TestTwilioChannelNonJSONError 非 JSON 错误体（网关 5xx/HTML）时错误信息
+// 应回退为 status + 原始 body 片段，而不是静默成功或空错误。
+func TestTwilioChannelNonJSONError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`<html>upstream down</html>`))
+	}))
+	defer srv.Close()
+	twilioAPIBase = srv.URL
+	defer func() { twilioAPIBase = "" }()
+
+	ch := &TwilioChannel{accountSID: "AC", authToken: "tk", fromNumber: "+1", defaultTo: "+8613900000000", enabled: true}
+	err := ch.Send(Message{Title: "t", Content: "c", Level: "INFO"})
+	if err == nil {
+		t.Fatal("non-2xx must return error")
+	}
+	if !strings.Contains(err.Error(), "502") || !strings.Contains(err.Error(), "upstream down") {
+		t.Fatalf("error should carry status and raw body, got %v", err)
+	}
+	if strings.Contains(err.Error(), "(code 0)") {
+		t.Fatalf("must not append empty twilio code: %v", err)
+	}
+}
+
+// TestTwilioChannelTransportError 上游不可达（连接拒绝）时必须包装并上报错误。
+func TestTwilioChannelTransportError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	url := srv.URL
+	srv.Close() // 立即关闭 → 连接被拒绝
+	twilioAPIBase = url
+	defer func() { twilioAPIBase = "" }()
+
+	ch := &TwilioChannel{accountSID: "AC", authToken: "tk", fromNumber: "+1", defaultTo: "+8613900000000", enabled: true,
+		httpClient: &http.Client{Timeout: 2 * time.Second}}
+	if err := ch.Send(Message{Title: "t", Content: "c", Level: "INFO"}); err == nil ||
+		!strings.HasPrefix(err.Error(), "twilio: ") {
+		t.Fatalf("transport error must be wrapped with twilio prefix, got %v", err)
+	}
+}

@@ -38,19 +38,19 @@ func (p ParamType) String() string {
 type ParamSpace struct {
 	Name    string
 	Type    ParamType
-	Min     float64 // for Int/Float
-	Max     float64 // for Int/Float
-	Step    float64 // for Int/Float
+	Min     float64  // for Int/Float
+	Max     float64  // for Int/Float
+	Step    float64  // for Int/Float
 	Options []string // for Categorical
 }
 
 // TrialResult holds the result of a single optimization trial.
 type TrialResult struct {
-	ID      int                `json:"id"`
-	Params  map[string]any     `json:"params"`
-	Metrics *BacktestMetrics   `json:"metrics"`
-	Score   float64            `json:"score"` // lower = better (loss)
-	Elapsed time.Duration      `json:"elapsed"`
+	ID      int              `json:"id"`
+	Params  map[string]any   `json:"params"`
+	Metrics *BacktestMetrics `json:"metrics"`
+	Score   float64          `json:"score"` // lower = better (loss)
+	Elapsed time.Duration    `json:"elapsed"`
 }
 
 // BacktestMetrics holds the performance metrics for a backtest run.
@@ -65,11 +65,15 @@ type BacktestMetrics struct {
 	TotalTrades    int     `json:"total_trades"`
 	AvgTradePct    float64 `json:"avg_trade_pct"`
 	// Extended metrics for advanced loss functions
-	AvgWinPct   float64 `json:"avg_win_pct,omitempty"`   // average winning trade return
-	AvgLossPct  float64 `json:"avg_loss_pct,omitempty"`  // average losing trade return (negative)
-	TradeStdDev float64 `json:"trade_stddev,omitempty"`  // std dev of individual trade returns
-	GrossProfit float64 `json:"gross_profit,omitempty"`  // sum of all winning trades
-	GrossLoss   float64 `json:"gross_loss,omitempty"`    // sum of all losing trades (negative)
+	AvgWinPct   float64 `json:"avg_win_pct,omitempty"`  // average winning trade return
+	AvgLossPct  float64 `json:"avg_loss_pct,omitempty"` // average losing trade return (negative)
+	TradeStdDev float64 `json:"trade_stddev,omitempty"` // std dev of individual trade returns
+	GrossProfit float64 `json:"gross_profit,omitempty"` // sum of all winning trades
+	GrossLoss   float64 `json:"gross_loss,omitempty"`   // sum of all losing trades (negative)
+	// AvgDurationMin is the average holding duration in minutes; populated by the
+	// backtest runner (AvgHoldingMs) when available. LossShortTradeDur uses it
+	// to penalize overly short holding periods.
+	AvgDurationMin float64 `json:"avg_duration_min,omitempty"`
 }
 
 // LossFunc computes a loss score from backtest metrics.
@@ -253,11 +257,18 @@ func LossSQN(m *BacktestMetrics) float64 {
 	return -sqn
 }
 
-// LossShortTradeDur penalizes strategies with very short average trade duration.
-// This helps avoid overfitting to micro-movements.
+// LossShortTradeDur penalizes strategies with overly short average holding
+// duration (freqtrade ShortTradeDurHyperOptLoss): when AvgDurationMin is
+// populated the profit is discounted by min(1, dur/30min); otherwise it
+// degrades to a Sharpe-based proxy for lack of a duration field.
 func LossShortTradeDur(m *BacktestMetrics) float64 {
 	if m == nil || m.TotalTrades == 0 {
 		return math.Inf(1)
+	}
+	if m.AvgDurationMin > 0 {
+		const minDurMin = 30.0 // target minimum average holding: 30 minutes
+		scale := math.Min(1.0, m.AvgDurationMin/minDurMin)
+		return -m.TotalReturnPct * scale
 	}
 	if m.TotalTrades > 100 && m.TotalReturnPct < 10 {
 		return -m.SharpeRatio * 0.5
@@ -277,7 +288,10 @@ func LossSortinoDaily(m *BacktestMetrics) float64 {
 	return -sortino * 1.2
 }
 
-// LossSharpeDaily uses daily Sharpe ratio.
+// LossSharpeDaily approximates freqtrade's SharpeHyperOptLossDaily.
+// BacktestMetrics has no daily return series, so the engine's equity-curve
+// Sharpe/Sortino are used as a structured proxy (mean of the two when Sortino
+// is available) — a documented approximation, not a true daily Sharpe.
 func LossSharpeDaily(m *BacktestMetrics) float64 {
 	if m == nil || m.TotalTrades == 0 {
 		return math.Inf(1)
@@ -286,7 +300,10 @@ func LossSharpeDaily(m *BacktestMetrics) float64 {
 	if sharpe <= 0 {
 		return math.Inf(1)
 	}
-	return -sharpe * 1.1
+	if m.SortinoRatio > 0 {
+		sharpe = (sharpe + m.SortinoRatio) / 2.0
+	}
+	return -sharpe
 }
 
 // LossMaxDrawdownPerPair penalizes max drawdown per trading pair.
@@ -300,6 +317,52 @@ func LossMaxDrawdownPerPair(m *BacktestMetrics) float64 {
 	}
 	penalty := math.Pow(dd/10, 2)
 	return penalty - m.TotalReturnPct*0.1
+}
+
+// ── Freqtrade-style Loss Functions (Step 2) ────────────────────
+
+// LossOnlyProfit is the drawdown-weighted variant of freqtrade's
+// OnlyProfitHyperOptLoss: pure total return with a fixed 0.5 weight on drawdown.
+func LossOnlyProfit(m *BacktestMetrics) float64 {
+	if m == nil || m.TotalTrades == 0 {
+		return math.Inf(1)
+	}
+	const ddWeight = 0.5
+	return -(m.TotalReturnPct) + ddWeight*m.MaxDrawdownPct
+}
+
+// LossMaxDrawdownAbs minimizes absolute drawdown; since BacktestMetrics only
+// carries percent drawdown (no absolute capital), the pct value is used as a
+// monotonic proxy — valid within one job where initial capital is fixed.
+func LossMaxDrawdownAbs(m *BacktestMetrics) float64 {
+	if m == nil {
+		return math.Inf(1)
+	}
+	return m.MaxDrawdownPct
+}
+
+// LossMaxDrawdownRel minimizes drawdown relative to the equity high-water mark:
+// dd%/(1-dd%) compounds the penalty as drawdown deepens, heavier than the abs
+// variant once dd exceeds ~15% (freqtrade MaxDrawDownRelative shape).
+func LossMaxDrawdownRel(m *BacktestMetrics) float64 {
+	if m == nil {
+		return math.Inf(1)
+	}
+	dd := m.MaxDrawdownPct
+	if dd >= 100.0 {
+		return math.Inf(1)
+	}
+	return dd / (1.0 - dd/100.0)
+}
+
+// LossProfitDrawdownWeighted combines return and drawdown as -profit + dd²/10:
+// a weighted combo whose drawdown weight grows with drawdown size, distinct
+// from the linear profit_drawdown ratio variant registered below.
+func LossProfitDrawdownWeighted(m *BacktestMetrics) float64 {
+	if m == nil || m.TotalTrades == 0 {
+		return math.Inf(1)
+	}
+	return -(m.TotalReturnPct) + m.MaxDrawdownPct*m.MaxDrawdownPct/10.0
 }
 
 // GetLossFunc returns a loss function by name.
@@ -337,6 +400,14 @@ func GetLossFunc(name string) LossFunc {
 		return LossSharpeDaily
 	case "max_drawdown_per_pair":
 		return LossMaxDrawdownPerPair
+	case "only_profit":
+		return LossOnlyProfit
+	case "max_drawdown_abs":
+		return LossMaxDrawdownAbs
+	case "max_drawdown_rel":
+		return LossMaxDrawdownRel
+	case "profit_drawdown_weighted":
+		return LossProfitDrawdownWeighted
 	default:
 		return LossSharpe
 	}
@@ -349,6 +420,7 @@ func LossFuncNames() []string {
 		"profit", "win_rate", "expectancy", "multi_metric",
 		"profit_drawdown", "profit_factor", "risk_reward", "sqn",
 		"short_trade_dur", "sortino_daily", "sharpe_daily", "max_drawdown_per_pair",
+		"only_profit", "max_drawdown_abs", "max_drawdown_rel", "profit_drawdown_weighted",
 	}
 }
 
@@ -356,11 +428,11 @@ func LossFuncNames() []string {
 
 // OptimizerConfig configures the optimizer.
 type OptimizerConfig struct {
-	MaxTrials  int           `json:"max_trials"`  // 0 = unlimited
-	Timeout    time.Duration `json:"timeout"`      // 0 = no timeout
-	LossFunc   LossFunc      `json:"-"`            // loss function
-	LossName   string        `json:"loss_name"`    // name of the loss function
-	Concurrent int           `json:"concurrent"`    // number of parallel trials (1 = sequential)
+	MaxTrials  int           `json:"max_trials"` // 0 = unlimited
+	Timeout    time.Duration `json:"timeout"`    // 0 = no timeout
+	LossFunc   LossFunc      `json:"-"`          // loss function
+	LossName   string        `json:"loss_name"`  // name of the loss function
+	Concurrent int           `json:"concurrent"` // number of parallel trials (1 = sequential)
 }
 
 // DefaultOptimizerConfig returns sensible defaults.

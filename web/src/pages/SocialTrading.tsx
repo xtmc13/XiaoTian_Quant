@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils'
 import { socialApi } from '@/lib/api'
 import { useToastStore } from '@/stores/toastStore'
 import { useAuthStore } from '@/stores/authStore'
+import ProfitSharePanel from '@/components/social/ProfitSharePanel'
 
 interface Provider {
   provider_id: number
@@ -362,6 +363,7 @@ export function SocialTrading() {
           </div>
         </div>
       )}
+      <ProfitSharePanel />
     </div>
   )
 }

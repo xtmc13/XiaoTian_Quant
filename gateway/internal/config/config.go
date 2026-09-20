@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -411,6 +412,11 @@ func Load(path string) (*Config, error) {
 		cfg.Cache.RedisURL = v
 	}
 
+	// Risk 参数启动校验：只告警不拦截（paper 环境在用放宽值）。
+	for _, w := range cfg.RiskWarnings() {
+		log.Printf("[WARN] 启动校验: %s", w)
+	}
+
 	mu.Lock()
 	global = cfg
 	mu.Unlock()
@@ -508,6 +514,21 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("invalid server mode: %s", c.Server.Mode)
 	}
 	return nil
+}
+
+// RiskWarnings 校验 risk.* 参数，返回非实盘安全值的告警列表（纯函数，不
+// 拒绝启动——paper 环境允许放宽值，由启动日志与 /trading/unlock 硬闸兜底）。
+// C2.1 硬校验（2026-09-20）：position_limit_pct 曾被调到 2500 使仓位风控
+// 形同虚设，"开实盘前回调"从此前口头约定升级为启动 WARN + 解锁硬拒绝。
+// 注意：原始值必须保留（不做钳制），实盘解锁闸依赖它识别"配置未回调"。
+func (c *Config) RiskWarnings() []string {
+	var warns []string
+	if c.Risk.PositionLimit > 100 {
+		warns = append(warns, fmt.Sprintf(
+			"risk.position_limit_pct=%v 为 paper 模式放宽值，非实盘安全值；开实盘前必须回调到 ≤100，或设置 XIAOTIAN_ALLOW_RELAXED_RISK=1 走实盘解锁逃逸开关",
+			c.Risk.PositionLimit))
+	}
+	return warns
 }
 
 // MaskedString returns a JSON-like string with sensitive values redacted.

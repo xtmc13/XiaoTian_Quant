@@ -69,9 +69,13 @@ export interface AIMultiAgentRequest {
 }
 
 export interface AIMultiAgentResponse {
-  consensus: 'bullish' | 'bearish' | 'neutral'
-  confidence: number
-  votes: { agent: string; sentiment: 'bullish' | 'bearish' | 'neutral'; reasoning: string }[]
+  status: 'ok' | 'error'
+  msg?: string
+  strategy_name?: string
+  strategy_code?: string
+  description?: string
+  agents?: Record<string, string>
+  debate_summary?: string
 }
 
 export interface AIChatResponse {

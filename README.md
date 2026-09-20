@@ -2,7 +2,7 @@
 
 > AI 驱动的多资产量化交易平台 — Go 网关 + React 前端 + 内置撮合引擎（纯 Go 默认，Rust FFI 可选），事件驱动，回测实盘一体。
 >
-> **v3.0 新增**: 三机器体系(策略/信号/AI) · ML 预测管线(Go 原生推理 + Python CLI 训练) · 配置API · 纯 Go 本地推理 · 社交交易 · 链上数据 · 高级订单(OCO/冰山/跟踪) · 套利监控 · Hyperopt 参数优化 · Protection 风控 · Pairlist 交易对筛选 · 策略社区 · Admin 面板 · Indicator IDE · Telegram/Discord Bot · 9 交易所适配器 · i18n 多语言 · OAuth 登录 · MFA 两步验证 · Billing 会员(USDT 链上核验 + Stripe) · 凭证加密 · TensorBoard 可视化
+> **v3.0 新增**: 三机器体系(策略/信号/AI) · ML 预测管线(Go 原生推理 + Python CLI 训练) · 配置API · 纯 Go 本地推理 · 社交交易 · 链上数据 · 高级订单(OCO/冰山/跟踪) · 套利监控 · Hyperopt 参数优化 · Protection 风控 · Pairlist 交易对筛选 · 策略社区 · Admin 面板 · Indicator IDE · Telegram/Discord Bot · 10 交易所适配器 · i18n 多语言 · OAuth 登录 · MFA 两步验证 · Billing 会员(USDT 链上核验 + Stripe) · 凭证加密 · TensorBoard 可视化
 
 ## 架构概览
 
@@ -13,13 +13,13 @@
 └───────────────────────────┬─────────────────────────────────┘
                             │ HTTP REST + WebSocket
 ┌───────────────────────────▼─────────────────────────────────┐
-│                  Go 网关 (Gin) — 376 API 路由                  │
+│                  Go 网关 (Gin) — 408 API 路由                  │
 │  ┌──────────┬──────────┬──────────┬──────────┬──────────┐  │
 │  │ 策略引擎  │ AI 服务  │ 回测引擎  │ 风控系统  │ 配置API  │  │
 │  ├──────────┼──────────┼──────────┼──────────┼──────────┤  │
 │  │ 订单管理  │ 持仓管理  │ 通知服务  │ 监控告警  │ 机器人   │  │
 │  └──────────┴──────────┴──────────┴──────────┴──────────┘  │
-│          交易所适配器 (Binance 深度 + 8 家基础 REST)        │
+│          交易所适配器 (Binance 深度 + 9 家基础 REST)         │
 │              SQLite · Redis (可选)                            │
 └───────────────────────────┬─────────────────────────────────┘
                             │ 纯 Go 撮合（默认）· Rust FFI 可选
@@ -32,7 +32,7 @@
 | 层 | 语言 | 职责 |
 |---|------|------|
 | **Web 前端** | React 19 + TypeScript + Vite | 仪表盘、K 线图表、AI 策略生成、回测面板、交易下单、资产管理、三机器管理 |
-| **Go 网关** | Go 1.25 + Gin 框架 | REST API (376 路由)、策略引擎、交易所适配、回测、风控、WebSocket 推送、通知、配置API |
+| **Go 网关** | Go 1.25 + Gin 框架 | REST API (408 路由)、策略引擎、交易所适配、回测、风控、WebSocket 推送、通知、配置API |
 | **Rust 引擎** | Rust (cdylib) | 高性能订单簿撮合，通过 FFI 被 Go 网关调用 |
 
 **辅助工具 (Python CLI)**：模型训练 (`sandbox/train.py`) 和指标沙箱执行 (`sandbox/main.py`)，非常驻服务，手动触发。
@@ -78,6 +78,7 @@ xiaotian_quant/
 │   │   │   ├── mexc.go             #   MEXC (基础 REST)
 │   │   │   ├── bitget.go           #   Bitget (基础 REST)
 │   │   │   ├── alpaca.go           #   Alpaca (基础 REST)
+│   │   │   ├── ibkr.go             #   IBKR (基础 REST)
 │   │   │   ├── matching.go         #   撮合引擎 FFI 桥接 + 纯Go fallback
 │   │   │   ├── cgo_bridge.go       #   CGo 动态库加载
 │   │   │   └── helpers.go          #   通用辅助函数 (stubError 等)
@@ -114,7 +115,7 @@ xiaotian_quant/
 │   │   ├── order/                  # 订单管理系统 (OMS)
 │   │   ├── paper/                  # 模拟交易
 │   │   ├── portfolio/              # 组合管理
-│   │   ├── risk/                   # 风控引擎 (12 维度)
+│   │   ├── risk/                   # 风控引擎 (15 维度)
 │   │   ├── service/                # 业务服务层
 │   │   ├── store/                  # SQLite 存储层
 │   │   ├── strategy/               # 策略运行时
@@ -323,7 +324,7 @@ REDIS_URL=redis://localhost:6379
 ### 交易执行
 - **交易所支持**:
   - 深度实现: **币安** (REST + WebSocket, 现货/合约/资金/理财)
-  - 基础 REST: OKX · Bybit · Coinbase · Kraken · Gate.io · MEXC · Bitget · Alpaca
+  - 基础 REST: OKX · Bybit · Coinbase · Kraken · Gate.io · MEXC · Bitget · Alpaca · IBKR
 - **统一接口**: REST 下单 + WebSocket 实时数据推送
 - **订单类型**: 市价单 · 限价单 · 止损单 · OCO · 冰山订单 · 跟踪止损 · 策略委托（Bracket）
 - **高级订单管理**: 条件委托、冰山委托、OCO、Bracket 一体化管理
@@ -349,7 +350,7 @@ REDIS_URL=redis://localhost:6379
 - **费用建模**: 手续费 + 滑点
 - **指标输出**: 夏普比率 · 最大回撤 · 胜率 · 盈亏比 · 收益率曲线 · VaR · CVaR
 
-### 风控系统 (12 维度)
+### 风控系统 (15 维度)
 
 | 维度 | 说明 |
 |------|------|
@@ -365,6 +366,9 @@ REDIS_URL=redis://localhost:6379
 | 价格偏离 | 市价偏离熔断 |
 | 波动率 | 异常波动限制 |
 | 熔断器 | 短时间内大量错误触发熔断 |
+| 交易对黑名单 | 黑名单交易对禁止下单 |
+| 交易时间窗口 | 限定可交易时段 |
+| 价格突变 | 买卖价差异常(插针)熔断 |
 
 ### AI 集成
 - **多模型支持**: DeepSeek · OpenAI GPT-4o · Anthropic Claude
@@ -386,7 +390,7 @@ REDIS_URL=redis://localhost:6379
 | **回测** | 参数配置 · 结果图表 · 交易明细 · 指标分析 · Tick 级回测 |
 | **资产** | 持仓列表 · 盈亏明细 · 历史收益 · 多账户聚合 · 收益日历 |
 | **机器人** | 机器人中心：现货/合约策略 · 网格 · 马丁 · 华尔街 · AI 机器人统一卡片管理 + AI 机器人市场订阅 |
-| **风控中心** | 12 维度风控配置 · 熔断状态 · 交易对保护 |
+| **风控中心** | 15 维度风控配置 · 熔断状态 · 交易对保护 |
 | **交易对筛选** | 多维度 Pairlist 过滤 · 成交量/波动率排序 |
 | **高级订单** | OCO · 冰山 · Bracket · 跟踪止损 一体化管理 |
 | **套利监控** | 多交易所价差实时检测 · 历史套利机会 |
@@ -490,7 +494,7 @@ REDIS_URL=redis://localhost:6379
 
 ## 风控说明
 
-平台内置 12 维度风控引擎，每次下单前逐项检查：
+平台内置 15 维度风控引擎，每次下单前逐项检查：
 
 1. 价格偏离校验 (防止插针/异常价格成交)
 2. 波动率熔断 (极端行情暂停)

@@ -85,8 +85,8 @@ func TestExpandParamCategorical(t *testing.T) {
 
 func TestGridSize(t *testing.T) {
 	spaces := []ParamSpace{
-		{Name: "fast", Type: ParamInt, Min: 5, Max: 15, Step: 5},     // 3 values
-		{Name: "slow", Type: ParamInt, Min: 20, Max: 30, Step: 10},     // 2 values
+		{Name: "fast", Type: ParamInt, Min: 5, Max: 15, Step: 5},           // 3 values
+		{Name: "slow", Type: ParamInt, Min: 20, Max: 30, Step: 10},         // 2 values
 		{Name: "stop", Type: ParamFloat, Min: 0.01, Max: 0.03, Step: 0.02}, // 2 values
 	}
 	o := NewGridOptimizer(DefaultOptimizerConfig(), spaces, mockEvaluator)
@@ -95,7 +95,7 @@ func TestGridSize(t *testing.T) {
 
 func TestGridCartesianProduct(t *testing.T) {
 	spaces := []ParamSpace{
-		{Name: "a", Type: ParamInt, Min: 1, Max: 2, Step: 1},    // 1, 2
+		{Name: "a", Type: ParamInt, Min: 1, Max: 2, Step: 1},             // 1, 2
 		{Name: "b", Type: ParamCategorical, Options: []string{"x", "y"}}, // x, y
 	}
 	o := NewGridOptimizer(DefaultOptimizerConfig(), spaces, mockEvaluator)
@@ -157,8 +157,8 @@ func TestOptimizerBest(t *testing.T) {
 
 func TestOptimizerMaxTrials(t *testing.T) {
 	spaces := []ParamSpace{
-		{Name: "p1", Type: ParamInt, Min: 1, Max: 10, Step: 1},  // 10 values
-		{Name: "p2", Type: ParamInt, Min: 1, Max: 10, Step: 1},  // 10 values = 100 total
+		{Name: "p1", Type: ParamInt, Min: 1, Max: 10, Step: 1}, // 10 values
+		{Name: "p2", Type: ParamInt, Min: 1, Max: 10, Step: 1}, // 10 values = 100 total
 	}
 	cfg := DefaultOptimizerConfig()
 	cfg.MaxTrials = 5
@@ -279,7 +279,7 @@ func TestLossSQNZeroStdDev(t *testing.T) {
 
 func TestGetLossFunc(t *testing.T) {
 	names := LossFuncNames()
-	htAssert(t, len(names) == 16, "16 loss functions")
+	htAssert(t, len(names) == 20, "20 loss functions")
 
 	for _, name := range names {
 		fn := GetLossFunc(name)
@@ -290,6 +290,80 @@ func TestGetLossFunc(t *testing.T) {
 func TestGetLossFuncUnknown(t *testing.T) {
 	fn := GetLossFunc("unknown_func")
 	htAssert(t, fn != nil, "unknown defaults to sharpe")
+}
+
+/* ── Freqtrade-style Loss Function Tests ─────────────────────── */
+
+func TestLossOnlyProfit(t *testing.T) {
+	// loss = -profit + 0.5*dd = -30 + 3 = -27
+	m := &BacktestMetrics{TotalReturnPct: 30.0, MaxDrawdownPct: 6.0, TotalTrades: 10}
+	htAssertFloat(t, LossOnlyProfit(m), -27.0, "only_profit weighted drawdown")
+}
+
+func TestLossOnlyProfitNoTrades(t *testing.T) {
+	m := &BacktestMetrics{TotalReturnPct: 30.0, TotalTrades: 0}
+	htAssert(t, math.IsInf(LossOnlyProfit(m), 1), "no trades = inf")
+}
+
+func TestLossMaxDrawdownAbs(t *testing.T) {
+	m := &BacktestMetrics{MaxDrawdownPct: 12.5, TotalTrades: 8}
+	htAssertFloat(t, LossMaxDrawdownAbs(m), 12.5, "abs drawdown = pct proxy")
+	// nil metrics still infinite
+	htAssert(t, math.IsInf(LossMaxDrawdownAbs(nil), 1), "nil = inf")
+}
+
+func TestLossMaxDrawdownRel(t *testing.T) {
+	// dd/(1-dd%): 10% → 11.111...
+	m := &BacktestMetrics{MaxDrawdownPct: 10.0, TotalTrades: 8}
+	htAssertFloat(t, LossMaxDrawdownRel(m), 11.111111, "rel drawdown compounds")
+	// deeper drawdown penalized superlinearly vs abs: 20% → 25 > 20
+	m2 := &BacktestMetrics{MaxDrawdownPct: 20.0, TotalTrades: 8}
+	htAssertFloat(t, LossMaxDrawdownRel(m2), 25.0, "rel drawdown at 20%")
+	htAssert(t, LossMaxDrawdownRel(m2) > LossMaxDrawdownAbs(m2), "rel heavier than abs for deep dd")
+	// >= 100% → inf
+	m3 := &BacktestMetrics{MaxDrawdownPct: 100.0}
+	htAssert(t, math.IsInf(LossMaxDrawdownRel(m3), 1), "100% dd = inf")
+}
+
+func TestLossProfitDrawdownWeighted(t *testing.T) {
+	// loss = -profit + dd²/10 = -20 + 25/10 = -17.5
+	m := &BacktestMetrics{TotalReturnPct: 20.0, MaxDrawdownPct: 5.0, TotalTrades: 5}
+	htAssertFloat(t, LossProfitDrawdownWeighted(m), -17.5, "weighted combo")
+	// deep drawdown flips the score positive: -20 + 400/10 = +20
+	m2 := &BacktestMetrics{TotalReturnPct: 20.0, MaxDrawdownPct: 20.0, TotalTrades: 5}
+	htAssertFloat(t, LossProfitDrawdownWeighted(m2), 20.0, "deep dd dominates profit")
+}
+
+func TestLossSharpeDailyApproximation(t *testing.T) {
+	// No daily-return series: structured proxy = mean(sharpe, sortino)
+	m := &BacktestMetrics{SharpeRatio: 1.6, SortinoRatio: 2.0, TotalTrades: 30}
+	htAssertFloat(t, LossSharpeDaily(m), -1.8, "sharpe_daily = -mean(sharpe, sortino)")
+	// Without sortino: falls back to sharpe only
+	m2 := &BacktestMetrics{SharpeRatio: 1.5, TotalTrades: 30}
+	htAssertFloat(t, LossSharpeDaily(m2), -1.5, "sharpe_daily without sortino")
+	// Non-positive sharpe → inf
+	m3 := &BacktestMetrics{SharpeRatio: 0, TotalTrades: 30}
+	htAssert(t, math.IsInf(LossSharpeDaily(m3), 1), "non-positive sharpe = inf")
+}
+
+func TestLossShortTradeDurWithDuration(t *testing.T) {
+	// dur 15min < 30min target: scale = 0.5 → loss = -20*0.5 = -10
+	m := &BacktestMetrics{TotalReturnPct: 20.0, AvgDurationMin: 15.0, TotalTrades: 10}
+	htAssertFloat(t, LossShortTradeDur(m), -10.0, "short duration discounts profit")
+	// dur 60min ≥ target: full profit → -20
+	m2 := &BacktestMetrics{TotalReturnPct: 20.0, AvgDurationMin: 60.0, TotalTrades: 10}
+	htAssertFloat(t, LossShortTradeDur(m2), -20.0, "long duration keeps full profit")
+	// shorter duration must score worse (higher loss) at equal profit
+	htAssert(t, LossShortTradeDur(m) > LossShortTradeDur(m2), "shorter holding penalized")
+}
+
+func TestLossShortTradeDurFallback(t *testing.T) {
+	// No duration field: degrades to the sharpe proxy
+	m := &BacktestMetrics{SharpeRatio: 1.5, TotalTrades: 5}
+	htAssertFloat(t, LossShortTradeDur(m), -1.5, "fallback = -sharpe")
+	// Churny profile: many trades, small return → half-weighted sharpe
+	m2 := &BacktestMetrics{SharpeRatio: 1.5, TotalReturnPct: 5, TotalTrades: 200}
+	htAssertFloat(t, LossShortTradeDur(m2), -0.75, "churny fallback = -0.5*sharpe")
 }
 
 /* ── Edge Case Tests ─────────────────────────────────────────── */

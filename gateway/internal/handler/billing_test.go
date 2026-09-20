@@ -873,3 +873,82 @@ func TestBillingStripePaymentFailedWebhook(t *testing.T) {
 	r.ServeHTTP(w, req)
 	assertEq(t, w.Code, http.StatusOK, "未知事件 200")
 }
+
+// ── verifyStripeSignature 直接单测（对齐 Stripe 官方 v1 算法）──
+
+// stripeV1Hex 只取签名 hex（不带 t= 前缀），用于拼装多 v1 头。
+func stripeV1Hex(secret string, payload []byte, ts int64) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(fmt.Sprintf("%d.", ts)))
+	mac.Write(payload)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func TestVerifyStripeSignatureTable(t *testing.T) {
+	secret := "whsec_table_test"
+	payload := []byte(`{"id":"evt_1","type":"checkout.session.completed"}`)
+	now := time.Now().Unix()
+	valid := stripeV1Hex(secret, payload, now)
+
+	cases := []struct {
+		name   string
+		header string
+		body   []byte
+		want   bool
+	}{
+		{"正确签名通过", fmt.Sprintf("t=%d,v1=%s", now, valid), payload, true},
+		{"错误密钥签名拒绝", fmt.Sprintf("t=%d,v1=%s", now, stripeV1Hex("whsec_other", payload, now)), payload, false},
+		{"篡改 payload 拒绝（签名按原 body 计算）", fmt.Sprintf("t=%d,v1=%s", now, valid), []byte(`{"id":"evt_1","type":"tampered"}`), false},
+		{"缺 t 拒绝", "v1=" + valid, payload, false},
+		{"缺 v1 拒绝", fmt.Sprintf("t=%d", now), payload, false},
+		{"空头拒绝", "", payload, false},
+		{"v1 非 hex 拒绝", fmt.Sprintf("t=%d,v1=zzzz", now), payload, false},
+		{"过期时间戳拒绝（>300s）", fmt.Sprintf("t=%d,v1=%s", now-400, stripeV1Hex(secret, payload, now-400)), payload, false},
+		{"未来时间戳拒绝（>300s）", fmt.Sprintf("t=%d,v1=%s", now+400, stripeV1Hex(secret, payload, now+400)), payload, false},
+		{"边界 -299s 通过", fmt.Sprintf("t=%d,v1=%s", now-299, stripeV1Hex(secret, payload, now-299)), payload, true},
+		{"边界 +299s 通过", fmt.Sprintf("t=%d,v1=%s", now+299, stripeV1Hex(secret, payload, now+299)), payload, true},
+		{"多 v1 轮换：有效签在无效签之后通过", fmt.Sprintf("t=%d,v1=deadbeef,v1=%s", now, valid), payload, true},
+		{"多 v1 轮换：有效签在无效签之前通过", fmt.Sprintf("t=%d,v1=%s,v1=deadbeef", now, valid), payload, true},
+		{"多 v1 全部无效拒绝", fmt.Sprintf("t=%d,v1=deadbeef,v1=cafe", now), payload, false},
+		{"携带 v0/未知字段忽略后通过", fmt.Sprintf("t=%d,v0=ignored,v1=%s,unknown=x", now, valid), payload, true},
+		{"空格容忍通过", fmt.Sprintf("t=%d, v1=%s", now, valid), payload, true},
+	}
+	for _, tc := range cases {
+		if got := verifyStripeSignature(tc.header, tc.body, secret); got != tc.want {
+			t.Fatalf("%s: verifyStripeSignature=%v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestBillingStripeWebhookTamperedBody 用 body A 算合法签名、投递被改过的 body B：
+// 必须 400，且订单状态保持 pending（不被伪造事件推进）。
+func TestBillingStripeWebhookTamperedBody(t *testing.T) {
+	t.Setenv("STRIPE_SECRET_KEY", "sk_test_tamper")
+	t.Setenv("STRIPE_WEBHOOK_SECRET", "whsec_tamper")
+	uid := billingSeedUser(t, "stripe_tamper")
+	repo := store.NewBillingRepo()
+	o := &store.BillingOrder{ID: "bill_stripe_tamper1", UserID: int64(uid), PlanID: "monthly", Chain: "stripe",
+		AmountMicro: 19900000, Status: store.BillingStatusPending, CreatedAt: time.Now().Unix()}
+	assertTrue(t, repo.Create(o) == nil, "create order")
+
+	r := setupRouter()
+	r.POST("/billing/stripe/webhook", BillingStripeWebhook)
+
+	goodBody, _ := json.Marshal(map[string]any{
+		"type": "checkout.session.completed",
+		"data": map[string]any{"object": map[string]any{
+			"id": "cs_tamper", "payment_status": "paid", "metadata": map[string]any{"order_id": o.ID},
+		}},
+	})
+	tamperedBody := strings.Replace(string(goodBody), `"paid"`, `"unpaid"`, 1)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodPost, "/billing/stripe/webhook", strings.NewReader(tamperedBody))
+	req.Header.Set("Stripe-Signature", signStripePayload("whsec_tamper", goodBody, time.Now().Unix()))
+	r.ServeHTTP(w, req)
+	assertEq(t, w.Code, http.StatusBadRequest, "签名与 body 不符必须 400")
+
+	got, err := repo.GetByID(o.ID)
+	assertTrue(t, err == nil && got.Status == store.BillingStatusPending,
+		fmt.Sprintf("篡改 body 不得推进订单: %+v", got))
+}

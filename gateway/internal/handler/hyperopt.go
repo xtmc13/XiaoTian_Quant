@@ -2,7 +2,9 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"net/http"
 	"sync"
@@ -13,6 +15,7 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/hyperopt"
 	"github.com/xiaotian-quant/gateway/internal/model"
 	"github.com/xiaotian-quant/gateway/internal/notify"
+	"github.com/xiaotian-quant/gateway/internal/store"
 	"github.com/xiaotian-quant/gateway/internal/strategy"
 	"github.com/xiaotian-quant/gateway/internal/strategy/strategies"
 )
@@ -20,34 +23,36 @@ import (
 // ── Hyperopt Jobs ──────────────────────────────────────────────
 
 var (
-	hyperoptJobs     = make(map[string]*hyperoptJob)
-	hyperoptJobsMu   sync.RWMutex
-	hyperoptJobSeq   int
+	hyperoptJobs   = make(map[string]*hyperoptJob)
+	hyperoptJobsMu sync.RWMutex
+	hyperoptJobSeq int
 )
 
 type hyperoptJob struct {
-	ID        string                `json:"id"`
-	UserID    int64                 `json:"user_id"`
-	Status    string                `json:"status"` // running, completed, failed, cancelled
-	Config    hyperoptJobConfig     `json:"config"`
-	Result    *hyperopt.Result      `json:"result,omitempty"`
-	Progress  hyperoptProgress      `json:"progress"`
-	Error     string                `json:"error,omitempty"`
-	CreatedAt int64                 `json:"created_at"`
-	UpdatedAt int64                 `json:"updated_at"`
+	ID        string            `json:"id"`
+	UserID    int64             `json:"user_id"`
+	Status    string            `json:"status"` // running, completed, failed, cancelled
+	Config    hyperoptJobConfig `json:"config"`
+	Result    *hyperopt.Result  `json:"result,omitempty"`
+	Progress  hyperoptProgress  `json:"progress"`
+	Error     string            `json:"error,omitempty"`
+	CreatedAt int64             `json:"created_at"`
+	UpdatedAt int64             `json:"updated_at"`
 	ctx       context.Context
 	cancel    context.CancelFunc
 }
 
 type hyperoptJobConfig struct {
 	StrategyType   string  `json:"strategy_type"`
+	StrategyID     string  `json:"strategy_id"` // 可选：目标策略配置，epochs 一键回写用
 	Symbol         string  `json:"symbol"`
 	Interval       string  `json:"interval"`
 	InitialBalance float64 `json:"initial_balance"`
 	MaxEvals       int     `json:"max_evals"`
-	Sampler        string  `json:"sampler"`     // tpe, random, grid
+	Sampler        string  `json:"sampler"` // tpe, random, grid
 	GridPoints     int     `json:"grid_points"`
-	LossMetric     string  `json:"loss_metric"` // total_return, sharpe, profit_factor, custom
+	LossMetric     string  `json:"loss_metric"` // total_return, sharpe, profit_factor, custom（旧式开关）
+	Loss           string  `json:"loss"`        // 可选：hyperopt.GetLossFunc 注册表名（only_profit, sqn, ...），优先于 loss_metric
 	From           string  `json:"from"`
 	To             string  `json:"to"`
 }
@@ -90,6 +95,23 @@ func StartHyperopt(c *gin.Context) {
 	}
 	if body.LossMetric == "" {
 		body.LossMetric = "sharpe"
+	}
+	// loss 参数走注册表（hyperopt.LossFuncNames），未知名称直接拒绝。
+	if body.Loss != "" {
+		valid := false
+		for _, n := range hyperopt.LossFuncNames() {
+			if n == body.Loss {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":  "unknown loss function: " + body.Loss,
+				"detail": "可用值: " + fmt.Sprintf("%v", hyperopt.LossFuncNames()),
+			})
+			return
+		}
 	}
 
 	// Parse date range
@@ -238,40 +260,58 @@ func StartHyperopt(c *gin.Context) {
 		}
 
 		var loss float64
-		switch body.LossMetric {
-		case "total_return":
-			loss = -result.TotalReturnPct // maximize return
-		case "sharpe":
-			loss = -result.SharpeRatio // maximize sharpe
-		case "profit_factor":
-			loss = -result.ProfitFactor // maximize profit factor
-		case "risk_reward":
-			// Approximate R:R from win rate and profit factor
-			if result.WinRate > 0 && result.WinRate < 100 && result.ProfitFactor > 0 {
-				W := result.WinRate / 100.0
-				rr := result.ProfitFactor * (1.0 - W) / W
-				loss = -rr
-			} else {
-				loss = math.Inf(1)
+		if body.Loss != "" {
+			// 注册表损失函数：由回测结果构造结构化指标后统一求值。
+			bm := &hyperopt.BacktestMetrics{
+				TotalReturnPct: result.TotalReturnPct,
+				MaxDrawdownPct: result.MaxDrawdownPct,
+				SharpeRatio:    result.SharpeRatio,
+				SortinoRatio:   result.SortinoRatio,
+				CalmarRatio:    result.CalmarRatio,
+				WinRate:        result.WinRate,
+				ProfitFactor:   result.ProfitFactor,
+				TotalTrades:    result.TotalTrades,
 			}
-		case "sqn":
-			// System Quality Number
-			if result.TotalTrades > 1 && result.SharpeRatio != 0 {
-				stdDev := math.Abs(result.TotalReturnPct / result.SharpeRatio)
-				if stdDev > 0 {
-					sqn := math.Sqrt(float64(result.TotalTrades)) * (result.TotalReturnPct / float64(result.TotalTrades)) / stdDev
-					loss = -sqn
+			if d := avgHoldingMinutes(result.Trades); d > 0 {
+				bm.AvgDurationMin = d
+			}
+			loss = hyperopt.GetLossFunc(body.Loss)(bm)
+		} else {
+			switch body.LossMetric {
+			case "total_return":
+				loss = -result.TotalReturnPct // maximize return
+			case "sharpe":
+				loss = -result.SharpeRatio // maximize sharpe
+			case "profit_factor":
+				loss = -result.ProfitFactor // maximize profit factor
+			case "risk_reward":
+				// Approximate R:R from win rate and profit factor
+				if result.WinRate > 0 && result.WinRate < 100 && result.ProfitFactor > 0 {
+					W := result.WinRate / 100.0
+					rr := result.ProfitFactor * (1.0 - W) / W
+					loss = -rr
 				} else {
 					loss = math.Inf(1)
 				}
-			} else {
-				loss = math.Inf(1)
+			case "sqn":
+				// System Quality Number
+				if result.TotalTrades > 1 && result.SharpeRatio != 0 {
+					stdDev := math.Abs(result.TotalReturnPct / result.SharpeRatio)
+					if stdDev > 0 {
+						sqn := math.Sqrt(float64(result.TotalTrades)) * (result.TotalReturnPct / float64(result.TotalTrades)) / stdDev
+						loss = -sqn
+					} else {
+						loss = math.Inf(1)
+					}
+				} else {
+					loss = math.Inf(1)
+				}
+			case "custom":
+				// Combined: negative return with drawdown penalty
+				loss = -result.TotalReturnPct + result.MaxDrawdownPct*2
+			default:
+				loss = -result.SharpeRatio
 			}
-		case "custom":
-			// Combined: negative return with drawdown penalty
-			loss = -result.TotalReturnPct + result.MaxDrawdownPct*2
-		default:
-			loss = -result.SharpeRatio
 		}
 
 		// Penalize insufficient trades
@@ -291,6 +331,43 @@ func StartHyperopt(c *gin.Context) {
 			Seed:       time.Now().UnixNano(),
 		}
 		engine := hyperopt.NewEngine(engineCfg, space, objective)
+
+		// 每轮 trial 落库 xt_hyperopt_epochs（engine 保持纯算法、不依赖 store，
+		// 持久化挂在 OnTrialComplete 回调上）。
+		lossName := body.Loss
+		if lossName == "" {
+			lossName = body.LossMetric
+		}
+		persistEpochs := store.GetDB() != nil
+		epochRepo := store.NewHyperoptEpochRepo()
+		engine.OnTrialComplete = func(trial hyperopt.Trial) {
+			if !persistEpochs {
+				return
+			}
+			paramsJSON, err := json.Marshal(trial.Params)
+			if err != nil {
+				return
+			}
+			metricsJSON, err := json.Marshal(trial.Metrics)
+			if err != nil {
+				return
+			}
+			rec := &store.HyperoptEpochRecord{
+				ID:          fmt.Sprintf("%s-t%d", jobID, trial.ID),
+				UserID:      job.UserID,
+				JobID:       jobID,
+				StrategyID:  body.StrategyID,
+				TrialID:     trial.ID,
+				ParamsJSON:  string(paramsJSON),
+				MetricsJSON: string(metricsJSON),
+				Loss:        trial.Loss,
+				LossName:    lossName,
+				CreatedAt:   trial.Timestamp,
+			}
+			if err := epochRepo.Create(rec); err != nil {
+				log.Printf("hyperopt: persist epoch %s: %v", rec.ID, err)
+			}
+		}
 
 		engine.OnProgress = func(done, total int, bestLoss float64) {
 			hyperoptJobsMu.Lock()
@@ -396,16 +473,16 @@ func GetHyperoptJob(c *gin.Context) {
 
 	if job.Result != nil {
 		resp["result"] = gin.H{
-			"total_evals":  job.Result.TotalEvals,
-			"duration_ms":  job.Result.Duration.Milliseconds(),
-			"sampler":      job.Result.Sampler,
-			"space_dims":   job.Result.SpaceDims,
-			"mean_loss":    roundFloat(job.Result.MeanLoss, 4),
-			"median_loss":  roundFloat(job.Result.MedianLoss, 4),
-			"std_loss":     roundFloat(job.Result.StdLoss, 4),
-			"min_loss":     roundFloat(job.Result.MinLoss, 4),
-			"max_loss":     roundFloat(job.Result.MaxLoss, 4),
-			"best_params":  job.Result.BestParams(),
+			"total_evals": job.Result.TotalEvals,
+			"duration_ms": job.Result.Duration.Milliseconds(),
+			"sampler":     job.Result.Sampler,
+			"space_dims":  job.Result.SpaceDims,
+			"mean_loss":   roundFloat(job.Result.MeanLoss, 4),
+			"median_loss": roundFloat(job.Result.MedianLoss, 4),
+			"std_loss":    roundFloat(job.Result.StdLoss, 4),
+			"min_loss":    roundFloat(job.Result.MinLoss, 4),
+			"max_loss":    roundFloat(job.Result.MaxLoss, 4),
+			"best_params": job.Result.BestParams(),
 			"best_metrics": func() map[string]float64 {
 				if job.Result.BestTrial != nil {
 					return job.Result.BestTrial.Metrics
@@ -635,6 +712,24 @@ func ExportHyperoptParams(c *gin.Context) {
 		"mapped_params": mapped,
 		"config_path":   configPath,
 	})
+}
+
+// avgHoldingMinutes 从回测平仓仓位计算平均持仓时长（分钟）；
+// 无平仓或时长非法时返回 0（LossShortTradeDur 会退化到 Sharpe 代理）。
+func avgHoldingMinutes(trades []backtest.Position) float64 {
+	var sumMs int64
+	var n int
+	for _, p := range trades {
+		if !p.IsClosed || p.ExitTime <= p.EntryTime {
+			continue
+		}
+		sumMs += p.ExitTime - p.EntryTime
+		n++
+	}
+	if n == 0 {
+		return 0
+	}
+	return float64(sumMs) / float64(n) / 60000.0
 }
 
 // roundFloat rounds a float to n decimal places.

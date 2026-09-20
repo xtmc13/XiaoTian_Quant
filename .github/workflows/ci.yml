@@ -29,8 +29,10 @@ jobs:
       - run: go test ./internal/... -race -count=1
 
   # ── Rust Engine ──
+  # 实验/基准参照，不进主链路：失败不阻塞主流程
   rust-build:
     runs-on: ubuntu-latest
+    continue-on-error: true
     defaults:
       run:
         working-directory: ./engine

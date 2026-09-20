@@ -240,6 +240,8 @@ func strategyUpdateHandler[T strategyBotConstraint](c *gin.Context, category str
 		rec.Status = plain.Status
 	}
 	rec.ConfigJSON = string(payload)
+	// 版本快照钩子：写库前自动打"更新前"快照（失败仅记日志，不影响更新）。
+	autoSnapshotStrategyVersion(rec.ID, "自动快照（更新前）")
 	if err := repo.Update(rec); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": err.Error()})
 		return

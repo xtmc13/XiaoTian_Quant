@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/reconcile"
@@ -229,6 +230,46 @@ func ReconcileDeviationResolve(c *gin.Context) {
 	c.JSON(http.StatusOK, updated)
 }
 
+// ReconcileReportedPnLList GET /api/reconcile/reported-pnl?exchange=&days=&status=&limit=&offset=
+// 回报 PnL 对账记录：admin 全量，普通用户看全账户行（user_id=0）+ 本人行。
+func ReconcileReportedPnLList(c *gin.Context) {
+	repo := reconcileRepo()
+	limit := queryInt(c, "limit", 100)
+	offset := queryInt(c, "offset", 0)
+	var sinceMs int64
+	if days := queryInt(c, "days", 0); days > 0 {
+		sinceMs = time.Now().Add(-time.Duration(days) * 24 * time.Hour).UnixMilli()
+	}
+	checks, err := repo.ListReportedPnLChecks(listOwnerFilter(c), c.Query("exchange"), c.Query("status"), sinceMs, limit, offset)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "list reported pnl checks failed"})
+		return
+	}
+	if checks == nil {
+		checks = []*store.ReportedPnLCheckRecord{}
+	}
+	c.JSON(http.StatusOK, gin.H{"checks": checks})
+}
+
+// ReconcileReportedPnLRun POST /api/reconcile/reported-pnl/run?days= —— admin 手动触发一轮。
+// days>0 时覆盖默认窗口（近 reported_pnl_window_h 小时）。
+func ReconcileReportedPnLRun(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
+	if reconcileSvc == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "reconcile service not ready"})
+		return
+	}
+	days := queryInt(c, "days", 0)
+	msg, err := reconcileSvc.RunReportedPnL(days)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "message": msg})
+}
+
 // ReconcileConfigGet GET /api/reconcile/config —— 当前生效配置（登录可见）。
 func ReconcileConfigGet(c *gin.Context) {
 	if reconcileSvc != nil {
@@ -240,6 +281,8 @@ func ReconcileConfigGet(c *gin.Context) {
 
 // ReconcileConfigPut PUT /api/reconcile/config —— 更新阈值/周期（admin-only）。
 // body 可含: interval_sec / slippage_pct / stuck_timeout_sec / auto_fix / enabled
+//
+//	min_drift / reported_pnl_window_h / reported_pnl_pct
 func ReconcileConfigPut(c *gin.Context) {
 	if !requireAdmin(c) {
 		return
@@ -253,6 +296,7 @@ func ReconcileConfigPut(c *gin.Context) {
 	allowed := map[string]bool{
 		"interval_sec": true, "slippage_pct": true, "stuck_timeout_sec": true,
 		"auto_fix": true, "enabled": true, "min_drift": true,
+		"reported_pnl_window_h": true, "reported_pnl_pct": true,
 	}
 	overrides := map[string]string{}
 	for k, v := range body {

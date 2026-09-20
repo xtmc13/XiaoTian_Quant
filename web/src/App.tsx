@@ -50,6 +50,7 @@ const OnChain = lazyPage(() => import('./pages/OnChain'), 'OnChain')
 const FreqAI = lazyPage(() => import('./pages/AI/FreqAI'), 'FreqAI')
 const RLTraining = lazyPage(() => import('./pages/AI/RLTraining'), 'RLTraining')
 const TensorBoard = lazyPage(() => import('./pages/AI/TensorBoard'), 'TensorBoard')
+const DiscussionRoom = lazyPage(() => import('./pages/AI/DiscussionRoom'), 'DiscussionRoom')
 const StrategyEditor = lazyPage(() => import('./pages/strategy/StrategyEditor'), 'StrategyEditor')
 const BotsSignal = lazyPage(() => import('./pages/bots/BotsSignal'), 'BotsSignal')
 const BotsAI = lazyPage(() => import('./pages/bots/BotsAI'), 'BotsAI')
@@ -151,6 +152,7 @@ function DocumentTitle() {
     '/ai/freqai': 'FreqAI - 小天量化',
     '/ai/rl': 'RL强化学习 - 小天量化',
     '/ai/tensorboard': 'TensorBoard - 小天量化',
+    '/ai/discussion-room': 'AI 讨论室 - 小天量化',
     '/bots/signal': '信号机器人 - 小天量化',
     '/bots/ai': 'AI机器人 - 小天量化',
     '/arbitrage/cross': '跨所套利 - 小天量化',
@@ -392,6 +394,14 @@ export default function App() {
                     element={
                       <PageShell>
                         <TensorBoard />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/ai/discussion-room"
+                    element={
+                      <PageShell>
+                        <DiscussionRoom />
                       </PageShell>
                     }
                   />

@@ -410,6 +410,11 @@ func registerStrategyRoutes(api *gin.RouterGroup) {
 	private.POST("/strategies/configs/batch-delete", handler.BatchDeleteConfigs)
 	private.POST("/strategies/configs/:id/start", handler.StartStrategyConfig)
 	private.POST("/strategies/configs/:id/stop", handler.StopStrategyConfig)
+	// ── 策略版本快照（更新前自动快照 + 手动快照/查看/恢复） ──
+	private.POST("/strategies/configs/:id/versions", handler.CreateStrategyVersion)
+	private.GET("/strategies/configs/:id/versions", handler.ListStrategyVersions)
+	private.GET("/strategies/configs/:id/versions/:vid", handler.GetStrategyVersion)
+	private.POST("/strategies/configs/:id/versions/:vid/restore", handler.RestoreStrategyVersion)
 	private.GET("/strategies/logs", handler.GetStrategyLogs)
 	private.DELETE("/strategies/logs", handler.ClearStrategyLogs)
 	private.GET("/strategies/templates", handler.GetTemplates)
@@ -490,6 +495,10 @@ func registerHyperoptRoutes(api *gin.RouterGroup) {
 	private.DELETE("/hyperopt/jobs/:id", handler.DeleteHyperoptJob)
 	private.GET("/hyperopt/spaces", handler.GetHyperoptSpaces)
 	private.POST("/hyperopt/jobs/:id/export", handler.ExportHyperoptParams)
+	// ── epoch 浏览器：持久化/过滤/一键回写策略（对标 freqtrade） ──
+	private.GET("/hyperopt/epochs", handler.ListHyperoptEpochs)
+	private.GET("/hyperopt/epochs/:id", handler.GetHyperoptEpoch)
+	private.POST("/hyperopt/epochs/:id/apply", handler.ApplyHyperoptEpoch)
 }
 
 func registerRLRoutes(api *gin.RouterGroup) {
@@ -552,6 +561,10 @@ func registerAIRoutes(api *gin.RouterGroup) {
 	private.POST("/ai/analyze", handler.AIAnalyze)
 	private.GET("/ai/quickscan", handler.AIQuickScan)
 	private.POST("/ai/chat", handler.AIChat)
+	// ── AI 策略复盘报告（对标 QuantDinger strategy_review） ──
+	private.POST("/ai/review", handler.AIReviewGenerate)
+	private.GET("/ai/review/reports", handler.AIReviewReportsList)
+	private.GET("/ai/review/reports/:id", handler.AIReviewReportGet)
 }
 
 func registerMLRoutes(api *gin.RouterGroup) {
@@ -784,6 +797,9 @@ func registerReconcileRoutes(api *gin.RouterGroup) {
 		private.POST("/deviations/:id/resolve", handler.ReconcileDeviationResolve)
 		private.GET("/config", handler.ReconcileConfigGet)
 		private.PUT("/config", middleware.AdminRequired(), handler.ReconcileConfigPut)
+		// ── 交易所回报 PnL 对账（交易所结算口径 vs 本地 FIFO 记账） ──
+		private.GET("/reported-pnl", handler.ReconcileReportedPnLList)
+		private.POST("/reported-pnl/run", middleware.AdminRequired(), handler.ReconcileReportedPnLRun)
 	}
 }
 

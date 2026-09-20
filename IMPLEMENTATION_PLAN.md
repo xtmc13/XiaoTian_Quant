@@ -1,6 +1,8 @@
 # 小天量化 v3.1 补齐计划
 ## 目标: 补齐所有功能差距(除CRA商业功能外)
 
+> **状态说明**: 本计划 Phase 1 的 Rust SignalExecutor 已完成开发，但经决策**不进主链路**；统一执行已由纯 Go 的 OMSBotExecutor（`gateway/internal/handler/bot_executor.go`）承担。`engine/` 保留为实验与基准参照，不参与主构建（`build.sh` 需显式 `BUILD_RUST=1` 才构建 Rust 引擎）。
+
 ---
 
 ## 原则
@@ -20,7 +22,7 @@
 - [ ] `engine/src/executor/tpsl.rs` - TPSLManager (6种止盈 + 3种止损)
 - [ ] `engine/src/executor/execution.rs` - ExecutionEngine
 - [ ] FFI接口: `engine_execute_signal`, `engine_update_price`
-- [ ] Go桥接: `gateway/internal/adapter/executor_bridge.go`
+- [ ] Go桥接: `gateway/internal/adapter/executor_bridge.go` — 已由 OMSBotExecutor 以纯 Go 方式实现，详见 `handler/bot_executor.go`
 
 ### Phase 2: Go策略引擎扩展
 - [ ] `gateway/internal/strategy/martin.go` - 马丁趋势(倍投)

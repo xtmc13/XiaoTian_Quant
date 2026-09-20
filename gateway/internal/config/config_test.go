@@ -1,7 +1,10 @@
 package config
 
 import (
+	"bytes"
+	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -96,4 +99,41 @@ func TestExchangeCredsMasking(t *testing.T) {
 
 func contains(s, substr string) bool {
 	return strings.Contains(s, substr)
+}
+
+/* ── Risk 启动校验测试（C2.1 硬校验）────────────────────────── */
+
+func TestRiskWarnings(t *testing.T) {
+	cfg := Default()
+	assertTrue(t, len(cfg.RiskWarnings()) == 0, "default position_limit_pct=50 应无告警")
+
+	cfg.Risk.PositionLimit = 100
+	assertTrue(t, len(cfg.RiskWarnings()) == 0, "position_limit_pct=100 是安全边界，应无告警")
+
+	cfg.Risk.PositionLimit = 2500 // HANDOFF 红线事故值
+	warns := cfg.RiskWarnings()
+	assertTrue(t, len(warns) == 1, "position_limit_pct=2500 必须告警")
+	assertTrue(t, contains(warns[0], "非实盘安全值"), "告警须提示非实盘安全值")
+	assertTrue(t, contains(warns[0], "XIAOTIAN_ALLOW_RELAXED_RISK"), "告警须提示逃逸开关")
+}
+
+// TestLoadWarnsOnRelaxedPositionLimit：Load 加载含放宽值的 config 时打 WARN
+// 但不失败、不改写原始值（实盘解锁硬闸依赖原始值识别"未回调"）。
+func TestLoadWarnsOnRelaxedPositionLimit(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "cfg.yaml")
+	err := os.WriteFile(p, []byte("risk:\n  position_limit_pct: 2500\n"), 0o644)
+	assertTrue(t, err == nil, "write temp config")
+
+	var buf bytes.Buffer
+	old := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(old)
+
+	cfg, err := Load(p)
+	assertTrue(t, err == nil, "Load must not fail on relaxed value")
+	assertTrue(t, cfg.Risk.PositionLimit == 2500, "Load 必须保留原始值（不做钳制）")
+	assertTrue(t, contains(buf.String(), "非实盘安全值"), "启动日志必须出现非实盘安全值告警")
+
+	t.Cleanup(func() { _, _ = Load("") })
 }
