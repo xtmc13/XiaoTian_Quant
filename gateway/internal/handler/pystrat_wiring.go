@@ -73,6 +73,11 @@ func NewPyStratRunner() *pystrat.Runner {
 		NewKindOMSBotExecutor("pystrat"),
 		pyStratAccounts{},
 	)
+	if appCtx := app.Get(); appCtx != nil && appCtx.EventBus != nil {
+		// v1.1 on_order 落地：OMS OnOrderUpdate → 事件总线 TypeOrderUpdate，
+		// 这里按 client_oid 前缀 "pystrat:<id>" 过滤后驱动沙箱 on_order。
+		runner.SetOrderSource(&pystrat.EventOrderSource{Bus: appCtx.EventBus})
+	}
 	runner.SetLiveGate(func(exchange string) error { return canPlaceLiveOrder(exchange, true) })
 	runner.SetProtector(pyStratProtector{})
 	runner.SetAlert(func(title, content string) {

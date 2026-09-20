@@ -75,6 +75,9 @@ export default function PythonStrategyPage() {
   const [symbol, setSymbol] = useState('BTC/USDT')
   const [interval, setInterval] = useState('15m')
   const [direction, setDirection] = useState<'long' | 'short' | 'both'>('long')
+  const [market, setMarket] = useState<'spot' | 'futures'>('spot')
+  const [leverage, setLeverage] = useState(1)
+  const [marginMode, setMarginMode] = useState<'cross' | 'isolated'>('cross')
   const [paramsJSON, setParamsJSON] = useState('{}')
   const [paper, setPaper] = useState(true)
   const [code, setCode] = useState(DEFAULT_CODE)
@@ -106,6 +109,9 @@ export default function PythonStrategyPage() {
     setSymbol(selected.symbol)
     setInterval(selected.interval || '15m')
     setDirection((selected.direction as 'long' | 'short' | 'both') || 'long')
+    setMarket((selected.market as 'spot' | 'futures') || 'spot')
+    setLeverage(selected.leverage || 1)
+    setMarginMode((selected.margin_mode as 'cross' | 'isolated') || 'cross')
     setParamsJSON(selected.params_json || '{}')
     setPaper(selected.paper)
     setCode(selected.code)
@@ -122,6 +128,9 @@ export default function PythonStrategyPage() {
         symbol,
         interval,
         direction,
+        market,
+        leverage,
+        margin_mode: marginMode,
         params_json: paramsJSON,
         code,
         paper,
@@ -308,6 +317,41 @@ export default function PythonStrategyPage() {
               <option value="both">both</option>
             </select>
           </div>
+          <div>
+            <label className="mb-1 block text-xs text-slate-400">市场（v1.1）</label>
+            <select
+              className="w-full rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-sm"
+              value={market}
+              onChange={(e) => setMarket(e.target.value as 'spot' | 'futures')}
+            >
+              <option value="spot">spot（现货执行）</option>
+              <option value="futures">futures（合约杠杆，paper=0 生效）</option>
+            </select>
+          </div>
+          {market === 'futures' && (
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="mb-1 block text-xs text-slate-400">杠杆（1-125）</label>
+                <input
+                  type="number" min={1} max={125}
+                  className="w-full rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-sm"
+                  value={leverage}
+                  onChange={(e) => setLeverage(Math.max(1, Math.min(125, Number(e.target.value) || 1)))}
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs text-slate-400">保证金模式</label>
+                <select
+                  className="w-full rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-sm"
+                  value={marginMode}
+                  onChange={(e) => setMarginMode(e.target.value as 'cross' | 'isolated')}
+                >
+                  <option value="cross">cross（全仓）</option>
+                  <option value="isolated">isolated（逐仓）</option>
+                </select>
+              </div>
+            </div>
+          )}
           <div>
             <label className="mb-1 block text-xs text-slate-400">参数覆盖 JSON</label>
             <textarea

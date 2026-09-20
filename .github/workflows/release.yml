@@ -177,3 +177,29 @@ jobs:
           draft: false
           prerelease: false
           generate_release_notes: true
+
+  # ── Electron Desktop (目录产物,供下游打安装包或人工验证) ──
+  desktop-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: './web/package-lock.json'
+      - name: Install & build web
+        working-directory: ./web
+        run: |
+          npm ci
+          npm run build
+      - name: Pack Electron app (unpacked dir)
+        working-directory: ./web
+        env:
+          ELECTRON_MIRROR: 'https://npmmirror.com/mirrors/electron/'
+        run: npm run electron:pack
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xiaotian-desktop-linux-unpacked
+          path: web/release/linux-unpacked
+          if-no-files-found: error

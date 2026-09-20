@@ -17,6 +17,11 @@ export interface PyStrategy {
   error: string
   paper: boolean
   bot_id: string
+  // v1.1 合约执行声明（manifest risk.leverage/risk.margin_mode 为策略侧覆盖，
+  // 运行时优先于这里的列）
+  market: 'spot' | 'futures'
+  leverage: number
+  margin_mode: 'cross' | 'isolated'
   created_at: number
   updated_at: number
   is_running?: boolean
@@ -67,6 +72,12 @@ export interface PyStrategyPayload {
   params_json: string
   code: string
   paper?: boolean
+  // v1.1：spot（默认现货执行）| futures（合约执行，paper=0 时买入走 OMS 合约链路）
+  market?: 'spot' | 'futures'
+  // 合约杠杆 1-125（仅 market='futures' 有意义）
+  leverage?: number
+  // cross（默认全仓）| isolated（逐仓）
+  margin_mode?: 'cross' | 'isolated'
 }
 
 export const pyStrategyApi = {

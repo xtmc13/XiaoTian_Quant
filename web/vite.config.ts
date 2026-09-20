@@ -5,6 +5,8 @@ import { visualizer } from 'rollup-plugin-visualizer'
 import path from 'path'
 
 export default defineConfig(({ mode }) => ({
+  // 相对路径:Electron file:// 直接加载构建产物;子路径部署(nginx)同样适用
+  base: './',
   test: {
     environment: 'jsdom',
     globals: true,

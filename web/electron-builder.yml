@@ -1,0 +1,44 @@
+# electron-builder 配置(小天量化桌面端)
+# 用法:
+#   npm run electron:pack   # --dir 快速产物(调试/CI)
+#   npm run electron:dist   # 全量安装包(linux AppImage+deb / win portable / mac zip)
+appId: ai.xiaotian.quant
+productName: 小天量化
+executableName: xiaotian-quant-desktop
+copyright: Copyright © 2026 XiaoTian Quant
+
+directories:
+  output: release
+  buildResources: build-resources
+
+# 打进 app 的内容:主进程/预加载 + 前端构建产物(build 优先,dist 为当前 Vite 实际输出;
+# 不存在的 glob 会被静默跳过,两者都列出以便兼容)
+files:
+  - electron/**/*
+  - package.json
+  - build/**/*
+  - dist/**/*
+
+asar: true
+
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Finance
+  maintainer: XiaoTian Quant <dev@xiaotian.local>
+  artifactName: xiaotian-quant-desktop-${version}-linux-${arch}.${ext}
+
+win:
+  target:
+    - portable
+  artifactName: xiaotian-quant-desktop-${version}-win-${arch}.${ext}
+
+mac:
+  target:
+    - zip
+  category: public.app-category.finance
+  artifactName: xiaotian-quant-desktop-${version}-mac-${arch}.${ext}
+
+# electron:dist 跨平台出包时的兜底架构
+npmRebuild: false

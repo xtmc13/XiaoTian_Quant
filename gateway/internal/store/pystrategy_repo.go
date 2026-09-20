@@ -19,6 +19,8 @@ const (
 )
 
 // PyStrategyRecord 是 xt_pystrategies 的行记录。
+// Market/Leverage/MarginMode 为 v1.1 合约执行声明（0023），manifest 的
+// risk.leverage/risk.margin_mode 是策略侧覆盖，运行时优先于本表列。
 type PyStrategyRecord struct {
 	ID         string `json:"id"`
 	UserID     int64  `json:"user_id"`
@@ -33,9 +35,22 @@ type PyStrategyRecord struct {
 	Error      string `json:"error"`
 	Paper      bool   `json:"paper"`
 	BotID      string `json:"bot_id"`
+	Market     string `json:"market"`
+	Leverage   int    `json:"leverage"`
+	MarginMode string `json:"margin_mode"`
 	CreatedAt  int64  `json:"created_at"`
 	UpdatedAt  int64  `json:"updated_at"`
 }
+
+// PyStrat 合约执行声明默认值（0023 列默认值保持一致）。
+const (
+	PyStratMarketSpot     = "spot"
+	PyStratMarketFutures  = "futures"
+	PyStratMarginCross    = "cross"
+	PyStratMarginIsolated = "isolated"
+	// PyStratMaxLeverage 是合约杠杆上限（与主流交易所 U 本位永续上限对齐）。
+	PyStratMaxLeverage = 125
+)
 
 // PyStrategyRepo provides typed CRUD for xt_pystrategies。
 type PyStrategyRepo struct{ mu sync.RWMutex }
@@ -43,14 +58,14 @@ type PyStrategyRepo struct{ mu sync.RWMutex }
 func NewPyStrategyRepo() *PyStrategyRepo { return &PyStrategyRepo{} }
 
 const pyStrategyColumns = `id, user_id, name, symbol, interval, direction, params_json,
-	code, version, status, error, paper, bot_id, created_at, updated_at`
+	code, version, status, error, paper, bot_id, market, leverage, margin_mode, created_at, updated_at`
 
 func scanPyStrategy(s rowScanner) (*PyStrategyRecord, error) {
 	var rec PyStrategyRecord
 	var paper int
 	err := s.Scan(&rec.ID, &rec.UserID, &rec.Name, &rec.Symbol, &rec.Interval, &rec.Direction,
 		&rec.ParamsJSON, &rec.Code, &rec.Version, &rec.Status, &rec.Error, &paper,
-		&rec.BotID, &rec.CreatedAt, &rec.UpdatedAt)
+		&rec.BotID, &rec.Market, &rec.Leverage, &rec.MarginMode, &rec.CreatedAt, &rec.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -81,15 +96,24 @@ func (r *PyStrategyRepo) Create(rec *PyStrategyRecord) error {
 	if rec.ParamsJSON == "" {
 		rec.ParamsJSON = "{}"
 	}
+	if rec.Market == "" {
+		rec.Market = PyStratMarketSpot
+	}
+	if rec.Leverage <= 0 {
+		rec.Leverage = 1
+	}
+	if rec.MarginMode == "" {
+		rec.MarginMode = PyStratMarginCross
+	}
 	paper := 0
 	if rec.Paper {
 		paper = 1
 	}
 	_, err := db.Exec(`INSERT INTO xt_pystrategies (`+pyStrategyColumns+`)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		rec.ID, rec.UserID, rec.Name, rec.Symbol, rec.Interval, rec.Direction,
 		rec.ParamsJSON, rec.Code, rec.Version, rec.Status, rec.Error, paper,
-		rec.BotID, rec.CreatedAt, rec.UpdatedAt)
+		rec.BotID, rec.Market, rec.Leverage, rec.MarginMode, rec.CreatedAt, rec.UpdatedAt)
 	return err
 }
 
@@ -137,11 +161,22 @@ func (r *PyStrategyRepo) Update(rec *PyStrategyRecord) error {
 	if rec.Paper {
 		paper = 1
 	}
+	if rec.Market == "" {
+		rec.Market = PyStratMarketSpot
+	}
+	if rec.Leverage <= 0 {
+		rec.Leverage = 1
+	}
+	if rec.MarginMode == "" {
+		rec.MarginMode = PyStratMarginCross
+	}
 	_, err := db.Exec(`UPDATE xt_pystrategies SET
 		name=?, symbol=?, interval=?, direction=?, params_json=?, code=?,
-		version=?, status=?, error=?, paper=?, bot_id=?, updated_at=? WHERE id=?`,
+		version=?, status=?, error=?, paper=?, bot_id=?, market=?, leverage=?,
+		margin_mode=?, updated_at=? WHERE id=?`,
 		rec.Name, rec.Symbol, rec.Interval, rec.Direction, rec.ParamsJSON, rec.Code,
-		rec.Version, rec.Status, rec.Error, paper, rec.BotID, rec.UpdatedAt, rec.ID)
+		rec.Version, rec.Status, rec.Error, paper, rec.BotID, rec.Market, rec.Leverage,
+		rec.MarginMode, rec.UpdatedAt, rec.ID)
 	return err
 }
 

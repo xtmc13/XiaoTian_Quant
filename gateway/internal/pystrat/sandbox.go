@@ -55,12 +55,43 @@ type BarResult struct {
 	Prints  []string `json:"prints,omitempty"`
 }
 
+// OrderEvent 是推给沙箱 on_order 的订单回报（OMS model.OrderData 的投影，
+// 仅含策略关心的字段；pnl 为订单已实现盈亏）。
+type OrderEvent struct {
+	ID        string  `json:"id"`
+	Symbol    string  `json:"symbol"`
+	Side      string  `json:"side"` // buy | sell
+	Type      string  `json:"type"` // market | limit | ...
+	Qty       float64 `json:"qty"`  // 委托量
+	Price     float64 `json:"price"`
+	Filled    float64 `json:"filled"`
+	AvgPrice  float64 `json:"avg_price"`
+	Status    string  `json:"status"` // new/partially_filled/filled/cancelled/rejected/...
+	PnL       float64 `json:"pnl"`
+	ClientOID string  `json:"client_oid,omitempty"`
+}
+
+// OrderResult 是一次 on_order 的产出（v1.1：回调内下单动作被丢弃并记日志，
+// 仅 logs/prints 生效）。
+type OrderResult struct {
+	Logs   []string `json:"logs"`
+	Prints []string `json:"prints,omitempty"`
+}
+
+// ErrOnOrderTimeout 表示单笔 on_order 调用超时。与 on_bar 超时策略不同：
+// 不 kill 沙箱（订单事件容忍度高），事件记日志跳过，worker 内的迟到响应
+// 由后续 rpc 的 id 匹配机制丢弃。
+var ErrOnOrderTimeout = errors.New("pystrat: on_order timeout")
+
 // Sandbox 是策略沙箱的窄接口（runner 只依赖它，测试注入 fake）。
 type Sandbox interface {
 	// Load 加载策略源码：AST 校验 → 受限 exec → manifest 校验 → initialize。
 	Load(ctx context.Context, code string, params map[string]any, symbol, interval string) (*Manifest, error)
 	// OnBar 驱动一根 K 线；单轮超时由实现强制（超时即子进程死亡）。
 	OnBar(ctx context.Context, bar model.Bar, state State) (*BarResult, error)
+	// OnOrder 分发一笔订单回报给 on_order 回调（策略未定义则跳过）。
+	// 单轮超时不杀子进程，返回 ErrOnOrderTimeout。
+	OnOrder(ctx context.Context, evt OrderEvent) (*OrderResult, error)
 	// Close 杀进程并清理临时文件。
 	Close() error
 	// Alive 报告沙箱是否存活（诊断用）。
@@ -81,6 +112,10 @@ type SubprocessSandbox struct {
 	dir     string
 	nextID  int
 	started bool
+	// lateDone 非 nil 表示有 on_order 超时遗留的孤儿读取 goroutine 正在等待
+	// 迟到响应；其关闭即"迟到响应已被消费"，下一条 rpc 才能开始读（维持
+	// bufio.Reader 单读者约束，同时满足 on_order 超时不杀子进程）。
+	lateDone chan struct{}
 }
 
 // NewSubprocessSandbox 创建沙箱（不启动子进程；首次 Load 时才拉进程）。
@@ -137,10 +172,77 @@ func (s *SubprocessSandbox) ensureStarted() error {
 	return nil
 }
 
+// waitLateLocked 等待上一次 on_order 超时遗留的孤儿读取 goroutine 退出
+// （持 s.mu 调用）。worker 彻底卡死时超时杀进程自愈——孤儿因管道关闭而
+// 退出，不会泄漏。
+func (s *SubprocessSandbox) waitLateLocked() error {
+	if s.lateDone == nil {
+		return nil
+	}
+	ch := s.lateDone
+	select {
+	case <-ch:
+		s.lateDone = nil
+		return nil
+	case <-time.After(s.timeout()):
+		s.markDead()
+		s.lateDone = nil
+		return fmt.Errorf("pystrat: wait late sandbox response timeout (%s): %w", s.timeout(), ErrSandboxDead)
+	}
+}
+
+// armOrphanLocked 把已放弃等待的 on_order 调用转为孤儿读取：留守 goroutine
+// 读到迟到响应（或进程死亡）后关闭 lateDone，后续 rpc 方能开始读——
+// 以此维持 bufio.Reader 单读者约束且不杀子进程。
+func (s *SubprocessSandbox) armOrphanLocked(done chan struct{}) {
+	ch := make(chan struct{})
+	prev := s.lateDone
+	s.lateDone = ch
+	go func() {
+		if prev != nil {
+			<-prev
+		}
+		<-done
+		close(ch)
+	}()
+}
+
+// readMatched 读取响应直到 id 匹配（防御性丢弃迟到响应）。致命错误时已
+// markDead。调用方必须持有 s.mu 或保证协议串行。
+func (s *SubprocessSandbox) readMatched(id int) (json.RawMessage, error) {
+	for {
+		respLine, err := s.stdout.ReadBytes('\n')
+		if err != nil {
+			s.markDead()
+			return nil, ErrSandboxDead
+		}
+		var resp struct {
+			ID     int             `json:"id"`
+			OK     bool            `json:"ok"`
+			Error  string          `json:"error"`
+			Result json.RawMessage `json:"result"`
+		}
+		if err := json.Unmarshal(respLine, &resp); err != nil {
+			s.markDead()
+			return nil, fmt.Errorf("pystrat: malformed sandbox response: %w", err)
+		}
+		if resp.ID != id {
+			continue // 迟到响应（正常已被孤儿机制消费，这里是双保险）
+		}
+		if !resp.OK {
+			return nil, errors.New(resp.Error)
+		}
+		return resp.Result, nil
+	}
+}
+
 // rpc 发送一条请求并等待响应（调用方持有 s.mu，串行协议）。
 func (s *SubprocessSandbox) rpc(method string, params map[string]any) (json.RawMessage, error) {
 	if !s.started {
 		return nil, ErrSandboxDead
+	}
+	if err := s.waitLateLocked(); err != nil {
+		return nil, err
 	}
 	s.nextID++
 	req, err := json.Marshal(map[string]any{"id": s.nextID, "method": method, "params": params})
@@ -159,26 +261,7 @@ func (s *SubprocessSandbox) rpc(method string, params map[string]any) (json.RawM
 		s.markDead()
 		return nil, ErrSandboxDead
 	}
-
-	respLine, err := s.stdout.ReadBytes('\n')
-	if err != nil {
-		s.markDead()
-		return nil, ErrSandboxDead
-	}
-	var resp struct {
-		ID     int             `json:"id"`
-		OK     bool            `json:"ok"`
-		Error  string          `json:"error"`
-		Result json.RawMessage `json:"result"`
-	}
-	if err := json.Unmarshal(respLine, &resp); err != nil {
-		s.markDead()
-		return nil, fmt.Errorf("pystrat: malformed sandbox response: %w", err)
-	}
-	if !resp.OK {
-		return nil, errors.New(resp.Error)
-	}
-	return resp.Result, nil
+	return s.readMatched(s.nextID)
 }
 
 func (s *SubprocessSandbox) markDead() {
@@ -297,6 +380,77 @@ func (s *SubprocessSandbox) OnBar(ctx context.Context, bar model.Bar, state Stat
 		// 调用方拿到 ErrSandboxDead 后重建沙箱重载策略。
 		s.markDead()
 		return nil, fmt.Errorf("pystrat: on_bar timeout (%s): %w", s.timeout(), ErrSandboxDead)
+	}
+}
+
+// OnOrder 见 Sandbox 接口。与 OnBar 的超时策略不同：订单事件容忍度高，
+// 单轮超时**不杀**子进程——留守 goroutine（孤儿）读到迟到响应后自行退出，
+// 后续 rpc 经 lateDone 等待维持单读者约束；worker 彻底卡死时由后续调用的
+// waitLateLocked 超时杀进程自愈。
+func (s *SubprocessSandbox) OnOrder(ctx context.Context, evt OrderEvent) (*OrderResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.started {
+		return nil, ErrSandboxDead
+	}
+	if err := s.waitLateLocked(); err != nil {
+		return nil, err
+	}
+	s.nextID++
+	id := s.nextID
+	req, err := json.Marshal(map[string]any{"id": id, "method": "on_order", "params": map[string]any{"order": evt}})
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.stdin.Write(req); err != nil {
+		s.markDead()
+		return nil, ErrSandboxDead
+	}
+	if err := s.stdin.WriteByte('\n'); err != nil {
+		s.markDead()
+		return nil, ErrSandboxDead
+	}
+	if err := s.stdin.Flush(); err != nil {
+		s.markDead()
+		return nil, ErrSandboxDead
+	}
+
+	done := make(chan struct{})
+	type orderOut struct {
+		res *OrderResult
+		err error
+	}
+	out := make(chan orderOut, 1)
+	go func() {
+		defer close(done)
+		raw, err := s.readMatched(id)
+		if err != nil {
+			out <- orderOut{nil, err}
+			return
+		}
+		var or OrderResult
+		if err := json.Unmarshal(raw, &or); err != nil {
+			out <- orderOut{nil, fmt.Errorf("pystrat: decode order result: %w", err)}
+			return
+		}
+		out <- orderOut{&or, nil}
+	}()
+
+	select {
+	case o := <-out:
+		if o.err != nil {
+			if errors.Is(o.err, ErrSandboxDead) {
+				return nil, o.err
+			}
+			return nil, fmt.Errorf("pystrat: on_order: %w", o.err)
+		}
+		return o.res, nil
+	case <-ctx.Done():
+		s.armOrphanLocked(done)
+		return nil, fmt.Errorf("pystrat: on_order: %w", ctx.Err())
+	case <-time.After(s.timeout()):
+		s.armOrphanLocked(done)
+		return nil, fmt.Errorf("pystrat: on_order timeout (%s): %w", s.timeout(), ErrOnOrderTimeout)
 	}
 }
 

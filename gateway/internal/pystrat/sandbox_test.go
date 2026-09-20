@@ -143,3 +143,120 @@ func TestSubprocessSandboxTimeoutKills(t *testing.T) {
 		t.Fatal("sandbox must be marked dead after timeout")
 	}
 }
+
+// on_order 端到端：策略定义 on_order → 收到订单回报并可见 logs。
+func TestSubprocessSandboxOnOrder(t *testing.T) {
+	requirePython3(t)
+	sb := NewSubprocessSandbox()
+	defer sb.Close()
+
+	code := validStrategy + `
+def on_order(context, order):
+    context.log("order %s status=%s pnl=%s" % (order["id"], order["status"], order.get("pnl")))
+`
+	manifest, err := sb.Load(context.Background(), code, nil, "BTCUSDT", "15m")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if manifest.Name != "t" {
+		t.Fatalf("manifest mismatch: %+v", manifest)
+	}
+	res, err := sb.OnOrder(context.Background(), OrderEvent{
+		ID: "ord-9", Symbol: "BTCUSDT", Side: "buy", Type: "limit",
+		Qty: 0.5, Price: 48000, Filled: 0.5, AvgPrice: 48000,
+		Status: "filled", PnL: 3.5,
+	})
+	if err != nil {
+		t.Fatalf("on_order: %v", err)
+	}
+	joined := strings.Join(res.Logs, "\n")
+	if !strings.Contains(joined, "ord-9") || !strings.Contains(joined, "filled") || !strings.Contains(joined, "3.5") {
+		t.Fatalf("on_order logs must carry order payload, got %v", res.Logs)
+	}
+}
+
+// 策略未定义 on_order → 跳过（ok=true, skipped 语义），子进程不受影响。
+func TestSubprocessSandboxOnOrderUndefinedSkips(t *testing.T) {
+	requirePython3(t)
+	sb := NewSubprocessSandbox()
+	defer sb.Close()
+	if _, err := sb.Load(context.Background(), validStrategy, nil, "BTCUSDT", "15m"); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	res, err := sb.OnOrder(context.Background(), OrderEvent{ID: "ord-1", Status: "filled"})
+	if err != nil {
+		t.Fatalf("on_order without callback must skip, got error: %v", err)
+	}
+	if res == nil {
+		t.Fatal("expected non-nil result")
+	}
+	// 后续 on_bar 照常工作
+	if _, err := sb.OnBar(context.Background(), model.Bar{Close: 1}, State{Equity: 1}); err != nil {
+		t.Fatalf("on_bar after skipped on_order: %v", err)
+	}
+}
+
+// on_order 内下单动作被丢弃并记 warning；回调异常以错误返回但子进程存活。
+func TestSubprocessSandboxOnOrderDiscardsActions(t *testing.T) {
+	requirePython3(t)
+	sb := NewSubprocessSandbox()
+	defer sb.Close()
+	code := validStrategy + `
+def on_order(context, order):
+    context.buy(amount=100)
+    context.log("saw order")
+`
+	if _, err := sb.Load(context.Background(), code, nil, "BTCUSDT", "15m"); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	res, err := sb.OnOrder(context.Background(), OrderEvent{ID: "ord-2", Status: "filled"})
+	if err != nil {
+		t.Fatalf("on_order: %v", err)
+	}
+	joined := strings.Join(res.Logs, "\n")
+	if !strings.Contains(joined, "已忽略") {
+		t.Fatalf("actions in on_order must be discarded with warning, got %v", res.Logs)
+	}
+}
+
+// on_order 超时：不杀子进程（与 on_bar 超时策略不同），返回 ErrOnOrderTimeout，
+// 后续 on_bar 照常（迟到响应被孤儿机制消费，协议不串位）。
+func TestSubprocessSandboxOnOrderTimeoutDoesNotKill(t *testing.T) {
+	requirePython3(t)
+	sb := NewSubprocessSandbox()
+	sb.CallTimeout = 500 * time.Millisecond
+	defer sb.Close()
+	// datetime 在白名单内；用墙钟忙等 1.2s（必超 500ms 调用超时，又在测试
+	// 轮询窗口内完成，保证孤儿能消费到迟到响应）。
+	code := validStrategy + `
+import datetime
+
+def on_order(context, order):
+    deadline = datetime.datetime.now() + datetime.timedelta(seconds=1.2)
+    while datetime.datetime.now() < deadline:
+        pass
+    context.log("late response arrived")
+`
+	if _, err := sb.Load(context.Background(), code, nil, "BTCUSDT", "15m"); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	start := time.Now()
+	_, err := sb.OnOrder(context.Background(), OrderEvent{ID: "ord-slow", Status: "filled"})
+	if !errors.Is(err, ErrOnOrderTimeout) {
+		t.Fatalf("expected ErrOnOrderTimeout, got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("on_order timeout wait too slow: %v", elapsed)
+	}
+	if !sb.Alive() {
+		t.Fatal("on_order timeout must NOT kill the sandbox")
+	}
+	// 等孤儿消费迟到响应（worker 忙等 1.2s 必完成），随后 on_bar 必须正常。
+	// 注意不能用 on_bar 轮询：waitLate 超时也会杀进程。
+	time.Sleep(1500 * time.Millisecond)
+	res, err := sb.OnBar(context.Background(), model.Bar{Close: 1}, State{Equity: 1})
+	if err != nil {
+		t.Fatalf("on_bar after on_order timeout: %v", err)
+	}
+	_ = res
+}

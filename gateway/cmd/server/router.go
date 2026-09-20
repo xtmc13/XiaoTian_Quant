@@ -74,6 +74,7 @@ func setupRoutes(r *gin.Engine, cfg *serverConfig) *gin.Engine {
 		registerDCABotRoutes(api)
 		registerLayeredMartinRoutes(api)
 		registerReconcileRoutes(api)
+		registerIndicatorAlertRoutes(api)
 		registerFactorResearchRoutes(api)
 		registerPortfolioBacktestRoutes(api)
 	}
@@ -813,6 +814,23 @@ func registerDCABotRoutes(api *gin.RouterGroup) {
 		private.DELETE("/:id", handler.DCABotDelete)
 		private.POST("/:id/start", handler.DCABotStart)
 		private.POST("/:id/stop", handler.DCABotStop)
+	}
+}
+
+// registerIndicatorAlertRoutes 指标信号告警任务（对标 QuantDinger indicator_signal_alerts）：CRUD+启停+立即执行+触发历史。
+func registerIndicatorAlertRoutes(api *gin.RouterGroup) {
+	private := api.Group("/alerts")
+	private.Use(middleware.AuthRequired())
+	{
+		private.GET("/", handler.IndicatorAlertList)
+		private.POST("/", handler.IndicatorAlertCreate)
+		private.GET("/:id", handler.IndicatorAlertGet)
+		private.PUT("/:id", handler.IndicatorAlertUpdate)
+		private.DELETE("/:id", handler.IndicatorAlertDelete)
+		private.POST("/:id/enable", handler.IndicatorAlertEnable)
+		private.POST("/:id/disable", handler.IndicatorAlertDisable)
+		private.POST("/:id/run", handler.IndicatorAlertRun) // ?force=1 绕过冷却
+		private.GET("/:id/history", handler.IndicatorAlertHistory)
 	}
 }
 

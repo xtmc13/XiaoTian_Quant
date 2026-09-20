@@ -37,6 +37,23 @@ type Executor interface {
 	SellSpot(botID, symbol, exchange string, userID int64, baseQty, refPrice float64) (filledQty, avgPrice float64, err error)
 }
 
+// LimitExecutor 是限价单执行扩展接口（v1.1，生产 handler.OMSBotExecutor 实现）。
+// Executor 未实现它时 runner 对 price>0 的动作报错并跳过（不会静默转市价）。
+type LimitExecutor interface {
+	// BuySpotLimit 挂限价买单，返回订单 ID（可能未成交，成交回报经订单事件回推）。
+	BuySpotLimit(botID, symbol, exchange string, userID int64, quoteAmount, price float64) (orderID string, err error)
+	// SellSpotLimit 挂限价卖单，返回订单 ID。
+	SellSpotLimit(botID, symbol, exchange string, userID int64, baseQty, price float64) (orderID string, err error)
+}
+
+// ContractExecutor 是合约下单窄接口（v1.1，生产 handler.OMSBotExecutor.PlaceContract，
+// 与 grid.Runner 的合约腿同一实现：market_type=swap + position_side +
+// leverage/margin_mode，client_oid 前缀 "pystrat:<id>"）。Executor 未实现它时
+// futures 买入报错并跳过。
+type ContractExecutor interface {
+	PlaceContract(botID, symbol, exchange string, userID int64, side string, qty, price, leverage float64, marginMode, positionSide string) (filledQty, avgPrice float64, err error)
+}
+
 // Accounts 是持仓/权益视图（生产读 portfolio manager 的 paper 账本）。
 type Accounts interface {
 	// Position 返回该 symbol 当前净持仓；无持仓 ok=false。
@@ -58,6 +75,7 @@ type Runner struct {
 	repo    *store.PyStrategyRepo
 	factory SandboxFactory
 	bars    BarSource
+	orders  OrderSource // v1.1 on_order 落地；nil 则不接订单回报（测试兼容）
 	exec    Executor
 	accts   Accounts
 	gate    func(exchange string) error
@@ -77,8 +95,10 @@ type botRuntime struct {
 	manifest *Manifest
 	sandbox  Sandbox
 	barCh    <-chan model.Bar
+	orderCh  <-chan OrderEvent // v1.1：策略自有订单回报（client_oid "pystrat:<id>"）
 	params   map[string]any
 	unsub    func()
+	unsubOrd func() // 订单回报退订（nil 表示未订阅）
 	stopCh   chan struct{}
 	done     chan struct{}
 	logs     *ringLog
@@ -111,6 +131,10 @@ func NewRunner(repo *store.PyStrategyRepo, factory SandboxFactory, bars BarSourc
 
 // SetLiveGate 注入实盘闸（生产为 handler.canPlaceLiveOrder 闭包）。
 func (r *Runner) SetLiveGate(gate func(exchange string) error) { r.gate = gate }
+
+// SetOrderSource 注入订单回报订阅源（v1.1 on_order 落地；可为 nil，
+// nil 时运行中的策略不接收订单回报——历史测试与最小部署兼容）。
+func (r *Runner) SetOrderSource(src OrderSource) { r.orders = src }
 
 // SetProtector 注入 TP/SL 条件单映射（可为 nil，nil 即记录并跳过）。
 func (r *Runner) SetProtector(p Protector) { r.prot = p }
@@ -173,21 +197,36 @@ func (r *Runner) Start(rec *store.PyStrategyRecord) error {
 		return fmt.Errorf("pystrat runner: subscribe bars: %w", err)
 	}
 
+	// v1.1：订阅策略自有订单回报（client_oid "pystrat:<id>" 前缀），驱动 on_order。
+	// 订阅失败不阻塞启动（订单回报是增量能力），仅记日志。
+	var orderCh <-chan OrderEvent
+	var unsubOrd func()
+	if r.orders != nil {
+		oc, uo, oerr := r.orders.Subscribe(rec.ID, normalizeSymbol(rec.Symbol))
+		if oerr != nil {
+			log.Printf("pystrat runner: subscribe orders %s: %v", rec.ID, oerr)
+		} else {
+			orderCh, unsubOrd = oc, uo
+		}
+	}
+
 	rt := &botRuntime{
 		record:    rec,
 		manifest:  manifest,
 		sandbox:   sandbox,
 		barCh:     barCh,
+		orderCh:   orderCh,
 		params:    manifest.EffectiveParams(params),
 		unsub:     unsub,
+		unsubOrd:  unsubOrd,
 		stopCh:    make(chan struct{}),
 		done:      make(chan struct{}),
 		logs:      newRingLog(200),
 		exchange:  exchange,
 		startTime: time.Now().UnixMilli(),
 	}
-	rt.logf("info", "策略已加载 manifest=%s symbol=%s interval=%s direction=%s exchange=%s",
-		manifest.Name, manifest.Symbol, manifest.Interval, manifest.Direction, exchange)
+	rt.logf("info", "策略已加载 manifest=%s symbol=%s interval=%s direction=%s exchange=%s market=%s",
+		manifest.Name, manifest.Symbol, manifest.Interval, manifest.Direction, exchange, rec.Market)
 
 	r.mu.Lock()
 	r.bots[rec.ID] = rt
@@ -217,6 +256,9 @@ func (r *Runner) Stop(id string) error {
 	}
 	close(rt.stopCh)
 	<-rt.done
+	if rt.unsubOrd != nil {
+		rt.unsubOrd()
+	}
 	if r.repo != nil {
 		return r.repo.UpdateStatus(id, store.PyStratStatusPaused, "")
 	}
@@ -323,16 +365,29 @@ func (r *Runner) RetryResume(fetch func() ([]*store.PyStrategyRecord, error), in
 	}
 }
 
-// run 是单策略的 bar goroutine：串行消费 K 线 → 沙箱 on_bar → 动作执行。
+// run 是单策略的 bar goroutine：串行消费 K 线 → 沙箱 on_bar → 动作执行；
+// v1.1 起同一 goroutine 串行消费订单回报 → 沙箱 on_order（与 on_bar 不并发，
+// 免沙箱锁竞争）。
 func (r *Runner) run(rt *botRuntime) {
 	defer close(rt.done)
 	defer rt.unsub()
 	defer rt.sandbox.Close()
+	defer func() {
+		if rt.unsubOrd != nil {
+			rt.unsubOrd()
+		}
+	}()
 
 	for {
 		select {
 		case <-rt.stopCh:
 			return
+		case ord, ok := <-rt.orderCh:
+			if !ok {
+				rt.orderCh = nil // 回报源关闭：不再监听，策略继续跑 bar
+				continue
+			}
+			r.onOrder(rt, ord)
 		case bar, ok := <-rt.barCh:
 			if !ok {
 				rt.logf("error", "K 线订阅已关闭，策略退出")
@@ -361,6 +416,45 @@ func (r *Runner) run(rt *botRuntime) {
 				rt.consecErrors = 0
 				rt.mu.Unlock()
 			}
+		}
+	}
+}
+
+// onOrder 把一笔订单回报分发给沙箱 on_order（v1.1）。容忍度高于 on_bar：
+// 超时不杀沙箱只记日志跳过；回调异常只记日志，不计入错误契约；限价买入
+// 成交（filled）时补挂 TP/SL（市价买单在 execAction 内已挂）。
+func (r *Runner) onOrder(rt *botRuntime, evt OrderEvent) {
+	res, err := rt.sandbox.OnOrder(context.Background(), evt)
+	if err != nil {
+		if errors.Is(err, ErrOnOrderTimeout) {
+			rt.logf("error", "on_order 超时，订单事件跳过 order=%s status=%s", evt.ID, evt.Status)
+			return
+		}
+		if errors.Is(err, ErrSandboxDead) {
+			// 沙箱死亡由下一根 bar 的重建路径处理，这里只记跳过。
+			rt.logf("error", "on_order 分发失败（沙箱已死，待重建） order=%s: %v", evt.ID, err)
+			return
+		}
+		rt.logf("error", "on_order 回调失败 order=%s status=%s: %v", evt.ID, evt.Status, err)
+		return
+	}
+	if res == nil {
+		return
+	}
+	for _, line := range res.Logs {
+		rt.logf("info", "%s", line)
+	}
+	for _, p := range res.Prints {
+		rt.logf("info", "print: %s", p)
+	}
+	// 限价买入成交 → 补挂 TP/SL（限价单在 execAction 挂单时无成交价）。
+	if evt.Status == "filled" && evt.Side == "buy" && evt.Type == "limit" && evt.Filled > 0 {
+		avg := evt.AvgPrice
+		if avg <= 0 {
+			avg = evt.Price
+		}
+		if err := r.applyBracket(rt, normalizeSymbol(rt.manifest.Symbol), evt.Filled, avg); err != nil {
+			rt.logf("error", "限价成交补挂 TP/SL 失败: %v", err)
 		}
 	}
 }
@@ -428,24 +522,38 @@ func (r *Runner) rebuildSandbox(rt *botRuntime) error {
 }
 
 // execAction 把一个 context 动作转成 OMS 下单 / 条件单。
+// v1.1：act.Price>0 走现货限价单；record.market='futures' 的买入走 OMS
+// 合约链路（paper 模式回落现货并记日志）。
 func (r *Runner) execAction(rt *botRuntime, bar model.Bar, act Action, state State) error {
 	symbol := normalizeSymbol(rt.manifest.Symbol)
 	refPrice := bar.Close
-	if act.Price > 0 {
-		rt.logf("info", "v1 为市价执行，忽略限价 %.4f", act.Price)
-	}
 
 	switch act.Type {
 	case "buy":
+		if !r.directionAllows(rt.manifest.Direction, true) {
+			return fmt.Errorf("direction=%s 不允许买入开仓", rt.manifest.Direction)
+		}
+		futures := rt.record.Market == store.PyStratMarketFutures
+		if futures && rt.record.Paper {
+			// paper 撮合不支持杠杆：回落现货撮合并注明
+			rt.logf("info", "paper 撮合不支持合约杠杆，market=futures 回落现货市价执行")
+			futures = false
+		}
+		if futures {
+			if act.Price > 0 {
+				rt.logf("info", "v1.1 合约单为市价执行，忽略限价 %.4f", act.Price)
+			}
+			return r.execContractBuy(rt, act, state, refPrice)
+		}
+		if act.Price > 0 {
+			return r.execLimitBuy(rt, act, state)
+		}
 		quote := act.Amount
 		if quote <= 0 && act.Qty > 0 {
 			quote = act.Qty * refPrice
 		}
 		if quote <= 0 {
 			return errors.New("buy: 数量无效")
-		}
-		if !r.directionAllows(rt.manifest.Direction, true) {
-			return fmt.Errorf("direction=%s 不允许买入开仓", rt.manifest.Direction)
 		}
 		if err := r.checkPositionLimit(rt, state, quote, refPrice); err != nil {
 			rt.logf("info", "仓位上限拦截买入: %v", err)
@@ -463,9 +571,16 @@ func (r *Runner) execAction(rt *botRuntime, bar model.Bar, act Action, state Sta
 		return r.applyBracket(rt, symbol, filled, avg)
 
 	case "sell":
+		limit := act.Price > 0
 		qty := act.Qty
-		if qty <= 0 && act.Amount > 0 && refPrice > 0 {
-			qty = act.Amount / refPrice
+		if qty <= 0 && act.Amount > 0 {
+			p := refPrice
+			if limit {
+				p = act.Price
+			}
+			if p > 0 {
+				qty = act.Amount / p
+			}
 		}
 		if qty <= 0 {
 			return errors.New("sell: 数量无效")
@@ -473,6 +588,9 @@ func (r *Runner) execAction(rt *botRuntime, bar model.Bar, act Action, state Sta
 		if !state.HasPosition {
 			rt.logf("info", "无持仓，跳过卖出 qty=%.6f", qty)
 			return nil
+		}
+		if limit {
+			return r.execLimitSell(rt, act, qty)
 		}
 		filled, avg, err := r.exec.SellSpot(rt.record.ID, rt.record.Symbol, rt.exchange, rt.record.UserID, qty, refPrice)
 		if err != nil {
@@ -522,6 +640,93 @@ func (r *Runner) execAction(rt *botRuntime, bar model.Bar, act Action, state Sta
 	return fmt.Errorf("未知动作类型 %q", act.Type)
 }
 
+// execLimitBuy 挂现货限价买单（v1.1）：按 act.Price 进 OMS 限价单，未成交
+// 部分留在订单簿（经现有订单查询/WS 对前端可见）；成交回报走订单事件 →
+// on_order，runner 在 filled 时补挂 TP/SL。数量：qty 直接作基础币委托量，
+// amount 按限价折算。
+func (r *Runner) execLimitBuy(rt *botRuntime, act Action, state State) error {
+	le, ok := r.exec.(LimitExecutor)
+	if !ok {
+		return errors.New("执行器不支持限价单（LimitExecutor 未实现）")
+	}
+	qty := act.Qty
+	quote := act.Amount
+	if qty <= 0 && quote > 0 {
+		qty = quote / act.Price
+	}
+	if qty <= 0 {
+		return errors.New("buy: 数量无效")
+	}
+	if quote <= 0 {
+		quote = qty * act.Price
+	}
+	if err := r.checkPositionLimit(rt, state, quote, act.Price); err != nil {
+		rt.logf("info", "仓位上限拦截限价买入: %v", err)
+		return nil // 风控拦截记日志不算错误
+	}
+	orderID, err := le.BuySpotLimit(rt.record.ID, rt.record.Symbol, rt.exchange, rt.record.UserID, quote, act.Price)
+	if err != nil {
+		return err
+	}
+	rt.logf("action", "限价买单已挂 order=%s quote=%.2f price=%.4f", orderID, quote, act.Price)
+	return nil
+}
+
+// execLimitSell 挂现货限价卖单（v1.1），qty 为基础币委托量。
+func (r *Runner) execLimitSell(rt *botRuntime, act Action, qty float64) error {
+	le, ok := r.exec.(LimitExecutor)
+	if !ok {
+		return errors.New("执行器不支持限价单（LimitExecutor 未实现）")
+	}
+	orderID, err := le.SellSpotLimit(rt.record.ID, rt.record.Symbol, rt.exchange, rt.record.UserID, qty, act.Price)
+	if err != nil {
+		return err
+	}
+	rt.logf("action", "限价卖单已挂 order=%s qty=%.6f price=%.4f", orderID, qty, act.Price)
+	return nil
+}
+
+// execContractBuy 走 OMS 合约链路（v1.1，复用 handler.OMSBotExecutor.PlaceContract
+// ——与 grid.Runner 合约腿同一实现：market_type=swap + position_side +
+// leverage/margin_mode，client_oid "pystrat:<id>"）。数量：qty 直接作基础币
+// 张数；amount 视为保证金，按杠杆放大后换算张数（与 CRA entryQty 同语义）。
+// 仅 market='futures' 且 paper=0 到达这里（paper 已在 execAction 回落现货）。
+func (r *Runner) execContractBuy(rt *botRuntime, act Action, state State, refPrice float64) error {
+	ce, ok := r.exec.(ContractExecutor)
+	if !ok {
+		return errors.New("执行器不支持合约下单（ContractExecutor 未实现）")
+	}
+	leverage := rt.manifest.EffectiveLeverage(rt.record.Leverage)
+	marginMode := rt.manifest.EffectiveMarginMode(rt.record.MarginMode)
+	qty := act.Qty
+	if qty <= 0 && act.Amount > 0 && refPrice > 0 {
+		qty = act.Amount * float64(leverage) / refPrice
+	}
+	if qty <= 0 {
+		return errors.New("buy: 数量无效")
+	}
+	if err := r.checkFuturesPositionLimit(rt, state, qty, refPrice, leverage); err != nil {
+		rt.logf("info", "合约仓位上限拦截买入: %v", err)
+		return nil // 风控拦截记日志不算错误
+	}
+	positionSide := string(model.PositionLong)
+	if rt.manifest.Direction == DirectionShort {
+		positionSide = string(model.PositionShort)
+	}
+	filled, avg, err := ce.PlaceContract(rt.record.ID, rt.record.Symbol, rt.exchange, rt.record.UserID,
+		string(model.SideBuy), qty, refPrice, float64(leverage), marginMode, positionSide)
+	if err != nil {
+		return err
+	}
+	if filled <= 0 {
+		rt.logf("info", "合约买入未成交 qty=%.6f @ %.4f", qty, refPrice)
+		return nil
+	}
+	rt.logf("action", "合约买入成交 qty=%.6f avg=%.4f leverage=%dx margin=%s side=%s",
+		filled, avg, leverage, marginMode, positionSide)
+	return r.applyBracket(rt, normalizeSymbol(rt.manifest.Symbol), filled, avg)
+}
+
 // directionAllows：v1 现货执行，short 方向不允许买入开仓（无现货空头），
 // long 方向允许买/卖（卖为减仓），both 全允许。
 func (r *Runner) directionAllows(direction string, isBuy bool) bool {
@@ -548,6 +753,29 @@ func (r *Runner) checkPositionLimit(rt *botRuntime, state State, quote, refPrice
 	if (current+quote)/state.Equity > limit {
 		return fmt.Errorf("仓位 %.2fU + 买入 %.2fU 超过权益 %.2fU 的 %.0f%% 上限",
 			current, quote, state.Equity, limit*100)
+	}
+	return nil
+}
+
+// checkFuturesPositionLimit 是合约买入的保证金口径风控（v1.1）：占用保证金
+// = 名义价值 / 杠杆，买后总保证金占权益比例不超 max_position_pct。
+func (r *Runner) checkFuturesPositionLimit(rt *botRuntime, state State, qty, refPrice float64, leverage int) error {
+	limit := rt.manifest.Risk.MaxPositionPct
+	if limit <= 0 || state.Equity <= 0 || refPrice <= 0 {
+		return nil
+	}
+	lev := float64(leverage)
+	if lev < 1 {
+		lev = 1
+	}
+	current := 0.0
+	if state.HasPosition {
+		current = state.PositionQty * refPrice / lev
+	}
+	margin := qty * refPrice / lev
+	if (current+margin)/state.Equity > limit {
+		return fmt.Errorf("持仓保证金 %.2fU + 买入保证金 %.2fU 超过权益 %.2fU 的 %.0f%% 上限",
+			current, margin, state.Equity, limit*100)
 	}
 	return nil
 }

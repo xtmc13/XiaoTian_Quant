@@ -11,6 +11,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -89,6 +90,9 @@ func pyStratToJSON(rec *store.PyStrategyRecord, running bool) gin.H {
 		"error":       rec.Error,
 		"paper":       rec.Paper,
 		"bot_id":      rec.BotID,
+		"market":      rec.Market,
+		"leverage":    rec.Leverage,
+		"margin_mode": rec.MarginMode,
 		"created_at":  rec.CreatedAt,
 		"updated_at":  rec.UpdatedAt,
 		"is_running":  running,
@@ -124,6 +128,9 @@ type pyStratParams struct {
 	ParamsJSON json.RawMessage `json:"params_json"`
 	Code       string          `json:"code"`
 	Paper      *bool           `json:"paper"`
+	Market     string          `json:"market"`
+	Leverage   int             `json:"leverage"`
+	MarginMode string          `json:"margin_mode"`
 }
 
 func (p *pyStratParams) validate() string {
@@ -148,6 +155,19 @@ func (p *pyStratParams) validate() string {
 	case "", "long", "short", "both":
 	default:
 		return "direction 必须是 long|short|both"
+	}
+	switch p.Market {
+	case "", store.PyStratMarketSpot, store.PyStratMarketFutures:
+	default:
+		return "market 必须是 spot|futures"
+	}
+	if p.Leverage < 0 || p.Leverage > store.PyStratMaxLeverage {
+		return fmt.Sprintf("leverage 必须在 [1,%d] 区间（0 表示用默认值 1）", store.PyStratMaxLeverage)
+	}
+	switch p.MarginMode {
+	case "", store.PyStratMarginCross, store.PyStratMarginIsolated:
+	default:
+		return "margin_mode 必须是 cross|isolated"
 	}
 	return ""
 }
@@ -229,6 +249,9 @@ func PyStratCreate(c *gin.Context) {
 		Code:       body.Code,
 		Status:     store.PyStratStatusDraft,
 		Paper:      paper,
+		Market:     body.Market,
+		Leverage:   body.Leverage,
+		MarginMode: body.MarginMode,
 	}
 	if rec.Direction == "" {
 		rec.Direction = "long"
@@ -276,6 +299,9 @@ func PyStratUpdate(c *gin.Context) {
 	rec.Direction = body.Direction
 	rec.ParamsJSON = body.paramsJSONOrDefault()
 	rec.Code = body.Code
+	rec.Market = body.Market
+	rec.Leverage = body.Leverage
+	rec.MarginMode = body.MarginMode
 	if body.Paper != nil {
 		rec.Paper = *body.Paper
 	}

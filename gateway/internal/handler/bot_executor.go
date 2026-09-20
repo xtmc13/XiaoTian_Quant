@@ -7,6 +7,8 @@
 package handler
 
 import (
+	"fmt"
+
 	"github.com/xiaotian-quant/gateway/internal/model"
 	"github.com/xiaotian-quant/gateway/internal/order"
 )
@@ -101,6 +103,62 @@ func (e *OMSBotExecutor) SellSpot(botID, symbol, exchange string, userID int64, 
 		filled = ord.Quantity
 	}
 	return filled, avg, nil
+}
+
+// BuySpotLimit 是 pystrat v1.1 的限价买入：按 price 挂现货 LIMIT 单，
+// 数量按 quoteAmount/price 换算（与 BuySpot 同一口径，只是限价而非市价）。
+// 返回 OMS 订单 ID——限价单可能未成交，调用方不得按成交推进状态；未成交
+// 委托对前端经现有订单查询/WS 可见，成交回报经订单事件（client_oid
+// "pystrat:<id>"）回推策略 on_order。live 进单前过 canPlaceLiveOrder 安全闸。
+func (e *OMSBotExecutor) BuySpotLimit(botID, symbol, exchange string, userID int64, quoteAmount, price float64) (string, error) {
+	if err := canPlaceLiveOrder(exchange, true); err != nil {
+		return "", err
+	}
+	if price <= 0 {
+		return "", fmt.Errorf("limit buy requires a positive price")
+	}
+	qty := quoteAmount / price
+	req := &order.Request{
+		Symbol:    symbol,
+		Side:      model.SideBuy,
+		OrderType: model.TypeLimit,
+		Price:     price,
+		Quantity:  qty,
+		Exchange:  exchange,
+		UserID:    uint64(userID),
+		ClientOID: e.botClientOID(botID),
+	}
+	ord, err := order.GetOrderManager().PlaceOrder(req)
+	if err != nil {
+		return "", err
+	}
+	return ord.ID, nil
+}
+
+// SellSpotLimit 是 pystrat v1.1 的限价卖出：挂现货 LIMIT 单，返回订单 ID。
+// 语义同 BuySpotLimit（未成交不等于错误，成交回报走订单事件）。
+func (e *OMSBotExecutor) SellSpotLimit(botID, symbol, exchange string, userID int64, baseQty, price float64) (string, error) {
+	if err := canPlaceLiveOrder(exchange, true); err != nil {
+		return "", err
+	}
+	if price <= 0 {
+		return "", fmt.Errorf("limit sell requires a positive price")
+	}
+	req := &order.Request{
+		Symbol:    symbol,
+		Side:      model.SideSell,
+		OrderType: model.TypeLimit,
+		Price:     price,
+		Quantity:  baseQty,
+		Exchange:  exchange,
+		UserID:    uint64(userID),
+		ClientOID: e.botClientOID(botID),
+	}
+	ord, err := order.GetOrderManager().PlaceOrder(req)
+	if err != nil {
+		return "", err
+	}
+	return ord.ID, nil
 }
 
 // PlaceContract 执行合约腿下单（grid.Runner 的 ContractExecutor 生产实现）：

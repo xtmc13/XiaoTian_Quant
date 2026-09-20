@@ -14,6 +14,8 @@ import { cn } from '@/lib/utils'
 import { useWebSocket } from '@/hooks/useWebSocket'
 import { toast, ToastContainer } from '@/lib/useToast'
 import { OrderBookPanel } from '@/components/trading/OrderBookPanel'
+import { ChartTrading } from '@/components/trading/ChartTrading'
+import { computeSpotAvgEntryPrice, formatLinePrice } from '@/components/trading/chartOverlays'
 import { WatchlistPanel, WatchlistItem } from '@/components/trading/WatchlistPanel'
 import { TradingBottomPanel } from '@/components/trading/TradingBottomPanel'
 import {
@@ -171,6 +173,22 @@ export function TradingSpot() {
     return list.filter((b) => safeNumber(b.free ?? b.available) > 0)
   }, [allBalances])
 
+  /* 现货持仓成本(由已有成交历史估算),用于图表持仓均价线 */
+  const spotPosition = useMemo(() => {
+    const baseAsset = symbol.replace('USDT', '')
+    const holding = holdingsList.find((b: unknown) => {
+      const bal = b as Record<string, unknown>
+      return String(bal.asset || bal.currency) === baseAsset
+    })
+    if (!holding) return null
+    const qty = parseFloat(
+      String((holding as Record<string, unknown>).free ?? (holding as Record<string, unknown>).available ?? 0)
+    )
+    if (!(qty > 0)) return null
+    const avg = computeSpotAvgEntryPrice(symbol, historyOrders)
+    return avg != null ? { avg_entry_price: avg } : null
+  }, [symbol, holdingsList, historyOrders])
+
   /* websocket */
   const { on: wsOn } = useWebSocket('/ws', {
     onReconnect: () => {
@@ -233,6 +251,31 @@ export function TradingSpot() {
   const isUp = change >= 0
   const bestBid = orderbook?.bids?.[0]?.[0] != null ? String(orderbook.bids[0][0]) : ''
   const bestAsk = orderbook?.asks?.[0]?.[0] != null ? String(orderbook.asks[0][0]) : ''
+
+  /* 图表点价后的视觉反馈:输入框高亮闪烁 */
+  const [priceFlash, setPriceFlash] = useState(false)
+  const priceFlashTimer = useRef<number | null>(null)
+  useEffect(() => {
+    return () => {
+      if (priceFlashTimer.current) window.clearTimeout(priceFlashTimer.current)
+    }
+  }, [])
+  const handleChartPriceSelect = useCallback(
+    (p: number) => {
+      const formatted = formatLinePrice(p, precision.price)
+      if (orderType === 'MARKET') {
+        setOrderType('LIMIT')
+        toast('info', `已切换为限价单,填入价格 ${formatted}`)
+      } else {
+        toast('success', `价格已填入 ${formatted}`)
+      }
+      setPrice(formatted)
+      if (priceFlashTimer.current) window.clearTimeout(priceFlashTimer.current)
+      setPriceFlash(true)
+      priceFlashTimer.current = window.setTimeout(() => setPriceFlash(false), 700)
+    },
+    [orderType, precision.price]
+  )
 
   const filteredWatchlist = useMemo(() => {
     if (!watchlistSearch.trim()) return WATCHLIST
@@ -491,7 +534,7 @@ export function TradingSpot() {
         />
 
         {/* CHART (1fr) */}
-        <div className="bg-quant-bg flex flex-col min-h-0 overflow-hidden">
+        <div className="bg-quant-bg flex flex-col min-h-0 overflow-hidden relative">
           <ErrorBoundary
             fallback={
               <div className="flex-1 flex flex-col items-center justify-center text-red-400 text-sm">
@@ -503,6 +546,16 @@ export function TradingSpot() {
           >
             <div ref={chartRef} className="flex-1 min-h-0" />
           </ErrorBoundary>
+          <ChartTrading
+            chartContainerRef={chartRef}
+            chartApiRef={chartApiRef}
+            symbol={symbol}
+            orders={orders}
+            position={spotPosition}
+            positionLabel="持仓成本"
+            pricePrecision={precision.price}
+            onPriceSelect={handleChartPriceSelect}
+          />
         </div>
 
         {/* RIGHT: Watchlist + Trade Form (310px) */}
@@ -616,7 +669,12 @@ export function TradingSpot() {
                   <span>USDT</span>
                 </div>
                 <div className="flex flex-col gap-1">
-                  <div className="flex items-center bg-quant-bg border border-quant-border rounded-lg px-3 h-10 focus-within:border-quant-gold transition-all">
+                  <div
+                    className={cn(
+                      'flex items-center bg-quant-bg border border-quant-border rounded-lg px-3 h-10 focus-within:border-quant-gold transition-all',
+                      priceFlash && 'border-quant-gold ring-2 ring-quant-gold/40 bg-quant-gold/5'
+                    )}
+                  >
                     <input
                       value={price}
                       onChange={(e) => setPrice(e.target.value)}

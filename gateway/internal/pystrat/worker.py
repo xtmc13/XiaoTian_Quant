@@ -11,6 +11,10 @@
   on_bar {bar, state}  刷新 context.position/equity → 调 on_bar(context, bar)。
         返回 {actions, logs, prints}。回调异常作为 ok:false 返回（由 Go 侧
         按错误契约计数）。
+  on_order {order}  调 on_order(context, order)（v1.1 订单回报回调，策略未
+        定义则跳过）。返回 {logs, prints}；回调内产生的 actions 被丢弃并
+        记 warning（订单事件里不允许下单）。异常作为 ok:false 返回（Go 侧
+        记日志跳过，不计入 on_bar 错误契约）。
   ping  存活探测。
 
 安全：import 白名单（与 Go 侧 ValidateStatic 一致）、危险内建调用与双下划线
@@ -260,6 +264,14 @@ def validate_manifest(manifest):
             value = risk.get(key, 0) or 0
             if not isinstance(value, (int, float)) or value < 0:
                 errors.append("STRATEGY_MANIFEST.risk.%s 必须是非负数字" % key)
+        # v1.1 合约执行覆盖：leverage 0/缺省=不覆盖平台设置，上限 125
+        leverage = risk.get("leverage", 0) or 0
+        if not isinstance(leverage, int) or isinstance(leverage, bool) \
+                or leverage < 0 or leverage > 125:
+            errors.append("STRATEGY_MANIFEST.risk.leverage 必须是 0-125 的整数（0=不覆盖）")
+        margin_mode = risk.get("margin_mode", "") or ""
+        if margin_mode not in ("", "cross", "isolated"):
+            errors.append("STRATEGY_MANIFEST.risk.margin_mode 必须是 cross|isolated")
     return errors
 
 
@@ -372,9 +384,42 @@ def handle_on_bar(params):
     return {"actions": actions, "logs": logs, "prints": prints.splitlines()}, None
 
 
+def handle_on_order(params):
+    if not STATE["loaded"]:
+        return None, ["策略未加载"]
+    order = params.get("order") or {}
+    context = STATE["context"]
+    sink = STATE["sink"]
+
+    on_order_fn = STATE["globals"].get("on_order")
+    if not callable(on_order_fn):
+        # 策略未定义 on_order：跳过（容忍度高的可选回调）。
+        return {"skipped": True, "logs": [], "prints": []}, None
+
+    old_stdout = sys.stdout
+    sys.stdout = sink
+    try:
+        on_order_fn(context, dict(order))
+    except Exception as e:
+        sys.stdout = old_stdout
+        tb = traceback.format_exc()
+        return None, ["on_order 抛异常: %s: %s" % (type(e).__name__, e), tb]
+    sys.stdout = old_stdout
+
+    # on_order 内不允许下单：产生的 actions 连同 warning 一起丢弃。
+    actions, logs = context.drain()
+    if actions:
+        logs = list(logs) + [
+            "警告: on_order 内产生 %d 个下单动作已忽略（订单回调不允许下单）" % len(actions)
+        ]
+    prints = sink.drain()
+    return {"logs": logs, "prints": prints.splitlines()}, None
+
+
 HANDLERS = {
     "load": handle_load,
     "on_bar": handle_on_bar,
+    "on_order": handle_on_order,
 }
 
 

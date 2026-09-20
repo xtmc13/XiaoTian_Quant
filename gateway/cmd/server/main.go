@@ -14,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/adapter"
+	"github.com/xiaotian-quant/gateway/internal/alerts"
 	"github.com/xiaotian-quant/gateway/internal/app"
 	"github.com/xiaotian-quant/gateway/internal/config"
 	"github.com/xiaotian-quant/gateway/internal/dca"
@@ -181,6 +182,11 @@ func main() {
 	})
 	reconcileSvc.Start()
 
+	// ── 指标信号告警扫描（对标 QuantDinger indicator_signal_alerts）──
+	alertSvc := alerts.NewService(store.NewIndicatorAlertRepo(), alerts.MarketKlineSource{}, notify.GetManager(), 0, 0)
+	handler.SetAlertScanService(alertSvc)
+	alertSvc.Start()
+
 	// ── ML 自动滚动重训引擎（对标 FreqAI live_retrain_hours）+ 预测落盘复用 ──
 	// 到点触发 TrainingPipeline 重训（复用 /ml/train 同一入口），失败 notify 告警，
 	// 连续失败 3 次自动暂停；成功后失效该模型预测缓存，顺带按 TTL 清理预测表
@@ -292,6 +298,7 @@ func main() {
 		mlRetrainer.Stop()
 		ltmTracker.Stop()
 		settleEngine.Stop()
+		alertSvc.Stop()
 		appCtx.WaitForShutdown()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()

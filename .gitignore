@@ -113,3 +113,11 @@ IMPLEMENTATION_REPORT_*.md
 .workbuddy/
 gateway/gateway
 gateway/runtime/
+
+# Electron 桌面端产物与本地缓存
+web/release/
+web/electron-builder-cache/
+
+# Capacitor 原生工程(由 `npm run cap:add:*` 生成,按需本地构建)
+web/android/
+web/ios/
