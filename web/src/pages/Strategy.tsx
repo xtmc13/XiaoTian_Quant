@@ -19,6 +19,7 @@ import {
   Play,
   Search,
   Trash2,
+  Code2,
 } from 'lucide-react'
 import { StatusBadge, getStatusDot } from '@/components/strategy/StrategyList'
 
@@ -91,6 +92,12 @@ function GuideBar({ onDismiss }: { onDismiss: () => void }) {
           className="px-3 py-2 rounded-lg bg-quant-gold/10 text-quant-gold border border-quant-gold/20 text-xs font-medium hover:bg-quant-gold/20 transition-colors flex items-center gap-1.5"
         >
           <Plus className="w-3.5 h-3.5" /> 启动策略机器人
+        </button>
+        <button
+          onClick={() => navigate('/strategy/python')}
+          className="px-3 py-2 rounded-lg bg-quant-card text-foreground border border-quant-border text-xs font-medium hover:border-quant-gold/40 transition-colors flex items-center gap-1.5"
+        >
+          <Code2 className="w-3.5 h-3.5" /> Python 策略
         </button>
         <button
           onClick={onDismiss}

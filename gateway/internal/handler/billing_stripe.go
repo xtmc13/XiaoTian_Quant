@@ -302,7 +302,9 @@ func BillingStripeWebhook(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"received": true, "ignored": "already paid"})
 		return
 	}
-	billingGrantOrder(o)
+	if billingGrantOrder(o) {
+		billingGrantReferralCommission(o)
+	}
 	c.JSON(http.StatusOK, gin.H{"received": true})
 }
 

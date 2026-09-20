@@ -18,7 +18,7 @@ interface AuthState {
   login: (username: string, password: string, turnstileToken?: string) => Promise<AuthResult>
   mfaVerify: (mfaToken: string, code: string) => Promise<void>
   loginByCode: (email: string, code: string, turnstileToken?: string) => Promise<AuthResult>
-  register: (data: { username: string; password: string; email: string; code: string; nickname?: string }, turnstileToken?: string) => Promise<AuthResult>
+  register: (data: { username: string; password: string; email: string; code: string; nickname?: string; referral_code?: string }, turnstileToken?: string) => Promise<AuthResult>
   sendCode: (email: string, codeType: string) => Promise<void>
   resetPassword: (email: string, code: string, password: string) => Promise<void>
   fetchUser: () => Promise<void>

@@ -49,6 +49,7 @@ func setupRoutes(r *gin.Engine, cfg *serverConfig) *gin.Engine {
 		registerTriangularRoutes(api)
 		registerDataRoutes(api)
 		registerPythonStrategyRoutes(api)
+		registerPyStratRoutes(api)
 		registerStrategyRoutes(api)
 		registerComboRoutes(api)
 		registerPortfolioRoutes(api)
@@ -164,6 +165,11 @@ func registerBillingRoutes(api *gin.RouterGroup) {
 		billingG.GET("/orders/:id/verification", handler.BillingOrderVerification)
 		billingG.GET("/stripe/config", handler.BillingStripeConfig)
 		billingG.POST("/stripe/checkout", handler.BillingStripeCheckout)
+		// ── 推荐码（affiliate）：取/建我的码、比例、收益 ──
+		billingG.GET("/referral/code", handler.BillingReferralCode)
+		billingG.POST("/referral/code", handler.BillingReferralCodeUpdate)
+		billingG.GET("/referral/summary", handler.BillingReferralSummary)
+		billingG.GET("/referral/earnings", handler.BillingReferralEarnings)
 	}
 
 	// 公开路由：Stripe webhook（验签在 handler 内完成，不能挂 AuthRequired）。
@@ -196,6 +202,7 @@ func registerAdminRoutes(api *gin.RouterGroup) {
 		adminG.POST("/users/:id/disable", handler.AdminUserDisable)
 		adminG.POST("/users/:id/enable", handler.AdminUserEnable)
 		adminG.POST("/config/reload", handler.ReloadConfig)
+		adminG.GET("/referrals", handler.AdminListReferrals)
 	}
 }
 
@@ -432,6 +439,24 @@ func registerPythonStrategyRoutes(api *gin.RouterGroup) {
 	private.POST("/strategies-python/run", handler.RunPythonStrategy)
 }
 
+// registerPyStratRoutes 用户 Python 策略（契约化运行时 v1）：CRUD + validate/start/stop/logs/status。
+func registerPyStratRoutes(api *gin.RouterGroup) {
+	private := api.Group("/pystrategies")
+	private.Use(middleware.AuthRequired())
+	{
+		private.GET("/", handler.PyStratList)
+		private.POST("/", handler.PyStratCreate)
+		private.GET("/:id", handler.PyStratGet)
+		private.PUT("/:id", handler.PyStratUpdate)
+		private.DELETE("/:id", handler.PyStratDelete)
+		private.POST("/:id/validate", handler.PyStratValidate)
+		private.POST("/:id/start", handler.PyStratStart)
+		private.POST("/:id/stop", handler.PyStratStop)
+		private.GET("/:id/logs", handler.PyStratLogs)
+		private.GET("/:id/status", handler.PyStratStatus)
+	}
+}
+
 func registerComboRoutes(api *gin.RouterGroup) {
 	private := api.Group("")
 	private.Use(middleware.AuthRequired())
@@ -588,6 +613,12 @@ func registerMLRoutes(api *gin.RouterGroup) {
 	private.POST("/analysis/start", handler.AIAnalysisStart)
 	private.GET("/analysis/result", handler.AIAnalysisResult)
 	private.POST("/chat/send", handler.ChatSend)
+	// ── ML 自动重训任务（对标 freqtrade live_retrain_hours） ──
+	private.GET("/ml/retrain-jobs", handler.ListRetrainJobs)
+	private.POST("/ml/retrain-jobs", handler.CreateRetrainJob)
+	private.PUT("/ml/retrain-jobs/:id", handler.UpdateRetrainJob)
+	private.POST("/ml/retrain-jobs/:id/run", handler.RunRetrainJob)
+	private.GET("/ml/retrain-jobs/:id/runs", handler.ListRetrainJobRuns)
 }
 
 func registerAgentRoutes(api *gin.RouterGroup) {

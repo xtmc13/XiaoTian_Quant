@@ -4,6 +4,7 @@ import { PageHeader } from '@/components/ui/PageHeader'
 import { SectionCard } from '@/components/ui/SectionCard'
 import { Badge } from '@/components/ui/Badge'
 import { billingApi } from '@/lib/api'
+import ReferralPanel from '@/components/billing/ReferralPanel'
 import type { BillingOrder, BillingPlan, ChainInfo, BillingSubscription, BillingVerificationResponse, StripeConfig } from '@/types'
 import { CheckCircle2, Zap, Crown, Star, Loader2, ExternalLink, Copy, Clock, CreditCard, RefreshCw } from 'lucide-react'
 
@@ -418,6 +419,8 @@ export function Billing() {
             </div>
           )}
         </SectionCard>
+
+        <ReferralPanel />
 
         <p className="text-[10px] text-muted-foreground flex items-center gap-1">
           <ExternalLink className="h-3 w-3" />

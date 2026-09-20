@@ -2,6 +2,7 @@ package handler
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 
@@ -23,6 +24,8 @@ type RegisterRequest struct {
 	Email          string `json:"email"`
 	Code           string `json:"code"`
 	TurnstileToken string `json:"turnstile_token,omitempty"`
+	// ReferralCode 可选推荐码（affiliate，0020）：注册成功写入 referred_by。
+	ReferralCode string `json:"referral_code,omitempty"`
 }
 
 type SendCodeRequest struct {
@@ -161,6 +164,26 @@ func Register(c *gin.Context) {
 		return
 	}
 
+	// 可选推荐码校验：存在且 active 才允许注册携带；自己推荐自己一并拒绝。
+	var referrerID int64
+	if req.ReferralCode != "" {
+		code := normalizeReferralCode(req.ReferralCode)
+		if !referralCodePattern.MatchString(code) {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "Invalid referral code"})
+			return
+		}
+		rc, err := referralRepo.GetCodeByCode(code)
+		if err != nil || rc == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "Invalid referral code"})
+			return
+		}
+		if !rc.Active {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "Referral code is inactive"})
+			return
+		}
+		referrerID = rc.UserID
+	}
+
 	userID, err := store.CreateUser(req.Username, req.Password, req.Nickname, req.Email, "user")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "Failed to create user"})
@@ -169,6 +192,14 @@ func Register(c *gin.Context) {
 
 	// Mark email as verified
 	store.SetEmailVerified(userID)
+
+	// 写推荐关系（仅校验通过时 referrerID > 0）。用户已创建成功，此处失败
+	// 只记日志不阻断注册（store 层另有自己的推荐守卫）。
+	if referrerID > 0 {
+		if err := store.SetReferredBy(userID, referrerID); err != nil {
+			log.Printf("[referral] set referred_by user=%d referrer=%d failed: %v", userID, referrerID, err)
+		}
+	}
 
 	token, err := store.GenerateJWT(userID, req.Username, "user", 1)
 	if err != nil {

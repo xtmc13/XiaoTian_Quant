@@ -115,12 +115,7 @@ func (m *Manager) SendSync(msg Message) []error {
 
 	m.recordHistory(msg)
 	var errs []error
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	for _, ch := range m.channels {
-		if !ch.IsEnabled() {
-			continue
-		}
+	for _, ch := range m.resolveChannels(msg) {
 		if err := ch.Send(msg); err != nil {
 			metrics.RecordNotifySend(ch.Name(), "failure")
 			errs = append(errs, fmt.Errorf("%s: %w", ch.Name(), err))
@@ -129,6 +124,45 @@ func (m *Manager) SendSync(msg Message) []error {
 		}
 	}
 	return errs
+}
+
+// resolveChannels returns the enabled channels that should receive msg.
+//
+// When msg carries a "_channels" tag (comma-separated channel names, written
+// by Router.Match/Broadcast), delivery is restricted to the intersection of
+// the tag's names and the enabled channels; unknown names are ignored. When
+// the intersection is empty a warning is logged and nothing is delivered. A
+// message without the tag keeps the legacy behavior: all enabled channels.
+func (m *Manager) resolveChannels(msg Message) []Channel {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	allowed := make(map[string]bool)
+	if raw, ok := msg.Tags["_channels"]; ok {
+		for _, name := range strings.Split(raw, ",") {
+			name = strings.TrimSpace(name)
+			if name != "" {
+				allowed[strings.ToLower(name)] = true
+			}
+		}
+	}
+
+	var out []Channel
+	for _, ch := range m.channels {
+		if !ch.IsEnabled() {
+			continue
+		}
+		if len(allowed) > 0 && !allowed[strings.ToLower(ch.Name())] {
+			continue
+		}
+		out = append(out, ch)
+	}
+
+	if len(allowed) > 0 && len(out) == 0 {
+		log.Printf("[Notify] WARN: no enabled channel matches _channels=%q for %q, skipping delivery",
+			msg.Tags["_channels"], msg.Title)
+	}
+	return out
 }
 
 // GetHistory returns recent notification history.
@@ -148,11 +182,7 @@ func (m *Manager) worker() {
 	defer m.wg.Done()
 	for msg := range m.queue {
 		m.recordHistory(msg)
-		m.mu.RLock()
-		for _, ch := range m.channels {
-			if !ch.IsEnabled() {
-				continue
-			}
+		for _, ch := range m.resolveChannels(msg) {
 			go func(ch Channel, msg Message) {
 				if err := ch.Send(msg); err != nil {
 					metrics.RecordNotifySend(ch.Name(), "failure")
@@ -162,7 +192,6 @@ func (m *Manager) worker() {
 				metrics.RecordNotifySend(ch.Name(), "success")
 			}(ch, msg)
 		}
-		m.mu.RUnlock()
 	}
 }
 

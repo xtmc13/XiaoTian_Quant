@@ -324,7 +324,9 @@ func (s *MLStrategy) predict() (float64, error) {
 	}
 
 	if s.useLocal && s.predictor.IsLoaded() {
-		// Local mode: compute features + predict (no HTTP, microseconds)
+		// Local mode: compute features + predict (no HTTP, microseconds).
+		// 预测落盘复用：同 (model, symbol, bar_time, features_hash) 直接命中缓存，
+		// 加速回测/hyperopt 重复遍历；模型重训成功后缓存自动失效。
 		ohlcv := make([]ml.OHLCV, len(bars))
 		for i, b := range bars {
 			ohlcv[i] = ml.OHLCV{Open: b.Open, High: b.High, Low: b.Low, Close: b.Close, Volume: b.Volume}
@@ -332,7 +334,12 @@ func (s *MLStrategy) predict() (float64, error) {
 		calc := ml.NewFeatureCalculator([]int{5, 10, 20, 50})
 		features := calc.Compute(ohlcv)
 
-		return s.predictor.PredictFromMap(features)
+		var barTimeMs int64
+		if n := len(s.bars); n > 0 {
+			barTimeMs = s.bars[n-1].Time
+		}
+		key := ml.PredictionKey{ModelName: s.modelID, Symbol: s.symbol, BarTimeMs: barTimeMs}
+		return ml.DefaultPredictionCache().Predict(s.predictor, key, features)
 	}
 
 	// HTTP mode: call ML server

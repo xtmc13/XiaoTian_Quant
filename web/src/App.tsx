@@ -52,6 +52,7 @@ const RLTraining = lazyPage(() => import('./pages/AI/RLTraining'), 'RLTraining')
 const TensorBoard = lazyPage(() => import('./pages/AI/TensorBoard'), 'TensorBoard')
 const DiscussionRoom = lazyPage(() => import('./pages/AI/DiscussionRoom'), 'DiscussionRoom')
 const StrategyEditor = lazyPage(() => import('./pages/strategy/StrategyEditor'), 'StrategyEditor')
+const PythonStrategyPage = lazyPage(() => import('./pages/strategy/PythonStrategyPage'), 'PythonStrategyPage')
 const BotsSignal = lazyPage(() => import('./pages/bots/BotsSignal'), 'BotsSignal')
 const BotsAI = lazyPage(() => import('./pages/bots/BotsAI'), 'BotsAI')
 const BotsCenter = lazyPage(() => import('./pages/bots/BotsCenter'), 'BotsCenter')
@@ -149,6 +150,7 @@ function DocumentTitle() {
     '/trading/spot': '现货交易 - 小天量化',
     '/trading/contract': '合约交易 - 小天量化',
     '/strategy/editor': '策略编辑器 - 小天量化',
+    '/strategy/python': 'Python 策略 - 小天量化',
     '/ai/freqai': 'FreqAI - 小天量化',
     '/ai/rl': 'RL强化学习 - 小天量化',
     '/ai/tensorboard': 'TensorBoard - 小天量化',
@@ -320,6 +322,14 @@ export default function App() {
                     element={
                       <PageShell>
                         <StrategyEditor />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/strategy/python"
+                    element={
+                      <PageShell>
+                        <PythonStrategyPage />
                       </PageShell>
                     }
                   />

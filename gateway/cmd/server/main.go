@@ -23,6 +23,7 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/market"
 	"github.com/xiaotian-quant/gateway/internal/metrics"
 	"github.com/xiaotian-quant/gateway/internal/middleware"
+	"github.com/xiaotian-quant/gateway/internal/ml"
 	"github.com/xiaotian-quant/gateway/internal/notify"
 	"github.com/xiaotian-quant/gateway/internal/order"
 	"github.com/xiaotian-quant/gateway/internal/portfolio"
@@ -115,6 +116,16 @@ func main() {
 		return lmRepo.GetGroups(botID)
 	}, 60*time.Second)
 
+	// ── 用户 Python 策略契约化运行时（v1）：策略代码在独立 python3 沙箱子
+	// 进程中长驻执行，K 线走 KlineFeeder→事件总线，信号经 OMSBotExecutor
+	// 进 OMS；paper=1 强制模拟盘，paper=0 启动前过实盘闸。接线细节见
+	// handler/pystrat_wiring.go。 ──
+	pyStratRunner := handler.NewPyStratRunner()
+	handler.SetPyStratService(pyStratRunner)
+	go pyStratRunner.RetryResume(func() ([]*store.PyStrategyRecord, error) {
+		return store.NewPyStrategyRepo().List(map[string]any{"status": "active"}, 0)
+	}, 60*time.Second)
+
 	// ── A8 对账体系（持仓对账/成交恢复/资金费对账/实盘偏差监控/回报PnL对账）──
 	// 交易所访问工厂：有默认凭证的交易所构造适配器，供 reconcile 通过窄接口
 	// （PositionQuerier/OrderStatusQuerier/OrderTradesQuerier/FundingQuerier/ReportedPnLQuerier）
@@ -169,6 +180,19 @@ func main() {
 		return gridRunner.ApplyRecoveredFill(botID, side, qty, price)
 	})
 	reconcileSvc.Start()
+
+	// ── ML 自动滚动重训引擎（对标 FreqAI live_retrain_hours）+ 预测落盘复用 ──
+	// 到点触发 TrainingPipeline 重训（复用 /ml/train 同一入口），失败 notify 告警，
+	// 连续失败 3 次自动暂停；成功后失效该模型预测缓存，顺带按 TTL 清理预测表
+	// （默认 30 天，ML_PREDICTION_TTL_D / ml_settings prediction_ttl_d 可覆盖）。
+	mlRetrainer := ml.NewRetrainer(
+		store.NewMLRetrainRepo(),
+		ml.NewTrainingPipeline(handler.MLClient, handler.DataDownloader),
+		notify.GetManager(),
+		ml.DefaultPredictionCache(),
+	)
+	handler.SetMLRetrainer(mlRetrainer)
+	mlRetrainer.Start()
 
 	// ── P1-4 开放信号市场：利润分成每日结算引擎（T+锁定后可提现）──
 	settleEngine := social.NewSettlementEngine(social.NewMarketService())
@@ -261,9 +285,11 @@ func main() {
 		gridRunner.StopAll()
 		dcaRunner.StopAll()
 		lmRunner.StopAll()
+		pyStratRunner.StopAll() // 杀沙箱子进程 + 退订 K 线，须在关库前落库状态
 		// 对账/limit-then-market 后台任务先停（它们依赖 store 与 OMS），
 		// 与上方 bots 同理：必须在 appCtx.WaitForShutdown 关库之前完成。
 		reconcileSvc.Stop()
+		mlRetrainer.Stop()
 		ltmTracker.Stop()
 		settleEngine.Stop()
 		appCtx.WaitForShutdown()

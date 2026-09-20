@@ -48,6 +48,7 @@ export function Login() {
   const [regPassword, setRegPassword] = useState('')
   const [regShowPw, setRegShowPw] = useState(false)
   const [regCode, setRegCode] = useState('')
+  const [regReferral, setRegReferral] = useState(() => new URLSearchParams(window.location.search).get('ref') ?? '')
   const [regCodeState, setRegCodeState] = useState<CodeState>({ sent: false, countdown: 0 })
 
   // ── Reset password form ──
@@ -116,7 +117,7 @@ export function Login() {
     e.preventDefault()
     if (!regUsername.trim() || !regPassword.trim() || !regEmail.trim() || !regCode.trim()) return
     try {
-      await register({ username: regUsername, password: regPassword, email: regEmail, code: regCode, nickname: regUsername }, turnstileToken || undefined)
+      await register({ username: regUsername, password: regPassword, email: regEmail, code: regCode, nickname: regUsername, referral_code: regReferral.trim() || undefined }, turnstileToken || undefined)
     } catch { /* store sets error */ } finally {
       resetTurnstile()
     }
@@ -331,6 +332,14 @@ export function Login() {
                 </button>
               </div>
             </div>
+
+            {regReferral && (
+              <div className="space-y-1.5">
+                <label className={labelCls}>推荐码</label>
+                <input type="text" value={regReferral} onChange={e => setRegReferral(e.target.value)}
+                  placeholder="推荐码（可选）" maxLength={16} className={inputCls} />
+              </div>
+            )}
 
             <button type="submit"
               disabled={isLoading || !regUsername.trim() || !regPassword.trim() || !regEmail.trim() || !regCode.trim() || (showTurnstile && !turnstileToken)}

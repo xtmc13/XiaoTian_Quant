@@ -399,7 +399,7 @@ export const authApi = {
     api.post<AuthResult>('/auth/login-code', { email, code, turnstile_token: turnstileToken }),
 
   register: (
-    data: { username: string; password: string; email: string; code: string; nickname?: string },
+    data: { username: string; password: string; email: string; code: string; nickname?: string; referral_code?: string },
     turnstileToken?: string
   ) => api.post<AuthResult>('/auth/register', { ...data, turnstile_token: turnstileToken }),
 

@@ -120,7 +120,9 @@ func verifyOneBillingOrder(o *store.BillingOrder, now int64) {
 		}
 
 	default:
-		billingGrantOrder(o)
+		if billingGrantOrder(o) {
+			billingGrantReferralCommission(o)
+		}
 	}
 }
 
@@ -157,18 +159,20 @@ func billingMarkFailed(orderID, reason string) {
 }
 
 // billingGrantOrder 核验通过：单事务内订单置 paid + 发放套餐/积分。
-func billingGrantOrder(o *store.BillingOrder) {
+// 返回是否本轮真正发放（granted=false = 已发放过的重复触发）。
+func billingGrantOrder(o *store.BillingOrder) bool {
 	plan := findBillingPlan(o.PlanID)
 	if plan == nil {
 		billingMarkFailed(o.ID, "套餐不存在，无法发放")
-		return
+		return false
 	}
 	granted, err := billingRepo.GrantPlanTx(o.ID, o.UserID, plan.ID, plan.Credits, plan.PeriodDays, time.Now().Unix())
 	if err != nil {
 		log.Printf("[billing] grant %s failed: %v", o.ID, err)
-		return
+		return false
 	}
 	if granted {
 		log.Printf("[billing] order %s paid: user=%d plan=%s credits=%d", o.ID, o.UserID, plan.ID, plan.Credits)
 	}
+	return granted
 }
