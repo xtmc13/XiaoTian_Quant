@@ -1057,6 +1057,13 @@ func ResumeRunningStrategiesLoop() {
 			if id == "" {
 				continue
 			}
+			// 已在引擎中运行的策略不是"假死"，直接跳过。
+			// startStrategyInEngine 会先停再启（供用户手动重启用），
+			// 若对它每 60s 调用一次，等于每分钟重启全部策略——每次重启
+			// 都触发即时开单信号，把风控每日单量限额打爆并跳熔断。
+			if eng := strategy.GetEngine(nil); eng != nil && eng.Get(id) != nil {
+				continue
+			}
 			if err := startStrategyInEngine(id, item); err != nil {
 				if !strings.Contains(err.Error(), "already registered") {
 					log.Printf("[strategy] resume %s (%s) failed: %v", id, getString(item, "name", ""), err)
