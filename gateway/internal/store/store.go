@@ -1367,12 +1367,20 @@ func PlaceOrder(order map[string]any) string {
 		rec.CreatedAt = time.Now().UnixMilli()
 	}
 	rec.UpdatedAt = rec.CreatedAt
+	// 展示层写入必须沿用调用方（OMS）订单 ID：此前 ID 被丢弃另造
+	// ord-<ms>-<orderCount>，与 OMS 计数器（ord-<ms>-<seq>）只有进程内
+	// 首单才巧合相等——此后 GetOrderByID/CancelOrderForUser 按 OMS id
+	// 全部落空，且 DB 里同单两行（Upsert 注释的本意就是同 ID 更新）。
+	if rec.ID == "" {
+		rec.ID = getString(order, "order_id", getString(order, "id", ""))
+	}
 	if rec.ID == "" {
 		rec.ID = fmt.Sprintf("ord-%d-%d", rec.CreatedAt, orderCount)
 	}
 
-	// Persist to DB immediately
-	if err := getOrderRepo().Create(rec); err != nil {
+	// Persist to DB immediately（upsert：OMS 已落库的同 ID 订单改为更新，
+	// 不再靠重复键报错兜住展示层写入）。
+	if err := getOrderRepo().Upsert(rec); err != nil {
 		fmt.Fprintf(os.Stderr, "[Order] DB write error: %v (order kept in memory)\n", err)
 	}
 

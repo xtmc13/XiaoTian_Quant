@@ -123,7 +123,8 @@ func DashboardSummary(c *gin.Context) {
 	}
 
 	// ── Equity curve from snapshots ──
-	snapshots := mgr.GetSnapshots()
+	// 剔除旧假数据/口径切换残留的异常点（无成交解释的超阈值变动）。
+	snapshots := filterEquityOutliers(mgr.GetSnapshots())
 	// Equity curve: convert snapshots to {time, value} format for frontend
 	equityCurve := make([]map[string]any, 0, len(snapshots))
 	for _, s := range snapshots {

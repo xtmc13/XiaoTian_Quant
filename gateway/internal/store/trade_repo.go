@@ -51,6 +51,14 @@ func (r *TradeRepo) Exists(id string) bool {
 	return n > 0
 }
 
+// CountBetween 返回 (startMs, endMs] 窗口内的成交笔数（权益曲线异常点
+// 过滤用：窗口内有成交的大幅波动视为真实波动保留）。
+func (r *TradeRepo) CountBetween(startMs, endMs int64) int {
+	var n int
+	_ = db.QueryRow(`SELECT COUNT(1) FROM trades WHERE created_at > ? AND created_at <= ?`, startMs, endMs).Scan(&n)
+	return n
+}
+
 func (r *TradeRepo) GetByID(id string) (*TradeRecord, error) {
 	row := db.QueryRow(`SELECT id, user_id, order_id, symbol, side, price, quantity, fee, fee_currency, exchange, COALESCE(exec_phase,''), created_at FROM trades WHERE id=?`, id)
 	var t TradeRecord

@@ -218,7 +218,7 @@ func PortfolioSnapshots(c *gin.Context) {
 		return
 	}
 
-	snapshots := mgr.GetSnapshots()
+	snapshots := filterEquityOutliers(mgr.GetSnapshots())
 	snapList := make([]gin.H, 0, len(snapshots))
 	for _, s := range snapshots {
 		snapList = append(snapList, gin.H{

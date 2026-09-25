@@ -70,12 +70,17 @@ func (r *OrderRepo) Create(o *OrderRecord) error {
 func (r *OrderRepo) GetByID(id string) (*OrderRecord, error) {
 	row := db.QueryRow(`SELECT id, symbol, side, order_type, price, stop_price, quantity, filled, status, exchange, user_id, client_oid, avg_fill_price, created_at, updated_at, market_type, position_side, leverage, margin_mode, tp_price, sl_price, close_position FROM xt_orders WHERE id=?`, id)
 	var o OrderRecord
+	// xt_orders.created_at/updated_at 为历史 REAL 列，驱动可能返回 float64，
+	// 大时间戳会以科学计数法走字符串解析而失败——先收 float64 再显式转换。
+	var createdF, updatedF float64
 	err := row.Scan(&o.ID, &o.Symbol, &o.Side, &o.OrderType, &o.Price, &o.StopPrice, &o.Quantity, &o.Filled, &o.Status, &o.Exchange,
-		&o.UserID, &o.ClientOID, &o.AvgFillPrice, &o.CreatedAt, &o.UpdatedAt,
+		&o.UserID, &o.ClientOID, &o.AvgFillPrice, &createdF, &updatedF,
 		&o.MarketType, &o.PositionSide, &o.Leverage, &o.MarginMode, &o.TPPrice, &o.SLPrice, &o.ClosePosition)
 	if err != nil {
 		return nil, err
 	}
+	o.CreatedAt = int64(createdF)
+	o.UpdatedAt = int64(updatedF)
 	return &o, nil
 }
 
@@ -118,12 +123,73 @@ func (r *OrderRepo) List(filter map[string]any, limit int) ([]*OrderRecord, erro
 	return result, nil
 }
 
+// ListActiveByClientOIDPrefix 返回 client_oid 带指定前缀且仍在活动状态
+// （NEW/PENDING/PARTIALLY_FILLED）的订单，按创建时间升序。
+// ltm 重启恢复扫描用：父单前缀 "ltm-"，市价补单前缀 "ltm-mkt:<parentID>"。
+func (r *OrderRepo) ListActiveByClientOIDPrefix(prefix string) ([]*OrderRecord, error) {
+	rows, err := db.Query(`SELECT id, symbol, side, order_type, price, stop_price, quantity, filled, status, exchange, user_id, client_oid, avg_fill_price, created_at, updated_at, market_type, position_side, leverage, margin_mode, tp_price, sl_price, close_position
+		FROM xt_orders WHERE client_oid LIKE ? AND status IN ('NEW','PENDING','PARTIALLY_FILLED') ORDER BY created_at ASC`, prefix+"%")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []*OrderRecord
+	for rows.Next() {
+		var o OrderRecord
+		// xt_orders.created_at/updated_at 为历史 REAL 列，驱动可能返回 float64，
+		// 大时间戳会以科学计数法走字符串解析而失败——先收 float64 再显式转换。
+		var createdF, updatedF float64
+		if err := rows.Scan(&o.ID, &o.Symbol, &o.Side, &o.OrderType, &o.Price, &o.StopPrice, &o.Quantity, &o.Filled, &o.Status, &o.Exchange,
+			&o.UserID, &o.ClientOID, &o.AvgFillPrice, &createdF, &updatedF,
+			&o.MarketType, &o.PositionSide, &o.Leverage, &o.MarginMode, &o.TPPrice, &o.SLPrice, &o.ClosePosition); err != nil {
+			return nil, err
+		}
+		o.CreatedAt = int64(createdF)
+		o.UpdatedAt = int64(updatedF)
+		result = append(result, &o)
+	}
+	return result, nil
+}
+
 func (r *OrderRepo) Update(o *OrderRecord) error {
 	o.UpdatedAt = time.Now().UnixMilli()
 	_, err := db.Exec(
 		`UPDATE xt_orders SET symbol=?, side=?, order_type=?, price=?, stop_price=?, quantity=?, filled=?, status=?, exchange=?, user_id=?, client_oid=?, avg_fill_price=?, market_type=?, position_side=?, leverage=?, margin_mode=?, tp_price=?, sl_price=?, close_position=? WHERE id=?`,
 		o.Symbol, o.Side, o.OrderType, o.Price, o.StopPrice, o.Quantity, o.Filled, o.Status, o.Exchange, o.UserID,
 		o.ClientOID, o.AvgFillPrice, o.MarketType, o.PositionSide, o.Leverage, o.MarginMode, o.TPPrice, o.SLPrice, o.ClosePosition, o.ID,
+	)
+	return err
+}
+
+// Upsert 按主键 id 存在即更新、不存在即插入。
+// 修正原 "Update 失败再 Create" 的伪 upsert：UPDATE 命中 0 行并不报错，
+// 导致首写永远落不了库（OMS 订单只有经 handler/镜像绕行才有 DB 行）。
+func (r *OrderRepo) Upsert(o *OrderRecord) error {
+	if o.ID == "" {
+		o.ID = fmt.Sprintf("ord-%d", time.Now().UnixMilli())
+	}
+	if o.CreatedAt == 0 {
+		o.CreatedAt = time.Now().UnixMilli()
+	}
+	o.UpdatedAt = time.Now().UnixMilli()
+	if o.Status == "" {
+		o.Status = "NEW"
+	}
+	if o.Exchange == "" {
+		o.Exchange = "BINANCE"
+	}
+	_, err := db.Exec(
+		`INSERT INTO xt_orders (id, symbol, side, order_type, price, stop_price, quantity, filled, status, exchange, user_id, client_oid, avg_fill_price, created_at, updated_at, market_type, position_side, leverage, margin_mode, tp_price, sl_price, close_position)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		 ON CONFLICT(id) DO UPDATE SET symbol=excluded.symbol, side=excluded.side, order_type=excluded.order_type,
+		 price=excluded.price, stop_price=excluded.stop_price, quantity=excluded.quantity, filled=excluded.filled,
+		 status=excluded.status, exchange=excluded.exchange, user_id=excluded.user_id, client_oid=excluded.client_oid,
+		 avg_fill_price=excluded.avg_fill_price, updated_at=excluded.updated_at, market_type=excluded.market_type,
+		 position_side=excluded.position_side, leverage=excluded.leverage, margin_mode=excluded.margin_mode,
+		 tp_price=excluded.tp_price, sl_price=excluded.sl_price, close_position=excluded.close_position`,
+		o.ID, o.Symbol, o.Side, o.OrderType, o.Price, o.StopPrice, o.Quantity, o.Filled, o.Status, o.Exchange,
+		o.UserID, o.ClientOID, o.AvgFillPrice, o.CreatedAt, o.UpdatedAt,
+		o.MarketType, o.PositionSide, o.Leverage, o.MarginMode, o.TPPrice, o.SLPrice, o.ClosePosition,
 	)
 	return err
 }

@@ -14,10 +14,15 @@ import AxeBuilder from '@axe-core/playwright'
  */
 
 // Helper: navigate to an authenticated page and wait for it to settle.
+// 必须等应用外壳（侧边 nav）挂载完成再扫描：fullyParallel 下 dev server
+// 编译 stalls 会让 axe 扫到半渲染/重定向中的过渡 DOM，产生抖动误报。
+// 注意不能用 networkidle——应用长驻 WebSocket，networkidle 永不达成。
 async function gotoAuthenticated(page: any, path: string) {
-  await page.goto(path)
-  await page.waitForLoadState('domcontentloaded')
-  await page.waitForTimeout(1500)
+  // dev server 冷编译重型页面（dashboard/trading 现挂更多面板）可能超过默认 30s
+  // 导航超时；这里只等 DOM 就绪（nav 可见性在下面单独等），给足编译余量。
+  await page.goto(path, { waitUntil: 'domcontentloaded', timeout: 60000 })
+  await page.locator('nav').first().waitFor({ state: 'visible', timeout: 30000 })
+  await page.waitForTimeout(800)
 }
 
 // Helper: build an AxeBuilder with the project-standard rules.
@@ -32,7 +37,8 @@ test.describe('Public Pages - a11y', () => {
   test('login page has no critical a11y violations', async ({ page }) => {
     await page.goto('/login')
     await page.waitForLoadState('domcontentloaded')
-    await page.waitForTimeout(1000)
+    // 等登录表单真实挂载（提交按钮可见）再扫描，避免扫到过渡态。
+    await page.locator('button[type="submit"]').first().waitFor({ state: 'visible', timeout: 15000 })
 
     const accessibilityScanResults = await buildAxe(page).analyze()
 
@@ -42,6 +48,8 @@ test.describe('Public Pages - a11y', () => {
 
 // Pages that require authentication
 test.describe('Authenticated Pages - a11y', () => {
+  // fullyParallel + dev server 冷编译下，单测可能远超默认 30s。
+  test.setTimeout(120000)
   test('dashboard has no critical a11y violations', async ({ authPage }) => {
     await gotoAuthenticated(authPage, '/dashboard')
 

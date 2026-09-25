@@ -445,6 +445,122 @@ func (t *LimitMarketTracker) Get(parentID string) *LMState {
 	return t.orders[parentID]
 }
 
+// DefaultLMRecoveryGrace 重启恢复给未完成 ltm 订单的统一宽限期：
+// 原 limit_timeout_ms 未持久化，恢复后给一个宽限窗口再进入
+// 超时→撤限价剩余→市价补单 状态机。
+const DefaultLMRecoveryGrace = 30 * time.Second
+
+// ltm client_oid 约定（与 PlaceLimitThenMarket/completeWithMarket 对齐）。
+const (
+	lmParentPrefix = "ltm-"
+	lmMarketPrefix = "ltm-mkt:"
+)
+
+// omsRehydrater 由 *OrderManager 实现：恢复时把 DB 里的活动订单回填 OMS
+// 内存，否则重启后 CancelOrder/GetOrder 找不到宕机前挂出的限价单。
+type omsRehydrater interface {
+	HandleOrderUpdate(*model.OrderData)
+}
+
+// RestoreFromStore 扫描 xt_orders 中未完成的 ltm 订单（client_oid "ltm-" 前缀、
+// 状态仍活动），重建跟踪状态继续执行状态机（含超时转市价）。幂等：已在跟踪
+// 的父单跳过。返回新恢复的订单数；store 未初始化（单测）时返回 0。
+func (t *LimitMarketTracker) RestoreFromStore(grace time.Duration) int {
+	if store.GetDB() == nil {
+		return 0
+	}
+	if grace <= 0 {
+		grace = DefaultLMRecoveryGrace
+	}
+	recs, err := store.GetOrderRepo().ListActiveByClientOIDPrefix(lmParentPrefix)
+	if err != nil {
+		log.Printf("[ltm] restore scan failed: %v", err)
+		return 0
+	}
+	now := time.Now().UnixMilli()
+	restored := 0
+	for _, rec := range recs {
+		if !strings.HasPrefix(rec.ClientOID, lmParentPrefix) || strings.HasPrefix(rec.ClientOID, lmMarketPrefix) {
+			continue // 市价补单腿不是父单，挂在父单状态下恢复
+		}
+		t.mu.Lock()
+		_, tracked := t.orders[rec.ID]
+		t.mu.Unlock()
+		if tracked {
+			continue
+		}
+		// 回填 OMS 内存：重启后 OMS 是空的，不回填则撤单/查单全部 miss。
+		if t.placer.GetOrder(rec.ID) == nil {
+			if rh, ok := t.placer.(omsRehydrater); ok {
+				rh.HandleOrderUpdate(lmRecordToOrderData(rec))
+			}
+		}
+		state := &LMState{
+			ParentID:      rec.ID,
+			Symbol:        rec.Symbol,
+			Side:          model.OrderSide(rec.Side),
+			Exchange:      rec.Exchange,
+			Quantity:      rec.Quantity,
+			Status:        "active",
+			LimitOrderID:  rec.ID,
+			LimitFilled:   rec.Filled,
+			LimitAvgPrice: avgOr(rec.AvgFillPrice, rec.Price),
+			CreatedAt:     rec.CreatedAt,
+			Deadline:      now + grace.Milliseconds(),
+			UpdatedAt:     now,
+		}
+		// 认领宕机前已发出的市价补单腿：watcher 只确认其结果，不重复撤单。
+		if legs, err := store.GetOrderRepo().ListActiveByClientOIDPrefix(lmMarketPrefix + rec.ID); err == nil && len(legs) > 0 {
+			leg := legs[0]
+			// 补单腿同样回填 OMS 内存，否则 confirmMarket 查单 miss 误判 market_failed。
+			if t.placer.GetOrder(leg.ID) == nil {
+				if rh, ok := t.placer.(omsRehydrater); ok {
+					rh.HandleOrderUpdate(lmRecordToOrderData(leg))
+				}
+			}
+			state.MarketOrderID = leg.ID
+			state.MarketFilled = leg.Filled
+			state.MarketAvgPrice = avgOr(leg.AvgFillPrice, leg.Price)
+		}
+		t.mu.Lock()
+		t.orders[rec.ID] = state
+		t.mu.Unlock()
+		restored++
+		log.Printf("[ltm] restored %s %s filled=%.8f/%.8f, market fallback in %s if still unfilled",
+			rec.Symbol, rec.ID, rec.Filled, rec.Quantity, grace)
+	}
+	return restored
+}
+
+// lmRecordToOrderData 把持久化订单记录还原为 OMS 内存模型。
+func lmRecordToOrderData(rec *store.OrderRecord) *model.OrderData {
+	return &model.OrderData{
+		ID:            rec.ID,
+		Symbol:        rec.Symbol,
+		Side:          model.OrderSide(rec.Side),
+		OrderType:     model.OrderType(rec.OrderType),
+		Price:         rec.Price,
+		StopPrice:     rec.StopPrice,
+		Quantity:      rec.Quantity,
+		Filled:        rec.Filled,
+		Status:        model.OrderStatus(rec.Status),
+		Exchange:      rec.Exchange,
+		UserID:        rec.UserID,
+		ClientOID:     rec.ClientOID,
+		AvgFillPrice:  rec.AvgFillPrice,
+		CreatedAt:     rec.CreatedAt,
+		UpdatedAt:     rec.UpdatedAt,
+		MarketType:    model.MarketType(rec.MarketType),
+		PositionSide:  model.PositionSide(rec.PositionSide),
+		Leverage:      rec.Leverage,
+		MarginMode:    model.MarginMode(rec.MarginMode),
+		TPPrice:       rec.TPPrice,
+		SLPrice:       rec.SLPrice,
+		ClosePosition: rec.ClosePosition,
+	}
+}
+
+
 // Snapshot 全部状态（调试/状态接口）。
 func (t *LimitMarketTracker) Snapshot() []*LMState {
 	t.mu.Lock()

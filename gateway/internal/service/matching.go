@@ -27,6 +27,13 @@ type MatchingService struct {
 	simOrderIDs   map[string][]uint64
 	simOrderIDsMu sync.Mutex
 
+	// orderIDs 是 store 订单号 → 引擎订单号的内部登记簿（C2.2）：
+	// OMS 是订单唯一事实源，撮合镜像不再回写展示层（legacy store），
+	// 撤单时按登记簿找到引擎单号撤引擎单。
+	orderIDs   map[string]uint64
+	orderIDsMu sync.Mutex
+	orderSeq   uint64
+
 	balanceProvider adapter.BalanceProvider
 }
 
@@ -43,8 +50,9 @@ var dataFeedHTTPClient = &http.Client{Timeout: 3 * time.Second}
 func GetMatchingService() *MatchingService {
 	matchSvcOnce.Do(func() {
 		matchSvc = &MatchingService{
-			engines:       make(map[string]*adapter.MatchingEngine),
-			simOrderIDs:   make(map[string][]uint64),
+			engines:     make(map[string]*adapter.MatchingEngine),
+			simOrderIDs: make(map[string][]uint64),
+			orderIDs:    make(map[string]uint64),
 		}
 	})
 	return matchSvc
@@ -88,46 +96,62 @@ func (ms *MatchingService) GetEngine(symbol string) *adapter.MatchingEngine {
 }
 
 // PlaceOrder places an order and matches it against the book.
-func (ms *MatchingService) PlaceOrder(symbol, side, orderType string, price, quantity float64, userID uint64) (map[string]any, error) {
+// storeOrderID 为展示层事实源（OMS）订单号；为空时内部铸造 "mord-" 前缀号。
+// C2.2：撮合镜像不再回写 legacy store（修复 paper LIMIT 单重复展示），
+// store 订单号 → 引擎订单号 的映射由内存登记簿维护，供撤单查找。
+func (ms *MatchingService) PlaceOrder(symbol, side, orderType string, price, quantity float64, userID uint64, storeOrderID string) (map[string]any, error) {
 	eng := ms.GetEngine(symbol)
 	result, err := eng.SubmitOrder(side, orderType, price, quantity, userID)
 	if err != nil {
 		return nil, err
 	}
 
-	// Also record in the Go store for API access
 	engineOrderID, _ := result["order_id"].(uint64)
-	storeOrder := map[string]any{
-		"symbol":         symbol,
-		"side":           side,
-		"order_type":     orderType,
-		"price":          price,
-		"quantity":       quantity,
-		"exchange":       "MATCHING",
-		"engine_order_id": engineOrderID,
+	if storeOrderID == "" {
+		ms.orderIDsMu.Lock()
+		ms.orderSeq++
+		storeOrderID = fmt.Sprintf("mord-%d-%d", time.Now().UnixMilli(), ms.orderSeq)
+		ms.orderIDsMu.Unlock()
 	}
-	orderID := store.PlaceOrder(storeOrder)
+	ms.orderIDsMu.Lock()
+	ms.orderIDs[storeOrderID] = engineOrderID
+	ms.orderIDsMu.Unlock()
 
-	result["store_order_id"] = orderID
+	result["store_order_id"] = storeOrderID
 	return result, nil
 }
 
 // CancelOrder cancels an order by store order ID.
+// 引擎里没有该单（重启后登记簿丢失/纯展示层单）时不算错误：
+// 继续把展示层事实源置 CANCELLED，找不到记录则容忍。
 func (ms *MatchingService) CancelOrder(symbol string, storeOrderID string) error {
-	order := store.GetOrderByID(storeOrderID)
-	if order == nil {
-		return fmt.Errorf("order %s not found", storeOrderID)
+	ms.orderIDsMu.Lock()
+	engineID, ok := ms.orderIDs[storeOrderID]
+	if ok {
+		delete(ms.orderIDs, storeOrderID)
+	}
+	ms.orderIDsMu.Unlock()
+
+	if !ok {
+		// 兼容修复前落库的镜像记录（engine_order_id 在 legacy store 里）。
+		if order := store.GetOrderByID(storeOrderID); order != nil {
+			if id, ok2 := order["engine_order_id"].(uint64); ok2 && id > 0 {
+				engineID, ok = id, true
+			}
+		}
 	}
 
-	// Cancel in matching engine first (if engine_order_id is available)
-	if engineID, ok := order["engine_order_id"].(uint64); ok && engineID > 0 {
+	if ok {
 		eng := ms.GetEngine(symbol)
 		if err := eng.CancelOrder(engineID); err != nil {
 			return err
 		}
 	}
 
-	return store.CancelOrder(storeOrderID)
+	// 展示层事实源（OMS/xt_orders）同步置 CANCELLED；镜像已不落库，
+	// 纯引擎单/已清理记录查不到不算错误。
+	_ = store.CancelOrder(storeOrderID)
+	return nil
 }
 
 // GetOrderBook returns the order book snapshot for a symbol.

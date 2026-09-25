@@ -89,6 +89,15 @@ func (f *fakeLMPlacer) GetOrder(orderID string) *model.OrderData {
 	return f.orders[orderID]
 }
 
+// HandleOrderUpdate 模拟 OMS 的内存回填接缝：重启恢复时把 DB 里的活动订单
+// 重新放进内存，否则恢复后的撤单/查单全部 miss。
+func (f *fakeLMPlacer) HandleOrderUpdate(o *model.OrderData) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cp := *o
+	f.orders[o.ID] = &cp
+}
+
 func (f *fakeLMPlacer) marketOrders() []*model.OrderData {
 	f.mu.Lock()
 	defer f.mu.Unlock()

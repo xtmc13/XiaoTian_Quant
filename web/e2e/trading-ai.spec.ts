@@ -232,6 +232,8 @@ test.describe('Trading Order Flow', () => {
 })
 
 test.describe('AI Analysis Flow', () => {
+  // AI 页现挂多个数据面板，dev server 冷编译 + fullyParallel 下首屏可能超默认 30s。
+  test.setTimeout(120000)
   /** Mock /market/snapshot responses per requested symbol on the AI page. */
   async function mockAiMarketData(page: Page) {
     await page.route('**/api/market/snapshot*', (route) => {
@@ -286,7 +288,8 @@ test.describe('AI Analysis Flow', () => {
     await authPage.goto('/ai')
 
     // ── Sentiment strip: fear & greed / VIX / DXY ──
-    await expect(authPage.locator('.indicator-box').filter({ hasText: '恐惧贪婪' })).toContainText('62')
+    // 首屏渲染门：fullyParallel 下 dev server 编译可能 stall >5s，给首断言更长超时。
+    await expect(authPage.locator('.indicator-box').filter({ hasText: '恐惧贪婪' })).toContainText('62', { timeout: 15000 })
     await expect(authPage.locator('.indicator-box').filter({ hasText: 'VIX' })).toContainText('14.5')
     await expect(authPage.locator('.indicator-box').filter({ hasText: 'DXY' })).toContainText('104.2')
 
@@ -341,8 +344,8 @@ test.describe('AI Analysis Flow', () => {
     await expect(dialog).toBeVisible()
     await dialog.getByText('BTC/USDT', { exact: true }).click()
 
-    // Select it in the symbol dropdown
-    const symbolSelect = authPage.locator('select')
+    // Select it in the symbol dropdown（页面上还有复盘/策略选择器等其它 select，取第一个 combobox）
+    const symbolSelect = authPage.getByRole('combobox').first()
     await expect(symbolSelect).toContainText('BTC/USDT')
     await symbolSelect.selectOption({ value: 'Crypto:BTC/USDT' })
     await expect(analyzeBtn).toBeEnabled()
