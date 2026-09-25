@@ -32,10 +32,12 @@ import {
 interface FieldDef {
   key: string
   label: string
-  type: 'tags' | 'number'
+  type: 'tags' | 'number' | 'text' | 'select' | 'bool'
   min?: number
   max?: number
   step?: number
+  options?: { value: string; label: string }[]
+  placeholder?: string
 }
 
 interface ProducerTemplate {
@@ -64,6 +66,54 @@ const PRODUCER_TEMPLATES: ProducerTemplate[] = [
     fields: [
       { key: 'top_n', label: '前 N 名', type: 'number', min: 1, max: 200 },
       { key: 'min_volume', label: '最小成交量', type: 'number', min: 0 },
+    ],
+  },
+  {
+    name: 'MarketCapPairList',
+    label: '市值排行',
+    description: '按市值排名取前 N（需配置市值数据源，未配置时降级报错）',
+    defaultParams: { number_assets: 30, max_rank: 30, refresh_period_sec: 86400 },
+    fields: [
+      { key: 'number_assets', label: '取前 N', type: 'number', min: 1, max: 250 },
+      { key: 'max_rank', label: '最大市值排名', type: 'number', min: 1, max: 250 },
+      { key: 'refresh_period_sec', label: '刷新间隔(秒)', type: 'number', min: 60 },
+    ],
+  },
+  {
+    name: 'PercentChangePairList',
+    label: '涨跌幅排行',
+    description: '按 N 周期涨跌幅排序选币（K线回溯或 24h ticker）',
+    defaultParams: { number_assets: 30, lookback_period: 0, lookback_timeframe: '1h', sort_direction: 'desc' },
+    fields: [
+      { key: 'number_assets', label: '取前 N', type: 'number', min: 1, max: 500 },
+      { key: 'lookback_period', label: '回溯K线数(0=24h)', type: 'number', min: 0, max: 500 },
+      {
+        key: 'lookback_timeframe', label: 'K线周期', type: 'select',
+        options: ['1m', '5m', '15m', '1h', '4h', '1d'].map((v) => ({ value: v, label: v })),
+      },
+      {
+        key: 'sort_direction', label: '排序方向', type: 'select',
+        options: [
+          { value: 'desc', label: '涨幅降序 (desc)' },
+          { value: 'asc', label: '涨幅升序 (asc)' },
+        ],
+      },
+      { key: 'min_value', label: '涨跌幅下限(%)', type: 'number', step: 0.1 },
+      { key: 'max_value', label: '涨跌幅上限(%)', type: 'number', step: 0.1 },
+    ],
+  },
+  {
+    name: 'RemotePairList',
+    label: '远端名单',
+    description: '从 URL 拉取名单（带超时与本地缓存兜底）',
+    defaultParams: { pairlist_url: 'https://example.com/pairlist.json', number_assets: 0, refresh_period_sec: 1800, read_timeout_sec: 10, keep_pairlist_on_failure: true },
+    fields: [
+      { key: 'pairlist_url', label: '名单 URL', type: 'text', placeholder: 'https://... 或 file:///path.json' },
+      { key: 'number_assets', label: '取前 N(0=不限)', type: 'number', min: 0 },
+      { key: 'refresh_period_sec', label: '刷新间隔(秒)', type: 'number', min: 10 },
+      { key: 'read_timeout_sec', label: '读取超时(秒)', type: 'number', min: 1, max: 120 },
+      { key: 'bearer_token', label: 'Bearer Token', type: 'text' },
+      { key: 'keep_pairlist_on_failure', label: '失败时缓存兜底', type: 'bool' },
     ],
   },
 ]
@@ -142,6 +192,185 @@ const FILTER_TEMPLATES: FilterTemplate[] = [
     defaultParams: { top_n: 20 },
     fields: [
       { key: 'top_n', label: '保留前 N', type: 'number', min: 1, max: 200 },
+    ],
+  },
+  {
+    name: 'DelistFilter',
+    label: '退市过滤',
+    description: '剔除非交易状态/计划退市/长期无成交的交易对',
+    defaultParams: { max_days_from_now: -1, max_inactive_days: 0 },
+    fields: [
+      { key: 'max_days_from_now', label: 'N天内将退市即剔除(-1关闭)', type: 'number', min: -1 },
+      { key: 'max_inactive_days', label: 'N天无成交即剔除(0关闭)', type: 'number', min: 0 },
+    ],
+  },
+  {
+    name: 'RemotePairList',
+    label: '远端名单',
+    description: '用远端名单过滤/追加/剔除（支持黑/白名单模式）',
+    defaultParams: { pairlist_url: 'https://example.com/pairlist.json', mode: 'whitelist', processing_mode: 'filter', number_assets: 0, refresh_period_sec: 1800, read_timeout_sec: 10, keep_pairlist_on_failure: true },
+    fields: [
+      { key: 'pairlist_url', label: '名单 URL', type: 'text', placeholder: 'https://... 或 file:///path.json' },
+      {
+        key: 'mode', label: '模式', type: 'select',
+        options: [
+          { value: 'whitelist', label: '白名单' },
+          { value: 'blacklist', label: '黑名单' },
+        ],
+      },
+      {
+        key: 'processing_mode', label: '合并方式', type: 'select',
+        options: [
+          { value: 'filter', label: '过滤（取交集）' },
+          { value: 'append', label: '追加（并集）' },
+        ],
+      },
+      { key: 'number_assets', label: '取前 N(0=不限)', type: 'number', min: 0 },
+      { key: 'refresh_period_sec', label: '刷新间隔(秒)', type: 'number', min: 10 },
+      { key: 'read_timeout_sec', label: '读取超时(秒)', type: 'number', min: 1, max: 120 },
+      { key: 'bearer_token', label: 'Bearer Token', type: 'text' },
+      { key: 'keep_pairlist_on_failure', label: '失败时缓存兜底', type: 'bool' },
+    ],
+  },
+  {
+    name: 'OffsetFilter',
+    label: '偏移过滤',
+    description: '跳过名单前 N 个交易对',
+    defaultParams: { offset: 0 },
+    fields: [
+      { key: 'offset', label: '跳过数量', type: 'number', min: 0 },
+    ],
+  },
+  {
+    name: 'ShuffleFilter',
+    label: '随机打乱',
+    description: '随机打乱名单顺序，避免过拟合',
+    defaultParams: { seed: 0 },
+    fields: [
+      { key: 'seed', label: '随机种子', type: 'number' },
+    ],
+  },
+  {
+    name: 'VolumeFilter',
+    label: '成交量过滤',
+    description: '剔除 24h 成交量低于阈值的交易对',
+    defaultParams: { min_volume: 1000000 },
+    fields: [
+      { key: 'min_volume', label: '最小成交量', type: 'number', min: 0 },
+    ],
+  },
+  {
+    name: 'CorrelationFilter',
+    label: '相关性过滤',
+    description: '剔除与基准高度相关的同质化交易对',
+    defaultParams: { max_correlated: 0.95 },
+    fields: [
+      { key: 'max_correlated', label: '最大相关性', type: 'number', min: 0, max: 1, step: 0.01 },
+    ],
+  },
+  {
+    name: 'RangeStabilityFilter',
+    label: '波动区间过滤',
+    description: '剔除价格区间过窄的僵尸交易对',
+    defaultParams: { min_range_ratio: 0.005 },
+    fields: [
+      { key: 'min_range_ratio', label: '最小区间比率', type: 'number', min: 0, step: 0.001 },
+    ],
+  },
+  {
+    name: 'FullTradesFilter',
+    label: '持仓过滤',
+    description: '剔除已有持仓的交易对',
+    defaultParams: {},
+    fields: [],
+  },
+  {
+    name: 'MarketCapFilter',
+    label: '市值过滤',
+    description: '按市值上下限过滤交易对',
+    defaultParams: { min_market_cap: 0, max_market_cap: 0 },
+    fields: [
+      { key: 'min_market_cap', label: '最小市值', type: 'number', min: 0 },
+      { key: 'max_market_cap', label: '最大市值', type: 'number', min: 0 },
+    ],
+  },
+  {
+    name: 'VolumeChangeFilter',
+    label: '成交量变化过滤',
+    description: '剔除成交量骤变（缩量/异常放量）的交易对',
+    defaultParams: { min_change: -0.8, max_change: 5.0 },
+    fields: [
+      { key: 'min_change', label: '最小变化率', type: 'number', step: 0.1 },
+      { key: 'max_change', label: '最大变化率', type: 'number', step: 0.1 },
+    ],
+  },
+  {
+    name: 'PriceJumpFilter',
+    label: '暴涨暴跌过滤',
+    description: '剔除近期涨跌幅过大的交易对',
+    defaultParams: { max_jump_pct: 20 },
+    fields: [
+      { key: 'max_jump_pct', label: '最大涨跌幅(%)', type: 'number', min: 0 },
+    ],
+  },
+  {
+    name: 'LiquidityFilter',
+    label: '深度过滤',
+    description: '剔除盘口深度不足的交易对',
+    defaultParams: { min_bid_depth: 50000, min_ask_depth: 50000 },
+    fields: [
+      { key: 'min_bid_depth', label: '最小买盘深度', type: 'number', min: 0 },
+      { key: 'min_ask_depth', label: '最小卖盘深度', type: 'number', min: 0 },
+    ],
+  },
+  {
+    name: 'FundingRateFilter',
+    label: '资金费率过滤',
+    description: '剔除资金费率过高的合约对',
+    defaultParams: { max_funding_rate: 0.01 },
+    fields: [
+      { key: 'max_funding_rate', label: '最大资金费率', type: 'number', min: 0, step: 0.001 },
+    ],
+  },
+  {
+    name: 'RankFilter',
+    label: '综合排名',
+    description: '按成交量+表现加权评分取前 N',
+    defaultParams: { top_n: 20, volume_weight: 0.5, performance_weight: 0.5 },
+    fields: [
+      { key: 'top_n', label: '取前 N', type: 'number', min: 1 },
+      { key: 'volume_weight', label: '成交量权重', type: 'number', step: 0.1 },
+      { key: 'performance_weight', label: '表现权重', type: 'number', step: 0.1 },
+    ],
+  },
+  {
+    name: 'LowProfitPairsFilter',
+    label: '低收益过滤',
+    description: '剔除历史收益低于阈值的交易对',
+    defaultParams: { min_profit_pct: 0 },
+    fields: [
+      { key: 'min_profit_pct', label: '最小收益率(%)', type: 'number', step: 0.1 },
+    ],
+  },
+  {
+    name: 'ChangeFilter',
+    label: '24h涨跌过滤',
+    description: '保留 24h 涨跌幅在区间内的交易对',
+    defaultParams: { min_change_pct: -10, max_change_pct: 20 },
+    fields: [
+      { key: 'min_change_pct', label: '最小涨跌幅(%)', type: 'number', step: 0.1 },
+      { key: 'max_change_pct', label: '最大涨跌幅(%)', type: 'number', step: 0.1 },
+    ],
+  },
+  {
+    name: 'RangeFilter',
+    label: '价格区间过滤',
+    description: '保留价格在参考价一定比例区间内的交易对',
+    defaultParams: { reference_price: 0, min_pct: 0.5, max_pct: 2.0 },
+    fields: [
+      { key: 'reference_price', label: '参考价格', type: 'number', min: 0 },
+      { key: 'min_pct', label: '最小比例', type: 'number', step: 0.1 },
+      { key: 'max_pct', label: '最大比例', type: 'number', step: 0.1 },
     ],
   },
 ]
@@ -227,6 +456,82 @@ export function PairlistManagement() {
   }, [producers, filters, configureMutation])
 
   const pairs = (whitelist?.whitelist as string[]) || []
+
+  // 通用参数字段渲染（tags/number/text/select/bool）
+  const renderField = (
+    kind: 'producer' | 'filter',
+    index: number,
+    field: FieldDef,
+    value: unknown,
+  ) => {
+    const inputCls = 'w-full px-2 py-1 rounded-md bg-quant-bg border border-quant-border text-sm focus:outline-none focus:border-quant-gold'
+    switch (field.type) {
+      case 'tags':
+        return (
+          <input
+            type="text"
+            value={Array.isArray(value) ? (value as string[]).join(',') : ''}
+            onChange={(e) => handleUpdateParam(kind, index, field.key, e.target.value.split(',').map((s) => s.trim()).filter(Boolean))}
+            className={inputCls}
+            placeholder="BTCUSDT,ETHUSDT,..."
+          />
+        )
+      case 'text':
+        return (
+          <input
+            type="text"
+            value={String(value ?? '')}
+            onChange={(e) => handleUpdateParam(kind, index, field.key, e.target.value)}
+            className={inputCls}
+            placeholder={field.placeholder}
+          />
+        )
+      case 'select':
+        return (
+          <select
+            value={String(value ?? '')}
+            onChange={(e) => handleUpdateParam(kind, index, field.key, e.target.value)}
+            className={inputCls}
+          >
+            {field.options?.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        )
+      case 'bool':
+        return (
+          <button
+            type="button"
+            role="switch"
+            aria-checked={Boolean(value)}
+            onClick={() => handleUpdateParam(kind, index, field.key, !value)}
+            className={cn(
+              'w-9 h-5 rounded-full transition-colors relative',
+              value ? 'bg-quant-gold' : 'bg-quant-border',
+            )}
+          >
+            <span
+              className={cn(
+                'absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all',
+                value ? 'left-[18px]' : 'left-0.5',
+              )}
+            />
+          </button>
+        )
+      default:
+        return (
+          <input
+            type="number"
+            value={value as number}
+            onChange={(e) => handleUpdateParam(kind, index, field.key, parseFloat(e.target.value))}
+            step={field.step || 1}
+            min={field.min}
+            max={field.max}
+            className={inputCls}
+          />
+        )
+    }
+  }
 
   return (
     <div className="h-full overflow-y-auto">
@@ -381,22 +686,7 @@ export function PairlistManagement() {
                         {template?.fields.map((field) => (
                           <div key={field.key} className="space-y-1">
                             <label className="text-xs text-muted-foreground">{field.label}</label>
-                            {field.type === 'tags' ? (
-                              <input
-                                type="text"
-                                value={Array.isArray(p.params[field.key]) ? (p.params[field.key] as string[]).join(',') : ''}
-                                onChange={(e) => handleUpdateParam('producer', i, field.key, e.target.value.split(',').map((s) => s.trim()).filter(Boolean))}
-                                className="w-full px-2 py-1 rounded-md bg-quant-bg border border-quant-border text-sm focus:outline-none focus:border-quant-gold"
-                                placeholder="BTCUSDT,ETHUSDT,..."
-                              />
-                            ) : (
-                              <input
-                                type="number"
-                                value={p.params[field.key] as number}
-                                onChange={(e) => handleUpdateParam('producer', i, field.key, parseFloat(e.target.value))}
-                                className="w-full px-2 py-1 rounded-md bg-quant-bg border border-quant-border text-sm focus:outline-none focus:border-quant-gold"
-                              />
-                            )}
+                            {renderField('producer', i, field, p.params[field.key])}
                           </div>
                         ))}
                       </div>
@@ -468,13 +758,7 @@ export function PairlistManagement() {
                         {template?.fields.map((field) => (
                           <div key={field.key} className="space-y-1">
                             <label className="text-xs text-muted-foreground">{field.label}</label>
-                            <input
-                              type="number"
-                              value={f.params[field.key] as number}
-                              onChange={(e) => handleUpdateParam('filter', i, field.key, parseFloat(e.target.value))}
-                              step={field.step || 1}
-                              className="w-full px-2 py-1 rounded-md bg-quant-bg border border-quant-border text-sm focus:outline-none focus:border-quant-gold"
-                            />
+                            {renderField('filter', i, field, f.params[field.key])}
                           </div>
                         ))}
                       </div>

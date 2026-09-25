@@ -2,25 +2,42 @@ package pairlist
 
 import (
 	"math"
+	"time"
 )
 
 // ── DelistFilter ───────────────────────────────────────────────
 
-// DelistFilter removes pairs that are not in active trading status.
-// It detects exchange delisting, halts, or break status.
+// DelistFilter removes pairs that are not in active trading status,
+// are scheduled for delisting, or have had no trades for a long time
+// （对标 freqtrade DelistFilter，并扩展"长期无成交/疑似退市"检测）。
+//
+// 三层判定（任一命中即剔除）：
+//  1. Status 不在 AllowedStatuses（如 BREAK / DELISTED）
+//  2. DelistingDate 已知且距今 <= MaxDaysFromNow 天（MaxDaysFromNow=0 表示凡有退市计划即剔除）
+//  3. LastTradeTime 已知且距今 >= MaxInactiveDays 天（MaxInactiveDays<=0 表示关闭该检测）
+//
+// 数据缺失（字段为 0）时保留该交易对，与包内其他过滤器的"无数据保留"约定一致。
 type DelistFilter struct {
 	AllowedStatuses []string
+	MaxDaysFromNow  int // 剔除 N 天内将退市的交易对；0 = 凡有退市计划即剔除；-1 = 关闭
+	MaxInactiveDays int // 剔除 >= N 天无成交的交易对；<=0 = 关闭
+	Now             func() time.Time // 可注入时钟（测试用），nil 用 time.Now
 }
 
 func NewDelistFilter() *DelistFilter {
 	return &DelistFilter{
 		AllowedStatuses: []string{"TRADING"},
+		MaxDaysFromNow:  -1, // 默认关闭计划退市检测（无数据源时行为与旧版一致）
 	}
 }
 
 func (f *DelistFilter) Name() string { return "DelistFilter" }
 
 func (f *DelistFilter) Filter(pairs []string, infoMap map[string]*PairInfo) ([]string, error) {
+	now := time.Now()
+	if f.Now != nil {
+		now = f.Now()
+	}
 	result := make([]string, 0, len(pairs))
 	for _, sym := range pairs {
 		info, ok := infoMap[sym]
@@ -35,9 +52,24 @@ func (f *DelistFilter) Filter(pairs []string, infoMap map[string]*PairInfo) ([]s
 				break
 			}
 		}
-		if allowed {
-			result = append(result, sym)
+		if !allowed {
+			continue
 		}
+		// 计划退市检测
+		if f.MaxDaysFromNow >= 0 && info.DelistingDate > 0 {
+			delistAt := time.UnixMilli(info.DelistingDate)
+			if f.MaxDaysFromNow == 0 || !delistAt.After(now.Add(time.Duration(f.MaxDaysFromNow)*24*time.Hour)) {
+				continue
+			}
+		}
+		// 长期无成交检测
+		if f.MaxInactiveDays > 0 && info.LastTradeTime > 0 {
+			lastTrade := time.UnixMilli(info.LastTradeTime)
+			if now.Sub(lastTrade) >= time.Duration(f.MaxInactiveDays)*24*time.Hour {
+				continue
+			}
+		}
+		result = append(result, sym)
 	}
 	return result, nil
 }

@@ -30,6 +30,10 @@ type PairInfo struct {
 	HasPosition     bool    `json:"has_position"`     // 是否已有持仓
 	RecentReturn    float64 `json:"recent_return"`    // 近期收益率
 	PriceRangeRatio float64 `json:"price_range_ratio"` // 价格区间比率 (high-low)/low
+
+	// DelistFilter 扩展字段（0 表示无数据，过滤器按"无数据保留"处理）
+	DelistingDate int64 `json:"delisting_date"` // 预计退市时间（unix 毫秒），0 = 未知/无退市计划
+	LastTradeTime int64 `json:"last_trade_time"` // 最近一笔成交时间（unix 毫秒），0 = 未知
 }
 
 // IProducer generates an initial whitelist of trading pairs.

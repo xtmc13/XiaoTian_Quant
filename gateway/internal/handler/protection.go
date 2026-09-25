@@ -173,7 +173,7 @@ func RecordTrade(c *gin.Context) {
 			prot.RecordExit(body.Symbol, exitTime)
 		case *protection.StoplossGuard:
 			if body.IsStoploss {
-				prot.RecordStoploss(body.Symbol, exitTime)
+				prot.RecordStoplossDetail(body.Symbol, exitTime, body.PnLPct, body.Side)
 			}
 		case *protection.LowProfitPairs:
 			prot.RecordTrade(trade)

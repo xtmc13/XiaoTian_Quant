@@ -3,6 +3,7 @@ package protection
 import (
 	"fmt"
 	"math"
+	"sort"
 	"sync"
 	"time"
 )
@@ -10,10 +11,12 @@ import (
 // ── CooldownPeriod ─────────────────────────────────────────────
 // Prevents entering a new trade on a pair immediately after closing one.
 // This gives the pair time to "cool down" and avoids overtrading.
+// 对标 freqtrade CooldownPeriod：以该对最近平仓时间为锚点，
+// 锁定时长支持 stop_duration_candles × timeframe 或 stop_duration（分钟），
+// 也支持 unlock_at（"HH:MM"）固定时刻解锁。
 
 type CooldownPeriod struct {
-	StopDurationCandles int `json:"stop_duration_candles"` // number of candles to wait
-	Timeframe           string `json:"timeframe"`          // candle timeframe (e.g., "1h", "15m")
+	windowParams
 
 	mu          sync.RWMutex
 	lastExits   map[string]time.Time // symbol -> last exit time
@@ -23,18 +26,7 @@ func NewCooldownPeriod(params map[string]any) (*CooldownPeriod, error) {
 	p := &CooldownPeriod{
 		lastExits: make(map[string]time.Time),
 	}
-	if v, ok := toInt(params["stop_duration_candles"]); ok {
-		p.StopDurationCandles = v
-	}
-	if v, ok := params["timeframe"].(string); ok {
-		p.Timeframe = v
-	}
-	if p.StopDurationCandles <= 0 {
-		p.StopDurationCandles = 5
-	}
-	if p.Timeframe == "" {
-		p.Timeframe = "1h"
-	}
+	p.windowParams = parseWindowParams(params, 5, 5, "1h")
 	return p, nil
 }
 
@@ -50,15 +42,11 @@ func (p *CooldownPeriod) Check(ctx ProtectionContext) ProtectionResult {
 		return ProtectionResult{Blocked: false}
 	}
 
-	// Calculate cooldown duration
-	duration := p.candleDuration()
-	cooldown := time.Duration(p.StopDurationCandles) * duration
-	resumeTime := lastExit.Add(cooldown)
-
+	resumeTime := p.lockEnd(lastExit)
 	if ctx.CurrentTime.Before(resumeTime) {
 		return ProtectionResult{
 			Blocked:    true,
-			Reason:     fmt.Sprintf("CooldownPeriod: %s cooling down for %d %s candles", ctx.Symbol, p.StopDurationCandles, p.Timeframe),
+			Reason:     fmt.Sprintf("CooldownPeriod: %s cooling down (%s)", ctx.Symbol, p.describeWindow()),
 			ResumeTime: resumeTime,
 			Pair:       ctx.Symbol,
 		}
@@ -67,12 +55,19 @@ func (p *CooldownPeriod) Check(ctx ProtectionContext) ProtectionResult {
 	return ProtectionResult{Blocked: false}
 }
 
-func (p *CooldownPeriod) Validate() error {
-	if p.StopDurationCandles <= 0 {
-		return fmt.Errorf("CooldownPeriod: stop_duration_candles must be > 0")
+func (p *CooldownPeriod) describeWindow() string {
+	if p.UnlockAt != "" {
+		return fmt.Sprintf("until %s", p.UnlockAt)
 	}
-	if p.Timeframe == "" {
-		return fmt.Errorf("CooldownPeriod: timeframe is required")
+	if p.StopDurationCandles > 0 {
+		return fmt.Sprintf("%d %s candles", p.StopDurationCandles, p.Timeframe)
+	}
+	return fmt.Sprintf("%d minutes", p.StopDurationMinutes)
+}
+
+func (p *CooldownPeriod) Validate() error {
+	if p.StopDurationCandles <= 0 && p.StopDurationMinutes <= 0 && p.UnlockAt == "" {
+		return fmt.Errorf("CooldownPeriod: stop_duration_candles / stop_duration / unlock_at 至少一项有效")
 	}
 	return nil
 }
@@ -90,57 +85,33 @@ func (p *CooldownPeriod) RecordExit(symbol string, exitTime time.Time) {
 	p.lastExits[symbol] = exitTime
 }
 
-func (p *CooldownPeriod) candleDuration() time.Duration {
-	switch p.Timeframe {
-	case "1m":
-		return time.Minute
-	case "5m":
-		return 5 * time.Minute
-	case "15m":
-		return 15 * time.Minute
-	case "30m":
-		return 30 * time.Minute
-	case "1h":
-		return time.Hour
-	case "2h":
-		return 2 * time.Hour
-	case "4h":
-		return 4 * time.Hour
-	case "6h":
-		return 6 * time.Hour
-	case "8h":
-		return 8 * time.Hour
-	case "12h":
-		return 12 * time.Hour
-	case "1d":
-		return 24 * time.Hour
-	case "3d":
-		return 72 * time.Hour
-	case "1w":
-		return 7 * 24 * time.Hour
-	default:
-		return time.Hour
-	}
-}
-
 // ── StoplossGuard ──────────────────────────────────────────────
-// Stops trading if a certain number of stoplosses occur within a time window.
+// 对标 freqtrade StoplossGuard：
+// 在回溯窗口内出现 trade_limit 次止损（盈利 < required_profit 才计入）后，
+// 锁定交易至「最近一次止损时间 + stop_duration」（或 unlock_at 固定时刻）。
+//   - only_per_pair=false：全局检查与单对检查同时进行（全局触发锁全局，单对触发锁该对）
+//   - only_per_pair=true：仅关闭全局检查，单对检查始终生效
+//   - only_per_side=true：仅计入与当前信号同方向的止损
+// 锁定期满后自动解锁（锚点固定，不会像滑动窗口一样无限续期）。
 
 type StoplossGuard struct {
-	LookbackPeriodCandles int `json:"lookback_period_candles"` // time window to look back
-	TradeLimit            int `json:"trade_limit"`             // max stoplosses allowed in window
-	StopDurationCandles   int `json:"stop_duration_candles"` // how long to stop after limit reached
-	Timeframe             string `json:"timeframe"`
-	OnlyPerPair           bool   `json:"only_per_pair"`          // if true, only blocks the affected pair
+	windowParams
+
+	TradeLimit     int     `json:"trade_limit"`      // 窗口内允许的止损次数上限
+	OnlyPerPair    bool    `json:"only_per_pair"`    // true = 关闭全局检查（单对检查始终生效）
+	OnlyPerSide    bool    `json:"only_per_side"`    // true = 只统计与当前信号同方向的止损
+	RequiredProfit float64 `json:"required_profit"` // 盈利率 >= 此值的"止损"不计入（如移动止盈）
 
 	mu            sync.RWMutex
-	stoplosses    []stoplossRecord // global stoploss history
+	stoplosses    []stoplossRecord            // global stoploss history
 	pairStoplosses map[string][]stoplossRecord // per-pair stoploss history
 }
 
 type stoplossRecord struct {
 	Symbol string    `json:"symbol"`
 	Time   time.Time `json:"time"`
+	Profit float64   `json:"profit"` // 盈利率（ratio，如 -0.05）
+	Side   string    `json:"side"`   // "LONG"/"SHORT"，空 = 未知
 }
 
 func NewStoplossGuard(params map[string]any) (*StoplossGuard, error) {
@@ -148,33 +119,22 @@ func NewStoplossGuard(params map[string]any) (*StoplossGuard, error) {
 		stoplosses:     make([]stoplossRecord, 0),
 		pairStoplosses: make(map[string][]stoplossRecord),
 	}
-	if v, ok := toInt(params["lookback_period_candles"]); ok {
-		p.LookbackPeriodCandles = v
-	}
+	p.windowParams = parseWindowParams(params, 24, 12, "1h")
 	if v, ok := toInt(params["trade_limit"]); ok {
 		p.TradeLimit = v
-	}
-	if v, ok := toInt(params["stop_duration_candles"]); ok {
-		p.StopDurationCandles = v
-	}
-	if v, ok := params["timeframe"].(string); ok {
-		p.Timeframe = v
 	}
 	if v, ok := params["only_per_pair"].(bool); ok {
 		p.OnlyPerPair = v
 	}
-
-	if p.LookbackPeriodCandles <= 0 {
-		p.LookbackPeriodCandles = 24
+	if v, ok := params["only_per_side"].(bool); ok {
+		p.OnlyPerSide = v
 	}
+	if v, ok := toFloat(params["required_profit"]); ok {
+		p.RequiredProfit = v
+	}
+
 	if p.TradeLimit <= 0 {
 		p.TradeLimit = 4
-	}
-	if p.StopDurationCandles <= 0 {
-		p.StopDurationCandles = 12
-	}
-	if p.Timeframe == "" {
-		p.Timeframe = "1h"
 	}
 	return p, nil
 }
@@ -186,48 +146,73 @@ func (p *StoplossGuard) Check(ctx ProtectionContext) ProtectionResult {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
-	lookback := p.lookbackDuration()
-	cutoff := ctx.CurrentTime.Add(-lookback)
+	cutoff := ctx.CurrentTime.Add(-p.lookback())
 
-	// Check per-pair stoplosses
-	if p.OnlyPerPair {
-		pairRecords := p.pairStoplosses[ctx.Symbol]
-		count := countRecent(pairRecords, cutoff)
+	// 全局检查（only_per_pair=true 时关闭，与 freqtrade 一致）
+	if !p.OnlyPerPair {
+		count, last := p.matchCount(p.stoplosses, cutoff, ctx.Side)
 		if count >= p.TradeLimit {
-			resumeTime := ctx.CurrentTime.Add(time.Duration(p.StopDurationCandles) * p.candleDuration())
+			resumeTime := p.lockEnd(last)
+			if ctx.CurrentTime.Before(resumeTime) {
+				return ProtectionResult{
+					Blocked:    true,
+					Reason:     fmt.Sprintf("StoplossGuard: %d stoplosses in lookback window, locking all pairs until %s", count, resumeTime.Format(time.RFC3339)),
+					ResumeTime: resumeTime,
+				}
+			}
+		}
+	}
+
+	// 单对检查（始终生效）
+	count, last := p.matchCount(p.pairStoplosses[ctx.Symbol], cutoff, ctx.Side)
+	if count >= p.TradeLimit {
+		resumeTime := p.lockEnd(last)
+		if ctx.CurrentTime.Before(resumeTime) {
 			return ProtectionResult{
 				Blocked:    true,
-				Reason:     fmt.Sprintf("StoplossGuard: %d stoplosses on %s in last %d %s candles", count, ctx.Symbol, p.LookbackPeriodCandles, p.Timeframe),
+				Reason:     fmt.Sprintf("StoplossGuard: %d stoplosses on %s in lookback window, locking pair until %s", count, ctx.Symbol, resumeTime.Format(time.RFC3339)),
 				ResumeTime: resumeTime,
 				Pair:       ctx.Symbol,
 			}
-		}
-		return ProtectionResult{Blocked: false}
-	}
-
-	// Check global stoplosses
-	count := countRecent(p.stoplosses, cutoff)
-	if count >= p.TradeLimit {
-		resumeTime := ctx.CurrentTime.Add(time.Duration(p.StopDurationCandles) * p.candleDuration())
-		return ProtectionResult{
-			Blocked:    true,
-			Reason:     fmt.Sprintf("StoplossGuard: %d stoplosses in last %d %s candles", count, p.LookbackPeriodCandles, p.Timeframe),
-			ResumeTime: resumeTime,
 		}
 	}
 
 	return ProtectionResult{Blocked: false}
 }
 
+// matchCount 统计窗口内符合条件的止损：时间在 cutoff 之后、
+// 盈利 < required_profit、方向匹配（only_per_side 时）。
+// 返回数量与最近一次止损时间（锁定锚点）。
+func (p *StoplossGuard) matchCount(records []stoplossRecord, cutoff time.Time, side string) (int, time.Time) {
+	count := 0
+	var last time.Time
+	for _, r := range records {
+		if !r.Time.After(cutoff) {
+			continue
+		}
+		if r.Profit >= p.RequiredProfit {
+			continue
+		}
+		if p.OnlyPerSide && side != "" && r.Side != "" && r.Side != side {
+			continue
+		}
+		count++
+		if r.Time.After(last) {
+			last = r.Time
+		}
+	}
+	return count, last
+}
+
 func (p *StoplossGuard) Validate() error {
-	if p.LookbackPeriodCandles <= 0 {
-		return fmt.Errorf("StoplossGuard: lookback_period_candles must be > 0")
+	if p.LookbackPeriodCandles <= 0 && p.LookbackPeriodMinutes <= 0 {
+		return fmt.Errorf("StoplossGuard: lookback_period_candles / lookback_period 至少一项 > 0")
 	}
 	if p.TradeLimit <= 0 {
 		return fmt.Errorf("StoplossGuard: trade_limit must be > 0")
 	}
-	if p.StopDurationCandles <= 0 {
-		return fmt.Errorf("StoplossGuard: stop_duration_candles must be > 0")
+	if p.StopDurationCandles <= 0 && p.StopDurationMinutes <= 0 && p.UnlockAt == "" {
+		return fmt.Errorf("StoplossGuard: stop_duration_candles / stop_duration / unlock_at 至少一项有效")
 	}
 	return nil
 }
@@ -239,12 +224,18 @@ func (p *StoplossGuard) Reset() {
 	p.pairStoplosses = make(map[string][]stoplossRecord)
 }
 
-// RecordStoploss records a stoploss event.
+// RecordStoploss records a stoploss event（盈利未知，始终计入，保持旧行为）。
 func (p *StoplossGuard) RecordStoploss(symbol string, t time.Time) {
+	p.RecordStoplossDetail(symbol, t, math.Inf(-1), "")
+}
+
+// RecordStoplossDetail records a stoploss with profit ratio and side
+// （对标 freqtrade：profit >= required_profit 的"止损"不计入，如移动止盈）。
+func (p *StoplossGuard) RecordStoplossDetail(symbol string, t time.Time, profit float64, side string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	rec := stoplossRecord{Symbol: symbol, Time: t}
+	rec := stoplossRecord{Symbol: symbol, Time: t, Profit: profit, Side: side}
 	p.stoplosses = append(p.stoplosses, rec)
 
 	if p.pairStoplosses[symbol] == nil {
@@ -253,7 +244,7 @@ func (p *StoplossGuard) RecordStoploss(symbol string, t time.Time) {
 	p.pairStoplosses[symbol] = append(p.pairStoplosses[symbol], rec)
 
 	// Cleanup old records
-	p.cleanup(t.Add(-p.lookbackDuration() * 2))
+	p.cleanup(t.Add(-p.lookback() * 2))
 }
 
 func (p *StoplossGuard) cleanup(cutoff time.Time) {
@@ -278,99 +269,96 @@ func (p *StoplossGuard) cleanup(cutoff time.Time) {
 	}
 }
 
-func (p *StoplossGuard) lookbackDuration() time.Duration {
-	return time.Duration(p.LookbackPeriodCandles) * p.candleDuration()
-}
-
-func (p *StoplossGuard) candleDuration() time.Duration {
-	switch p.Timeframe {
-	case "1m":
-		return time.Minute
-	case "5m":
-		return 5 * time.Minute
-	case "15m":
-		return 15 * time.Minute
-	case "30m":
-		return 30 * time.Minute
-	case "1h":
-		return time.Hour
-	case "2h":
-		return 2 * time.Hour
-	case "4h":
-		return 4 * time.Hour
-	case "6h":
-		return 6 * time.Hour
-	case "8h":
-		return 8 * time.Hour
-	case "12h":
-		return 12 * time.Hour
-	case "1d":
-		return 24 * time.Hour
-	case "3d":
-		return 72 * time.Hour
-	case "1w":
-		return 7 * 24 * time.Hour
-	default:
-		return time.Hour
-	}
-}
-
-func countRecent(records []stoplossRecord, cutoff time.Time) int {
-	count := 0
-	for _, r := range records {
-		if r.Time.After(cutoff) {
-			count++
-		}
-	}
-	return count
-}
-
 // ── MaxDrawdown ────────────────────────────────────────────────
-// Stops all trading if the portfolio drawdown exceeds a threshold.
+// 对标 freqtrade MaxDrawdownProtection：账户级最大回撤超过阈值后，
+// 全局停止开新仓，锁定至「窗口内最近一笔平仓 + stop_duration」（或 unlock_at）。
+//
+// 回撤计算（calculation_mode）：
+//   - "ratios"（默认）：窗口内交易按平仓时间排序，累计盈利率曲线的
+//     峰谷落差（freqtrade legacy ratios 口径）
+//   - "equity"：窗口起始权益 = ctx.TotalBalance - 窗口累计盈亏，
+//     回撤 = max((峰值权益 - 权益) / 峰值权益)
+//
+// trade_limit：窗口内交易数不足时不触发（freqtrade 默认 1）。
+// ctx.TradeHistory 为空时回退到旧行为：直接使用外部计算的 ctx.CurrentDrawdown。
 
 type MaxDrawdown struct {
-	MaxDrawdownPct      float64 `json:"max_drawdown_pct"`      // 0.0 to 1.0
-	LookbackPeriodCandles int   `json:"lookback_period_candles"` // lookback window
-	Timeframe           string  `json:"timeframe"`
-	StopDurationCandles int     `json:"stop_duration_candles"` // how long to stop
+	windowParams
+
+	MaxDrawdownPct float64 `json:"max_drawdown_pct"` // 最大允许回撤（0-1；alias: max_allowed_drawdown）
+	TradeLimit     int     `json:"trade_limit"`      // 窗口内至少 N 笔交易才评估
+	CalculationMode string `json:"calculation_mode"` // "ratios" | "equity"
 }
 
 func NewMaxDrawdown(params map[string]any) (*MaxDrawdown, error) {
 	p := &MaxDrawdown{}
+	p.windowParams = parseWindowParams(params, 48, 12, "1h")
 	if v, ok := toFloat(params["max_drawdown_pct"]); ok {
 		p.MaxDrawdownPct = v
+	} else if v, ok := toFloat(params["max_allowed_drawdown"]); ok {
+		p.MaxDrawdownPct = v
 	}
-	if v, ok := toInt(params["lookback_period_candles"]); ok {
-		p.LookbackPeriodCandles = v
+	if v, ok := toInt(params["trade_limit"]); ok {
+		p.TradeLimit = v
 	}
-	if v, ok := params["timeframe"].(string); ok {
-		p.Timeframe = v
-	}
-	if v, ok := toInt(params["stop_duration_candles"]); ok {
-		p.StopDurationCandles = v
+	if v, ok := params["calculation_mode"].(string); ok && v != "" {
+		p.CalculationMode = v
 	}
 
 	if p.MaxDrawdownPct <= 0 {
 		p.MaxDrawdownPct = 0.20 // 20% default
 	}
-	if p.LookbackPeriodCandles <= 0 {
-		p.LookbackPeriodCandles = 48 // 48 candles
+	if p.TradeLimit <= 0 {
+		p.TradeLimit = 1
 	}
-	if p.StopDurationCandles <= 0 {
-		p.StopDurationCandles = 12
-	}
-	if p.Timeframe == "" {
-		p.Timeframe = "1h"
+	if p.CalculationMode != "equity" && p.CalculationMode != "ratios" {
+		p.CalculationMode = "ratios"
 	}
 	return p, nil
 }
 
 func (p *MaxDrawdown) Name() string        { return "MaxDrawdown" }
-func (p *MaxDrawdown) Description() string { return "Stop trading if drawdown exceeds threshold" }
+func (p *MaxDrawdown) Description() string { return "Stop opening new trades if account drawdown exceeds threshold" }
 
 func (p *MaxDrawdown) Check(ctx ProtectionContext) ProtectionResult {
+	cutoff := ctx.CurrentTime.Add(-p.lookback())
+
+	// 窗口内交易（按平仓时间升序）
+	windowTrades := make([]TradeRecord, 0, len(ctx.TradeHistory))
+	for _, t := range ctx.TradeHistory {
+		if t.ExitTime.After(cutoff) {
+			windowTrades = append(windowTrades, t)
+		}
+	}
+	sort.Slice(windowTrades, func(i, j int) bool { return windowTrades[i].ExitTime.Before(windowTrades[j].ExitTime) })
+
+	if len(windowTrades) > 0 {
+		// freqtrade 语义：窗口内交易数不足 trade_limit 时不触发
+		if len(windowTrades) < p.TradeLimit {
+			return ProtectionResult{Blocked: false}
+		}
+		var dd float64
+		if p.CalculationMode == "equity" {
+			dd = equityDrawdown(windowTrades, ctx.TotalBalance)
+		} else {
+			dd = ratioDrawdown(windowTrades)
+		}
+		if dd > p.MaxDrawdownPct {
+			resumeTime := p.lockEnd(windowTrades[len(windowTrades)-1].ExitTime)
+			if ctx.CurrentTime.Before(resumeTime) {
+				return ProtectionResult{
+					Blocked:    true,
+					Reason:     fmt.Sprintf("MaxDrawdown: drawdown %.2f%% exceeds limit %.2f%% (%s mode, %d trades), locking until %s", dd*100, p.MaxDrawdownPct*100, p.CalculationMode, len(windowTrades), resumeTime.Format(time.RFC3339)),
+					ResumeTime: resumeTime,
+				}
+			}
+		}
+		return ProtectionResult{Blocked: false}
+	}
+
+	// 无交易历史：回退到外部提供的回撤值（兼容旧行为）
 	if ctx.CurrentDrawdown >= p.MaxDrawdownPct {
-		resumeTime := ctx.CurrentTime.Add(p.stopDuration())
+		resumeTime := p.lockEnd(ctx.CurrentTime)
 		return ProtectionResult{
 			Blocked:    true,
 			Reason:     fmt.Sprintf("MaxDrawdown: drawdown %.2f%% exceeds limit %.2f%%", ctx.CurrentDrawdown*100, p.MaxDrawdownPct*100),
@@ -380,61 +368,89 @@ func (p *MaxDrawdown) Check(ctx ProtectionContext) ProtectionResult {
 	return ProtectionResult{Blocked: false}
 }
 
+// tradeProfitRatio 返回单笔交易盈利率（PnLPct 为 ratio 口径；
+// 缺失时由 PnL / 名义价值推导）。
+func tradeProfitRatio(t TradeRecord) float64 {
+	if t.PnLPct != 0 {
+		return t.PnLPct
+	}
+	notional := t.EntryPrice * t.Quantity
+	if notional > 0 {
+		return t.PnL / notional
+	}
+	return 0
+}
+
+// ratioDrawdown 计算累计盈利率曲线的峰谷落差（freqtrade legacy ratios 口径）。
+func ratioDrawdown(trades []TradeRecord) float64 {
+	cum := 0.0
+	peak := 0.0
+	maxDD := 0.0
+	for _, t := range trades {
+		cum += tradeProfitRatio(t)
+		if cum > peak {
+			peak = cum
+		}
+		if dd := peak - cum; dd > maxDD {
+			maxDD = dd
+		}
+	}
+	return maxDD
+}
+
+// equityDrawdown 计算权益曲线的相对回撤。
+// 窗口起始权益 = 当前总权益 - 窗口内累计盈亏。
+func equityDrawdown(trades []TradeRecord, totalBalance float64) float64 {
+	sumPnL := 0.0
+	for _, t := range trades {
+		sumPnL += t.PnL
+	}
+	startBalance := totalBalance - sumPnL
+	if startBalance <= 0 {
+		return 0
+	}
+	equity := startBalance
+	peak := startBalance
+	maxDD := 0.0
+	for _, t := range trades {
+		equity += t.PnL
+		if equity > peak {
+			peak = equity
+		}
+		if peak > 0 {
+			if dd := (peak - equity) / peak; dd > maxDD {
+				maxDD = dd
+			}
+		}
+	}
+	return maxDD
+}
+
 func (p *MaxDrawdown) Validate() error {
 	if p.MaxDrawdownPct <= 0 || p.MaxDrawdownPct >= 1 {
 		return fmt.Errorf("MaxDrawdown: max_drawdown_pct must be between 0 and 1")
+	}
+	if p.CalculationMode != "ratios" && p.CalculationMode != "equity" {
+		return fmt.Errorf("MaxDrawdown: calculation_mode must be 'ratios' or 'equity'")
 	}
 	return nil
 }
 
 func (p *MaxDrawdown) Reset() {}
 
-func (p *MaxDrawdown) stopDuration() time.Duration {
-	return time.Duration(p.StopDurationCandles) * p.candleDuration()
-}
-
-func (p *MaxDrawdown) candleDuration() time.Duration {
-	switch p.Timeframe {
-	case "1m":
-		return time.Minute
-	case "5m":
-		return 5 * time.Minute
-	case "15m":
-		return 15 * time.Minute
-	case "30m":
-		return 30 * time.Minute
-	case "1h":
-		return time.Hour
-	case "2h":
-		return 2 * time.Hour
-	case "4h":
-		return 4 * time.Hour
-	case "6h":
-		return 6 * time.Hour
-	case "8h":
-		return 8 * time.Hour
-	case "12h":
-		return 12 * time.Hour
-	case "1d":
-		return 24 * time.Hour
-	case "3d":
-		return 72 * time.Hour
-	case "1w":
-		return 7 * 24 * time.Hour
-	default:
-		return time.Hour
-	}
-}
-
 // ── LowProfitPairs ─────────────────────────────────────────────
-// Locks pairs that have low combined profit over a lookback period.
+// 对标 freqtrade LowProfitPairs：窗口内某交易对的累计盈利率
+// （各笔交易盈利率之和，ratio 口径）低于 min_profit_ratio 时锁定该对，
+// 锁定至「窗口内最近一笔平仓 + stop_duration」（或 unlock_at）。
+//   - min_trade_count（freqtrade trade_limit）：窗口内交易数不足时不评估
+//   - only_per_side：仅统计与当前信号同方向的交易
 
 type LowProfitPairs struct {
-	LookbackPeriodCandles int     `json:"lookback_period_candles"`
-	MinProfitRatio      float64 `json:"min_profit_ratio"`      // minimum profit ratio (e.g., 0.01 = 1%)
-	MinTradeCount       int     `json:"min_trade_count"`       // minimum trades to evaluate
-	Timeframe           string  `json:"timeframe"`
-	StopDurationCandles int     `json:"stop_duration_candles"`
+	windowParams
+
+	MinProfitRatio float64 `json:"min_profit_ratio"` // 最低累计盈利率（alias: required_profit）
+	MinTradeCount  int     `json:"min_trade_count"`  // 窗口内至少 N 笔交易才评估（alias: trade_limit）
+	OnlyPerSide    bool    `json:"only_per_side"`
 
 	mu          sync.RWMutex
 	tradeHistory map[string][]TradeRecord // per-pair trade history
@@ -444,36 +460,26 @@ func NewLowProfitPairs(params map[string]any) (*LowProfitPairs, error) {
 	p := &LowProfitPairs{
 		tradeHistory: make(map[string][]TradeRecord),
 	}
-	if v, ok := toInt(params["lookback_period_candles"]); ok {
-		p.LookbackPeriodCandles = v
-	}
+	p.windowParams = parseWindowParams(params, 24, 12, "1h")
 	if v, ok := toFloat(params["min_profit_ratio"]); ok {
+		p.MinProfitRatio = v
+	} else if v, ok := toFloat(params["required_profit"]); ok {
 		p.MinProfitRatio = v
 	}
 	if v, ok := toInt(params["min_trade_count"]); ok {
 		p.MinTradeCount = v
+	} else if v, ok := toInt(params["trade_limit"]); ok {
+		p.MinTradeCount = v
 	}
-	if v, ok := params["timeframe"].(string); ok {
-		p.Timeframe = v
-	}
-	if v, ok := toInt(params["stop_duration_candles"]); ok {
-		p.StopDurationCandles = v
+	if v, ok := params["only_per_side"].(bool); ok {
+		p.OnlyPerSide = v
 	}
 
-	if p.LookbackPeriodCandles <= 0 {
-		p.LookbackPeriodCandles = 24
-	}
 	if p.MinProfitRatio <= 0 {
 		p.MinProfitRatio = 0.01 // 1%
 	}
 	if p.MinTradeCount <= 0 {
 		p.MinTradeCount = 4
-	}
-	if p.StopDurationCandles <= 0 {
-		p.StopDurationCandles = 12
-	}
-	if p.Timeframe == "" {
-		p.Timeframe = "1h"
 	}
 	return p, nil
 }
@@ -483,42 +489,46 @@ func (p *LowProfitPairs) Description() string { return "Lock pairs with low prof
 
 func (p *LowProfitPairs) Check(ctx ProtectionContext) ProtectionResult {
 	p.mu.RLock()
-	defer p.mu.RUnlock()
-
 	records := p.tradeHistory[ctx.Symbol]
-	if len(records) < p.MinTradeCount {
+	p.mu.RUnlock()
+
+	cutoff := ctx.CurrentTime.Add(-p.lookback())
+
+	// 窗口内、方向匹配的交易
+	var windowTrades []TradeRecord
+	for _, r := range records {
+		if !r.ExitTime.After(cutoff) {
+			continue
+		}
+		if p.OnlyPerSide && ctx.Side != "" && r.Side != "" && r.Side != ctx.Side {
+			continue
+		}
+		windowTrades = append(windowTrades, r)
+	}
+
+	if len(windowTrades) < p.MinTradeCount {
 		return ProtectionResult{Blocked: false}
 	}
 
-	lookback := p.lookbackDuration()
-	cutoff := ctx.CurrentTime.Add(-lookback)
-
-	var totalProfit, totalVolume float64
-	tradeCount := 0
-	for _, r := range records {
-		if r.ExitTime.After(cutoff) {
-			totalProfit += r.PnL
-			totalVolume += r.EntryPrice * r.Quantity
-			tradeCount++
+	// freqtrade 口径：窗口内各笔交易盈利率（ratio）求和
+	profit := 0.0
+	var lastExit time.Time
+	for _, r := range windowTrades {
+		profit += tradeProfitRatio(r)
+		if r.ExitTime.After(lastExit) {
+			lastExit = r.ExitTime
 		}
 	}
 
-	if tradeCount < p.MinTradeCount {
-		return ProtectionResult{Blocked: false}
-	}
-
-	profitRatio := 0.0
-	if totalVolume > 0 {
-		profitRatio = totalProfit / totalVolume
-	}
-
-	if profitRatio < p.MinProfitRatio {
-		resumeTime := ctx.CurrentTime.Add(p.stopDuration())
-		return ProtectionResult{
-			Blocked:    true,
-			Reason:     fmt.Sprintf("LowProfitPairs: %s profit ratio %.4f below %.4f over %d trades", ctx.Symbol, profitRatio, p.MinProfitRatio, tradeCount),
-			ResumeTime: resumeTime,
-			Pair:       ctx.Symbol,
+	if profit < p.MinProfitRatio {
+		resumeTime := p.lockEnd(lastExit)
+		if ctx.CurrentTime.Before(resumeTime) {
+			return ProtectionResult{
+				Blocked:    true,
+				Reason:     fmt.Sprintf("LowProfitPairs: %s profit %.4f < %.4f over %d trades, locking until %s", ctx.Symbol, profit, p.MinProfitRatio, len(windowTrades), resumeTime.Format(time.RFC3339)),
+				ResumeTime: resumeTime,
+				Pair:       ctx.Symbol,
+			}
 		}
 	}
 
@@ -526,8 +536,8 @@ func (p *LowProfitPairs) Check(ctx ProtectionContext) ProtectionResult {
 }
 
 func (p *LowProfitPairs) Validate() error {
-	if p.LookbackPeriodCandles <= 0 {
-		return fmt.Errorf("LowProfitPairs: lookback_period_candles must be > 0")
+	if p.LookbackPeriodCandles <= 0 && p.LookbackPeriodMinutes <= 0 {
+		return fmt.Errorf("LowProfitPairs: lookback_period_candles / lookback_period 至少一项 > 0")
 	}
 	if p.MinProfitRatio <= 0 {
 		return fmt.Errorf("LowProfitPairs: min_profit_ratio must be > 0")
@@ -555,7 +565,7 @@ func (p *LowProfitPairs) RecordTrade(trade TradeRecord) {
 	p.tradeHistory[trade.Symbol] = append(p.tradeHistory[trade.Symbol], trade)
 
 	// Cleanup old records
-	cutoff := trade.ExitTime.Add(-p.lookbackDuration() * 2)
+	cutoff := trade.ExitTime.Add(-p.lookback() * 2)
 	newRecords := make([]TradeRecord, 0)
 	for _, r := range p.tradeHistory[trade.Symbol] {
 		if r.ExitTime.After(cutoff) {
@@ -563,47 +573,6 @@ func (p *LowProfitPairs) RecordTrade(trade TradeRecord) {
 		}
 	}
 	p.tradeHistory[trade.Symbol] = newRecords
-}
-
-func (p *LowProfitPairs) lookbackDuration() time.Duration {
-	return time.Duration(p.LookbackPeriodCandles) * p.candleDuration()
-}
-
-func (p *LowProfitPairs) stopDuration() time.Duration {
-	return time.Duration(p.StopDurationCandles) * p.candleDuration()
-}
-
-func (p *LowProfitPairs) candleDuration() time.Duration {
-	switch p.Timeframe {
-	case "1m":
-		return time.Minute
-	case "5m":
-		return 5 * time.Minute
-	case "15m":
-		return 15 * time.Minute
-	case "30m":
-		return 30 * time.Minute
-	case "1h":
-		return time.Hour
-	case "2h":
-		return 2 * time.Hour
-	case "4h":
-		return 4 * time.Hour
-	case "6h":
-		return 6 * time.Hour
-	case "8h":
-		return 8 * time.Hour
-	case "12h":
-		return 12 * time.Hour
-	case "1d":
-		return 24 * time.Hour
-	case "3d":
-		return 72 * time.Hour
-	case "1w":
-		return 7 * 24 * time.Hour
-	default:
-		return time.Hour
-	}
 }
 
 // ── Helpers ────────────────────────────────────────────────────

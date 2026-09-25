@@ -7,6 +7,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/hyperopt"
 	"github.com/xiaotian-quant/gateway/internal/model"
 	"github.com/xiaotian-quant/gateway/internal/notify"
+	"github.com/xiaotian-quant/gateway/internal/protection"
 	"github.com/xiaotian-quant/gateway/internal/store"
 	"github.com/xiaotian-quant/gateway/internal/strategy"
 	"github.com/xiaotian-quant/gateway/internal/strategy/strategies"
@@ -55,6 +57,26 @@ type hyperoptJobConfig struct {
 	Loss           string  `json:"loss"`        // 可选：hyperopt.GetLossFunc 注册表名（only_profit, sqn, ...），优先于 loss_metric
 	From           string  `json:"from"`
 	To             string  `json:"to"`
+
+	// spaces 优化空间选择（对标 freqtrade --spaces）：["default", "protection"]。
+	// 缺省 = ["default"]（仅策略参数）。勾选 "protection" 时必须提供 protections。
+	Spaces []string `json:"spaces"`
+	// protections 是 protection 空间的基础配置（name + params），
+	// 与 internal/protection.BuildManagerFromConfig 的配置结构一致；
+	// 优化时其可调参数（见 hyperopt.ProtectionSpaceRegistry）各生成一个维度。
+	Protections []protection.ProtectionConfig `json:"protections"`
+	// protection_ranges 可选：按维度名（protection__<Name>__<param>）覆盖搜索范围。
+	ProtectionRanges map[string]hyperopt.SpaceRangeOverride `json:"protection_ranges"`
+}
+
+// hasSpace 判断优化空间是否被勾选。
+func (c *hyperoptJobConfig) hasSpace(name string) bool {
+	for _, s := range c.Spaces {
+		if s == name {
+			return true
+		}
+	}
+	return false
 }
 
 type hyperoptProgress struct {
@@ -169,8 +191,13 @@ func StartHyperopt(c *gin.Context) {
 		strat = strategies.NewBreakoutStrategy()
 	}
 
+	// spaces 语义（对标 freqtrade --spaces）：缺省只优化策略参数；
+	// 显式给出 spaces 时按勾选生成对应维度（如只勾 protection 则跳过策略参数）。
+	useDefaultSpace := len(body.Spaces) == 0 || body.hasSpace("default")
+	protectionSpaceEnabled := body.hasSpace("protection")
+
 	reg := strat.GetParameters()
-	if reg == nil || len(reg.Optimizable()) == 0 {
+	if useDefaultSpace && (reg == nil || len(reg.Optimizable()) == 0) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":  "策略无优化参数",
 			"detail": fmt.Sprintf("策略 %s 没有可优化的参数，请检查参数定义中的 optimize 字段", body.StrategyType),
@@ -180,8 +207,30 @@ func StartHyperopt(c *gin.Context) {
 
 	// Build search space
 	space := hyperopt.NewSearchSpaceFromRegistry(reg)
+	if !useDefaultSpace {
+		space = hyperopt.NewSearchSpaceFromRegistry(strategy.NewParamRegistry())
+	}
+
+	// protection 空间（对标 freqtrade --spaces protection）：
+	// 为每个配置的 protection 的可调参数生成维度，回测评分时应用对应配置。
+	if protectionSpaceEnabled {
+		if len(body.Protections) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":  "protection 空间需要 protections 基础配置",
+				"detail": "勾选 protection 空间时必须提供 protections（name + params），可优化参数见 GET /api/hyperopt/spaces?space=protection",
+			})
+			return
+		}
+		protSpaces, err := hyperopt.BuildProtectionSpaces(body.Protections, body.ProtectionRanges)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		space.AddSpaces(protSpaces)
+	}
+
 	if space.Dimensions() == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "搜索空间为空，参数可能缺少 min/max 范围"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "搜索空间为空，参数可能缺少 min/max 范围或未勾选优化空间"})
 		return
 	}
 
@@ -206,6 +255,9 @@ func StartHyperopt(c *gin.Context) {
 
 	// Objective function: run backtest with given params
 	objective := func(params map[string]any) (float64, map[string]float64, error) {
+		// 拆分策略参数与 protection 参数（protection 维度带 protection__ 前缀）
+		stratParams, protParams := hyperopt.SplitProtectionParams(params)
+
 		// Clone strategy and apply params
 		var btStrat strategy.Strategy
 		switch body.StrategyType {
@@ -229,12 +281,26 @@ func StartHyperopt(c *gin.Context) {
 			btStrat = strategies.NewBreakoutStrategy()
 		}
 
-		if err := btStrat.ApplyParams(params); err != nil {
+		if err := btStrat.ApplyParams(stratParams); err != nil {
 			return math.Inf(1), nil, err
 		}
 
 		// Create backtest strategy adapter
 		adapter := &strategyBacktestAdapter{Strategy: btStrat, symbol: body.Symbol}
+
+		// protection 空间：按采样参数构建 protection 配置并挂到回测上
+		// （对标 freqtrade hyperopt 回测评分时 enable_protections）。
+		var btStrategy backtest.BacktestStrategy = adapter
+		var protected *hyperopt.ProtectedBacktestStrategy
+		if protectionSpaceEnabled {
+			protCfg := hyperopt.ApplyProtectionParams(body.Protections, protParams)
+			mgr, err := protection.BuildManagerFromConfig(protection.Config{Protections: protCfg})
+			if err != nil {
+				return math.Inf(1), nil, fmt.Errorf("build protections: %w", err)
+			}
+			protected = hyperopt.NewProtectedBacktestStrategy(adapter, mgr, body.Interval)
+			btStrategy = protected
+		}
 
 		// Run backtest
 		cfg := backtest.DefaultRunnerConfig()
@@ -244,7 +310,7 @@ func StartHyperopt(c *gin.Context) {
 		runner := backtest.NewRunner(cfg)
 		runner.LoadBars(body.Symbol, bars)
 
-		result, err := runner.Run(adapter)
+		result, err := runner.Run(btStrategy)
 		if err != nil {
 			return math.Inf(1), nil, err
 		}
@@ -257,6 +323,9 @@ func StartHyperopt(c *gin.Context) {
 			"win_rate":         result.WinRate,
 			"profit_factor":    result.ProfitFactor,
 			"total_trades":     float64(result.TotalTrades),
+		}
+		if protected != nil {
+			metrics["blocked_entries"] = float64(protected.BlockedEntries())
 		}
 
 		var loss float64
@@ -578,7 +647,49 @@ func DeleteHyperoptJob(c *gin.Context) {
 }
 
 // GetHyperoptSpaces returns the search space for a strategy.
+// ?strategy=<type>            策略参数空间（原有行为）
+// ?space=protection           protection 空间全部可调参数（注册表）
+// ?space=protection&protections=StoplossGuard,MaxDrawdown  指定 protection 的维度
 func GetHyperoptSpaces(c *gin.Context) {
+	if c.Query("space") == "protection" {
+		var base []protection.ProtectionConfig
+		if names := c.Query("protections"); names != "" {
+			for _, n := range strings.Split(names, ",") {
+				n = strings.TrimSpace(n)
+				if n != "" {
+					base = append(base, protection.ProtectionConfig{Name: n})
+				}
+			}
+		} else {
+			for _, n := range hyperopt.ProtectionSpaceNames() {
+				base = append(base, protection.ProtectionConfig{Name: n})
+			}
+		}
+		spaces, err := hyperopt.BuildProtectionSpaces(base, nil)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		// 输出形状与前端 HyperoptSpace 接口一致（小写键、字符串类型）
+		views := make([]gin.H, 0, len(spaces))
+		for _, sp := range spaces {
+			views = append(views, gin.H{
+				"name":    sp.Name,
+				"type":    paramTypeString(sp.Type),
+				"low":     sp.Min,
+				"high":    sp.Max,
+				"step":    sp.Step,
+				"choices": sp.Options,
+			})
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"space":  "protection",
+			"spaces": views,
+			"count":  len(views),
+		})
+		return
+	}
+
 	strategyType := c.Query("strategy")
 	if strategyType == "" {
 		strategyType = "breakout"
@@ -736,4 +847,20 @@ func avgHoldingMinutes(trades []backtest.Position) float64 {
 func roundFloat(v float64, n int) float64 {
 	p := math.Pow(10, float64(n))
 	return math.Round(v*p) / p
+}
+
+// paramTypeString 把 strategy.ParamType 转成前端可读字符串。
+func paramTypeString(t strategy.ParamType) string {
+	switch t {
+	case strategy.ParamInt:
+		return "int"
+	case strategy.ParamFloat:
+		return "float"
+	case strategy.ParamBool:
+		return "bool"
+	case strategy.ParamCategorical:
+		return "categorical"
+	default:
+		return "unknown"
+	}
 }

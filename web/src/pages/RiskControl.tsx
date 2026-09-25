@@ -50,7 +50,7 @@ interface ProtectionConfigItem {
 interface FieldDef {
   key: string
   label: string
-  type: 'number' | 'select'
+  type: 'number' | 'select' | 'bool'
   min?: number
   max?: number
   step?: number
@@ -66,6 +66,8 @@ interface ProtectionTemplate {
   fields: FieldDef[]
 }
 
+const TIMEFRAME_OPTIONS = ['1m', '5m', '15m', '30m', '1h', '4h', '1d']
+
 const PROTECTION_TEMPLATES: ProtectionTemplate[] = [
   {
     name: 'CooldownPeriod',
@@ -75,39 +77,115 @@ const PROTECTION_TEMPLATES: ProtectionTemplate[] = [
     defaultParams: { stop_duration_candles: 5, timeframe: '1h' },
     fields: [
       { key: 'stop_duration_candles', label: '冷却 K线数', type: 'number', min: 1, max: 50 },
-      { key: 'timeframe', label: '时间周期', type: 'select', options: ['1m', '5m', '15m', '30m', '1h', '4h', '1d'] },
+      { key: 'timeframe', label: '时间周期', type: 'select', options: TIMEFRAME_OPTIONS },
     ],
   },
   {
     name: 'StoplossGuard',
     label: '止损保护',
-    description: 'N 次止损后暂停交易，防止连续亏损',
+    description: 'N 根K线内触发 M 次止损后锁定该对/全局 X 根K线（对标 freqtrade）',
     icon: <ShieldAlert className="w-4 h-4" />,
-    defaultParams: { max_stoplosses: 3, lookback_minutes: 60 },
+    defaultParams: {
+      lookback_period_candles: 24,
+      trade_limit: 4,
+      stop_duration_candles: 12,
+      timeframe: '1h',
+      only_per_pair: false,
+      required_profit: 0.0,
+    },
     fields: [
-      { key: 'max_stoplosses', label: '最大止损次数', type: 'number', min: 1, max: 20 },
-      { key: 'lookback_minutes', label: '观察窗口 (分钟)', type: 'number', min: 5, max: 1440 },
+      { key: 'lookback_period_candles', label: '回溯 K线数', type: 'number', min: 1, max: 96 },
+      { key: 'trade_limit', label: '最大止损次数', type: 'number', min: 1, max: 20 },
+      { key: 'stop_duration_candles', label: '锁定 K线数', type: 'number', min: 1, max: 96 },
+      { key: 'timeframe', label: '时间周期', type: 'select', options: TIMEFRAME_OPTIONS },
+      { key: 'only_per_pair', label: '仅锁该交易对(关闭全局)', type: 'bool' },
+      { key: 'required_profit', label: '计入阈值(盈利率低于此值才算止损)', type: 'number', step: 0.01 },
     ],
   },
   {
     name: 'MaxDrawdown',
     label: '最大回撤保护',
-    description: '账户回撤超过阈值时暂停全部交易',
+    description: '账户回撤超阈值后全局停开新仓（对标 freqtrade MaxDrawdownProtection）',
     icon: <TrendingDown className="w-4 h-4" />,
-    defaultParams: { max_drawdown_pct: 10.0 },
+    defaultParams: {
+      max_drawdown_pct: 0.20,
+      lookback_period_candles: 48,
+      trade_limit: 1,
+      stop_duration_candles: 12,
+      timeframe: '1h',
+      calculation_mode: 'ratios',
+    },
     fields: [
-      { key: 'max_drawdown_pct', label: '最大回撤 (%)', type: 'number', min: 1, max: 50, step: 0.5 },
+      { key: 'max_drawdown_pct', label: '最大回撤比例(0-1)', type: 'number', min: 0.01, max: 0.99, step: 0.01 },
+      { key: 'lookback_period_candles', label: '回溯 K线数', type: 'number', min: 1, max: 200 },
+      { key: 'trade_limit', label: '最少交易数(不足不评估)', type: 'number', min: 1, max: 50 },
+      { key: 'stop_duration_candles', label: '锁定 K线数', type: 'number', min: 1, max: 96 },
+      { key: 'timeframe', label: '时间周期', type: 'select', options: TIMEFRAME_OPTIONS },
+      { key: 'calculation_mode', label: '计算模式', type: 'select', options: ['ratios', 'equity'] },
     ],
   },
   {
     name: 'LowProfitPairs',
     label: '低收益交易对保护',
-    description: '交易对收益低于阈值时暂停该对交易',
+    description: '窗口内累计盈利率低于阈值时锁定该对（对标 freqtrade）',
     icon: <Activity className="w-4 h-4" />,
-    defaultParams: { min_profit_pct: 1.0, lookback_trades: 10 },
+    defaultParams: {
+      lookback_period_candles: 24,
+      min_profit_ratio: 0.01,
+      min_trade_count: 4,
+      stop_duration_candles: 12,
+      timeframe: '1h',
+    },
     fields: [
-      { key: 'min_profit_pct', label: '最低收益 (%)', type: 'number', min: 0, max: 10, step: 0.1 },
-      { key: 'lookback_trades', label: '观察交易数', type: 'number', min: 3, max: 50 },
+      { key: 'lookback_period_candles', label: '回溯 K线数', type: 'number', min: 1, max: 200 },
+      { key: 'min_profit_ratio', label: '最低盈利率(如 0.01=1%)', type: 'number', step: 0.01 },
+      { key: 'min_trade_count', label: '最少交易数', type: 'number', min: 1, max: 50 },
+      { key: 'stop_duration_candles', label: '锁定 K线数', type: 'number', min: 1, max: 96 },
+      { key: 'timeframe', label: '时间周期', type: 'select', options: TIMEFRAME_OPTIONS },
+    ],
+  },
+  {
+    name: 'DailyLossLimit',
+    label: '日亏损限额',
+    description: '当日累计亏损超过账户百分比时暂停交易，次日重置',
+    icon: <Gauge className="w-4 h-4" />,
+    defaultParams: { max_daily_loss_pct: 5.0, reset_hour: 0 },
+    fields: [
+      { key: 'max_daily_loss_pct', label: '最大日亏损(%)', type: 'number', min: 0.5, max: 50, step: 0.5 },
+      { key: 'reset_hour', label: '重置小时(0-23)', type: 'number', min: 0, max: 23 },
+    ],
+  },
+  {
+    name: 'ConsecutiveLosses',
+    label: '连续亏损保护',
+    description: '连续亏损 N 笔后暂停交易一段时间',
+    icon: <ShieldAlert className="w-4 h-4" />,
+    defaultParams: { max_consecutive: 3, stop_duration: 30 },
+    fields: [
+      { key: 'max_consecutive', label: '最大连亏笔数', type: 'number', min: 1, max: 20 },
+      { key: 'stop_duration', label: '停开新仓(分钟)', type: 'number', min: 5, max: 1440 },
+    ],
+  },
+  {
+    name: 'Overtrading',
+    label: '过度交易保护',
+    description: '每小时交易次数超限时暂停交易',
+    icon: <Clock className="w-4 h-4" />,
+    defaultParams: { max_trades_per_hour: 10 },
+    fields: [
+      { key: 'max_trades_per_hour', label: '每小时最大交易数', type: 'number', min: 1, max: 100 },
+    ],
+  },
+  {
+    name: 'PriceJump',
+    label: '价格剧烈波动保护',
+    description: '检测暴涨暴跌后暂停交易一段时间',
+    icon: <AlertTriangle className="w-4 h-4" />,
+    defaultParams: { max_jump_pct: 5.0, stop_duration: 15, lookback_bars: 3 },
+    fields: [
+      { key: 'max_jump_pct', label: '最大涨跌幅(%)', type: 'number', min: 1, max: 50, step: 0.5 },
+      { key: 'stop_duration', label: '停开新仓(分钟)', type: 'number', min: 5, max: 240 },
+      { key: 'lookback_bars', label: '检测K线数', type: 'number', min: 1, max: 20 },
     ],
   },
 ]
@@ -531,6 +609,24 @@ export function RiskControl() {
                               <option key={opt} value={opt}>{opt}</option>
                             ))}
                           </select>
+                        ) : field.type === 'bool' ? (
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={Boolean(protection.params[field.key])}
+                            onClick={() => handleUpdateParam(index, field.key, !protection.params[field.key])}
+                            className={cn(
+                              'w-10 h-5 rounded-full transition-colors relative block',
+                              protection.params[field.key] ? 'bg-quant-gold' : 'bg-quant-border',
+                            )}
+                          >
+                            <span
+                              className={cn(
+                                'absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all',
+                                protection.params[field.key] ? 'left-5' : 'left-0.5',
+                              )}
+                            />
+                          </button>
                         ) : (
                           <input
                             type="number"

@@ -134,6 +134,18 @@ func (ss *SearchSpace) Sample(rng *rand.Rand) map[string]any {
 	return point
 }
 
+// AddSpaces appends additional dimensions (e.g. protection space) to the
+// search space. Dimensions whose name already exists are skipped.
+func (ss *SearchSpace) AddSpaces(extra []Space) {
+	for _, s := range extra {
+		if _, exists := ss.index[s.Name]; exists {
+			continue
+		}
+		ss.index[s.Name] = len(ss.spaces)
+		ss.spaces = append(ss.spaces, s)
+	}
+}
+
 // Quantize rounds all values in a point to valid steps.
 func (ss *SearchSpace) Quantize(point map[string]any) map[string]any {
 	result := make(map[string]any, len(point))

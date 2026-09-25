@@ -61,6 +61,36 @@ const STRATEGIES = [
   { value: 'market_making', label: '做市' },
 ]
 
+/* ── Protection 空间模板（与后端 hyperopt.ProtectionSpaceRegistry 对应） ── */
+interface ProtectionSpaceTemplate {
+  name: string
+  label: string
+  defaultParams: Record<string, unknown>
+}
+
+const PROTECTION_SPACE_TEMPLATES: ProtectionSpaceTemplate[] = [
+  {
+    name: 'CooldownPeriod',
+    label: '交易冷却期',
+    defaultParams: { stop_duration_candles: 5, timeframe: '1h' },
+  },
+  {
+    name: 'StoplossGuard',
+    label: '止损保护',
+    defaultParams: { lookback_period_candles: 24, trade_limit: 4, stop_duration_candles: 12, timeframe: '1h' },
+  },
+  {
+    name: 'MaxDrawdown',
+    label: '最大回撤保护',
+    defaultParams: { max_drawdown_pct: 0.2, lookback_period_candles: 48, trade_limit: 1, stop_duration_candles: 12, timeframe: '1h' },
+  },
+  {
+    name: 'LowProfitPairs',
+    label: '低收益交易对保护',
+    defaultParams: { lookback_period_candles: 24, min_profit_ratio: 0.01, min_trade_count: 4, stop_duration_candles: 12, timeframe: '1h' },
+  },
+]
+
 /* ── Page ── */
 export function HyperoptManagement() {
   const queryClient = useQueryClient()
@@ -75,6 +105,10 @@ export function HyperoptManagement() {
     max_trials: 50,
     sampler: 'tpe',
   })
+  // spaces 勾选（对标 freqtrade --spaces）：默认只优化策略参数
+  const [useDefaultSpace, setUseDefaultSpace] = useState(true)
+  const [useProtectionSpace, setUseProtectionSpace] = useState(false)
+  const [selectedProtections, setSelectedProtections] = useState<string[]>(['StoplossGuard', 'MaxDrawdown'])
 
   // Queries
   const { data: jobs, isLoading: jobsLoading } = useQuery({
@@ -95,6 +129,15 @@ export function HyperoptManagement() {
     enabled: showSpaces,
   })
 
+  const { data: protectionSpaces } = useQuery({
+    queryKey: ['hyperopt-protection-spaces', selectedProtections],
+    queryFn: async () => {
+      const res = await hyperoptApi.protectionSpaces(selectedProtections)
+      return res
+    },
+    enabled: showSpaces && useProtectionSpace,
+  })
+
   const { data: jobDetail } = useQuery({
     queryKey: ['hyperopt-job', selectedJob],
     queryFn: async () => {
@@ -107,13 +150,29 @@ export function HyperoptManagement() {
 
   // Mutations
   const startMutation = useMutation({
-    mutationFn: () => hyperoptApi.start({
-      strategy_type: jobConfig.strategy_type,
-      symbol: jobConfig.symbol,
-      interval: jobConfig.interval,
-      max_trials: jobConfig.max_trials,
-      sampler: jobConfig.sampler,
-    }),
+    mutationFn: () => {
+      // spaces 勾选：默认缺省（仅策略参数）；勾选 protection 时附带 protections 基础配置
+      const spaces: string[] = []
+      if (useDefaultSpace) spaces.push('default')
+      if (useProtectionSpace) spaces.push('protection')
+      const payload: Record<string, unknown> = {
+        strategy_type: jobConfig.strategy_type,
+        symbol: jobConfig.symbol,
+        interval: jobConfig.interval,
+        max_evals: jobConfig.max_trials,
+        sampler: jobConfig.sampler,
+      }
+      if (spaces.length > 0) {
+        payload.spaces = spaces
+      }
+      if (useProtectionSpace) {
+        payload.protections = selectedProtections.map((name) => ({
+          name,
+          params: { ...PROTECTION_SPACE_TEMPLATES.find((t) => t.name === name)?.defaultParams },
+        }))
+      }
+      return hyperoptApi.start(payload)
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['hyperopt-jobs'] })
       setShowNewJob(false)
@@ -263,14 +322,62 @@ export function HyperoptManagement() {
                   <option value="grid">Grid (网格搜索)</option>
                 </select>
               </div>
+              <div className="space-y-1 md:col-span-3">
+                <label className="text-xs text-muted-foreground">优化空间（对标 freqtrade --spaces）</label>
+                <div className="flex flex-wrap items-center gap-4 p-2 rounded-md bg-quant-bg-secondary">
+                  <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={useDefaultSpace}
+                      onChange={(e) => setUseDefaultSpace(e.target.checked)}
+                      className="accent-quant-gold"
+                    />
+                    策略参数 (default)
+                  </label>
+                  <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={useProtectionSpace}
+                      onChange={(e) => setUseProtectionSpace(e.target.checked)}
+                      className="accent-quant-gold"
+                    />
+                    Protection 空间 (protection)
+                  </label>
+                  {useProtectionSpace && (
+                    <div className="flex flex-wrap items-center gap-3 pl-3 border-l border-quant-border">
+                      {PROTECTION_SPACE_TEMPLATES.map((t) => (
+                        <label key={t.name} className="flex items-center gap-1.5 text-xs cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={selectedProtections.includes(t.name)}
+                            onChange={(e) =>
+                              setSelectedProtections((prev) =>
+                                e.target.checked ? [...prev, t.name] : prev.filter((n) => n !== t.name),
+                              )
+                            }
+                            className="accent-quant-gold"
+                          />
+                          {t.label}
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                {useProtectionSpace && selectedProtections.length === 0 && (
+                  <div className="text-[11px] text-red-400">勾选 protection 空间后需至少选择一种保护</div>
+                )}
+                {!useDefaultSpace && !useProtectionSpace && (
+                  <div className="text-[11px] text-red-400">至少勾选一个优化空间</div>
+                )}
+              </div>
             </div>
             <div className="mt-3 flex items-center gap-3">
               <button
                 onClick={() => startMutation.mutate()}
-                disabled={startMutation.isPending}
+                disabled={startMutation.isPending || (!useDefaultSpace && !useProtectionSpace) || (useProtectionSpace && selectedProtections.length === 0)}
                 className={cn(
                   'flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors',
-                  startMutation.isPending
+                  startMutation.isPending || (!useDefaultSpace && !useProtectionSpace) || (useProtectionSpace && selectedProtections.length === 0)
                     ? 'bg-muted text-muted-foreground cursor-not-allowed'
                     : 'bg-quant-gold text-white hover:bg-quant-gold/90'
                 )}
@@ -302,6 +409,25 @@ export function HyperoptManagement() {
                 </div>
               ))}
             </div>
+            {useProtectionSpace && protectionSpaces && protectionSpaces.length > 0 && (
+              <div className="mt-3">
+                <div className="text-xs text-muted-foreground mb-1.5">Protection 空间维度（回测评分时应用对应 protection 配置）</div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                  {protectionSpaces.map((space, i) => (
+                    <div key={i} className="p-2.5 rounded-md bg-quant-bg-secondary ring-1 ring-quant-gold/20">
+                      <div className="text-[10px] text-muted-foreground uppercase">{space.name}</div>
+                      <div className="text-xs font-medium mt-0.5">
+                        {space.type === 'categorical' && space.choices
+                          ? space.choices.join(', ')
+                          : space.low !== undefined && space.high !== undefined
+                            ? `${space.low} ~ ${space.high}`
+                            : space.type}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </SectionCard>
         )}
 

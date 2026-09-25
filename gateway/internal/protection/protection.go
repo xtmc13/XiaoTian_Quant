@@ -44,6 +44,7 @@ type ProtectionContext struct {
 	Symbol      string    `json:"symbol"`
 	Timeframe   string    `json:"timeframe"`
 	CurrentTime time.Time `json:"current_time"`
+	Side        string    `json:"side,omitempty"` // "LONG"/"SHORT"；仅 only_per_side 类保护使用，空 = 不限方向
 
 	// Trade history (recent trades for lookback calculations)
 	TradeHistory []TradeRecord `json:"trade_history"`

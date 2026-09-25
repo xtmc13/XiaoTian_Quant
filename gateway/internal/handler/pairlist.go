@@ -118,111 +118,24 @@ func ConfigurePairlist(c *gin.Context) {
 	cfg := pairlist.DefaultManagerConfig()
 	newManager := pairlist.NewManager(cfg)
 
-	// Add producers
+	// Add producers（经 pairlist 包工厂构建，参数名与前端模板一致）
 	for _, pc := range body.Producers {
-		switch pc.Name {
-		case "StaticPairList":
-			raw, ok := pc.Params["pairs"].([]any)
-			if !ok {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "StaticPairList requires 'pairs' array"})
-				return
-			}
-			pairs := make([]string, 0, len(raw))
-			for _, v := range raw {
-				if s, ok := v.(string); ok {
-					pairs = append(pairs, s)
-				}
-			}
-			newManager.AddProducer(pairlist.NewStaticPairList(pairs))
-		case "VolumePairList":
-			topN := 30
-			minVol := 0.0
-			if v, ok := pc.Params["top_n"].(float64); ok {
-				topN = int(v)
-			}
-			if v, ok := pc.Params["min_volume"].(float64); ok {
-				minVol = v
-			}
-			newManager.AddProducer(pairlist.NewVolumePairList(topN, minVol, nil))
-		default:
-			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown producer: " + pc.Name})
+		producer, err := pairlist.BuildProducerFromConfig(pc.Name, pc.Params)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
+		newManager.AddProducer(producer)
 	}
 
 	// Add filters
 	for _, fc := range body.Filters {
-		switch fc.Name {
-		case "PriceFilter":
-			minPrice := 0.0
-			maxPrice := 0.0
-			if v, ok := fc.Params["min_price"].(float64); ok {
-				minPrice = v
-			}
-			if v, ok := fc.Params["max_price"].(float64); ok {
-				maxPrice = v
-			}
-			newManager.AddFilter(pairlist.NewPriceFilter(minPrice, maxPrice))
-		case "SpreadFilter":
-			maxSpread := 0.5
-			if v, ok := fc.Params["max_spread_pct"].(float64); ok {
-				maxSpread = v
-			}
-			newManager.AddFilter(pairlist.NewSpreadFilter(maxSpread))
-		case "VolatilityFilter":
-			minVol := 0.0
-			maxVol := 0.0
-			if v, ok := fc.Params["min_volatility_pct"].(float64); ok {
-				minVol = v
-			}
-			if v, ok := fc.Params["max_volatility_pct"].(float64); ok {
-				maxVol = v
-			}
-			newManager.AddFilter(pairlist.NewVolatilityFilter(minVol, maxVol))
-		case "PrecisionFilter":
-			minPricePrec := 0
-			minQtyPrec := 0
-			if v, ok := fc.Params["min_price_precision"].(float64); ok {
-				minPricePrec = int(v)
-			}
-			if v, ok := fc.Params["min_qty_precision"].(float64); ok {
-				minQtyPrec = int(v)
-			}
-			newManager.AddFilter(pairlist.NewPrecisionFilter(minPricePrec, minQtyPrec))
-		case "MaxPairsFilter":
-			maxPairs := 0
-			if v, ok := fc.Params["max_pairs"].(float64); ok {
-				maxPairs = int(v)
-			}
-			newManager.AddFilter(pairlist.NewMaxPairsFilter(maxPairs))
-		case "ShuffleFilter":
-			seed := int64(0)
-			if v, ok := fc.Params["seed"].(float64); ok {
-				seed = int64(v)
-			}
-			newManager.AddFilter(pairlist.NewShuffleFilter(seed))
-		case "CorrelationFilter":
-			maxCorr := 2
-			if v, ok := fc.Params["max_correlated"].(float64); ok {
-				maxCorr = int(v)
-			}
-			newManager.AddFilter(pairlist.NewCorrelationFilter(float64(maxCorr)))
-		case "AgeFilter":
-			minAge := 0
-			if v, ok := fc.Params["min_age_days"].(float64); ok {
-				minAge = int(v)
-			}
-			newManager.AddFilter(pairlist.NewAgeFilter(minAge))
-		case "PerformanceFilter":
-			topN := 0
-			if v, ok := fc.Params["top_n"].(float64); ok {
-				topN = int(v)
-			}
-			newManager.AddFilter(pairlist.NewPerformanceFilter(topN))
-		default:
-			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown filter: " + fc.Name})
+		filter, err := pairlist.BuildFilterFromConfig(fc.Name, fc.Params)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
+		newManager.AddFilter(filter)
 	}
 
 	// Replace the global manager
@@ -232,6 +145,15 @@ func ConfigurePairlist(c *gin.Context) {
 		"status":    "configured",
 		"producers": newManager.Producers(),
 		"filters":   newManager.Filters(),
+	})
+}
+
+// GetPairlistSpecs 返回可用 producer/filter 的元数据（名称、参数定义），
+// 供前端动态渲染配置表单，避免前端硬编码与后端能力漂移。
+func GetPairlistSpecs(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"producers": pairlist.ProducerSpecs(),
+		"filters":   pairlist.FilterSpecs(),
 	})
 }
 

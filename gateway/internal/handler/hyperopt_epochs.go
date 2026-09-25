@@ -7,6 +7,8 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xiaotian-quant/gateway/internal/hyperopt"
+	"github.com/xiaotian-quant/gateway/internal/protection"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
@@ -204,8 +206,13 @@ func ApplyHyperoptEpoch(c *gin.Context) {
 		return
 	}
 
+	// protection 空间参数（protection__<Name>__<param>）不进策略顶层字段，
+	// 而是写回 config_json 的 protections 数组（与 protection.BuildManagerFromConfig
+	// 的配置结构一致），回测/实盘经该配置生效。
+	stratParams, protParams := hyperopt.SplitProtectionParams(params)
+
 	diff := make(map[string]gin.H, len(params))
-	for k, v := range params {
+	for k, v := range stratParams {
 		oldVal, existed := cfgMap[k]
 		if !existed {
 			diff[k] = gin.H{"old": nil, "new": v}
@@ -213,6 +220,14 @@ func ApplyHyperoptEpoch(c *gin.Context) {
 			diff[k] = gin.H{"old": oldVal, "new": v}
 		}
 		cfgMap[k] = v
+	}
+
+	if len(protParams) > 0 {
+		base := parseProtectionConfigs(cfgMap["protections"])
+		oldProtections := cfgMap["protections"]
+		merged := hyperopt.ApplyProtectionParams(base, protParams)
+		cfgMap["protections"] = protectionConfigsToJSON(merged)
+		diff["protections"] = gin.H{"old": oldProtections, "new": cfgMap["protections"]}
 	}
 
 	payload, err := json.Marshal(cfgMap)
@@ -237,4 +252,33 @@ func ApplyHyperoptEpoch(c *gin.Context) {
 		"strategy_id": rec.StrategyID,
 		"diff":        diff,
 	})
+}
+
+// parseProtectionConfigs 把 config_json 里的 protections 字段（[]any）
+// 解析为 protection.ProtectionConfig 切片；无法解析时返回空。
+func parseProtectionConfigs(raw any) []protection.ProtectionConfig {
+	if raw == nil {
+		return nil
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+	var out []protection.ProtectionConfig
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+// protectionConfigsToJSON 把 protection 配置转成可写入 config_json 的形式。
+func protectionConfigsToJSON(cfgs []protection.ProtectionConfig) []map[string]any {
+	out := make([]map[string]any, 0, len(cfgs))
+	for _, pc := range cfgs {
+		out = append(out, map[string]any{
+			"name":   pc.Name,
+			"params": pc.Params,
+		})
+	}
+	return out
 }

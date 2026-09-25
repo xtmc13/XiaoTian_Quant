@@ -442,8 +442,9 @@ type Result struct {
 }
 
 // BestParams returns the best parameter set as a map.
+// It is nil-receiver safe: jobs still running have no result yet.
 func (r *Result) BestParams() map[string]any {
-	if r.BestTrial == nil {
+	if r == nil || r.BestTrial == nil {
 		return nil
 	}
 	return r.BestTrial.Params
