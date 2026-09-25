@@ -65,3 +65,78 @@ export interface IcebergOrder {
   created_at: string
   [key: string]: unknown
 }
+
+// ── 阶梯智能单（Ladder Smart Orders）──
+
+export type LadderLegStatus = 'pending' | 'open' | 'partial' | 'filled' | 'cancelled' | 'waiting'
+
+export type LadderStatus =
+  | 'active'
+  | 'stopping'
+  | 'completed'
+  | 'cancelled'
+  | 'stopped'
+  | 'flattened'
+  | 'failed'
+
+export interface LadderEntry {
+  price: number
+  qty: number
+  amount_usdt?: number
+  order_id?: string
+  filled: number
+  avg_price?: number
+  status: LadderLegStatus
+}
+
+export interface LadderTarget {
+  price: number
+  close_pct: number
+  order_id?: string
+  assigned: number
+  filled: number
+  status: LadderLegStatus
+}
+
+export interface LadderOrder {
+  id: string
+  user_id: number
+  symbol: string
+  side: 'BUY' | 'SELL'
+  exchange: string
+  entries: LadderEntry[]
+  targets: LadderTarget[]
+  total_qty: number
+  stop_loss: number
+  breakeven_after_target: number
+  trailing_step_pct: number
+  status: LadderStatus
+  current_sl: number
+  breakeven_armed: boolean
+  filled_qty: number
+  closed_qty: number
+  avg_entry: number
+  stop_reason?: string
+  fail_reason?: string
+  created_at: number
+  updated_at: number
+}
+
+export interface LadderCreateRequest {
+  symbol: string
+  side: 'BUY' | 'SELL'
+  exchange?: string
+  entries: { price: number; qty?: number; amount_usdt?: number }[]
+  targets: { price: number; close_pct: number }[]
+  stop_loss?: number
+  breakeven_after_target?: number
+  trailing_step_pct?: number
+}
+
+export interface LadderAmendRequest {
+  entries?: { index: number; price: number }[]
+  targets?: { index: number; price: number }[]
+  stop_loss?: number
+  breakeven_after_target?: number
+  trailing_step_pct?: number
+}
