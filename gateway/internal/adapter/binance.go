@@ -213,6 +213,16 @@ func (b *BinanceAdapter) request(method, path string, params url.Values, signed 
 	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]any
 	json.Unmarshal(respBody, &result)
+	// 币安 4xx/业务错误体为 {"code":-N,"msg":"..."}——必须作为错误返回，
+	// 否则调用方把错误响应当成功解析，产生 id=<nil> 的"假成交"（status=NEW）。
+	if resp.StatusCode >= 400 || negativeCode(result) {
+		code, _ := result["code"].(float64)
+		msg, _ := result["msg"].(string)
+		if msg == "" {
+			msg = strings.TrimSpace(string(respBody))
+		}
+		return result, fmt.Errorf("binance %s %s: HTTP %d code=%d %s", method, path, resp.StatusCode, int(code), msg)
+	}
 	return result, nil
 }
 
@@ -405,7 +415,26 @@ func (b *BinanceAdapter) futuresRequest(method, path string, params url.Values) 
 	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]any
 	json.Unmarshal(respBody, &result)
+	// 币安 4xx/业务错误体为 {"code":-N,"msg":"..."}——必须作为错误返回，
+	// 否则调用方把错误响应当成功解析，产生 id=<nil> 的"假成交"（status=NEW）。
+	if resp.StatusCode >= 400 || negativeCode(result) {
+		code, _ := result["code"].(float64)
+		msg, _ := result["msg"].(string)
+		if msg == "" {
+			msg = strings.TrimSpace(string(respBody))
+		}
+		return result, fmt.Errorf("binance %s %s: HTTP %d code=%d %s", method, path, resp.StatusCode, int(code), msg)
+	}
 	return result, nil
+}
+
+// negativeCode 报告币安业务错误码（负数即错误）。
+func negativeCode(result map[string]any) bool {
+	if result == nil {
+		return false
+	}
+	c, ok := result["code"].(float64)
+	return ok && c < 0
 }
 
 // GetFuturesAccount returns full futures account info (balance + positions).
