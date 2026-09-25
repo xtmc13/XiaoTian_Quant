@@ -1,0 +1,60 @@
+name: OpenAPI Contract CI
+
+# 契约漂移守护：gateway 的路由注册代码（cmd/server/router.go +
+# internal/{onchain,social,dataprovider}/api.go）是全量 REST 契约的唯一事实源，
+# docs/api/openapi.yaml 是由 cmd/apidump 生成的快照。二者必须同步演进：
+# 新增/修改路由后运行 `cd gateway && go run ./cmd/apidump -openapi ../docs/api/openapi.yaml`
+# 并把生成物随代码一并提交，否则本 workflow 失败。
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'gateway/**'
+      - 'docs/api/**'
+      - '.github/workflows/openapi-ci.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'gateway/**'
+      - 'docs/api/**'
+      - '.github/workflows/openapi-ci.yml'
+
+# Cancel redundant workflows on the same PR
+concurrency:
+  group: openapi-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  openapi:
+    name: OpenAPI drift check & runtime contract test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Go mod download
+        working-directory: ./gateway
+        run: go mod download
+
+      # ── 第一道：生成物漂移检查（静态提取器 ↔ 已提交契约）──
+      - name: Regenerate OpenAPI spec from route registrations
+        working-directory: ./gateway
+        run: CGO_ENABLED=0 go run ./cmd/apidump -openapi ../docs/api/openapi.yaml
+
+      - name: Fail on contract drift
+        run: |
+          if ! git diff --exit-code -- docs/api/openapi.yaml; then
+            echo "::error::docs/api/openapi.yaml 与路由注册代码漂移。"
+            echo "::error::修复：cd gateway && go run ./cmd/apidump -openapi ../docs/api/openapi.yaml，并把生成物随 PR 一并提交。"
+            exit 1
+          fi
+          echo "Committed openapi.yaml matches AST extraction."
+
+      # ── 第二道：运行期一致性（gin 实际注册集合 ↔ 契约路径集合）──
+      # 覆盖提取器可能漏掉的动态注册形态：运行期多/少任何一条都会失败。
+      - name: Runtime routes == contract paths
+        working-directory: ./gateway
+        run: CGO_ENABLED=0 go test ./cmd/server -run 'TestOpenAPIContract|TestGinToOpenAPIPath|TestRouteCountSanity' -count=1 -v
