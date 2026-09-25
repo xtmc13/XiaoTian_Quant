@@ -13,7 +13,11 @@ import (
 	"time"
 )
 
-// 链上核验器：TRC20(TronGrid) / BEP20(BscScan) / ERC20(Etherscan) / SOL(Solana RPC)。
+// 链上核验器：TRC20(TronGrid) / BEP20 / ERC20 / SOL。
+// BEP20/ERC20 共用同一 EVM 适配器（合约地址+确认数不同），核验通道二选一：
+//   1. 裸 JSON-RPC（BSC_RPC_URL / ETH_RPC_URL，eth_getTransactionReceipt + eth_blockNumber）
+//   2. 浏览器同构 API（BscScan/Etherscan，需 *_API_KEY）
+// RPC env 优先；SOL 走 Solana RPC（SOL_RPC_URL 优先，兼容 SOLANA_RPC_URL）。
 // 全部基于标准库 net/http，base URL 做成包级变量便于 httptest 注入。
 // 金额一律微单位整数比较。
 
@@ -24,6 +28,15 @@ var (
 	solanaRPCBaseURL  = envOrDefault("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com")
 	chainVerifyClient = &http.Client{Timeout: 10 * time.Second}
 )
+
+// solanaRPCURL SOL 链 RPC：SOL_RPC_URL 优先（任务约定的 env 命名），
+// 未设置时回退 SOLANA_RPC_URL（含包级变量，测试可注入 mock）。
+func solanaRPCURL() string {
+	if v := os.Getenv("SOL_RPC_URL"); v != "" {
+		return v
+	}
+	return solanaRPCBaseURL
+}
 
 // 链上核验参数（可被环境变量覆盖）：
 //   - TRON_MIN_CONFIRMATIONS：TRC20 到账所需区块确认数（默认 19，TRON 常用安全确认）
@@ -80,6 +93,7 @@ const (
 //   - Err != nil：网络/接口错误（只累加尝试次数，不改状态）
 //   - !Found：链上还没查到该交易（累加尝试次数，超上限转 failed）
 //   - Found：交易已上链；Valid=地址/金额/合约校验是否通过；Confirmed=确认数是否达标
+//
 // Details 附带链上细节（GET /verification 展示），无则零值。
 type chainVerifyResult struct {
 	Err       error // 网络/接口错误（只累加尝试次数，不改状态）
@@ -96,27 +110,111 @@ type chainVerifyResult struct {
 	ToAddress             string
 }
 
-// verifyChainTx 按链分发核验。
-func verifyChainTx(chain, txHash, address string, amountMicro int64) chainVerifyResult {
-	switch chain {
-	case "TRC20":
-		return verifyTRC20Tx(txHash, address, amountMicro)
-	case "BEP20":
-		key := os.Getenv("BSCSCAN_API_KEY")
-		if key == "" {
-			return chainVerifyResult{Found: true, Valid: false, Reason: "未配置核验密钥（BSCSCAN_API_KEY）"}
-		}
-		return verifyEvmTx(bscScanBaseURL, key, bep20USDTContract, txHash, address, amountMicro, bep20MinConfirmations)
-	case "ERC20":
-		key := os.Getenv("ETHERSCAN_API_KEY")
-		if key == "" {
-			return chainVerifyResult{Found: true, Valid: false, Reason: "未配置核验密钥（ETHERSCAN_API_KEY）"}
-		}
-		return verifyEvmTx(etherScanBaseURL, key, erc20USDTContract, txHash, address, amountMicro, erc20MinConfirmations)
-	case "SOL":
-		return verifySOLTx(txHash, address, amountMicro)
+// chainAdapter USDT 链适配器：把每链的"收款地址/合约/确认数/核验通道"收敛到一处，
+// 支付页链列表（Available）与后台核验分发（Verify）共用同一份注册表。
+// env 一律在调用时读取，便于测试注入。
+type chainAdapter struct {
+	Chain            string // 链标识（订单 chain 字段）
+	AddressEnv       string // 收款地址 env
+	Memo             string // 支付页展示文案
+	Contract         string // USDT 合约/mint（链原生格式）
+	MinConfirmations int64  // 到账所需区块确认数（SOL 为 1：confirmed commitment 即到账）
+	VerifierReady    func() bool
+	Verify           func(txHash, address string, amountMicro int64) chainVerifyResult
+}
+
+// bscVerifierReady BEP20 核验通道就绪：裸 RPC 或 BscScan key 任一。
+func bscVerifierReady() bool {
+	return os.Getenv("BSC_RPC_URL") != "" || os.Getenv("BSCSCAN_API_KEY") != ""
+}
+
+// ethVerifierReady ERC20 核验通道就绪：裸 RPC 或 Etherscan key 任一。
+func ethVerifierReady() bool {
+	return os.Getenv("ETH_RPC_URL") != "" || os.Getenv("ETHERSCAN_API_KEY") != ""
+}
+
+// verifyBEP20 BEP20 核验：BSC_RPC_URL 优先走裸 RPC，否则 BscScan API。
+func verifyBEP20(txHash, address string, amountMicro int64) chainVerifyResult {
+	if rpc := os.Getenv("BSC_RPC_URL"); rpc != "" {
+		return verifyEvmTxRPC(rpc, bep20USDTContract, txHash, address, amountMicro, bep20MinConfirmations)
 	}
-	return chainVerifyResult{Found: true, Valid: false, Reason: "不支持的链"}
+	key := os.Getenv("BSCSCAN_API_KEY")
+	if key == "" {
+		return chainVerifyResult{Found: true, Valid: false, Reason: "未配置核验密钥（BSCSCAN_API_KEY）或节点（BSC_RPC_URL）"}
+	}
+	return verifyEvmTx(bscScanBaseURL, key, bep20USDTContract, txHash, address, amountMicro, bep20MinConfirmations)
+}
+
+// verifyERC20 ERC20 核验：ETH_RPC_URL 优先走裸 RPC，否则 Etherscan API。
+func verifyERC20(txHash, address string, amountMicro int64) chainVerifyResult {
+	if rpc := os.Getenv("ETH_RPC_URL"); rpc != "" {
+		return verifyEvmTxRPC(rpc, erc20USDTContract, txHash, address, amountMicro, erc20MinConfirmations)
+	}
+	key := os.Getenv("ETHERSCAN_API_KEY")
+	if key == "" {
+		return chainVerifyResult{Found: true, Valid: false, Reason: "未配置核验密钥（ETHERSCAN_API_KEY）或节点（ETH_RPC_URL）"}
+	}
+	return verifyEvmTx(etherScanBaseURL, key, erc20USDTContract, txHash, address, amountMicro, erc20MinConfirmations)
+}
+
+// usdtChainAdapters 链适配注册表（调用时构造，env 变更即时生效）。
+func usdtChainAdapters() []chainAdapter {
+	return []chainAdapter{
+		{
+			Chain: "TRC20", AddressEnv: "USDT_TRC20_ADDRESS", Memo: "TRON TRC20",
+			Contract: tronUSDTContract, MinConfirmations: tronMinConfirmations(),
+			VerifierReady: func() bool { return true }, // TronGrid 公共 API，key 可选
+			Verify:        verifyTRC20Tx,
+		},
+		{
+			Chain: "BEP20", AddressEnv: "USDT_BEP20_ADDRESS", Memo: "BSC BEP20",
+			Contract: bep20USDTContract, MinConfirmations: bep20MinConfirmations,
+			VerifierReady: bscVerifierReady,
+			Verify:        verifyBEP20,
+		},
+		{
+			Chain: "ERC20", AddressEnv: "USDT_ERC20_ADDRESS", Memo: "Ethereum ERC20",
+			Contract: erc20USDTContract, MinConfirmations: erc20MinConfirmations,
+			VerifierReady: ethVerifierReady,
+			Verify:        verifyERC20,
+		},
+		{
+			Chain: "SOL", AddressEnv: "USDT_SOL_ADDRESS", Memo: "Solana SPL",
+			Contract: solUSDTMint, MinConfirmations: 1,
+			VerifierReady: func() bool { return true }, // 公共 RPC 兜底，SOL_RPC_URL 可覆盖
+			Verify:        verifySOLTx,
+		},
+	}
+}
+
+// chainAdapterOf 按链标识查适配器；未注册返回 nil。
+func chainAdapterOf(chain string) *chainAdapter {
+	adapters := usdtChainAdapters()
+	for i := range adapters {
+		if adapters[i].Chain == chain {
+			return &adapters[i]
+		}
+	}
+	return nil
+}
+
+// chainAdapterAvailable 该链是否可上架支付页：收款地址已配置且核验通道就绪。
+// 未配置的链不下发（前端不展示），创建订单时同样拦截。
+func chainAdapterAvailable(chain string) bool {
+	a := chainAdapterOf(chain)
+	if a == nil {
+		return false
+	}
+	return os.Getenv(a.AddressEnv) != "" && a.VerifierReady()
+}
+
+// verifyChainTx 按链分发核验（链适配注册表驱动；stripe 等非法链直接拒绝）。
+func verifyChainTx(chain, txHash, address string, amountMicro int64) chainVerifyResult {
+	a := chainAdapterOf(chain)
+	if a == nil {
+		return chainVerifyResult{Found: true, Valid: false, Reason: "不支持的链"}
+	}
+	return a.Verify(txHash, address, amountMicro)
 }
 
 // getJSON 发起 GET 并把响应体读出来（限制 2MB，防止异常大包）。
@@ -333,42 +431,20 @@ func base58Decode(s string) ([]byte, error) {
 	return out, nil
 }
 
-// ── BEP20 / ERC20 (Etherscan 同构 API) ──
+// ── BEP20 / ERC20（同一 EVM 适配器：合约地址 + 确认数不同）──
 
-// verifyEvmTx 核验 EVM 链 USDT 转账：receipt 日志中合约+Transfer(to=本站)+金额合计，
-// 再用 eth_blockNumber 计算确认数。
-func verifyEvmTx(baseURL, apiKey, contract, txHash, address string, amountMicro, minConfirmations int64) chainVerifyResult {
-	receiptURL := fmt.Sprintf("%s/api?module=proxy&action=eth_getTransactionReceipt&txhash=%s&apikey=%s", baseURL, txHash, apiKey)
-	body, _, err := getJSON(receiptURL, nil)
-	if err != nil {
-		return chainVerifyResult{Err: err}
-	}
-	var receiptResp struct {
-		Result *struct {
-			Status      string `json:"status"` // "0x1" 成功
-			BlockNumber string `json:"blockNumber"`
-			Logs        []struct {
-				Address string   `json:"address"`
-				Topics  []string `json:"topics"`
-				Data    string   `json:"data"`
-			} `json:"logs"`
-		} `json:"result"`
-	}
-	if err := json.Unmarshal(body, &receiptResp); err != nil {
-		return chainVerifyResult{Err: fmt.Errorf("receipt 响应解析失败: %w", err)}
-	}
-	if receiptResp.Result == nil {
-		// 交易未上链或还未打包（节点返回 null）
-		return chainVerifyResult{Found: false}
-	}
-	rc := receiptResp.Result
-	if rc.Status != "0x1" {
-		return chainVerifyResult{Found: true, Valid: false, Reason: "链上交易执行失败（reverted）"}
-	}
+// evmReceiptLog receipt 单条日志（浏览器 API 与裸 JSON-RPC 同构）。
+type evmReceiptLog struct {
+	Address string   `json:"address"`
+	Topics  []string `json:"topics"`
+	Data    string   `json:"data"`
+}
 
+// sumEvmUSDTTransfers 汇总 receipt 日志中"USDT 合约 + Transfer(to=本站)"的微单位总额。
+func sumEvmUSDTTransfers(logs []evmReceiptLog, contract, address string) *big.Int {
 	wantTo := strings.ToLower(strings.TrimPrefix(address, "0x"))
 	sum := new(big.Int)
-	for _, lg := range rc.Logs {
+	for _, lg := range logs {
 		if len(lg.Topics) < 3 || !strings.EqualFold(lg.Address, contract) {
 			continue
 		}
@@ -383,37 +459,156 @@ func verifyEvmTx(baseURL, apiKey, contract, txHash, address string, amountMicro,
 		if len(to) != 40 || !strings.EqualFold(to, wantTo) {
 			continue
 		}
-		data, err := hexDecode(strings.TrimPrefix(lg.Data, "0x"))
-		if err != nil {
+		// data 为 32 字节金额 hex；big.Int 十六进制解析容忍非左填充
+		// （奇数长度）的 hex，与真实节点的 64 位填充形式语义一致。
+		v, ok := new(big.Int).SetString(strings.TrimPrefix(lg.Data, "0x"), 16)
+		if !ok {
 			continue
 		}
-		sum.Add(sum, new(big.Int).SetBytes(data))
+		sum.Add(sum, v)
 	}
+	return sum
+}
+
+// evmConfirmations 由最新块高与交易所在块高（均为 0x hex）计算确认数与达标判定。
+func evmConfirmations(latestHex, txBlockHex string, minConfirmations int64) (confirmations int64, confirmed bool, txBlock int64) {
+	latest, _ := strconv.ParseInt(strings.TrimPrefix(latestHex, "0x"), 16, 64)
+	txBlock, _ = strconv.ParseInt(strings.TrimPrefix(txBlockHex, "0x"), 16, 64)
+	if latest > 0 && txBlock > 0 {
+		confirmations = latest - txBlock + 1
+		confirmed = confirmations >= minConfirmations
+	}
+	return confirmations, confirmed, txBlock
+}
+
+// verifyEvmTx 核验 EVM 链 USDT 转账：receipt 日志中合约+Transfer(to=本站)+金额合计，
+// 再用 eth_blockNumber 计算确认数。
+func verifyEvmTx(baseURL, apiKey, contract, txHash, address string, amountMicro, minConfirmations int64) chainVerifyResult {
+	receiptURL := fmt.Sprintf("%s/api?module=proxy&action=eth_getTransactionReceipt&txhash=%s&apikey=%s", baseURL, txHash, apiKey)
+	body, _, err := getJSON(receiptURL, nil)
+	if err != nil {
+		return chainVerifyResult{Err: err}
+	}
+	var receiptResp struct {
+		Result *struct {
+			Status      string          `json:"status"` // "0x1" 成功
+			BlockNumber string          `json:"blockNumber"`
+			Logs        []evmReceiptLog `json:"logs"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(body, &receiptResp); err != nil {
+		return chainVerifyResult{Err: fmt.Errorf("receipt 响应解析失败: %w", err)}
+	}
+	if receiptResp.Result == nil {
+		// 交易未上链或还未打包（节点返回 null）
+		return chainVerifyResult{Found: false}
+	}
+	rc := receiptResp.Result
+	if rc.Status != "0x1" {
+		return chainVerifyResult{Found: true, Valid: false, Reason: "链上交易执行失败（reverted）"}
+	}
+
+	sum := sumEvmUSDTTransfers(rc.Logs, contract, address)
 	if sum.Cmp(big.NewInt(minAcceptableMicro(amountMicro, amountTolerancePct()))) < 0 {
 		return chainVerifyResult{Found: true, Valid: false, Reason: fmt.Sprintf("交易未向本站地址转入足额 USDT（实收 %s 微单位，容许偏差 %d%%）", sum.String(), amountTolerancePct()),
 			ReceivedMicro: sum.Int64(), ToAddress: address, RequiredConfirmations: minConfirmations}
 	}
 
-	// 确认数：eth_blockNumber - tx blockNumber
-	confirmed := false
-	var confirmations int64
+	// 确认数：eth_blockNumber - tx blockNumber（查询失败保持 confirming 下轮重试）
+	var latestHex string
 	blockURL := fmt.Sprintf("%s/api?module=proxy&action=eth_blockNumber&apikey=%s", baseURL, apiKey)
 	if body, _, err := getJSON(blockURL, nil); err == nil {
 		var bnResp struct {
 			Result string `json:"result"`
 		}
 		if json.Unmarshal(body, &bnResp) == nil {
-			latest, _ := strconv.ParseInt(strings.TrimPrefix(bnResp.Result, "0x"), 16, 64)
-			txBlock, _ := strconv.ParseInt(strings.TrimPrefix(rc.BlockNumber, "0x"), 16, 64)
-			if latest > 0 {
-				confirmations = latest - txBlock + 1
-				if confirmations >= minConfirmations {
-					confirmed = true
-				}
-			}
+			latestHex = bnResp.Result
 		}
 	}
-	txBlockNum, _ := strconv.ParseInt(strings.TrimPrefix(rc.BlockNumber, "0x"), 16, 64)
+	confirmations, confirmed, txBlockNum := evmConfirmations(latestHex, rc.BlockNumber, minConfirmations)
+	return chainVerifyResult{Found: true, Valid: true, Confirmed: confirmed,
+		Confirmations: confirmations, RequiredConfirmations: minConfirmations,
+		BlockNumber: txBlockNum, ReceivedMicro: sum.Int64(), ToAddress: address}
+}
+
+// postJSONRPC 裸 JSON-RPC POST（EVM 节点），返回 result 原始 JSON。
+func postJSONRPC(rpcURL, method string, params []any) (json.RawMessage, error) {
+	payload := map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequest(http.MethodPost, rpcURL, bytes.NewReader(raw))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := chainVerifyClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("rpc status %d", resp.StatusCode)
+	}
+	var rpcResp struct {
+		Result json.RawMessage `json:"result"`
+		Error  *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &rpcResp); err != nil {
+		return nil, fmt.Errorf("rpc 响应解析失败: %w", err)
+	}
+	if rpcResp.Error != nil {
+		return nil, fmt.Errorf("rpc error: %s", rpcResp.Error.Message)
+	}
+	return rpcResp.Result, nil
+}
+
+// verifyEvmTxRPC 裸 JSON-RPC 通道（BSC_RPC_URL / ETH_RPC_URL）：
+// eth_getTransactionReceipt 日志解析与浏览器通道共用 sumEvmUSDTTransfers，
+// eth_blockNumber 计算确认数。节点查询失败一律返回 Err（累计尝试次数，不误判）。
+func verifyEvmTxRPC(rpcURL, contract, txHash, address string, amountMicro, minConfirmations int64) chainVerifyResult {
+	raw, err := postJSONRPC(rpcURL, "eth_getTransactionReceipt", []any{txHash})
+	if err != nil {
+		return chainVerifyResult{Err: err}
+	}
+	// result 为 null = 交易未上链/未打包
+	if len(raw) == 0 || string(raw) == "null" {
+		return chainVerifyResult{Found: false}
+	}
+	var rc struct {
+		Status      string          `json:"status"`
+		BlockNumber string          `json:"blockNumber"`
+		Logs        []evmReceiptLog `json:"logs"`
+	}
+	if err := json.Unmarshal(raw, &rc); err != nil {
+		return chainVerifyResult{Err: fmt.Errorf("receipt 解析失败: %w", err)}
+	}
+	if rc.Status != "0x1" {
+		return chainVerifyResult{Found: true, Valid: false, Reason: "链上交易执行失败（reverted）"}
+	}
+
+	sum := sumEvmUSDTTransfers(rc.Logs, contract, address)
+	if sum.Cmp(big.NewInt(minAcceptableMicro(amountMicro, amountTolerancePct()))) < 0 {
+		return chainVerifyResult{Found: true, Valid: false, Reason: fmt.Sprintf("交易未向本站地址转入足额 USDT（实收 %s 微单位，容许偏差 %d%%）", sum.String(), amountTolerancePct()),
+			ReceivedMicro: sum.Int64(), ToAddress: address, RequiredConfirmations: minConfirmations}
+	}
+
+	latestRaw, err := postJSONRPC(rpcURL, "eth_blockNumber", []any{})
+	if err != nil {
+		return chainVerifyResult{Err: err}
+	}
+	var latestHex string
+	if err := json.Unmarshal(latestRaw, &latestHex); err != nil {
+		return chainVerifyResult{Err: fmt.Errorf("blockNumber 解析失败: %w", err)}
+	}
+	confirmations, confirmed, txBlockNum := evmConfirmations(latestHex, rc.BlockNumber, minConfirmations)
 	return chainVerifyResult{Found: true, Valid: true, Confirmed: confirmed,
 		Confirmations: confirmations, RequiredConfirmations: minConfirmations,
 		BlockNumber: txBlockNum, ReceivedMicro: sum.Int64(), ToAddress: address}
@@ -437,7 +632,7 @@ func verifySOLTx(txHash, address string, amountMicro int64) chainVerifyResult {
 	if err != nil {
 		return chainVerifyResult{Err: err}
 	}
-	req, err := http.NewRequest(http.MethodPost, solanaRPCBaseURL, bytes.NewReader(raw))
+	req, err := http.NewRequest(http.MethodPost, solanaRPCURL(), bytes.NewReader(raw))
 	if err != nil {
 		return chainVerifyResult{Err: err}
 	}

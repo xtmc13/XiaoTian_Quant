@@ -16,6 +16,8 @@ type BillingOrder struct {
 	ID          string `json:"order_id"`
 	UserID      int64  `json:"user_id"`
 	PlanID      string `json:"plan_id"`
+	Purpose     string `json:"purpose"` // plan（默认）| market_subscription（市场条目订阅轨扣费）
+	RefID       string `json:"ref_id"`  // purpose=market_subscription 时为 provider id
 	Chain       string `json:"chain"`
 	Address     string `json:"address"`
 	AmountMicro int64  `json:"amount_usdt"`
@@ -27,6 +29,12 @@ type BillingOrder struct {
 	UpdatedAt   int64  `json:"updated_at"`
 	ConfirmedAt int64  `json:"confirmed_at"`
 }
+
+// Billing 订单用途（迁移 0028）。
+const (
+	BillingPurposePlan               = "plan"
+	BillingPurposeMarketSubscription = "market_subscription"
+)
 
 // Billing 订单状态机常量。
 const (
@@ -50,11 +58,11 @@ type BillingRepo struct{ mu sync.Mutex }
 
 func NewBillingRepo() *BillingRepo { return &BillingRepo{} }
 
-const billingOrderCols = `id, user_id, plan_id, chain, address, amount_usdt, tx_hash, status, fail_reason, attempts, created_at, updated_at, confirmed_at`
+const billingOrderCols = `id, user_id, plan_id, purpose, ref_id, chain, address, amount_usdt, tx_hash, status, fail_reason, attempts, created_at, updated_at, confirmed_at`
 
 func scanBillingOrder(row interface{ Scan(...any) error }) (*BillingOrder, error) {
 	var o BillingOrder
-	err := row.Scan(&o.ID, &o.UserID, &o.PlanID, &o.Chain, &o.Address, &o.AmountMicro,
+	err := row.Scan(&o.ID, &o.UserID, &o.PlanID, &o.Purpose, &o.RefID, &o.Chain, &o.Address, &o.AmountMicro,
 		&o.TxHash, &o.Status, &o.FailReason, &o.Attempts, &o.CreatedAt, &o.UpdatedAt, &o.ConfirmedAt)
 	if err != nil {
 		return nil, err
@@ -71,10 +79,13 @@ func (r *BillingRepo) Create(o *BillingOrder) error {
 	if o.Status == "" {
 		o.Status = BillingStatusPending
 	}
+	if o.Purpose == "" {
+		o.Purpose = BillingPurposePlan
+	}
 	_, err := db.Exec(
-		`INSERT INTO billing_orders (id, user_id, plan_id, chain, address, amount_usdt, tx_hash, status, fail_reason, attempts, created_at, updated_at, confirmed_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		o.ID, o.UserID, o.PlanID, o.Chain, o.Address, o.AmountMicro, o.TxHash, o.Status,
+		`INSERT INTO billing_orders (id, user_id, plan_id, purpose, ref_id, chain, address, amount_usdt, tx_hash, status, fail_reason, attempts, created_at, updated_at, confirmed_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		o.ID, o.UserID, o.PlanID, o.Purpose, o.RefID, o.Chain, o.Address, o.AmountMicro, o.TxHash, o.Status,
 		o.FailReason, o.Attempts, o.CreatedAt, o.UpdatedAt, o.ConfirmedAt,
 	)
 	return err
@@ -228,6 +239,70 @@ func (r *BillingRepo) GrantPlanTx(orderID string, userID int64, planID string, c
 			if _, err := tx.Exec(`UPDATE xt_users SET plan=?,
 				vip_expires_at = MAX(COALESCE(vip_expires_at,0), ?) + ? WHERE id=?`,
 				planID, now, periodDays*86400, userID); err != nil {
+				return false, err
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// GrantMarketSubscriptionTx 市场条目订阅轨发放（迁移 0028 双轨 SKU）：
+// 单事务内订单置 paid + 激活/顺延 follower 对 provider 的订阅轨
+// （xt_social_subscriptions: track='subscription', fee_mode='monthly'）。
+// 幂等同 GrantPlanTx：已 paid 返回 granted=false。
+// 有效期顺延：现有到期时间在未来则叠加，否则从当前时间起算 periodDays。
+func (r *BillingRepo) GrantMarketSubscriptionTx(orderID string, userID, providerID, periodDays, now int64) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	tx, err := db.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec(`UPDATE billing_orders SET status='paid', fail_reason='', confirmed_at=?, updated_at=?
+		WHERE id=? AND status != 'paid'`, now, now, orderID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if n == 0 {
+		return false, nil // 已发放过（幂等）
+	}
+
+	nowMs := now * 1000
+	periodMs := periodDays * 86400 * 1000
+	// 已有 active 行：切到订阅轨并顺延（MAX 处理到期后续费/未到期续费两种）。
+	res, err = tx.Exec(
+		`UPDATE xt_social_subscriptions SET fee_mode='monthly', track='subscription',
+			track_expires_at = MAX(track_expires_at, ?) + ?
+		 WHERE provider_id=? AND follower_user_id=? AND status='active'`,
+		nowMs, periodMs, providerID, userID)
+	if err != nil {
+		return false, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		// cancelled 行复活：从当前时间起算。
+		res, err = tx.Exec(
+			`UPDATE xt_social_subscriptions SET status='active', cancelled_at=NULL, fee_mode='monthly',
+				track='subscription', track_expires_at=?
+			 WHERE provider_id=? AND follower_user_id=? AND status='cancelled'`,
+			nowMs+periodMs, providerID, userID)
+		if err != nil {
+			return false, err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			if _, err = tx.Exec(
+				`INSERT INTO xt_social_subscriptions (provider_id, follower_user_id, fee_mode, track, track_expires_at, status, created_at)
+				 VALUES (?, ?, 'monthly', 'subscription', ?, 'active', ?)`,
+				providerID, userID, nowMs+periodMs, nowMs); err != nil {
 				return false, err
 			}
 		}

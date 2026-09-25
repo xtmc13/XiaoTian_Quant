@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/xiaotian-quant/gateway/internal/social"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
@@ -158,9 +159,12 @@ func billingMarkFailed(orderID, reason string) {
 	}
 }
 
-// billingGrantOrder 核验通过：单事务内订单置 paid + 发放套餐/积分。
+// billingGrantOrder 核验通过：按订单用途分发发放路径（平台套餐 / 市场订阅轨）。
 // 返回是否本轮真正发放（granted=false = 已发放过的重复触发）。
 func billingGrantOrder(o *store.BillingOrder) bool {
+	if o.Purpose == store.BillingPurposeMarketSubscription {
+		return billingGrantMarketSubscription(o)
+	}
 	plan := findBillingPlan(o.PlanID)
 	if plan == nil {
 		billingMarkFailed(o.ID, "套餐不存在，无法发放")
@@ -173,6 +177,25 @@ func billingGrantOrder(o *store.BillingOrder) bool {
 	}
 	if granted {
 		log.Printf("[billing] order %s paid: user=%d plan=%s credits=%d", o.ID, o.UserID, plan.ID, plan.Credits)
+	}
+	return granted
+}
+
+// billingGrantMarketSubscription 市场条目订阅轨发放：订单 paid + 激活/顺延
+// 用户对该 provider 的订阅轨（30 天/期），单事务保证。
+func billingGrantMarketSubscription(o *store.BillingOrder) bool {
+	providerID, err := strconv.ParseInt(o.RefID, 10, 64)
+	if err != nil || providerID <= 0 {
+		billingMarkFailed(o.ID, "市场订阅订单缺少有效的 provider 引用")
+		return false
+	}
+	granted, err := billingRepo.GrantMarketSubscriptionTx(o.ID, o.UserID, providerID, social.MarketSubscriptionPeriodDays, time.Now().Unix())
+	if err != nil {
+		log.Printf("[billing] grant market subscription %s failed: %v", o.ID, err)
+		return false
+	}
+	if granted {
+		log.Printf("[billing] order %s paid: user=%d market subscription provider=%d", o.ID, o.UserID, providerID)
 	}
 	return granted
 }

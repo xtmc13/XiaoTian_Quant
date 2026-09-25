@@ -45,6 +45,7 @@ func findBillingPlan(id string) *billingPlanDef {
 }
 
 // usdtChainList 读取已配置的 USDT 收款链（env 在调用时读取，便于测试注入）。
+// 与 usdtChainAdapters（billing_chain.go）同序；收款地址缺失时 address 为空串。
 func usdtChainList() []map[string]string {
 	return []map[string]string{
 		{"chain": "TRC20", "address": os.Getenv("USDT_TRC20_ADDRESS"), "memo": "TRON TRC20"},
@@ -92,13 +93,21 @@ func BillingPlans(c *gin.Context) {
 	c.JSON(http.StatusOK, plans)
 }
 
-// BillingChains 已配置收款地址的链列表（隐藏未配置的）。
+// BillingChains 可用链列表：收款地址已配置且核验通道就绪（RPC/浏览器 key）的链才下发，
+// 未配置的链不在支付页展示（chainAdapterAvailable，billing_chain.go）。
 func BillingChains(c *gin.Context) {
-	chains := make([]map[string]string, 0, 4)
-	for _, ch := range usdtChainList() {
-		if ch["address"] != "" {
-			chains = append(chains, ch)
+	chains := make([]map[string]any, 0, 4)
+	for _, a := range usdtChainAdapters() {
+		if !chainAdapterAvailable(a.Chain) {
+			continue
 		}
+		chains = append(chains, map[string]any{
+			"chain":             a.Chain,
+			"address":           os.Getenv(a.AddressEnv),
+			"memo":              a.Memo,
+			"contract":          a.Contract,
+			"min_confirmations": a.MinConfirmations,
+		})
 	}
 	c.JSON(http.StatusOK, chains)
 }
@@ -148,11 +157,12 @@ func BillingCreateOrder(c *gin.Context) {
 			return
 		}
 	} else {
-		address = chainAddress(req.Chain)
-		if address == "" {
+		// 链必须可用：收款地址已配置且核验通道就绪（避免创建永远无法核验的订单）。
+		if !chainAdapterAvailable(req.Chain) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported chain or address not configured"})
 			return
 		}
+		address = chainAddress(req.Chain)
 	}
 
 	// tx_hash 幂等占用检查：同一哈希不能服务多个订单（已在别的订单上则拒绝，
@@ -197,10 +207,16 @@ func trimTxHash(h string) string {
 
 // writeBillingOrder 输出订单（附加 expires_at 便于前端倒计时）。
 func writeBillingOrder(c *gin.Context, o *store.BillingOrder) {
+	purpose := o.Purpose
+	if purpose == "" {
+		purpose = store.BillingPurposePlan
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"order_id":     o.ID,
 		"user_id":      o.UserID,
 		"plan_id":      o.PlanID,
+		"purpose":      purpose,
+		"ref_id":       o.RefID,
 		"chain":        o.Chain,
 		"address":      o.Address,
 		"amount_usdt":  o.AmountMicro,

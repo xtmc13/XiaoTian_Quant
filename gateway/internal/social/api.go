@@ -56,6 +56,10 @@ func RegisterRoutes(r *gin.RouterGroup, engine *Engine) {
 	r.POST("/providers/:id/reject", middleware.AdminRequired(), hm.rejectProvider)
 	r.POST("/providers/:id/follow", h.followProvider)
 	r.POST("/providers/:id/unfollow", h.unfollowProvider)
+	// 双轨订阅（迁移 0028）：订阅轨选择 / 切轨 / 我的轨状态
+	r.POST("/providers/:id/subscribe", hm.subscribeTrack)
+	r.POST("/providers/:id/switch_track", hm.switchTrack)
+	r.GET("/providers/:id/subscription", hm.mySubscription)
 	r.GET("/signals", h.listSignals)
 	r.POST("/signals", h.publishSignal)
 	r.GET("/followers/configs", h.getFollowerConfigs)
@@ -88,10 +92,13 @@ func (h *handler) listProviders(c *gin.Context) {
 			}
 			item := gin.H{
 				"id":               MarketEngineID(p.ID),
+				"db_id":            p.ID,
 				"name":             p.Name,
 				"description":      p.Description,
 				"monthly_fee":      p.MonthlyFee,
 				"fee_mode":         p.FeeMode,
+				"pricing_model":    p.PricingModel,
+				"available_tracks": AvailableTracks(p),
 				"profit_share_pct": p.ProfitSharePct,
 				"follower_count":   followers,
 			}
