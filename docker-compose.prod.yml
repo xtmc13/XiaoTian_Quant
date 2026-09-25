@@ -30,6 +30,8 @@ services:
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      # Alertmanager 告警 webhook 共享密钥（/api/alerts/webhook 校验，空则该端点 503）
+      - ALERT_WEBHOOK_SECRET=${ALERT_WEBHOOK_SECRET:-}
     volumes:
       - gateway_data:/app/data
     restart: always

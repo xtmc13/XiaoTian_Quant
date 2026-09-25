@@ -80,6 +80,7 @@ func WSHandler(c *gin.Context) {
 	defer conn.Close()
 	metrics.IncWSConnections()
 	defer metrics.DecWSConnections()
+	defer metrics.RecordWSDisconnect()
 
 	tick := 0
 

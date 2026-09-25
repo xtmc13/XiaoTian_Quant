@@ -88,6 +88,16 @@ func NewRouter() *Router {
 				Channels: []string{"telegram", "lark"},
 				Enabled:  true,
 			},
+			{
+				// Alertmanager 基础设施告警（alerting 包以 EventAlert 广播）；
+				// 无持久化路由表的新部署默认走 telegram/lark，可在通知路由 API 调整。
+				ID:       "infra-alerts",
+				Name:     "Infra Alerts (Alertmanager)",
+				Events:   []string{"alert"},
+				Levels:   []string{"INFO", "WARN", "CRITICAL"},
+				Channels: []string{"telegram", "lark"},
+				Enabled:  true,
+			},
 		},
 	}
 }

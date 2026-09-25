@@ -14,6 +14,14 @@ global:
 rule_files:
   - /etc/prometheus/alerts.yml
 
+# 告警推送：评估结果发给同网络的 Alertmanager（compose profile
+# observability 提供，容器名/服务名 alertmanager，见
+# docker-compose.observability.yml；路由树见 ops/alertmanager/alertmanager.yml）
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
 scrape_configs:
   # Go 网关。默认通过 compose 网络内服务名访问；
   # 若网关运行在宿主机上（如 ./start-local.sh），用环境变量覆盖：

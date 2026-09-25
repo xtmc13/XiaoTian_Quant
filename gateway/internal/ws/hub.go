@@ -76,6 +76,7 @@ func (h *Hub) run() {
 				delete(h.clients, client)
 				close(client.send)
 				metrics.DecWSConnections()
+				metrics.RecordWSDisconnect()
 			}
 			h.mu.Unlock()
 			log.Printf("[ws] client disconnected, total: %d", h.ClientCount())

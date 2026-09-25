@@ -2,9 +2,13 @@
 # XiaoTian Quant — 告警规则
 # 仅使用 gateway/internal/metrics 真实暴露的指标：
 #   http_requests_total / http_request_duration_seconds /
-#   go_goroutines / go_memstats_* / portfolio_equity_usdt
-# 注意：本项目当前未引入 Alertmanager，告警只在 Prometheus UI
-# （/alerts）与 Grafana 中可见。
+#   go_goroutines / go_memstats_* / portfolio_equity_usdt /
+#   orders_total / ws_connections / ws_disconnects_total /
+#   reconcile_diffs_total / notify_sends_total / gateway_disk_*_bytes
+# 评估结果经 Alertmanager（prometheus.yml alerting 段）推送到
+# gateway /api/alerts/webhook，去重后走内部 notify 多渠道；
+# critical 额外直连邮件/Telegram（ops/alertmanager/alertmanager.yml）。
+# 每条规则必须带 for 与 runbook 注解（处置步骤）。
 # ═══════════════════════════════════════════════════════════════════
 
 groups:
@@ -19,6 +23,7 @@ groups:
         annotations:
           summary: "XiaoTian 网关不可达"
           description: "Prometheus 已连续 1 分钟无法抓取 {{ $labels.instance }} 的 /metrics，网关可能已宕机或网络中断。"
+          runbook: "1) docker compose ps 确认 xiaotian-gateway 容器状态；2) docker logs xiaotian-gateway --tail 200 查崩溃原因；3) 宿主机运行时用 systemctl/进程管理器拉起；4) 恢复后确认 http://127.0.0.1:9090/targets 变绿。"
 
       # 5xx 比例超过 5%（持续 5 分钟）。
       # clamp_min 防止无流量时除零；无请求时该表达式为 0，不会误报。
@@ -30,6 +35,7 @@ groups:
         annotations:
           summary: "XiaoTian 网关 5xx 比例过高"
           description: "过去 5 分钟 5xx 比例约 {{ $value | humanizePercentage }}，超过 5% 阈值。"
+          runbook: "1) Grafana Overview 看板 Top 5 路径定位出错端点；2) docker logs xiaotian-gateway 查 5xx 堆栈；3) 若是下游（交易所/数据库）超时，先查对应组件健康接口 /api/health/components。"
 
       # p90 请求延迟超过 1 秒（持续 5 分钟）。
       # histogram_quantile 依赖 http_request_duration_seconds 的累积桶。
@@ -41,6 +47,18 @@ groups:
         annotations:
           summary: "XiaoTian 网关 p90 延迟过高"
           description: "过去 5 分钟 p90 请求延迟约 {{ $value }} 秒，超过 1 秒阈值。"
+          runbook: "1) 看板按 path 拆解延迟热点；2) 检查 SQLite 慢查询与 GC（go_memstats_gc_cpu_fraction）；3) 确认是否有大批量回测/数据下载并发占用 CPU。"
+
+      # p95 请求延迟超过 2 秒（持续 10 分钟）——长尾劣化信号，与 p90 互补。
+      - alert: GatewayHighLatencyP95
+        expr: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket[5m]))) > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "XiaoTian 网关 p95 延迟过高"
+          description: "过去 5 分钟 p95 请求延迟约 {{ $value }} 秒，超过 2 秒阈值（长尾请求劣化）。"
+          runbook: "1) 与 GatewayHighLatency 联动确认是整体劣化还是长尾；2) pprof（debug 模式）抓 CPU/阻塞 profile；3) 检查 WS 广播风暴或大盘行情推送洪峰。"
 
       # 堆内存占用超过 512MiB（持续 10 分钟）。
       # 生产 compose 给 gateway 的内存上限为 1G，此处留一半余量，可按需调整。
@@ -52,6 +70,19 @@ groups:
         annotations:
           summary: "XiaoTian 网关堆内存占用过高"
           description: "go_memstats_heap_inuse_bytes 已连续 10 分钟超过 512MiB（当前 {{ $value | humanize1024 }}），接近容器内存上限。"
+          runbook: "1) 确认是否存在 K 线/回测大数据集驻留内存；2) debug 模式下 /debug/pprof/heap 取堆快照定位泄漏；3) 必要时 docker compose restart gateway 并排查诱因。"
+
+      # 数据卷磁盘可用空间低于 10%（持续 10 分钟）。
+      # gateway_disk_*_bytes 由 /metrics 抓取时对 DB_PATH 目录 statfs 采样。
+      - alert: GatewayDiskLow
+        expr: gateway_disk_avail_bytes / gateway_disk_total_bytes < 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "XiaoTian 数据卷磁盘空间不足"
+          description: "{{ $labels.path }} 可用空间仅剩 {{ $value | humanizePercentage }}（低于 10%），SQLite/日志/数据下载可能写失败。"
+          runbook: "1) df -h 确认卷用量；2) 清理 data/ 下历史 K 线缓存与日志（docker system prune 亦可回收）；3) 评估扩容或开启数据保留策略。"
 
       # 组合/权益指标缺失：portfolio_equity_usdt 由后台任务每 15s 调
       # metrics.SetEquity 上报（见 handler/index.go StartBackgroundTasks）。
@@ -64,6 +95,43 @@ groups:
         annotations:
           summary: "XiaoTian 组合/权益指标未上报"
           description: "15 分钟内未抓取到 portfolio_equity_usdt，说明 15s 业务指标上报循环或 /metrics 端点异常。"
+          runbook: "1) curl http://127.0.0.1:8080/metrics | grep portfolio 确认端点输出；2) 查 gateway 日志中 StartBackgroundTasks 是否退出；3) 新部署首 15 分钟无数据属正常，可忽略。"
+
+      # 下单失败率：REJECTED/EXPIRED 占比超 20% 且样本 ≥5 笔（10 分钟窗口）。
+      # orders_total 由 handler/order.go RecordOrder 按 model.OrderStatus 计数。
+      - alert: GatewayOrderFailureRate
+        expr: sum(rate(orders_total{status=~"REJECTED|EXPIRED"}[10m])) / clamp_min(sum(rate(orders_total[10m])), 0.001) > 0.2 and sum(increase(orders_total[10m])) >= 5
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "XiaoTian 下单失败率过高"
+          description: "过去 10 分钟下单 REJECTED/EXPIRED 比例约 {{ $value | humanizePercentage }}，超过 20% 阈值。"
+          runbook: "1) 查 /api/reconcile/diffs 与 OMS 日志定位拒绝原因（余额不足/风控/交易所限流）；2) 确认交易所 API 密钥权限与有效期；3) 若伴随 GatewayRiskRejectionsBurst，先检查 Protection 规则是否过严。"
+
+      # WebSocket 断连风暴：平均每秒断连超过 0.2 次（10 分钟窗口持续 10 分钟）。
+      # ws_disconnects_total 在 /ws 与 /ws/v2 断开路径计数（ws/hub.go、handler/ws.go）。
+      - alert: GatewayWebSocketChurn
+        expr: rate(ws_disconnects_total[10m]) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "XiaoTian WebSocket 断连频繁"
+          description: "过去 10 分钟 WS 平均每秒断连约 {{ $value }} 次，客户端在不断重连（可能网络抖动或推送洪峰）。"
+          runbook: "1) 查 gateway 日志 [ws] client disconnected 频率；2) 确认 nginx/反代 WS 空闲超时（proxy_read_timeout）是否过短；3) 检查上行带宽与行情推送频率。"
+
+      # paper/live 持仓不一致：15 分钟内出现 position_* 类对账差异
+      # （reconcile_diffs_total 由 reconcile/positions.go 落差异时计数）。
+      - alert: GatewayPositionMismatch
+        expr: sum(increase(reconcile_diffs_total{type=~"position_.*"}[15m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "XiaoTian 本地与交易所持仓不一致"
+          description: "15 分钟内检测到 {{ $value }} 次持仓类对账差异（missing/quantity 不匹配），paper/live 状态可能已漂移。"
+          runbook: "1) 打开 /api/reconcile/diffs?diff_type=position 查看差异明细；2) 确认是否有手工在交易所侧下单/平仓绕过网关；3) 必要时触发人工对账确认或暂停自动策略。"
 
       # 风控拒绝突增：5 分钟内风控平均每秒拒绝超过 1 笔（OMS RiskCheck 拦截）。
       - alert: GatewayRiskRejectionsBurst
@@ -74,6 +142,7 @@ groups:
         annotations:
           summary: "XiaoTian 风控拒绝突增"
           description: "过去 5 分钟风控平均每秒拒绝约 {{ $value }} 笔订单，请检查 Protection 规则或市场异常。"
+          runbook: "1) 查 Protection 面板哪些规则在拦截；2) 确认是否为行情剧烈波动触发的合理拦截；3) 误拦时调整风控阈值后再放行。"
 
       # 通知投递失败：某渠道 10 分钟内失败率超过 50% 且失败数 ≥ 3。
       - alert: GatewayNotifyDeliveryFailures
@@ -84,3 +153,4 @@ groups:
         annotations:
           summary: "XiaoTian 通知渠道投递失败率过高"
           description: "渠道 {{ $labels.channel }} 过去 10 分钟投递失败率超过 50%，请检查渠道配置（webhook/token/短信凭证）。"
+          runbook: "1) 用 /api/notify/test 对该渠道发测试消息复现；2) 核对 .env 中对应渠道凭证（webhook 地址变更/token 过期最常见）；3) 渠道恢复前告警仍可靠 log 渠道兜底。"

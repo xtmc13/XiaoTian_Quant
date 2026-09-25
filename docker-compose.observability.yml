@@ -1,11 +1,12 @@
 version: "3.9"
 
 # ═══════════════════════════════════════════════════════════════════
-# XiaoTianQuant v3.0 — Observability Compose (Prometheus + Grafana)
+# XiaoTianQuant v3.0 — Observability Compose (Prometheus + Alertmanager + Grafana)
 # ═══════════════════════════════════════════════════════════════════
-# 用途：可选监控栈，抓取网关 /metrics 并提供 Grafana 看板。
-# 不改动 gateway 服务本身，需与主 compose 文件叠加使用（共享 xiaotian
-# 网络，Prometheus 通过服务名 gateway 抓取 :8080/metrics）：
+# 用途：可选监控栈，抓取网关 /metrics、评估告警规则并经 Alertmanager 推送，
+# 同时提供 Grafana 看板。不改动 gateway 服务本身，需与主 compose 文件叠加
+# 使用（共享 xiaotian 网络，Prometheus 通过服务名 gateway 抓取 :8080/metrics，
+# Alertmanager 通过服务名 gateway 推送 :8080/api/alerts/webhook）：
 #
 #   开发环境：
 #     docker compose -f docker-compose.yml -f docker-compose.observability.yml \
@@ -15,14 +16,31 @@ version: "3.9"
 #     docker compose -f docker-compose.prod.yml -f docker-compose.observability.yml \
 #       --profile observability up -d
 #
+# 告警链路：
+#   Prometheus 评估 ops/prometheus/alerts.yml
+#     → Alertmanager（ops/alertmanager/alertmanager.yml 路由树）
+#       → 默认 webhook → gateway POST /api/alerts/webhook
+#           （X-Alert-Webhook-Secret 共享密钥头 → fingerprint 去重 →
+#             内部 notify 渠道：邮件/飞书/钉钉/Telegram/Discord/短信）
+#       → severity=critical 额外直连 critical-direct（邮件 + Telegram，
+#           env 未配置时对应块自动剪掉，退化为纯 gateway webhook 通道）
+#
 # 说明：
-#   - 两个服务均归属 profile "observability"，不带 --profile 启动时不会运行。
-#   - 端口只绑定 127.0.0.1（Grafana :3000、Prometheus :9090），不对公网暴露。
-#   - 不引入 Alertmanager，保持轻量；告警在 Prometheus 内评估，
-#     可在 http://127.0.0.1:9090/alerts 或 Grafana 中查看。
+#   - 三个服务均归属 profile "observability"，不带 --profile 启动时不会运行。
+#   - 端口只绑定 127.0.0.1（Grafana :3000、Prometheus :9090、Alertmanager :9093），
+#     不对公网暴露。
+#   - Alertmanager 数据卷 alertmanager_data 持久化 silence/通知日志，
+#     重启不丢静默状态。
+#   - 告警 webhook 需要共享密钥：在 .env 配置 ALERT_WEBHOOK_SECRET
+#     （gateway 与 alertmanager 两侧同值；gateway 侧未配置时
+#     /api/alerts/webhook 一律 503，推送链路 fail-closed）。
+#   - critical 直连邮件/Telegram 为可选：配置 ALERT_SMTP_* / ALERT_EMAIL_TO /
+#     ALERT_TELEGRAM_* 后自动启用（见 .env.example 与
+#     ops/alertmanager/alertmanager.yml 头部注释）。
 #   - 若网关不是通过 compose 运行（如宿主机 ./start-local.sh），
 #     用环境变量指向宿主机：
 #       GATEWAY_SCRAPE_TARGET=host.docker.internal:8080 \
+#       ALERT_GATEWAY_WEBHOOK_URL=http://host.docker.internal:8080/api/alerts/webhook \
 #       docker compose -f docker-compose.yml -f docker-compose.observability.yml \
 #         --profile observability up -d
 # ═══════════════════════════════════════════════════════════════════
@@ -49,6 +67,47 @@ services:
       - prometheus_data:/prometheus
     extra_hosts:
       # 允许 GATEWAY_SCRAPE_TARGET 使用 host.docker.internal 指向宿主机
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    networks:
+      - xiaotian
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  alertmanager:
+    image: prom/alertmanager:v0.34.1
+    container_name: xiaotian-alertmanager
+    profiles:
+      - observability
+    ports:
+      - "127.0.0.1:9093:9093"
+    # 入口脚本展开 alertmanager.yml 中的 ${VAR} 占位符并按 env 门控剪枝
+    # （Alertmanager 不支持配置内 env 展开），生成 /alertmanager/alertmanager.generated.yml
+    entrypoint: ["/bin/sh", "/docker-entrypoint.sh"]
+    environment:
+      # 告警 webhook 共享密钥（与 gateway 侧 ALERT_WEBHOOK_SECRET 同值）
+      - ALERT_WEBHOOK_SECRET=${ALERT_WEBHOOK_SECRET:-}
+      # 网关 webhook 地址；网关跑在宿主机时改为 http://host.docker.internal:8080/...
+      - ALERT_GATEWAY_WEBHOOK_URL=${ALERT_GATEWAY_WEBHOOK_URL:-http://gateway:8080/api/alerts/webhook}
+      # critical 直连邮件（可选，配齐 ALERT_EMAIL_TO 才生效）
+      - ALERT_SMTP_HOST=${ALERT_SMTP_HOST:-}
+      - ALERT_SMTP_FROM=${ALERT_SMTP_FROM:-}
+      - ALERT_SMTP_USER=${ALERT_SMTP_USER:-}
+      - ALERT_SMTP_PASSWORD=${ALERT_SMTP_PASSWORD:-}
+      - ALERT_EMAIL_TO=${ALERT_EMAIL_TO:-}
+      # critical 直连 Telegram（可选，配齐 ALERT_TELEGRAM_BOT_TOKEN 才生效）
+      - ALERT_TELEGRAM_BOT_TOKEN=${ALERT_TELEGRAM_BOT_TOKEN:-}
+      - ALERT_TELEGRAM_CHAT_ID=${ALERT_TELEGRAM_CHAT_ID:-}
+    volumes:
+      - ./ops/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./ops/alertmanager/docker-entrypoint.sh:/docker-entrypoint.sh:ro
+      # 持久化 silence 与通知日志（重启不丢静默状态）
+      - alertmanager_data:/alertmanager
+    extra_hosts:
+      # 允许 ALERT_GATEWAY_WEBHOOK_URL 使用 host.docker.internal 指向宿主机
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
     networks:
@@ -88,6 +147,7 @@ services:
 
 volumes:
   prometheus_data:
+  alertmanager_data:
   grafana_data:
 
 networks:

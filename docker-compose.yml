@@ -45,6 +45,8 @@ services:
       - DINGTALK_SECRET=${DINGTALK_SECRET:-}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      # Alertmanager 告警 webhook 共享密钥（/api/alerts/webhook 校验，空则该端点 503）
+      - ALERT_WEBHOOK_SECRET=${ALERT_WEBHOOK_SECRET:-}
       # Cache (optional Redis)
       - CACHE_ENABLED=${CACHE_ENABLED:-false}
       - REDIS_URL=${REDIS_URL:-}

@@ -19,6 +19,7 @@ const (
 	EventPairlist     = "pairlist"      // Pairlist 更新
 	EventOrder        = "order"         // 订单状态
 	EventDailyReport  = "daily_report"  // 日报
+	EventAlert        = "alert"         // Alertmanager 基础设施告警
 )
 
 // ── Notification Templates ─────────────────────────────────────
@@ -261,6 +262,50 @@ func NewOrderTemplate(symbol, side, orderType, status string, price, qty float64
 		Content:   fmt.Sprintf("%s **%s** %s %s %.4f @ %.2f", emoji, status, side, symbol, qty, price),
 		Level:     "INFO",
 		Tags:      map[string]string{"symbol": symbol, "status": status},
+	}
+}
+
+// NewAlertTemplate creates an Alertmanager-sourced infrastructure alert notification.
+// severity 映射内部等级：critical→CRITICAL、warning→WARN、其余→INFO。
+func NewAlertTemplate(alertname, severity, status, summary, description, runbook string, labels map[string]string) Template {
+	level := "INFO"
+	switch strings.ToLower(severity) {
+	case "critical":
+		level = "CRITICAL"
+	case "warning":
+		level = "WARN"
+	}
+
+	emoji := "🔥"
+	state := "FIRING"
+	if status == "resolved" {
+		emoji = "✅"
+		state = "RESOLVED"
+	}
+
+	content := fmt.Sprintf("%s **[%s] %s**\n\n%s", emoji, state, alertname, summary)
+	if description != "" {
+		content += "\n\n" + description
+	}
+	if runbook != "" {
+		content += "\n\n**Runbook:** " + runbook
+	}
+
+	tags := map[string]string{
+		"alertname": alertname,
+		"severity":  strings.ToLower(severity),
+		"status":    status,
+	}
+	if fp, ok := labels["fingerprint"]; ok {
+		tags["fingerprint"] = fp
+	}
+
+	return Template{
+		EventType: EventAlert,
+		Title:     fmt.Sprintf("[%s] %s", state, alertname),
+		Content:   content,
+		Level:     level,
+		Tags:      tags,
 	}
 }
 

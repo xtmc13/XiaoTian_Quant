@@ -1,0 +1,86 @@
+# ═══════════════════════════════════════════════════════════════════
+# XiaoTian Quant — Alertmanager 配置（模板）
+# ═══════════════════════════════════════════════════════════════════
+# Alertmanager 不支持在配置文件中展开环境变量，本文件中的
+# ${VAR} / ${VAR:-default} 占位符由容器入口脚本
+# ops/alertmanager/docker-entrypoint.sh 在启动时展开（生成
+# /alertmanager/alertmanager.generated.yml 后 exec alertmanager）。
+#
+# 门控块：以 "# AM_GATE_BEGIN <ENV_VAR>" 与 "# AM_GATE_END" 包围的行，
+# 仅在对应环境变量非空时保留——未配置邮件/Telegram 时自动剪掉对应
+# receiver 块，避免空 bot_token/to 导致配置校验失败。
+#
+# 路由设计：
+#   默认接收器 gateway-webhook —— 所有告警（含 resolved）经 webhook 推回
+#     gateway（fingerprint 去重后走内部 notify 路由：邮件/飞书/钉钉/
+#     Telegram/Discord/短信，落库 xt_alert_events 供前端展示）；
+#   severity=critical —— 额外直连 critical-direct 接收器（邮件+Telegram，
+#     continue: true 保证 gateway webhook 依然收到，作为 gateway 通知
+#     渠道之外的兜底直达通道）。
+#
+# 密钥全部经 env 注入（ALERT_* 变量见 .env.example），本文件不得硬编码。
+# 注意：密钥中不要包含单引号（YAML 单引号字符串）。
+# ═══════════════════════════════════════════════════════════════════
+
+global:
+  # 邮件直连通道（仅 critical-direct 使用；gateway webhook 通道的邮件走
+  # gateway 自己的 SMTP_* 配置，两者相互独立）
+  smtp_smarthost: '${ALERT_SMTP_HOST}'
+  smtp_from: '${ALERT_SMTP_FROM:-alertmanager@xiaotian.local}'
+  smtp_auth_username: '${ALERT_SMTP_USER}'
+  smtp_auth_password: '${ALERT_SMTP_PASSWORD}'
+  smtp_require_tls: true
+
+route:
+  receiver: gateway-webhook
+  group_by: [alertname, severity]
+  # 首组等待 30s 聚合抖动告警；组内追加间隔 5m；同一告警 4h 后才重复提醒
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - matchers:
+        - severity = "critical"
+      receiver: critical-direct
+      # continue: critical 同时落入默认 gateway-webhook 接收器
+      continue: true
+
+receivers:
+  # 默认通道：推回 gateway 的内部通知路由（fingerprint 去重 + 模板化多渠道）。
+  - name: gateway-webhook
+    webhook_configs:
+      - url: '${ALERT_GATEWAY_WEBHOOK_URL:-http://gateway:8080/api/alerts/webhook}'
+        send_resolved: true
+        max_alerts: 50
+        timeout: 10s
+        http_config:
+          http_headers:
+            X-Alert-Webhook-Secret:
+              secrets: ['${ALERT_WEBHOOK_SECRET}']
+
+  # critical 直达通道：绕过 gateway，直连邮件 + Telegram。
+  # 两块均带门控，未配置对应 env 时整块剪掉（此时本接收器为空接收器，
+  # critical 告警仍经 continue 落到 gateway-webhook，不会丢失）。
+  - name: critical-direct
+# AM_GATE_BEGIN ALERT_EMAIL_TO
+    email_configs:
+      - to: '${ALERT_EMAIL_TO}'
+        send_resolved: true
+# AM_GATE_END
+# AM_GATE_BEGIN ALERT_TELEGRAM_BOT_TOKEN
+    telegram_configs:
+      - bot_token: '${ALERT_TELEGRAM_BOT_TOKEN}'
+        # chat_id 为整数（YAML 数值），env 必须是纯数字
+        chat_id: ${ALERT_TELEGRAM_CHAT_ID}
+        send_resolved: true
+        parse_mode: Markdown
+        message: '{{ template "telegram.default.message" . }}'
+# AM_GATE_END
+
+# critical 抑制同名 warning（同一 alertname 的 warning 不重复打扰）
+inhibit_rules:
+  - source_matchers:
+      - severity = "critical"
+    target_matchers:
+      - severity = "warning"
+    equal: [alertname]
