@@ -281,13 +281,17 @@ func (b *BinanceAdapter) GetTicker(symbol string) (map[string]any, error) {
 // ── Trading REST ──
 
 func (b *BinanceAdapter) PlaceOrder(symbol, side, orderType string, price, quantity float64) (map[string]any, error) {
+	qtyStr, priceStr, err := b.normalizeBinanceOrder(symbol, orderType, price, quantity, false)
+	if err != nil {
+		return nil, err
+	}
 	params := url.Values{}
 	params.Set("symbol", symbol)
 	params.Set("side", side)
 	params.Set("type", orderType)
-	params.Set("quantity", fmt.Sprintf("%.6f", quantity))
+	params.Set("quantity", qtyStr)
 	if orderType == "LIMIT" {
-		params.Set("price", fmt.Sprintf("%.2f", price))
+		params.Set("price", priceStr)
 		params.Set("timeInForce", "GTC")
 	}
 	return b.request("POST", "/order", params, true)
@@ -295,16 +299,20 @@ func (b *BinanceAdapter) PlaceOrder(symbol, side, orderType string, price, quant
 
 // PlaceFuturesOrder places a USDT-M futures order on Binance.
 func (b *BinanceAdapter) PlaceFuturesOrder(symbol, side, orderType string, price, quantity, leverage float64, positionSide string) (map[string]any, error) {
+	qtyStr, priceStr, err := b.normalizeBinanceOrder(symbol, orderType, price, quantity, true)
+	if err != nil {
+		return nil, err
+	}
 	params := url.Values{}
 	params.Set("symbol", symbol)
 	params.Set("side", side)
 	params.Set("type", orderType)
-	params.Set("quantity", fmt.Sprintf("%.6f", quantity))
+	params.Set("quantity", qtyStr)
 	if positionSide != "" {
 		params.Set("positionSide", positionSide)
 	}
 	if orderType == "LIMIT" {
-		params.Set("price", fmt.Sprintf("%.2f", price))
+		params.Set("price", priceStr)
 		params.Set("timeInForce", "GTC")
 	}
 	return b.futuresRequest("POST", "/fapi/v1/order", params)
@@ -388,11 +396,11 @@ func (b *BinanceAdapter) futuresRequest(method, path string, params url.Values) 
 	var body io.Reader
 
 	if method == "GET" || method == "DELETE" {
-		u, _ := url.Parse(BinanceFuturesRestURL + path)
+		u, _ := url.Parse(b.fapiBaseURL() + path)
 		u.RawQuery = params.Encode()
 		reqURL = u.String()
 	} else {
-		reqURL = BinanceFuturesRestURL + path
+		reqURL = b.fapiBaseURL() + path
 		body = strings.NewReader(params.Encode())
 	}
 
