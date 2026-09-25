@@ -91,6 +91,13 @@ func ValidateStatic(code string) []ValidationIssue {
 			issues = append(issues, ValidationIssue{Line: lineNo, Code: "SIGNATURE",
 				Message: fmt.Sprintf("on_order 签名错误：应为 on_order(context, order)，当前 %s", strings.TrimSpace(line))})
 		}
+		// v1.2 可选钩子：出现即要求签名正确
+		for _, h := range v12Hooks {
+			if h.wrong.MatchString(line) && !h.right.MatchString(line) {
+				issues = append(issues, ValidationIssue{Line: lineNo, Code: "SIGNATURE",
+					Message: fmt.Sprintf("%s 签名错误：应为 %s(%s)，当前 %s", h.name, h.name, h.args, strings.TrimSpace(line))})
+			}
+		}
 
 		// import 白名单
 		if m := reImportStmt.FindStringSubmatch(line); m != nil {
@@ -156,6 +163,31 @@ var (
 	reDefInitWrong    = regexp.MustCompile(`^\s*def\s+initialize\s*\(`)
 	reDefOnOrderWrong = regexp.MustCompile(`^\s*def\s+on_order\s*\(`)
 )
+
+// v12Hooks 是 v1.2 可选契约钩子（对标 freqtrade IStrategy）：策略可选实现，
+// 但如出现则签名必须正确（宽松识别 def <name>(，精确比对参数列表）。
+var v12Hooks = []struct {
+	name  string
+	args  string // 展示用参数列表
+	right *regexp.Regexp
+	wrong *regexp.Regexp
+}{
+	{"confirm_entry", "context, side, price, amount",
+		regexp.MustCompile(`^\s*def\s+confirm_entry\s*\(\s*context\s*,\s*side\s*,\s*price\s*,\s*amount\s*\)\s*:`),
+		regexp.MustCompile(`^\s*def\s+confirm_entry\s*\(`)},
+	{"confirm_exit", "context, side, price, qty",
+		regexp.MustCompile(`^\s*def\s+confirm_exit\s*\(\s*context\s*,\s*side\s*,\s*price\s*,\s*qty\s*\)\s*:`),
+		regexp.MustCompile(`^\s*def\s+confirm_exit\s*\(`)},
+	{"custom_stake_amount", "context, proposed_amount, price, side",
+		regexp.MustCompile(`^\s*def\s+custom_stake_amount\s*\(\s*context\s*,\s*proposed_amount\s*,\s*price\s*,\s*side\s*\)\s*:`),
+		regexp.MustCompile(`^\s*def\s+custom_stake_amount\s*\(`)},
+	{"adjust_trade_position", "context, bar, position",
+		regexp.MustCompile(`^\s*def\s+adjust_trade_position\s*\(\s*context\s*,\s*bar\s*,\s*position\s*\)\s*:`),
+		regexp.MustCompile(`^\s*def\s+adjust_trade_position\s*\(`)},
+	{"check_entry_timeout", "context, order",
+		regexp.MustCompile(`^\s*def\s+check_entry_timeout\s*\(\s*context\s*,\s*order\s*\)\s*:`),
+		regexp.MustCompile(`^\s*def\s+check_entry_timeout\s*\(`)},
+}
 
 func hasCall(line, name string) bool {
 	re := regexp.MustCompile(`\b` + regexp.QuoteMeta(name) + `\s*\(`)

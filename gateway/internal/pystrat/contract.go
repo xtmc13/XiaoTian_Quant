@@ -1,9 +1,14 @@
-// Package pystrat 实现"用户 Python 策略契约化运行时 v1.1"：
+// Package pystrat 实现"用户 Python 策略契约化运行时 v1.2"：
 // 用户写一个约定契约的 Python 文件（STRATEGY_MANIFEST + initialize/on_bar
-// 回调，可选 on_order），平台在独立 python 子进程沙箱里长驻执行，K 线经
+// 回调，可选 on_order 与 v1.2 契约钩子），平台在独立 python 子进程沙箱里长驻执行，K 线经
 // 事件总线驱动 on_bar，订单回报（client_oid "pystrat:<id>" 前缀）驱动
 // on_order；context.buy/sell 动作转成信号走 OMS 统一执行层下单（现货市价/
 // v1.1 现货限价/合约杠杆）。
+//
+// v1.2 契约钩子（对标 freqtrade IStrategy）：confirm_entry / confirm_exit /
+// custom_stake_amount / adjust_trade_position（DCA 动态加减仓）/
+// check_entry_timeout，全部可选，未定义走默认行为；契约全文见
+// docs/PYTHON_STRATEGY_API.md。
 //
 // 对标 QuantDinger Strategy API V2 / freqtrade IStrategy；契约全文见
 // docs/PYTHON_STRATEGY_API.md。
@@ -36,12 +41,20 @@ type Manifest struct {
 // 止损/止盈百分比（0<pct<1），策略可用 context.set_stop_loss/set_take_profit 覆盖。
 // leverage/margin_mode 是 v1.1 合约执行覆盖：market='futures' 时作用于
 // context.buy 的合约下单，优先级高于平台保存的 xt_pystrategies 列。
+// max_position_adjustments / entry_timeout_minutes 是 v1.2 契约钩子参数
+// （对标 freqtrade max_entry_position_adjustment / unfilledtimeout）：
+// 前者限制 adjust_trade_position 的**加仓**次数（0=不限；减仓是降风险动作
+// 不受此限），后者是入场限价挂单超时分钟数（0=不启用检查；超时默认撤单，
+// 策略可用 check_entry_timeout 钩子接管决定）。
 type ManifestRisk struct {
 	MaxPositionPct float64 `json:"max_position_pct"`
 	StopLossPct    float64 `json:"stop_loss_pct"`
 	TakeProfitPct  float64 `json:"take_profit_pct"`
 	Leverage       int     `json:"leverage,omitempty"`
 	MarginMode     string  `json:"margin_mode,omitempty"` // cross | isolated
+	// v1.2
+	MaxPositionAdjustments int `json:"max_position_adjustments,omitempty"` // 0=不限
+	EntryTimeoutMinutes    int `json:"entry_timeout_minutes,omitempty"`    // 0=不启用挂单超时检查
 }
 
 // MaxLeverage 是合约杠杆上限（与 store.PyStratMaxLeverage 同值，主流
@@ -82,6 +95,12 @@ func (m *Manifest) Validate() string {
 	case "", "cross", "isolated":
 	default:
 		return fmt.Sprintf("STRATEGY_MANIFEST.risk.margin_mode 必须是 cross|isolated，当前 %q", m.Risk.MarginMode)
+	}
+	if m.Risk.MaxPositionAdjustments < 0 {
+		return "STRATEGY_MANIFEST.risk.max_position_adjustments 必须是非负整数（0 表示不限制加仓/减仓次数）"
+	}
+	if m.Risk.EntryTimeoutMinutes < 0 {
+		return "STRATEGY_MANIFEST.risk.entry_timeout_minutes 必须是非负整数（0 表示不启用挂单超时检查）"
 	}
 	return ""
 }

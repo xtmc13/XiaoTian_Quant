@@ -15,11 +15,25 @@
         定义则跳过）。返回 {logs, prints}；回调内产生的 actions 被丢弃并
         记 warning（订单事件里不允许下单）。异常作为 ok:false 返回（Go 侧
         记日志跳过，不计入 on_bar 错误契约）。
+  confirm {kind, side, price, amount}  v1.2 契约钩子（对标 freqtrade
+        confirm_trade_entry/exit）：kind="entry" 调 confirm_entry、
+        "exit" 调 confirm_exit；策略未定义 → allow=true。返回
+        {allow, logs, prints}。
+  custom_stake {proposed_amount, price, side}  v1.2（对标 custom_stake_amount）：
+        策略未定义或返回 <=0/None → amount=0（Go 侧保持默认金额）。返回
+        {amount, logs, prints}。
+  adjust_position {bar, position}  v1.2（对标 adjust_trade_position，DCA
+        动态加减仓）：策略未定义或返回 None/0 → amount=0（不调整）；
+        >0 加仓（USDT 金额）、<0 减仓。返回 {amount, logs, prints}。
+  entry_timeout {order}  v1.2（对标 check_entry_timeout）：未成交入场挂单
+        超时由策略决定撤单行为；策略未定义 → cancel=true（默认撤单，同
+        现有超时逻辑）。返回 {cancel, logs, prints}。
   ping  存活探测。
 
 安全：import 白名单（与 Go 侧 ValidateStatic 一致）、危险内建调用与双下划线
 访问静态拒绝、受限 builtins、RLIMIT_AS 256MB、stdout 重定向（用户 print 进
-prints 缓冲，不污染协议流）。单轮超时由 Go 侧强制（kill 子进程）。
+prints 缓冲，不污染协议流）。单轮超时由 Go 侧强制（kill 子进程）。钩子回调
+与 on_order 同约束：回调内不允许下单（产生的 actions 丢弃并记 warning）。
 """
 
 import ast
@@ -272,6 +286,11 @@ def validate_manifest(manifest):
         margin_mode = risk.get("margin_mode", "") or ""
         if margin_mode not in ("", "cross", "isolated"):
             errors.append("STRATEGY_MANIFEST.risk.margin_mode 必须是 cross|isolated")
+        # v1.2 契约钩子参数：非负整数（0=不限/不启用）
+        for key in ("max_position_adjustments", "entry_timeout_minutes"):
+            value = risk.get(key, 0) or 0
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                errors.append("STRATEGY_MANIFEST.risk.%s 必须是非负整数（0=不限/不启用）" % key)
     return errors
 
 
@@ -416,12 +435,127 @@ def handle_on_order(params):
     return {"logs": logs, "prints": prints.splitlines()}, None
 
 
+# ── v1.2 契约钩子（对标 freqtrade IStrategy，全部可选）──
+#
+# 策略可在模块级定义以下可选函数；未定义时各 handler 返回默认值（与
+# freqtrade 的缺省行为对齐）：
+#   confirm_entry(context, side, price, amount) -> bool
+#       买入下单前最后一刻确认，返回 False 否决该笔入场。
+#   confirm_exit(context, side, price, qty) -> bool
+#       卖出/平仓前最后一刻确认，返回 False 否决本次出场。
+#   custom_stake_amount(context, proposed_amount, price, side) -> float
+#       自定义入场金额（USDT）；返回 <=0 或 None 表示用策略动作自带金额。
+#   adjust_trade_position(context, bar, position) -> float
+#       持仓期间每根 K 线询问加/减仓（DCA）：>0 加仓 USDT 金额、<0 减仓、
+#       0/None 不调整。次数受 manifest.risk.max_position_adjustments 限制。
+#   check_entry_timeout(context, order) -> bool
+#       未成交入场限价单超时（risk.entry_timeout_minutes）时决定撤单行为；
+#       True=撤单（默认），False=保留挂单。
+#
+# 与 on_order 同一约束：钩子内不允许下单（actions 丢弃并记 warning）；
+# 钩子异常作为 ok:false 返回（Go 侧记日志并按各钩子 fail-safe 默认值处理，
+# 不计入 on_bar 的连续 10 次错误契约）。
+
+
+def _invoke_hook(name, *args):
+    """调用可选钩子；返回 (found, value, logs, prints, errors)。"""
+    if not STATE["loaded"]:
+        return None, None, None, None, ["策略未加载"]
+    fn = STATE["globals"].get(name)
+    if not callable(fn):
+        return False, None, [], [], None
+    context = STATE["context"]
+    sink = STATE["sink"]
+    old_stdout = sys.stdout
+    sys.stdout = sink
+    try:
+        value = fn(*args)
+    except Exception as e:
+        sys.stdout = old_stdout
+        tb = traceback.format_exc()
+        return True, None, None, None, \
+            ["%s 抛异常: %s: %s" % (name, type(e).__name__, e), tb]
+    sys.stdout = old_stdout
+    # 钩子内不允许下单：actions 连同 warning 一起丢弃（与 on_order 同约束）。
+    actions, logs = context.drain()
+    if actions:
+        logs = list(logs) + [
+            "警告: %s 内产生 %d 个下单动作已忽略（确认/查询钩子不允许下单）"
+            % (name, len(actions))
+        ]
+    prints = sink.drain()
+    return True, value, logs, prints.splitlines(), None
+
+
+def _hook_float(value):
+    """钩子返回值的容错 float 转换；非法/None → 0。"""
+    if value is None:
+        return 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def handle_confirm(params):
+    kind = params.get("kind") or "entry"
+    side = params.get("side") or "long"
+    price = params.get("price") or 0
+    amount = params.get("amount") or 0
+    name = "confirm_entry" if kind == "entry" else "confirm_exit"
+    found, value, logs, prints, errors = _invoke_hook(
+        name, STATE["context"], side, price, amount)
+    if errors:
+        return None, errors
+    allow = True if not found else bool(value)
+    return {"allow": allow, "logs": logs or [], "prints": prints or []}, None
+
+
+def handle_custom_stake(params):
+    proposed = params.get("proposed_amount") or 0
+    price = params.get("price") or 0
+    side = params.get("side") or "long"
+    found, value, logs, prints, errors = _invoke_hook(
+        "custom_stake_amount", STATE["context"], proposed, price, side)
+    if errors:
+        return None, errors
+    amount = _hook_float(value) if found else 0.0
+    if amount < 0:
+        amount = 0.0
+    return {"amount": amount, "logs": logs or [], "prints": prints or []}, None
+
+
+def handle_adjust_position(params):
+    bar = params.get("bar") or {}
+    position = params.get("position") or {}
+    found, value, logs, prints, errors = _invoke_hook(
+        "adjust_trade_position", STATE["context"], dict(bar), dict(position))
+    if errors:
+        return None, errors
+    amount = _hook_float(value) if found else 0.0
+    return {"amount": amount, "logs": logs or [], "prints": prints or []}, None
+
+
+def handle_entry_timeout(params):
+    order = params.get("order") or {}
+    found, value, logs, prints, errors = _invoke_hook(
+        "check_entry_timeout", STATE["context"], dict(order))
+    if errors:
+        return None, errors
+    # 策略未定义 → 默认撤单（与平台现有超时逻辑一致；freqtrade 同样以撤单收尾）
+    cancel = True if not found else bool(value)
+    return {"cancel": cancel, "logs": logs or [], "prints": prints or []}, None
+
+
 HANDLERS = {
     "load": handle_load,
     "on_bar": handle_on_bar,
     "on_order": handle_on_order,
+    "confirm": handle_confirm,
+    "custom_stake": handle_custom_stake,
+    "adjust_position": handle_adjust_position,
+    "entry_timeout": handle_entry_timeout,
 }
-
 
 def main():
     apply_memory_limit()

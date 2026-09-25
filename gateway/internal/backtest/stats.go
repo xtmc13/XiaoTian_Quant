@@ -38,6 +38,10 @@ type PerformanceReport struct {
 	WorstTrade     float64 `json:"worst_trade"`
 	AvgHoldingMs   int64   `json:"avg_holding_ms"`
 
+	// v1.2 加仓统计（对标 freqtrade DCA 报表口径）
+	TotalAdjustments       int     `json:"total_adjustments"`
+	AvgAdjustmentsPerTrade float64 `json:"avg_adjustments_per_trade"`
+
 	MaxConsecWins int `json:"max_consec_wins"`
 	MaxConsecLoss int `json:"max_consec_loss"`
 
@@ -82,6 +86,9 @@ func GenerateReport(result *RunResult, strategy, symbol string) *PerformanceRepo
 		AvgLoss:       result.AvgLoss,
 		BestTrade:     result.BestTrade,
 		WorstTrade:    result.WorstTrade,
+
+		TotalAdjustments:       result.TotalAdjustments,
+		AvgAdjustmentsPerTrade: result.AvgAdjustmentsPerTrade,
 	}
 
 	if len(result.EquityCurve) > 0 {

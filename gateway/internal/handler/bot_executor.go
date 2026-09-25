@@ -213,3 +213,13 @@ func (e *OMSBotExecutor) PlaceContract(botID, symbol, exchange string, userID in
 	}
 	return filled, avg, nil
 }
+
+// CancelSpot 撤销策略的未成交挂单（v1.2 pystrat check_entry_timeout 落地，
+// pystrat.CancelExecutor 的生产实现）。撤单是降风险动作，不过 canPlaceLiveOrder
+// 进单闸；交易所侧撤单经 OMS CancelOnExchange 钩子。
+func (e *OMSBotExecutor) CancelSpot(botID, orderID string) error {
+	if _, err := order.GetOrderManager().CancelOrder(orderID, ""); err != nil {
+		return fmt.Errorf("cancel %s: %w", orderID, err)
+	}
+	return nil
+}

@@ -28,6 +28,16 @@ func DefaultTimeoutConfig() TimeoutConfig {
 	}
 }
 
+// TimeoutDecider 是可选的策略决策钩子（v1.2，对标 freqtrade
+// check_entry_timeout/check_exit_timeout）：挂单超时先问策略。
+// 返回 (action, true) 接管默认逻辑：
+//
+//	"cancel" — 撤单（同现有默认）
+//	"keep"   — 保留挂单继续等待（重置计时，下个超时周期再问）
+//
+// ok=false（未注入或策略未实现）走 tracker 现有默认逻辑。
+type TimeoutDecider func(state OrderState) (action string, ok bool)
+
 // ── Order Timeout Tracker ──────────────────────────────────────
 
 // TimeoutTracker tracks order age and triggers emergency actions.
@@ -36,6 +46,7 @@ type TimeoutTracker struct {
 	mu     sync.RWMutex
 
 	orders map[string]*OrderState
+	decide TimeoutDecider
 }
 
 // OrderState tracks an individual order's timeout state.
@@ -57,6 +68,14 @@ func NewTimeoutTracker(cfg TimeoutConfig) *TimeoutTracker {
 		config: cfg,
 		orders: make(map[string]*OrderState),
 	}
+}
+
+// SetDecider 注入策略超时决策钩子（v1.2；nil = 纯默认逻辑）。
+// 生产接线：strategy.Engine.TimeoutDecider()。
+func (t *TimeoutTracker) SetDecider(d TimeoutDecider) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.decide = d
 }
 
 // Track adds an order to timeout tracking.
@@ -105,6 +124,24 @@ func (t *TimeoutTracker) CheckTimeout() []TimeoutAction {
 		}
 
 		if now.Sub(state.PlacedAt) > timeout {
+			// v1.2 策略钩子优先：策略决定撤单（cancel）或保留挂单（keep）。
+			if t.decide != nil {
+				if action, ok := t.decide(*state); ok {
+					if action == "keep" {
+						state.PlacedAt = now // 策略选择保留：重置计时，下个周期再问
+						continue
+					}
+					state.TimeoutCount++
+					state.Status = "timed_out"
+					actions = append(actions, TimeoutAction{
+						OrderID:      id,
+						Symbol:       state.Symbol,
+						Action:       action,
+						TimeoutCount: state.TimeoutCount,
+					})
+					continue
+				}
+			}
 			state.TimeoutCount++
 			state.Status = "timed_out"
 

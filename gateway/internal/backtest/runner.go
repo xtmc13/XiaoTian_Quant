@@ -34,6 +34,8 @@ type Runner struct {
 	equity     []EquityPoint
 	equityPeak float64
 
+	maxPositionAdjustments int // v1.2: 单笔持仓加/减仓次数上限（<=0 不限）
+
 	mu sync.Mutex
 }
 
@@ -49,6 +51,15 @@ type Position struct {
 	RealizedPnL   float64
 	IsClosed      bool
 	ExitReason    string
+	// Adjustments 是持仓期间的加仓/减仓总次数（v1.2：含 PositionAdjuster
+	// 钩子产生的调整单与信号驱动的同向加仓），回测报告据此统计平均加仓次数。
+	Adjustments int `json:"adjustments,omitempty"`
+	// partialPnL 是减仓调整已落袋的盈亏（最终平仓时并入 RealizedPnL 展示，
+	// 现金在减仓当时已入账，避免重复计）。
+	partialPnL float64
+	// addCount 是钩子/信号驱动的加仓次数（max_position_adjustments 上限按
+	// 此判定；减仓是降风险动作，不计入——freqtrade 同口径）。
+	addCount int
 }
 
 // EquityPoint is a snapshot of portfolio value at a point in time.
@@ -70,6 +81,10 @@ type RunnerConfig struct {
 	PositionSizePct float64 `json:"position_size_pct"` // position size as % of balance, e.g. 0.02 = 2%
 	RiskFreeRate    float64 `json:"risk_free_rate"`    // annual risk-free rate, e.g. 0.02 = 2%
 	SlippageSeed    int64   `json:"slippage_seed"`     // seed for reproducible slippage; 0 = use time
+	// MaxPositionAdjustments 限制单笔持仓的加仓次数（v1.2，对标
+	// freqtrade max_entry_position_adjustment；减仓是降风险动作不受此限）；
+	// <=0 表示不限。策略实现 MaxPositionAdjustmentsProvider 时以策略值优先。
+	MaxPositionAdjustments int `json:"max_position_adjustments"`
 }
 
 func DefaultRunnerConfig() RunnerConfig {
@@ -106,6 +121,7 @@ func NewRunner(cfg RunnerConfig) *Runner {
 		endTime:         cfg.EndTime,
 		positionSizePct: cfg.PositionSizePct,
 		riskFreeRate:    cfg.RiskFreeRate,
+		maxPositionAdjustments: cfg.MaxPositionAdjustments,
 		rng:             rand.New(rand.NewSource(seed)),
 		bars:            make(map[string][]model.Bar),
 		ticks:           make(map[string][]model.Tick),
@@ -149,6 +165,48 @@ type BacktestStrategy interface {
 	OnTick(tick model.Tick, state *StrategyState) (*model.Signal, error)
 }
 
+// ── v1.2 可选契约钩子（对标 freqtrade IStrategy / strategy 包同名能力）──
+// 与实盘引擎"回测实盘同源"：回测策略实现哪个接口就启用哪个钩子，未实现
+// 走默认行为，存量回测策略完全不受影响。钩子目前只在 K 线路径（Run）生效；
+// tick 路径（RunWithTicks）不支持（回测差异见 docs/PYTHON_STRATEGY_API.md 同节说明）。
+
+// EntryConfirmer 对标 confirm_trade_entry：开新仓前最后一刻确认，
+// 返回 false 否决该笔入场（加仓信号不询问——策略自身信号决策）。
+type EntryConfirmer interface {
+	ConfirmTradeEntry(signal *model.Signal, state *StrategyState) bool
+}
+
+// ExitConfirmer 对标 confirm_trade_exit：平仓前最后一刻确认，
+// 返回 false 否决本次平仓（持仓保留）。
+type ExitConfirmer interface {
+	ConfirmTradeExit(pos *Position, state *StrategyState) bool
+}
+
+// StakeCustomizer 对标 custom_stake_amount：信号未指定数量时自定义入场金额
+// （计价币 USDT）。返回 <=0 用默认（initial_balance × position_size_pct）。
+type StakeCustomizer interface {
+	CustomStakeAmount(proposedStake float64, signal *model.Signal, state *StrategyState) float64
+}
+
+// PositionAdjuster 对标 adjust_trade_position（DCA 动态加减仓）：持仓期间
+// 每根 K 线（含无信号 K 线）询问是否调整仓位。返回计价币金额：
+//
+//	>0 加仓（按当根收盘价折算数量，均价重算，计入 Adjustments）
+//	<0 减仓（|金额| 折算部分平仓，盈亏即时落袋）
+//	0  不调整
+//
+// 次数受 RunnerConfig.MaxPositionAdjustments / MaxPositionAdjustmentsProvider 限制。
+type PositionAdjuster interface {
+	AdjustTradePosition(pos *Position, bar model.Bar, state *StrategyState) float64
+}
+
+// MaxPositionAdjustmentsProvider 对标 max_entry_position_adjustment：
+// 限制单笔持仓的**加仓**次数（减仓不受此限）；<=0 表示不限。实现后优先于
+// RunnerConfig.MaxPositionAdjustments。
+type MaxPositionAdjustmentsProvider interface {
+	MaxPositionAdjustments() int
+}
+
 // StrategyState provides current state to the strategy during backtest.
 type StrategyState struct {
 	Cash            float64
@@ -184,6 +242,10 @@ type RunResult struct {
 	Trades         []Position      `json:"trades"`
 	Orders         []model.OrderData `json:"orders"`
 	DurationMs     int64           `json:"duration_ms"`
+	// v1.2 加仓统计：TotalAdjustments 是所有已平仓持仓的加/减仓总次数，
+	// AvgAdjustmentsPerTrade 是平均每笔交易的调整次数（DCA 密集度）。
+	TotalAdjustments       int     `json:"total_adjustments"`
+	AvgAdjustmentsPerTrade float64 `json:"avg_adjustments_per_trade"`
 }
 
 // Run executes the backtest using bar data for the given strategy.
@@ -246,6 +308,17 @@ func (r *Runner) Run(strategy BacktestStrategy) (*RunResult, error) {
 			continue
 		}
 		if signal == nil {
+			// v1.2 adjust_trade_position：无信号 K 线同样询问加/减仓
+			// （freqtrade 每个迭代轮次都问，不只信号 K 线）。
+			r.maybeAdjustPosition(strategy, position, bar, state, &cash)
+			equityPoints = append(equityPoints, EquityPoint{
+				Timestamp: bar.Time, Equity: state.Equity, AvailableCash: cash,
+			})
+			continue
+		}
+
+		// v1.2 下单前确认钩子：confirm_trade_entry（新仓）/ confirm_trade_exit。
+		if r.hookVetoes(strategy, signal, position, state) {
 			equityPoints = append(equityPoints, EquityPoint{
 				Timestamp: bar.Time, Equity: state.Equity, AvailableCash: cash,
 			})
@@ -266,13 +339,22 @@ func (r *Runner) Run(strategy BacktestStrategy) (*RunResult, error) {
 					totalCost := position.Quantity*position.EntryPrice + addQty*execPrice
 					position.Quantity += addQty
 					position.EntryPrice = totalCost / position.Quantity
+					position.Adjustments++ // v1.2: 信号驱动加仓计入统计
+					position.addCount++
 					state.TradeCount++
 				}
 				continue
 			}
 			qty := signal.Qty
 			if qty <= 0 {
-				qty = r.initialBalance * r.positionSizePct / execPrice
+				// v1.2 custom_stake_amount：策略自定义入场金额（<=0 用默认）
+				stake := r.initialBalance * r.positionSizePct
+				if sc, ok := strategy.(StakeCustomizer); ok {
+					if custom := sc.CustomStakeAmount(stake, signal, state); custom > 0 {
+						stake = custom
+					}
+				}
+				qty = stake / execPrice
 			}
 			position = &Position{
 				Symbol:     symbol,
@@ -297,13 +379,21 @@ func (r *Runner) Run(strategy BacktestStrategy) (*RunResult, error) {
 					totalCost := position.Quantity*position.EntryPrice + addQty*execPrice
 					position.Quantity += addQty
 					position.EntryPrice = totalCost / position.Quantity
+					position.Adjustments++ // v1.2: 信号驱动加仓计入统计
+					position.addCount++
 					state.TradeCount++
 				}
 				continue
 			}
 			qty := signal.Qty
 			if qty <= 0 {
-				qty = r.initialBalance * r.positionSizePct / execPrice
+				stake := r.initialBalance * r.positionSizePct
+				if sc, ok := strategy.(StakeCustomizer); ok {
+					if custom := sc.CustomStakeAmount(stake, signal, state); custom > 0 {
+						stake = custom
+					}
+				}
+				qty = stake / execPrice
 			}
 			position = &Position{
 				Symbol:     symbol,
@@ -326,20 +416,29 @@ func (r *Runner) Run(strategy BacktestStrategy) (*RunResult, error) {
 			position.IsClosed = true
 			position.ExitReason = signal.Reason
 
+			var closeLegPnL float64
 			if position.Side == model.SideBuy {
-				position.RealizedPnL = position.Quantity * (execPrice - position.EntryPrice)
+				closeLegPnL = position.Quantity * (execPrice - position.EntryPrice)
 			} else {
-				position.RealizedPnL = position.Quantity * (position.EntryPrice - execPrice)
+				closeLegPnL = position.Quantity * (position.EntryPrice - execPrice)
 			}
 			closeNotional := position.Quantity * execPrice
 			closeCommission := closeNotional * r.commission
-			position.RealizedPnL -= closeCommission
-			cash += closeNotional + position.RealizedPnL
+			closeLegPnL -= closeCommission
+			// v1.2：减仓调整已落袋的盈亏并入展示口径；现金只记平仓腿
+			// （减仓腿的现金在减仓当时已入账，不能重复计）。
+			position.RealizedPnL = closeLegPnL + position.partialPnL
+			cash += closeNotional + closeLegPnL
 
 			r.mu.Lock()
 			r.positions = append(r.positions, *position)
 			r.mu.Unlock()
 		}
+
+		// v1.2 adjust_trade_position：信号处理后再询问加/减仓（新开仓的
+		// 同根 K 线也会被询问——freqtrade 回测成交在下一根 K 线开盘，存在
+		// 一根 K 线的口径差异）。
+		r.maybeAdjustPosition(strategy, position, bar, state, &cash)
 
 		equity := cash
 		if position != nil && !position.IsClosed {
@@ -364,12 +463,14 @@ func (r *Runner) Run(strategy BacktestStrategy) (*RunResult, error) {
 		position.IsClosed = true
 		position.ExitReason = "end_of_test"
 
+		var closeLegPnL float64
 		if position.Side == model.SideBuy {
-			position.RealizedPnL = position.Quantity * (lastBar.Close - position.EntryPrice)
+			closeLegPnL = position.Quantity * (lastBar.Close - position.EntryPrice)
 		} else {
-			position.RealizedPnL = position.Quantity * (position.EntryPrice - lastBar.Close)
+			closeLegPnL = position.Quantity * (position.EntryPrice - lastBar.Close)
 		}
-		cash += position.Quantity*lastBar.Close + position.RealizedPnL
+		position.RealizedPnL = closeLegPnL + position.partialPnL
+		cash += position.Quantity*lastBar.Close + closeLegPnL
 
 		r.mu.Lock()
 		r.positions = append(r.positions, *position)
@@ -491,6 +592,115 @@ func (r *Runner) RunWithTicks(strategy BacktestStrategy) (*RunResult, error) {
 	return r.buildResult(positions, equityPoints, time.Since(startTime).Milliseconds()), nil
 }
 
+// hookVetoes 应用 v1.2 确认钩子：新仓入场问 EntryConfirmer，平仓问
+// ExitConfirmer；返回 true = 策略否决，该信号不下单（持仓保留）。
+func (r *Runner) hookVetoes(strategy BacktestStrategy, signal *model.Signal, position *Position, state *StrategyState) bool {
+	switch signal.Direction {
+	case "LONG", "SHORT":
+		if position != nil && !position.IsClosed {
+			return false // 信号驱动的同向加仓不询问（策略自身信号决策）
+		}
+		if ec, ok := strategy.(EntryConfirmer); ok {
+			return !ec.ConfirmTradeEntry(signal, state)
+		}
+	case "CLOSE":
+		if position == nil || position.IsClosed {
+			return false
+		}
+		if xc, ok := strategy.(ExitConfirmer); ok {
+			return !xc.ConfirmTradeExit(position, state)
+		}
+	}
+	return false
+}
+
+// maybeAdjustPosition 驱动 PositionAdjuster（v1.2，对标 adjust_trade_position）：
+// 持仓期间每根 K 线询问加/减仓；次数受 RunnerConfig.MaxPositionAdjustments
+// 限制（策略实现 MaxPositionAdjustmentsProvider 时以策略值优先）。
+func (r *Runner) maybeAdjustPosition(strategy BacktestStrategy, position *Position, bar model.Bar, state *StrategyState, cash *float64) {
+	if position == nil || position.IsClosed {
+		return
+	}
+	adj, ok := strategy.(PositionAdjuster)
+	if !ok {
+		return
+	}
+	amt := adj.AdjustTradePosition(position, bar, state)
+	if amt == 0 {
+		return
+	}
+	if amt > 0 {
+		// 上限只约束加仓（freqtrade max_entry_position_adjustment 同口径：
+		// 减仓永不被拦截）。
+		maxAdj := r.maxPositionAdjustments
+		if mp, ok2 := strategy.(MaxPositionAdjustmentsProvider); ok2 {
+			maxAdj = mp.MaxPositionAdjustments()
+		}
+		if maxAdj > 0 && position.addCount >= maxAdj {
+			return
+		}
+	}
+	r.applyPositionAdjustment(position, amt, bar, state, cash)
+}
+
+// applyPositionAdjustment 执行一次加/减仓：加仓重算均价，减仓盈亏即时落袋
+// （现金当场入账、计入 partialPnL，最终平仓时并入 RealizedPnL 展示口径）；
+// 减到 0 视为平仓（ExitReason=position_reduce）记入已平仓持仓。
+func (r *Runner) applyPositionAdjustment(position *Position, amt float64, bar model.Bar, state *StrategyState, cash *float64) {
+	if amt > 0 {
+		dir := "LONG"
+		if position.Side == model.SideSell {
+			dir = "SHORT"
+		}
+		execPrice := r.applySlippage(bar.Close, dir)
+		if execPrice <= 0 {
+			return
+		}
+		addQty := amt / execPrice
+		addNotional := addQty * execPrice
+		commissionCost := addNotional * r.commission
+		*cash -= addNotional + commissionCost
+		totalCost := position.Quantity*position.EntryPrice + addQty*execPrice
+		position.Quantity += addQty
+		position.EntryPrice = totalCost / position.Quantity
+		position.Adjustments++
+		position.addCount++
+		state.TradeCount++
+		return
+	}
+	execPrice := r.applySlippage(bar.Close, "CLOSE")
+	if execPrice <= 0 {
+		return
+	}
+	reduceQty := (-amt) / execPrice
+	if reduceQty > position.Quantity {
+		reduceQty = position.Quantity
+	}
+	reduceNotional := reduceQty * execPrice
+	var legPnL float64
+	if position.Side == model.SideBuy {
+		legPnL = reduceQty * (execPrice - position.EntryPrice)
+	} else {
+		legPnL = reduceQty * (position.EntryPrice - execPrice)
+	}
+	legPnL -= reduceNotional * r.commission
+	*cash += reduceNotional + legPnL
+	position.partialPnL += legPnL
+	position.Quantity -= reduceQty
+	position.Adjustments++
+	state.TradeCount++
+	if position.Quantity <= 0 {
+		position.IsClosed = true
+		position.ExitPrice = execPrice
+		position.ExitTime = bar.Time
+		position.ExitReason = "position_reduce"
+		position.RealizedPnL = position.partialPnL
+		r.mu.Lock()
+		r.positions = append(r.positions, *position)
+		r.mu.Unlock()
+	}
+}
+
 func (r *Runner) applySlippage(price float64, direction string) float64 {
 	slipFactor := 1.0
 	if direction == "LONG" {
@@ -542,8 +752,16 @@ func (r *Runner) buildResult(positions []Position, equity []EquityPoint, duratio
 	result.WinningTrades = len(wins)
 	result.LosingTrades = len(losses)
 
+	// v1.2 加仓统计：调整总次数 + 平均每笔交易调整次数（DCA 密集度）
+	totalAdj := 0
+	for _, pos := range positions {
+		totalAdj += pos.Adjustments
+	}
+	result.TotalAdjustments = totalAdj
+
 	if result.TotalTrades > 0 {
 		result.WinRate = float64(len(wins)) / float64(result.TotalTrades) * 100
+		result.AvgAdjustmentsPerTrade = float64(totalAdj) / float64(result.TotalTrades)
 	}
 
 	if len(wins) > 0 {

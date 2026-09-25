@@ -147,6 +147,15 @@ type Engine struct {
 	scheduled map[string]*scheduledEntry
 	schedMu   sync.Mutex
 	schedOnce sync.Once
+
+	// ── v1.2 契约钩子（hooks.go）──
+	// positionLookup/balanceLookup 由 app 层注入持仓与余额视图，
+	// 供 ConfirmTradeExit/AdjustTradePosition/CustomStakeAmount 决策。
+	positionLookup func(strategyName, symbol string) *Position
+	balanceLookup  func() float64
+	// adjCounts 记录每策略当前持仓的加仓次数（持仓归零时清零，
+	// MaxPositionAdjustmentsProvider 的上限按此判定；减仓不计入）。
+	adjCounts map[string]int
 }
 
 var (
@@ -165,6 +174,7 @@ func GetEngine(bus *event.EventBus) *Engine {
 			feedHolds:  make(map[string][]feedHold),
 			universes:  make(map[string]*universeState),
 			scheduled:  make(map[string]*scheduledEntry),
+			adjCounts:  make(map[string]int),
 		}
 	})
 	return engineInstance
@@ -378,6 +388,11 @@ func (e *Engine) dispatch(s Strategy, evt event.Event) {
 			// 动态 universe：按主周期 K 线计数驱动刷新（OnBar 之后，拿到的
 			// 是最新状态；panic 已由订阅回调 recover）
 			e.maybeRefreshUniverse(s, core, bar)
+			// v1.2 adjust_trade_position：持仓期间每根主周期 K 线询问加/减仓；
+			// OnBar 报错的 K 线跳过（与信号出口的错误处理同口径）。
+			if err == nil {
+				e.maybeAdjustPosition(s, core, bar)
+			}
 		}
 	case event.TypeOrderUpdate:
 		if order, ok := evt.Data.(model.OrderData); ok {

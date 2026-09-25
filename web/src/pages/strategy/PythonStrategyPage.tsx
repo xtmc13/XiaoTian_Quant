@@ -59,6 +59,28 @@ def on_bar(context, bar):
         context.set_take_profit(0.1)
     elif fast_ma < slow_ma and has_pos:
         context.close_position()
+
+# ── v1.2 可选契约钩子（对标 freqtrade IStrategy，删掉注释即可启用）──
+# manifest.risk 可加 "max_position_adjustments": 2（加仓次数上限）与
+# "entry_timeout_minutes": 10（限价挂单超时分钟数，超时默认撤单）。
+#
+# def confirm_entry(context, side, price, amount):
+#     return amount <= 500          # 下单前最后一刻确认；False 否决入场
+#
+# def confirm_exit(context, side, price, qty):
+#     return True                   # False 否决出场（持仓保留）
+#
+# def custom_stake_amount(context, proposed_amount, price, side):
+#     return proposed_amount        # 返回 >0 覆盖入场金额（USDT），0 用默认
+#
+# def adjust_trade_position(context, bar, position):
+#     avg = position.get("avg_price", 0)
+#     if avg > 0 and bar["close"] < avg * 0.97:
+#         return 100                # >0 加仓 USDT 金额（DCA）；<0 减仓；0 不动
+#     return 0
+#
+# def check_entry_timeout(context, order):
+#     return True                   # 未成交挂单超时：True 撤单；False 保留
 `
 
 const STATUS_BADGE: Record<string, { label: string; className: string }> = {

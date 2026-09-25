@@ -37,6 +37,9 @@ type Action struct {
 	Amount float64 `json:"amount,omitempty"`
 	Price  float64 `json:"price,omitempty"`
 	Pct    float64 `json:"pct,omitempty"`
+	// SkipStake 跳过 custom_stake_amount 钩子（v1.2）：adjust_trade_position
+	// 产生的调整单金额是钩子显式返回值，不再被 stake 钩子二次覆盖。
+	SkipStake bool `json:"-"`
 }
 
 // State 是每根 bar 前注入沙箱的持仓/权益快照。
@@ -452,6 +455,120 @@ func (s *SubprocessSandbox) OnOrder(ctx context.Context, evt OrderEvent) (*Order
 		s.armOrphanLocked(done)
 		return nil, fmt.Errorf("pystrat: on_order timeout (%s): %w", s.timeout(), ErrOnOrderTimeout)
 	}
+}
+
+// ── v1.2 契约钩子（对标 freqtrade IStrategy；HookSandbox 接口见 runner.go）──
+
+// HookResult 是钩子回调的统一产出：Value 携带金额类钩子的数值（custom_stake/
+// adjust_position），Allow 携带确认/撤单类钩子的决定；Logs 是钩子内
+// context.log 输出（runner 转发进运行日志）。
+type HookResult struct {
+	Value float64
+	Allow bool
+	Logs  []string
+}
+
+// hookRPC 是 v1.2 可选钩子的共用调用：与 OnBar 同一超时语义（单轮超时杀
+// 子进程并返回 ErrSandboxDead，由 runner 走既有重建路径）。调用方持有
+// s.mu，经 rpc() 串行化协议。
+func (s *SubprocessSandbox) hookRPC(ctx context.Context, method string, params map[string]any, res *HookResult) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.started {
+		return ErrSandboxDead
+	}
+	type rpcOut struct {
+		raw json.RawMessage
+		err error
+	}
+	done := make(chan rpcOut, 1)
+	go func() {
+		raw, err := s.rpc(method, params)
+		done <- rpcOut{raw, err}
+	}()
+	select {
+	case o := <-done:
+		if o.err != nil {
+			if errors.Is(o.err, ErrSandboxDead) {
+				return o.err
+			}
+			return fmt.Errorf("pystrat: %s: %w", method, o.err)
+		}
+		var decoded struct {
+			Value  float64  `json:"amount"`
+			Allow  bool     `json:"allow"`
+			Cancel bool     `json:"cancel"`
+			Logs   []string `json:"logs"`
+			Prints []string `json:"prints"`
+		}
+		if err := json.Unmarshal(o.raw, &decoded); err != nil {
+			return fmt.Errorf("pystrat: decode %s result: %w", method, err)
+		}
+		res.Value = decoded.Value
+		res.Allow = decoded.Allow || decoded.Cancel
+		res.Logs = append(decoded.Logs, prefixPrints(decoded.Prints)...)
+		return nil
+	case <-ctx.Done():
+		s.markDead()
+		return fmt.Errorf("pystrat: %s: %w", method, ctx.Err())
+	case <-time.After(s.timeout()):
+		s.markDead()
+		return fmt.Errorf("pystrat: %s timeout (%s): %w", method, s.timeout(), ErrSandboxDead)
+	}
+}
+
+// prefixPrints 把 print 捕获行加上前缀（与 runner 打印 prints 的口径一致）。
+func prefixPrints(prints []string) []string {
+	out := make([]string, 0, len(prints))
+	for _, p := range prints {
+		out = append(out, "print: "+p)
+	}
+	return out
+}
+
+// ConfirmTrade 询问 confirm_entry / confirm_exit（kind="entry"|"exit"）：
+// 下单前最后一刻确认，Allow=false 表示策略否决。策略未定义钩子时
+// worker 返回 allow=true（freqtrade 缺省行为）。
+func (s *SubprocessSandbox) ConfirmTrade(ctx context.Context, kind, side string, price, amount float64) (HookResult, error) {
+	var res HookResult
+	err := s.hookRPC(ctx, "confirm", map[string]any{
+		"kind": kind, "side": side, "price": price, "amount": amount,
+	}, &res)
+	return res, err
+}
+
+// CustomStake 询问 custom_stake_amount：Value>0 替换默认入场金额（USDT），
+// Value=0（未定义/返回<=0）保持策略动作自带金额。
+func (s *SubprocessSandbox) CustomStake(ctx context.Context, proposedAmount, price float64, side string) (HookResult, error) {
+	var res HookResult
+	err := s.hookRPC(ctx, "custom_stake", map[string]any{
+		"proposed_amount": proposedAmount, "price": price, "side": side,
+	}, &res)
+	return res, err
+}
+
+// AdjustPosition 询问 adjust_trade_position（DCA）：Value>0 加仓 USDT 金额、
+// Value<0 减仓、0 不调整。bar/position 投影与 OnBar 注入的口径一致。
+func (s *SubprocessSandbox) AdjustPosition(ctx context.Context, bar model.Bar, qty, avgPrice float64, side string) (HookResult, error) {
+	var res HookResult
+	barMap := map[string]any{
+		"time": bar.Time, "open": bar.Open, "high": bar.High,
+		"low": bar.Low, "close": bar.Close, "volume": bar.Volume,
+	}
+	pos := map[string]any{"qty": qty, "avg_price": avgPrice, "side": side}
+	err := s.hookRPC(ctx, "adjust_position", map[string]any{
+		"bar": barMap, "position": pos,
+	}, &res)
+	return res, err
+}
+
+// CheckEntryTimeout 询问 check_entry_timeout：未成交入场挂单超时由策略决定
+// 撤单行为——Allow=true 撤单（策略未定义时 worker 默认 true，同现有超时
+// 逻辑），false 保留挂单。
+func (s *SubprocessSandbox) CheckEntryTimeout(ctx context.Context, evt OrderEvent) (HookResult, error) {
+	var res HookResult
+	err := s.hookRPC(ctx, "entry_timeout", map[string]any{"order": evt}, &res)
+	return res, err
 }
 
 // Close 杀进程、清临时目录；幂等。

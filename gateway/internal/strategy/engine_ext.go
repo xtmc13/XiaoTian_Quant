@@ -458,6 +458,11 @@ func (e *Engine) emitSignal(s Strategy, signal *model.Signal, err error) {
 	// cra_contract）：下游按 signal.Strategy 查配置/维护投入资金，内部名
 	// 永远查不到，多个同类型策略按 strategy_type 兜底匹配会张冠李戴。
 	signal.Strategy = s.Name()
+	// v1.2 契约钩子：CustomStakeAmount 折算默认数量，ConfirmTradeEntry/
+	// ConfirmTradeExit 最后一刻否决（钩子 panic 回退默认行为，见 hooks.go）。
+	if !e.applyTradeHooks(s, UnwrapStrategy(s), signal) {
+		return
+	}
 	e.mu.RLock()
 	onSignal := e.OnSignal
 	protectionMgr := e.protectionMgr

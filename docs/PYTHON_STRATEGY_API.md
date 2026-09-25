@@ -1,4 +1,4 @@
-# 用户 Python 策略契约化运行时 v1.1（PYTHON_STRATEGY_API）
+# 用户 Python 策略契约化运行时 v1.2（PYTHON_STRATEGY_API）
 
 对标 QuantDinger Strategy API V2 / freqtrade `IStrategy`：用户写一个约定契约的
 Python 文件，平台托管 7×24 实盘执行。策略在**独立 python3 子进程沙箱**中长驻运行，
@@ -9,6 +9,11 @@ K 线经事件总线驱动 `on_bar`，`context.buy/sell` 动作转成信号走 O
 - 本文档是策略作者与平台之间的契约；v1 明确不做：visual 参数生成器、tick 级执行、多标的组合优化
 - **v1.1（2026-09-20）三增强**：`on_order` 订单回报回调落地、`context.buy/sell(price=...)`
   限价单生效、`market='futures'` 合约杠杆执行（详见 §1.4/§1.5/§3）
+- **v1.2（2026-09-25）契约钩子**（对标 freqtrade `IStrategy` 覆写点，全部可选）：
+  `confirm_entry` / `confirm_exit`（下单前最后一刻确认/否决）、
+  `custom_stake_amount`（自定义入场金额）、`adjust_trade_position`（DCA 动态
+  加减仓）、`check_entry_timeout`（未成交挂单超时决策）；配套 manifest 参数
+  `risk.max_position_adjustments` / `risk.entry_timeout_minutes`（详见 §1.6）
 
 ## 1. 策略文件结构
 
@@ -73,6 +78,8 @@ def on_bar(context, bar):
 | `risk.take_profit_pct` | 否 | 默认止盈 `(0,1)`；`context.set_take_profit` 覆盖 |
 | `risk.leverage` | 否 | v1.1：合约杠杆 `1-125`，`0`/缺省=不覆盖平台保存值（仅 `market='futures'` 有意义） |
 | `risk.margin_mode` | 否 | v1.1：`cross`（默认全仓）\| `isolated`（逐仓），非空时覆盖平台保存值 |
+| `risk.max_position_adjustments` | 否 | v1.2：`adjust_trade_position` 的**加仓**次数上限，非负整数，`0`/缺省=不限（减仓不受限，freqtrade `max_entry_position_adjustment` 同口径） |
+| `risk.entry_timeout_minutes` | 否 | v1.2：入场限价挂单超时分钟数，非负整数，`0`/缺省=不启用检查（挂单常驻订单簿，v1.1 行为）；超时默认撤单，`check_entry_timeout` 可接管 |
 
 ### 1.2 生命周期回调
 
@@ -81,6 +88,7 @@ def on_bar(context, bar):
 | `initialize(context)` | 启动时一次（沙箱加载后） | 初始化跨回调状态；抛异常 → 启动失败 |
 | `on_bar(context, bar)` | 每根**闭合** K 线 | 异常 → 本轮跳过并计数（见错误契约） |
 | `on_order(context, order)` | 可选，v1.1 起触发 | **策略产生的订单**成交/状态变化时调用（签名必须 `on_order(context, order)`，见 §1.4） |
+| v1.2 契约钩子 ×5 | 可选，见 §1.6 | `confirm_entry` / `confirm_exit` / `custom_stake_amount` / `adjust_trade_position` / `check_entry_timeout` |
 
 `bar` 是 dict：`time`（开盘时间 ms）/ `open` / `high` / `low` / `close` / `volume`。
 
@@ -143,6 +151,61 @@ def on_bar(context, bar):
 跨回调状态：挂在 `context` 任意属性上（如 `context.fast_hist`）。沙箱因超时/崩溃
 重建时，这些内存状态会丢失（重启恢复是已知边界，后续版本考虑持久化）。
 
+### 1.6 契约钩子（v1.2，对标 freqtrade IStrategy）
+
+策略可在模块级定义以下**可选**函数；未定义时走默认行为（与 v1.1 完全兼容）。
+与 `on_order` 同一约束：**钩子内不允许下单**（产生的 buy/sell 动作丢弃并记
+warning）；钩子抛异常只记日志、按各钩子 fail-safe 默认值处理，**不计入**
+`on_bar` 的连续 10 次错误契约；单轮超时同 5s 杀沙箱走既有重建路径。
+
+| 钩子 | 触发时点 | 返回值语义 | 默认（未定义） |
+|---|---|---|---|
+| `confirm_entry(context, side, price, amount)` | 每笔买入下单前最后一刻（含加仓单） | `False` 否决本次入场 | 放行 |
+| `confirm_exit(context, side, price, qty)` | 每笔卖出/平仓前最后一刻（含减仓单） | `False` 否决本次出场（持仓保留） | 放行 |
+| `custom_stake_amount(context, proposed_amount, price, side)` | 买入执行前（金额确定阶段） | `>0` 替换入场金额（USDT）；`<=0`/`None` 保持策略动作自带金额 | 保持默认 |
+| `adjust_trade_position(context, bar, position)` | 持仓期间**每根** K 线（`on_bar` 动作执行后） | `>0` 加仓 USDT 金额（买入）；`<0` 减仓（卖出 \|金额\|）；`0`/`None` 不动 | 不调整 |
+| `check_entry_timeout(context, order)` | 入场限价单挂单超过 `risk.entry_timeout_minutes` 后，每根 K 线复查 | `True` 撤单；`False` 保留挂单 | 撤单 |
+
+语义要点（与 freqtrade 对齐）：
+
+- `adjust_trade_position` 是 DCA 核心钩子：加仓单同样过 `confirm_entry`、
+  `risk.max_position_pct` 仓位风控与实盘总闸；加仓次数受
+  `risk.max_position_adjustments` 限制（freqtrade
+  `max_entry_position_adjustment` 同口径：**只限制加仓**，减仓是降风险动作
+  永不被拦截），持仓归零后计数清零。
+- `adjust_trade_position` 返回的金额**不再**经 `custom_stake_amount` 二次覆盖
+  （钩子显式返回的金额即最终金额）。
+- `confirm_entry` 回调异常时 **fail-safe 否决**本次入场（不开新风险）；
+  `confirm_exit` 异常时**放行出场**（不困住已有持仓）——两者方向相反，有意为之。
+- `side` 取值 `long`/`short`（由 manifest.direction 推导）；`price` 对限价单
+  取委托限价、市价单取当根 K 线收盘价；`position` 与 `context.position` 同构
+  （`{"qty","avg_price","side"}`）。
+- `check_entry_timeout` 需要 `risk.entry_timeout_minutes > 0` 才会触发；
+  撤单经 OMS `CancelOrder`（执行器未实现撤单时记日志保留挂单）。
+- Go 策略契约侧（`gateway/internal/strategy`）同名能力通过可选接口
+  `PositionAdjuster` / `MaxPositionAdjustmentsProvider` / `EntryTimeoutDecider` /
+  `ExitTimeoutDecider` 提供（回测引擎 `backtest.Runner` 同源支持，接口与语义一致）。
+
+```python
+# v1.2 钩子示例：跌破均价 3% 加仓 100U，最多加 2 次
+STRATEGY_MANIFEST = {
+    "name": "DCA 示例", "symbol": "BTC/USDT", "interval": "15m", "direction": "long",
+    "risk": {"max_position_adjustments": 2, "entry_timeout_minutes": 10},
+}
+
+def adjust_trade_position(context, bar, position):
+    avg = position.get("avg_price", 0)
+    if avg > 0 and bar["close"] < avg * 0.97:
+        return 100          # 加仓 100 USDT
+    return 0                # 0/None = 不调整
+
+def confirm_entry(context, side, price, amount):
+    return amount <= 500    # 单笔入场不超过 500U
+
+def check_entry_timeout(context, order):
+    return True             # 超时即撤（默认行为）；False = 保留挂单
+```
+
 ## 2. 安全契约（禁止事项）
 
 沙箱为**独立 python3 子进程**（`-I` 隔离模式，白名单 `__import__` + 受限
@@ -204,6 +267,11 @@ builtins + AST 静态校验 + 双下划线访问拒绝 + stdout 重定向）。�
   子进程**——事件记日志跳过（订单事件容忍度高，订单回报链路不得拖垮策略主循环）；
   回调抛异常同样只记日志、**不计入** 10 次错误契约；沙箱死亡时事件跳过，
   由下一根 K 线的既有重建路径恢复。
+- **v1.2 契约钩子容忍度语义**（与 `on_order` 对齐）：`confirm_entry` /
+  `confirm_exit` / `custom_stake_amount` / `adjust_trade_position` /
+  `check_entry_timeout` 回调抛异常只记日志、**不计入** 10 次错误契约，并按
+  各钩子 fail-safe 默认值处理（入场否决/出场放行/金额保持/不调整/默认撤单）；
+  单轮超时（同 5s）杀子进程走既有重建路径，本轮跳过不计错误。
 - 内存限制 **256MB**（worker 启动时 POSIX `RLIMIT_AS`；非 POSIX 环境降级
   为不限制——部署目标 Linux 生效）。
 - 进程重启恢复：`status=active` 的策略由 `RetryResume` 每 60s 复查拉起。
@@ -241,3 +309,16 @@ v1.1：创建/更新载荷新增 `market`（`spot`|`futures`）、`leverage`（1
 - `market='futures'` 且 paper=1 回落现货撮合（paper 撮合不支持杠杆），日志注明。
 - 沙箱重建丢失模块内状态；`initialize` 会重跑。
 - 多标的/组合优化/tick 级/visual 参数生成器：明确不在 v1 范围。
+
+## 7. v1.2 已知边界
+
+- `adjust_trade_position` 的持仓视图来自 paper 组合账本；paper=0 实盘时该账本
+  由 OMS 成交回报驱动，与交易所实际持仓存在对账延迟（同既有信号链路口径）。
+- 加仓/减仓调整单为**市价**执行（走 `context.buy/sell` 同链路），限价调整单
+  列入后续版本；`check_entry_timeout` 只覆盖入场**限价**单（市价单即时成交无超时）。
+- `check_exit_timeout` v1.2 只在 Go 策略契约提供（`ExitTimeoutDecider`），
+  Python 契约未开放（pystrat 卖出现货腿以市价为主，超时场景稀薄）。
+- 钩子内 `context.log`/`print` 正常入运行日志；钩子异常不回溯已执行动作。
+- Go 侧 `CheckEntryTimeout`/`CheckExitTimeout` 挂接在 `order.TimeoutTracker`
+  （`SetDecider` + `Engine.TimeoutDecider()`）；回测引擎即时成交无挂单概念，
+  超时钩子不进回测（freqtrade 回测支持挂单超时模拟，列为后续差异项）。

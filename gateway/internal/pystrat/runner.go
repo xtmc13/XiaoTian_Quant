@@ -54,6 +54,30 @@ type ContractExecutor interface {
 	PlaceContract(botID, symbol, exchange string, userID int64, side string, qty, price, leverage float64, marginMode, positionSide string) (filledQty, avgPrice float64, err error)
 }
 
+// CancelExecutor 是撤单扩展接口（v1.2，生产 handler.OMSBotExecutor.CancelSpot）。
+// 用于 check_entry_timeout 决定撤单时撤销未成交挂单；Executor 未实现它时
+// 超时撤单记日志跳过（保留挂单）。
+type CancelExecutor interface {
+	CancelSpot(botID, orderID string) error
+}
+
+// HookSandbox 是 v1.2 契约钩子的可选沙箱接口（对标 freqtrade IStrategy 的
+// confirm_trade_entry/exit、custom_stake_amount、adjust_trade_position、
+// check_entry_timeout；生产 SubprocessSandbox 实现）。runner 用类型断言探测：
+// 沙箱未实现（含全部历史测试 fake）时各钩子走默认行为，与 v1.1 完全兼容。
+// 超时语义与 OnBar 一致：单轮超时杀子进程返回 ErrSandboxDead，runner 走既有
+// 重建路径；钩子异常只记日志按 fail-safe 默认值处理，不计入连续 10 次错误契约。
+type HookSandbox interface {
+	// ConfirmTrade 下单前最后一刻确认（kind="entry"|"exit"）：Allow=false 否决。
+	ConfirmTrade(ctx context.Context, kind, side string, price, amount float64) (HookResult, error)
+	// CustomStake 自定义入场金额（USDT）：Value>0 替换默认金额，0 保持默认。
+	CustomStake(ctx context.Context, proposedAmount, price float64, side string) (HookResult, error)
+	// AdjustPosition 持仓期间每根 K 线询问加/减仓：Value>0 加仓金额、<0 减仓、0 不动。
+	AdjustPosition(ctx context.Context, bar model.Bar, qty, avgPrice float64, side string) (HookResult, error)
+	// CheckEntryTimeout 未成交入场挂单超时决定撤单行为：Allow=true 撤单。
+	CheckEntryTimeout(ctx context.Context, evt OrderEvent) (HookResult, error)
+}
+
 // Accounts 是持仓/权益视图（生产读 portfolio manager 的 paper 账本）。
 type Accounts interface {
 	// Position 返回该 symbol 当前净持仓；无持仓 ok=false。
@@ -114,6 +138,21 @@ type botRuntime struct {
 	consecErrors int
 	lastErr      string
 	restarts     int
+
+	// v1.2 契约钩子状态（只允许 bar goroutine 触碰）：
+	// posAdjusts 当前持仓的加仓次数（持仓归零清零，
+	// manifest.risk.max_position_adjustments 的上限按此判定；减仓不计入——
+	// freqtrade max_entry_position_adjustment 同口径）；
+	// openEntryOrders 跟踪未成交入场限价单（orderID → 挂单快照），供
+	// entry_timeout_minutes 超时检查与 check_entry_timeout 钩子使用。
+	posAdjusts      int
+	openEntryOrders map[string]openEntryOrder
+}
+
+// openEntryOrder 是一笔未成交入场限价单的跟踪快照（v1.2）。
+type openEntryOrder struct {
+	evt      OrderEvent // 钩子入参投影
+	placedMs int64
 }
 
 // NewRunner 创建 Python 策略 Runner（依赖全注入，测试给 fake）。
@@ -224,6 +263,8 @@ func (r *Runner) Start(rec *store.PyStrategyRecord) error {
 		logs:      newRingLog(200),
 		exchange:  exchange,
 		startTime: time.Now().UnixMilli(),
+
+		openEntryOrders: make(map[string]openEntryOrder),
 	}
 	rt.logf("info", "策略已加载 manifest=%s symbol=%s interval=%s direction=%s exchange=%s market=%s",
 		manifest.Name, manifest.Symbol, manifest.Interval, manifest.Direction, exchange, rec.Market)
@@ -424,6 +465,11 @@ func (r *Runner) run(rt *botRuntime) {
 // 超时不杀沙箱只记日志跳过；回调异常只记日志，不计入错误契约；限价买入
 // 成交（filled）时补挂 TP/SL（市价买单在 execAction 内已挂）。
 func (r *Runner) onOrder(rt *botRuntime, evt OrderEvent) {
+	// v1.2：跟踪中的入场挂单到达终态即移除超时跟踪（无论回调成败）。
+	switch evt.Status {
+	case "filled", "cancelled", "rejected", "expired":
+		delete(rt.openEntryOrders, evt.ID)
+	}
 	res, err := rt.sandbox.OnOrder(context.Background(), evt)
 	if err != nil {
 		if errors.Is(err, ErrOnOrderTimeout) {
@@ -492,8 +538,10 @@ func (r *Runner) onBar(rt *botRuntime, bar model.Bar) error {
 		rt.logf("info", "print: %s", p)
 	}
 	warmup := bar.Time > 0 && bar.Time < rt.startTime
-	if warmup && len(result.Actions) > 0 {
-		rt.logf("info", "暖机 bar 跳过 %d 个交易动作", len(result.Actions))
+	if warmup {
+		if len(result.Actions) > 0 {
+			rt.logf("info", "暖机 bar 跳过 %d 个交易动作", len(result.Actions))
+		}
 		return nil
 	}
 	for _, act := range result.Actions {
@@ -501,6 +549,11 @@ func (r *Runner) onBar(rt *botRuntime, bar model.Bar) error {
 			rt.logf("error", "动作 %s 执行失败: %v", act.Type, err)
 		}
 	}
+	// v1.2 adjust_trade_position：持仓期间每根 K 线询问加/减仓（warmup 已在
+	// 上方提前返回）；次数受 manifest.risk.max_position_adjustments 限制。
+	r.maybeAdjustPosition(rt, bar, state)
+	// v1.2 check_entry_timeout：未成交入场限价单超时检查（默认撤单，策略可接管）。
+	r.checkEntryTimeouts(rt)
 	return nil
 }
 
@@ -521,17 +574,192 @@ func (r *Runner) rebuildSandbox(rt *botRuntime) error {
 	return nil
 }
 
+// ── v1.2 契约钩子执行 ──
+
+// rebuildAfterHookDeath 钩子调用发现沙箱死亡时走与 onBar 相同的重建路径
+// （重载策略、restarts 计数、本轮跳过不计连续错误）。
+func (r *Runner) rebuildAfterHookDeath(rt *botRuntime, hook string) {
+	if err := r.rebuildSandbox(rt); err != nil {
+		rt.logf("error", "沙箱在 %s 调用中死亡且重建失败: %v", hook, err)
+		return
+	}
+	rt.mu.Lock()
+	n := rt.restarts
+	rt.mu.Unlock()
+	rt.logf("info", "沙箱已重建并重载策略（%s 钩子超时/死亡，第 %d 次）", hook, n)
+}
+
+// forwardHookLogs 把钩子内的 context.log / print 输出转发进运行日志。
+func (r *Runner) forwardHookLogs(rt *botRuntime, logs []string) {
+	for _, line := range logs {
+		rt.logf("info", "%s", line)
+	}
+}
+
+// maybeAdjustPosition 驱动 v1.2 adjust_trade_position 钩子（对标 freqtrade
+// adjust_trade_position，DCA 动态加减仓）：持仓期间每根 K 线询问策略，
+// 返回 >0 买入加仓（USDT 金额）、<0 卖出减仓。调整单走 execAction——同样过
+// confirm_entry/confirm_exit、仓位上限风控与实盘闸；SkipStake 防止金额被
+// custom_stake_amount 二次覆盖。次数受 manifest.risk.max_position_adjustments
+// 限制（0=不限），持仓归零后计数清零。沙箱未实现 HookSandbox 时不生效。
+func (r *Runner) maybeAdjustPosition(rt *botRuntime, bar model.Bar, state State) {
+	if !state.HasPosition || state.PositionQty <= 0 {
+		rt.posAdjusts = 0
+		return
+	}
+	hs, ok := rt.sandbox.(HookSandbox)
+	if !ok {
+		return
+	}
+	res, err := hs.AdjustPosition(context.Background(), bar, state.PositionQty, state.PositionAvgPrice, state.PositionSide)
+	if err != nil {
+		if errors.Is(err, ErrSandboxDead) {
+			r.rebuildAfterHookDeath(rt, "adjust_trade_position")
+			return
+		}
+		rt.logf("error", "adjust_trade_position 回调失败: %v", err)
+		return
+	}
+	r.forwardHookLogs(rt, res.Logs)
+	if res.Value == 0 {
+		return
+	}
+	if res.Value > 0 {
+		// 上限只约束加仓（freqtrade max_entry_position_adjustment 同口径：
+		// 减仓是降风险动作，永不被拦截）。
+		if maxAdj := rt.manifest.Risk.MaxPositionAdjustments; maxAdj > 0 && rt.posAdjusts >= maxAdj {
+			return
+		}
+	}
+	act := Action{Type: "buy", Amount: res.Value, SkipStake: true}
+	if res.Value < 0 {
+		act = Action{Type: "sell", Amount: -res.Value, SkipStake: true}
+	}
+	if err := r.execAction(rt, bar, act, state); err != nil {
+		rt.logf("error", "持仓调整动作 %s 执行失败: %v", act.Type, err)
+		return
+	}
+	if act.Type == "buy" {
+		rt.posAdjusts++
+		rt.logf("action", "持仓加仓 amount=%.2f（第 %d/%d 次）", act.Amount, rt.posAdjusts, rt.manifest.Risk.MaxPositionAdjustments)
+	} else {
+		rt.logf("action", "持仓减仓 amount=%.2f", act.Amount)
+	}
+}
+
+// checkEntryTimeouts 检查未成交入场限价单超时（v1.2，对标 freqtrade
+// check_entry_timeout）：挂单超过 manifest.risk.entry_timeout_minutes
+// （0=不启用，保持 v1.1 挂单常驻行为）后，先问策略 check_entry_timeout
+// 钩子；策略返回 false 保留挂单（每根 K 线复查），true 或未定义则撤单
+// （与平台现有超时逻辑一致）。撤单经 CancelExecutor（未实现时记日志）。
+func (r *Runner) checkEntryTimeouts(rt *botRuntime) {
+	minutes := rt.manifest.Risk.EntryTimeoutMinutes
+	if minutes <= 0 || len(rt.openEntryOrders) == 0 {
+		return
+	}
+	nowMs := time.Now().UnixMilli()
+	for id, oe := range rt.openEntryOrders {
+		if nowMs-oe.placedMs < int64(minutes)*60*1000 {
+			continue
+		}
+		cancel := true
+		if hs, ok := rt.sandbox.(HookSandbox); ok {
+			res, err := hs.CheckEntryTimeout(context.Background(), oe.evt)
+			if err != nil {
+				if errors.Is(err, ErrSandboxDead) {
+					r.rebuildAfterHookDeath(rt, "check_entry_timeout")
+					return
+				}
+				rt.logf("error", "check_entry_timeout 回调失败 order=%s: %v（按默认撤单处理）", id, err)
+			} else {
+				r.forwardHookLogs(rt, res.Logs)
+				cancel = res.Allow
+			}
+		}
+		if !cancel {
+			rt.logf("info", "策略经 check_entry_timeout 保留超时挂单 order=%s，下根 K 线复查", id)
+			continue
+		}
+		ce, ok := r.exec.(CancelExecutor)
+		if !ok {
+			rt.logf("error", "执行器不支持撤单（CancelExecutor 未实现），超时挂单 order=%s 无法撤销", id)
+			delete(rt.openEntryOrders, id)
+			continue
+		}
+		if err := ce.CancelSpot(rt.record.ID, id); err != nil {
+			rt.logf("error", "超时挂单撤单失败 order=%s: %v", id, err)
+		} else {
+			rt.logf("action", "入场挂单超时已撤 order=%s（超过 %d 分钟未成交）", id, minutes)
+		}
+		delete(rt.openEntryOrders, id)
+	}
+}
+
 // execAction 把一个 context 动作转成 OMS 下单 / 条件单。
 // v1.1：act.Price>0 走现货限价单；record.market='futures' 的买入走 OMS
 // 合约链路（paper 模式回落现货并记日志）。
+// v1.2：买入前问 custom_stake_amount（SkipStake 除外）与 confirm_entry，
+// 卖出/平仓前问 confirm_exit（沙箱实现 HookSandbox 时）。
 func (r *Runner) execAction(rt *botRuntime, bar model.Bar, act Action, state State) error {
 	symbol := normalizeSymbol(rt.manifest.Symbol)
 	refPrice := bar.Close
+	// v1.2 钩子入参：side 取持仓方向语义（long|short），price 限价单取限价。
+	side := "long"
+	if rt.manifest.Direction == DirectionShort {
+		side = "short"
+	}
+	hookPrice := refPrice
+	if act.Price > 0 {
+		hookPrice = act.Price
+	}
 
 	switch act.Type {
 	case "buy":
 		if !r.directionAllows(rt.manifest.Direction, true) {
 			return fmt.Errorf("direction=%s 不允许买入开仓", rt.manifest.Direction)
+		}
+		proposed := act.Amount
+		if proposed <= 0 && act.Qty > 0 {
+			proposed = act.Qty * hookPrice
+		}
+		if hs, ok := rt.sandbox.(HookSandbox); ok {
+			if !act.SkipStake {
+				res, err := hs.CustomStake(context.Background(), proposed, hookPrice, side)
+				if err != nil {
+					if errors.Is(err, ErrSandboxDead) {
+						r.rebuildAfterHookDeath(rt, "custom_stake_amount")
+						return nil
+					}
+					rt.logf("error", "custom_stake_amount 回调失败: %v（保持原金额 %.2f）", err, proposed)
+				} else {
+					r.forwardHookLogs(rt, res.Logs)
+					if res.Value > 0 {
+						rt.logf("info", "custom_stake_amount 覆盖入场金额 %.2f → %.2f", proposed, res.Value)
+						act.Amount = res.Value
+						act.Qty = 0 // stake 金额优先：按金额换算，丢弃原 qty
+					}
+				}
+			}
+			// confirm_entry 看到的是 stake 覆盖后的最终金额（freqtrade 同口径：
+			// confirm 在 sizing 之后调用）。
+			if act.Amount > 0 {
+				proposed = act.Amount
+			}
+			res, err := hs.ConfirmTrade(context.Background(), "entry", side, hookPrice, proposed)
+			if err != nil {
+				if errors.Is(err, ErrSandboxDead) {
+					r.rebuildAfterHookDeath(rt, "confirm_entry")
+					return nil
+				}
+				// fail-safe：确认钩子异常时放弃本次入场（不开新风险）
+				rt.logf("error", "confirm_entry 回调失败: %v（本次买入放弃）", err)
+				return nil
+			}
+			r.forwardHookLogs(rt, res.Logs)
+			if !res.Allow {
+				rt.logf("info", "confirm_entry 否决买入 amount=%.2f price=%.4f", proposed, hookPrice)
+				return nil
+			}
 		}
 		futures := rt.record.Market == store.PyStratMarketFutures
 		if futures && rt.record.Paper {
@@ -589,6 +817,24 @@ func (r *Runner) execAction(rt *botRuntime, bar model.Bar, act Action, state Sta
 			rt.logf("info", "无持仓，跳过卖出 qty=%.6f", qty)
 			return nil
 		}
+		// v1.2 confirm_exit：出场前最后一刻确认；钩子异常按默认放行出场
+		// （与入场反向的 fail-safe：不困住已有持仓）。
+		if hs, ok := rt.sandbox.(HookSandbox); ok {
+			res, err := hs.ConfirmTrade(context.Background(), "exit", side, hookPrice, qty)
+			if err != nil {
+				if errors.Is(err, ErrSandboxDead) {
+					r.rebuildAfterHookDeath(rt, "confirm_exit")
+					return nil
+				}
+				rt.logf("error", "confirm_exit 回调失败: %v（按默认放行出场）", err)
+			} else {
+				r.forwardHookLogs(rt, res.Logs)
+				if !res.Allow {
+					rt.logf("info", "confirm_exit 否决卖出 qty=%.6f price=%.4f", qty, hookPrice)
+					return nil
+				}
+			}
+		}
 		if limit {
 			return r.execLimitSell(rt, act, qty)
 		}
@@ -607,6 +853,23 @@ func (r *Runner) execAction(rt *botRuntime, bar model.Bar, act Action, state Sta
 		if !state.HasPosition {
 			rt.logf("info", "无持仓，close_position 空操作")
 			return nil
+		}
+		// v1.2 confirm_exit：与 sell 同一确认钩子（qty=全部持仓）。
+		if hs, ok := rt.sandbox.(HookSandbox); ok {
+			res, err := hs.ConfirmTrade(context.Background(), "exit", side, refPrice, state.PositionQty)
+			if err != nil {
+				if errors.Is(err, ErrSandboxDead) {
+					r.rebuildAfterHookDeath(rt, "confirm_exit")
+					return nil
+				}
+				rt.logf("error", "confirm_exit 回调失败: %v（按默认放行平仓）", err)
+			} else {
+				r.forwardHookLogs(rt, res.Logs)
+				if !res.Allow {
+					rt.logf("info", "confirm_exit 否决平仓 qty=%.6f", state.PositionQty)
+					return nil
+				}
+			}
 		}
 		filled, avg, err := r.exec.SellSpot(rt.record.ID, rt.record.Symbol, rt.exchange, rt.record.UserID, state.PositionQty, refPrice)
 		if err != nil {
@@ -667,6 +930,15 @@ func (r *Runner) execLimitBuy(rt *botRuntime, act Action, state State) error {
 	orderID, err := le.BuySpotLimit(rt.record.ID, rt.record.Symbol, rt.exchange, rt.record.UserID, quote, act.Price)
 	if err != nil {
 		return err
+	}
+	// v1.2：跟踪未成交入场限价单（entry_timeout_minutes 超时检查用；
+	// 终态回报在 onOrder 里移除）。
+	rt.openEntryOrders[orderID] = openEntryOrder{
+		evt: OrderEvent{
+			ID: orderID, Symbol: normalizeSymbol(rt.manifest.Symbol),
+			Side: "buy", Type: "limit", Qty: qty, Price: act.Price, Status: "new",
+		},
+		placedMs: time.Now().UnixMilli(),
 	}
 	rt.logf("action", "限价买单已挂 order=%s quote=%.2f price=%.4f", orderID, quote, act.Price)
 	return nil
