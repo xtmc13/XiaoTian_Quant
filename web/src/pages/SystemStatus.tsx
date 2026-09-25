@@ -5,8 +5,10 @@ import { Badge } from '@/components/ui/Badge'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { DataTable } from '@/components/DataTable'
-import { healthApi } from '@/lib/api'
-import { Activity, Server, Database, Cpu, Radio } from 'lucide-react'
+import { healthApi, alertApi, type AlertEvent } from '@/lib/api'
+import { ExchangeHealthPanel } from '@/components/ExchangeHealthPanel'
+import { IntegrationStatusPanel } from '@/components/IntegrationStatusPanel'
+import { Activity, Server, Database, Cpu, Radio, Bell } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const COMPONENT_ICONS: Record<string, React.ReactNode> = {
@@ -26,6 +28,19 @@ function statusVariant(status: string): 'success' | 'warning' | 'error' | 'neutr
   }
 }
 
+function severityVariant(severity: string): 'success' | 'warning' | 'error' | 'neutral' {
+  switch (severity) {
+    case 'critical': return 'error'
+    case 'warning': return 'warning'
+    default: return 'neutral'
+  }
+}
+
+function fmtAlertTime(ms: number): string {
+  if (!ms) return '-'
+  return new Date(ms).toLocaleString('zh-CN')
+}
+
 export function SystemStatus() {
   const { data: health, isLoading: healthLoading } = useQuery({
     queryKey: ['health'],
@@ -37,6 +52,18 @@ export function SystemStatus() {
     queryKey: ['health-components'],
     queryFn: () => healthApi.components(),
     refetchInterval: 10000,
+  })
+
+  const { data: activeAlerts } = useQuery({
+    queryKey: ['alerts-active'],
+    queryFn: () => alertApi.active(),
+    refetchInterval: 15000,
+  })
+
+  const { data: alertHistory } = useQuery({
+    queryKey: ['alerts-history'],
+    queryFn: () => alertApi.history(20),
+    refetchInterval: 30000,
   })
 
   const isLoading = healthLoading || componentsLoading
@@ -108,6 +135,82 @@ export function SystemStatus() {
             <EmptyState title="暂无组件状态" description="健康检查接口未返回组件数据" />
           )}
         </SectionCard>
+
+        <SectionCard title={
+          <span className="flex items-center gap-2">
+            <Bell className="w-4 h-4 text-quant-gold" />
+            告警
+            {activeAlerts && activeAlerts.alerts.length > 0 && (
+              <Badge variant="error">{activeAlerts.alerts.length} 活跃</Badge>
+            )}
+          </span>
+        }>
+          {/* 活跃告警：Prometheus 评估 → Alertmanager → /api/alerts/webhook 落库 */}
+          {activeAlerts && activeAlerts.alerts.length > 0 ? (
+            <div className="space-y-2 mb-4">
+              {activeAlerts.alerts.map((a: AlertEvent) => (
+                <div key={a.fingerprint} className="rounded-lg border border-quant-border bg-quant-bg-secondary p-3">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Badge variant={severityVariant(a.severity)}>{a.severity}</Badge>
+                    <span className="text-sm font-medium text-foreground">{a.alertname}</span>
+                    <span className="text-[10px] text-muted-foreground">始于 {fmtAlertTime(a.first_seen)}</span>
+                  </div>
+                  {a.summary && <div className="mt-1 text-xs text-muted-foreground">{a.summary}</div>}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="mb-4">
+              <EmptyState title="当前无活跃告警" description="Prometheus 告警经 Alertmanager 推送到网关后在此显示" />
+            </div>
+          )}
+
+          {/* 最近告警历史（含已恢复）*/}
+          <div className="text-xs text-muted-foreground mb-2">最近告警历史</div>
+          {alertHistory && alertHistory.alerts.length > 0 ? (
+            <DataTable
+              data={alertHistory.alerts}
+              keyExtractor={(item) => item.fingerprint}
+              columns={[
+                {
+                  key: 'last_seen',
+                  title: '时间',
+                  render: (item) => <span className="text-xs text-muted-foreground">{fmtAlertTime(item.last_seen)}</span>,
+                },
+                {
+                  key: 'alertname',
+                  title: '告警',
+                  render: (item) => <span className="text-sm text-foreground">{item.alertname}</span>,
+                },
+                {
+                  key: 'severity',
+                  title: '级别',
+                  render: (item) => <Badge variant={severityVariant(item.severity)}>{item.severity}</Badge>,
+                },
+                {
+                  key: 'status',
+                  title: '状态',
+                  render: (item) => (
+                    <Badge variant={item.status === 'firing' ? 'warning' : 'success'}>
+                      {item.status === 'firing' ? 'firing' : 'resolved'}
+                    </Badge>
+                  ),
+                },
+                {
+                  key: 'summary',
+                  title: '摘要',
+                  render: (item) => <span className="text-xs text-muted-foreground">{item.summary || '-'}</span>,
+                },
+              ]}
+            />
+          ) : (
+            <EmptyState title="暂无告警历史" description="尚未收到 Alertmanager 推送（检查 observability profile 是否启动）" />
+          )}
+        </SectionCard>
+
+        <ExchangeHealthPanel />
+
+        <IntegrationStatusPanel />
       </div>
     </div>
   )

@@ -73,6 +73,9 @@ import {
   type OCOOrder,
   type BracketOrder,
   type IcebergOrder,
+  type LadderOrder,
+  type LadderCreateRequest,
+  type LadderAmendRequest,
   type ArbitrageConfig,
   type ArbitrageStatus,
   type ArbitrageOpportunity,
@@ -133,6 +136,13 @@ import {
   type StatusResponse,
   type TradingSafetyResponse,
   type ExchangeStatusResponse,
+  type ProviderResult,
+  type SentimentResponse,
+  type MacroData,
+  type NewsData,
+  type HeatmapData,
+  type CalendarData,
+  type SourceHealth,
 } from '@/types'
 
 // ── Timeout presets (XiaoTianQuant style) ──
@@ -611,6 +621,84 @@ export const aiReviewApi = {
     api.get<{ report: AIReviewReport }>(`/ai/review/reports/${id}`).then((d) => d?.report),
 }
 
+// ── AI 交易决策门（对标 QuantDinger JEV 决策门） ──
+export type AIGateDecisionKind = 'approve' | 'reject' | 'abstain' | 'bypassed_exit' | 'skipped' | 'fail_open'
+export interface AIGateDecision {
+  id: string
+  user_id: number
+  source: string
+  symbol: string
+  side: string
+  order_type: string
+  market_type: string
+  position_side: string
+  quantity: number
+  ref_price: number
+  notional: number
+  decision: AIGateDecisionKind
+  allowed: boolean
+  confidence: number
+  reasons: string[]
+  provider: string
+  model: string
+  latency_ms: number
+  fail_open: boolean
+  degrade_reason: string
+  request_hash: string
+  context_json: string
+  order_id: string
+  executed: boolean
+  created_at: number
+  updated_at: number
+}
+export interface AIGateConfig {
+  enabled: boolean
+  min_confidence: number
+  abstain_action: 'allow' | 'block'
+  paper_only: boolean
+  timeout_seconds: number
+  provider: string
+  context_bars: number
+  excluded_sources: string[]
+}
+export interface AIGateStats {
+  total: number
+  evaluated: number
+  approved: number
+  blocked: number
+  abstained: number
+  fail_open: number
+  bypassed_exit: number
+  skipped: number
+}
+export interface AIGateStatsResponse {
+  stats: AIGateStats
+  block_rate: number
+  fail_open_rate: number
+}
+export const aiGateApi = {
+  listDecisions: (params?: {
+    page?: number
+    page_size?: number
+    decision?: string
+    symbol?: string
+    source?: string
+    fail_open?: string
+    days?: number
+  }) =>
+    api
+      .get<{ decisions: AIGateDecision[]; total: number; page: number; page_size: number }>('/ai/gate/decisions', {
+        params,
+      })
+      .then((d) => d ?? { decisions: [], total: 0, page: 1, page_size: 20 }),
+  getDecision: (id: string) =>
+    api.get<{ decision: AIGateDecision }>(`/ai/gate/decisions/${id}`).then((d) => d?.decision),
+  stats: (days?: number) => api.get<AIGateStatsResponse>('/ai/gate/stats', { params: days ? { days } : {} }),
+  getConfig: () => api.get<{ config: AIGateConfig }>('/ai/gate/config').then((d) => d?.config),
+  putConfig: (data: Partial<AIGateConfig>) =>
+    api.put<{ status: string; config: AIGateConfig }>('/ai/gate/config', data).then((d) => d?.config),
+}
+
 // ── 社交市场：开放信号入驻 + 利润分成 + 提现 ──
 export interface SocialProviderApply {
   id: number
@@ -1061,6 +1149,98 @@ export const mlApi = {
   health: () => api.get<{ status: string }>('/ml/health'),
   deploy: (data: Record<string, unknown>) => api.post<{ success: boolean; strategy_id: string }>('/ml/deploy', data),
   strategyModels: () => api.get<{ models: MLModelInfo[] }>('/ml/strategy-models').then((d) => d?.models ?? []),
+  // ── 训练闭环（自动重训任务 + 运行历史 + 状态汇总）──
+  retrainJobs: () => api.get<{ jobs: MLRetrainJob[] }>('/ml/retrain-jobs').then((d) => d?.jobs ?? []),
+  createRetrainJob: (data: { model_name: string; feature_set?: Record<string, unknown>; interval_minutes?: number }) =>
+    api.post<MLRetrainJob>('/ml/retrain-jobs', data),
+  updateRetrainJob: (id: number, data: { interval_minutes?: number; active?: boolean }) =>
+    api.put<MLRetrainJob>(`/ml/retrain-jobs/${id}`, data),
+  runRetrainJob: (id: number) =>
+    api.post<{ run: { status: string; error: string } }>(`/ml/retrain-jobs/${id}/run`, {}, { timeout: 300000 }),
+  trainingRuns: (limit = 20) =>
+    api.get<{ runs: MLTrainingRun[] }>('/ml/training-runs', { params: { limit } }).then((d) => d?.runs ?? []),
+  loopStatus: () => api.get<MLLoopStatus>('/ml/loop-status'),
+}
+
+// ── ML 训练闭环类型 ──
+export interface MLRetrainJob {
+  id: number
+  user_id: number
+  model_name: string
+  feature_set: string
+  interval_minutes: number
+  last_run_at: number
+  last_status: string
+  last_error: string
+  created_at: number
+  active: boolean
+}
+
+export interface MLTrainingRun {
+  id: number
+  job_id: number
+  model_name: string
+  trigger: string
+  trainer: string
+  status: string
+  error: string
+  symbol: string
+  interval: string
+  bars_loaded: number
+  train_samples: number
+  test_samples: number
+  feature_count: number
+  metrics_json: string
+  model_version: string
+  duration_ms: number
+  created_at: number
+}
+
+export interface MLLoopStatus {
+  ml_server: {
+    managed: boolean
+    running?: boolean
+    adopted?: boolean
+    pid?: number
+    restarts?: number
+    healthy?: boolean
+    reachable?: boolean
+    url: string
+    last_error?: string
+  }
+  retrainer: {
+    running: boolean
+    enabled: boolean
+    check_interval_sec?: number
+    fallback_mode?: string
+  }
+  jobs: {
+    id: number
+    model_name: string
+    active: boolean
+    interval_minutes: number
+    last_run_at: number
+    last_status: string
+    last_error: string
+    next_run_at: number
+  }[]
+  models_loaded: {
+    model_id: string
+    version: string
+    model_type: string
+    features: number
+    trees: number
+    loaded_at: number
+  }[]
+  last_run?: MLTrainingRun | null
+  drift: {
+    model_id: string
+    has_baseline: boolean
+    checked_at: number
+    drifted: boolean
+    overall_psi?: number
+    drifted_features?: string[]
+  }[]
 }
 
 // ── RL (Reinforcement Learning) ──
@@ -1138,6 +1318,23 @@ export const advancedOrderApi = {
     list: () => api.get<IcebergOrder[]>('/orders/iceberg'),
     cancel: (id: string) => api.del<{ success: boolean }>(`/orders/iceberg/${id}`),
   },
+}
+
+// ── Ladder Smart Orders（阶梯智能单）──
+export const ladderApi = {
+  create: (data: LadderCreateRequest) =>
+    api.post<{ status: string; ladder: LadderOrder }>('/orders/ladder', data).then((d) => d?.ladder),
+  list: (all = false) =>
+    api
+      .get<{ orders: LadderOrder[]; count: number }>(`/orders/ladder${all ? '?all=1' : ''}`)
+      .then((d) => d?.orders ?? []),
+  get: (id: string) => api.get<LadderOrder>(`/orders/ladder/${id}`),
+  amend: (id: string, data: LadderAmendRequest) =>
+    api.put<{ status: string; ladder: LadderOrder }>(`/orders/ladder/${id}`, data).then((d) => d?.ladder),
+  cancel: (id: string) =>
+    api.post<{ status: string; ladder: LadderOrder }>(`/orders/ladder/${id}/cancel`).then((d) => d?.ladder),
+  flatten: (id: string) =>
+    api.post<{ status: string; ladder: LadderOrder }>(`/orders/ladder/${id}/flatten`).then((d) => d?.ladder),
 }
 
 const SEC_TO_NS = 1e9
@@ -1238,6 +1435,13 @@ export const hyperoptApi = {
   delete: (id: string) => api.del<{ success: boolean }>(`/hyperopt/jobs/${id}`),
   spaces: (strategy?: string) =>
     api.get<{ spaces: HyperoptSpace[] }>('/hyperopt/spaces', { params: { strategy } }).then((d) => d?.spaces ?? []),
+  // protection 空间维度（freqtrade --spaces protection 对标）
+  protectionSpaces: (protections?: string[]) =>
+    api
+      .get<{ spaces: HyperoptSpace[] }>('/hyperopt/spaces', {
+        params: { space: 'protection', protections: protections?.join(',') },
+      })
+      .then((d) => d?.spaces ?? []),
   epochs: (params?: Record<string, string>) =>
     api
       .get<{ epochs: HyperoptEpoch[]; count: number }>('/hyperopt/epochs', { params })
@@ -1487,6 +1691,17 @@ export const onchainApi = {
   ethSignal: () => api.get<any>('/onchain/signal/eth'),
 }
 
+// ── Data Providers（外部数据生态：情绪/宏观/新闻/热力图/经济日历）──
+export const dataProviderApi = {
+  sentiment: () => api.get<SentimentResponse>('/dataproviders/sentiment'),
+  macro: () => api.get<ProviderResult<MacroData>>('/dataproviders/macro'),
+  news: (symbol?: string) =>
+    api.get<ProviderResult<NewsData>>('/dataproviders/news', { params: symbol ? { symbol } : {} }),
+  heatmap: () => api.get<ProviderResult<HeatmapData>>('/dataproviders/heatmap'),
+  calendar: () => api.get<ProviderResult<CalendarData>>('/dataproviders/calendar'),
+  sources: () => api.get<{ sources: SourceHealth[] }>('/dataproviders/sources').then((d) => d?.sources ?? []),
+}
+
 // ── Community ──
 export const communityApi = {
   market: (params?: {
@@ -1619,6 +1834,104 @@ export const aiBotApi = {
   cancelSubscription: (id: number) => api.post<{ id: number }>(`/ai-bots/subscriptions/${id}/cancel`),
 }
 
+// ── Market Listings（机器人/信号市场上架准入，对标 CryptoRobotics 创作者市场）──
+export type MarketListingStatus = 'draft' | 'probation' | 'pending_review' | 'listed' | 'rejected' | 'delisted'
+
+export interface MarketListingStats {
+  listing_id: string
+  date: string
+  total_return_pct: number
+  annualized_return_pct: number
+  max_drawdown_pct: number
+  win_rate: number
+  profit_factor: number
+  sharpe_ratio: number
+  total_trades: number
+  monthly_return_pct: number
+  followers: number
+  running_days: number
+}
+
+export interface MarketProbationProgress {
+  days_elapsed: number
+  min_days: number
+  remaining_days: number
+  trades_in_window: number
+  min_trades: number
+  remaining_trades: number
+  max_drawdown_pct: number
+  max_drawdown_limit: number
+  days_ok: boolean
+  trades_ok: boolean
+  drawdown_ok: boolean
+  passed: boolean
+}
+
+export interface MarketListing {
+  id: string
+  author_user_id: number
+  bot_instance_id: string
+  kind: string
+  name: string
+  description: string
+  fee_model: string
+  fee_percent: number
+  monthly_fee: number
+  status: MarketListingStatus
+  listed_at?: number
+  probation_passed: boolean
+  stats?: MarketListingStats
+  // 作者/管理视图扩展字段
+  reject_reason?: string
+  delist_reason?: string
+  probation_started_at?: number
+  progress?: MarketProbationProgress
+  rule_min_days?: number
+  rule_min_trades?: number
+  rule_max_drawdown_pct?: number
+}
+
+export interface MarketRules {
+  min_days: number
+  min_trades: number
+  max_drawdown_pct: number
+}
+
+export interface MarketListingCreateRequest {
+  bot_instance_id: string
+  kind?: string
+  name?: string
+  description?: string
+  fee_model?: string
+  fee_percent?: number
+  monthly_fee?: number
+  submit?: boolean
+}
+
+export const marketListingApi = {
+  // 作者侧
+  create: (data: MarketListingCreateRequest) => api.post<MarketListing>('/market/listings', data),
+  myListings: () => api.get<{ listings: MarketListing[] }>('/market/my-listings').then((d) => d?.listings ?? []),
+  submit: (id: string) => api.post<MarketListing>(`/market/listings/${id}/submit`),
+  cancel: (id: string) => api.post<MarketListing>(`/market/listings/${id}/cancel`),
+  // 公开侧
+  list: (params?: { sort?: string; order?: string; page?: number; page_size?: number }) =>
+    api.get<{ listings: MarketListing[]; total: number; page: number; page_size: number }>('/market/listings', { params }),
+  stats: (id: string, limit = 90) =>
+    api.get<{ listing: MarketListing; series: MarketListingStats[] }>(`/market/listings/${id}/stats?limit=${limit}`),
+  rules: () => api.get<MarketRules>('/market/rules'),
+}
+
+// ── Admin Market（上架审核队列）──
+export const adminMarketApi = {
+  listings: (status = 'pending_review') =>
+    api.get<{ listings: MarketListing[] }>('/admin/market/listings', { params: { status } }).then((d) => d?.listings ?? []),
+  approve: (id: string) => api.post<MarketListing>(`/admin/market/listings/${id}/approve`),
+  reject: (id: string, reason: string) => api.post<MarketListing>(`/admin/market/listings/${id}/reject`, { reason }),
+  delist: (id: string, reason: string) => api.post<MarketListing>(`/admin/market/listings/${id}/delist`, { reason }),
+  saveRules: (rules: MarketRules) => api.put<MarketRules>('/admin/market/rules', rules),
+}
+
 // ── Logs ──
 export const logsApi = {
   tail: (lines?: number) => api.get<string>(`/logs?tail=${lines || 100}`),
@@ -1640,6 +1953,212 @@ export const healthApi = {
   health: () => api.get<HealthResponse>('/health'),
   components: () => api.get<ComponentHealthResponse[]>('/health/components'),
   status: () => api.get<StatusResponse>('/status'),
+}
+
+// ── Alertmanager 告警事件（Prometheus → Alertmanager → gateway webhook 落库）──
+export interface AlertEvent {
+  fingerprint: string
+  alertname: string
+  status: 'firing' | 'resolved' | string
+  severity: 'critical' | 'warning' | 'info' | string
+  summary: string
+  description: string
+  labels: Record<string, string>
+  starts_at: number
+  ends_at: number
+  first_seen: number
+  last_seen: number
+}
+
+export const alertApi = {
+  active: () => api.get<{ alerts: AlertEvent[] }>('/alerts/active'),
+  history: (limit?: number) => api.get<{ alerts: AlertEvent[] }>(`/alerts/history?limit=${limit || 50}`),
+}
+
+// ── Integrations Precheck（外部集成预检：连通性 + 凭证格式，密钥不回显）──
+export interface IntegrationStatus {
+  name: string
+  display_name: string
+  category: string
+  configured: boolean
+  /** null = 未探测 */
+  reachable: boolean | null
+  last_verified_at?: number
+  notes?: string
+}
+
+export const integrationsApi = {
+  status: () => api.get<{ integrations: IntegrationStatus[] }>('/integrations/status'),
+  check: (name: string) => api.post<IntegrationStatus>(`/integrations/${name}/check`),
+}
+
+// ── Exchange Health Check（交易所体检，对标 freqtrade check_exchange）──
+export type ExchangeHealthCheckStatus = 'pass' | 'fail' | 'skip'
+export type ExchangeHealthOverall = 'healthy' | 'degraded' | 'unhealthy' | 'not_configured'
+
+export interface ExchangeHealthCheckItem {
+  name: string
+  status: ExchangeHealthCheckStatus
+  duration_ms: number
+  detail?: string
+  error?: string
+}
+
+export interface ExchangeHealthLevel {
+  level: number
+  name: string
+  status: ExchangeHealthCheckStatus
+  duration_ms: number
+  items: ExchangeHealthCheckItem[]
+}
+
+export interface ExchangeHealthReport {
+  exchange: string
+  configured: boolean
+  overall: ExchangeHealthOverall
+  levels: ExchangeHealthLevel[]
+  duration_ms: number
+  checked_at: number
+}
+
+export interface ExchangeHealthRecord {
+  id: string
+  exchange: string
+  job_id: string
+  overall: ExchangeHealthOverall
+  configured: boolean
+  duration_ms: number
+  checked_at: number
+  report: ExchangeHealthReport
+}
+
+export interface ExchangeHealthJob {
+  id: string
+  user_id: number
+  exchanges: string[]
+  status: 'running' | 'completed' | 'failed'
+  results: Record<string, ExchangeHealthReport>
+  error?: string
+  created_at: number
+  finished_at?: number
+}
+
+export const exchangeHealthApi = {
+  start: (exchange?: string) =>
+    api.post<{ job_id: string; status: string; exchanges: string[] }>('/exchanges/health-check', {
+      exchange: exchange || 'all',
+    }),
+  job: (id: string) => api.get<ExchangeHealthJob>(`/exchanges/health-check/jobs/${id}`),
+  latest: () => api.get<{ results: ExchangeHealthRecord[] }>('/exchanges/health-check/latest'),
+  history: (exchange?: string, limit?: number) =>
+    api.get<{ results: ExchangeHealthRecord[] }>(
+      `/exchanges/health-check/history?limit=${limit || 50}${exchange ? `&exchange=${exchange}` : ''}`,
+    ),
+}
+
+// ── 回测偏差检测（对标 freqtrade lookahead-analysis / recursive-analysis）──
+export interface AnalysisJob {
+  id: string
+  user_id: number
+  kind: 'lookahead' | 'recursive'
+  status: 'running' | 'completed' | 'failed'
+  symbol: string
+  interval: string
+  strategy_type: string
+  params: string
+  result?: string
+  error?: string
+  created_at: number
+  updated_at: number
+  completed_at?: number
+}
+
+export interface AnalysisSignalEvent {
+  time: number
+  index: number
+  direction: string
+}
+
+export interface AnalysisFalseSignal {
+  signal: AnalysisSignalEvent
+  variant: string
+  kind: 'missing' | 'displaced'
+  detail: string
+}
+
+export interface AnalysisVariantReport {
+  name: string
+  kind: string
+  n: number
+  variant_bars: number
+  total_entries: number
+  false_entries: AnalysisFalseSignal[]
+  missing_count: number
+  displaced_count: number
+}
+
+export interface LookaheadResult {
+  conclusion: 'biased' | 'unbiased' | 'inconclusive'
+  biased: boolean
+  confidence: string
+  total_entries: number
+  checked_entries: number
+  false_entry_count: number
+  variant_count: number
+  baseline_entries: AnalysisSignalEvent[]
+  variants: AnalysisVariantReport[]
+  summary: string
+}
+
+export interface AnalysisPrefixLevel {
+  name: string
+  bars: number
+  entries: number
+  exits: number
+}
+
+export interface AnalysisUnstablePoint {
+  index: number
+  time: number
+  by_lens: Record<string, string>
+}
+
+export interface RecursiveResult {
+  conclusion: 'recursive' | 'stable' | 'inconclusive'
+  recursive: boolean
+  confidence: string
+  levels: AnalysisPrefixLevel[]
+  unstable_points: AnalysisUnstablePoint[]
+  unstable_count: number
+  compared_points: number
+  summary: string
+}
+
+export interface AnalysisJobDetail {
+  id: string
+  kind: 'lookahead' | 'recursive'
+  status: 'running' | 'completed' | 'failed'
+  symbol: string
+  interval: string
+  strategy_type: string
+  config?: Record<string, unknown>
+  result?: LookaheadResult | RecursiveResult
+  error?: string
+  created_at: number
+  updated_at: number
+  completed_at?: number
+}
+
+export const analysisApi = {
+  startLookahead: (data: Record<string, unknown>) =>
+    api.post<{ job_id: string; status: string }>('/analysis/lookahead', data),
+  startRecursive: (data: Record<string, unknown>) =>
+    api.post<{ job_id: string; status: string }>('/analysis/recursive', data),
+  jobs: (kind?: string) =>
+    api
+      .get<{ jobs: AnalysisJob[] }>('/analysis/jobs', { params: kind ? { kind } : {} })
+      .then((d) => d?.jobs ?? []),
+  job: (id: string) => api.get<AnalysisJobDetail>(`/analysis/jobs/${id}`),
 }
 
 // ── Paper / Live Trading Safety ──

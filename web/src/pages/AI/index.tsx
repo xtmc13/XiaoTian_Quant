@@ -11,6 +11,7 @@ import { EconomicCalendar } from './components/EconomicCalendar'
 import { AnalysisPlaceholder, AnalysisResultView } from './components/AnalysisPanel'
 import { WatchlistPanel } from './components/WatchlistPanel'
 import { AIReviewPanel } from '@/components/ai/AIReviewPanel'
+import { AIGatePanel } from '@/components/ai/AIGatePanel'
 import { AddStockModal, HistoryModal } from './components/Modals'
 
 import { MARKET_NAMES } from './constants'
@@ -526,16 +527,19 @@ export function AI() {
   const canAnalyze = !!selectedSymbol && !analyzing
 
   return (
-    <div className="h-full flex flex-col">
-      <TopIndexBar
-        marketData={marketData}
-        loadingSentiment={loadingSentiment}
-        loadingIndices={loadingIndices}
-        onRefresh={() => loadMarketData(true)}
-        loadingMarket={loadingMarket}
-      />
+    // 根容器纵向滚动：复盘/决策门面板块数较多，不能再挤占三栏主区（flex-1 会被压到 0 高）
+    <div className="h-full overflow-y-auto">
+      <div className="flex min-h-full flex-col">
+        <TopIndexBar
+          marketData={marketData}
+          loadingSentiment={loadingSentiment}
+          loadingIndices={loadingIndices}
+          onRefresh={() => loadMarketData(true)}
+          loadingMarket={loadingMarket}
+        />
 
-      <div className="flex-1 flex gap-3 p-3 min-h-0 overflow-hidden">
+        {/* 三栏主区：固定视口高度，不随下方面板伸缩 */}
+        <div className="flex h-[calc(100vh-220px)] min-h-[480px] flex-none gap-3 p-3">
         {/* Left Panel */}
         <div className="hidden md:flex w-[280px] shrink-0 flex-col gap-2.5 overflow-y-auto min-h-0">
           <HeatmapSection
@@ -636,6 +640,9 @@ export function AI() {
       />
 
       <AIReviewPanel />
+
+      <AIGatePanel />
+      </div>
     </div>
   )
 }

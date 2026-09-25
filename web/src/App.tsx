@@ -43,8 +43,10 @@ const RiskControl = lazyPage(() => import('./pages/RiskControl'), 'RiskControl')
 const PairlistManagement = lazyPage(() => import('./pages/PairlistManagement'), 'PairlistManagement')
 const AdvancedOrderManagement = lazyPage(() => import('./pages/AdvancedOrderManagement'), 'AdvancedOrderManagement')
 const HyperoptManagement = lazyPage(() => import('./pages/HyperoptManagement'), 'HyperoptManagement')
+const AnalysisPage = lazyPage(() => import('./pages/AnalysisPage'), 'AnalysisPage')
 const SocialTrading = lazyPage(() => import('./pages/SocialTrading'), 'SocialTrading')
 const OnChain = lazyPage(() => import('./pages/OnChain'), 'OnChain')
+const MarketData = lazyPage(() => import('./pages/MarketData'), 'MarketData')
 
 // ── Split pages (flat navigation) ──
 const FreqAI = lazyPage(() => import('./pages/AI/FreqAI'), 'FreqAI')
@@ -138,8 +140,10 @@ function DocumentTitle() {
     '/advanced-orders': '高级订单 - 小天量化',
     '/arbitrage': '套利监控 - 小天量化',
     '/hyperopt': '参数优化 - 小天量化',
+    '/analysis': '偏差检测 - 小天量化',
     '/social-trading': '社交交易 - 小天量化',
     '/onchain': '链上数据 - 小天量化',
+    '/market-data': '市场数据 - 小天量化',
     '/profile': '个人中心 - 小天量化',
     '/users': '用户管理 - 小天量化',
     '/agent-tokens': 'Agent令牌 - 小天量化',
@@ -364,6 +368,14 @@ export default function App() {
                     element={
                       <PageShell>
                         <FactorResearch />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/analysis"
+                    element={
+                      <PageShell>
+                        <AnalysisPage />
                       </PageShell>
                     }
                   />
@@ -630,6 +642,14 @@ export default function App() {
                     element={
                       <PageShell>
                         <OnChain />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/market-data"
+                    element={
+                      <PageShell>
+                        <MarketData />
                       </PageShell>
                     }
                   />

@@ -5,6 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/community"
+	"github.com/xiaotian-quant/gateway/internal/dataprovider"
 	"github.com/xiaotian-quant/gateway/internal/experiment"
 	"github.com/xiaotian-quant/gateway/internal/handler"
 	"github.com/xiaotian-quant/gateway/internal/indicator"
@@ -35,7 +36,9 @@ func setupRoutes(r *gin.Engine, cfg *serverConfig) *gin.Engine {
 		registerAuthRoutes(api)
 		registerOAuthRoutes(api)
 		registerHealthRoutes(api)
+	registerIntegrationRoutes(api)
 		registerBillingRoutes(api)
+		registerShareRoutes(api)
 		registerUserRoutes(api)
 		registerAdminRoutes(api)
 		registerConfigRoutes(api)
@@ -77,6 +80,21 @@ func setupRoutes(r *gin.Engine, cfg *serverConfig) *gin.Engine {
 		registerIndicatorAlertRoutes(api)
 		registerFactorResearchRoutes(api)
 		registerPortfolioBacktestRoutes(api)
+		registerExchangeHealthRoutes(api)
+		registerAnalysisRoutes(api)
+		registerAIGateRoutes(api)
+		registerMarketListingRoutes(api)
+		registerDataProviderRoutes(api)
+		registerAlertRoutes(api)
+	}
+
+	// ── API Docs（交互式 OpenAPI 文档，默认关闭）──
+	// API_DOCS_ENABLED=true 时挂载 /api/docs（Swagger UI CDN 版 +
+	// openapi.yaml 文件服务）。页面/规范不含敏感数据（规范在仓库内）；
+	// 生产若开启建议在 nginx 层加访问控制。契约见 docs/api/openapi.yaml
+	// （由 cmd/apidump 生成，CI 漂移守护）。
+	if docsEnabled() {
+		registerDocsRoutes(api)
 	}
 
 	// ── Webhooks ──
@@ -175,6 +193,17 @@ func registerBillingRoutes(api *gin.RouterGroup) {
 
 	// 公开路由：Stripe webhook（验签在 handler 内完成，不能挂 AuthRequired）。
 	api.POST("/billing/stripe/webhook", handler.BillingStripeWebhook)
+}
+
+// registerShareRoutes 收益分享卡：已平仓交易/回测报告的结构化卡片数据
+// （前端 canvas 渲染成图）。属主/admin 可见，昵称默认脱敏。
+func registerShareRoutes(api *gin.RouterGroup) {
+	shareG := api.Group("/share")
+	shareG.Use(middleware.AuthRequired())
+	{
+		shareG.GET("/trade/:id/card", handler.ShareTradeCard)
+		shareG.GET("/backtest/:id/card", handler.ShareBacktestCard)
+	}
 }
 
 func registerUserRoutes(api *gin.RouterGroup) {
@@ -291,6 +320,14 @@ func registerOrderRoutes(api *gin.RouterGroup) {
 	private.DELETE("/orders/iceberg/:id", handler.CancelIceberg)
 	private.POST("/orders/bracket/calculate", handler.CalculateBracket)
 
+	// Ladder Smart Orders（阶梯智能单）
+	private.POST("/orders/ladder", handler.PlaceLadder)
+	private.GET("/orders/ladder", handler.ListLadders)
+	private.GET("/orders/ladder/:id", handler.GetLadder)
+	private.PUT("/orders/ladder/:id", handler.UpdateLadder)
+	private.POST("/orders/ladder/:id/cancel", handler.CancelLadder)
+	private.POST("/orders/ladder/:id/flatten", handler.FlattenLadder)
+
 	private.DELETE("/orders/:order_id", handler.CancelOrder)
 	private.POST("/orders/:order_id/cancel", handler.CancelOrder)
 }
@@ -348,6 +385,21 @@ func registerNotificationRoutes(api *gin.RouterGroup) {
 	private.POST("/notify/test", handler.TestNotifyChannel)
 	private.POST("/notify/send", handler.SendCustomNotification)
 	private.GET("/chart", handler.Chart)
+}
+
+// registerAlertRoutes Alertmanager 告警接入：webhook 为公开路由（豁免 JWT，
+// X-Alert-Webhook-Secret 共享密钥头在 handler 内校验，做法同 stripe webhook），
+// active/history 查询走 AuthRequired。webhook 叠加宽松限流防通知轰炸。
+func registerAlertRoutes(api *gin.RouterGroup) {
+	handler.WarnIfAlertWebhookSecretMissing()
+	api.POST("/alerts/webhook", middleware.RateLimiter(5, 20), handler.AlertsWebhook)
+
+	private := api.Group("/alerts")
+	private.Use(middleware.AuthRequired())
+	{
+		private.GET("/active", handler.AlertsActive)
+		private.GET("/history", handler.AlertsHistory)
+	}
 }
 
 func registerArbitrageRoutes(api *gin.RouterGroup) {
@@ -490,6 +542,7 @@ func registerPairlistRoutes(api *gin.RouterGroup) {
 	private.GET("/pairlist/refresh", handler.RefreshPairlist)
 	private.GET("/pairlist/config", handler.GetPairlistConfig)
 	private.POST("/pairlist/config", handler.ConfigurePairlist)
+	private.GET("/pairlist/specs", handler.GetPairlistSpecs)
 }
 
 // registerRiskConfigRoutes 风控参数 API：GET 任意登录用户；PUT 仅 admin
@@ -620,6 +673,9 @@ func registerMLRoutes(api *gin.RouterGroup) {
 	private.PUT("/ml/retrain-jobs/:id", handler.UpdateRetrainJob)
 	private.POST("/ml/retrain-jobs/:id/run", handler.RunRetrainJob)
 	private.GET("/ml/retrain-jobs/:id/runs", handler.ListRetrainJobRuns)
+	// ── ML 训练闭环观测（训练历史 + 闭环状态汇总） ──
+	private.GET("/ml/training-runs", handler.MLTrainingRuns)
+	private.GET("/ml/loop-status", handler.MLLoopStatus)
 }
 
 func registerAgentRoutes(api *gin.RouterGroup) {
@@ -654,6 +710,33 @@ func registerHealthRoutes(api *gin.RouterGroup) {
 	api.GET("/health/components", handler.ComponentHealth)
 	// M4: 服务日志可能含敏感信息，至少要求登录。
 	api.GET("/logs", middleware.AuthRequired(), handler.GetLogs)
+}
+
+// 外部集成预检：状态查询登录可见；主动探测会触达第三方端点，收敛为 admin。
+func registerIntegrationRoutes(api *gin.RouterGroup) {
+	integrationsG := api.Group("/integrations")
+	integrationsG.Use(middleware.AuthRequired())
+	{
+		integrationsG.GET("/status", handler.IntegrationsStatus)
+		integrationsG.POST("/:name/check", middleware.AdminRequired(), handler.IntegrationCheck)
+	}
+}
+
+// registerDocsRoutes 交互式 API 文档（Swagger UI CDN 版）：仅 API_DOCS_ENABLED=true 时
+// 由 setupRoutes 条件挂载（见上方 if docsEnabled()）。规范文件定位见 apispec.FindSpecFile。
+func registerDocsRoutes(api *gin.RouterGroup) {
+	docs := api.Group("/docs")
+	{
+		docs.GET("", handler.APIDocsPage)
+		docs.GET("/", handler.APIDocsPage)
+		docs.GET("/openapi.yaml", handler.APIDocsSpec)
+	}
+}
+
+// docsEnabled API_DOCS_ENABLED=true/1 时开启 /api/docs。
+func docsEnabled() bool {
+	v := os.Getenv("API_DOCS_ENABLED")
+	return v == "true" || v == "1"
 }
 
 func registerIndicatorRoutes(api *gin.RouterGroup) {
@@ -788,6 +871,33 @@ func registerAIBotRoutes(api *gin.RouterGroup) {
 	}
 }
 
+// registerMarketListingRoutes 机器人/信号市场上架准入（考核期 + 标准化统计 + 人工审核）。
+// 作者/公开端点挂 AuthRequired；管理端点挂 AdminRequired。
+func registerMarketListingRoutes(api *gin.RouterGroup) {
+	private := api.Group("/market")
+	private.Use(middleware.AuthRequired())
+	{
+		// 作者侧
+		private.POST("/listings", handler.MarketListingCreate)
+		private.GET("/my-listings", handler.MarketMyListings)
+		private.POST("/listings/:id/submit", handler.MarketListingSubmit)
+		private.POST("/listings/:id/cancel", handler.MarketListingCancel)
+		// 公开侧（登录即可）：listed 市场卡片 + 快照序列 + 考核规则
+		private.GET("/listings", handler.MarketListingList)
+		private.GET("/listings/:id/stats", handler.MarketListingStats)
+		private.GET("/rules", handler.MarketRulesGet)
+	}
+	adminM := api.Group("/admin/market")
+	adminM.Use(middleware.AdminRequired())
+	{
+		adminM.GET("/listings", handler.AdminMarketListingList)
+		adminM.POST("/listings/:id/approve", handler.AdminMarketListingApprove)
+		adminM.POST("/listings/:id/reject", handler.AdminMarketListingReject)
+		adminM.POST("/listings/:id/delist", handler.AdminMarketListingDelist)
+		adminM.PUT("/rules", handler.AdminMarketRulesPut)
+	}
+}
+
 func registerGridRoutes(api *gin.RouterGroup) {
 	private := api.Group("/grid")
 	private.Use(middleware.AuthRequired())
@@ -894,6 +1004,55 @@ func registerPortfolioBacktestRoutes(api *gin.RouterGroup) {
 		private.GET("/portfolio/:id", handler.GetPortfolioBacktest)
 		private.DELETE("/portfolio/:id", handler.DeletePortfolioBacktest)
 	}
+}
+
+// registerAnalysisRoutes 回测偏差检测（对标 freqtrade lookahead-analysis / recursive-analysis）：
+// 异步任务，结果持久化 xt_analysis_jobs（迁移 0025），详情走属主校验。
+func registerAnalysisRoutes(api *gin.RouterGroup) {
+	private := api.Group("")
+	private.Use(middleware.AuthRequired())
+	private.POST("/analysis/lookahead", handler.StartLookaheadAnalysis)
+	private.POST("/analysis/recursive", handler.StartRecursiveAnalysis)
+	private.GET("/analysis/jobs", handler.ListAnalysisJobs)
+	private.GET("/analysis/jobs/:id", handler.GetAnalysisJob)
+}
+
+// registerAIGateRoutes AI 交易决策门（对标 QuantDinger JEV 决策门）：
+// 决策时间线/统计（AuthRequired，非 admin 只看本人），配置读全登录、写 admin-only。
+func registerAIGateRoutes(api *gin.RouterGroup) {
+	private := api.Group("/ai/gate")
+	private.Use(middleware.AuthRequired())
+	{
+		private.GET("/decisions", handler.AIGateDecisionsList)
+		private.GET("/decisions/:id", handler.AIGateDecisionGet)
+		private.GET("/stats", handler.AIGateStats)
+		private.GET("/config", handler.AIGateConfigGet)
+		private.PUT("/config", middleware.AdminRequired(), handler.AIGateConfigPut)
+	}
+}
+
+// registerExchangeHealthRoutes 交易所体检（对标 freqtrade check_exchange）：
+// 触发异步体检 job（单所或全部）/ 轮询 job / 每所最近一次结果 / 历史（全 AuthRequired）。
+// 结果持久化 xt_exchange_health_checks（迁移 0024），job 本身为内存态，重启失效。
+func registerExchangeHealthRoutes(api *gin.RouterGroup) {
+	private := api.Group("/exchanges/health-check")
+	private.Use(middleware.AuthRequired())
+	{
+		private.POST("", handler.ExchangeHealthCheckStart)
+		private.POST("/", handler.ExchangeHealthCheckStart)
+		private.GET("/latest", handler.ExchangeHealthCheckLatest)
+		private.GET("/history", handler.ExchangeHealthCheckHistory)
+		private.GET("/jobs/:id", handler.ExchangeHealthCheckJobStatus)
+	}
+}
+
+// registerDataProviderRoutes 外部数据生态（对标 QuantDinger data_providers）：
+// 情绪/宏观/新闻/热力图/经济日历 + 源健康状态。限流/熔断/TTL 缓存/降级均在
+// dataprovider.Service 内完成；未配置 key 的源返回 not_configured 而非报错。
+func registerDataProviderRoutes(api *gin.RouterGroup) {
+	dp := api.Group("/dataproviders")
+	dp.Use(middleware.AuthRequired())
+	dataprovider.RegisterRoutes(dp, dataprovider.Default())
 }
 
 // metricsAccessGuard /metrics 访问控制（A9.1，环境变量驱动，读取见 metrics 包）：

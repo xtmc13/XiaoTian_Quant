@@ -14,14 +14,17 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/adapter"
+	"github.com/xiaotian-quant/gateway/internal/alerting"
 	"github.com/xiaotian-quant/gateway/internal/alerts"
 	"github.com/xiaotian-quant/gateway/internal/app"
 	"github.com/xiaotian-quant/gateway/internal/config"
+	"github.com/xiaotian-quant/gateway/internal/dataprovider"
 	"github.com/xiaotian-quant/gateway/internal/dca"
 	"github.com/xiaotian-quant/gateway/internal/grid"
 	"github.com/xiaotian-quant/gateway/internal/handler"
 	"github.com/xiaotian-quant/gateway/internal/lmartin"
 	"github.com/xiaotian-quant/gateway/internal/market"
+	"github.com/xiaotian-quant/gateway/internal/marketplace"
 	"github.com/xiaotian-quant/gateway/internal/metrics"
 	"github.com/xiaotian-quant/gateway/internal/middleware"
 	"github.com/xiaotian-quant/gateway/internal/ml"
@@ -187,22 +190,60 @@ func main() {
 	handler.SetAlertScanService(alertSvc)
 	alertSvc.Start()
 
-	// ── ML 自动滚动重训引擎（对标 FreqAI live_retrain_hours）+ 预测落盘复用 ──
-	// 到点触发 TrainingPipeline 重训（复用 /ml/train 同一入口），失败 notify 告警，
-	// 连续失败 3 次自动暂停；成功后失效该模型预测缓存，顺带按 TTL 清理预测表
-	// （默认 30 天，ML_PREDICTION_TTL_D / ml_settings prediction_ttl_d 可覆盖）。
+	// ── Alertmanager 告警接入（/api/alerts/webhook → fingerprint 去重 → notify 路由）──
+	handler.SetAlertIngestService(alerting.NewService(store.NewAlertEventRepo(), notify.NewBroadcaster()))
+
+	// ── 外部数据生态采集（对标 QuantDinger data_providers）──
+	// 情绪/宏观/新闻/热力图/经济日历：每源限流+熔断+TTL 缓存，周期刷新落库
+	// xt_dataprovider_cache（迁移 0031）；密钥全走环境变量，未配置的源自动降级
+	// 为 not_configured，API 照常 200 返回降级结构。
+	dpCfg := dataprovider.LoadEnvConfig()
+	dpSvc := dataprovider.NewService(dataprovider.BuildSources(dpCfg, nil), store.NewDataProviderRepo(), dpCfg.Secrets())
+	dataprovider.SetDefault(dpSvc)
+	dpSvc.Start()
+
+	// ── ML 训练闭环（对标 FreqAI live_retrain_hours 全链路）────────────────
+	// 链路：retrainer 调度（含漂移触发）→ TrainingLoop 闭环执行
+	//   数据准备（本地 K 线）→ ml_server 训练（不可达时按 ML_TRAIN_FALLBACK
+	//   降级 Go 原生训练或跳过并告警，不 panic）→ 导出模型 JSON → 原子热加载
+	//   进 ModelRegistry（Go 原生推理）→ 运行档案落库 xt_ml_training_runs。
+	// ml_server 生命周期：ML_SERVER_MANAGED=true 时由 gateway 拉起/守护
+	// sandbox/ml_server/server.py（健康检查、崩溃重启、优雅退出）。
+	mlServerMgr := ml.NewServerManager(ml.LoadServerManagerConfig(), notify.GetManager())
+	mlServerMgr.Start()
+	if mlServerMgr.Status().Managed {
+		// 托管模式下 MLClient 跟随管理器端口（env ML_SERVER_PORT 可改）
+		handler.MLClient = ml.NewClient(mlServerMgr.URL())
+	}
+	mlModelDir := os.Getenv("ML_MODEL_EXPORT_DIR")
+	if mlModelDir == "" {
+		mlModelDir = "data/ml_models" // 导出模型 JSON 落盘目录（热加载 + 重启恢复）
+	}
+	mlModelRegistry := ml.NewModelRegistry(mlModelDir)
+	mlModelRegistry.LoadFromDir() // 重启恢复已导出模型
+	mlTrainingLoop := ml.NewTrainingLoop(
+		ml.NewTrainingPipeline(handler.MLClient, handler.DataDownloader),
+		handler.MLClient,
+		mlModelRegistry,
+		store.NewMLTrainingRunRepo(),
+	)
 	mlRetrainer := ml.NewRetrainer(
 		store.NewMLRetrainRepo(),
-		ml.NewTrainingPipeline(handler.MLClient, handler.DataDownloader),
+		mlTrainingLoop,
 		notify.GetManager(),
 		ml.DefaultPredictionCache(),
 	)
 	handler.SetMLRetrainer(mlRetrainer)
+	handler.SetMLLoopDeps(mlRetrainer, mlTrainingLoop, mlModelRegistry, mlServerMgr, store.NewMLTrainingRunRepo())
 	mlRetrainer.Start()
 
 	// ── P1-4 开放信号市场：利润分成每日结算引擎（T+锁定后可提现）──
 	settleEngine := social.NewSettlementEngine(social.NewMarketService())
 	settleEngine.Start()
+
+	// ── 市场上架准入：标准化统计日聚合 + 考核达标自动转 pending_review ──
+	marketEngine := marketplace.NewEngine(marketplace.NewService())
+	marketEngine.Start()
 
 	// ── A2.2 limit-then-market 跟踪器：超时撤剩余 + 市价补单（paper/live 均支持）──
 	ltmTracker := order.GetLimitMarketTracker()
@@ -216,6 +257,30 @@ func main() {
 		notify.GetNotificationStore().Add("limit-then-market 执行异常", msg, "WARN", "order")
 	})
 	ltmTracker.Start()
+	// 重启恢复：扫描 xt_orders 中挂在中间态的 ltm 订单，重建状态机继续执行
+	// （原 limit_timeout_ms 未持久化，统一给一个宽限窗口后进入超时→市价补单）。
+	if n := ltmTracker.RestoreFromStore(order.DefaultLMRecoveryGrace); n > 0 {
+		log.Printf("[ltm] 重启恢复 %d 个未完成 limit-then-market 订单", n)
+	}
+
+	// ── 阶梯智能单引擎：分档止盈 + 保本/追踪止损 + 一键全平（paper/live 同路径）──
+	// 价格源复用条件单引擎的 WS 喂价缓存；子单全部走 OMS。
+	ladderEng := order.GetLadderEngine()
+	ladderEng.SetPriceSource(order.GetConditionalEngine().GetPrice)
+	ladderEng.SetNotifyHook(func(l *order.LadderOrder, msg string) {
+		notify.GetManager().Send(notify.Message{
+			Title:   "阶梯单执行异常: " + l.Symbol,
+			Content: msg,
+			Level:   "WARN",
+			Tags:    map[string]string{"source": "ladder", "ladder_id": l.ID},
+		})
+		notify.GetNotificationStore().Add("阶梯单执行异常", msg, "WARN", "order")
+	})
+	ladderEng.Start()
+	// 重启恢复：扫描 xt_ladder_orders 未终结的阶梯单，回填子单进 OMS 后继续状态机。
+	if n := ladderEng.RestoreFromStore(); n > 0 {
+		log.Printf("[ladder] 重启恢复 %d 个未终结阶梯单", n)
+	}
 
 	// ── C2.2 撮合引擎资金校验：接组合账本（paper 账户）可用余额 ──
 	// 模拟做市单（userID=0）与未配置组合账本时自动豁免（+Inf）。
@@ -296,9 +361,12 @@ func main() {
 		// 与上方 bots 同理：必须在 appCtx.WaitForShutdown 关库之前完成。
 		reconcileSvc.Stop()
 		mlRetrainer.Stop()
+		mlServerMgr.Stop() // 托管模式才终止 ml_server 子进程（收养的实例不杀）
 		ltmTracker.Stop()
 		settleEngine.Stop()
+		marketEngine.Stop()
 		alertSvc.Stop()
+		dpSvc.Stop()
 		appCtx.WaitForShutdown()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()

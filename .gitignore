@@ -121,3 +121,6 @@ web/electron-builder-cache/
 # Capacitor 原生工程(由 `npm run cap:add:*` 生成,按需本地构建)
 web/android/
 web/ios/
+
+# ML 训练产物
+sandbox/ml_server/trained_models/

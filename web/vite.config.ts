@@ -11,6 +11,10 @@ export default defineConfig(({ mode }) => ({
     environment: 'jsdom',
     globals: true,
     include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    // 低内存机器上 forks worker 并发启动会超时（worker respond timeout），
+    // 限制并发数以换取稳定；单文件调试不受影响。
+    maxWorkers: 4,
+    minWorkers: 1,
   },
   plugins: [
     react(),

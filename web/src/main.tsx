@@ -12,6 +12,7 @@ import '@/i18n/locales/settings'
 import '@/i18n/locales/dashboard'
 import '@/i18n/locales/arb'
 import '@/i18n/locales/chrome'
+import '@/i18n/locales/marketdata'
 
 // 渲染前应用持久化的主题/缩放，避免刷新后外观回跳
 bootstrapAppearance()

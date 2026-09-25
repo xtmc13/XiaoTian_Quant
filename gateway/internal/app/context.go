@@ -17,6 +17,7 @@ import (
 
 	"github.com/xiaotian-quant/gateway/internal/adapter"
 	"github.com/xiaotian-quant/gateway/internal/ai"
+	"github.com/xiaotian-quant/gateway/internal/aigate"
 	"github.com/xiaotian-quant/gateway/internal/backtest"
 	"github.com/xiaotian-quant/gateway/internal/cache"
 	"github.com/xiaotian-quant/gateway/internal/config"
@@ -328,6 +329,18 @@ func (ctx *Context) wireOrderManager() {
 			return err
 		}
 		return ctx.RiskManager.Check(riskCtx)
+	}
+
+	// ── AI 决策门（对标 QuantDinger JEV 决策门）──
+	// 入场单在风控 15 维检查之后、实际下单之前强制 AI 审批；出场/止损单
+	// 门内直接放行（AI 不能拦出场）；provider 故障 fail-open 并落 degrade
+	// 事件；默认关闭（AI_GATE_ENABLED 或 PUT /api/ai/gate/config 开启）。
+	// 闭包在调用时取 Global()，测试可整体替换全局门。
+	om.AIGateCheck = func(req *order.Request) (string, error) {
+		return aigate.Global().CheckOrder(req)
+	}
+	om.AIGateOutcome = func(decisionID, orderID string, executed bool) {
+		aigate.Global().RecordOutcome(decisionID, orderID, executed)
 	}
 
 	// ── Balance Lock (paper trading default account) ──
@@ -700,6 +713,9 @@ func (ctx *Context) wireConditionalEngine() {
 			Leverage:      ord.Leverage,
 			MarginMode:    ord.MarginMode,
 			ClosePosition: ord.ClosePosition,
+			// 条件单（TP/SL/Stop）触发是父单入场时已批准的风控保护动作，
+			// 不再过 AI 决策门（AI 不能拦止损）。
+			AIGateBypass: true,
 		}
 		return order.GetOrderManager().PlaceOrder(req)
 	}
@@ -726,6 +742,9 @@ func (ctx *Context) wireAdvancedOrderEngine() {
 			Leverage:      ord.Leverage,
 			MarginMode:    ord.MarginMode,
 			ClosePosition: ord.ClosePosition,
+			// 冰山/TWAP/VWAP 子单是父单（已过决策门）的执行切片，逐片过
+			// LLM 既昂贵又非确定，直接绕过。
+			AIGateBypass: true,
 		}
 		return order.GetOrderManager().PlaceOrder(req)
 	}
@@ -763,6 +782,9 @@ func (ctx *Context) simulatePaperFill(ord *model.OrderData) (map[string]any, err
 			ord.Price,
 			ord.Quantity,
 			uint64(ord.UserID),
+			// OMS 订单号即事实源 ID：镜像不再另造 ID 落库（C2.2），
+			// 否则原 ID 会留下 PENDING 孤儿单、订单列表出现两条。
+			ord.ID,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("matching engine: %w", err)
@@ -1440,6 +1462,42 @@ func (ctx *Context) wireStrategyEngine() {
 	// ── WebSocket Hub ──
 	eng.SetWSHub(ws.GetHub())
 
+	// ── v1.2 契约钩子：持仓/余额视图注入 ──
+	// ConfirmTradeExit 与 AdjustTradePosition 的持仓快照、CustomStakeAmount
+	// 的可用余额都取自 paper 组合账本（与 closePositionFromSignal 同一视图）。
+	eng.SetPositionLookup(func(strategyName, symbol string) *strategy.Position {
+		acct := ctx.PortfolioManager.GetAccount("default")
+		if acct == nil {
+			return nil
+		}
+		sym := strings.ToUpper(strings.TrimSpace(symbol))
+		for _, side := range []model.PositionSide{model.PositionLong, model.PositionShort} {
+			pos := acct.Positions[sym+"-"+string(side)]
+			if pos == nil || pos.Quantity <= 0 {
+				continue
+			}
+			return &strategy.Position{
+				Symbol:        sym,
+				Side:          string(side),
+				EntryPrice:    pos.AvgEntryPrice,
+				Quantity:      pos.Quantity,
+				UnrealizedPnL: pos.UnrealizedPnL,
+				OpenTime:      pos.OpenedAt,
+			}
+		}
+		return nil
+	})
+	eng.SetBalanceLookup(func() float64 {
+		acct := ctx.PortfolioManager.GetAccount("default")
+		if acct == nil {
+			return 0
+		}
+		if b := acct.Balances["USDT"]; b != nil {
+			return b.Free
+		}
+		return 0
+	})
+
 	// ── Signal → Order Pipeline ──
 	eng.OnSignal = func(signal model.Signal) {
 		// Map signal direction to order side
@@ -1473,6 +1531,8 @@ func (ctx *Context) wireStrategyEngine() {
 			Price:     0,
 			Quantity:  qty,
 			Exchange:  ctx.resolveExchange(signal.Symbol),
+			// AI 决策门来源标记（不动 ClientOID，避免干扰 A8.2 成交恢复路由）。
+			Source: "signal:" + signal.Strategy,
 		}
 
 		// ── Contract support: load strategy config for leverage/TP/SL ──
@@ -1669,6 +1729,14 @@ func (ctx *Context) closePositionFromSignal(signal model.Signal) {
 		if pos == nil || pos.Quantity <= 0 {
 			continue
 		}
+		// v1.2 减仓信号（AdjustTradePosition 负值经引擎 emit 的 CLOSE+Qty）：
+		// 0 < signal.Qty < 持仓量 时部分平仓，否则全平。
+		closeQty := pos.Quantity
+		fullClose := true
+		if signal.Qty > 0 && signal.Qty < pos.Quantity {
+			closeQty = signal.Qty
+			fullClose = false
+		}
 		// Place opposite order to close
 		closeSide := model.SideSell
 		if side == model.PositionShort {
@@ -1679,7 +1747,7 @@ func (ctx *Context) closePositionFromSignal(signal model.Signal) {
 			Side:          closeSide,
 			OrderType:     model.TypeMarket,
 			Price:         0,
-			Quantity:      pos.Quantity,
+			Quantity:      closeQty,
 			Exchange:      ctx.resolveExchange(signal.Symbol),
 			MarketType:    pos.MarketType,
 			PositionSide:  side,
@@ -1692,10 +1760,12 @@ func (ctx *Context) closePositionFromSignal(signal model.Signal) {
 			ctx.Logger.Warn("Close position order failed", "symbol", signal.Symbol, "side", side, "error", err.Error())
 			continue
 		}
-		ctx.Logger.Info("Position closed from signal", "symbol", signal.Symbol, "side", side, "qty", pos.Quantity, "order_id", ord.ID)
+		ctx.Logger.Info("Position closed from signal", "symbol", signal.Symbol, "side", side, "qty", closeQty, "full", fullClose, "order_id", ord.ID)
 
-		// Release displayed capital for this strategy since position is closed.
-		ctx.releaseStrategyCapital(signal.Strategy)
+		if fullClose {
+			// Release displayed capital for this strategy since position is closed.
+			ctx.releaseStrategyCapital(signal.Strategy)
+		}
 	}
 }
 
