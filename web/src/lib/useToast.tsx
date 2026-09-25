@@ -1,84 +1,23 @@
-import { useState, useEffect, useCallback } from 'react'
+/**
+ * 统一 toast 入口（历史模块，保留 API 兼容）。
+ *
+ * 曾经这里维护一套独立的 module 级 toast 队列 + 独立 ToastContainer，
+ * 但该容器只被交易页挂载，其它 20+ 页面调 toast() 没有任何可见反馈。
+ * 现在 toast() 委托给 zustand 全局 store（Layout 统一挂载 ToastContainer），
+ * 用户动作 toast 走 bypassCooldown，保证连点操作（如连续撤单）每次都有反馈。
+ */
+import { useToastStore } from '@/stores/toastStore'
 
 type ToastType = 'success' | 'error' | 'info' | 'warning'
 
-interface ToastItem {
-  id: number
-  type: ToastType
-  message: string
-}
-
-let nextId = 1
-let listeners: Array<(toasts: ToastItem[]) => void> = []
-let toasts: ToastItem[] = []
-
-function notify() {
-  listeners.forEach(l => l([...toasts]))
-}
-
-// 相同文案的 toast 同时只显示一个：重复触发时重置其计时器（延长显示），
-// 既避免后台轮询堆叠刷屏，也保证用户连续操作（如连点撤单）始终有反馈。
-const activeToasts = new Map<string, { id: number; timer: ReturnType<typeof setTimeout> }>() // key → 显示中的 toast
-
-function dismiss(key: string) {
-  const active = activeToasts.get(key)
-  if (!active) return
-  activeToasts.delete(key)
-  toasts = toasts.filter(t => t.id !== active.id)
-  notify()
-}
-
 export function toast(type: ToastType, message: string) {
-  const key = `${type}:${message}`
-  const existing = activeToasts.get(key)
-  if (existing) {
-    clearTimeout(existing.timer)
-    existing.timer = setTimeout(() => dismiss(key), 3500)
-    return
-  }
-
-  const id = nextId++
-  const timer = setTimeout(() => dismiss(key), 3500)
-  activeToasts.set(key, { id, timer })
-  toasts = [...toasts, { id, type, message }]
-  notify()
+  useToastStore.getState().addToast({ type, message, duration: 3500 }, { bypassCooldown: true })
 }
 
-export function useToast() {
-  const [state, setState] = useState<ToastItem[]>([])
-
-  useEffect(() => {
-    listeners.push(setState)
-    return () => { listeners = listeners.filter(l => l !== setState) }
-  }, [])
-
-  return { toasts: state }
-}
-
+/**
+ * @deprecated 全局 ToastContainer 已在 Layout 挂载（@/components/ToastContainer），
+ * 页面内无需再挂。保留导出仅为兼容旧引用，渲染为空。
+ */
 export function ToastContainer() {
-  const { toasts } = useToast()
-
-  if (toasts.length === 0) return null
-
-  return (
-    <div className="fixed top-4 right-4 z-[9999] flex flex-col gap-2 pointer-events-none">
-      {toasts.map(t => (
-        <div
-          key={t.id}
-          className={cn(
-            'px-4 py-2.5 rounded text-sm font-medium shadow-lg animate-in slide-in-from-right',
-            t.type === 'success' && 'bg-[#0ECB81]/90 text-black',
-            t.type === 'error' && 'bg-[#F6465D]/90 text-foreground',
-            t.type === 'info' && 'bg-quant-card border border-quant-border text-foreground',
-            t.type === 'warning' && 'bg-yellow-500/90 text-black',
-          )}
-        >
-          {t.message}
-        </div>
-      ))}
-    </div>
-  )
+  return null
 }
-
-import { cn } from './utils'
-

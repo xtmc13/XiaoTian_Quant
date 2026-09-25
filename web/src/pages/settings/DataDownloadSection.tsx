@@ -46,6 +46,10 @@ export function DataDownloadSection() {
   })
 
   const handleDownload = () => {
+    if (!Number.isFinite(days) || days < 1 || days > 3650) {
+      toast('warning', '天数需在 1-3650 之间')
+      return
+    }
     const to = Date.now()
     const from = to - days * 24 * 60 * 60 * 1000
     downloadMutation.mutate({ symbol: symbol.toUpperCase(), interval, from, to, exchange })

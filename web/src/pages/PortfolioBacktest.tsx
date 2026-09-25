@@ -17,15 +17,18 @@ import {
 import { cn } from '@/lib/utils'
 import {
   portfolioBacktestApi,
+  shareApi,
   type PortfolioBacktestRequest,
   type PortfolioBacktestResult,
   type PortfolioLegConfig,
+  type ShareBacktestCard,
 } from '@/lib/api'
 import { INTERVAL_OPTIONS } from '@/lib/constants'
 import { getEcharts } from '@/lib/echarts'
 import { KPICard, KPIGrid } from '@/components/ui/KPICard'
 import { SectionCard } from '@/components/ui/SectionCard'
 import { PageHeader } from '@/components/ui/PageHeader'
+import { ShareCardModal } from '@/components/ShareCardModal'
 import { toast } from '@/lib/useToast'
 
 /* ── 单策略目录（与后端 RunBacktest 目录一致） ─────────────────────── */
@@ -120,6 +123,19 @@ export function PortfolioBacktest() {
   ])
   const [result, setResult] = useState<PortfolioBacktestResult | null>(null)
   const [detailId, setDetailId] = useState<string | null>(null)
+  const [shareCard, setShareCard] = useState<ShareBacktestCard | null>(null)
+  const [shareLoading, setShareLoading] = useState(false)
+
+  const openShareCard = async (id: string) => {
+    setShareLoading(true)
+    try {
+      setShareCard(await shareApi.backtestCard(id))
+    } catch (err) {
+      toast('error', `分享卡生成失败: ${(err as Error).message}`)
+    } finally {
+      setShareLoading(false)
+    }
+  }
 
   const historyQuery = useQuery({
     queryKey: ['portfolio-backtests', 'history'],
@@ -316,7 +332,12 @@ export function PortfolioBacktest() {
                 title={`${result.name}${detailId ? '（历史记录）' : ''} · 权益曲线`}
                 headerAction={
                   detailId ? (
-                    <button onClick={() => deleteMutation.mutate(detailId)} className="flex items-center gap-1 rounded border border-[#1c1c1c] px-2 py-1 text-[11px] text-[#f5222d] hover:bg-[#1c1c1c]">
+                    <button
+                      onClick={() => {
+                        if (window.confirm(`确定删除组合回测「${result.name}」？该操作不可恢复。`)) deleteMutation.mutate(detailId)
+                      }}
+                      className="flex items-center gap-1 rounded border border-[#1c1c1c] px-2 py-1 text-[11px] text-[#f5222d] hover:bg-[#1c1c1c]"
+                    >
                       <Trash2 className="h-3 w-3" />删除
                     </button>
                   ) : undefined
@@ -449,9 +470,18 @@ export function PortfolioBacktest() {
                         <td className="py-1.5 pr-3">{fmtPct(b.max_drawdown_pct)}</td>
                         <td className="py-1.5 pr-3">{fmtNum(b.sharpe_ratio)}</td>
                         <td className="py-1.5 pr-3">
-                          <button onClick={() => loadDetail(b.id)} className="rounded border border-[#1c1c1c] px-2 py-0.5 text-[11px] text-[#bbb] hover:bg-[#1c1c1c]">
-                            查看
-                          </button>
+                          <div className="flex gap-1.5">
+                            <button onClick={() => loadDetail(b.id)} className="rounded border border-[#1c1c1c] px-2 py-0.5 text-[11px] text-[#bbb] hover:bg-[#1c1c1c]">
+                              查看
+                            </button>
+                            <button
+                              onClick={() => openShareCard(b.id)}
+                              disabled={shareLoading}
+                              className="rounded border border-quant-gold/30 px-2 py-0.5 text-[11px] text-quant-gold hover:bg-quant-gold/10 disabled:opacity-50"
+                            >
+                              分享
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -464,6 +494,7 @@ export function PortfolioBacktest() {
           </SectionCard>
         </div>
       </div>
+      <ShareCardModal card={shareCard} onClose={() => setShareCard(null)} />
     </div>
   )
 }

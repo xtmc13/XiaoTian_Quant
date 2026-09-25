@@ -11,7 +11,7 @@ export interface Toast {
 
 interface ToastState {
   toasts: Toast[]
-  addToast: (toast: Omit<Toast, 'id'>) => void
+  addToast: (toast: Omit<Toast, 'id'>, opts?: { bypassCooldown?: boolean }) => void
   removeToast: (id: string) => void
   clearAll: () => void
 }
@@ -24,12 +24,14 @@ const COOLDOWN_MS = 30_000 // 30 秒冷却
 
 export const useToastStore = create<ToastState>((set) => ({
   toasts: [],
-  addToast: (toast) => {
+  addToast: (toast, opts) => {
     const key = `${toast.type}:${toast.message}`
     const now = Date.now()
-    const lastShown = recentMessages.get(key)
-    if (lastShown && (now - lastShown) < COOLDOWN_MS) {
-      return // 冷却期内，跳过
+    if (!opts?.bypassCooldown) {
+      const lastShown = recentMessages.get(key)
+      if (lastShown && now - lastShown < COOLDOWN_MS) {
+        return // 冷却期内，跳过
+      }
     }
     recentMessages.set(key, now)
 

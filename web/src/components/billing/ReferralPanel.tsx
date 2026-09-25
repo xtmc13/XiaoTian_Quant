@@ -39,10 +39,13 @@ export interface ReferralEarning {
   created_at: number
 }
 
-// 推荐链接优先用当前站点 origin（与后端 FRONTEND_BASE_URL 配置的绝对链接互为兜底）
+// 推荐链接优先用当前站点 origin（与后端 FRONTEND_BASE_URL 配置的绝对链接互为兜底）；
+// FRONTEND_BASE_URL 未配置时后端 referral_link 退化为相对路径，此时也必须补 origin，
+// 否则复制出来是不可用的相对地址。
 function buildReferralLink(info: ReferralCodeInfo): string {
-  if (info.referral_link) return info.referral_link
-  return `${window.location.origin}${info.referral_path}`
+  if (info.referral_link && info.referral_link.startsWith('http')) return info.referral_link
+  const path = info.referral_path || info.referral_link || ''
+  return `${window.location.origin}${path}`
 }
 
 function formatTime(ts?: number): string {

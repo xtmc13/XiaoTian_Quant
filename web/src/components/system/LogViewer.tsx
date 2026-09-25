@@ -51,7 +51,7 @@ export function LogViewer({ lines = 100, className }: LogViewerProps) {
     )
   }
 
-  const logLines = data.split('\n').filter(Boolean)
+  const logLines = (typeof data === 'string' ? data : '').split('\n').filter(Boolean)
 
   return (
     <div ref={containerRef} className={cn('h-full overflow-auto font-mono text-[11px] leading-5 bg-quant-bg-secondary rounded-lg border border-quant-border p-3', className)}>

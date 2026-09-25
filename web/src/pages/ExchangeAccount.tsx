@@ -9,6 +9,7 @@ import { SectionCard } from '@/components/ui/SectionCard'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { ExchangeSignupModal } from '@/components/ExchangeSignupModal'
+import { ExchangeHealthPanel } from '@/components/ExchangeHealthPanel'
 import {
   Wallet,
   TrendingUp,
@@ -627,6 +628,9 @@ export function ExchangeAccount() {
             </div>
           )}
         </SectionCard>
+
+        {/* 交易所体检（L1-L4 只读探测，与系统状态页同一面板） */}
+        <ExchangeHealthPanel />
       </div>
       <ExchangeSignupModal open={showSignupModal} onClose={() => setShowSignupModal(false)} />
     </div>

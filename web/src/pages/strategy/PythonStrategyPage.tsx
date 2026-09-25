@@ -90,7 +90,7 @@ const STATUS_BADGE: Record<string, { label: string; className: string }> = {
   error: { label: '错误', className: 'bg-red-600/30 text-red-300' },
 }
 
-export default function PythonStrategyPage() {
+export function PythonStrategyPage() {
   const queryClient = useQueryClient()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [name, setName] = useState('我的 Python 策略')

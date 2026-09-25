@@ -206,9 +206,9 @@ function RiskParamsCard() {
       .getConfig()
       .then((cfg) => {
         if (!cfg) return
-        setMaxConcurrent(cfg.max_concurrent_orders)
-        setPositionLimit(cfg.position_limit_pct)
-        setProfitProtection(cfg.profit_protection_enabled)
+        setMaxConcurrent(cfg.max_concurrent_orders ?? 5)
+        setPositionLimit(cfg.position_limit_pct ?? 50)
+        setProfitProtection(cfg.profit_protection_enabled ?? false)
         setIndicatorFailOpen(cfg.indicator_fail_open ?? true)
         setLoaded(true)
       })

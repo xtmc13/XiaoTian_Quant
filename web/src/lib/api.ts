@@ -694,7 +694,7 @@ export const aiGateApi = {
   getDecision: (id: string) =>
     api.get<{ decision: AIGateDecision }>(`/ai/gate/decisions/${id}`).then((d) => d?.decision),
   stats: (days?: number) => api.get<AIGateStatsResponse>('/ai/gate/stats', { params: days ? { days } : {} }),
-  getConfig: () => api.get<{ config: AIGateConfig }>('/ai/gate/config').then((d) => d?.config),
+  getConfig: () => api.get<{ config: AIGateConfig }>('/ai/gate/config').then((d) => d?.config ?? null),
   putConfig: (data: Partial<AIGateConfig>) =>
     api.put<{ status: string; config: AIGateConfig }>('/ai/gate/config', data).then((d) => d?.config),
 }
@@ -1398,7 +1398,7 @@ export const arbitrageApi = {
 // ── Triangular Arbitrage ──
 
 export const triangularApi = {
-  config: () => api.get<{ config: TriangularConfig }>('/triangular/config').then((r) => r.config),
+  config: () => api.get<{ config: TriangularConfig }>('/triangular/config').then((r) => r?.config ?? null),
 
   updateConfig: (data: TriangularConfig) =>
     api.post<{ config: TriangularConfig }>('/triangular/config', data).then((r) => r.config),
@@ -1939,7 +1939,29 @@ export const logsApi = {
 
 // ── Data Download ──
 export const dataApi = {
-  coverage: () => api.get<DataCoverageResponse>('/data/coverage'),
+  coverage: () =>
+    api
+      .get<{
+        coverage?: { symbol: string; interval: string; bar_count?: number; start_time?: number; end_time: number }[] | null
+        symbols?: string[] | null
+      }>('/data/coverage')
+      .then((d): DataCoverageResponse => {
+        // 后端实际返回 {coverage:[{symbol,interval,...}], symbols:[...]}（可为 null），
+        // 归一化为按交易对聚合的 DataCoverageResponse，两个消费组件共用。
+        const grouped = new Map<string, { symbol: string; intervals: string[]; from?: number; to?: number }>()
+        for (const c of d?.coverage ?? []) {
+          const g = grouped.get(c.symbol) ?? { symbol: c.symbol, intervals: [] as string[] }
+          if (c.interval && !g.intervals.includes(c.interval)) g.intervals.push(c.interval)
+          if (c.start_time && (!g.from || c.start_time < g.from)) g.from = c.start_time
+          if (c.end_time && (!g.to || c.end_time > g.to)) g.to = c.end_time
+          grouped.set(c.symbol, g)
+        }
+        for (const s of d?.symbols ?? []) {
+          if (!grouped.has(s)) grouped.set(s, { symbol: s, intervals: [] })
+        }
+        const symbols = [...grouped.values()]
+        return { symbols, total_symbols: symbols.length }
+      }),
   info: (symbol: string, interval: string) =>
     api.get<DataInfoResponse>(`/data/info?symbol=${symbol}&interval=${interval}`),
   download: (config: DownloadConfig) => api.post<{ job_id: string }>('/data/download', config),
@@ -2438,3 +2460,54 @@ export const layeredMartinApi = {
 }
 
 export { ApiError }
+
+// ── Share Card（收益分享卡：已平仓交易 / 回测报告，属主+admin 可取）──
+export interface ShareCardBase {
+  kind: string
+  id: string
+  nickname: string
+  amount_mode: 'pct' | 'abs'
+  share_url: string
+  generated_at: number
+}
+
+export interface ShareBacktestCard extends ShareCardBase {
+  kind: 'backtest'
+  name: string
+  strategy: string
+  symbol?: string
+  timeframe?: string
+  total_return_pct: number
+  max_drawdown_pct: number
+  sharpe_ratio: number
+  sortino_ratio: number
+  win_rate: number
+  profit_factor: number
+  total_trades: number
+  initial_capital: number
+  final_equity: number
+  start_time: number
+  end_time: number
+  created_at: number
+}
+
+export interface ShareTradeCard extends ShareCardBase {
+  kind: 'trade'
+  symbol: string
+  side: string
+  exchange: string
+  entry_price: number
+  exit_price: number
+  quantity: number
+  cost_basis: number
+  pnl: number
+  pnl_pct: number
+  opened_at: number
+  closed_at: number
+  hold_ms: number
+}
+
+export const shareApi = {
+  backtestCard: (id: string) => api.get<ShareBacktestCard>(`/share/backtest/${id}/card`),
+  tradeCard: (id: string) => api.get<ShareTradeCard>(`/share/trade/${id}/card`),
+}

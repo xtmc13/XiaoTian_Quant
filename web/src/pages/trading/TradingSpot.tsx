@@ -12,7 +12,7 @@ import { TRADING_INTERVALS } from '@/lib/constants'
 import { extractArray, safeNumber, safeString } from '@/lib/typeHelpers'
 import { cn } from '@/lib/utils'
 import { useWebSocket } from '@/hooks/useWebSocket'
-import { toast, ToastContainer } from '@/lib/useToast'
+import { toast } from '@/lib/useToast'
 import { OrderBookPanel } from '@/components/trading/OrderBookPanel'
 import { ChartTrading } from '@/components/trading/ChartTrading'
 import { computeSpotAvgEntryPrice, formatLinePrice } from '@/components/trading/chartOverlays'
@@ -1585,7 +1585,6 @@ export function TradingSpot() {
           </div>
         )}
       </div>
-      <ToastContainer />
     </div>
   )
 }

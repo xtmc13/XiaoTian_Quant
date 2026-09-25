@@ -13,9 +13,10 @@ import {
 import { TRADING_INTERVALS } from '@/lib/constants'
 import { cn } from '@/lib/utils'
 import { useWebSocket } from '@/hooks/useWebSocket'
-import { toast, ToastContainer } from '@/lib/useToast'
+import { toast } from '@/lib/useToast'
 import { OrderBookPanel } from '@/components/trading/OrderBookPanel'
 import { ChartTrading } from '@/components/trading/ChartTrading'
+import { LadderPanel } from '@/components/trading/LadderPanel'
 import { formatLinePrice } from '@/components/trading/chartOverlays'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { Skeleton } from '@/components/ui/Skeleton'
@@ -110,6 +111,7 @@ export function TradingContract() {
   const [postOnly, setPostOnly] = useState(false) // 只做 Maker
   const [slippage, setSlippage] = useState('0.5') // 滑点容忍度（%）
   const [showAdvanced, setShowAdvanced] = useState(false) // 高级设置展开
+  const [showLadder, setShowLadder] = useState(false) // 阶梯智能单面板
 
   const chartRef = useRef<HTMLDivElement>(null)
   const chartApiRef = useRef<ChartApi | null>(null)
@@ -842,6 +844,15 @@ export function TradingContract() {
               >
                 高级
               </button>
+              <button
+                onClick={() => setShowLadder(!showLadder)}
+                className={cn(
+                  'flex-1 py-1 text-[11px] rounded transition-colors',
+                  showLadder ? 'bg-quant-bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground'
+                )}
+              >
+                阶梯
+              </button>
             </div>
 
             {/* 触发价格输入 */}
@@ -1194,6 +1205,18 @@ export function TradingContract() {
                   />
                   <span className="text-[10px] text-muted-foreground ml-1">USDT</span>
                 </div>
+              </div>
+            )}
+
+            {/* 阶梯智能单面板 */}
+            {showLadder && (
+              <div className="flex flex-col gap-2 p-2 bg-quant-bg/50 rounded-lg border border-quant-border/50">
+                <LadderPanel
+                  symbol={symbol}
+                  currentPrice={lastPrice}
+                  pricePrecision={precision.price}
+                  onClose={() => setShowLadder(false)}
+                />
               </div>
             )}
 
@@ -2047,7 +2070,6 @@ export function TradingContract() {
           </div>
         )}
       </div>
-      <ToastContainer />
 
       {/* ═══════════════════════════════════════════════
          Settings Modal
