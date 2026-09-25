@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"math"
 	"net/http"
@@ -71,6 +72,12 @@ func main() {
 			log.Fatalf("FATAL: %v", err)
 		}
 		log.Printf("WARNING: vault init: %v", err)
+	}
+	// 密钥轮换双 key 窗口：env 新 key + 本机旧 key 文件 → 旧 key 解密、新 key 重加密。
+	if n, err := store.MigrateVaultKeyToEnv(); err != nil {
+		log.Printf("WARNING: vault key migration: %v", err)
+	} else if n > 0 {
+		log.Printf("[vault] re-encrypted %d credential(s) onto VAULT_MASTER_KEY", n)
 	}
 	if migrated, err := store.MigratePlaintextCredentialsToVault(); err != nil {
 		log.Printf("WARNING: credential migration: %v", err)
@@ -470,6 +477,11 @@ func setupGinEngine(appCtx *app.Context) *gin.Engine {
 func isFatalInitErr(err error) bool {
 	if err == nil {
 		return false
+	}
+	// 本机保险库密钥文件损坏：继续启动会用 dev 兜底密钥孤儿化全部已存凭证，
+	// 必须 fatal 让人工处置（恢复备份或确认放弃旧凭证后删除密钥文件）。
+	if errors.Is(err, store.ErrVaultKeyCorrupted) {
+		return true
 	}
 	msg := err.Error()
 	return (strings.Contains(msg, "SECRET_KEY") || strings.Contains(msg, "VAULT_MASTER_KEY")) && strings.Contains(msg, "required in production")

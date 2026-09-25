@@ -8,12 +8,23 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+)
+
+var (
+	// ErrVaultKeyCorrupted 本机密钥文件存在但内容为空/损坏。绝不静默重新生成
+	// （那会让全部已加密凭证变成无法解密的孤儿密文），必须人工处置。
+	ErrVaultKeyCorrupted = errors.New("vault key file corrupted")
+	// ErrVaultDecrypt 凭证密文解密失败（主密钥不匹配或密文损坏，常见于密钥
+	// 轮换后旧密文未迁移）。与"凭证未配置"（not found）严格区分。
+	ErrVaultDecrypt = errors.New("vault credential undecryptable")
 )
 
 // CredentialVault provides Fernet-like encrypted storage for API keys.
@@ -90,26 +101,41 @@ func resolveVaultMasterKey() string {
 	return "xiaotian-quant-default-vault-key" // dev fallback：禁止用于真实凭证加密
 }
 
-// loadLocalVaultKey 读取本机随机保险库密钥文件。
+// loadLocalVaultKey 读取本机随机保险库密钥文件。文件存在但内容为空视为损坏
+// （ErrVaultKeyCorrupted）；权限宽于 0600 时自愈回收。
 func loadLocalVaultKey() (string, error) {
 	data, err := os.ReadFile(VaultKeyPath)
 	if err != nil {
 		return "", err
 	}
-	return string(data), nil
+	key := strings.TrimSpace(string(data))
+	if key == "" {
+		return "", fmt.Errorf("%w: %s 内容为空；请从备份恢复，或确认无有效凭证后删除该文件重启以生成新密钥（旧密文将无法解密）", ErrVaultKeyCorrupted, VaultKeyPath)
+	}
+	if info, statErr := os.Stat(VaultKeyPath); statErr == nil && info.Mode().Perm() != 0o600 {
+		if chErr := os.Chmod(VaultKeyPath, 0o600); chErr == nil {
+			log.Printf("[vault] 密钥文件权限已纠正为 0600: %s", VaultKeyPath)
+		}
+	}
+	return key, nil
 }
 
 // ensureLocalVaultKey 生成（或读取）本机随机主密钥，0600 权限落盘 runtime/.vault_key。
-// 用于"未设 env 主密钥且需要加密真实凭证"的场景，warn 日志提示多机迁移需设 env。
+// 仅当文件不存在时生成；文件存在但损坏时原样返回错误，绝不覆盖（避免已加密
+// 凭证被新密钥孤儿化）。用于"未设 env 主密钥且需要加密真实凭证"的场景。
 func ensureLocalVaultKey() (string, error) {
-	if key, err := loadLocalVaultKey(); err == nil && key != "" {
+	key, err := loadLocalVaultKey()
+	if err == nil {
 		return key, nil
+	}
+	if !os.IsNotExist(err) {
+		return "", err
 	}
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
 		return "", err
 	}
-	key := hex.EncodeToString(buf)
+	key = hex.EncodeToString(buf)
 	if err := os.MkdirAll(filepath.Dir(VaultKeyPath), 0o700); err != nil {
 		return "", err
 	}
@@ -123,6 +149,8 @@ func ensureLocalVaultKey() (string, error) {
 // APP_ENV=production 且未设 VAULT_MASTER_KEY → fatal；其余场景**先确保本机随机
 // 密钥文件存在**（未设 env 时），再锁定进程唯一主密钥并创建保险库单例——保证
 // 迁移加密与运行期读取使用同一把钥匙（顺序：键文件 → resolvedVaultKey → 单例）。
+// 本机密钥文件持久化在 VaultKeyPath（0600），重启不丢凭证；文件损坏时返回
+// ErrVaultKeyCorrupted（启动 fatal），绝不静默重生成。
 func EnsureVaultReady() error {
 	if os.Getenv("VAULT_MASTER_KEY") == "" {
 		if env := os.Getenv("APP_ENV"); env == "production" || env == "release" {
@@ -132,7 +160,7 @@ func EnsureVaultReady() error {
 		if _, err := ensureLocalVaultKey(); err != nil {
 			return fmt.Errorf("vault local key: %w", err)
 		}
-		log.Printf("[vault] 使用本机随机保险库密钥，设置 VAULT_MASTER_KEY env 以便多机迁移")
+		log.Printf("[vault] 未设置 VAULT_MASTER_KEY：使用本机持久化密钥文件 %s（0600，重启不丢凭证）；多机部署/迁移请设置 VAULT_MASTER_KEY", VaultKeyPath)
 	}
 	key := os.Getenv("VAULT_MASTER_KEY")
 	if key == "" {
@@ -149,6 +177,59 @@ func EnsureVaultReady() error {
 	vaultMu.Unlock()
 	GetVault()
 	return nil
+}
+
+// MigrateVaultKeyToEnv 双 key 解密窗口（密钥轮换）：VAULT_MASTER_KEY（新 key）
+// 与本机密钥文件（旧 key）同时存在且不同时，逐条检查保险库条目——env key 已能
+// 解密的跳过；env key 失败而旧 key 成功的，用旧 key 解密后以 env key 重加密并
+// 落盘。幂等：全部条目可被 env key 解密后为 no-op。
+// 返回迁移条数；新旧 key 都解不开的条目以 error 汇总报告（不中断启动，由
+// 调用方记 WARNING——这些条目需用户重新录入凭证）。
+func MigrateVaultKeyToEnv() (int, error) {
+	envKey := os.Getenv("VAULT_MASTER_KEY")
+	if envKey == "" {
+		return 0, nil
+	}
+	oldKey, err := loadLocalVaultKey()
+	if err != nil || oldKey == "" || oldKey == envKey {
+		return 0, nil
+	}
+
+	v := GetVault()
+	old := NewCredentialVault(oldKey)
+
+	v.mu.Lock()
+	migrated := make([]string, 0)
+	var undecryptable []string
+	for alias, e := range v.entries {
+		if _, derr := v.decrypt(e.Encrypted); derr == nil {
+			continue
+		}
+		plain, oerr := old.decrypt(e.Encrypted)
+		if oerr != nil {
+			undecryptable = append(undecryptable, alias)
+			continue
+		}
+		enc, eerr := v.encrypt(plain)
+		if eerr != nil {
+			v.mu.Unlock()
+			return 0, fmt.Errorf("vault re-encrypt %s: %w", alias, eerr)
+		}
+		e.Encrypted = enc
+		migrated = append(migrated, alias)
+	}
+	v.mu.Unlock()
+
+	if len(migrated) > 0 {
+		if err := v.SaveToFile(VaultFilePath); err != nil {
+			return 0, fmt.Errorf("vault re-encrypt persist: %w", err)
+		}
+		log.Printf("[vault] 密钥轮换：已用旧本机密钥解密并以 VAULT_MASTER_KEY 重加密 %d 条凭证: %v", len(migrated), migrated)
+	}
+	if len(undecryptable) > 0 {
+		return len(migrated), fmt.Errorf("%d 条凭证新旧主密钥均无法解密（需重新录入）: %v", len(undecryptable), undecryptable)
+	}
+	return len(migrated), nil
 }
 
 // GetOrReload 先查内存；miss 时从 VaultFilePath 惰性重载一次再查——兜底
@@ -270,7 +351,7 @@ func (v *CredentialVault) Get(alias string) (apiKey, apiSecret, passphrase strin
 
 	plaintext, err := v.decrypt(entry.Encrypted)
 	if err != nil {
-		return "", "", "", fmt.Errorf("vault decrypt: %w", err)
+		return "", "", "", fmt.Errorf("%w: credential %q 解密失败（主密钥不匹配或密文损坏，疑似密钥轮换后旧密文未迁移）: %v", ErrVaultDecrypt, alias, err)
 	}
 
 	parts := vaultSplitN(string(plaintext), "|", 3)

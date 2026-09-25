@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -172,6 +173,11 @@ func GetExchanges(c *gin.Context) {
 				if !item["has_credentials"].(bool) {
 					_, _, _, verr := store.GetVault().GetOrReload(key)
 					item["has_credentials"] = verr == nil
+					// 区分"未配置"与"已配置但解密失败"（主密钥不匹配/密钥轮换后
+					// 旧密文未迁移）——后者必须显式报错引导用户重新录入。
+					if verr != nil && errors.Is(verr, store.ErrVaultDecrypt) {
+						item["credential_error"] = "保险库解密失败：主密钥不匹配或密文损坏（疑似密钥轮换），请重新录入该交易所 API 凭证"
+					}
 				}
 			}
 		}

@@ -230,6 +230,21 @@ chmod +x build.sh
 | `LOG_LEVEL` | 日志级别 | `INFO` |
 | `LOG_FORMAT` | 日志格式 (`text`/`json`) | `text` |
 | `SECRET_KEY` | JWT 签名密钥 | 自动生成 |
+| `VAULT_MASTER_KEY` | 凭证保险库主密钥（见下节） | 本机自动生成并持久化 |
+
+### 凭证保险库（交易所 API 密钥加密存储）
+
+交易所 API 凭证以 AES-256-GCM 加密落盘在 `gateway/runtime/credentials_vault.json`，主密钥解析优先级：
+
+1. `VAULT_MASTER_KEY` 环境变量（多机部署/迁移**必须**设置；`APP_ENV=production` 未设置时启动 fatal）；
+2. 本机持久化密钥文件 `gateway/runtime/.vault_key`（未设 env 时首次启动自动生成随机密钥，权限 0600，**重启不丢凭证**，但仅本机可用）。
+
+运维要点：
+
+- `runtime/` 目录已在 `.gitignore` 中忽略，密钥文件与密文都不会进版本库；请把 `.vault_key` 纳入本机备份。
+- 密钥文件损坏（存在但为空）时启动 fatal 并报 `vault key file corrupted`——不会静默重生成新密钥（那会让全部已存凭证无法解密）。从备份恢复，或确认放弃旧凭证后删除该文件重启。
+- **密钥轮换/多机迁移**：在新环境设置 `VAULT_MASTER_KEY` 并保留旧 `.vault_key` 文件启动即可，启动期自动用旧 key 解密、新 key 重加密全部条目（日志 `[vault] 密钥轮换：…重加密 N 条凭证`）；新旧 key 都解不开的条目会在启动 WARNING 中列出别名，需用户重新录入。
+- 凭证"已配置但解密失败"（主密钥不匹配）时，`GET /api/exchanges` 对应交易所会返回 `credential_error` 字段，与"未配置"明确区分。
 
 ### 交易所 API
 
