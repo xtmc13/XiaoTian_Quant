@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 )
 
@@ -20,15 +22,22 @@ type Client struct {
 }
 
 // NewClient creates a new ML service client.
+// baseURL 为空时依次读 ML_SERVER_URL 环境变量、默认 http://localhost:8001。
 func NewClient(baseURL string) *Client {
+	if baseURL == "" {
+		baseURL = os.Getenv("ML_SERVER_URL")
+	}
 	if baseURL == "" {
 		baseURL = "http://localhost:8001"
 	}
 	return &Client{
-		baseURL:    baseURL,
+		baseURL:    strings.TrimRight(baseURL, "/"),
 		httpClient: &http.Client{Timeout: 120 * time.Second},
 	}
 }
+
+// BaseURL 返回当前指向的 ml_server 地址（状态 API 展示用）。
+func (c *Client) BaseURL() string { return c.baseURL }
 
 // ── Types ──────────────────────────────────────────────────────
 

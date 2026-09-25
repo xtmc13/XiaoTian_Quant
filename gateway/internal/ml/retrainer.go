@@ -36,7 +36,6 @@ const (
 	DefaultRetrainCheckInterval   = 60 * time.Second // 任务到期扫描周期
 	DefaultPredictionTTL          = 30 * 24 * time.Hour
 	DefaultMaxConsecutiveFailures = 3
-	defaultRetrainIntervalMin     = 1440 // 24h，对应 freqtrade live_retrain_hours 默认
 )
 
 // RetrainerConfig 重训引擎配置。读取顺序：ml_settings 覆盖 > 环境变量 > 默认值。
@@ -181,6 +180,7 @@ type Retrainer struct {
 	stopCh      chan struct{}
 	doneCh      chan struct{}
 	lastCleanup time.Time
+	lastDriftScan time.Time // 上次漂移扫描时间（checkDrift 周期门）
 	runningJobs map[int64]bool // 同任务不重入（手动/周期撞车保护）
 }
 
@@ -248,7 +248,7 @@ func (r *Retrainer) loop() {
 	}
 }
 
-// tick 单轮：扫描到期任务 + 顺带预测缓存 TTL 清理。panic 不得杀死循环。
+// tick 单轮：扫描到期任务 + 漂移检查 + 顺带预测缓存 TTL 清理。panic 不得杀死循环。
 func (r *Retrainer) tick() {
 	defer func() {
 		if rec := recover(); rec != nil {
@@ -259,7 +259,78 @@ func (r *Retrainer) tick() {
 		return
 	}
 	r.checkJobs(time.Now())
+	r.checkDrift(time.Now())
 	r.cleanupIfDue(time.Now())
+}
+
+// DriftChecker 闭环漂移检查窄接口（*TrainingLoop 天然满足）。
+// 返回 true 表示检出漂移（调用方随即触发一次 drift 重训）。
+type DriftChecker interface {
+	CheckJobDrift(job *store.MLRetrainJob) (bool, error)
+}
+
+// checkDrift 周期漂移检查：runner 实现 DriftChecker 时，对未到期的启用任务
+// 做特征分布 PSI 检查，检出漂移立即触发一次 trigger="drift" 的重训
+// （检查周期 ML_DRIFT_CHECK_MIN，默认 60 分钟；正在跑的任务跳过本轮）。
+func (r *Retrainer) checkDrift(now time.Time) {
+	checker, ok := r.runner.(DriftChecker)
+	if !ok || r.repo == nil {
+		return
+	}
+	r.mu.Lock()
+	due := r.lastDriftScan.IsZero() || now.Sub(r.lastDriftScan) >= r.driftScanInterval()
+	if due {
+		r.lastDriftScan = now
+	}
+	r.mu.Unlock()
+	if !due {
+		return
+	}
+	jobs, err := r.repo.ListJobs(0, true)
+	if err != nil {
+		log.Printf("[ml-retrainer] drift scan list jobs: %v", err)
+		return
+	}
+	for _, job := range jobs {
+		// 已到期的任务本轮 checkJobs 会跑常规重训，无需漂移检查
+		interval := time.Duration(job.IntervalMinutes) * time.Minute
+		if job.LastRunAt == 0 || now.Sub(time.UnixMilli(job.LastRunAt)) >= interval {
+			continue
+		}
+		r.mu.Lock()
+		busy := r.runningJobs[job.ID]
+		r.mu.Unlock()
+		if busy {
+			continue
+		}
+		drifted, err := checker.CheckJobDrift(job)
+		if err != nil {
+			log.Printf("[ml-retrainer] drift check job %d: %v", job.ID, err)
+			continue
+		}
+		if !drifted {
+			continue
+		}
+		if !r.acquire(job.ID) {
+			continue
+		}
+		log.Printf("[ml-retrainer] job %d (%s) 漂移触发重训", job.ID, job.ModelName)
+		r.notify("WARN", "ML 模型漂移触发重训: "+job.ModelName,
+			fmt.Sprintf("job_id=%d 特征分布 PSI 超阈值，提前触发重训", job.ID))
+		r.runJob(job, "drift")
+	}
+}
+
+// driftScanInterval 漂移扫描周期（ml_settings drift_check_min > ML_DRIFT_CHECK_MIN > 60min）。
+func (r *Retrainer) driftScanInterval() time.Duration {
+	if r.repo != nil {
+		if v := r.repo.GetSetting("drift_check_min"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				return time.Duration(n) * time.Minute
+			}
+		}
+	}
+	return time.Duration(mlEnvInt("ML_DRIFT_CHECK_MIN", 60)) * time.Minute
 }
 
 // checkJobs 触发所有到期的启用任务（串行，单个任务 panic 不影响其他任务）。
@@ -328,6 +399,8 @@ func (r *Retrainer) runJob(job *store.MLRetrainJob, trigger string) {
 	}()
 
 	cfg := JobPipelineConfig(job)
+	cfg.JobID = job.ID
+	cfg.Trigger = trigger // 闭环档案记账（xt_ml_training_runs.trigger_src）
 	start := time.Now()
 	result, err := r.runner.Run(cfg)
 	durationMs := time.Since(start).Milliseconds()
@@ -441,4 +514,7 @@ func (r *Retrainer) notify(level, title, content string) {
 }
 
 // 默认任务间隔常量导出（API 层创建任务时复用）。
-func DefaultRetrainIntervalMinutes() int { return defaultRetrainIntervalMin }
+// 读取 ML_RETRAIN_HOURS（小时），默认 24h，对应 freqtrade live_retrain_hours。
+func DefaultRetrainIntervalMinutes() int {
+	return mlEnvInt("ML_RETRAIN_HOURS", 24) * 60
+}

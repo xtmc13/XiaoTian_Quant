@@ -32,6 +32,7 @@ import {
   Server,
 } from 'lucide-react'
 import { RLWorkerStatusCard } from './AI/components/RLWorkerStatusCard'
+import { MLTrainingLoopCard } from './AI/components/MLTrainingLoopCard'
 
 /* ── Types ── */
 interface ModelInfo {
@@ -446,6 +447,10 @@ export function ModelManagement() {
             })}
           </div>
         )}
+        {/* Training Loop (闭环) */}
+        <div className="mt-6">
+          <MLTrainingLoopCard />
+        </div>
         {/* RL Worker Status */}
         <div className="mt-6">
           <RLWorkerStatusCard />

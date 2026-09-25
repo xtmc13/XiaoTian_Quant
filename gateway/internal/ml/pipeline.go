@@ -6,9 +6,15 @@ import (
 	"time"
 
 	"github.com/xiaotian-quant/gateway/internal/data"
+	"github.com/xiaotian-quant/gateway/internal/model"
 )
 
 // ── Training Pipeline ──────────────────────────────────────────
+
+// BarLoader 历史 K 线加载窄接口（*data.Downloader 天然满足，测试可 fake）。
+type BarLoader interface {
+	LoadBarsForBacktest(symbol, interval string, fromMs, toMs int64) []model.Bar
+}
 
 // PipelineConfig configures the end-to-end training pipeline.
 type PipelineConfig struct {
@@ -21,6 +27,8 @@ type PipelineConfig struct {
 	FeaturePeriods []int           `json:"feature_periods"` // e.g., [5, 10, 20, 50]
 	LabelHorizon int               `json:"label_horizon"`   // bars ahead for return label
 	ModelParams  map[string]any    `json:"model_params,omitempty"`
+	JobID        int64             `json:"job_id,omitempty"` // 闭环记账：所属重训任务（0=非任务触发）
+	Trigger      string            `json:"trigger,omitempty"` // 闭环记账：schedule | manual | drift
 }
 
 func DefaultPipelineConfig() PipelineConfig {
@@ -48,16 +56,23 @@ type PipelineResult struct {
 	FeatureNames  []string          `json:"feature_names"`
 	DurationMs    int64             `json:"duration_ms"`
 	Error         string            `json:"error,omitempty"`
+	// FeatureSample 训练特征向量采样（<=1000 条），闭环用于漂移参考分布；不序列化。
+	FeatureSample []map[string]float64 `json:"-"`
 }
 
 // TrainingPipeline orchestrates data loading, feature generation, and model training.
 type TrainingPipeline struct {
 	client     *Client
-	downloader *data.Downloader
+	downloader BarLoader
 }
 
-// NewTrainingPipeline creates a pipeline with the given ML client and data downloader.
-func NewTrainingPipeline(client *Client, downloader *data.Downloader) *TrainingPipeline {
+// NewTrainingPipeline creates a pipeline with the given ML client and bar loader.
+func NewTrainingPipeline(client *Client, downloader BarLoader) *TrainingPipeline {
+	// 归一化 typed-nil：*data.Downloader(nil) 装进接口后 == nil 不再成立，
+	// 历史调用方（online learner 等）传 nil 指针依赖 loadBars 的 nil 检查。
+	if d, ok := downloader.(*data.Downloader); ok && d == nil {
+		downloader = nil
+	}
 	return &TrainingPipeline{
 		client:     client,
 		downloader: downloader,
@@ -121,11 +136,35 @@ func (p *TrainingPipeline) Run(cfg PipelineConfig) (*PipelineResult, error) {
 	result.Metrics = trainResult.Metrics
 	result.FeatureNames = p.getFeatureNames(cfg.FeaturePeriods)
 	result.DurationMs = time.Since(start).Milliseconds()
+	result.FeatureSample = sampleFeatureVectors(featureBars, result.FeatureNames, 1000)
 
 	// Log label distribution for debugging
 	_ = labels
 
 	return result, nil
+}
+
+// sampleFeatureVectors 从训练 bar 中抽取特征向量采样（等距 stride 抽取，上限 maxSamples），
+// 只保留特征键（剔除 time/ohlcv/label），闭环漂移参考分布用。
+func sampleFeatureVectors(featureBars []map[string]any, featureNames []string, maxSamples int) []map[string]float64 {
+	if len(featureBars) == 0 || len(featureNames) == 0 || maxSamples <= 0 {
+		return nil
+	}
+	stride := 1
+	if len(featureBars) > maxSamples {
+		stride = (len(featureBars) + maxSamples - 1) / maxSamples
+	}
+	sample := make([]map[string]float64, 0, maxSamples)
+	for i := 0; i < len(featureBars); i += stride {
+		vec := make(map[string]float64, len(featureNames))
+		for _, name := range featureNames {
+			if v, ok := featureBars[i][name].(float64); ok && !math.IsNaN(v) && !math.IsInf(v, 0) {
+				vec[name] = v
+			}
+		}
+		sample = append(sample, vec)
+	}
+	return sample
 }
 
 // loadBars loads historical bars from local storage or downloads from exchange.
