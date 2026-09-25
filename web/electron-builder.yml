@@ -1,7 +1,9 @@
 # electron-builder 配置(小天量化桌面端)
 # 用法:
 #   npm run electron:pack   # --dir 快速产物(调试/CI)
-#   npm run electron:dist   # 全量安装包(linux AppImage+deb / win portable / mac zip)
+#   npm run electron:dist   # 全量安装包(linux AppImage+deb / win nsis / mac dmg)
+# 注意: dmg 只能在 macOS 上产出; nsis 需要在 Windows(或 CI windows runner)上构建;
+# 未配置签名证书时(CSC_IDENTITY_AUTO_DISCOVERY=false)产出未签名安装包。
 appId: ai.xiaotian.quant
 productName: 小天量化
 executableName: xiaotian-quant-desktop
@@ -31,14 +33,24 @@ linux:
 
 win:
   target:
-    - portable
+    - nsis
   artifactName: xiaotian-quant-desktop-${version}-win-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: 小天量化
 
 mac:
   target:
-    - zip
+    - dmg
   category: public.app-category.finance
   artifactName: xiaotian-quant-desktop-${version}-mac-${arch}.${ext}
+
+dmg:
+  writeUpdateInfo: false
 
 # electron:dist 跨平台出包时的兜底架构
 npmRebuild: false

@@ -38,6 +38,12 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             name: linux-amd64
+          # linux/arm64：在 x86 runner 上交叉编译（gateway 为 CGO_ENABLED=0 纯 Go，
+          # 但保持引擎产物矩阵齐全，供 CGO 形态/下游使用）。
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            name: linux-arm64
+            cross_linker: gcc-aarch64-linux-gnu
           - os: macos-latest
             target: x86_64-apple-darwin
             name: macos-amd64
@@ -53,11 +59,24 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-      - run: cd engine && cargo build --release --target ${{ matrix.target }}
+      - name: Install cross linker (linux/arm64)
+        if: matrix.name == 'linux-arm64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.cross_linker }}
+      - name: Build engine
+        run: cd engine && cargo build --release --target ${{ matrix.target }}
+        env:
+          # 仅对 aarch64-unknown-linux-gnu 生效；其他 target 忽略该变量。
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
       - uses: actions/upload-artifact@v4
         with:
           name: engine-${{ matrix.name }}
-          path: engine/target/${{ matrix.target }}/release/libxiaotian_engine.*
+          # Cargo.toml [lib] name = xt_matching → libxt_matching.{so,dylib} / xt_matching.dll
+          path: |
+            engine/target/${{ matrix.target }}/release/libxt_matching.*
+            engine/target/${{ matrix.target }}/release/xt_matching.dll
+          if-no-files-found: error
 
   # ── Build Go Backend ──
   build-gateway:
@@ -178,9 +197,27 @@ jobs:
           prerelease: false
           generate_release_notes: true
 
-  # ── Electron Desktop (目录产物,供下游打安装包或人工验证) ──
+  # ── Electron Desktop（安装包：linux AppImage+deb / win nsis / mac dmg）──
   desktop-build:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: linux
+            patterns: |
+              web/release/*.AppImage
+              web/release/*.deb
+          - os: windows-latest
+            name: win
+            patterns: |
+              web/release/*.exe
+          # dmg 只能在 macOS runner 上产出（未签名；公证需另行配置证书）。
+          - os: macos-latest
+            name: mac
+            patterns: |
+              web/release/*.dmg
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -193,13 +230,15 @@ jobs:
         run: |
           npm ci
           npm run build
-      - name: Pack Electron app (unpacked dir)
+      - name: Pack Electron installers
         working-directory: ./web
         env:
           ELECTRON_MIRROR: 'https://npmmirror.com/mirrors/electron/'
-        run: npm run electron:pack
+          # 未配置签名证书：跳过 mac 公证/签名与 win 签名，产出未签名安装包。
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm run electron:dist
       - uses: actions/upload-artifact@v4
         with:
-          name: xiaotian-desktop-linux-unpacked
-          path: web/release/linux-unpacked
+          name: xiaotian-desktop-${{ matrix.name }}
+          path: ${{ matrix.patterns }}
           if-no-files-found: error

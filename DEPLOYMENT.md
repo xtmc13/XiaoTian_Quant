@@ -23,6 +23,7 @@
 | 组件 | 最低配置 | 推荐配置 |
 |------|---------|---------|
 | CPU | 2 核 | 4 核 |
+| 架构 | x86_64 (amd64) 或 arm64 (aarch64) | amd64 |
 | 内存 | 4 GB | 8 GB |
 | 磁盘 | 20 GB SSD | 100 GB SSD |
 | 网络 | 10 Mbps | 100 Mbps |
@@ -124,6 +125,17 @@ export GIN_MODE=release
 ./xiaotian-gateway
 ```
 
+> **arm64 服务器**：Go 后端为 `CGO_ENABLED=0` 纯静态二进制，可直接交叉编译：
+>
+> ```bash
+> # 在 x86_64 机器上为 arm64 服务器构建（前端产物与架构无关，无需重复构建）
+> cd gateway
+> CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o xiaotian-gateway ./cmd/server
+> ```
+>
+> Release 页面同时提供 `xiaotianquant-<版本>-linux-arm64.tar.gz` 预编译包；
+> `install.sh` 在 aarch64 机器上会自动识别并下载该包。
+
 ### 方案 C：systemd 服务
 
 创建 `/etc/systemd/system/xiaotian-gateway.service`：
@@ -177,6 +189,25 @@ DOCKER_BUILDKIT=1 docker build \
   --build-arg VERSION=$(git describe --tags) \
   --build-arg BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
   -t xiaotian-quant/gateway:latest .
+```
+
+### 多架构镜像（amd64 / arm64）
+
+Dockerfile 的所有 base 镜像（`rust`、`node`、`golang`、`alpine`）均为官方多架构镜像；
+构建时 buildx 自动注入 `TARGETARCH`，Rust engine target 与 Go `GOARCH` 随之推导：
+
+```bash
+# 单架构 arm64（如 ARM 服务器 / Apple Silicon）
+docker buildx build --platform linux/arm64 \
+  -t xiaotian-quant/gateway:latest-arm64 --load .
+
+# 多架构 manifest（需推送到 registry）
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t <registry>/xiaotian-quant/gateway:latest --push .
+
+# 显式覆盖 Rust target（默认按 TARGETARCH 推导为 *-linux-musl，与 alpine 运行时匹配）
+docker buildx build --platform linux/arm64 \
+  --build-arg RUST_TARGET=aarch64-unknown-linux-musl ...
 ```
 
 ### 本地开发构建脚本
@@ -235,7 +266,6 @@ chmod +x build.sh
 |------|------|--------|
 | `CACHE_ENABLED` | 是否启用 Redis 缓存 | `false` |
 | `REDIS_URL` | Redis 连接 URL | 空 |
-| `FREQTRADE_URL` | Freqtrade 服务地址 | `http://freqtrade:8080` |
 | `SANDBOX_URL` | Python 沙箱地址 | `http://sandbox:9000` |
 
 ---
@@ -246,6 +276,8 @@ chmod +x build.sh
 
 - `GET /api/health` — Gateway 健康检查
 - `GET /api/health/components` — 各组件状态（DB、Redis、Sandbox 等）
+- `GET /api/integrations/status` — 外部集成预检状态（Twilio/Stripe/IBKR/Turnstile/LLM/USDT 链上核验等；登录可见，密钥不回显）
+- `POST /api/integrations/:name/check` — 单项主动探测（仅 admin；只做连通性 + 凭证格式校验，不触发真实短信/扣款/下单）
 
 ### Docker 健康检查
 
@@ -277,9 +309,6 @@ docker compose logs --tail=100 gateway | jq -r '.msg'
 ```bash
 # 备份 gateway 数据库
 docker compose exec gateway tar czf - /app/data > backup-gateway-$(date +%F).tar.gz
-
-# 备份 freqtrade 数据
-docker compose exec freqtrade tar czf - /freqtrade/user_data > backup-freqtrade-$(date +%F).tar.gz
 
 # 备份 Redis (启用 AOF 后可直接复制数据文件)
 docker compose exec redis redis-cli BGSAVE

@@ -1,5 +1,7 @@
 # 小田量化 (XiaoTianQuant) 部署运维手册
 
+> **状态说明（2026-09-25）**：本文为 v2.0.0 时期旧版手册，其中 Rust 撮合引擎相关内容已过期——Rust 引擎已弃用仅作基准、不进主链路（默认构建不含，`BUILD_RUST=1` 才编译），生产部署请优先参考根目录 [DEPLOYMENT.md](../DEPLOYMENT.md)。
+
 > 版本：v2.0.0  
 > 更新日期：2026-06-06  
 > 适用环境：Linux / macOS / Windows (WSL2)
@@ -89,6 +91,7 @@ sudo apt update && sudo apt install -y \
 brew install git curl wget sqlite redis
 
 # 安装 Go (推荐通过官方安装器)
+# arm64 机器（ARM 服务器 / Apple Silicon 虚拟机）将 linux-amd64 换成 linux-arm64
 curl -L https://go.dev/dl/go1.25.linux-amd64.tar.gz | sudo tar -C /usr/local -xzf -
 echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
 
@@ -223,6 +226,8 @@ cd gateway
 go build -o bin/gateway-dev cmd/server/main.go
 
 # 生产模式（静态链接 + 压缩）
+# arm64 目标：GOARCH=arm64（CGO 链接 Rust 引擎时需 aarch64 工具链与对应 libxt_matching.so；
+# 纯 Go 部署可用 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 直接交叉编译）
 CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
   go build -ldflags="-s -w -X main.version=$(git describe --tags)" \
   -o bin/gateway cmd/server/main.go

@@ -19,11 +19,35 @@ chmod +x install.sh
 ./install.sh
 ```
 
+> **架构支持**：`install.sh` 通过 `uname -m` 自动识别 `x86_64/amd64` 与 `aarch64/arm64`
+> （Apple Silicon、ARM 服务器、树莓派 64 位系统均可），并下载对应的
+> `xiaotianquant-<版本>-<平台>-<架构>` 预编译包；未识别架构会明确告警并回退源码构建。
+
 ### Docker（所有平台）
 ```bash
 # 安装 Docker Desktop 后
 cd ~/xiaotianquant
 make docker-up
+```
+
+### 桌面客户端（Electron）
+
+从 [Releases](https://github.com/xiaotian-quant/xiaotian_quant/releases) 下载对应平台的安装包：
+
+| 平台 | 文件 | 安装方式 |
+|------|------|---------|
+| Linux | `xiaotian-quant-desktop-*-linux-x86_64.AppImage` | `chmod +x` 后直接运行 |
+| Linux | `xiaotian-quant-desktop-*-linux-x86_64.deb` | `sudo dpkg -i <file>.deb` |
+| Windows | `xiaotian-quant-desktop-*-win-x86_64.exe` | NSIS 安装向导（可选安装目录、桌面快捷方式） |
+| macOS | `xiaotian-quant-desktop-*-mac-*.dmg` | 拖入 Applications（未签名，首次需在"系统设置 → 隐私与安全性"放行） |
+
+自行打包：
+
+```bash
+cd web
+npm ci && npm run build
+npm run electron:pack   # 快速目录产物（调试用）
+npm run electron:dist   # 完整安装包（linux=AppImage+deb / win=nsis / mac=dmg，各平台需在对应系统上构建）
 ```
 
 ---
@@ -33,6 +57,7 @@ make docker-up
 | 组件 | 最低要求 | 推荐 |
 |------|---------|------|
 | CPU | 2 核 | 4 核+ |
+| 架构 | x86_64 (amd64) 或 arm64 (aarch64) | — |
 | 内存 | 4 GB | 8 GB+ |
 | 磁盘 | 10 GB | 50 GB+ |
 | 网络 | 可访问 Binance | VPN 代理 |

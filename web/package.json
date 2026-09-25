@@ -2,6 +2,9 @@
   "name": "xiaotian-quant-web-v2",
   "private": true,
   "version": "2.0.0",
+  "description": "小天量化交易平台 Web 前端与桌面端",
+  "author": "XiaoTian Quant <dev@xiaotian.local>",
+  "homepage": "https://github.com/xiaotian-quant/xiaotian_quant",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {

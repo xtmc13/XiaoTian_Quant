@@ -57,10 +57,15 @@ case "${OS}" in
   *)        PLATFORM="linux" ;;
 esac
 
+ARCH_UNSUPPORTED=false
 case "${ARCH}" in
   x86_64|amd64)  ARCH_NAME="amd64" ;;
   aarch64|arm64) ARCH_NAME="arm64" ;;
-  *)             ARCH_NAME="amd64" ;;
+  *)
+    # 未识别架构：不静默假设 amd64，按原名尝试；预编译包不存在时回退源码构建。
+    ARCH_NAME="$(echo "${ARCH}" | tr '[:upper:]' '[:lower:]')"
+    ARCH_UNSUPPORTED=true
+    ;;
 esac
 
 PLATFORM_NAME="${PLATFORM}-${ARCH_NAME}"
@@ -199,7 +204,10 @@ install_go() {
   fi
   log_step "安装 Go..."
   local go_ver="1.25.0"
-  local go_tar="go${go_ver}.${PLATFORM}-${ARCH_NAME}.tar.gz"
+  # Go 官方包的平台命名与脚本内部 PLATFORM 不同（macos→darwin）。
+  local go_os="${PLATFORM}"
+  [[ "${go_os}" == "macos" ]] && go_os="darwin"
+  local go_tar="go${go_ver}.${go_os}-${ARCH_NAME}.tar.gz"
   local tmp="$(mktemp -d)"
   download "https://go.dev/dl/${go_tar}" "${tmp}/${go_tar}"
   sudo tar -C /usr/local -xzf "${tmp}/${go_tar}"
@@ -346,6 +354,10 @@ main() {
   log_info "版本: ${VERSION}"
   [[ "$IS_REMOTE" == true ]] && log_info "模式: 远程安装 (curl | bash)"
   [[ "$FORCE_SOURCE" == true ]] && log_info "模式: 强制源码构建"
+  if [[ "$ARCH_UNSUPPORTED" == true ]]; then
+    log_warn "未识别的 CPU 架构: ${ARCH}（已支持: x86_64/amd64, aarch64/arm64）"
+    log_warn "将尝试 ${PLATFORM_NAME} 预编译包，失败则自动回退源码构建"
+  fi
 
   # Create install directory
   mkdir -p "$INSTALL_DIR"
