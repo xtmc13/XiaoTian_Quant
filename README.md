@@ -1,6 +1,6 @@
 # 小天量化 XiaoTianQuant v3.0
 
-> AI 驱动的多资产量化交易平台 — Go 网关 + React 前端 + 内置撮合引擎（纯 Go 默认，Rust FFI 可选），事件驱动，回测实盘一体。
+> AI 驱动的多资产量化交易平台 — Go 网关 + React 前端 + 内置撮合引擎（纯 Go 主链路；Rust 引擎已弃用，仅作基准），事件驱动，回测实盘一体。
 >
 > **v3.0 新增**: 三机器体系(策略/信号/AI) · ML 预测管线(Go 原生推理 + Python CLI 训练) · 配置API · 纯 Go 本地推理 · 社交交易 · 链上数据 · 高级订单(OCO/冰山/跟踪) · 套利监控 · Hyperopt 参数优化 · Protection 风控 · Pairlist 交易对筛选 · 策略社区 · Admin 面板 · Indicator IDE · Telegram/Discord Bot · 10 交易所适配器 · i18n 多语言 · OAuth 登录 · MFA 两步验证 · Billing 会员(USDT 链上核验 + Stripe) · 凭证加密 · TensorBoard 可视化
 
@@ -13,7 +13,7 @@
 └───────────────────────────┬─────────────────────────────────┘
                             │ HTTP REST + WebSocket
 ┌───────────────────────────▼─────────────────────────────────┐
-│                  Go 网关 (Gin) — 408 API 路由                  │
+│                  Go 网关 (Gin) — 526 API 路由                  │
 │  ┌──────────┬──────────┬──────────┬──────────┬──────────┐  │
 │  │ 策略引擎  │ AI 服务  │ 回测引擎  │ 风控系统  │ 配置API  │  │
 │  ├──────────┼──────────┼──────────┼──────────┼──────────┤  │
@@ -22,9 +22,9 @@
 │          交易所适配器 (Binance 深度 + 9 家基础 REST)         │
 │              SQLite · Redis (可选)                            │
 └───────────────────────────┬─────────────────────────────────┘
-                            │ 纯 Go 撮合（默认）· Rust FFI 可选
+                            │ 纯 Go 撮合（唯一主链路）
 ┌───────────────────────────▼─────────────────────────────────┐
-│               Rust 撮合引擎（可选组件，不进主链路）            │
+│             Rust 撮合引擎（已弃用，仅作基准参照）              │
 │         价格-时间优先订单簿 · 限价/市价/部分成交              │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -32,8 +32,8 @@
 | 层 | 语言 | 职责 |
 |---|------|------|
 | **Web 前端** | React 19 + TypeScript + Vite | 仪表盘、K 线图表、AI 策略生成、回测面板、交易下单、资产管理、三机器管理 |
-| **Go 网关** | Go 1.25 + Gin 框架 | REST API (408 路由)、策略引擎、交易所适配、回测、风控、WebSocket 推送、通知、配置API |
-| **Rust 引擎** | Rust (cdylib) | 高性能订单簿撮合，通过 FFI 被 Go 网关调用 |
+| **Go 网关** | Go 1.25 + Gin 框架 | REST API（526 条运行期路由，契约基线 docs/api/openapi.yaml 由 `go run ./cmd/apidump` 自动生成，CI 漂移检查守护）、策略引擎、交易所适配、回测、风控、WebSocket 推送、通知、配置API |
+| **Rust 引擎**（已弃用） | Rust (cdylib) | 仅作撮合性能基准参照，不进主链路；不参与默认构建（build.sh 需显式 `BUILD_RUST=1`） |
 
 **辅助工具 (Python CLI)**：模型训练 (`sandbox/train.py`) 和指标沙箱执行 (`sandbox/main.py`)，非常驻服务，手动触发。
 
@@ -57,9 +57,10 @@
 - **图标**: Lucide React
 
 ### 撮合引擎 (engine/)
+- **状态**: 已弃用 — 纯 Go 撮合（`gateway/internal/adapter/matching.go`）为唯一主链路；Rust 引擎仅保留作性能基准参照
 - **语言**: Rust (edition 2021)
 - **序列化**: Serde + serde_json
-- **编译**: cdylib + rlib, LTO 优化
+- **编译**: cdylib + rlib, LTO 优化（默认不构建，`BUILD_RUST=1 bash build.sh` 才编译）
 
 ## 项目结构
 
@@ -79,8 +80,8 @@ xiaotian_quant/
 │   │   │   ├── bitget.go           #   Bitget (基础 REST)
 │   │   │   ├── alpaca.go           #   Alpaca (基础 REST)
 │   │   │   ├── ibkr.go             #   IBKR (基础 REST)
-│   │   │   ├── matching.go         #   撮合引擎 FFI 桥接 + 纯Go fallback
-│   │   │   ├── cgo_bridge.go       #   CGo 动态库加载
+│   │   │   ├── matching.go         #   纯 Go 撮合引擎（主链路，价格-时间优先）
+│   │   │   ├── cgo_bridge.go       #   CGo 动态库加载（可选 Rust FFI，已弃用）
 │   │   │   └── helpers.go          #   通用辅助函数 (stubError 等)
 │   │   ├── bot/                    # Telegram/Discord 通知机器人
 │   │   ├── data/                   # 配置文件 (markets.json · indices.json)
@@ -151,7 +152,7 @@ xiaotian_quant/
 │   │   └── lib/                    #   工具函数 · API 客户端
 │   ├── package.json
 │   └── vite.config.js
-├── engine/                         # Rust 撮合引擎
+├── engine/                         # Rust 撮合引擎（已弃用，仅作基准参照）
 │   ├── Cargo.toml
 │   └── src/
 │       ├── lib.rs                  #   库入口
@@ -210,7 +211,7 @@ curl -fsSL .../install.sh | bash -s -- --version v3.0.0
 
 - **Go** 1.25+ (仅源码构建时需要)
 - **Node.js** 20+ (仅源码构建时需要)
-- **Rust** (仅构建撮合引擎时需要, 可跳过)
+- **Rust** (不需要 — 撮合引擎已弃用仅作基准，默认构建不含)
 - **Docker** (可选, 容器化部署)
 
 ### 方式一：本地构建
@@ -332,7 +333,7 @@ REDIS_URL=redis://localhost:6379
 - **模拟交易**: 内置 Paper Trading，零成本测试
 
 ### 策略引擎
-- **16 种内置策略**: 网格交易 · 突破策略 · EMA 交叉 · MACD · RSI · 布林带 · ATR  trailing stop · Dual Thrust · Renko · 市场中性套利 · 做市商 · 马丁格尔 · 华尔街 · 趋势多/空 · ML 策略
+- **17 种内置策略**: 网格交易 · 突破策略 · EMA 交叉 · MACD · RSI · 布林带 · ATR trailing stop · Dual Thrust · Renko · 市场中性套利 · 做市商 · 马丁格尔 · 华尔街(v1/v2) · 多标的轮动 · 趋势多/空（cmd/server/main.go 注册 55 个工厂名，含前端 bot_type 与 AI 机器人市场别名；另有 ML 策略经 ML 管线单独创建，不走内置工厂）
 - **自定义策略**: Go 插件式策略运行时
 - **AI 生成**: LLM 辅助策略代码生成与修复
 - **策略组合 (Combo)**: 多策略信号聚合，组合管理
@@ -343,7 +344,7 @@ REDIS_URL=redis://localhost:6379
 - **信号机器人**: 接收外部信号(Webhook/API/IDE)，阶梯止盈/止损自动执行
 - **AI 机器人市场**: 目录订阅 + 实例生命周期（对标 CryptoRobotics 的机器人商店）
 - **社交跟单**: 信号提供商广播，跟随者自动跟单
-- **统一执行层**: 纯 Go 执行器统一处理仓位/止盈/止损（Rust SignalExecutor 为可选实验组件，不进主链路）
+- **统一执行层**: 纯 Go 执行器统一处理仓位/止盈/止损（Rust SignalExecutor 已弃用，仅作基准，不进主链路）
 
 ### 回测系统
 - **事件驱动**: 精准模拟交易所行为

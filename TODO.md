@@ -26,15 +26,15 @@
 
 ## P1 —— 稳定性与可信度
 
-- [ ] 5. **交易主链路 E2E 测试补全**：9 个用例 7 个标 `fixme`，含下单流程。
-- [ ] 6. **前端路由缺口复核**：`/api/experiments` 无列表路由、`/api/onchain/*` 未注册（对照 `cmd/server/router.go` 逐条核对）。
-- [ ] 7. **仓库卫生**：清理根目录 `tmp_*.tsx`、`login-filled.yaml`（疑似含凭据）、`sandbox.log`、`gateway/gateway` 二进制入 `.gitignore`；29 份过期报告归档到 `docs/audits-20260827/`。
-- [ ] 8. **决定 Rust 引擎定位**：补 FFI 桥接接入 Go 主链路，或正式宣布 Go 执行路径为正式版、Rust 为实验分支（写进 README，消除"计划中"的幻觉）。
+- [x] 5. **交易主链路 E2E 测试补全**：9 个用例 7 个标 `fixme`，含下单流程。✅ 2026-09-25 复核：web/e2e/ 全目录 `grep fixme` 为 0（7 个 fixme 已在补齐清单 C1.1 补全）；现共 30 个 Playwright 用例，仅 gate-status.spec.ts 1 条带条件跳过（需 `E2E_LIVE_BACKEND=1` 真实后端），与补齐清单完成记录"29 过/0 失败"口径一致。
+- [x] 6. **前端路由缺口复核**：`/api/experiments` 无列表路由、`/api/onchain/*` 未注册（对照 `cmd/server/router.go` 逐条核对）。✅ 2026-09-25 复核：两缺口均已闭环——`GET /api/experiments` 已注册（router.go:697 → `internal/experiment/handler.go:178` 真实实现，按属主过滤）；`/api/onchain/*` 已注册（router.go:71 `registerOnChainRoutes` → `internal/onchain/api.go` 6 条 GET，handler+client 真实实现并带单测，数据源依赖外部 API 与 `ONCHAIN_API_KEY`，未做实机联调）。
+- [x] 7. **仓库卫生**：清理根目录 `tmp_*.tsx`、`login-filled.yaml`（疑似含凭据）、`sandbox.log`、`gateway/gateway` 二进制入 `.gitignore`；29 份过期报告归档到 `docs/audits-20260827/`。✅ 2026-09-25 复核：四类垃圾文件均已不存在；`.gitignore` 已含 `gateway/gateway`（第 114 行）；过期报告实际归档于 `docs/archive/`（20 份，路径与本条原文不同，以实际为准）。
+- [x] 8. **决定 Rust 引擎定位**：补 FFI 桥接接入 Go 主链路，或正式宣布 Go 执行路径为正式版、Rust 为实验分支（写进 README，消除"计划中"的幻觉）。✅ 已决策并全面落地：纯 Go 为唯一主链路、Rust 引擎弃用仅作基准——TODO 文首"明确不做"、IMPLEMENTATION_PLAN.md 文首状态说明、`build.sh`（默认跳过，需 `BUILD_RUST=1`）、CI `rust-build` 为 `continue-on-error`；2026-09-25 README/ARCHITECTURE/docs 口径已同步修正。
 
 ## P2 —— 质量
 
-- [ ] 9. **CRA 参数表单去重收尾**：Settings / Strategy / Bots 三页仍是约 400 行/份的重复块。
-- [ ] 10. **新代码纪律**：时间戳统一 INTEGER (unix ms)；新表/新索引必须走 `migrations/sql/*.sql`，禁止再散落 `CREATE TABLE`；JSON 列在应用层做校验。
+- [x] 9. **CRA 参数表单去重收尾**：Settings / Strategy / Bots 三页仍是约 400 行/份的重复块。✅ 2026-09-25 复核：去重已完成（补齐清单 C5.1）——共享组件 `web/src/components/strategy/CRAParamForm.tsx`、`components/bots/BotParamForm.tsx` 就位并带测试；Settings.tsx / Strategy.tsx 中 `fast_period/slow_period` 重复参数块为 0 匹配。
+- [ ] 10. **新代码纪律**：时间戳统一 INTEGER (unix ms)；新表/新索引必须走 `migrations/sql/*.sql`，禁止再散落 `CREATE TABLE`；JSON 列在应用层做校验。（长期纪律项，非一次性任务，保持未勾作为常态提醒。）
 
 ## 端到端验证记录
 
@@ -42,9 +42,9 @@
 
 - 2026-09-15：工具链就绪（Go 1.25.3 安装并清理了 /usr/local/go 旧版残留；前端 nginx 8088 部署成功；后端旧二进制可启动，testnet+dry_run 双保险）。
 - 2026-09-15：数据层修复（清单第 4 条）验证通过——新装路径：32 表、SQL 迁移 0001 应用、审计日志新列齐、6 新索引在、ticks 懒建表生效；升级路径：现有库 30 表行数零变化，admin/admin123 登录正常。CGO_ENABLED=0 全量编译 + store/data 单测通过（ Rust 引擎库缺失时纯 Go 构建为正式路径，见第 8 条）。
-- 2026-09-15：【里程碑·项目第一次"能用"】线上全链路实测：登录 → paper LIMIT 单（秒回，NEW 已持久化）→ paper 市价单（0.7s 成交 FILLED）→ 持仓可见（ETH/USDT 0.01 @ 合成价 2484.87）。修复内容：风控上下文构建由"每单串行 2×30s 网络等待"改为"WS 缓存→2s 探测→合成价三级兜底 + 在线活性门"；`getLastPrice` 消除无超时 http.DefaultClient；MaxDrawdown 无权益基线放行。31 个包单测全绿。已知遗留：paper LIMIT 单会在列表出现两条（OMS+撮合镜像，预置行为）。下一步：接真实行情源（第 3 条），持仓盈亏才能反映真实价格。
+- 2026-09-15：【里程碑·项目第一次"能用"】线上全链路实测：登录 → paper LIMIT 单（秒回，NEW 已持久化）→ paper 市价单（0.7s 成交 FILLED）→ 持仓可见（ETH/USDT 0.01 @ 合成价 2484.87）。修复内容：风控上下文构建由"每单串行 2×30s 网络等待"改为"WS 缓存→2s 探测→合成价三级兜底 + 在线活性门"；`getLastPrice` 消除无超时 http.DefaultClient；MaxDrawdown 无权益基线放行。31 个包单测全绿。已知遗留：paper LIMIT 单会在列表出现两条（OMS+撮合镜像，预置行为）。【2026-09-25 已修：撮合镜像不再回写展示 store，OMS 为唯一事实源；回归测试 `TestPaperLimitOrderNotDuplicated`(app)、`TestPlaceOrderDoesNotMirrorIntoDisplayStore`(service)】下一步：接真实行情源（第 3 条），持仓盈亏才能反映真实价格。
 - 2026-09-15：真实权益接入（配合用户"不要模拟盘假数据"）：挖出并修复凭证链路三个坑——① InitDB 的 SECRET_KEY 早退导致路径未初始化、LoadConfig 读空路径产出空配置；② config.yaml 密钥引号内 trailing space 会使签名 secret 多一个空格（网络恢复后必 401，已 TrimSpace + 清文件）；③ 10 万 USDT 假模拟账户改为 `paper_account.enabled: false` 可关（已关，accounts_count 3→0）。实测：带签名的币安账户请求已正常发出，仅剩网络不通（手机代理 7897 未开）；代理开启后真实权益自动同步，无需再改代码。
-- 2026-09-16：【里程碑·网格机器人上线】产品方向第一阶段首个真商品完成（切片1-5：引擎 b1b3e1c / Runner 3b676e5 / API 38083e0 / 前端 c0d758a）。E2E：BTCUSDT 74818-77097 12格 1000U 机器人已于真实行情启动（id 22e9f3c8e8e7），真实价格穿越成交（BUY@75957.5）、权益快照正常落库（equity 998.82=1000-手续费-半格价差，记账正确）、前端页面可实时监控。机器人保持运行作为演示，可随时在页面停止/删除。遗留：①跨用户越权检查（多用户市场阶段前必须补）②paper 限价单重复展示 ③纯下跌行情 quote 余额为负的纸面记账（权益计算正确）。
+- 2026-09-16：【里程碑·网格机器人上线】产品方向第一阶段首个真商品完成（切片1-5：引擎 b1b3e1c / Runner 3b676e5 / API 38083e0 / 前端 c0d758a）。E2E：BTCUSDT 74818-77097 12格 1000U 机器人已于真实行情启动（id 22e9f3c8e8e7），真实价格穿越成交（BUY@75957.5）、权益快照正常落库（equity 998.82=1000-手续费-半格价差，记账正确）、前端页面可实时监控。机器人保持运行作为演示，可随时在页面停止/删除。遗留：①跨用户越权检查（多用户市场阶段前必须补）②paper 限价单重复展示【2026-09-25 已修，见上条标注】③纯下跌行情 quote 余额为负的纸面记账（权益计算正确）。
 - 2026-09-16：合约策略跑通（goal）——MACD15m/BTCUSDT/1U×125x/逐仓/paper 配置（bd592954）真实运行：K线供给管→总线(PublishSync保序)→引擎→MACD→信号 全链路实测（双策略各发真实 LONG 信号）。关键修复：①事件总线多worker乱序→PublishSync ②供给管删除币安WS伪1m Bar（会污染指标）③启动回补100根历史K线暖机 ④risk position_limit_pct 50%→2500%（paper小权益+最大杠杆会误杀；config.yaml 未入库，开实盘前必须回调）。遗留：信号→paper成交的最终落库验证因手机代理再次断连（13:40起）暂缓，网络恢复后 feeder 每20s自动重试，下一个金叉即完成闭环。
 - 2026-09-16：代码已同步 GitHub（SSH deploy key，main=f7df0eb，16 提交：SQL迁移机制/网格机器人五切片/响应包装器修复/下单离线修复/K线供给管/可观测性）。手机代理极不稳定（一天多次被杀），后续验证与部署转入用户提供的服务器进行。
 - 2026-09-16：【服务器部署完成】43.165.179.199（x86_64，网络自由）：Go1.25.3+仓库+编译+真实币安数据（余额同步成功）。合约策略全链路在服务器实测跑通：真实15m/1m K线→MACD→信号→**paper撮合成交（FILLED, qty=0.0016=125U名义）**。过程中揪出并修复三个深坑：①信号配置查找 id/名字不匹配导致 execution_mode=paper 与杠杆/TP/SL 全部被跳过、信号单直连真实交易所（用户密钥为只读，未造成实际下单，虚惊）②前端 dist 曾缺 index.html（旧部署假象掩盖）③事件进程残留导致新代码不生效（pkill 自匹配自杀）。前端已部署（nginx 8088），网格机器人服务器版已启动（b8c379b57193）。遗留：①云安全组未开 8088，外网暂不可访问（需用户在云控制台放行）②paper 种子金额时序（LoadConfig 晚于 NewManager，1000 配置生效为 100000）③合约 paper 持仓的权益展示口径 ④两策略同刻信号撞 500ms 限速仅成一单。

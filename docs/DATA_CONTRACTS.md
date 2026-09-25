@@ -1,5 +1,7 @@
 # XiaoTianQuant 数据契约与分层边界
 
+> **状态说明（2026-09-25）**：Rust 撮合引擎已弃用（仅作基准，不进主链路，撮合为 `gateway/internal/adapter/matching.go` 纯 Go 实现）。本文涉及的 Rust 层与 FFI 边界内容仅对基准组件有效，Go/TypeScript 两侧的数据契约仍然适用。
+
 > 本文档定义 Rust(撮合) / Go(网关/账户) / TypeScript(前端) 三层之间的数据结构边界。
 > 目标：每层只持有自己应该持有的数据形态，禁止跨层类型泄漏。
 

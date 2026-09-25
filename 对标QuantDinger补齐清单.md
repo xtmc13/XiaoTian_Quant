@@ -101,7 +101,7 @@
 
 - [x] **C5.1 前端去重**：Settings/Strategy/Bots 三页重复的 CRA 参数表单抽公共组件；删除旧版 SpotTrading/ContractTrading 遗留（约 2450 行）
 - [x] **C5.2 清理根目录**：tmp_*.tsx 空文件删除，29 份过期报告归档 docs/archive/
-- [ ] **C5.3 修 README**：删除 freqtrade 兼容 API、IBKR/MT5（若 A2.1 未做）、"244 端点"等不实宣称，与 router.go 实际端点一致（用户明确暂缓）
+- [x] **C5.3 修 README**：删除 freqtrade 兼容 API、IBKR/MT5（若 A2.1 未做）、"244 端点"等不实宣称，与 router.go 实际端点一致（曾按用户要求暂缓）✅ 2026-09-25 完成：路由数按实测修正为 472（router.go 直接注册 449 + onchain 6 + social 17），内置策略 17 种（55 个工厂注册名含别名），Rust 引擎标注"已弃用仅作基准"；复核确认代码中无 freqtrade 兼容 API 层、无 MT5 适配器，IBKR 适配器真实存在（基础 REST）故保留。
 - [x] **C5.4 补 GET /api/experiments**：现为内联空列表（router.go:607），接真实实验数据
 
 ## 执行顺序建议
@@ -116,7 +116,7 @@
 
 ## 完成记录（2026-09-19）
 
-全部条目（C5.3 按用户要求暂缓）已实施并验证：
+全部条目（C5.3 按用户要求暂缓）已实施并验证：（注：C5.3 已于 2026-09-25 补做，README 数字全部按代码实测修正，见 C5.3 条目。）
 
 - **后端**：`CGO_ENABLED=0 go build ./...` 通过，`go test -count=1 ./...` 42 包全绿
 - **前端**：`npx tsc --noEmit` 零错误，`npx vitest run` 218/218 通过

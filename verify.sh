@@ -221,10 +221,10 @@ else
 fi
 
 # 检查 JWT 生产环境校验
-if grep -q "required in production" gateway/internal/store/store.go; then
-  pass "JWT Secret 包含生产环境强制校验"
+if grep -q "SECRET_KEY environment variable is required" gateway/internal/store/store.go; then
+  pass "JWT Secret 强制环境变量提供（不入盘）"
 else
-  fail "JWT Secret 缺少生产环境校验"
+  fail "JWT Secret 缺少强制校验"
 fi
 
 # 检查 pprof 端点（注册在 router.go）

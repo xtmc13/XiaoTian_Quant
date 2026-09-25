@@ -1,7 +1,9 @@
 # 小天量化 v3.1 补齐计划
 ## 目标: 补齐所有功能差距(除CRA商业功能外)
 
-> **状态说明**: 本计划 Phase 1 的 Rust SignalExecutor 已完成开发，但经决策**不进主链路**；统一执行已由纯 Go 的 OMSBotExecutor（`gateway/internal/handler/bot_executor.go`）承担。`engine/` 保留为实验与基准参照，不参与主构建（`build.sh` 需显式 `BUILD_RUST=1` 才构建 Rust 引擎）。
+> **状态说明（2026-09-25）**: 本文档整体为历史计划存档，条目勾选状态不代表当前代码真实进度（当前进度以 TODO.md 与《对标QuantDinger补齐清单.md》为准）。
+> Phase 1 的 Rust SignalExecutor 已完成开发，但经决策**不进主链路、已弃用仅作基准**；统一执行已由纯 Go 的 OMSBotExecutor（`gateway/internal/handler/bot_executor.go`）承担。`engine/` 保留为基准参照，不参与主构建（`build.sh` 需显式 `BUILD_RUST=1` 才构建 Rust 引擎；CI 中 rust-build 为 continue-on-error）。
+> Phase 2-6 中：Phase 2 的 martin/wallstreet/flashcrash/indicators/contract、Phase 3 的 config_dynamic、Phase 6 的 install.sh/GHCR 均已落地；Phase 4 的 `internal/mcp`、`internal/audit` 目录未建（MCP 能力由 `internal/agent/` 承担）。
 
 ---
 
