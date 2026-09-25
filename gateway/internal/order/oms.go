@@ -25,24 +25,32 @@ func ValidateTransition(from, to model.OrderStatus) error {
 
 // Request is the input payload for order placement.
 type Request struct {
-	Symbol        string      `json:"symbol"`
-	Side          model.OrderSide `json:"side"`
-	OrderType     model.OrderType `json:"order_type"`
-	Price         float64     `json:"price"`
-	StopPrice     float64     `json:"stop_price,omitempty"`
-	Quantity      float64     `json:"quantity"`
-	Exchange      string      `json:"exchange"`
-	UserID        uint64      `json:"user_id"`
-	ClientOID     string      `json:"client_oid,omitempty"`
+	Symbol    string          `json:"symbol"`
+	Side      model.OrderSide `json:"side"`
+	OrderType model.OrderType `json:"order_type"`
+	Price     float64         `json:"price"`
+	StopPrice float64         `json:"stop_price,omitempty"`
+	Quantity  float64         `json:"quantity"`
+	Exchange  string          `json:"exchange"`
+	UserID    uint64          `json:"user_id"`
+	ClientOID string          `json:"client_oid,omitempty"`
 
 	// ── Contract fields ──
-	MarketType    model.MarketType  `json:"market_type,omitempty"`
+	MarketType    model.MarketType   `json:"market_type,omitempty"`
 	PositionSide  model.PositionSide `json:"position_side,omitempty"`
-	Leverage      float64           `json:"leverage,omitempty"`
-	MarginMode    model.MarginMode  `json:"margin_mode,omitempty"`
-	TPPrice       float64           `json:"tp_price,omitempty"`
-	SLPrice       float64           `json:"sl_price,omitempty"`
-	ClosePosition bool              `json:"close_position,omitempty"`
+	Leverage      float64            `json:"leverage,omitempty"`
+	MarginMode    model.MarginMode   `json:"margin_mode,omitempty"`
+	TPPrice       float64            `json:"tp_price,omitempty"`
+	SLPrice       float64            `json:"sl_price,omitempty"`
+	ClosePosition bool               `json:"close_position,omitempty"`
+
+	// ── AI 决策门（aigate） ──
+	// Source 标记订单来源（"signal:<strategy>" 等）；空时由决策门从
+	// ClientOID 前缀（"dca:botID" 等）推断，再兜底 "manual"。
+	Source string `json:"source,omitempty"`
+	// AIGateBypass=true 表示本单是条件单触发/高级引擎子单（TWAP/冰山等），
+	// 父单的入场决策已审批过，子单不再重复过 AI 门。
+	AIGateBypass bool `json:"ai_gate_bypass,omitempty"`
 
 	// ── A2.2 limit-then-market ──
 	// LimitTimeoutMs > 0 时启用：限价单超时未完全成交则撤剩余并市价补单。
@@ -81,9 +89,9 @@ func (r *Request) Validate() error {
 
 // OrderManager coordinates the full order lifecycle.
 type OrderManager struct {
-	orders    map[string]*model.OrderData
-	orderMu   sync.RWMutex
-	orderSeq  int64
+	orders   map[string]*model.OrderData
+	orderMu  sync.RWMutex
+	orderSeq int64
 
 	// Pipeline hooks (set during integration)
 	RiskCheck        func(req *Request) error
@@ -92,6 +100,14 @@ type OrderManager struct {
 	SubmitToExchange func(order *model.OrderData) (map[string]any, error)
 	CancelOnExchange func(order *model.OrderData) error
 	OnOrderUpdate    func(order *model.OrderData)
+
+	// ── AI 决策门钩子（aigate 包生产实现，见 app.Context.wireOrderManager）──
+	// AIGateCheck 在 RiskCheck 之后、LockBalance 之前调用，仅评估入场单
+	// （出场/止损/引擎子单在门内直接放行）。返回 decisionID（空=未评估），
+	// error 非空表示 AI 拦截。nil 时完全跳过（零开销）。
+	AIGateCheck func(req *Request) (string, error)
+	// AIGateOutcome 在订单终态后回写决策记录的 order_id 与成交结果。nil 跳过。
+	AIGateOutcome func(decisionID, orderID string, executed bool)
 
 	// Rate limiting
 	rateLimitBurst int
@@ -129,19 +145,19 @@ func (om *OrderManager) PlaceOrder(req *Request) (*model.OrderData, error) {
 
 	// Create order
 	order := &model.OrderData{
-		ID:            om.generateID(),
-		Symbol:        req.Symbol,
-		Side:          req.Side,
-		OrderType:     req.OrderType,
-		Price:         req.Price,
-		StopPrice:     req.StopPrice,
-		Quantity:      req.Quantity,
-		Status:        model.StatusCreated,
-		Exchange:      req.Exchange,
-		UserID:        req.UserID,
-		ClientOID:     req.ClientOID,
-		CreatedAt:     time.Now().UnixMilli(),
-		UpdatedAt:     time.Now().UnixMilli(),
+		ID:        om.generateID(),
+		Symbol:    req.Symbol,
+		Side:      req.Side,
+		OrderType: req.OrderType,
+		Price:     req.Price,
+		StopPrice: req.StopPrice,
+		Quantity:  req.Quantity,
+		Status:    model.StatusCreated,
+		Exchange:  req.Exchange,
+		UserID:    req.UserID,
+		ClientOID: req.ClientOID,
+		CreatedAt: time.Now().UnixMilli(),
+		UpdatedAt: time.Now().UnixMilli(),
 
 		// ── Contract fields ──
 		MarketType:    req.MarketType,
@@ -162,11 +178,28 @@ func (om *OrderManager) PlaceOrder(req *Request) (*model.OrderData, error) {
 		}
 	}
 
+	// AI 决策门（入场单强制审批；出场/止损/引擎子单在门内直接放行；
+	// provider 故障 fail-open）。被拒按风控拒绝同口径：REJECTED 落库。
+	var gateDecisionID string
+	if om.AIGateCheck != nil {
+		id, err := om.AIGateCheck(req)
+		if err != nil {
+			order.Status = model.StatusRejected
+			om.storeOrder(order)
+			if id != "" && om.AIGateOutcome != nil {
+				om.AIGateOutcome(id, order.ID, false)
+			}
+			return order, fmt.Errorf("ai gate: %w", err)
+		}
+		gateDecisionID = id
+	}
+
 	// Lock balance
 	if om.LockBalance != nil {
 		if err := om.LockBalance(req); err != nil {
 			order.Status = model.StatusRejected
 			om.storeOrder(order)
+			om.reportGateOutcome(gateDecisionID, order.ID, false)
 			return order, fmt.Errorf("balance lock: %w", err)
 		}
 	}
@@ -184,6 +217,7 @@ func (om *OrderManager) PlaceOrder(req *Request) (*model.OrderData, error) {
 			if om.UnlockBalance != nil {
 				om.UnlockBalance(order)
 			}
+			om.reportGateOutcome(gateDecisionID, order.ID, false)
 			return order, fmt.Errorf("exchange submit: %w", err)
 		}
 
@@ -201,6 +235,7 @@ func (om *OrderManager) PlaceOrder(req *Request) (*model.OrderData, error) {
 
 	order.UpdatedAt = time.Now().UnixMilli()
 	om.storeOrder(order)
+	om.reportGateOutcome(gateDecisionID, order.ID, order.Status == model.StatusFilled)
 
 	// Register conditional orders (TP/SL/Stop-Limit) with the conditional engine
 	if order.TPPrice > 0 || order.SLPrice > 0 {
@@ -355,6 +390,14 @@ func (om *OrderManager) HandleOrderUpdate(orderData *model.OrderData) {
 
 // ── Internal ──
 
+// reportGateOutcome 回写 AI 决策的成交结果（decisionID 为空或钩子未设置时跳过）。
+func (om *OrderManager) reportGateOutcome(decisionID, orderID string, executed bool) {
+	if decisionID == "" || om.AIGateOutcome == nil {
+		return
+	}
+	om.AIGateOutcome(decisionID, orderID, executed)
+}
+
 func (om *OrderManager) storeOrder(order *model.OrderData) {
 	om.orderMu.Lock()
 	defer om.orderMu.Unlock()
@@ -388,11 +431,9 @@ func (om *OrderManager) storeOrder(order *model.OrderData) {
 		ClosePosition: copy_.ClosePosition,
 	}
 
-	// Try update first (for state transitions), fall back to create (first write)
-	if err := store.GetOrderRepo().Update(rec); err != nil {
-		// If not found, create it
-		_ = store.GetOrderRepo().Create(rec)
-	}
+	// 首写插入、状态翻转更新，一次调用完成（原 Update 命中 0 行不报错，
+	// 首写永远落不了库）。
+	_ = store.GetOrderRepo().Upsert(rec)
 }
 
 func (om *OrderManager) generateID() string {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/adapter"
+	"github.com/xiaotian-quant/gateway/internal/aigate"
 	"github.com/xiaotian-quant/gateway/internal/metrics"
 	"github.com/xiaotian-quant/gateway/internal/model"
 	"github.com/xiaotian-quant/gateway/internal/order"
@@ -26,8 +27,19 @@ import (
 //   - LockBalance: reserves funds from the portfolio manager
 //   - SubmitToExchange: sends the order to the real exchange adapter
 //   - CancelOnExchange: cancels the order on the real exchange
+//   - AIGateCheck/AIGateOutcome: AI 决策门（入场单审批+成交回写，默认关闭）
 func InitOMSPipeline() {
 	om := order.GetOrderManager()
+
+	// ── 0. AI 决策门（对标 QuantDinger JEV 决策门，入场强制/出场绕过/fail-open）──
+	// 生产环境 app.Context.wireOrderManager 会用同一全局门再挂一次（幂等）。
+	// 闭包在调用时取 Global()，测试可整体替换全局门。
+	om.AIGateCheck = func(req *order.Request) (string, error) {
+		return aigate.Global().CheckOrder(req)
+	}
+	om.AIGateOutcome = func(decisionID, orderID string, executed bool) {
+		aigate.Global().RecordOutcome(decisionID, orderID, executed)
+	}
 
 	// ── 1. Risk Check: validate order against ProtectionManager ──
 	om.RiskCheck = func(req *order.Request) error {

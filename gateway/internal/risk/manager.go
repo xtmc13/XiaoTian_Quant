@@ -608,6 +608,14 @@ func (m *Manager) Config() ManagerConfig {
 	return m.cfg
 }
 
+// StateSnapshot 返回运行时风控状态（当日订单计数、连亏次数、熔断器状态字符串），
+// 供 AI 决策门等审计场景组装账户风险上下文；只读，不改变任何状态。
+func (m *Manager) StateSnapshot() (dailyOrders int, consecutiveLosses int, breakerState string) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.dailyOrderCount, m.consecutiveLosses, m.circuitBreaker.State().String()
+}
+
 // UpdateConfig replaces the running config and rebuilds the check chain and
 // circuit breaker. It can be called at runtime to adjust risk parameters.
 func (m *Manager) UpdateConfig(cfg ManagerConfig) {
