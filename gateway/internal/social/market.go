@@ -55,8 +55,94 @@ const (
 	WithdrawStatusRejected = "rejected"
 )
 
-// MaxProfitSharePct 平台分成上限（对标 CryptoRobotics 10%-30% 区间）。
+// MaxProfitSharePct 平台分成上限（旧 fee_mode 路径，对标 CryptoRobotics 10%-30% 区间）。
 const MaxProfitSharePct = 30.0
+
+// ── 双轨定价模型（迁移 0028，对标 CryptoRobotics 双 SKU）─────────────
+// pricing_model: 条目级定价模型；track: 用户对某条目实际占用的轨。
+const (
+	PricingSubscription = "subscription"  // 仅订阅轨（月费）
+	PricingProfitShare  = "profit_share"  // 仅分成轨（盈利抽成）
+	PricingBoth         = "both"          // 双轨并存，用户二选一
+
+	TrackSubscription = "subscription"
+	TrackProfitShare  = "profit_share"
+)
+
+// 双轨分成比例区间（CryptoRobotics PSH 10%-35%）。
+const (
+	DualTrackMinSharePct = 10.0
+	DualTrackMaxSharePct = 35.0
+)
+
+// MarketSubscriptionPeriodDays 市场订阅轨每期天数（月费）。
+const MarketSubscriptionPeriodDays = 30
+
+// ValidatePricingModel 校验双轨定价模型与价格字段的组合；model 为空串表示
+// 沿用 fee_mode 旧语义（不做双轨校验）。
+func ValidatePricingModel(model string, monthlyFee float64, pct *float64) error {
+	switch model {
+	case "":
+		return nil
+	case PricingSubscription:
+		if monthlyFee <= 0 {
+			return fmt.Errorf("pricing_model=subscription 要求 monthly_fee > 0")
+		}
+	case PricingProfitShare:
+		if pct == nil || *pct < DualTrackMinSharePct || *pct > DualTrackMaxSharePct {
+			return fmt.Errorf("pricing_model=profit_share 要求 profit_share_pct 在 %.0f-%.0f 之间", DualTrackMinSharePct, DualTrackMaxSharePct)
+		}
+	case PricingBoth:
+		if monthlyFee <= 0 {
+			return fmt.Errorf("pricing_model=both 要求 monthly_fee > 0")
+		}
+		if pct == nil || *pct < DualTrackMinSharePct || *pct > DualTrackMaxSharePct {
+			return fmt.Errorf("pricing_model=both 要求 profit_share_pct 在 %.0f-%.0f 之间", DualTrackMinSharePct, DualTrackMaxSharePct)
+		}
+	default:
+		return fmt.Errorf("invalid pricing_model %q (want subscription|profit_share|both)", model)
+	}
+	return nil
+}
+
+// AvailableTracks 返回该条目当前可选的轨。pricing_model 优先；空则按旧
+// fee_mode 推导（hybrid 视为双轨并存——新订阅二选一，存量 hybrid 订阅语义不变）。
+func AvailableTracks(p *ProviderApply) []string {
+	switch p.PricingModel {
+	case PricingSubscription:
+		return []string{TrackSubscription}
+	case PricingProfitShare:
+		return []string{TrackProfitShare}
+	case PricingBoth:
+		return []string{TrackSubscription, TrackProfitShare}
+	}
+	switch p.FeeMode {
+	case FeeModeMonthly:
+		return []string{TrackSubscription}
+	case FeeModeHybrid:
+		return []string{TrackSubscription, TrackProfitShare}
+	default:
+		return []string{TrackProfitShare}
+	}
+}
+
+// trackAvailable 目标轨是否在条目可选轨集合内。
+func trackAvailable(p *ProviderApply, track string) bool {
+	for _, t := range AvailableTracks(p) {
+		if t == track {
+			return true
+		}
+	}
+	return false
+}
+
+// feeModeForTrack 轨 → 写入订阅行的 fee_mode（保持旧结算查询兼容）。
+func feeModeForTrack(track string) string {
+	if track == TrackSubscription {
+		return FeeModeMonthly
+	}
+	return FeeModeProfitShare
+}
 
 // ProviderApply 是 xt_social_providers 的一行（入驻申请/Provider 档案）。
 type ProviderApply struct {
@@ -67,6 +153,7 @@ type ProviderApply struct {
 	MonthlyFee     float64  `json:"monthly_fee"`
 	ProfitSharePct *float64 `json:"profit_share_pct,omitempty"`
 	FeeMode        string   `json:"fee_mode"`
+	PricingModel   string   `json:"pricing_model"` // ''=旧 fee_mode 语义；subscription|profit_share|both
 	ApplyStatus    string   `json:"apply_status"`
 	ApplyNote      string   `json:"apply_note,omitempty"`
 	ApprovedAt     int64    `json:"approved_at,omitempty"`
@@ -81,6 +168,8 @@ type Subscription struct {
 	ProviderID     int64  `json:"provider_id"`
 	FollowerUserID int64  `json:"follower_user_id"`
 	FeeMode        string `json:"fee_mode"`
+	Track          string `json:"track"`           // ''=旧语义；subscription|profit_share
+	TrackExpiresAt int64  `json:"track_expires_at"` // 订阅轨到期毫秒时间戳（0=无到期/非订阅轨）
 	Status         string `json:"status"`
 	CreatedAt      int64  `json:"created_at"`
 	CancelledAt    int64  `json:"cancelled_at,omitempty"`
@@ -149,6 +238,15 @@ func DeriveFeeMode(monthlyFee float64, pct *float64) string {
 
 // ApplyProvider 写入入驻申请：apply_status=pending，返回完整档案。
 func (m *MarketService) ApplyProvider(userID int64, name, description string, monthlyFee float64, pct *float64) (*ProviderApply, error) {
+	return m.ApplyProviderWithPricing(userID, name, description, monthlyFee, pct, "")
+}
+
+// ApplyProviderWithPricing 同 ApplyProvider，额外写入双轨定价模型（""=旧 fee_mode 语义）。
+// pricingModel 非空时先经 ValidatePricingModel 校验。
+func (m *MarketService) ApplyProviderWithPricing(userID int64, name, description string, monthlyFee float64, pct *float64, pricingModel string) (*ProviderApply, error) {
+	if err := ValidatePricingModel(pricingModel, monthlyFee, pct); err != nil {
+		return nil, err
+	}
 	db, err := m.db()
 	if err != nil {
 		return nil, err
@@ -156,9 +254,9 @@ func (m *MarketService) ApplyProvider(userID int64, name, description string, mo
 	now := time.Now().UnixMilli()
 	res, err := db.Exec(
 		`INSERT INTO xt_social_providers
-			(user_id, name, description, monthly_fee, profit_share_pct, fee_mode, apply_status, is_public, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
-		userID, name, description, monthlyFee, nullableFloat(pct), DeriveFeeMode(monthlyFee, pct), ApplyPending, now, now,
+			(user_id, name, description, monthly_fee, profit_share_pct, fee_mode, pricing_model, apply_status, is_public, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+		userID, name, description, monthlyFee, nullableFloat(pct), DeriveFeeMode(monthlyFee, pct), pricingModel, ApplyPending, now, now,
 	)
 	if err != nil {
 		return nil, err
@@ -177,10 +275,10 @@ func (m *MarketService) GetProvider(id int64) (*ProviderApply, error) {
 	var pct sql.NullFloat64
 	var approvedAt sql.NullInt64
 	row := db.QueryRow(
-		`SELECT id, user_id, name, description, monthly_fee, profit_share_pct, fee_mode,
+		`SELECT id, user_id, name, description, monthly_fee, profit_share_pct, fee_mode, pricing_model,
 			apply_status, apply_note, approved_at, is_public, created_at, updated_at
 		 FROM xt_social_providers WHERE id = ?`, id)
-	if err := row.Scan(&p.ID, &p.UserID, &p.Name, &p.Description, &p.MonthlyFee, &pct, &p.FeeMode,
+	if err := row.Scan(&p.ID, &p.UserID, &p.Name, &p.Description, &p.MonthlyFee, &pct, &p.FeeMode, &p.PricingModel,
 		&p.ApplyStatus, &p.ApplyNote, &approvedAt, &p.IsPublic, &p.CreatedAt, &p.UpdatedAt); err != nil {
 		return nil, err
 	}
@@ -332,8 +430,83 @@ func (m *MarketService) CancelSubscription(providerID, followerUserID int64) err
 	return err
 }
 
+// ── 双轨订阅（迁移 0028）────────────────────────────────────────
+
+// GetSubscription 查某 follower 对某 provider 当前有效（active）订阅；
+// 不存在返回 sql.ErrNoRows。
+func (m *MarketService) GetSubscription(providerID, followerUserID int64) (*Subscription, error) {
+	db, err := m.db()
+	if err != nil {
+		return nil, err
+	}
+	row := db.QueryRow(
+		`SELECT id, provider_id, follower_user_id, fee_mode, track, track_expires_at, status, created_at,
+			COALESCE(cancelled_at, 0)
+		 FROM xt_social_subscriptions
+		 WHERE provider_id = ? AND follower_user_id = ? AND status = ?
+		 ORDER BY id DESC LIMIT 1`, providerID, followerUserID, SubStatusActive)
+	var s Subscription
+	if err := row.Scan(&s.ID, &s.ProviderID, &s.FollowerUserID, &s.FeeMode, &s.Track, &s.TrackExpiresAt,
+		&s.Status, &s.CreatedAt, &s.CancelledAt); err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+// EffectiveTrack 订阅当前实际占用的轨：track 列优先，空则按 fee_mode 推导
+// （旧数据 hybrid/monthly 视作订阅轨语义按 monthly 处理）。
+func (s *Subscription) EffectiveTrack() string {
+	if s.Track != "" {
+		return s.Track
+	}
+	if s.FeeMode == FeeModeProfitShare {
+		return TrackProfitShare
+	}
+	return TrackSubscription
+}
+
+// TrackExpired 订阅轨是否已到期（分成轨/无到期时间恒为 false）。
+func (s *Subscription) TrackExpired(nowMs int64) bool {
+	return s.EffectiveTrack() == TrackSubscription && s.TrackExpiresAt > 0 && s.TrackExpiresAt <= nowMs
+}
+
+// UpsertSubscriptionTrack 免费开通/切换分成轨：无订阅则插入 track 行；
+// 已有 cancelled 行则复活；已有 active 行则原地切轨（调用方负责切轨规则校验）。
+func (m *MarketService) UpsertSubscriptionTrack(providerID, followerUserID int64, track string, expiresAtMs int64) error {
+	db, err := m.db()
+	if err != nil {
+		return err
+	}
+	now := time.Now().UnixMilli()
+	feeMode := feeModeForTrack(track)
+	res, err := db.Exec(
+		`UPDATE xt_social_subscriptions SET status = ?, cancelled_at = NULL, fee_mode = ?, track = ?, track_expires_at = ?
+		 WHERE provider_id = ? AND follower_user_id = ? AND status = ?`,
+		SubStatusActive, feeMode, track, expiresAtMs, providerID, followerUserID, SubStatusCancelled)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		return nil
+	}
+	if _, err := m.GetSubscription(providerID, followerUserID); err == nil {
+		_, err = db.Exec(
+			`UPDATE xt_social_subscriptions SET fee_mode = ?, track = ?, track_expires_at = ?
+			 WHERE provider_id = ? AND follower_user_id = ? AND status = ?`,
+			feeMode, track, expiresAtMs, providerID, followerUserID, SubStatusActive)
+		return err
+	}
+	_, err = db.Exec(
+		`INSERT INTO xt_social_subscriptions (provider_id, follower_user_id, fee_mode, track, track_expires_at, status, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		providerID, followerUserID, feeMode, track, expiresAtMs, SubStatusActive, now)
+	return err
+}
+
 // ListActiveShareSubscriptions 返回分成结算的作用范围：active 订阅 ∩ 已上架 provider
-// ∩ fee_mode ∈ (profit_share, hybrid) ∩ profit_share_pct > 0。
+// ∩ 分成轨 ∩ profit_share_pct > 0。
+// 分成轨判定：track='profit_share'（双轨新语义），或 track='' 且 fee_mode ∈
+// (profit_share, hybrid)（旧语义兼容）；track='subscription' 一律排除。
 func (m *MarketService) ListActiveShareSubscriptions() ([]*ShareSubscription, error) {
 	db, err := m.db()
 	if err != nil {
@@ -344,9 +517,10 @@ func (m *MarketService) ListActiveShareSubscriptions() ([]*ShareSubscription, er
 			COALESCE(s.cancelled_at, 0), p.user_id, p.profit_share_pct
 		 FROM xt_social_subscriptions s
 		 JOIN xt_social_providers p ON p.id = s.provider_id
-		 WHERE s.status = ? AND p.apply_status = ? AND s.fee_mode IN (?, ?)
+		 WHERE s.status = ? AND p.apply_status = ?
+			AND (s.track = ? OR (s.track = '' AND s.fee_mode IN (?, ?)))
 			AND p.profit_share_pct IS NOT NULL AND p.profit_share_pct > 0`,
-		SubStatusActive, ApplyApproved, FeeModeProfitShare, FeeModeHybrid)
+		SubStatusActive, ApplyApproved, TrackProfitShare, FeeModeProfitShare, FeeModeHybrid)
 	if err != nil {
 		return nil, err
 	}

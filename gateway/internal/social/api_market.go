@@ -1,11 +1,17 @@
 package social
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"math"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
 // marketHandler 开放信号市场 + 利润分成的 HTTP handler。
@@ -28,6 +34,8 @@ func requireUserID(c *gin.Context) (int64, bool) {
 
 // applyProvider 开放入驻申请：POST /api/social/providers/apply。
 // 收费模式由月费/分成比例推导（ DeriveFeeMode ），申请进入 pending 等待管理员审核。
+// pricing_model 可选：subscription|profit_share|both（双轨 SKU，迁移 0028）；
+// 传空则沿用 fee_mode 旧语义。
 func (h *marketHandler) applyProvider(c *gin.Context) {
 	userID, ok := requireUserID(c)
 	if !ok {
@@ -38,6 +46,7 @@ func (h *marketHandler) applyProvider(c *gin.Context) {
 		Description    string   `json:"description"`
 		ProfitSharePct *float64 `json:"profit_share_pct"`
 		MonthlyFee     float64  `json:"monthly_fee"`
+		PricingModel   string   `json:"pricing_model"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -55,7 +64,12 @@ func (h *marketHandler) applyProvider(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "profit_share_pct must be between 0 and 30"})
 		return
 	}
-	p, err := h.market.ApplyProvider(userID, strings.TrimSpace(req.Name), req.Description, req.MonthlyFee, req.ProfitSharePct)
+	pricingModel := strings.TrimSpace(req.PricingModel)
+	if err := ValidatePricingModel(pricingModel, req.MonthlyFee, req.ProfitSharePct); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	p, err := h.market.ApplyProviderWithPricing(userID, strings.TrimSpace(req.Name), req.Description, req.MonthlyFee, req.ProfitSharePct, pricingModel)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -272,4 +286,297 @@ func (h *marketHandler) adminRejectWithdrawal(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"withdrawal": w})
+}
+
+// ── 双轨订阅（迁移 0028，对标 CryptoRobotics 双 SKU）──────────────────
+//
+// 订阅轨选择：POST /providers/:id/subscribe {track, chain?}
+//   - track=profit_share：免费开通，立即挂到利润分成日窗跑批（T+3 锁定）；
+//   - track=subscription：创建 market_subscription 用途的 USDT 计费订单，
+//     链上核验 paid 后由 billing 发放路径激活订阅轨（30 天/期，顺延）。
+// 切轨规则：POST /providers/:id/switch_track {track, chain?}
+//   - 分成轨 → 订阅轨：随时（返回计费订单，paid 后切换）；
+//   - 订阅轨 → 分成轨：仅订阅到期后允许（409 携带到期时间）。
+
+// marketOrderChains 市场订阅订单可用的 USDT 链 → 收款地址 env。
+var marketOrderChains = map[string][2]string{
+	"TRC20": {"USDT_TRC20_ADDRESS", "TRON TRC20"},
+	"BEP20": {"USDT_BEP20_ADDRESS", "BSC BEP20"},
+	"ERC20": {"USDT_ERC20_ADDRESS", "Ethereum ERC20"},
+	"SOL":   {"USDT_SOL_ADDRESS", "Solana SPL"},
+}
+
+// marketChainAddress 取链收款地址；链不可用（地址未配置或核验通道未就绪）返回空串。
+// 与 handler.chainAdapterAvailable 口径一致（social 不能反向 import handler，保持小份镜像）。
+func marketChainAddress(chain string) string {
+	e, ok := marketOrderChains[chain]
+	if !ok {
+		return ""
+	}
+	if os.Getenv(e[0]) == "" {
+		return ""
+	}
+	switch chain {
+	case "BEP20":
+		if os.Getenv("BSC_RPC_URL") == "" && os.Getenv("BSCSCAN_API_KEY") == "" {
+			return ""
+		}
+	case "ERC20":
+		if os.Getenv("ETH_RPC_URL") == "" && os.Getenv("ETHERSCAN_API_KEY") == "" {
+			return ""
+		}
+	}
+	return os.Getenv(e[0])
+}
+
+// newMarketOrderID 市场订阅订单号：mkt_ + 时间戳 + 4 字节随机后缀。
+func newMarketOrderID() string {
+	buf := make([]byte, 4)
+	if _, err := rand.Read(buf); err != nil {
+		return "mkt_" + time.Now().Format("20060102150405")
+	}
+	return "mkt_" + time.Now().Format("20060102150405") + hex.EncodeToString(buf)
+}
+
+// resolveApprovedProvider 解析 :id（库 id）并校验已上架。
+func (h *marketHandler) resolveApprovedProvider(c *gin.Context) (*ProviderApply, bool) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	p, err := h.market.GetProvider(id)
+	if err != nil {
+		if IsNotFound(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "provider not found"})
+			return nil, false
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return nil, false
+	}
+	if p.ApplyStatus != ApplyApproved {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "provider is not approved"})
+		return nil, false
+	}
+	return p, true
+}
+
+// subscriptionView 订阅状态的统一输出。
+func subscriptionView(sub *Subscription, p *ProviderApply) gin.H {
+	out := gin.H{
+		"provider_id":      sub.ProviderID,
+		"track":            sub.EffectiveTrack(),
+		"status":           sub.Status,
+		"track_expires_at": sub.TrackExpiresAt,
+		"created_at":       sub.CreatedAt,
+	}
+	if p != nil {
+		out["provider_name"] = p.Name
+		out["available_tracks"] = AvailableTracks(p)
+	}
+	return out
+}
+
+// createSubscriptionOrder 创建订阅轨计费订单（用途 market_subscription）。
+func (h *marketHandler) createSubscriptionOrder(c *gin.Context, p *ProviderApply, userID int64, chain string) {
+	chain = strings.ToUpper(strings.TrimSpace(chain))
+	if chain == "" {
+		chain = "TRC20"
+	}
+	address := marketChainAddress(chain)
+	if address == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported chain or address not configured"})
+		return
+	}
+	amountMicro := int64(math.Round(p.MonthlyFee * 1e6))
+	if amountMicro <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "provider monthly_fee is not configured"})
+		return
+	}
+	now := time.Now().Unix()
+	o := &store.BillingOrder{
+		ID:          newMarketOrderID(),
+		UserID:      userID,
+		PlanID:      "market_sub",
+		Purpose:     store.BillingPurposeMarketSubscription,
+		RefID:       strconv.FormatInt(p.ID, 10),
+		Chain:       chain,
+		Address:     address,
+		AmountMicro: amountMicro,
+		Status:      store.BillingStatusPending,
+		CreatedAt:   now,
+	}
+	if err := store.NewBillingRepo().Create(o); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "create order failed"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"order":        o,
+		"expires_at":   o.CreatedAt + 1800,
+		"period_days":  MarketSubscriptionPeriodDays,
+		"provider_id":  p.ID,
+		"track":        TrackSubscription,
+		"available_tracks": AvailableTracks(p),
+	})
+}
+
+// subscribeTrack 双轨订阅入口：POST /api/social/providers/:id/subscribe。
+// 同一用户同一条目二选一：已有 active 订阅且轨不同 → 409 引导走 switch_track。
+func (h *marketHandler) subscribeTrack(c *gin.Context) {
+	userID, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+	p, ok := h.resolveApprovedProvider(c)
+	if !ok {
+		return
+	}
+	var req struct {
+		Track string `json:"track"`
+		Chain string `json:"chain"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+	track := strings.TrimSpace(req.Track)
+	if track != TrackSubscription && track != TrackProfitShare {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "track must be subscription or profit_share"})
+		return
+	}
+	if !trackAvailable(p, track) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "track not available for this provider", "available_tracks": AvailableTracks(p)})
+		return
+	}
+
+	nowMs := time.Now().UnixMilli()
+	if cur, err := h.market.GetSubscription(p.ID, userID); err == nil {
+		curTrack := cur.EffectiveTrack()
+		if curTrack == track {
+			if track == TrackSubscription && cur.TrackExpired(nowMs) {
+				// 订阅轨已到期：续费 → 新订单
+				h.createSubscriptionOrder(c, p, userID, req.Chain)
+				return
+			}
+			// 同轨且有效：幂等返回当前订阅
+			c.JSON(http.StatusOK, gin.H{"subscription": subscriptionView(cur, p), "already": true})
+			return
+		}
+		c.JSON(http.StatusConflict, gin.H{
+			"error":          "已占用另一轨，请使用 switch_track 切轨",
+			"current_track":  curTrack,
+			"track_expires_at": cur.TrackExpiresAt,
+		})
+		return
+	} else if !IsNotFound(err) {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if track == TrackProfitShare {
+		// 分成轨：免费开通，立即进结算作用范围，并开始跟单。
+		if err := h.market.UpsertSubscriptionTrack(p.ID, userID, TrackProfitShare, 0); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		_ = h.engine.Follow(DefaultCopyConfig(int(userID), MarketEngineID(p.ID)))
+		sub, err := h.market.GetSubscription(p.ID, userID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"subscription": subscriptionView(sub, p)})
+		return
+	}
+	// 订阅轨：创建计费订单，paid 后由 billing 发放路径激活。
+	h.createSubscriptionOrder(c, p, userID, req.Chain)
+}
+
+// switchTrack 切轨：POST /api/social/providers/:id/switch_track。
+// 分成轨 → 订阅轨随时；订阅轨 → 分成轨仅到期后。
+func (h *marketHandler) switchTrack(c *gin.Context) {
+	userID, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+	p, ok := h.resolveApprovedProvider(c)
+	if !ok {
+		return
+	}
+	var req struct {
+		Track string `json:"track"`
+		Chain string `json:"chain"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+	track := strings.TrimSpace(req.Track)
+	if track != TrackSubscription && track != TrackProfitShare {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "track must be subscription or profit_share"})
+		return
+	}
+	if !trackAvailable(p, track) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "track not available for this provider", "available_tracks": AvailableTracks(p)})
+		return
+	}
+
+	cur, err := h.market.GetSubscription(p.ID, userID)
+	if err != nil {
+		if IsNotFound(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "no active subscription, use subscribe instead"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	curTrack := cur.EffectiveTrack()
+	if curTrack == track {
+		c.JSON(http.StatusOK, gin.H{"subscription": subscriptionView(cur, p), "already": true})
+		return
+	}
+
+	if track == TrackSubscription {
+		// 分成轨 → 订阅轨：随时，创建订单，paid 后切换到订阅轨。
+		h.createSubscriptionOrder(c, p, userID, req.Chain)
+		return
+	}
+
+	// 订阅轨 → 分成轨：仅到期后允许。
+	nowMs := time.Now().UnixMilli()
+	if !cur.TrackExpired(nowMs) {
+		c.JSON(http.StatusConflict, gin.H{
+			"error":            "订阅轨未到期，到期后方可切换到分成轨",
+			"track_expires_at": cur.TrackExpiresAt,
+		})
+		return
+	}
+	if err := h.market.UpsertSubscriptionTrack(p.ID, userID, TrackProfitShare, 0); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	sub, err := h.market.GetSubscription(p.ID, userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"subscription": subscriptionView(sub, p)})
+}
+
+// mySubscription 当前用户对该 provider 的订阅轨状态：GET /api/social/providers/:id/subscription。
+func (h *marketHandler) mySubscription(c *gin.Context) {
+	userID, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+	p, ok := h.resolveApprovedProvider(c)
+	if !ok {
+		return
+	}
+	sub, err := h.market.GetSubscription(p.ID, userID)
+	if err != nil {
+		if IsNotFound(err) {
+			c.JSON(http.StatusOK, gin.H{"subscription": nil, "available_tracks": AvailableTracks(p)})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"subscription": subscriptionView(sub, p)})
 }

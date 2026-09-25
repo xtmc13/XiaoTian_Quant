@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { DataTable } from '@/components/DataTable'
+import { AdminMarketReview } from '@/components/market/AdminMarketReview'
 import { adminApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import type { AdminUser, AdminStats, AdminAuditLog } from '@/types'
@@ -23,7 +24,7 @@ export function UserManage() {
   const [editRole, setEditRole] = useState('')
   const [editActive, setEditActive] = useState(1)
   const [saving, setSaving] = useState(false)
-  const [activeTab, setActiveTab] = useState<'users' | 'audit' | 'system'>('users')
+  const [activeTab, setActiveTab] = useState<'users' | 'audit' | 'system' | 'market'>('users')
   // Enhanced stats
   const [sysStats, setSysStats] = useState<AdminStats | null>(null)
   const [auditLog, setAuditLog] = useState<AdminAuditLog[]>([])
@@ -129,6 +130,7 @@ export function UserManage() {
           { k: 'users' as const, label: '用户管理', icon: Users },
           { k: 'audit' as const, label: '审计日志', icon: FileText },
           { k: 'system' as const, label: '系统监控', icon: Cpu },
+          { k: 'market' as const, label: '上架审核', icon: Shield },
         ].map(t => (
           <button key={t.k} onClick={() => setActiveTab(t.k)}
             className={cn('flex items-center gap-1.5 px-4 py-2 rounded-md text-xs font-medium transition-colors',
@@ -139,6 +141,7 @@ export function UserManage() {
       </div>
 
       {/* ── System Monitor Tab ── */}
+      {activeTab === 'market' && <AdminMarketReview />}
       {activeTab === 'system' && sysStats?.system && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {[
