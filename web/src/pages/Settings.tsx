@@ -309,6 +309,70 @@ function SelectField({
   )
 }
 
+// ModelSelect 模型选择器：原生下拉（平板/移动端兼容，datalist 在触屏浏览器不可用）
+// + "自定义…"入口切手填；当前值不在候选列表时自动进手填模式并提供返回列表按钮。
+function ModelSelect({
+  value,
+  models,
+  onChange,
+  ariaLabel,
+  placeholder,
+}: {
+  value: string
+  models: string[]
+  onChange: (v: string) => void
+  ariaLabel: string
+  placeholder?: string
+}) {
+  const { t } = useI18n()
+  const [customMode, setCustomMode] = useState(false)
+  const inList = value === '' || models.includes(value)
+
+  if (customMode || !inList) {
+    return (
+      <div className="flex items-center gap-2">
+        <input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          aria-label={ariaLabel}
+          placeholder={placeholder}
+          className="flex-1 rounded-md border border-quant-border bg-quant-bg px-3 py-2 text-sm text-foreground outline-none transition-colors focus:border-quant-gold"
+        />
+        {models.length > 0 && (
+          <button
+            type="button"
+            title={t('settings.ai.backToList')}
+            onClick={() => {
+              setCustomMode(false)
+              if (!models.includes(value) && models[0]) onChange(models[0])
+            }}
+            className="shrink-0 rounded-md border border-quant-border bg-quant-card p-2 text-muted-foreground transition-colors hover:border-quant-gold/30 hover:text-foreground"
+          >
+            <ChevronRight className="h-4 w-4 -rotate-90" />
+          </button>
+        )}
+      </div>
+    )
+  }
+  return (
+    <SelectField
+      value={value}
+      onChange={(v) => {
+        if (v === '__custom__') {
+          setCustomMode(true)
+        } else {
+          onChange(v)
+        }
+      }}
+      options={[
+        ...models.map((m) => ({ value: m, label: m })),
+        { value: '__custom__', label: t('settings.ai.customModel') },
+      ]}
+      label={ariaLabel}
+    />
+  )
+}
+
 function NumberInput({
   value,
   onChange,
@@ -1075,19 +1139,13 @@ export function Settings() {
                             {t('settings.ai.fetchModels')}
                           </button>
                         </div>
-                        <input
-                          list={`ai-models-${prov.key}`}
+                        <ModelSelect
                           value={effectiveModel}
-                          onChange={(e) => setAIField(prov.key, 'model', e.target.value)}
-                          aria-label={`${prov.label} ${t('settings.ai.defaultModel')}`}
-                          placeholder={prov.models[0] || ''}
-                          className="w-full rounded-md border border-quant-border bg-quant-bg px-3 py-2 text-sm text-foreground outline-none transition-colors focus:border-quant-gold"
+                          models={fetchedModels[prov.key] ?? prov.models}
+                          onChange={(v) => setAIField(prov.key, 'model', v)}
+                          ariaLabel={`${prov.label} ${t('settings.ai.defaultModel')}`}
+                          placeholder={prov.models[0]}
                         />
-                        <datalist id={`ai-models-${prov.key}`}>
-                          {(fetchedModels[prov.key] ?? prov.models).map((m) => (
-                            <option key={m} value={m} />
-                          ))}
-                        </datalist>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">

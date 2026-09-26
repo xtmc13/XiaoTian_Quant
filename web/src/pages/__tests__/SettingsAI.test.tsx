@@ -99,11 +99,13 @@ describe('Settings AI 模型设置', () => {
     expect(defaultSelect.value).toBe('openai')
   })
 
-  it('模型输入框带 datalist 候选且默认取目录 default', async () => {
+  it('模型选择器默认取目录 default 且候选完整', async () => {
     await renderAITab()
-    const claudeInput = screen.getByLabelText('Anthropic Claude 默认模型') as HTMLInputElement
-    expect(claudeInput.value).toBe('claude-opus-4-7')
-    expect(document.getElementById('ai-models-claude')).toBeTruthy()
+    const claudeSelect = screen.getByLabelText('Anthropic Claude 默认模型') as HTMLSelectElement
+    expect(claudeSelect.value).toBe('claude-opus-4-7')
+    // 候选 = 目录模型 + 自定义项
+    expect(claudeSelect.options.length).toBe(3)
+    expect(claudeSelect.options[2].value).toBe('__custom__')
   })
 
   it('legacy anthropic 配置迁移到 claude', async () => {
@@ -171,11 +173,11 @@ describe('Settings AI 模型设置', () => {
         base_url: 'https://api.anthropic.com',
       })
     )
-    // datalist 被实时列表替换
+    // 下拉候选被实时列表替换（+ 自定义项）
     await waitFor(() => {
-      const dl = document.getElementById('ai-models-claude') as HTMLDataListElement
-      expect(dl.options.length).toBe(3)
-      expect(dl.options[2].value).toBe('claude-haiku-4-5')
+      const sel = screen.getByLabelText('Anthropic Claude 默认模型') as HTMLSelectElement
+      expect(sel.options.length).toBe(4)
+      expect(sel.options[2].value).toBe('claude-haiku-4-5')
     })
     await waitFor(() =>
       expect(useToastModule.toast).toHaveBeenCalledWith('success', expect.stringContaining('3'))
@@ -192,8 +194,8 @@ describe('Settings AI 模型设置', () => {
     await waitFor(() =>
       expect(useToastModule.toast).toHaveBeenCalledWith('error', 'deepseek 拉取失败: HTTP 401')
     )
-    const dl = document.getElementById('ai-models-deepseek') as HTMLDataListElement
-    expect(dl.options.length).toBe(1) // 回落目录候选数不变
+    const sel = screen.getByLabelText('DeepSeek 默认模型') as HTMLSelectElement
+    expect(sel.options.length).toBe(2) // 目录候选 1 + 自定义项，拉取失败不变
   })
 
   it('Kimi 卡片"订阅版端点"按钮一键填充 coding 网关地址与模型', async () => {

@@ -3,6 +3,7 @@ package metrics
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -586,6 +587,33 @@ func (w *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	}
 	return hijacker.Hijack()
 }
+
+// Flush implements http.Flusher for SSE support。
+// 缺失时 gin 的 c.Writer.Flush() 会触发 interface conversion panic（生产环境实测）。
+func (w *responseWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// ReadFrom implements io.ReaderFrom，避免包装后丢失 sendfile/零拷贝优化。
+func (w *responseWriter) ReadFrom(src io.Reader) (int64, error) {
+	if rf, ok := w.ResponseWriter.(io.ReaderFrom); ok {
+		return rf.ReadFrom(src)
+	}
+	return io.Copy(onlyWriter{w}, src)
+}
+
+// Push implements http.Pusher（HTTP/2 server push），底层不支持时静默跳过。
+func (w *responseWriter) Push(target string, opts *http.PushOptions) error {
+	if p, ok := w.ResponseWriter.(http.Pusher); ok {
+		return p.Push(target, opts)
+	}
+	return http.ErrNotSupported
+}
+
+// onlyWriter 隐藏 ReadFrom，防止 io.Copy 走自身 ReadFrom 造成递归。
+type onlyWriter struct{ io.Writer }
 
 // ── Convenience ──
 // 包级单例注册：重复 Register 会替换 Registry 中的实例导致计数清零，
