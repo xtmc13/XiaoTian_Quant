@@ -124,11 +124,13 @@ func PortfolioSummary(c *gin.Context) {
 	if exMap, ok := cfg["exchanges"].(map[string]any); ok {
 		for name, v := range exMap {
 			ex, _ := v.(map[string]any)
-			hasKey := ex["api_key"] != nil && ex["api_key"] != ""
-			hasSecret := ex["secret"] != nil && ex["secret"] != ""
+			// 凭证判定走统一解析链（env→保险库→config）：P0-1 后 config.yaml
+			// 里的 api_key/secret 恒为空（明文已收进保险库），读 config 原值会
+			// 永远得到 configured=false（仪表盘资产分布空白的根因）。
+			hasCreds := adapter.HasCredential(name)
 			connected := false
 			exchangeBalance := 0.0
-			if hasKey && hasSecret {
+			if hasCreds {
 				// Quick connectivity check + get balance
 				if name == "binance" {
 					apiKey, secret, _ := adapter.GetCredential("binance")
@@ -145,7 +147,7 @@ func PortfolioSummary(c *gin.Context) {
 			}
 			exchanges = append(exchanges, gin.H{
 				"name":      name,
-				"configured": hasKey && hasSecret,
+				"configured": hasCreds,
 				"connected": connected,
 				"enabled":   ex["enabled"],
 				"balance":   exchangeBalance,
