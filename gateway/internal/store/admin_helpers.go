@@ -117,9 +117,20 @@ func AddAuditLog(actor, action, detail string) {
 	if db == nil {
 		return
 	}
-	db.Exec(
+	// endpoint/timestamp 为 NOT NULL 无默认列（agent 审计原 schema），必须显式给值，
+	// 否则新库上整条 INSERT 静默失败（旧版只写 4 列，审计实际没落库）。
+	now := time.Now().Unix()
+	if _, err := db.Exec(
+		`INSERT INTO agent_audit_log (actor, action, detail, created_at, endpoint, method, timestamp) VALUES (?, ?, ?, ?, ?, 'AUDIT', ?)`,
+		actor, action, detail, now, "audit:"+action, now,
+	); err == nil {
+		return
+	}
+	// 兼容未跑 0001 迁移的旧库（无 actor/action/detail 列）：降级到原 4 列试试，
+	// 仍失败则放弃（审计绝不能阻塞交易路径）。
+	_, _ = db.Exec(
 		`INSERT INTO agent_audit_log (actor, action, detail, created_at) VALUES (?, ?, ?, ?)`,
-		actor, action, detail, time.Now().Unix(),
+		actor, action, detail, now,
 	)
 }
 

@@ -3,15 +3,18 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   analysisApi,
   type AnalysisJob,
+  type AnalysisVariantGroup,
   type LookaheadResult,
   type RecursiveResult,
 } from '@/lib/api'
 import { MODEL_INTERVALS } from '@/lib/constants'
 import { cn } from '@/lib/utils'
+import { toast } from '@/lib/useToast'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { SectionCard } from '@/components/ui/SectionCard'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { KPICard } from '@/components/ui/KPICard'
+import { useConfirmDialog } from '@/components/ui/ConfirmDialog'
 import {
   ShieldCheck,
   ShieldAlert,
@@ -23,6 +26,8 @@ import {
   ScanSearch,
   ChevronDown,
   ChevronUp,
+  Ban,
+  Trash2,
 } from 'lucide-react'
 
 /* ── Constants ── */
@@ -93,6 +98,12 @@ function statusBadge(status: AnalysisJob['status']) {
           <CheckCircle2 className="w-3.5 h-3.5" /> 已完成
         </span>
       )
+    case 'cancelled':
+      return (
+        <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+          <Ban className="w-3.5 h-3.5" /> 已取消
+        </span>
+      )
     default:
       return (
         <span className="inline-flex items-center gap-1 text-xs text-red-400">
@@ -102,9 +113,106 @@ function statusBadge(status: AnalysisJob['status']) {
   }
 }
 
+const GROUP_LABELS: Record<string, string> = {
+  prefix: '前缀递增（同起点、长度递增）',
+  start_offset: '起点偏移（固定终点、起点右移，捕捉 warmup 不收敛）',
+}
+
+/* Recursive 单个变体组（prefix / start_offset）的档位表 + 不稳定时点表 */
+function RecursiveGroupView({ group }: { group: AnalysisVariantGroup }) {
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 text-xs">
+        <span className="px-2 py-0.5 rounded bg-purple-500/15 text-purple-400 font-mono">{group.kind}</span>
+        <span className="text-muted-foreground">{GROUP_LABELS[group.kind] ?? group.kind}</span>
+        <span className="text-muted-foreground">
+          对比时点 <span className="text-foreground">{group.compared_points}</span>，不稳定{' '}
+          <span className={group.unstable_count > 0 ? 'text-red-400 font-medium' : 'text-foreground'}>
+            {group.unstable_count}
+          </span>
+        </span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-quant-border text-xs text-muted-foreground">
+              <th className="text-left px-3 py-2 font-medium">档位</th>
+              <th className="text-right px-3 py-2 font-medium">K线数</th>
+              <th className="text-right px-3 py-2 font-medium">入场</th>
+              <th className="text-right px-3 py-2 font-medium">离场</th>
+            </tr>
+          </thead>
+          <tbody>
+            {group.levels.map((l) => (
+              <tr key={l.name} className="border-b border-quant-border/50">
+                <td className="px-3 py-2 font-mono text-xs text-foreground">{l.name}</td>
+                <td className="px-3 py-2 text-right text-foreground">{l.bars}</td>
+                <td className="px-3 py-2 text-right text-foreground">{l.entries}</td>
+                <td className="px-3 py-2 text-right text-foreground">{l.exits}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {group.unstable_points.length > 0 && (
+        <div>
+          <h3 className="text-sm font-medium text-red-400 mb-2">
+            不稳定时点（同一历史时点信号在该维度下不一致）
+          </h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-quant-border text-xs text-muted-foreground">
+                  <th className="text-left px-3 py-2 font-medium">时间</th>
+                  {group.levels.map((l) => (
+                    <th key={l.name} className="text-left px-3 py-2 font-medium">
+                      {l.bars}根
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {group.unstable_points.slice(0, 50).map((p) => {
+                  const first = group.levels[0] ? p.by_lens[group.levels[0].name] : ''
+                  return (
+                    <tr key={p.index} className="border-b border-quant-border/50 bg-red-500/5">
+                      <td className="px-3 py-2 text-xs text-foreground">{fmtTime(p.time)}</td>
+                      {group.levels.map((l) => {
+                        const dir = p.by_lens[l.name] || ''
+                        return (
+                          <td
+                            key={l.name}
+                            className={cn(
+                              'px-3 py-2 text-xs',
+                              dir !== first ? 'text-red-400 font-medium' : 'text-foreground'
+                            )}
+                          >
+                            {dir || '—'}
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+            {group.unstable_points.length > 50 && (
+              <p className="text-xs text-muted-foreground mt-2">
+                仅展示前 50 个，共 {group.unstable_points.length} 个不稳定时点
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 /* ── Page ── */
 export function AnalysisPage() {
   const queryClient = useQueryClient()
+  const { confirm, Dialog } = useConfirmDialog()
   const [showForm, setShowForm] = useState(false)
   const [selectedJob, setSelectedJob] = useState<string | null>(null)
   const [form, setForm] = useState({
@@ -148,6 +256,45 @@ export function AnalysisPage() {
       if (res?.job_id) setSelectedJob(res.job_id)
     },
   })
+
+  const cancelMutation = useMutation({
+    mutationFn: (id: string) => analysisApi.cancel(id),
+    onSuccess: () => {
+      toast('success', '任务已取消')
+      queryClient.invalidateQueries({ queryKey: ['analysis-jobs'] })
+      if (selectedJob) queryClient.invalidateQueries({ queryKey: ['analysis-job', selectedJob] })
+    },
+    onError: (e) => toast('error', '取消失败：' + ((e as Error)?.message || '未知错误')),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => analysisApi.remove(id),
+    onSuccess: (_res, id) => {
+      toast('success', '任务已删除')
+      if (selectedJob === id) setSelectedJob(null)
+      queryClient.invalidateQueries({ queryKey: ['analysis-jobs'] })
+    },
+    onError: (e) => toast('error', '删除失败：' + ((e as Error)?.message || '未知错误')),
+  })
+
+  const handleCancelJob = async (j: AnalysisJob) => {
+    if (await confirm({ title: '取消检测任务', message: `确定取消任务 ${j.id} 吗？后台变体回测将中止。` })) {
+      cancelMutation.mutate(j.id)
+    }
+  }
+
+  const handleDeleteJob = async (j: AnalysisJob) => {
+    if (
+      await confirm({
+        title: '删除检测任务',
+        message: `确定删除任务 ${j.id} 吗？结果记录将一并删除，不可恢复。`,
+        confirmText: '删除',
+        variant: 'danger',
+      })
+    ) {
+      deleteMutation.mutate(j.id)
+    }
+  }
 
   const runningCount = jobs?.filter((j) => j.status === 'running').length ?? 0
   const completedCount = jobs?.filter((j) => j.status === 'completed').length ?? 0
@@ -334,6 +481,7 @@ export function AnalysisPage() {
                     <th className="text-left px-4 py-3 font-medium">交易对</th>
                     <th className="text-left px-4 py-3 font-medium">状态</th>
                     <th className="text-left px-4 py-3 font-medium">创建时间</th>
+                    <th className="text-right px-4 py-3 font-medium">操作</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -365,6 +513,30 @@ export function AnalysisPage() {
                       </td>
                       <td className="px-4 py-3">{statusBadge(j.status)}</td>
                       <td className="px-4 py-3 text-xs text-muted-foreground">{fmtTime(j.created_at)}</td>
+                      <td className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
+                        <div className="inline-flex items-center gap-1.5">
+                          {j.status === 'running' && (
+                            <button
+                              onClick={() => handleCancelJob(j)}
+                              disabled={cancelMutation.isPending}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-quant-gold hover:bg-quant-gold/10 disabled:opacity-50"
+                              title="取消任务（中止后台变体回测）"
+                            >
+                              <Ban className="w-3.5 h-3.5" /> 取消
+                            </button>
+                          )}
+                          {j.status !== 'running' && (
+                            <button
+                              onClick={() => handleDeleteJob(j)}
+                              disabled={deleteMutation.isPending}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-red-400 hover:bg-red-500/10 disabled:opacity-50"
+                              title="删除任务记录（仅终态可删）"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" /> 删除
+                            </button>
+                          )}
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -528,82 +700,23 @@ export function AnalysisPage() {
                   </div>
                 )}
 
-                {/* Recursive: 档位与不稳定时点 */}
+                {/* Recursive: 按变体组渲染（prefix 前缀递增 + start_offset 起点偏移） */}
                 {!isLookahead(result) && (
-                  <div className="space-y-4">
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="border-b border-quant-border text-xs text-muted-foreground">
-                            <th className="text-left px-3 py-2 font-medium">前缀档位</th>
-                            <th className="text-right px-3 py-2 font-medium">K线数</th>
-                            <th className="text-right px-3 py-2 font-medium">入场</th>
-                            <th className="text-right px-3 py-2 font-medium">离场</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {result.levels.map((l) => (
-                            <tr key={l.name} className="border-b border-quant-border/50">
-                              <td className="px-3 py-2 font-mono text-xs text-foreground">{l.name}</td>
-                              <td className="px-3 py-2 text-right text-foreground">{l.bars}</td>
-                              <td className="px-3 py-2 text-right text-foreground">{l.entries}</td>
-                              <td className="px-3 py-2 text-right text-foreground">{l.exits}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-
-                    {result.unstable_points.length > 0 && (
-                      <div>
-                        <h3 className="text-sm font-medium text-red-400 mb-2">
-                          不稳定时点（同一历史时点信号随数据变长而改变）
-                        </h3>
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-sm">
-                            <thead>
-                              <tr className="border-b border-quant-border text-xs text-muted-foreground">
-                                <th className="text-left px-3 py-2 font-medium">时间</th>
-                                {result.levels.map((l) => (
-                                  <th key={l.name} className="text-left px-3 py-2 font-medium">
-                                    {l.bars}根
-                                  </th>
-                                ))}
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {result.unstable_points.slice(0, 50).map((p) => {
-                                const first = result.levels[0] ? p.by_lens[result.levels[0].name] : ''
-                                return (
-                                  <tr key={p.index} className="border-b border-quant-border/50 bg-red-500/5">
-                                    <td className="px-3 py-2 text-xs text-foreground">{fmtTime(p.time)}</td>
-                                    {result.levels.map((l) => {
-                                      const dir = p.by_lens[l.name] || ''
-                                      return (
-                                        <td
-                                          key={l.name}
-                                          className={cn(
-                                            'px-3 py-2 text-xs',
-                                            dir !== first ? 'text-red-400 font-medium' : 'text-foreground'
-                                          )}
-                                        >
-                                          {dir || '—'}
-                                        </td>
-                                      )
-                                    })}
-                                  </tr>
-                                )
-                              })}
-                            </tbody>
-                          </table>
-                          {result.unstable_points.length > 50 && (
-                            <p className="text-xs text-muted-foreground mt-2">
-                              仅展示前 50 个，共 {result.unstable_points.length} 个不稳定时点
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                    )}
+                  <div className="space-y-6">
+                    {(result.groups && result.groups.length > 0
+                      ? result.groups
+                      : [
+                          {
+                            kind: 'prefix' as const,
+                            levels: result.levels,
+                            compared_points: result.compared_points,
+                            unstable_points: result.unstable_points,
+                            unstable_count: result.unstable_count,
+                          },
+                        ]
+                    ).map((g) => (
+                      <RecursiveGroupView key={g.kind} group={g} />
+                    ))}
                   </div>
                 )}
               </div>
@@ -611,6 +724,7 @@ export function AnalysisPage() {
           </SectionCard>
         )}
       </div>
+      <Dialog />
     </div>
   )
 }

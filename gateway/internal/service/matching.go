@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/xiaotian-quant/gateway/internal/adapter"
+	"github.com/xiaotian-quant/gateway/internal/order"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
@@ -34,6 +35,11 @@ type MatchingService struct {
 	orderIDsMu sync.Mutex
 	orderSeq   uint64
 
+	// engineToStoreIDs 是反向登记簿（C2.3）：symbol → 引擎订单号 → OMS 订单号。
+	// 挂单（maker）被后续对手单/模拟做市单撮合成交时，按它找到 OMS 事实源订单
+	// 回写 FILLED/均价/数量——否则 paper LIMIT 单成交后 OMS 里仍挂 NEW。
+	engineToStoreIDs map[string]map[uint64]string
+
 	balanceProvider adapter.BalanceProvider
 }
 
@@ -50,9 +56,10 @@ var dataFeedHTTPClient = &http.Client{Timeout: 3 * time.Second}
 func GetMatchingService() *MatchingService {
 	matchSvcOnce.Do(func() {
 		matchSvc = &MatchingService{
-			engines:     make(map[string]*adapter.MatchingEngine),
-			simOrderIDs: make(map[string][]uint64),
-			orderIDs:    make(map[string]uint64),
+			engines:          make(map[string]*adapter.MatchingEngine),
+			simOrderIDs:      make(map[string][]uint64),
+			orderIDs:         make(map[string]uint64),
+			engineToStoreIDs: make(map[string]map[uint64]string),
 		}
 	})
 	return matchSvc
@@ -91,8 +98,34 @@ func (ms *MatchingService) GetEngine(symbol string) *adapter.MatchingEngine {
 	if ms.balanceProvider != nil {
 		eng.SetBalanceProvider(ms.balanceProvider)
 	}
+	// C2.3：成交回写钩子，挂单成交后回写 OMS 事实源（handler 闭包捕获 symbol）。
+	eng.SetOnFill(func(orderID uint64, filledQty, avgPrice float64) {
+		ms.handleEngineFill(symbol, orderID, filledQty, avgPrice)
+	})
 	ms.engines[symbol] = eng
 	return eng
+}
+
+// handleEngineFill 引擎成交回调：把 maker 侧的累计成交回写 OMS。
+// taker 侧在下单当下已由 OMS 提交结果回写（且此刻反向登记簿尚未登记 taker，
+// 天然跳过），这里只处理引擎里已登记的挂单。引擎锁内触发，OMS 写库/事件较重，
+// 异步化防引擎锁长占与重入死锁；累计量语义 + RecordFill 幂等，乱序收敛。
+func (ms *MatchingService) handleEngineFill(symbol string, engineOrderID uint64, filledQty, avgPrice float64) {
+	ms.orderIDsMu.Lock()
+	storeOrderID := ms.engineToStoreIDs[symbol][engineOrderID]
+	ms.orderIDsMu.Unlock()
+	if storeOrderID == "" {
+		return // 模拟做市单/未登记引擎单：不回写
+	}
+	om := order.GetOrderManager()
+	if om.GetOrder(storeOrderID) == nil {
+		return // 非 OMS 订单（内部铸造的 mord- 号）：无事实源可回写
+	}
+	go func() {
+		if err := om.RecordFill(storeOrderID, filledQty, avgPrice); err != nil {
+			log.Printf("[Matching] fill write-back to OMS failed: order=%s err=%v", storeOrderID, err)
+		}
+	}()
 }
 
 // PlaceOrder places an order and matches it against the book.
@@ -115,6 +148,10 @@ func (ms *MatchingService) PlaceOrder(symbol, side, orderType string, price, qua
 	}
 	ms.orderIDsMu.Lock()
 	ms.orderIDs[storeOrderID] = engineOrderID
+	if ms.engineToStoreIDs[symbol] == nil {
+		ms.engineToStoreIDs[symbol] = make(map[uint64]string)
+	}
+	ms.engineToStoreIDs[symbol][engineOrderID] = storeOrderID
 	ms.orderIDsMu.Unlock()
 
 	result["store_order_id"] = storeOrderID
@@ -129,6 +166,7 @@ func (ms *MatchingService) CancelOrder(symbol string, storeOrderID string) error
 	engineID, ok := ms.orderIDs[storeOrderID]
 	if ok {
 		delete(ms.orderIDs, storeOrderID)
+		delete(ms.engineToStoreIDs[symbol], engineID)
 	}
 	ms.orderIDsMu.Unlock()
 

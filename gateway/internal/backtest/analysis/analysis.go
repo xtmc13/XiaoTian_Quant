@@ -14,6 +14,7 @@
 package analysis
 
 import (
+	"context"
 	"fmt"
 	"sort"
 
@@ -185,10 +186,14 @@ type LookaheadResult struct {
 const minVariantBars = 30
 
 // RunLookahead 执行 lookahead 偏差分析。bars 为完整历史数据（已按时间升序）。
-func RunLookahead(cfg Config, factory Factory, bars []model.Bar) (*LookaheadResult, error) {
+// ctx 取消时中止剩余变体回测（任务级取消端点）。
+func RunLookahead(ctx context.Context, cfg Config, factory Factory, bars []model.Bar) (*LookaheadResult, error) {
 	cfg.defaults()
 	if len(bars) < cfg.PrefixMinBars {
 		return nil, fmt.Errorf("数据不足：%d 根K线，至少需要 %d 根", len(bars), cfg.PrefixMinBars)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	baseline, err := runOnce(factory, cfg.Symbol, bars, cfg.InitialBalance)
@@ -215,6 +220,9 @@ func RunLookahead(cfg Config, factory Factory, bars []model.Bar) (*LookaheadResu
 
 	// ── 变体1：整体时间轴平移 N 根（内容不变） ──
 	for _, n := range cfg.ShiftN {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if n <= 0 || intervalMs <= 0 {
 			continue
 		}
@@ -237,6 +245,9 @@ func RunLookahead(cfg Config, factory Factory, bars []model.Bar) (*LookaheadResu
 
 	// ── 变体2：截断末尾 N 根 ──
 	for _, n := range cfg.TruncateN {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if n <= 0 || len(bars)-n < minVariantBars {
 			continue
 		}
@@ -268,6 +279,9 @@ func RunLookahead(cfg Config, factory Factory, bars []model.Bar) (*LookaheadResu
 		checks = sampled
 	}
 	for _, entry := range checks {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		k := entry.Index
 		if k+1 < minVariantBars || k+1 > len(bars) {
 			continue
@@ -402,7 +416,23 @@ type UnstablePoint struct {
 	ByLens map[string]string `json:"by_lens"` // 档位名 -> 方向（"" = 无信号）
 }
 
+// VariantGroup 一组递归变体对比结果：
+//   - prefix       同起点、长度递增的前缀序列（既有维度）；
+//   - start_offset 固定终点、起点右移若干档（freqtrade recursive-analysis 的
+//     另一半）。warmup 不收敛类递归偏差（信号依赖"自起点以来"的全序列状态，
+//     如递归均线/全量预计算归一化）在同起点前缀对比下天然隐身，只有移动起点
+//     才能暴露重叠区间内同一时点信号不一致。
+type VariantGroup struct {
+	Kind           string          `json:"kind"` // prefix | start_offset
+	Levels         []PrefixLevel   `json:"levels"`
+	ComparedPoints int             `json:"compared_points"`
+	UnstablePoints []UnstablePoint `json:"unstable_points"`
+	UnstableCount  int             `json:"unstable_count"`
+}
+
 // RecursiveResult recursive 分析结论。
+// 顶层 Levels/UnstablePoints/ComparedPoints 保留 prefix 组镜像（向后兼容），
+// Groups 按组承载全部维度明细；UnstableCount 为各组不稳定点合计。
 type RecursiveResult struct {
 	Conclusion     string          `json:"conclusion"` // recursive | stable | inconclusive
 	Recursive      bool            `json:"recursive"`
@@ -411,15 +441,20 @@ type RecursiveResult struct {
 	UnstablePoints []UnstablePoint `json:"unstable_points"`
 	UnstableCount  int             `json:"unstable_count"`
 	ComparedPoints int             `json:"compared_points"`
+	Groups         []VariantGroup  `json:"groups"`
 	Summary        string          `json:"summary"`
 }
 
-// RunRecursive 执行递归偏差分析：同一起点、长度递增的前缀序列上分别回测，
-// 对比共享历史区间的信号稳定性。
-func RunRecursive(cfg Config, factory Factory, bars []model.Bar) (*RecursiveResult, error) {
+// RunRecursive 执行递归偏差分析：同一起点、长度递增的前缀序列 + 固定终点、
+// 起点右移的偏移序列，两个维度分别回测并对比重叠区间信号稳定性。
+// ctx 取消时中止剩余变体回测（任务级取消端点）。
+func RunRecursive(ctx context.Context, cfg Config, factory Factory, bars []model.Bar) (*RecursiveResult, error) {
 	cfg.defaults()
 	if len(bars) < cfg.PrefixMinBars+10 {
 		return nil, fmt.Errorf("数据不足：%d 根K线，至少需要 %d 根", len(bars), cfg.PrefixMinBars+10)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	// 前缀档位：最短 PrefixMinBars，最长为全量，均匀取 PrefixLevels 档
@@ -433,11 +468,15 @@ func RunRecursive(cfg Config, factory Factory, bars []model.Bar) (*RecursiveResu
 		Confidence:     "high",
 		Levels:         []PrefixLevel{},
 		UnstablePoints: []UnstablePoint{},
+		Groups:         []VariantGroup{},
 	}
 
 	levelSignals := make([]map[int]string, len(lengths))
 	levelNames := make([]string, len(lengths))
 	for i, l := range lengths {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		name := fmt.Sprintf("prefix_%d", l)
 		levelNames[i] = name
 		signals, err := runOnce(factory, cfg.Symbol, bars[:l], cfg.InitialBalance)
@@ -481,7 +520,25 @@ func RunRecursive(cfg Config, factory Factory, bars []model.Bar) (*RecursiveResu
 			})
 		}
 	}
-	res.UnstableCount = len(res.UnstablePoints)
+	prefixUnstable := len(res.UnstablePoints)
+	res.Groups = append(res.Groups, VariantGroup{
+		Kind:           "prefix",
+		Levels:         res.Levels,
+		ComparedPoints: res.ComparedPoints,
+		UnstablePoints: res.UnstablePoints,
+		UnstableCount:  prefixUnstable,
+	})
+
+	// ── 起点偏移维度：固定终点、起点右移若干档，对齐绝对时间比较重叠区间 ──
+	offsetGroup, err := runStartOffsetGroup(ctx, cfg, factory, bars)
+	if err != nil {
+		return nil, err
+	}
+	res.UnstableCount = prefixUnstable
+	if offsetGroup != nil {
+		res.Groups = append(res.Groups, *offsetGroup)
+		res.UnstableCount += offsetGroup.UnstableCount
+	}
 
 	totalEntries := res.Levels[len(res.Levels)-1].Entries
 	switch {
@@ -498,13 +555,122 @@ func RunRecursive(cfg Config, factory Factory, bars []model.Bar) (*RecursiveResu
 		} else {
 			res.Confidence = "medium"
 		}
-		res.Summary = fmt.Sprintf("检出递归/前视偏差：%d 档前缀对比中 %d 个历史时点信号随数据变长而改变",
-			len(res.Levels), res.UnstableCount)
+		offsetNote := ""
+		if offsetGroup != nil {
+			offsetNote = fmt.Sprintf("（起点偏移组 %d 处）", offsetGroup.UnstableCount)
+		}
+		res.Summary = fmt.Sprintf("检出递归/前视偏差：%d 档前缀 + 起点偏移对比中共 %d 个历史时点信号不稳定%s",
+			len(res.Levels), res.UnstableCount, offsetNote)
 	default:
-		res.Summary = fmt.Sprintf("%d 档前缀（%d~%d 根）共享区间内信号完全一致，未发现递归偏差",
+		res.Summary = fmt.Sprintf("%d 档前缀（%d~%d 根）与起点偏移组共享区间内信号完全一致，未发现递归偏差",
 			len(res.Levels), lengths[0], lengths[len(lengths)-1])
 	}
 	return res, nil
+}
+
+// runStartOffsetGroup 起点右移变体组：bars[off:] 各档分别回测，信号按绝对时间
+// 对齐，在每档都完成各自 warmup（minVariantBars 根）的重叠尾部逐时点对比。
+// 数据不足以留出 warmup 重叠区时返回 nil（跳过该维度，不产生误报）。
+func runStartOffsetGroup(ctx context.Context, cfg Config, factory Factory, bars []model.Bar) (*VariantGroup, error) {
+	offsets := startOffsets(len(bars), cfg.PrefixLevels, cfg.PrefixMinBars)
+	if len(offsets) < 2 {
+		return nil, nil
+	}
+	overlapFrom := offsets[len(offsets)-1] + minVariantBars
+	if overlapFrom >= len(bars) {
+		return nil, nil
+	}
+
+	group := &VariantGroup{
+		Kind:           "start_offset",
+		Levels:         []PrefixLevel{},
+		UnstablePoints: []UnstablePoint{},
+		ComparedPoints: len(bars) - overlapFrom,
+	}
+	variantSigs := make([]map[int64]string, len(offsets))
+	variantNames := make([]string, len(offsets))
+	for i, off := range offsets {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		name := fmt.Sprintf("start_offset_%d", off)
+		variantNames[i] = name
+		signals, err := runOnce(factory, cfg.Symbol, bars[off:], cfg.InitialBalance)
+		if err != nil {
+			return nil, fmt.Errorf("起点偏移 %d 回测失败: %w", off, err)
+		}
+		byTime := make(map[int64]string, len(signals))
+		entries, exits := 0, 0
+		for _, s := range signals {
+			if _, dup := byTime[s.Time]; !dup {
+				byTime[s.Time] = s.Direction
+			}
+			if isEntry(s.Direction) {
+				entries++
+			} else if s.Direction == "CLOSE" {
+				exits++
+			}
+		}
+		variantSigs[i] = byTime
+		group.Levels = append(group.Levels, PrefixLevel{Name: name, Bars: len(bars) - off, Entries: entries, Exits: exits})
+	}
+
+	for idx := overlapFrom; idx < len(bars); idx++ {
+		t := bars[idx].Time
+		var first string
+		stable := true
+		byLens := make(map[string]string, len(offsets))
+		for i := range offsets {
+			dir := variantSigs[i][t]
+			byLens[variantNames[i]] = dir
+			if i == 0 {
+				first = dir
+			} else if dir != first {
+				stable = false
+			}
+		}
+		if !stable {
+			group.UnstablePoints = append(group.UnstablePoints, UnstablePoint{
+				Index:  idx,
+				Time:   t,
+				ByLens: byLens,
+			})
+		}
+	}
+	group.UnstableCount = len(group.UnstablePoints)
+	return group, nil
+}
+
+// startOffsets 起点右移档位：首档 0（全量数据），末档 total-minBars（最短可用
+// 数据集），中间均匀分布。返回 nil 表示数据不足以构造至少 2 档。
+func startOffsets(total, levels, minBars int) []int {
+	maxOff := total - minBars
+	if maxOff < 1 {
+		return nil
+	}
+	if levels < 2 {
+		levels = 2
+	}
+	step := maxOff / (levels - 1)
+	if step < 1 {
+		step = 1
+	}
+	seen := make(map[int]bool)
+	out := make([]int, 0, levels)
+	for i := 0; i < levels-1; i++ {
+		off := i * step
+		if off > maxOff {
+			break
+		}
+		if !seen[off] {
+			seen[off] = true
+			out = append(out, off)
+		}
+	}
+	if !seen[maxOff] {
+		out = append(out, maxOff)
+	}
+	return out
 }
 
 // prefixLengths 生成递增前缀长度序列：首档 minBars，末档为 total，中间均匀分布。

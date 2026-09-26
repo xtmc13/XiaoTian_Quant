@@ -66,6 +66,12 @@ func (r *AnalysisJobRepo) Finish(id, status, resultJSON, errMsg string) error {
 	return err
 }
 
+// Delete 物理删除任务记录（handler 保证仅终态可删、属主校验）。
+func (r *AnalysisJobRepo) Delete(id string) error {
+	_, err := db.Exec(`DELETE FROM xt_analysis_jobs WHERE id = ?`, id)
+	return err
+}
+
 // GetByID returns a single job by ID (属主校验由 handler 做)。
 func (r *AnalysisJobRepo) GetByID(id string) (*AnalysisJobRecord, error) {
 	row := db.QueryRow(`SELECT `+analysisJobColumns+` FROM xt_analysis_jobs WHERE id = ?`, id)

@@ -388,6 +388,49 @@ func (om *OrderManager) HandleOrderUpdate(orderData *model.OrderData) {
 	}
 }
 
+// RecordFill 回写撮合引擎成交（paper LIMIT 挂单被后续对手单/模拟做市单成交的场景）。
+// filledQty/avgPrice 为累计语义（非增量）：重复或乱序事件收敛到最新累计值，天然幂等；
+// 已终态（撤/拒/过期）的订单不回写——撤单与成交竞态时撤单赢。
+// 状态/数量实际变化时触发 OnOrderUpdate（走与主动成交相同的组合更新管线）。
+func (om *OrderManager) RecordFill(orderID string, filledQty, avgPrice float64) error {
+	if filledQty <= 0 {
+		return fmt.Errorf("filled qty must be positive")
+	}
+	om.orderMu.RLock()
+	ord, ok := om.orders[orderID]
+	om.orderMu.RUnlock()
+	if !ok {
+		return fmt.Errorf("order %s not found", orderID)
+	}
+	if ord.Status == model.StatusCancelled || ord.Status == model.StatusRejected ||
+		ord.Status == model.StatusExpired {
+		return nil
+	}
+	if filledQty <= ord.Filled {
+		return nil // 重复/旧事件：幂等跳过，不回退
+	}
+	if filledQty > ord.Quantity {
+		filledQty = ord.Quantity // 防御：不得超成
+	}
+
+	ord.Filled = filledQty
+	if avgPrice > 0 {
+		ord.AvgFillPrice = avgPrice
+	}
+	if ord.Filled >= ord.Quantity {
+		ord.Status = model.StatusFilled
+	} else {
+		ord.Status = model.StatusPartiallyFilled
+	}
+	ord.UpdatedAt = time.Now().UnixMilli()
+	om.storeOrder(ord)
+
+	if om.OnOrderUpdate != nil {
+		om.OnOrderUpdate(ord)
+	}
+	return nil
+}
+
 // ── Internal ──
 
 // reportGateOutcome 回写 AI 决策的成交结果（decisionID 为空或钩子未设置时跳过）。

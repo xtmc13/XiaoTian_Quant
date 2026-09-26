@@ -1,6 +1,7 @@
 package analysis
 
 import (
+	"context"
 	"math"
 	"testing"
 	"time"
@@ -144,7 +145,7 @@ func testConfig() Config {
 
 func TestLookaheadDetectsFutureStrategy(t *testing.T) {
 	bars := synthBars(400)
-	res, err := RunLookahead(testConfig(), futureFactory, bars)
+	res, err := RunLookahead(context.Background(), testConfig(), futureFactory, bars)
 	if err != nil {
 		t.Fatalf("RunLookahead: %v", err)
 	}
@@ -174,7 +175,7 @@ func TestLookaheadDetectsFutureStrategy(t *testing.T) {
 
 func TestLookaheadCleanStrategyUnbiased(t *testing.T) {
 	bars := synthBars(400)
-	res, err := RunLookahead(testConfig(), cleanFactory, bars)
+	res, err := RunLookahead(context.Background(), testConfig(), cleanFactory, bars)
 	if err != nil {
 		t.Fatalf("RunLookahead: %v", err)
 	}
@@ -200,7 +201,7 @@ func TestLookaheadInconclusiveWhenFewSignals(t *testing.T) {
 	}
 	cfg := testConfig()
 	cfg.MinSignals = 100
-	res, err := RunLookahead(cfg, factory, bars)
+	res, err := RunLookahead(context.Background(), cfg, factory, bars)
 	if err != nil {
 		t.Fatalf("RunLookahead: %v", err)
 	}
@@ -213,7 +214,7 @@ func TestLookaheadInconclusiveWhenFewSignals(t *testing.T) {
 
 func TestRecursiveDetectsFutureStrategy(t *testing.T) {
 	bars := trendBars(400)
-	res, err := RunRecursive(testConfig(), futureFactory, bars)
+	res, err := RunRecursive(context.Background(), testConfig(), futureFactory, bars)
 	if err != nil {
 		t.Fatalf("RunRecursive: %v", err)
 	}
@@ -236,11 +237,161 @@ func TestRecursiveDetectsFutureStrategy(t *testing.T) {
 	if len(res.Levels) != 5 {
 		t.Fatalf("expected 5 prefix levels, got %d", len(res.Levels))
 	}
+	// 起点偏移维度并入结果：futureStrategy 的相对前瞻（i+5）对平移不变，
+	// 偏移组应稳定（0 个不稳定点），但组必须存在。
+	if len(res.Groups) != 2 || res.Groups[0].Kind != "prefix" || res.Groups[1].Kind != "start_offset" {
+		t.Fatalf("expected prefix+start_offset groups, got %+v", res.Groups)
+	}
+	if res.Groups[0].UnstableCount != 5 {
+		t.Fatalf("prefix group unstable = %d, want 5", res.Groups[0].UnstableCount)
+	}
+	if res.Groups[1].UnstableCount != 0 {
+		t.Fatalf("futureStrategy 相对前瞻对起点平移不变，偏移组应稳定: %d", res.Groups[1].UnstableCount)
+	}
+}
+
+// warmupStrategy warmup 不收敛玩具策略：入场条件依赖"自数据起点以来的累计均价"
+// （递归均值），起点右移后同一绝对时点的均值不同、信号随之改变。
+// 同起点前缀对比对它天然盲（前缀共享起点，共享区间累计值完全一致）。
+type warmupStrategy struct {
+	symbol string
+	mean   []float64 // mean[i] = 构造数据 close[0..i] 的累计均值
+}
+
+func newWarmupStrategy(symbol string, bars []model.Bar) *warmupStrategy {
+	mean := make([]float64, len(bars))
+	sum := 0.0
+	for i, b := range bars {
+		sum += b.Close
+		mean[i] = sum / float64(i+1)
+	}
+	return &warmupStrategy{symbol: symbol, mean: mean}
+}
+
+func (s *warmupStrategy) Name() string   { return "warmup_toy" }
+func (s *warmupStrategy) Symbol() string { return s.symbol }
+func (s *warmupStrategy) OnTick(t model.Tick, st *backtest.StrategyState) (*model.Signal, error) {
+	return nil, nil
+}
+func (s *warmupStrategy) OnBar(bar model.Bar, st *backtest.StrategyState) (*model.Signal, error) {
+	if st.BarIndex < len(s.mean) && bar.Close > s.mean[st.BarIndex]*1.02 {
+		return &model.Signal{Direction: "LONG", Symbol: s.symbol, Strategy: s.Name(), Reason: "above cumulative mean"}, nil
+	}
+	return nil, nil
+}
+
+// stepBars 阶梯数据：前 jump 根 close=100，之后跳到 110 并保持。
+// 累计均值收敛速度取决于起点位置——起点越晚，均值越快贴近 110，信号越早消失。
+func stepBars(n, jump int) []model.Bar {
+	bars := synthBars(n)
+	for i := range bars {
+		c := 100.0
+		if i >= jump {
+			c = 110.0
+		}
+		bars[i].Close = c
+		bars[i].Open = c - 0.1
+		bars[i].High = c + 0.2
+		bars[i].Low = c - 0.3
+	}
+	return bars
+}
+
+func warmupFactory(symbol string, bars []model.Bar) (backtest.BacktestStrategy, error) {
+	return newWarmupStrategy(symbol, bars), nil
+}
+
+// 起点偏移维度检出 warmup 不收敛：前缀组稳定（共享起点）而偏移组在重叠尾部
+// 全部时点不稳定（s=0 档 LONG、s≥85 档均值已收敛无信号），结论必须 recursive。
+func TestRecursiveStartOffsetDetectsWarmupNonConvergence(t *testing.T) {
+	bars := stepBars(400, 100)
+	res, err := RunRecursive(context.Background(), testConfig(), warmupFactory, bars)
+	if err != nil {
+		t.Fatalf("RunRecursive: %v", err)
+	}
+	if res.Conclusion != "recursive" || !res.Recursive {
+		t.Fatalf("expected recursive, got %s (summary: %s)", res.Conclusion, res.Summary)
+	}
+	if len(res.Groups) != 2 {
+		t.Fatalf("expected 2 variant groups, got %+v", res.Groups)
+	}
+	prefix, offset := res.Groups[0], res.Groups[1]
+	if prefix.UnstableCount != 0 {
+		t.Fatalf("warmup 策略在同起点前缀下应稳定（旧维度盲区）: %d", prefix.UnstableCount)
+	}
+	// 偏移档位 [0,85,170,255,340]，重叠尾部从 340+30=370 起共 30 个时点，
+	// s=0 档信号 LONG 维持到 t≈462，其余档在重叠区全无信号 → 30 点全不稳定。
+	if offset.UnstableCount != 30 {
+		t.Fatalf("start_offset unstable = %d, want 30 (%v)", offset.UnstableCount, offset.UnstablePoints)
+	}
+	if offset.ComparedPoints != 30 {
+		t.Fatalf("start_offset compared points = %d, want 30", offset.ComparedPoints)
+	}
+	if len(offset.Levels) != 5 || offset.Levels[4].Bars != 60 {
+		t.Fatalf("offset levels wrong: %+v", offset.Levels)
+	}
+	if res.UnstableCount != 30 {
+		t.Fatalf("total unstable = %d, want 30", res.UnstableCount)
+	}
+}
+
+// 干净因果策略在起点偏移维度同样稳定（ warmup 豁免区外无差异，不误报）。
+func TestRecursiveStartOffsetCleanStrategyStable(t *testing.T) {
+	bars := synthBars(400)
+	res, err := RunRecursive(context.Background(), testConfig(), cleanFactory, bars)
+	if err != nil {
+		t.Fatalf("RunRecursive: %v", err)
+	}
+	if len(res.Groups) != 2 {
+		t.Fatalf("expected 2 variant groups, got %+v", res.Groups)
+	}
+	if res.Groups[1].UnstableCount != 0 {
+		t.Fatalf("clean strategy start_offset must be stable: %+v", res.Groups[1].UnstablePoints)
+	}
+	if res.Conclusion != "stable" {
+		t.Fatalf("expected stable, got %s (summary: %s)", res.Conclusion, res.Summary)
+	}
+}
+
+// ctx 取消应立即中止（任务级取消端点的语义）。
+func TestRunRecursiveHonoursContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := RunRecursive(ctx, testConfig(), cleanFactory, synthBars(400)); err == nil {
+		t.Fatal("cancelled ctx must abort recursive analysis")
+	}
+	if _, err := RunLookahead(ctx, testConfig(), cleanFactory, synthBars(400)); err == nil {
+		t.Fatal("cancelled ctx must abort lookahead analysis")
+	}
+}
+
+func TestStartOffsets(t *testing.T) {
+	cases := []struct {
+		total, levels, min int
+		want               []int
+	}{
+		{400, 5, 60, []int{0, 85, 170, 255, 340}},
+		{100, 5, 60, []int{0, 10, 20, 30, 40}},
+		{61, 5, 60, []int{0, 1}},
+		{60, 5, 60, nil},
+		{50, 5, 60, nil},
+	}
+	for _, c := range cases {
+		got := startOffsets(c.total, c.levels, c.min)
+		if len(got) != len(c.want) {
+			t.Fatalf("startOffsets(%d,%d,%d) = %v, want %v", c.total, c.levels, c.min, got, c.want)
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Fatalf("startOffsets(%d,%d,%d) = %v, want %v", c.total, c.levels, c.min, got, c.want)
+			}
+		}
+	}
 }
 
 func TestRecursiveCleanStrategyStable(t *testing.T) {
 	bars := synthBars(400)
-	res, err := RunRecursive(testConfig(), cleanFactory, bars)
+	res, err := RunRecursive(context.Background(), testConfig(), cleanFactory, bars)
 	if err != nil {
 		t.Fatalf("RunRecursive: %v", err)
 	}

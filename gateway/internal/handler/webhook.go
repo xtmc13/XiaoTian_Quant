@@ -14,6 +14,9 @@ import (
 	"sync"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xiaotian-quant/gateway/internal/metrics"
+	"github.com/xiaotian-quant/gateway/internal/model"
+	"github.com/xiaotian-quant/gateway/internal/order"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
@@ -94,7 +97,8 @@ func TradingViewWebhook(c *gin.Context) {
 	case "sell", "short", "enter_short":
 		side = "SELL"
 	case "exit", "close", "exit_long", "exit_short", "flatten":
-		// Close position using the OMS pipeline (cancel open orders + submit exit order)
+		// 出场单保持直发（AI 不能拦出场、风控不拦平仓，与 OMS 门内口径一致），
+		// 但记审计留痕——收口后不再是无痕通道。
 		closeAllOrdersForSymbol(symbol)
 		closeOrder := map[string]any{
 			"symbol":   strings.ToUpper(symbol),
@@ -107,6 +111,9 @@ func TradingViewWebhook(c *gin.Context) {
 			"action":   "exit",
 		}
 		fillOrderAndUpdatePortfolio(closeOrder)
+		store.AddAuditLog("webhook", "tv_exit_direct",
+			fmt.Sprintf("symbol=%s quantity=%.8f strategy=%s（出场直发，不过风控/AI决策门）",
+				strings.ToUpper(symbol), quantity, getString(body, "strategy", "TV_Strategy")))
 		log.Printf("[webhook] TV signal: CLOSE %s (orders cancelled + exit submitted)", symbol)
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "action": "close", "symbol": symbol, "msg": "close signal processed"})
 		return
@@ -117,32 +124,101 @@ func TradingViewWebhook(c *gin.Context) {
 
 	// Get price from alert or use 0 for market order
 	price := getFloat(body, "price", getFloat(body, "limit", 0))
-	orderType := "MARKET"
+	orderType := model.OrderType("MARKET")
 	if price > 0 {
-		orderType = "LIMIT"
+		orderType = model.TypeLimit
 	}
 
-	// Build order
-	order := map[string]any{
-		"symbol":   strings.ToUpper(symbol),
-		"side":     side,
-		"type":     orderType,
-		"price":    price,
-		"quantity": quantity,
-		"source":   "tradingview",
-		"strategy": getString(body, "strategy", "TV_Strategy"),
+	// 入场单改道 OMS 全管线（安全收口）：风控 15 维 → AI 决策门 → 余额锁 → 下单，
+	// 与界面/策略下单同一口径，不再直发绕过。
+	req := &order.Request{
+		Symbol:    strings.ToUpper(symbol),
+		Side:      model.OrderSide(side),
+		OrderType: orderType,
+		Price:     price,
+		Quantity:  quantity,
+		Exchange:  strings.ToLower(getString(body, "exchange", "paper")),
+		Source:    "webhook",
+		ClientOID: "webhook:tv",
+		// 合约字段转发（旧直发路径支持 market_type=swap，保持能力平价）
+		MarketType:   model.MarketType(getString(body, "market_type", "spot")),
+		PositionSide: model.PositionSide(getString(body, "position_side", "")),
+		Leverage:     getFloat(body, "leverage", 0),
+		MarginMode:   model.MarginMode(getString(body, "margin_mode", "cross")),
+	}
+	ord, ok := placeWebhookEntryViaOMS(c, req, getBool(body, "confirmed", false))
+	if !ok {
+		return
 	}
 
-	// Execute through the order fill pipeline
-	fillOrderAndUpdatePortfolio(order)
-
-	log.Printf("[webhook] TV signal: %s %s %s qty=%.4f price=%.2f",
-		order["strategy"], side, symbol, quantity, price)
+	log.Printf("[webhook] TV signal: %s %s %s qty=%.4f price=%.2f → OMS %s (%s)",
+		getString(body, "strategy", "TV_Strategy"), side, symbol, quantity, price, ord.ID, ord.Status)
 
 	c.JSON(http.StatusOK, gin.H{
 		"status": "ok",
-		"order":  order,
+		"order":  normalizeOrder(omsOrderStoreMap(ord, "webhook")),
 	})
+}
+
+// placeWebhookEntryViaOMS 把 webhook 入场单送进 OMS 管线（risk/manager 15 维检查
+// + aigate 决策门 + 余额锁 + 交易所/paper 撮合）。Source="webhook"：决策门默认
+// 豁免列表（grid/dca/lmartin）不含 webhook，门对该源生效。
+// 被拒/失败时写好错误响应并返回 ok=false；成功时落展示层 store 并返回订单。
+func placeWebhookEntryViaOMS(c *gin.Context, req *order.Request, confirmed bool) (*model.OrderData, bool) {
+	if err := canPlaceLiveOrder(req.Exchange, confirmed); err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"status": "error", "detail": err.Error()})
+		return nil, false
+	}
+
+	ord, err := order.GetOrderManager().PlaceOrder(req)
+	if err != nil {
+		// 风控/决策门拒绝的订单在 OMS 里以 REJECTED 落库（审计口径），但不成交、
+		// 不进撮合/交易所——webhook 返回错误，调用方必须感知被拒。
+		resp := gin.H{"status": "error", "detail": err.Error()}
+		if ord != nil {
+			resp["order_id"] = ord.ID
+		}
+		c.JSON(http.StatusBadRequest, resp)
+		return ord, false
+	}
+
+	storeOrder := omsOrderStoreMap(ord, req.Source)
+	store.PlaceOrder(storeOrder)
+	metrics.RecordOrder(string(ord.Side), string(ord.Status))
+	if ord.Filled > 0 {
+		metrics.RecordFill(string(ord.Side), ord.Filled)
+	}
+	return ord, true
+}
+
+// omsOrderStoreMap 把 OMS 订单转成展示层 store map（与 PlaceOrder handler 同口径），
+// 使 webhook 单出现在订单列表/历史里。
+func omsOrderStoreMap(ord *model.OrderData, source string) map[string]any {
+	return map[string]any{
+		"id":             ord.ID,
+		"order_id":       ord.ID,
+		"symbol":         ord.Symbol,
+		"side":           string(ord.Side),
+		"order_type":     string(ord.OrderType),
+		"price":          ord.Price,
+		"quantity":       ord.Quantity,
+		"filled":         ord.Filled,
+		"status":         string(ord.Status),
+		"exchange":       ord.Exchange,
+		"user_id":        ord.UserID,
+		"client_oid":     ord.ClientOID,
+		"avg_fill_price": ord.AvgFillPrice,
+		"created_at":     ord.CreatedAt,
+		"updated_at":     ord.UpdatedAt,
+		"market_type":    string(ord.MarketType),
+		"position_side":  string(ord.PositionSide),
+		"leverage":       ord.Leverage,
+		"margin_mode":    string(ord.MarginMode),
+		"tp_price":       ord.TPPrice,
+		"sl_price":       ord.SLPrice,
+		"close_position": ord.ClosePosition,
+		"source":         source,
+	}
 }
 
 // GenericWebhook receives signals from any external source (3Commas, custom bots, etc).
@@ -176,20 +252,57 @@ func GenericWebhook(c *gin.Context) {
 		return
 	}
 
-	order := map[string]any{
-		"symbol":   symbol,
-		"side":     side,
-		"type":     orderType,
-		"price":    price,
-		"quantity": quantity,
-		"source":   getString(body, "source", "webhook"),
+	// 显式出场标记（action=exit/close/flatten 或 close_position=true）保持直发 + 审计；
+	// 其余一律按入场口径改道 OMS（风控 + AI 决策门）。
+	action := strings.ToLower(getString(body, "action", ""))
+	isExit := action == "exit" || action == "close" || action == "flatten" ||
+		action == "exit_long" || action == "exit_short" || getBool(body, "close_position", false)
+	if isExit {
+		exitOrder := map[string]any{
+			"symbol":         symbol,
+			"side":           side,
+			"type":           orderType,
+			"price":          price,
+			"quantity":       quantity,
+			"source":         getString(body, "source", "webhook"),
+			"action":         "exit",
+			"market_type":    getString(body, "market_type", "spot"),
+			"position_side":  getString(body, "position_side", ""),
+			"leverage":       getFloat(body, "leverage", 1),
+			"margin_mode":    getString(body, "margin_mode", "cross"),
+			"close_position": true,
+		}
+		fillOrderAndUpdatePortfolio(exitOrder)
+		store.AddAuditLog("webhook", "generic_exit_direct",
+			fmt.Sprintf("symbol=%s side=%s quantity=%.8f（出场直发，不过风控/AI决策门）", symbol, side, quantity))
+		log.Printf("[webhook] generic exit: %s %s %s qty=%.4f (direct + audited)", side, orderType, symbol, quantity)
+		c.JSON(http.StatusOK, gin.H{"status": "ok", "action": "close", "order": exitOrder})
+		return
 	}
 
-	fillOrderAndUpdatePortfolio(order)
+	req := &order.Request{
+		Symbol:    symbol,
+		Side:      model.OrderSide(side),
+		OrderType: model.OrderType(orderType),
+		Price:     price,
+		Quantity:  quantity,
+		Exchange:  strings.ToLower(getString(body, "exchange", "paper")),
+		Source:    "webhook",
+		ClientOID: "webhook:generic",
+		// 合约字段转发（与旧直发路径能力平价）
+		MarketType:   model.MarketType(getString(body, "market_type", "spot")),
+		PositionSide: model.PositionSide(getString(body, "position_side", "")),
+		Leverage:     getFloat(body, "leverage", 0),
+		MarginMode:   model.MarginMode(getString(body, "margin_mode", "cross")),
+	}
+	ord, ok := placeWebhookEntryViaOMS(c, req, getBool(body, "confirmed", false))
+	if !ok {
+		return
+	}
 
-	log.Printf("[webhook] generic: %s %s %s qty=%.4f", side, orderType, symbol, quantity)
+	log.Printf("[webhook] generic: %s %s %s qty=%.4f → OMS %s (%s)", side, orderType, symbol, quantity, ord.ID, ord.Status)
 
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "order": order})
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "order": normalizeOrder(omsOrderStoreMap(ord, "webhook"))})
 }
 
 // closeAllOrdersForSymbol cancels all open orders for a given symbol.
