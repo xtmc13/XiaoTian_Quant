@@ -1027,6 +1027,16 @@ export function Settings() {
                         />
                       </div>
                       <div>
+                        <label className="mb-1.5 block text-xs text-muted-foreground">{t('settings.ai.baseUrl')}</label>
+                        <input
+                          value={cfg.base_url || ''}
+                          onChange={(e) => setAIField(prov.key, 'base_url', e.target.value)}
+                          aria-label={`${prov.label} Base URL`}
+                          placeholder={prov.baseUrl}
+                          className="w-full rounded-md border border-quant-border bg-quant-bg px-3 py-2 text-sm text-foreground outline-none transition-colors focus:border-quant-gold"
+                        />
+                      </div>
+                      <div>
                         <div className="mb-1.5 flex items-center justify-between">
                           <label className="block text-xs text-muted-foreground">{t('settings.ai.defaultModel')}</label>
                           <button

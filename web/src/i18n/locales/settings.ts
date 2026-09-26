@@ -71,6 +71,7 @@ const zhCN: Record<string, string> = {
   'settings.ai.configured': '已配置',
   'settings.ai.runtimeModel': '生效中',
   'settings.ai.fetchModels': '拉取模型',
+  'settings.ai.baseUrl': 'Base URL（中转/代理时填写，留空用官方）',
   'settings.ai.modelsFetched': '已获取 {n} 个模型，可在下拉中选择',
   'settings.ai.fetchFailed': '拉取模型列表失败',
 
@@ -237,6 +238,7 @@ const enUS: Record<string, string> = {
   'settings.ai.configured': 'Configured',
   'settings.ai.runtimeModel': 'Active',
   'settings.ai.fetchModels': 'Fetch models',
+  'settings.ai.baseUrl': 'Base URL (for relay/proxy; blank = official)',
   'settings.ai.modelsFetched': 'Fetched {n} models — pick from the dropdown',
   'settings.ai.fetchFailed': 'Failed to fetch model list',
 
@@ -403,6 +405,7 @@ const ja: Record<string, string> = {
   'settings.ai.configured': '設定済み',
   'settings.ai.runtimeModel': '稼働中',
   'settings.ai.fetchModels': 'モデル取得',
+  'settings.ai.baseUrl': 'Base URL（リレー/プロキシ用、空欄=公式）',
   'settings.ai.modelsFetched': '{n} 件のモデルを取得しました — ドロップダウンから選択',
   'settings.ai.fetchFailed': 'モデル一覧の取得に失敗しました',
 
