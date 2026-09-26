@@ -262,8 +262,9 @@ func remotePairListFromParams(params map[string]any) (*RemotePairList, error) {
 
 // BuildProducerFromConfig 按名称+参数构建 producer。
 // VolumePairList / PerformancePairList 依赖 InfoProvider（交易所行情），
-// 由调用方在构建后注入；MarketCapPairList / PercentChangePairList 的外部数据源
-// 同样由调用方注入（未注入时 Generate 返回明确降级错误）。
+// MarketCapPairList / PercentChangePairList 依赖外部数据源（市值/universe/K线），
+// 均由调用方在构建后经 WireProducer 注入（生产接线见 ProductionSourceDeps）；
+// 未注入时 Generate 返回明确降级错误。
 func BuildProducerFromConfig(name string, params map[string]any) (IProducer, error) {
 	switch name {
 	case "StaticPairList":
@@ -280,7 +281,7 @@ func BuildProducerFromConfig(name string, params map[string]any) (IProducer, err
 		), nil
 	case "PerformancePairList":
 		return &PerformancePairList{
-			TopN:         paramInt(params, "top_n", 30),
+			TopN:          paramInt(params, "top_n", 30),
 			LookbackHours: paramInt(params, "lookback_hours", 24),
 		}, nil
 	case "MarketCapPairList":

@@ -500,6 +500,11 @@ func CreateStrategyConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
 		return
 	}
+	// ── 策略级 protections 合法化（config_json["protections"]，非法拒绝写库）──
+	if err := validateStrategyProtections(mergedStrategyConfig(item, payloadConfig)); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
 
 	// ── 机器人身份持久化：strategy_mode/bot_type 不是 DB 列，必须写入
 	// config_json 才能在 DB 重建后继续被 isBotItem 判别（根治互窜）。 ──
@@ -602,6 +607,11 @@ func UpdateStrategyConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
 		return
 	}
+	// ── 策略级 protections 合法化（config_json["protections"]，非法拒绝写库）──
+	if err := validateStrategyProtections(mergedStrategyConfig(item, payloadConfig)); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
 
 	// ── 机器人身份保留/刷新：执行别名字段同步会把 strategy_mode 覆写成
 	// execution_mode('paper')，这里对机器人记录恢复 'bot' 标记。 ──
@@ -624,6 +634,8 @@ func UpdateStrategyConfig(c *gin.Context) {
 	store.SetStrategyConfig(id, item)
 	store.PersistStrategyConfigs()
 	persistStrategyConfigToDB(item)
+	// 策略级 protections 热重载：运行中的策略按新 config_json 重建/清除
+	refreshStrategyProtection(id, item)
 	resp := gin.H{"status": "ok"}
 	if em, ok := body["execution_mode"].(string); ok && strings.ToLower(strings.TrimSpace(em)) != "paper" && getString(item, "execution_mode", "") == "paper" {
 		resp["forced_paper"] = true
@@ -1187,12 +1199,22 @@ func startStrategyInEngine(id string, item map[string]any) error {
 		params = filtered
 	}
 
+	// 策略级 protections（config_json["protections"]，hyperopt epoch 回写）：
+	// 配置非法拒绝启动——静默裸奔比明确报错更危险。
+	protMgr, err := strategyProtectionManagerFromConfig(item)
+	if err != nil {
+		return err
+	}
+
 	// Register and start
 	if err := eng.Register(wrapped); err != nil {
 		return fmt.Errorf("register strategy: %w", err)
 	}
+	if protMgr != nil {
+		eng.SetStrategyProtectionManager(id, protMgr)
+	}
 	if err := eng.Start(id, params); err != nil {
-		_ = eng.Unregister(id)
+		_ = eng.Unregister(id) // Unregister 一并释放策略级 protection manager
 		return fmt.Errorf("start strategy: %w", err)
 	}
 	// 引擎订阅的 topic 是 wrapped.Symbol()（Start 应用参数后的值），
@@ -1811,6 +1833,12 @@ func normalizeStrategyConfig(it map[string]any) map[string]any {
 		if _, hasTotalPnl := result["total_pnl"]; !hasTotalPnl {
 			result["total_pnl"] = v
 		}
+	}
+
+	// 策略级 protections（config_json["protections"]，hyperopt 回写）提升为顶层
+	// 字段，前端策略列表/详情直接展示，不必各自再解析 config。
+	if prot := strategyProtectionsView(it); prot != nil {
+		result["protections"] = prot
 	}
 
 	// Time conversion: backend stores float64 Unix milliseconds, frontend expects ISO string

@@ -126,6 +126,12 @@ type Engine struct {
 	// Protection manager — checks before emitting signals
 	protectionMgr *protection.ProtectionManager
 
+	// strategyProtections 策略级 protection manager（key=包装后策略名=配置 id），
+	// 来自策略 config_json["protections"]（hyperopt epoch 回写，与全局
+	// /api/protection/config 同 schema）。emitSignal 先过策略级再过引擎全局。
+	// 由 handler 在策略启动/重载时注入，Unregister 时释放。
+	strategyProtections map[string]*protection.ProtectionManager
+
 	// Broadcaster sends notifications for trading events
 	broadcaster *notify.Broadcaster
 
@@ -167,14 +173,15 @@ var (
 func GetEngine(bus *event.EventBus) *Engine {
 	engineOnce.Do(func() {
 		engineInstance = &Engine{
-			strategies: make(map[string]Strategy),
-			symbolMap:  make(map[string][]string),
-			subIDs:     make(map[string]event.SubscriptionID),
-			bus:        bus,
-			feedHolds:  make(map[string][]feedHold),
-			universes:  make(map[string]*universeState),
-			scheduled:  make(map[string]*scheduledEntry),
-			adjCounts:  make(map[string]int),
+			strategies:          make(map[string]Strategy),
+			symbolMap:           make(map[string][]string),
+			subIDs:              make(map[string]event.SubscriptionID),
+			bus:                 bus,
+			feedHolds:           make(map[string][]feedHold),
+			universes:           make(map[string]*universeState),
+			scheduled:           make(map[string]*scheduledEntry),
+			adjCounts:           make(map[string]int),
+			strategyProtections: make(map[string]*protection.ProtectionManager),
 		}
 	})
 	return engineInstance
@@ -185,6 +192,32 @@ func (e *Engine) SetProtectionManager(mgr *protection.ProtectionManager) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.protectionMgr = mgr
+}
+
+// SetStrategyProtectionManager 注入/替换某策略的策略级 protection manager；
+// mgr 为 nil 时清除（策略 config_json 不再含 protections 的重载场景）。
+func (e *Engine) SetStrategyProtectionManager(name string, mgr *protection.ProtectionManager) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.strategyProtections == nil { // 防御：struct 字面量构造的引擎（测试）
+		e.strategyProtections = make(map[string]*protection.ProtectionManager)
+	}
+	if mgr == nil {
+		delete(e.strategyProtections, name)
+		return
+	}
+	e.strategyProtections[name] = mgr
+}
+
+// StrategyProtectionCount 策略级 protection 数量（状态/测试观测用；无 manager 返回 0）。
+func (e *Engine) StrategyProtectionCount(name string) int {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	mgr := e.strategyProtections[name]
+	if mgr == nil {
+		return 0
+	}
+	return len(mgr.Protections())
 }
 
 // Register adds a strategy to the engine and subscribes it to events.
@@ -248,6 +281,7 @@ func (e *Engine) Unregister(name string) error {
 		delete(e.subIDs, name)
 	}
 	delete(e.strategies, name)
+	delete(e.strategyProtections, name) // 策略级 protection 随注销释放
 	e.mu.Unlock()
 
 	s.Stop()

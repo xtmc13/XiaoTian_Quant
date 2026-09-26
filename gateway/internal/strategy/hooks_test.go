@@ -7,6 +7,7 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/event"
 	"github.com/xiaotian-quant/gateway/internal/model"
 	"github.com/xiaotian-quant/gateway/internal/order"
+	"github.com/xiaotian-quant/gateway/internal/protection"
 )
 
 // hookFake 是契约钩子（v1.2）测试用的策略假身：嵌入 BaseStrategy，
@@ -97,14 +98,15 @@ func (f *hookFake) CheckExitTimeout(od model.OrderData) bool {
 // newHookTestEngine 构造独立引擎实例（不走 GetEngine 单例，避免测试间污染）。
 func newHookTestEngine() *Engine {
 	return &Engine{
-		strategies: make(map[string]Strategy),
-		symbolMap:  make(map[string][]string),
-		subIDs:     make(map[string]event.SubscriptionID),
-		bus:        event.NewEventBus(64, 1),
-		feedHolds:  make(map[string][]feedHold),
-		universes:  make(map[string]*universeState),
-		scheduled:  make(map[string]*scheduledEntry),
-		adjCounts:  make(map[string]int),
+		strategies:          make(map[string]Strategy),
+		symbolMap:           make(map[string][]string),
+		subIDs:              make(map[string]event.SubscriptionID),
+		bus:                 event.NewEventBus(64, 1),
+		feedHolds:           make(map[string][]feedHold),
+		universes:           make(map[string]*universeState),
+		scheduled:           make(map[string]*scheduledEntry),
+		adjCounts:           make(map[string]int),
+		strategyProtections: make(map[string]*protection.ProtectionManager),
 	}
 }
 

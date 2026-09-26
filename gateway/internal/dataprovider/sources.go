@@ -75,6 +75,7 @@ func BuildSources(cfg Config, httpClient *http.Client) []Source {
 		newCryptoCompareNewsSource(cfg, httpClient),
 		newHeatmapSource(cfg, httpClient),
 		newCalendarSource(cfg, httpClient),
+		newCoinGeckoSource(cfg, httpClient),
 	}
 }
 

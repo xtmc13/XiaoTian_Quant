@@ -466,9 +466,26 @@ func (e *Engine) emitSignal(s Strategy, signal *model.Signal, err error) {
 	e.mu.RLock()
 	onSignal := e.OnSignal
 	protectionMgr := e.protectionMgr
+	stratProt := e.strategyProtections[s.Name()]
 	broadcaster := e.broadcaster
 	wsHub := e.wsHub
 	e.mu.RUnlock()
+	// 策略级 protections（config_json["protections"]）先于全局检查：
+	// 策略自己的风控约束未过就直接吞信号，不污染全局判定。
+	if stratProt != nil {
+		ctx := protectionContextFor(signal)
+		if result := stratProt.CheckAll(ctx); result.Blocked {
+			log.Printf("[protection] signal blocked for %s (strategy=%s, scope=strategy): %s",
+				signal.Symbol, s.Name(), result.Reason)
+			if broadcaster != nil {
+				broadcaster.Protection("protection", signal.Symbol, "block", "strategy: "+result.Reason, 0)
+				if wsHub != nil {
+					wsHub.BroadcastProtection("protection", signal.Symbol, "block", "strategy: "+result.Reason)
+				}
+			}
+			return
+		}
+	}
 	if protectionMgr != nil {
 		ctx := protectionContextFor(signal)
 		result := protectionMgr.CheckAll(ctx)
