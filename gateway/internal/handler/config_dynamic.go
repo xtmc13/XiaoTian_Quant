@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xiaotian-quant/gateway/internal/ai"
 	"github.com/xiaotian-quant/gateway/internal/store"
 	"github.com/xiaotian-quant/gateway/internal/strategy"
 )
@@ -70,31 +71,93 @@ var defaultExchanges = map[string]any{
 	},
 }
 
+// defaultAIModels 是设置页 AI 模型目录（GET /config/ai-models）。
+// key 与 internal/ai 运行时 provider 注册表逐一对应（openrouter 为聚合网关，无运行时注册）。
 var defaultAIModels = map[string]any{
 	"providers": []map[string]any{
 		{
 			"key":     "openai",
 			"label":   "OpenAI",
-			"models":  []string{"gpt-4o", "gpt-4-turbo", "gpt-4o-mini", "o1-preview", "o1-mini"},
+			"models":  []string{"gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-4.1", "o3", "gpt-4o"},
 			"baseUrl": "https://api.openai.com/v1",
+			"default": "gpt-5.5",
 		},
 		{
-			"key":     "anthropic",
-			"label":   "Anthropic",
-			"models":  []string{"claude-3-5-sonnet-20241022", "claude-3-opus-20240229", "claude-3-5-haiku-20241022"},
-			"baseUrl": "https://api.anthropic.com/v1",
+			"key":     "claude",
+			"label":   "Anthropic Claude",
+			"models":  []string{"claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-sonnet-4-5", "claude-haiku-4-5"},
+			"baseUrl": "https://api.anthropic.com",
+			"default": "claude-opus-4-7",
+		},
+		{
+			"key":     "gemini",
+			"label":   "Google Gemini",
+			"models":  []string{"gemini-3.1-pro-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"},
+			"baseUrl": "https://generativelanguage.googleapis.com",
+			"default": "gemini-3.1-pro-preview",
 		},
 		{
 			"key":     "deepseek",
 			"label":   "DeepSeek",
-			"models":  []string{"deepseek-chat", "deepseek-coder", "deepseek-reasoner"},
+			"models":  []string{"deepseek-chat", "deepseek-reasoner"},
 			"baseUrl": "https://api.deepseek.com/v1",
+			"default": "deepseek-chat",
+		},
+		{
+			"key":     "qwen",
+			"label":   "通义千问",
+			"models":  []string{"qwen3-max", "qwen-plus", "qwen-turbo", "qwen3-coder-plus"},
+			"baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+			"default": "qwen3-max",
+		},
+		{
+			"key":     "glm",
+			"label":   "智谱 GLM",
+			"models":  []string{"glm-4.7", "glm-4.6", "glm-4-plus", "glm-4.5-air"},
+			"baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+			"default": "glm-4.7",
+		},
+		{
+			"key":     "kimi",
+			"label":   "Kimi（月之暗面）",
+			"models":  []string{"kimi-k2.5", "kimi-k2-0905-preview", "moonshot-v1-128k", "moonshot-v1-32k"},
+			"baseUrl": "https://api.moonshot.cn/v1",
+			"default": "kimi-k2.5",
+		},
+		{
+			"key":     "doubao",
+			"label":   "豆包（火山引擎）",
+			"models":  []string{"doubao-seed-1-6", "doubao-pro-32k", "doubao-lite-32k"},
+			"baseUrl": "https://ark.cn-beijing.volces.com/api/v3",
+			"default": "doubao-seed-1-6",
+		},
+		{
+			"key":     "hunyuan",
+			"label":   "腾讯混元",
+			"models":  []string{"hunyuan-pro", "hunyuan-standard", "hunyuan-lite"},
+			"baseUrl": "https://api.hunyuan.cloud.tencent.com/v1",
+			"default": "hunyuan-pro",
+		},
+		{
+			"key":     "llama",
+			"label":   "Llama（Groq）",
+			"models":  []string{"llama-4-maverick", "llama-4-scout"},
+			"baseUrl": "https://api.groq.com/openai/v1",
+			"default": "llama-4-maverick",
+		},
+		{
+			"key":     "mistral",
+			"label":   "Mistral",
+			"models":  []string{"mistral-large-3", "mistral-medium", "codestral"},
+			"baseUrl": "https://api.mistral.ai/v1",
+			"default": "mistral-large-3",
 		},
 		{
 			"key":     "openrouter",
-			"label":   "OpenRouter",
-			"models":  []string{"openai/gpt-4o", "anthropic/claude-3.5-sonnet", "deepseek/deepseek-chat"},
+			"label":   "OpenRouter（聚合）",
+			"models":  []string{"openai/gpt-5.5", "anthropic/claude-opus-4.7", "google/gemini-3.1-pro-preview", "deepseek/deepseek-chat", "qwen/qwen3-max"},
 			"baseUrl": "https://openrouter.ai/api/v1",
+			"default": "openai/gpt-5.5",
 		},
 	},
 }
@@ -197,7 +260,36 @@ func GetAIModels(c *gin.Context) {
 			return
 		}
 	}
-	c.JSON(http.StatusOK, defaultAIModels)
+	c.JSON(http.StatusOK, aiModelsWithRuntimeStatus())
+}
+
+// aiModelsWithRuntimeStatus 在目录副本上叠加运行时状态：每个 provider 附
+// configured（注册表 APIKey 非空）与 current_model（注册表当前模型），
+// 便于设置页展示"已配置"标识与生效模型；openrouter 等未注册 provider 恒为未配置。
+func aiModelsWithRuntimeStatus() map[string]any {
+	out := map[string]any{}
+	for k, v := range defaultAIModels {
+		out[k] = v
+	}
+	providers, _ := defaultAIModels["providers"].([]map[string]any)
+	enriched := make([]map[string]any, 0, len(providers))
+	for _, p := range providers {
+		item := make(map[string]any, len(p)+2)
+		for k, v := range p {
+			item[k] = v
+		}
+		key, _ := p["key"].(string)
+		if rp := ai.GetProvider(ai.NormalizeProviderName(key)); rp != nil {
+			item["configured"] = rp.APIKey != ""
+			item["current_model"] = rp.Model
+		} else {
+			item["configured"] = false
+			item["current_model"] = p["default"]
+		}
+		enriched = append(enriched, item)
+	}
+	out["providers"] = enriched
+	return out
 }
 
 // GetConversionRate returns USD/CNY conversion rate.

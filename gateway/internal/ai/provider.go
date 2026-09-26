@@ -33,21 +33,60 @@ var (
 )
 
 // Supported pre-configured providers.
+// 默认模型取各家旗舰（与 handler.defaultAIModels 目录保持一致）。
 var defaultProviders = []Provider{
 	// International
-	{Name: "openai", BaseURL: "https://api.openai.com", Model: "gpt-4o"},
-	{Name: "claude", BaseURL: "https://api.anthropic.com", Model: "claude-sonnet-4-6"},
-	{Name: "gemini", BaseURL: "https://generativelanguage.googleapis.com", Model: "gemini-2.5-pro"},
+	{Name: "openai", BaseURL: "https://api.openai.com", Model: "gpt-5.5"},
+	{Name: "claude", BaseURL: "https://api.anthropic.com", Model: "claude-opus-4-7"},
+	{Name: "gemini", BaseURL: "https://generativelanguage.googleapis.com", Model: "gemini-3.1-pro-preview"},
 	// Chinese domestic
 	{Name: "deepseek", BaseURL: "https://api.deepseek.com", Model: "deepseek-chat"},
-	{Name: "qwen", BaseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1", Model: "qwen-plus"},
+	{Name: "qwen", BaseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1", Model: "qwen3-max"},
 	{Name: "hunyuan", BaseURL: "https://api.hunyuan.cloud.tencent.com/v1", Model: "hunyuan-pro"},
-	{Name: "doubao", BaseURL: "https://ark.cn-beijing.volces.com/api/v3", Model: "doubao-pro-32k"},
-	{Name: "glm", BaseURL: "https://open.bigmodel.cn/api/paas/v4", Model: "glm-4-plus"},
-	{Name: "kimi", BaseURL: "https://api.moonshot.cn/v1", Model: "moonshot-v1-32k"},
+	{Name: "doubao", BaseURL: "https://ark.cn-beijing.volces.com/api/v3", Model: "doubao-seed-1-6"},
+	{Name: "glm", BaseURL: "https://open.bigmodel.cn/api/paas/v4", Model: "glm-4.7"},
+	{Name: "kimi", BaseURL: "https://api.moonshot.cn/v1", Model: "kimi-k2.5"},
 	// Open source
 	{Name: "llama", BaseURL: "https://api.groq.com/openai/v1", Model: "llama-4-maverick"},
-	{Name: "mistral", BaseURL: "https://api.mistral.ai/v1", Model: "mistral-large"},
+	{Name: "mistral", BaseURL: "https://api.mistral.ai/v1", Model: "mistral-large-3"},
+}
+
+// legacyProviderNames 历史遗留 provider 命名映射：旧版前端/配置里写的 key
+// 与运行时注册表不一致，统一在配置读写与运行时解析入口归一到注册表名称。
+var legacyProviderNames = map[string]string{
+	"anthropic": "claude", // 旧目录/前端用 anthropic，注册表为 claude
+}
+
+// NormalizeProviderName 把 legacy/别名 provider 名归一到注册表名称。
+func NormalizeProviderName(name string) string {
+	if v, ok := legacyProviderNames[strings.ToLower(strings.TrimSpace(name))]; ok {
+		return v
+	}
+	return name
+}
+
+// LegacyProviderName 返回注册表名称对应的 legacy 别名（无则空串），
+// 用于按注册表名读配置时回退查找 legacy key（如 ai.anthropic → claude）。
+func LegacyProviderName(name string) string {
+	for legacy, cur := range legacyProviderNames {
+		if cur == name {
+			return legacy
+		}
+	}
+	return ""
+}
+
+// NewEphemeralProvider 构造一个不注册进全局表的临时 Provider（设置页连接测试用），
+// 自带超时 client，调用 ChatCompletion 等方法与注册 provider 完全同路径。
+func NewEphemeralProvider(name, baseURL, model, apiKey string) *Provider {
+	return &Provider{
+		Name:     name,
+		BaseURL:  baseURL,
+		Model:    model,
+		APIKey:   apiKey,
+		TimeoutS: 60,
+		client:   &http.Client{Timeout: 30 * time.Second},
+	}
 }
 
 func init() {
@@ -183,8 +222,20 @@ func (p *Provider) ChatCompletion(req CompletionRequest) (*CompletionResponse, e
 	return p.openAICompatibleChat(req)
 }
 
+// chatCompletionsURL 由 baseURL 推导 OpenAI 兼容 chat completions 端点。
+// base 末段已含版本号（/v1、/v3、/v4…）时直接拼 /chat/completions，
+// 否则补 /v1——修复 qwen/glm/kimi/doubao 等 base 自带版本段时重复拼 /v1 的问题。
+func chatCompletionsURL(baseURL string) string {
+	b := strings.TrimRight(baseURL, "/")
+	seg := b[strings.LastIndex(b, "/")+1:]
+	if len(seg) >= 2 && seg[0] == 'v' && seg[1] >= '0' && seg[1] <= '9' {
+		return b + "/chat/completions"
+	}
+	return b + "/v1/chat/completions"
+}
+
 func (p *Provider) openAICompatibleChat(req CompletionRequest) (*CompletionResponse, error) {
-	url := p.BaseURL + "/v1/chat/completions"
+	url := chatCompletionsURL(p.BaseURL)
 	return p.doChatRequest(url, req)
 }
 
@@ -530,7 +581,7 @@ func (p *Provider) openAICompatibleStream(req CompletionRequest, callback func(d
 	req.Stream = true
 	req.Model = p.Model
 
-	url := p.BaseURL + "/v1/chat/completions"
+	url := chatCompletionsURL(p.BaseURL)
 	body, _ := json.Marshal(req)
 	httpReq, err := http.NewRequest("POST", url, bytes.NewReader(body))
 	if err != nil {

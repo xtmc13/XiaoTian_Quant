@@ -17,12 +17,13 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/adapter"
+	"github.com/xiaotian-quant/gateway/internal/ai"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
 func GetConfig(c *gin.Context) {
 	cfg := store.GetConfig()
-	c.JSON(http.StatusOK, cfg)
+	c.JSON(http.StatusOK, migrateAILegacyKeys(cfg))
 }
 
 func SaveConfig(c *gin.Context) {
@@ -31,11 +32,81 @@ func SaveConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	data = migrateAILegacyKeys(data)
 	if err := store.SaveConfig(data); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, data)
+}
+
+// migrateAILegacyKeys 归一遗留 AI provider 命名：ai.anthropic 合并进 ai.claude
+// （claude 已有字段优先，anthropic 仅补缺），default_ai_provider / ai.provider /
+// ai.defaults.provider 中的 anthropic 改写为注册表名称 claude。
+// 读（GET /config）与写（PUT /config）两个入口都过这里，保证老配置即时生效。
+// 无遗留 key 时原样返回；有遗留 key 时 copy-on-write，不污染 store 共享的嵌套 map。
+func migrateAILegacyKeys(cfg map[string]any) map[string]any {
+	if cfg == nil {
+		return cfg
+	}
+	if p, ok := cfg["default_ai_provider"].(string); ok {
+		if np := ai.NormalizeProviderName(p); np != p {
+			cfg["default_ai_provider"] = np
+		}
+	}
+	aiCfg, ok := cfg["ai"].(map[string]any)
+	if !ok {
+		return cfg
+	}
+
+	_, hasLegacy := aiCfg["anthropic"]
+	legacyProviderName := false
+	if p, ok := aiCfg["provider"].(string); ok {
+		legacyProviderName = ai.NormalizeProviderName(p) != p
+	}
+	legacyDefaultName := false
+	if defaults, ok := aiCfg["defaults"].(map[string]any); ok {
+		if p, ok := defaults["provider"].(string); ok {
+			legacyDefaultName = ai.NormalizeProviderName(p) != p
+		}
+	}
+	if !hasLegacy && !legacyProviderName && !legacyDefaultName {
+		return cfg
+	}
+
+	// copy-on-write：浅拷贝 ai 层（defaults/claude 如需改动再逐层拷贝）。
+	next := make(map[string]any, len(aiCfg)+1)
+	for k, v := range aiCfg {
+		next[k] = v
+	}
+	if legacy, ok := next["anthropic"].(map[string]any); ok {
+		merged := make(map[string]any, len(legacy)+4)
+		for k, v := range legacy {
+			merged[k] = v
+		}
+		if cur, ok := next["claude"].(map[string]any); ok {
+			for k, v := range cur {
+				merged[k] = v
+			}
+		}
+		next["claude"] = merged
+		delete(next, "anthropic")
+	}
+	if p, ok := next["provider"].(string); ok {
+		next["provider"] = ai.NormalizeProviderName(p)
+	}
+	if defaults, ok := next["defaults"].(map[string]any); ok && legacyDefaultName {
+		nd := make(map[string]any, len(defaults)+1)
+		for k, v := range defaults {
+			nd[k] = v
+		}
+		if p, ok := nd["provider"].(string); ok {
+			nd["provider"] = ai.NormalizeProviderName(p)
+		}
+		next["defaults"] = nd
+	}
+	cfg["ai"] = next
+	return cfg
 }
 
 func GetGlobalStrategy(c *gin.Context) {
@@ -456,34 +527,30 @@ func AISave(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
+// AITest 旧入口（POST /ai/test，config 组）：与 SettingsAITest 共用 runAITest 实现，
+// provider 取自请求体，legacy 名归一；响应保留旧版 status/detail 字段兼容老前端。
 func AITest(c *gin.Context) {
 	var data map[string]any
 	c.ShouldBindJSON(&data)
-	baseURL := getString(data, "base_url", "https://api.openai.com/v1")
-	apiKey := getString(data, "api_key", "")
-	if apiKey == "" {
-		c.JSON(http.StatusOK, gin.H{"status": "error", "detail": "API key required"})
-		return
+	id := ai.NormalizeProviderName(getString(data, "provider", ""))
+	if id == "" {
+		// 未指定 provider：回退到当前激活 provider 的名称（保持旧行为）。
+		if p := getActiveAIProvider(); p != nil {
+			id = p.Name
+		}
 	}
-	baseURL = stringsTrimSuffix(baseURL, "/")
-	resp, err := http.Get(baseURL + "/models")
-	// Attempt with auth header
-	if err != nil {
-		req, _ := http.NewRequest("GET", baseURL+"/models", nil)
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-		client := &http.Client{Timeout: 10 * time.Second}
-		resp, err = client.Do(req)
+	result := runAITest(id, aiTestRequest{
+		APIKey:  getString(data, "api_key", ""),
+		Model:   getString(data, "model", ""),
+		BaseURL: getString(data, "base_url", ""),
+	})
+	status := "ok"
+	if result["success"] != true {
+		status = "error"
 	}
-	if err != nil || resp == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
-		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == 200 {
-		c.JSON(http.StatusOK, gin.H{"status": "ok"})
-	} else {
-		c.JSON(http.StatusOK, gin.H{"status": "error", "detail": fmt.Sprintf("HTTP %d", resp.StatusCode)})
-	}
+	result["status"] = status
+	result["detail"] = result["message"]
+	c.JSON(http.StatusOK, result)
 }
 
 func AIDefault(c *gin.Context) {

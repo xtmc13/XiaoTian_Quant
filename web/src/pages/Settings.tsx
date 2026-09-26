@@ -6,9 +6,11 @@ import { cn } from '@/lib/utils'
 import type { ExchangeTestResult } from '@/types'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { SectionCard } from '@/components/ui/SectionCard'
+import { Badge } from '@/components/ui/Badge'
 import { DataDownloadSection } from './settings/DataDownloadSection'
 import { MfaSection } from './settings/MfaSection'
 import { useI18n, LANGS } from '@/i18n'
+import { toast } from '@/lib/useToast'
 import {
   Globe,
   KeyRound,
@@ -129,26 +131,33 @@ const EXCHANGES = [
   { key: 'kraken', label: 'Kraken', needsPassphrase: false },
 ] as const
 
-const AI_PROVIDERS = [
-  {
-    key: 'openai',
-    label: 'OpenAI',
-    models: ['gpt-4o', 'gpt-4-turbo', 'o1-preview'],
-    baseUrl: 'https://api.openai.com/v1',
-  },
-  {
-    key: 'anthropic',
-    label: 'Anthropic',
-    models: ['claude-sonnet-4-6', 'claude-opus-4-7'],
-    baseUrl: 'https://api.anthropic.com/v1',
-  },
-  {
-    key: 'deepseek',
-    label: 'DeepSeek',
-    models: ['deepseek-chat', 'deepseek-coder', 'deepseek-r1'],
-    baseUrl: 'https://api.deepseek.com/v1',
-  },
-] as const
+// AI 模型目录条目（与后端 GET /config/ai-models 返回形状一致；
+// 后端不可达时回落到这份内置完整目录）。
+interface AIModelCatalogItem {
+  key: string
+  label: string
+  models: string[]
+  baseUrl: string
+  default?: string
+  configured?: boolean
+  current_model?: string
+}
+
+// 内置回落目录：key 与后端 provider 注册表逐一对应（claude 不用 anthropic）。
+const FALLBACK_AI_CATALOG: AIModelCatalogItem[] = [
+  { key: 'openai', label: 'OpenAI', models: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-4.1', 'o3', 'gpt-4o'], baseUrl: 'https://api.openai.com/v1', default: 'gpt-5.5' },
+  { key: 'claude', label: 'Anthropic Claude', models: ['claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-sonnet-4-5', 'claude-haiku-4-5'], baseUrl: 'https://api.anthropic.com', default: 'claude-opus-4-7' },
+  { key: 'gemini', label: 'Google Gemini', models: ['gemini-3.1-pro-preview', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'], baseUrl: 'https://generativelanguage.googleapis.com', default: 'gemini-3.1-pro-preview' },
+  { key: 'deepseek', label: 'DeepSeek', models: ['deepseek-chat', 'deepseek-reasoner'], baseUrl: 'https://api.deepseek.com/v1', default: 'deepseek-chat' },
+  { key: 'qwen', label: '通义千问', models: ['qwen3-max', 'qwen-plus', 'qwen-turbo', 'qwen3-coder-plus'], baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', default: 'qwen3-max' },
+  { key: 'glm', label: '智谱 GLM', models: ['glm-4.7', 'glm-4.6', 'glm-4-plus', 'glm-4.5-air'], baseUrl: 'https://open.bigmodel.cn/api/paas/v4', default: 'glm-4.7' },
+  { key: 'kimi', label: 'Kimi（月之暗面）', models: ['kimi-k2.5', 'kimi-k2-0905-preview', 'moonshot-v1-128k', 'moonshot-v1-32k'], baseUrl: 'https://api.moonshot.cn/v1', default: 'kimi-k2.5' },
+  { key: 'doubao', label: '豆包（火山引擎）', models: ['doubao-seed-1-6', 'doubao-pro-32k', 'doubao-lite-32k'], baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', default: 'doubao-seed-1-6' },
+  { key: 'hunyuan', label: '腾讯混元', models: ['hunyuan-pro', 'hunyuan-standard', 'hunyuan-lite'], baseUrl: 'https://api.hunyuan.cloud.tencent.com/v1', default: 'hunyuan-pro' },
+  { key: 'llama', label: 'Llama（Groq）', models: ['llama-4-maverick', 'llama-4-scout'], baseUrl: 'https://api.groq.com/openai/v1', default: 'llama-4-maverick' },
+  { key: 'mistral', label: 'Mistral', models: ['mistral-large-3', 'mistral-medium', 'codestral'], baseUrl: 'https://api.mistral.ai/v1', default: 'mistral-large-3' },
+  { key: 'openrouter', label: 'OpenRouter（聚合）', models: ['openai/gpt-5.5', 'anthropic/claude-opus-4.7', 'google/gemini-3.1-pro-preview', 'deepseek/deepseek-chat', 'qwen/qwen3-max'], baseUrl: 'https://openrouter.ai/api/v1', default: 'openai/gpt-5.5' },
+]
 
 const TIMEZONES = [
   'UTC',
@@ -268,7 +277,7 @@ function SelectField({
 }: {
   value: string
   onChange: (v: string) => void
-  options: string[]
+  options: Array<string | { value: string; label: string }>
   label?: string
 }) {
   // options 兜底：调用方传入 null（接口异常/旧缓存页面）时不至于 .map 崩溃
@@ -281,11 +290,15 @@ function SelectField({
         aria-label={label}
         className="w-full appearance-none rounded-md border border-quant-border bg-quant-bg px-3 py-2 pr-8 text-sm text-foreground outline-none transition-colors focus:border-quant-gold"
       >
-        {safeOptions.map((opt) => (
-          <option key={opt} value={opt}>
-            {opt}
-          </option>
-        ))}
+        {safeOptions.map((opt) => {
+          const optValue = typeof opt === 'string' ? opt : opt.value
+          const optLabel = typeof opt === 'string' ? opt : opt.label
+          return (
+            <option key={optValue} value={optValue}>
+              {optLabel}
+            </option>
+          )
+        })}
       </select>
       <ChevronRight className="pointer-events-none absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2 rotate-90 text-muted-foreground" />
     </div>
@@ -339,6 +352,32 @@ export function Settings() {
     queryFn: () => configApi.exchangesConfigured(),
     staleTime: 30000,
   })
+
+  // AI 模型目录（后端 GET /config/ai-models；失败/为空时回落内置完整目录）。
+  const { data: aiModelsCatalog } = useQuery({
+    queryKey: ['ai-models-catalog'],
+    queryFn: () => configApi.aiModels(),
+    staleTime: 300000,
+    retry: 1,
+  })
+
+  // 生效目录：后端目录优先，条目字段不完整时用内置目录补齐兜底。
+  const aiCatalog: AIModelCatalogItem[] = useMemo(() => {
+    const remote = Array.isArray(aiModelsCatalog?.providers) ? aiModelsCatalog.providers : []
+    if (remote.length === 0) return FALLBACK_AI_CATALOG
+    return remote.map((p) => {
+      const fb = FALLBACK_AI_CATALOG.find((f) => f.key === p.key)
+      return {
+        key: p.key,
+        label: p.label || fb?.label || p.key,
+        models: Array.isArray(p.models) && p.models.length > 0 ? p.models : fb?.models || [],
+        baseUrl: p.baseUrl || fb?.baseUrl || '',
+        default: p.default || fb?.default,
+        configured: !!p.configured,
+        current_model: p.current_model,
+      }
+    })
+  }, [aiModelsCatalog])
 
   /* ── Backend-backed form state ── */
   const [defaultExchange, setDefaultExchange] = useState('binance')
@@ -434,8 +473,16 @@ export function Settings() {
     if (!backendConfig) return
     setDefaultExchange(((backendConfig as Record<string, unknown>).default_exchange as string) || 'binance')
     setExchanges(((backendConfig as Record<string, unknown>).exchanges || {}) as Record<string, ExchangeConfig>)
-    setDefaultAIProvider(((backendConfig as Record<string, unknown>).default_ai_provider as string) || 'openai')
-    setAiProviders(((backendConfig as Record<string, unknown>).ai || {}) as Record<string, AIProviderConfig>)
+    const rawAI = ((backendConfig as Record<string, unknown>).ai || {}) as Record<string, AIProviderConfig>
+    // legacy 迁移：旧版前端用 anthropic 作 key，后端注册表为 claude——合并到 claude 并删除旧键。
+    const migratedAI: Record<string, AIProviderConfig> = {}
+    for (const [k, v] of Object.entries(rawAI)) {
+      const key = k === 'anthropic' ? 'claude' : k
+      migratedAI[key] = { ...(migratedAI[key] || {}), ...v }
+    }
+    const rawDefault = ((backendConfig as Record<string, unknown>).default_ai_provider as string) || 'openai'
+    setDefaultAIProvider(rawDefault === 'anthropic' ? 'claude' : rawDefault)
+    setAiProviders(migratedAI)
     const risk = ((backendConfig as Record<string, unknown>).risk as Record<string, unknown>) || {}
     setProfitProtection(!!risk.profit_protection_enabled)
     setMaxOrders(typeof risk.max_concurrent_orders === 'number' ? risk.max_concurrent_orders : 5)
@@ -535,8 +582,19 @@ export function Settings() {
 
   const testAIMut = useMutation<ExchangeTestResult, Error, { provider: string; cfg: AIProviderConfig }>({
     mutationFn: async ({ provider, cfg }: { provider: string; cfg: AIProviderConfig }) => {
-      const prov = AI_PROVIDERS.find((p) => p.key === provider)
-      return configApi.aiTest({ provider, api_key: cfg.api_key || '', base_url: cfg.base_url || prov?.baseUrl || '' })
+      const prov = aiCatalog.find((p) => p.key === provider)
+      return configApi.aiTest({
+        provider,
+        api_key: cfg.api_key || '',
+        model: cfg.model || '',
+        base_url: cfg.base_url || prov?.baseUrl || '',
+      })
+    },
+    onSuccess: (data) => {
+      if (data?.success) toast('success', data?.message || t('settings.connectOk'))
+    },
+    onError: (err: Error) => {
+      toast('error', err.message || t('settings.connectFail'))
     },
   })
 
@@ -892,15 +950,16 @@ export function Settings() {
                         setDefaultAIProvider(v)
                         setDirty(true)
                       }}
-                      options={AI_PROVIDERS.map((p) => p.label)}
+                      options={aiCatalog.map((p) => ({ value: p.key, label: p.label }))}
                       label={t('settings.ai.defaultLabel')}
                     />
                   </div>
                 </div>
               </SectionCard>
 
-              {AI_PROVIDERS.map((prov) => {
+              {aiCatalog.map((prov) => {
                 const cfg = aiProviders[prov.key] || {}
+                const effectiveModel = cfg.model || prov.default || prov.models[0] || ''
                 const testStatus =
                   testAIMut.variables?.provider === prov.key
                     ? testAIMut.isPending
@@ -912,7 +971,23 @@ export function Settings() {
                           : null
                     : null
                 return (
-                  <SectionCard key={prov.key} title={prov.label} bodyClassName="space-y-4">
+                  <SectionCard
+                    key={prov.key}
+                    title={prov.label}
+                    bodyClassName="space-y-4"
+                    headerAction={
+                      <div className="flex items-center gap-2">
+                        {prov.configured && (
+                          <Badge variant="success">{t('settings.ai.configured')}</Badge>
+                        )}
+                        {prov.current_model && prov.current_model !== effectiveModel && (
+                          <span className="text-xs text-muted-foreground">
+                            {t('settings.ai.runtimeModel')}: {prov.current_model}
+                          </span>
+                        )}
+                      </div>
+                    }
+                  >
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                       <div>
                         <label className="mb-1.5 block text-xs text-muted-foreground">API Key</label>
@@ -924,12 +999,19 @@ export function Settings() {
                       </div>
                       <div>
                         <label className="mb-1.5 block text-xs text-muted-foreground">{t('settings.ai.defaultModel')}</label>
-                        <SelectField
-                          value={cfg.model || prov.models[0]}
-                          onChange={(v) => setAIField(prov.key, 'model', v)}
-                          options={[...prov.models]}
-                          label={t('settings.ai.defaultModel')}
+                        <input
+                          list={`ai-models-${prov.key}`}
+                          value={effectiveModel}
+                          onChange={(e) => setAIField(prov.key, 'model', e.target.value)}
+                          aria-label={`${prov.label} ${t('settings.ai.defaultModel')}`}
+                          placeholder={prov.models[0] || ''}
+                          className="w-full rounded-md border border-quant-border bg-quant-bg px-3 py-2 text-sm text-foreground outline-none transition-colors focus:border-quant-gold"
                         />
+                        <datalist id={`ai-models-${prov.key}`}>
+                          {prov.models.map((m) => (
+                            <option key={m} value={m} />
+                          ))}
+                        </datalist>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
@@ -937,7 +1019,7 @@ export function Settings() {
                         onClick={() =>
                           testAIMut.mutate({
                             provider: prov.key,
-                            cfg: { ...cfg, base_url: cfg.base_url || prov.baseUrl },
+                            cfg: { ...cfg, model: effectiveModel, base_url: cfg.base_url || prov.baseUrl },
                           })
                         }
                         disabled={testAIMut.isPending && testAIMut.variables?.provider === prov.key}

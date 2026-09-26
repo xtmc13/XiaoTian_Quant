@@ -98,9 +98,17 @@ func getActiveAIProvider() *ai.Provider {
 		if providerName == "" {
 			providerName = getStringFromMap(aiCfg, "provider", "")
 		}
+		// legacy 名归一：旧配置/旧前端可能写 anthropic，注册表为 claude。
+		providerName = ai.NormalizeProviderName(providerName)
 		// Read provider-specific config from store (frontend saves as ai.{provider_name})
 		if providerName != "" {
 			providerCfg, _ = aiCfg[providerName].(map[string]any)
+			// 磁盘上的老配置可能仍存于 legacy key（如 ai.anthropic），回退查找。
+			if providerCfg == nil {
+				if legacy := ai.LegacyProviderName(providerName); legacy != "" {
+					providerCfg, _ = aiCfg[legacy].(map[string]any)
+				}
+			}
 		}
 		// Also try nested "providers" key
 		if providerCfg == nil {

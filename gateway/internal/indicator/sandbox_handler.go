@@ -310,6 +310,8 @@ func getActiveAIProvider() *ai.Provider {
 		if providerName == "" {
 			providerName = getString(aiCfg, "provider", "")
 		}
+		// legacy 名归一：旧配置可能写 anthropic，注册表为 claude。
+		providerName = ai.NormalizeProviderName(providerName)
 	}
 
 	if providerName != "" {

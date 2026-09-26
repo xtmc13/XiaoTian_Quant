@@ -1286,7 +1286,8 @@ export const configApi = {
   exchangeSave: (data: ExchangeSettings) => api.post<ExchangeSaveResult>('/exchange/save', data),
   currencyGet: () => api.get<{ currency: string }>('/settings/currency'),
   currencySet: (currency: string) => api.put<{ currency: string }>('/settings/currency', { currency }),
-  aiTest: (data: Record<string, unknown>) => api.post<{ success: boolean }>('/ai/test', data),
+  aiTest: (data: Record<string, unknown>) =>
+    api.post<{ success: boolean; message?: string; latency_ms?: number }>('/ai/test', data),
   aiSave: (data: Record<string, unknown>) => api.post<{ success: boolean }>('/ai/save', data),
   // Dynamic config endpoints (backend-driven)
   getMarkets: () =>
@@ -1303,9 +1304,29 @@ export const configApi = {
       '/config/exchanges'
     ),
   getAIModels: () =>
-    api.get<{ providers: Array<{ key: string; label: string; models: string[]; baseUrl: string }> }>(
-      '/config/ai-models'
-    ),
+    api.get<{
+      providers: Array<{
+        key: string
+        label: string
+        models: string[]
+        baseUrl: string
+        default?: string
+        configured?: boolean
+        current_model?: string
+      }>
+    }>('/config/ai-models'),
+  aiModels: () =>
+    api.get<{
+      providers: Array<{
+        key: string
+        label: string
+        models: string[]
+        baseUrl: string
+        default?: string
+        configured?: boolean
+        current_model?: string
+      }>
+    }>('/config/ai-models'),
   getRate: () => api.get<{ rate: number; from: string; to: string; timestamp: number }>('/config/rate'),
   exchangesConfigured: () => api.get<Record<string, ExchangeConfiguredStatus>>('/exchanges/configured'),
 }

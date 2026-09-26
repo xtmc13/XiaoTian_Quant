@@ -711,7 +711,8 @@ func activeStoreProvider() *ai.Provider {
 	if name == "" {
 		return nil
 	}
-	return resolveStoreProvider(name)
+	// legacy 名归一：旧配置可能写 anthropic，注册表为 claude。
+	return resolveStoreProvider(ai.NormalizeProviderName(name))
 }
 
 // resolveStoreProvider 取注册 provider 并应用 store 中的凭证/模型覆盖（克隆，不改全局）。
@@ -730,6 +731,12 @@ func resolveStoreProvider(name string) *ai.Provider {
 		return nil
 	}
 	pc, _ := aiCfg[name].(map[string]any)
+	if pc == nil {
+		// 磁盘上的老配置可能仍存于 legacy key（如 ai.anthropic），回退查找。
+		if legacy := ai.LegacyProviderName(name); legacy != "" {
+			pc, _ = aiCfg[legacy].(map[string]any)
+		}
+	}
 	if pc == nil {
 		if nested, ok := aiCfg["providers"].(map[string]any); ok {
 			pc, _ = nested[name].(map[string]any)

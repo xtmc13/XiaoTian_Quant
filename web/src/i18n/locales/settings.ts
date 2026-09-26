@@ -68,6 +68,8 @@ const zhCN: Record<string, string> = {
   'settings.ai.apiKeyPlaceholderPrefix': '输入 ',
   'settings.ai.apiKeyPlaceholderSuffix': ' API Key',
   'settings.ai.defaultModel': '默认模型',
+  'settings.ai.configured': '已配置',
+  'settings.ai.runtimeModel': '生效中',
 
   // ── 通知 ──
   'settings.notify.emailTitle': '邮件通知',
@@ -229,6 +231,8 @@ const enUS: Record<string, string> = {
   'settings.ai.apiKeyPlaceholderPrefix': 'Enter ',
   'settings.ai.apiKeyPlaceholderSuffix': ' API Key',
   'settings.ai.defaultModel': 'Default Model',
+  'settings.ai.configured': 'Configured',
+  'settings.ai.runtimeModel': 'Active',
 
   // ── Notifications ──
   'settings.notify.emailTitle': 'Email Notifications',
@@ -390,6 +394,8 @@ const ja: Record<string, string> = {
   'settings.ai.apiKeyPlaceholderPrefix': '',
   'settings.ai.apiKeyPlaceholderSuffix': ' API キーを入力',
   'settings.ai.defaultModel': '既定モデル',
+  'settings.ai.configured': '設定済み',
+  'settings.ai.runtimeModel': '稼働中',
 
   // ── 通知 ──
   'settings.notify.emailTitle': 'メール通知',

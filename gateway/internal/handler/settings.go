@@ -719,25 +719,94 @@ func SettingsExchangeSave(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "id": id})
 }
 
+// aiTestRequest 是 AI 连接测试请求体：字段全部可选，缺省按
+// 请求体 → 该 provider 已保存配置 → 运行时注册表默认 的顺序回落。
+type aiTestRequest struct {
+	APIKey  string `json:"api_key"`
+	Model   string `json:"model"`
+	BaseURL string `json:"base_url"`
+}
+
 // SettingsAITest tests an AI provider by making a real API call.
+// 使用请求体（或已保存配置）构造临时 provider，测试未保存的草稿配置；
+// 不再忽略 :id——不同 provider 卡片各自测各自的连接。
 func SettingsAITest(c *gin.Context) {
-	_ = c.Param("id")
-	provider := getActiveAIProvider()
-	if provider == nil || provider.APIKey == "" {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "No AI provider configured"})
-		return
+	id := ai.NormalizeProviderName(c.Param("id"))
+	var body aiTestRequest
+	// 请求体解析失败不致命：按无覆盖（全部回落已存配置）处理。
+	_ = c.ShouldBindJSON(&body)
+	c.JSON(http.StatusOK, runAITest(id, body))
+}
+
+// runAITest 是 AI 连接测试的统一实现（settings 组与旧 /ai/test 两个入口共用）。
+func runAITest(id string, body aiTestRequest) gin.H {
+	if id == "" {
+		return gin.H{"success": false, "message": "provider id is required"}
 	}
-	// Simple test prompt
+
+	// 已保存配置（ai.{id}）作为回落来源。
+	cfg := store.GetConfig()
+	var saved map[string]any
+	if aiCfg, ok := cfg["ai"].(map[string]any); ok {
+		saved, _ = aiCfg[id].(map[string]any)
+	}
+
+	// 逐项解析：请求体 → 已存配置 → 注册表默认。
+	reg := ai.GetProvider(id)
+	apiKey := firstNonEmpty(body.APIKey, getString(saved, "api_key", ""))
+	if reg != nil {
+		apiKey = firstNonEmpty(apiKey, reg.APIKey)
+	}
+	if apiKey == "" {
+		return gin.H{"success": false, "message": id + " 未配置 API Key，请先填写并保存"}
+	}
+
+	model := firstNonEmpty(body.Model, getString(saved, "model", ""))
+	baseURL := firstNonEmpty(body.BaseURL, getString(saved, "base_url", ""))
+	if reg != nil {
+		model = firstNonEmpty(model, reg.Model)
+		baseURL = firstNonEmpty(baseURL, reg.BaseURL)
+	}
+	// 目录 default 作为最后回落（如 openrouter 未注册进运行时表）。
+	for _, p := range defaultAIModels["providers"].([]map[string]any) {
+		if p["key"] == id {
+			model = firstNonEmpty(model, getString(p, "default", ""))
+			baseURL = firstNonEmpty(baseURL, getString(p, "baseUrl", ""))
+			break
+		}
+	}
+
+	// claude/gemini 适配器内部会自行补 /v1 或 /v1beta 路径段，
+	// 用户按旧习惯传的 .../v1 尾缀需剥掉，否则会拼成 /v1/v1/...。
+	if id == "claude" || id == "gemini" {
+		baseURL = stringsTrimSuffix(strings.TrimRight(baseURL, "/"), "/v1")
+	}
+
+	provider := ai.NewEphemeralProvider(id, baseURL, model, apiKey)
+	start := time.Now()
 	resp, err := provider.ChatCompletion(ai.CompletionRequest{
-		Messages:    []ai.ChatMessage{{Role: ai.RoleUser, Content: "Say 'OK' if you can read this."}},
-		MaxTokens:   10,
+		Messages:    []ai.ChatMessage{{Role: ai.RoleUser, Content: "Reply with the single word: OK"}},
+		MaxTokens:   16,
 		Temperature: 0,
 	})
+	latencyMs := time.Since(start).Milliseconds()
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "AI测试失败: " + err.Error()})
-		return
+		return gin.H{"success": false, "message": err.Error(), "latency_ms": latencyMs}
 	}
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": "AI测试通过: " + resp.Choices[0].Message.Content})
+	if resp == nil || len(resp.Choices) == 0 {
+		return gin.H{"success": false, "message": id + " 返回空响应", "latency_ms": latencyMs}
+	}
+	return gin.H{"success": true, "message": "连接成功 · " + model, "latency_ms": latencyMs}
+}
+
+// firstNonEmpty 返回第一个非空字符串。
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // SettingsAISave saves an AI provider configuration.
