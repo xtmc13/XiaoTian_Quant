@@ -123,7 +123,7 @@ var defaultAIModels = map[string]any{
 		{
 			"key":     "kimi",
 			"label":   "Kimi（月之暗面）",
-			"models":  []string{"kimi-k2.5", "kimi-k2-0905-preview", "moonshot-v1-128k", "moonshot-v1-32k"},
+			"models":  []string{"kimi-k2.5", "kimi-k2-0905-preview", "moonshot-v1-128k", "moonshot-v1-32k", "k3", "kimi-for-coding", "kimi-for-coding-highspeed"},
 			"baseUrl": "https://api.moonshot.cn/v1",
 			"default": "kimi-k2.5",
 		},

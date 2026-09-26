@@ -55,6 +55,7 @@ const CATALOG = {
     { key: 'openai', label: 'OpenAI', models: ['gpt-5.5', 'gpt-4.1'], baseUrl: 'https://api.openai.com/v1', default: 'gpt-5.5', configured: true, current_model: 'gpt-5.5' },
     { key: 'claude', label: 'Anthropic Claude', models: ['claude-opus-4-7', 'claude-sonnet-4-6'], baseUrl: 'https://api.anthropic.com', default: 'claude-opus-4-7', configured: false },
     { key: 'deepseek', label: 'DeepSeek', models: ['deepseek-chat'], baseUrl: 'https://api.deepseek.com/v1', default: 'deepseek-chat', configured: false },
+    { key: 'kimi', label: 'Kimi（月之暗面）', models: ['kimi-k2.5', 'k3', 'kimi-for-coding'], baseUrl: 'https://api.moonshot.cn/v1', default: 'kimi-k2.5', configured: false },
   ],
 }
 
@@ -193,5 +194,20 @@ describe('Settings AI 模型设置', () => {
     )
     const dl = document.getElementById('ai-models-deepseek') as HTMLDataListElement
     expect(dl.options.length).toBe(1) // 回落目录候选数不变
+  })
+
+  it('Kimi 卡片"订阅版端点"按钮一键填充 coding 网关地址与模型', async () => {
+    await renderAITab()
+    fireEvent.click(screen.getByText('订阅版端点'))
+    const baseUrlInput = screen.getByLabelText('Kimi（月之暗面） Base URL') as HTMLInputElement
+    const modelInput = screen.getByLabelText('Kimi（月之暗面） 默认模型') as HTMLInputElement
+    expect(baseUrlInput.value).toBe('https://api.kimi.com/coding/v1')
+    expect(modelInput.value).toBe('kimi-for-coding')
+    await waitFor(() =>
+      expect(useToastModule.toast).toHaveBeenCalledWith(
+        'success',
+        expect.stringContaining('api.kimi.com/coding')
+      )
+    )
   })
 })

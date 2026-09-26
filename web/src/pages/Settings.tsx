@@ -144,15 +144,18 @@ interface AIModelCatalogItem {
   current_model?: string
 }
 
+// Kimi 会员订阅版（Kimi Code 套餐）端点：与按量付费平台（api.moonshot.cn）不同，
+// 订阅 key 只能走该端点。官方文档: https://www.kimi.com/code/docs/
+const KIMI_SUBSCRIPTION_BASE_URL = 'https://api.kimi.com/coding/v1'
+
 // 内置回落目录：key 与后端 provider 注册表逐一对应（claude 不用 anthropic）。
-const FALLBACK_AI_CATALOG: AIModelCatalogItem[] = [
-  { key: 'openai', label: 'OpenAI', models: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-4.1', 'o3', 'gpt-4o'], baseUrl: 'https://api.openai.com/v1', default: 'gpt-5.5' },
+const FALLBACK_AI_CATALOG: AIModelCatalogItem[] = [  { key: 'openai', label: 'OpenAI', models: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-4.1', 'o3', 'gpt-4o'], baseUrl: 'https://api.openai.com/v1', default: 'gpt-5.5' },
   { key: 'claude', label: 'Anthropic Claude', models: ['claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-sonnet-4-5', 'claude-haiku-4-5'], baseUrl: 'https://api.anthropic.com', default: 'claude-opus-4-7' },
   { key: 'gemini', label: 'Google Gemini', models: ['gemini-3.1-pro-preview', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'], baseUrl: 'https://generativelanguage.googleapis.com', default: 'gemini-3.1-pro-preview' },
   { key: 'deepseek', label: 'DeepSeek', models: ['deepseek-chat', 'deepseek-reasoner'], baseUrl: 'https://api.deepseek.com/v1', default: 'deepseek-chat' },
   { key: 'qwen', label: '通义千问', models: ['qwen3-max', 'qwen-plus', 'qwen-turbo', 'qwen3-coder-plus'], baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', default: 'qwen3-max' },
   { key: 'glm', label: '智谱 GLM', models: ['glm-4.7', 'glm-4.6', 'glm-4-plus', 'glm-4.5-air'], baseUrl: 'https://open.bigmodel.cn/api/paas/v4', default: 'glm-4.7' },
-  { key: 'kimi', label: 'Kimi（月之暗面）', models: ['kimi-k2.5', 'kimi-k2-0905-preview', 'moonshot-v1-128k', 'moonshot-v1-32k'], baseUrl: 'https://api.moonshot.cn/v1', default: 'kimi-k2.5' },
+  { key: 'kimi', label: 'Kimi（月之暗面）', models: ['kimi-k2.5', 'kimi-k2-0905-preview', 'moonshot-v1-128k', 'moonshot-v1-32k', 'k3', 'kimi-for-coding', 'kimi-for-coding-highspeed'], baseUrl: 'https://api.moonshot.cn/v1', default: 'kimi-k2.5' },
   { key: 'doubao', label: '豆包（火山引擎）', models: ['doubao-seed-1-6', 'doubao-pro-32k', 'doubao-lite-32k'], baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', default: 'doubao-seed-1-6' },
   { key: 'hunyuan', label: '腾讯混元', models: ['hunyuan-pro', 'hunyuan-standard', 'hunyuan-lite'], baseUrl: 'https://api.hunyuan.cloud.tencent.com/v1', default: 'hunyuan-pro' },
   { key: 'llama', label: 'Llama（Groq）', models: ['llama-4-maverick', 'llama-4-scout'], baseUrl: 'https://api.groq.com/openai/v1', default: 'llama-4-maverick' },
@@ -1027,7 +1030,22 @@ export function Settings() {
                         />
                       </div>
                       <div>
-                        <label className="mb-1.5 block text-xs text-muted-foreground">{t('settings.ai.baseUrl')}</label>
+                        <div className="mb-1.5 flex items-center justify-between">
+                          <label className="block text-xs text-muted-foreground">{t('settings.ai.baseUrl')}</label>
+                          {prov.key === 'kimi' && (
+                            <button
+                              onClick={() => {
+                                setAIField('kimi', 'base_url', KIMI_SUBSCRIPTION_BASE_URL)
+                                setAIField('kimi', 'model', 'kimi-for-coding')
+                                toast('success', t('settings.ai.subscriptionApplied'))
+                              }}
+                              className="flex items-center gap-1 rounded border border-quant-border bg-quant-card px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:border-quant-gold/30 hover:text-foreground"
+                            >
+                              <Zap className="h-3 w-3" />
+                              {t('settings.ai.useSubscription')}
+                            </button>
+                          )}
+                        </div>
                         <input
                           value={cfg.base_url || ''}
                           onChange={(e) => setAIField(prov.key, 'base_url', e.target.value)}
