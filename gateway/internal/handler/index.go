@@ -46,6 +46,10 @@ func StartBackgroundTasks() {
 	}
 	go StartAIBotSnapshotWorker(snapshotInterval)
 
+	// ── AI 机器人信号扫描 worker（按用户配置的 scan_interval 轮询 watchlist，
+	//    fast/deep 决策落 xt_ai_signals 表；enabled=false 不扫）──
+	go StartAIRobotScanWorker()
+
 	// ── Billing 订单核验器（30s 轮询 pending/confirming/failed 订单）──
 	go StartBillingVerifier()
 

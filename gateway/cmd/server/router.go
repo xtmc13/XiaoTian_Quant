@@ -272,6 +272,10 @@ func registerConfigRoutes(api *gin.RouterGroup) {
 	private.GET("/executor/positions", handler.ExecutorPositions)
 	private.GET("/executor/records", handler.ExecutionRecords)
 	private.GET("/executor/signal-sources", handler.ExecutorSignalSources)
+	private.GET("/executor/stats", handler.ExecutorStats)
+	private.POST("/executor/sources", handler.ExecutorCreateSignalSource)
+	private.POST("/executor/sources/:id/subscribe", handler.ExecutorSubscribeSignalSource)
+	private.GET("/executor/sources/:id/subscribers", handler.ExecutorSourceSubscribers)
 
 	// ── Contract ──
 	private.GET("/contract/leverage", handler.ContractLeverageGet)
@@ -284,6 +288,9 @@ func registerConfigRoutes(api *gin.RouterGroup) {
 	// ── AI Robot ──
 	private.GET("/ai/status", handler.AIRobotStatus)
 	private.GET("/ai/signals", handler.AISignals)
+	private.GET("/ai-robot/config", handler.AIRobotConfigGet)
+	private.POST("/ai-robot/config", handler.AIRobotConfigSave)
+	private.GET("/ai-robot/models", handler.AIRobotModels)
 
 	// ── Martin / WallStreet Strategies ──
 	private.GET("/strategies/martin", handler.StrategyMartinList)
@@ -696,7 +703,7 @@ func registerAgentRoutes(api *gin.RouterGroup) {
 		agent.PUT("/ai-config", handler.SaveAgentAIConfig)
 		agent.POST("/ai-config", handler.SaveAgentAIConfig)
 		agent.POST("/ai-test", handler.AgentAITest)
-		agent.POST("/chat", handler.AgentChat)
+		agent.POST("/chat", handler.AgentChatStream)
 	}
 }
 

@@ -115,6 +115,8 @@ import {
   type ExecutorPosition,
   type ExecutionRecord,
   type SignalSource,
+  type ExecutorStats,
+  type AIRobotConfig,
   type AISignal,
   type ContractParams,
   type ContractMarginInfo,
@@ -345,6 +347,14 @@ axiosInstance.interceptors.response.use(
 )
 
 // ── Generic request helpers ──
+/** 部分后端接口包一层 { success, data }（响应拦截器只自动解含 meta 的包），此处兜底解包。 */
+function unwrapEnvelope<T>(payload: T | { success?: boolean; data?: T }): T {
+  if (payload && typeof payload === 'object' && 'success' in payload && 'data' in payload) {
+    return (payload as { data?: T }).data as T
+  }
+  return payload as T
+}
+
 async function request<T>(method: string, path: string, body?: unknown, config?: AxiosRequestConfig): Promise<T> {
   const resp = await axiosInstance.request<ApiResponse<T>>({
     method: method as Method,
@@ -1096,6 +1106,176 @@ export const agentApi = {
   chat: (message: string) => api.post<AIChatResponse>('/agent/chat', { message }),
 }
 
+// ── Agent Chat (SSE streaming, POST /agent/chat) ──
+// 与 indicatorApi.aiGenerateStream 同样的 fetch + ReadableStream 模式：
+// axios 拦截器管不到 SSE，401/错误码在下方手工处理。
+export interface AgentChatMessage {
+  role: 'user' | 'assistant' | 'system'
+  content: string
+}
+
+export interface AgentToolCall {
+  name: string
+  args_summary?: string
+  status: 'running' | 'done'
+  result_summary?: string
+}
+
+export interface AgentChatDoneMessage {
+  content: string
+  tool_calls?: AgentToolCall[]
+}
+
+export interface AgentChatHandlers {
+  onDelta?: (delta: string) => void
+  onToolCall?: (toolCall: AgentToolCall) => void
+  onDone?: (message: AgentChatDoneMessage) => void
+  onError?: (message: string) => void
+}
+
+export const agentChatApi = {
+  chat: (
+    messages: AgentChatMessage[],
+    handlers: AgentChatHandlers
+  ): { abort: () => void; promise: Promise<void> } => {
+    const controller = new AbortController()
+    const token = localStorage.getItem('xt-token') || ''
+    const url = `${API_BASE_URL}/agent/chat`
+
+    const promise = (async (): Promise<void> => {
+      let response: Response
+      try {
+        response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+            'Access-Token': token,
+          },
+          body: JSON.stringify({ messages, stream: true }),
+          signal: controller.signal,
+        })
+      } catch (e) {
+        // 用户主动停止（abort）不算错误，静默结束
+        if (controller.signal.aborted) return
+        handlers.onError?.('网络错误，请检查连接')
+        throw e instanceof Error ? e : new Error(String(e))
+      }
+
+      if (!response.ok) {
+        const text = await response.text()
+        if (response.status === 401) {
+          // 与 axios 401 拦截器行为保持一致：清 token 跳登录
+          if (!isRedirectingToLogin) {
+            isRedirectingToLogin = true
+            localStorage.removeItem('xt-token')
+            localStorage.removeItem('xt-auth')
+            if (window.location.pathname !== '/login') {
+              window.location.href = '/login'
+            }
+            setTimeout(() => {
+              isRedirectingToLogin = false
+            }, 3000)
+          }
+          handlers.onError?.('登录已过期，请重新登录')
+          throw new ApiError('登录已过期，请重新登录', 401, 'UNAUTHORIZED')
+        }
+        handlers.onError?.(`HTTP ${response.status}: ${text || '请求失败'}`)
+        throw new ApiError(text || `请求失败 (${response.status})`, response.status)
+      }
+
+      const reader = response.body?.getReader()
+      if (!reader) {
+        handlers.onError?.('No response body')
+        throw new Error('No response body')
+      }
+
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let currentEvent = ''
+      let currentData = ''
+
+      const flushEvent = () => {
+        if (!currentEvent) {
+          currentEvent = 'message'
+        }
+        if (currentData === '') {
+          currentEvent = ''
+          return
+        }
+        // SSE 结束标记，不是消息内容
+        if (currentData === '[DONE]') {
+          currentEvent = ''
+          currentData = ''
+          return
+        }
+        try {
+          if (currentEvent === 'message') {
+            // 默认事件 = 文本分片，直接追加
+            handlers.onDelta?.(currentData)
+          } else if (currentEvent === 'tool_call') {
+            handlers.onToolCall?.(JSON.parse(currentData))
+          } else if (currentEvent === 'done') {
+            handlers.onDone?.(JSON.parse(currentData))
+          } else if (currentEvent === 'error') {
+            let msg = currentData
+            try {
+              const parsed = JSON.parse(currentData)
+              msg = parsed?.message || parsed?.error || msg
+            } catch {
+              /* 纯文本错误 */
+            }
+            handlers.onError?.(msg)
+          }
+        } catch (e) {
+          if (currentEvent === 'message') handlers.onDelta?.(currentData)
+          else if (currentEvent === 'done') handlers.onDone?.({ content: currentData })
+        }
+        currentEvent = ''
+        currentData = ''
+      }
+
+      const feedLine = (line: string) => {
+        if (line.startsWith('event:')) {
+          currentEvent = line.slice(6).trim()
+        } else if (line.startsWith('data:')) {
+          if (currentData !== '') currentData += '\n'
+          currentData += line.slice(5).trim()
+        } else if (line.trim() === '') {
+          flushEvent()
+        }
+      }
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split('\n')
+          buffer = lines.pop() || ''
+          for (const line of lines) feedLine(line)
+        }
+        // 处理残留 buffer（服务端可能不以空行结尾）
+        if (buffer) {
+          for (const line of buffer.split('\n')) feedLine(line)
+        }
+        flushEvent()
+        // done 事件缺省时以流结束为完成——promise resolve 即代表流正常结束
+      } catch (e) {
+        if (controller.signal.aborted) return
+        const msg = e instanceof Error ? e.message : 'Stream error'
+        handlers.onError?.(msg)
+        throw e instanceof Error ? e : new Error(msg)
+      }
+    })()
+
+    return {
+      abort: () => controller.abort(),
+      promise,
+    }
+  },
+}
+
 // ── Config (raw store config) ──
 export const configApi = {
   get: () => api.get<RawConfig>('/config'),
@@ -1798,15 +1978,34 @@ export const executorApi = {
   getSignalSources: () => axiosInstance.get<{ sources: SignalSource[] }>('/executor/signal-sources'),
   updateSignalSource: (id: string, data: Partial<SignalSource>) =>
     axiosInstance.put<{ success: boolean }>(`/executor/signal-sources/${id}`, data),
+  // GET /executor/stats — 信号统计：KPI、近 30 日盈亏曲线、按交易对汇总
+  getStats: () =>
+    axiosInstance
+      .get<ExecutorStats | { success: boolean; data: ExecutorStats }>('/executor/stats')
+      .then((r) => unwrapEnvelope(r.data)),
 }
 
 // ── AI Robot ──
-// 后端无 /api/ai-robot/* 路由（机器人配置走 /ai-bots/*，模型走 /ai/models）；
-// 仅保留真实存在的 /ai/status、/ai/signals。
+// ai-robot 配置/模型路由已接入（见 handler/ai_robot.go）；状态与信号走 /ai/*。
 export const aiRobotApi = {
-  getStatus: () => axiosInstance.get<{ success: boolean; data: AIStatus }>('/ai/status').then((r) => r.data?.data),
+  getConfig: () =>
+    axiosInstance
+      .get<AIRobotConfig | { success: boolean; data: AIRobotConfig }>('/ai-robot/config')
+      .then((r) => unwrapEnvelope(r.data)),
+  saveConfig: (config: AIRobotConfig) =>
+    axiosInstance.post<AIRobotConfig | { success: boolean; data: AIRobotConfig }>('/ai-robot/config', config),
+  getStatus: () =>
+    axiosInstance
+      .get<AIStatus | { success: boolean; data: AIStatus }>('/ai/status')
+      .then((r) => unwrapEnvelope(r.data)),
   getSignals: (params?: { limit?: number; symbol?: string }) =>
-    axiosInstance.get<{ signals: AISignal[] }>('/ai/signals', { params }).then((r) => r.data?.signals || []),
+    axiosInstance
+      .get<{ signals: AISignal[] } | { success: boolean; data: { signals: AISignal[] } }>('/ai/signals', { params })
+      .then((r) => unwrapEnvelope(r.data)?.signals || []),
+  getModels: () =>
+    axiosInstance
+      .get<{ models: string[] } | { success: boolean; data: { models: string[] } }>('/ai-robot/models')
+      .then((r) => unwrapEnvelope(r.data)?.models || []),
 }
 
 // ── Contract Trading ──

@@ -477,6 +477,15 @@ func aiBotToStrategyConfig(item map[string]any) map[string]any {
 	cfg["strategy_type"] = getString(item, "strategy_type", "ai_alpha")
 	cfg["symbol"] = getString(item, "symbol", "BTCUSDT")
 	cfg["market_type"] = getString(item, "market_type", "spot")
+	// user_id 透传给策略（如 ai_bot 策略消费该用户自己的 ai_signals）。
+	switch v := item["user_id"].(type) {
+	case int:
+		cfg["user_id"] = v
+	case int64:
+		cfg["user_id"] = int(v)
+	case float64:
+		cfg["user_id"] = int(v)
+	}
 
 	// Parse config_json into top-level params
 	if cj, ok := item["config_json"].(string); ok && cj != "" {

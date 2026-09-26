@@ -12,9 +12,9 @@ import (
 
 // Agent is a specialized AI agent in the multi-agent pipeline.
 type Agent struct {
-	Name     string `json:"name"`
-	Role     string `json:"role"`
-	Provider string `json:"provider"`
+	Name         string `json:"name"`
+	Role         string `json:"role"`
+	Provider     string `json:"provider"`
 	SystemPrompt string `json:"-"`
 }
 
@@ -22,8 +22,8 @@ type Agent struct {
 
 // AgentResult is the output from a single agent.
 type AgentResult struct {
-	Agent     string  `json:"agent"`
-	Content   string  `json:"content"`
+	Agent      string  `json:"agent"`
+	Content    string  `json:"content"`
 	Confidence float64 `json:"confidence"`
 	DurationMs int64   `json:"duration_ms"`
 }
@@ -45,57 +45,57 @@ type AgentResult struct {
 // Phase 3 (decision):
 //   - Trader: synthesizes all inputs, generates strategy code
 type Pipeline struct {
-	mu           sync.RWMutex
-	agents       map[string]*Agent
-	enableCache  bool
-	maxRetries   int
-	OnProgress   func(phase string, agent string)
+	mu          sync.RWMutex
+	agents      map[string]*Agent
+	enableCache bool
+	maxRetries  int
+	OnProgress  func(phase string, agent string)
 }
 
 func NewPipeline() *Pipeline {
 	p := &Pipeline{
-		agents:      make(map[string]*Agent),
-		maxRetries:  3,
+		agents:     make(map[string]*Agent),
+		maxRetries: 3,
 	}
 
 	// Phase 1 - Parallel analysis agents
 	p.Register(Agent{
-		Name:   "technical_analyst",
-		Role:   "You are a technical analysis expert. Analyze price action, patterns, and indicators to determine market direction. Provide specific entry/exit levels.",
+		Name:     "technical_analyst",
+		Role:     "You are a technical analysis expert. Analyze price action, patterns, and indicators to determine market direction. Provide specific entry/exit levels.",
 		Provider: "deepseek",
 	})
 	p.Register(Agent{
-		Name:   "onchain_analyst",
-		Role:   "You are a blockchain data analyst. Analyze on-chain metrics, wallet flows, staking data, and network activity.",
+		Name:     "onchain_analyst",
+		Role:     "You are a blockchain data analyst. Analyze on-chain metrics, wallet flows, staking data, and network activity.",
 		Provider: "deepseek",
 	})
 	p.Register(Agent{
-		Name:   "sentiment_analyst",
-		Role:   "You are a market sentiment analyst. Analyze market sentiment from news, social media, and fear/greed indicators.",
+		Name:     "sentiment_analyst",
+		Role:     "You are a market sentiment analyst. Analyze market sentiment from news, social media, and fear/greed indicators.",
 		Provider: "deepseek",
 	})
 	p.Register(Agent{
-		Name:   "risk_analyst",
-		Role:   "You are a risk management expert. Evaluate volatility, VaR, drawdown risk, and recommend position sizing.",
+		Name:     "risk_analyst",
+		Role:     "You are a risk management expert. Evaluate volatility, VaR, drawdown risk, and recommend position sizing.",
 		Provider: "deepseek",
 	})
 
 	// Phase 2 - Debate agents
 	p.Register(Agent{
-		Name:   "bull_advocate",
-		Role:   "You are the bullish trader. Make the strongest possible case for going LONG. Challenge bearish assumptions. Find every reason prices could rise.",
+		Name:     "bull_advocate",
+		Role:     "You are the bullish trader. Make the strongest possible case for going LONG. Challenge bearish assumptions. Find every reason prices could rise.",
 		Provider: "deepseek",
 	})
 	p.Register(Agent{
-		Name:   "bear_advocate",
-		Role:   "You are the bearish trader. Make the strongest possible case for going SHORT. Challenge bullish assumptions. Find every reason prices could fall.",
+		Name:     "bear_advocate",
+		Role:     "You are the bearish trader. Make the strongest possible case for going SHORT. Challenge bullish assumptions. Find every reason prices could fall.",
 		Provider: "deepseek",
 	})
 
 	// Phase 3 - Decision maker
 	p.Register(Agent{
-		Name:   "trader",
-		Role:   "You are the head trader. Synthesize all analysts' and debaters' inputs. Make the final trading decision and generate strategy code. If no clear edge exists, recommend staying out.",
+		Name:     "trader",
+		Role:     "You are the head trader. Synthesize all analysts' and debaters' inputs. Make the final trading decision and generate strategy code. If no clear edge exists, recommend staying out.",
 		Provider: "deepseek",
 	})
 
@@ -114,6 +114,19 @@ func (p *Pipeline) AgentCount() int {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return len(p.agents)
+}
+
+// SetProvider 把所有已注册 agent 的 LLM provider 统一替换（如 deepseek → openai）。
+// 未知名称忽略；空 pipeline 无副作用。
+func (p *Pipeline) SetProvider(provider string) {
+	if provider == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, agent := range p.agents {
+		agent.Provider = provider
+	}
 }
 
 // ── Market Input ──
@@ -176,18 +189,18 @@ News: %s`,
 
 // Decision is the final output of the multi-agent pipeline.
 type Decision struct {
-	Direction    string          `json:"direction"`     // LONG, SHORT, NONE
-	Confidence   float64         `json:"confidence"`
-	EntryPrice   float64         `json:"entry_price"`
-	StopLoss     float64         `json:"stop_loss"`
-	TakeProfit   float64         `json:"take_profit"`
-	PositionSize float64         `json:"position_size"`
-	Reason       string          `json:"reason"`
-	StrategyCode string          `json:"strategy_code"`
-	Results      []AgentResult   `json:"agent_results"`
-	DebateResult []AgentResult   `json:"debate_results"`
-	Consensus    float64         `json:"consensus"`
-	HasConsensus bool            `json:"has_consensus"`
+	Direction    string        `json:"direction"` // LONG, SHORT, NONE
+	Confidence   float64       `json:"confidence"`
+	EntryPrice   float64       `json:"entry_price"`
+	StopLoss     float64       `json:"stop_loss"`
+	TakeProfit   float64       `json:"take_profit"`
+	PositionSize float64       `json:"position_size"`
+	Reason       string        `json:"reason"`
+	StrategyCode string        `json:"strategy_code"`
+	Results      []AgentResult `json:"agent_results"`
+	DebateResult []AgentResult `json:"debate_results"`
+	Consensus    float64       `json:"consensus"`
+	HasConsensus bool          `json:"has_consensus"`
 }
 
 // Run executes the full multi-agent pipeline.

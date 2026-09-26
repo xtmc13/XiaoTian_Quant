@@ -106,8 +106,18 @@ function recordsToRows(records: ExecutionRecord[]): TradeRowItem[] {
 }
 
 /* ── Signal Sources ── */
+const feeModelLabel = (model: string): string => {
+  const labels: Record<string, string> = {
+    free: '免费',
+    fixed_monthly: '固定月费',
+    monthly: '固定月费',
+    profit_share: '盈利分成',
+  }
+  return labels[model] ?? model
+}
+
 const SignalSourcesView: React.FC<{
-  sources: { id: string; name: string; type: string; enabled: boolean; webhook_url?: string; signal_count_today: number; signal_count_total: number; tp_sl_config?: { tp1_pct: number; tp2_pct: number; tp3_pct: number; sl_pct: number } }[]
+  sources: { id: string; name: string; type: string; enabled: boolean; webhook_url?: string; signal_count_today: number; signal_count_total: number; fee_model?: string; fee_percent?: number; tp_sl_config?: { tp1_pct: number; tp2_pct: number; tp3_pct: number; sl_pct: number } }[]
 }> = ({ sources }) => {
   const [copiedId, setCopiedId] = React.useState<string | null>(null)
 
@@ -185,6 +195,27 @@ const SignalSourcesView: React.FC<{
               <Badge variant="info">TP2: {source.tp_sl_config.tp2_pct}%</Badge>
               <Badge variant="default">TP3: {source.tp_sl_config.tp3_pct}%</Badge>
               <Badge variant="error">SL: {source.tp_sl_config.sl_pct}%</Badge>
+            </div>
+          )}
+
+          {source.fee_model && (
+            <div className="flex items-center gap-2 mt-3 text-xs text-[#888]">
+              <span>定价:</span>
+              <Badge
+                variant={
+                  source.fee_model === 'free'
+                    ? 'success'
+                    : source.fee_model === 'profit_share'
+                      ? 'warning'
+                      : 'info'
+                }
+                className="text-[10px]"
+              >
+                {feeModelLabel(source.fee_model)}
+                {source.fee_model === 'profit_share' && source.fee_percent
+                  ? ` ${source.fee_percent}%`
+                  : ''}
+              </Badge>
             </div>
           )}
         </div>

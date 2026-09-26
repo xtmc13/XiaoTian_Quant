@@ -98,7 +98,9 @@ func TradingViewWebhook(c *gin.Context) {
 		side = "SELL"
 	case "exit", "close", "exit_long", "exit_short", "flatten":
 		// 出场单保持直发（AI 不能拦出场、风控不拦平仓，与 OMS 门内口径一致），
-		// 但记审计留痕——收口后不再是无痕通道。
+		// 但记审计留痕并落信号库——收口后不再是无痕通道。
+		sourceID := resolveSignalSourceID(body)
+		recordSignalFromWebhook(body, symbol, "CLOSE", sourceID)
 		closeAllOrdersForSymbol(symbol)
 		closeOrder := map[string]any{
 			"symbol":   strings.ToUpper(symbol),
@@ -124,6 +126,30 @@ func TradingViewWebhook(c *gin.Context) {
 
 	// Get price from alert or use 0 for market order
 	price := getFloat(body, "price", getFloat(body, "limit", 0))
+	// 信号落库：开仓类信号进 SignalRepo（此前缺失的持久化环节），
+	// 统计端点（/executor/stats）与信号源计数都依赖这条链路。
+	sourceID := resolveSignalSourceID(body)
+	sig := recordSignalFromWebhook(body, symbol, side, sourceID)
+
+	// 信号式 payload（带保证金模式/止盈止损）走信号执行管线：阶梯 TP/SL + hedge 双腿
+	if isSignalStyleBody(body) && sig != nil {
+		sig.EntryPrice = price
+		sig.PositionSize = quantity
+		if exec, err := executeSignalRecord(sig, body); err != nil {
+			log.Printf("[webhook] signal execute failed: %v", err)
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		} else {
+			c.JSON(http.StatusOK, gin.H{
+				"status":    "ok",
+				"signal":    sig.ID,
+				"execution": exec.ID,
+			})
+			return
+		}
+	}
+
+	// 普通 alert 走 OMS 全管线（安全收口：风控 15 维 + AI 决策门），成交后回写信号状态
 	orderType := model.OrderType("MARKET")
 	if price > 0 {
 		orderType = model.TypeLimit
@@ -151,6 +177,10 @@ func TradingViewWebhook(c *gin.Context) {
 		return
 	}
 
+	if sig != nil && ord.Status == model.StatusFilled {
+		sig.Status = "EXECUTED"
+		_ = executorSignalRepo.Update(sig)
+	}
 	log.Printf("[webhook] TV signal: %s %s %s qty=%.4f price=%.2f → OMS %s (%s)",
 		getString(body, "strategy", "TV_Strategy"), side, symbol, quantity, price, ord.ID, ord.Status)
 
@@ -252,8 +282,26 @@ func GenericWebhook(c *gin.Context) {
 		return
 	}
 
+	// 信号落库（与 TV webhook 同一链路）
+	sourceID := resolveSignalSourceID(body)
+	sig := recordSignalFromWebhook(body, symbol, side, sourceID)
+
+	// 信号式 payload（带保证金模式/止盈止损）走信号执行管线：阶梯 TP/SL + hedge 双腿
+	if isSignalStyleBody(body) && sig != nil {
+		sig.EntryPrice = price
+		sig.PositionSize = quantity
+		if exec, err := executeSignalRecord(sig, body); err != nil {
+			log.Printf("[webhook] signal execute failed: %v", err)
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		} else {
+			c.JSON(http.StatusOK, gin.H{"status": "ok", "signal": sig.ID, "execution": exec.ID})
+			return
+		}
+	}
+
 	// 显式出场标记（action=exit/close/flatten 或 close_position=true）保持直发 + 审计；
-	// 其余一律按入场口径改道 OMS（风控 + AI 决策门）。
+	// 其余一律按入场口径改道 OMS（风控 15 维 + AI 决策门）。
 	action := strings.ToLower(getString(body, "action", ""))
 	isExit := action == "exit" || action == "close" || action == "flatten" ||
 		action == "exit_long" || action == "exit_short" || getBool(body, "close_position", false)
@@ -299,8 +347,12 @@ func GenericWebhook(c *gin.Context) {
 	if !ok {
 		return
 	}
-
+	if sig != nil && ord != nil && ord.Status == model.StatusFilled {
+		sig.Status = "EXECUTED"
+		_ = executorSignalRepo.Update(sig)
+	}
 	log.Printf("[webhook] generic: %s %s %s qty=%.4f → OMS %s (%s)", side, orderType, symbol, quantity, ord.ID, ord.Status)
+
 
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "order": normalizeOrder(omsOrderStoreMap(ord, "webhook"))})
 }

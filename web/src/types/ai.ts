@@ -144,17 +144,24 @@ export interface AIStatus {
   enabled: boolean
 }
 
+/**
+ * AI 信号（后端落库结构）。direction 主字段为 signal(long/short/neutral)；
+ * side/model/indicators/timestamp/executed 为旧前端兼容字段，过渡期可选。
+ */
 export interface AISignal {
   id: string
   symbol: string
-  side: 'buy' | 'sell'
+  signal?: 'long' | 'short' | 'neutral'
   confidence: number
-  model: string
-  indicators: Record<string, number>
   reason?: string
   filters?: string[]
   market_condition?: string
-  timestamp: string
-  executed: boolean
+  mode?: string
+  provider?: string
   created_at: string
+  side?: 'buy' | 'sell' | 'long' | 'short' | 'neutral'
+  model?: string
+  indicators?: Record<string, number>
+  timestamp?: string
+  executed?: boolean
 }

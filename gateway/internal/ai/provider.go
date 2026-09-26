@@ -118,11 +118,15 @@ const (
 	RoleSystem    Role = "system"
 	RoleUser      Role = "user"
 	RoleAssistant Role = "assistant"
+	RoleTool      Role = "tool" // OpenAI 协议中回传工具结果的角色
 )
 
 type ChatMessage struct {
-	Role    Role   `json:"role"`
-	Content string `json:"content"`
+	Role       Role        `json:"role"`
+	Content    string      `json:"content"`
+	ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`   // assistant 发起的工具调用
+	ToolCallID string      `json:"tool_call_id,omitempty"` // tool 角色回传结果时对应的原调用 id（OpenAI）
+	ToolResult *ToolResult `json:"-"`                      // 结构化工具结果（Anthropic tool_result / Gemini functionResponse 序列化时优先使用）
 }
 
 // ── Completion Request/Response ──
@@ -133,6 +137,8 @@ type CompletionRequest struct {
 	MaxTokens   int           `json:"max_tokens,omitempty"`
 	Temperature float64       `json:"temperature,omitempty"`
 	Stream      bool          `json:"stream,omitempty"`
+	Tools       []Tool        `json:"tools,omitempty"`
+	ToolChoice  string        `json:"tool_choice,omitempty"`
 }
 
 type CompletionResponse struct {
@@ -213,14 +219,59 @@ func (p *Provider) doChatRequest(url string, req CompletionRequest) (*Completion
 	return &result, nil
 }
 
-// Anthropic Messages API format.
-func (p *Provider) claudeChat(req CompletionRequest) (*CompletionResponse, error) {
-	// Build anthropic request
+// anthropicTools 把通用 Tool 列表转为 Anthropic messages API 的 tools 格式
+func anthropicTools(tools []Tool) []map[string]any {
+	out := make([]map[string]any, 0, len(tools))
+	for _, t := range tools {
+		out = append(out, map[string]any{
+			"name":         t.Function.Name,
+			"description":  t.Function.Description,
+			"input_schema": t.Function.Parameters,
+		})
+	}
+	return out
+}
+
+// buildAnthropicMessages 把通用消息列表转为 Anthropic messages 格式（支持 tool_use / tool_result content blocks）
+func buildAnthropicMessages(messages []ChatMessage) (string, []map[string]any) {
 	var systemMsg string
 	var anthropicMsgs []map[string]any
-	for _, msg := range req.Messages {
+	for _, msg := range messages {
 		if msg.Role == RoleSystem {
 			systemMsg = msg.Content
+			continue
+		}
+		// 工具结果回传：tool_result block（Role 为 user）
+		if msg.ToolResult != nil {
+			anthropicMsgs = append(anthropicMsgs, map[string]any{
+				"role": "user",
+				"content": []map[string]any{{
+					"type":        "tool_result",
+					"tool_use_id": msg.ToolResult.ToolCallID,
+					"content":     msg.ToolResult.Content,
+				}},
+			})
+			continue
+		}
+		// assistant 回传工具调用历史：text 与 tool_use blocks 混合
+		if msg.Role == RoleAssistant && len(msg.ToolCalls) > 0 {
+			blocks := []map[string]any{}
+			if msg.Content != "" {
+				blocks = append(blocks, map[string]any{"type": "text", "text": msg.Content})
+			}
+			for _, tc := range msg.ToolCalls {
+				var input map[string]any
+				if json.Unmarshal([]byte(tc.Arguments), &input) != nil || input == nil {
+					input = map[string]any{}
+				}
+				blocks = append(blocks, map[string]any{
+					"type":  "tool_use",
+					"id":    tc.ID,
+					"name":  tc.Name,
+					"input": input,
+				})
+			}
+			anthropicMsgs = append(anthropicMsgs, map[string]any{"role": "assistant", "content": blocks})
 			continue
 		}
 		role := "user"
@@ -232,6 +283,12 @@ func (p *Provider) claudeChat(req CompletionRequest) (*CompletionResponse, error
 			"content": msg.Content,
 		})
 	}
+	return systemMsg, anthropicMsgs
+}
+
+// Anthropic Messages API format.
+func (p *Provider) claudeChat(req CompletionRequest) (*CompletionResponse, error) {
+	systemMsg, anthropicMsgs := buildAnthropicMessages(req.Messages)
 
 	payload := map[string]any{
 		"model":      p.Model,
@@ -243,6 +300,9 @@ func (p *Provider) claudeChat(req CompletionRequest) (*CompletionResponse, error
 	}
 	if systemMsg != "" {
 		payload["system"] = systemMsg
+	}
+	if len(req.Tools) > 0 {
+		payload["tools"] = anthropicTools(req.Tools)
 	}
 
 	body, _ := json.Marshal(payload)
@@ -268,26 +328,92 @@ func (p *Provider) claudeChat(req CompletionRequest) (*CompletionResponse, error
 	var claudeResp map[string]any
 	json.Unmarshal(respBody, &claudeResp)
 
-	// Convert to standard format
+	// Convert to standard format: 解析 text 与 tool_use content blocks
 	result := &CompletionResponse{
 		ID:    fmt.Sprint(claudeResp["id"]),
 		Model: p.Model,
 	}
 	if content, ok := claudeResp["content"].([]any); ok && len(content) > 0 {
-		if block, ok := content[0].(map[string]any); ok {
-			result.Choices = []Choice{{
-				Index:   0,
-				Message: ChatMessage{Role: RoleAssistant, Content: fmt.Sprint(block["text"])},
-			}}
+		var text string
+		var toolCalls []ToolCall
+		for _, cb := range content {
+			block, ok := cb.(map[string]any)
+			if !ok {
+				continue
+			}
+			if block["type"] == "tool_use" {
+				input, _ := json.Marshal(block["input"])
+				toolCalls = append(toolCalls, ToolCall{
+					ID:        fmt.Sprint(block["id"]),
+					Name:      fmt.Sprint(block["name"]),
+					Arguments: string(input),
+				})
+				continue
+			}
+			if t, ok := block["text"].(string); ok {
+				text += t
+			}
 		}
+		result.Choices = []Choice{{
+			Index:   0,
+			Message: ChatMessage{Role: RoleAssistant, Content: text, ToolCalls: toolCalls},
+		}}
 	}
 	return result, nil
 }
 
-// Google Gemini API format.
-func (p *Provider) geminiChat(req CompletionRequest) (*CompletionResponse, error) {
+// geminiTools 把通用 Tool 列表转为 Gemini functionDeclarations 格式
+func geminiTools(tools []Tool) []map[string]any {
+	decls := make([]map[string]any, 0, len(tools))
+	for _, t := range tools {
+		decls = append(decls, map[string]any{
+			"name":        t.Function.Name,
+			"description": t.Function.Description,
+			"parameters":  t.Function.Parameters,
+		})
+	}
+	return []map[string]any{{"functionDeclarations": decls}}
+}
+
+// buildGeminiContents 把通用消息列表转为 Gemini contents 格式（支持 functionCall / functionResponse parts）
+func buildGeminiContents(messages []ChatMessage) []map[string]any {
 	var contents []map[string]any
-	for _, msg := range req.Messages {
+	for _, msg := range messages {
+		// 工具结果回传：functionResponse part
+		if msg.ToolResult != nil {
+			name := msg.ToolResult.Name
+			if name == "" {
+				name = msg.ToolResult.ToolCallID
+			}
+			contents = append(contents, map[string]any{
+				"role": "user",
+				"parts": []map[string]any{{
+					"functionResponse": map[string]any{
+						"name":     name,
+						"response": map[string]any{"name": name, "content": msg.ToolResult.Content},
+					},
+				}},
+			})
+			continue
+		}
+		// assistant 回传工具调用历史：functionCall parts
+		if msg.Role == RoleAssistant && len(msg.ToolCalls) > 0 {
+			parts := []map[string]any{}
+			if msg.Content != "" {
+				parts = append(parts, map[string]any{"text": msg.Content})
+			}
+			for _, tc := range msg.ToolCalls {
+				var args map[string]any
+				if json.Unmarshal([]byte(tc.Arguments), &args) != nil || args == nil {
+					args = map[string]any{}
+				}
+				parts = append(parts, map[string]any{
+					"functionCall": map[string]any{"name": tc.Name, "args": args},
+				})
+			}
+			contents = append(contents, map[string]any{"role": "model", "parts": parts})
+			continue
+		}
 		role := "user"
 		if msg.Role == RoleAssistant {
 			role = "model"
@@ -297,9 +423,18 @@ func (p *Provider) geminiChat(req CompletionRequest) (*CompletionResponse, error
 			"parts": []map[string]string{{"text": msg.Content}},
 		})
 	}
+	return contents
+}
+
+// Google Gemini API format.
+func (p *Provider) geminiChat(req CompletionRequest) (*CompletionResponse, error) {
+	contents := buildGeminiContents(req.Messages)
 
 	payload := map[string]any{
 		"contents": contents,
+	}
+	if len(req.Tools) > 0 {
+		payload["tools"] = geminiTools(req.Tools)
 	}
 	body, _ := json.Marshal(payload)
 	url := fmt.Sprintf("%s/v1beta/models/%s:generateContent?key=%s", p.BaseURL, p.Model, p.APIKey)
@@ -324,17 +459,34 @@ func (p *Provider) geminiChat(req CompletionRequest) (*CompletionResponse, error
 	var geminiResp map[string]any
 	json.Unmarshal(respBody, &geminiResp)
 
+	// Convert to standard format: 解析 text 与 functionCall parts
 	result := &CompletionResponse{Model: p.Model}
 	if candidates, ok := geminiResp["candidates"].([]any); ok && len(candidates) > 0 {
 		if cand, ok := candidates[0].(map[string]any); ok {
 			if content, ok := cand["content"].(map[string]any); ok {
 				if parts, ok := content["parts"].([]any); ok && len(parts) > 0 {
-					if part, ok := parts[0].(map[string]any); ok {
-						result.Choices = []Choice{{
-							Index:   0,
-							Message: ChatMessage{Role: RoleAssistant, Content: fmt.Sprint(part["text"])},
-						}}
+					var text string
+					var toolCalls []ToolCall
+					for _, item := range parts {
+						part, ok := item.(map[string]any)
+						if !ok {
+							continue
+						}
+						if t, ok := part["text"].(string); ok {
+							text += t
+						}
+						if fc, ok := part["functionCall"].(map[string]any); ok {
+							args, _ := json.Marshal(fc["args"])
+							toolCalls = append(toolCalls, ToolCall{
+								Name:      fmt.Sprint(fc["name"]),
+								Arguments: string(args),
+							})
+						}
 					}
+					result.Choices = []Choice{{
+						Index:   0,
+						Message: ChatMessage{Role: RoleAssistant, Content: text, ToolCalls: toolCalls},
+					}}
 				}
 			}
 		}
@@ -353,6 +505,18 @@ func (p *Provider) SupportsStream() bool {
 
 // ChatCompletionStream streams the response token by token.
 func (p *Provider) ChatCompletionStream(req CompletionRequest, callback func(delta string)) error {
+	_, _, err := p.chatCompletionStream(req, callback)
+	return err
+}
+
+// ChatCompletionStreamEx 流式聊天：文本增量通过回调返回，
+// 同时聚合 tool calls（含分片拼接），返回完整文本与工具调用列表。
+func (p *Provider) ChatCompletionStreamEx(req CompletionRequest, callback func(delta string)) (string, []ToolCall, error) {
+	return p.chatCompletionStream(req, callback)
+}
+
+// chatCompletionStream 流式实现：按协议分发，回调文本增量并聚合工具调用
+func (p *Provider) chatCompletionStream(req CompletionRequest, callback func(delta string)) (string, []ToolCall, error) {
 	if p.Name == "claude" {
 		return p.claudeChatStream(req, callback)
 	}
@@ -362,7 +526,7 @@ func (p *Provider) ChatCompletionStream(req CompletionRequest, callback func(del
 	return p.openAICompatibleStream(req, callback)
 }
 
-func (p *Provider) openAICompatibleStream(req CompletionRequest, callback func(delta string)) error {
+func (p *Provider) openAICompatibleStream(req CompletionRequest, callback func(delta string)) (string, []ToolCall, error) {
 	req.Stream = true
 	req.Model = p.Model
 
@@ -370,7 +534,7 @@ func (p *Provider) openAICompatibleStream(req CompletionRequest, callback func(d
 	body, _ := json.Marshal(req)
 	httpReq, err := http.NewRequest("POST", url, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return "", nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+p.APIKey)
@@ -378,9 +542,12 @@ func (p *Provider) openAICompatibleStream(req CompletionRequest, callback func(d
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return err
+		return "", nil, err
 	}
 	defer resp.Body.Close()
+
+	var fullText string
+	agg := newToolCallAggregator()
 
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
@@ -402,32 +569,39 @@ func (p *Provider) openAICompatibleStream(req CompletionRequest, callback func(d
 		}
 		choice, _ := choices[0].(map[string]any)
 		delta, _ := choice["delta"].(map[string]any)
-		content, _ := delta["content"].(string)
-		if content != "" {
-			callback(content)
+		if content, ok := delta["content"].(string); ok && content != "" {
+			fullText += content
+			if callback != nil {
+				callback(content)
+			}
+		}
+		// delta.tool_calls 分片按 index 聚合（arguments 为分片字符串，需拼接）
+		if items, ok := delta["tool_calls"].([]any); ok {
+			for _, item := range items {
+				tc, ok := item.(map[string]any)
+				if !ok {
+					continue
+				}
+				idx, _ := tc["index"].(float64)
+				id, _ := tc["id"].(string)
+				var name, args string
+				if fn, ok := tc["function"].(map[string]any); ok {
+					name, _ = fn["name"].(string)
+					args, _ = fn["arguments"].(string)
+				}
+				agg.add(int(idx), id, name, args)
+			}
 		}
 	}
-	return scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return fullText, nil, err
+	}
+	return fullText, agg.result(), nil
 }
 
 // Anthropic streaming via SSE.
-func (p *Provider) claudeChatStream(req CompletionRequest, callback func(delta string)) error {
-	var systemMsg string
-	var anthropicMsgs []map[string]any
-	for _, msg := range req.Messages {
-		if msg.Role == RoleSystem {
-			systemMsg = msg.Content
-			continue
-		}
-		role := "user"
-		if msg.Role == RoleAssistant {
-			role = "assistant"
-		}
-		anthropicMsgs = append(anthropicMsgs, map[string]any{
-			"role":    role,
-			"content": msg.Content,
-		})
-	}
+func (p *Provider) claudeChatStream(req CompletionRequest, callback func(delta string)) (string, []ToolCall, error) {
+	systemMsg, anthropicMsgs := buildAnthropicMessages(req.Messages)
 	payload := map[string]any{
 		"model":      p.Model,
 		"max_tokens": 4096,
@@ -440,11 +614,14 @@ func (p *Provider) claudeChatStream(req CompletionRequest, callback func(delta s
 	if systemMsg != "" {
 		payload["system"] = systemMsg
 	}
+	if len(req.Tools) > 0 {
+		payload["tools"] = anthropicTools(req.Tools)
+	}
 
 	body, _ := json.Marshal(payload)
 	httpReq, err := http.NewRequest("POST", p.BaseURL+"/v1/messages", bytes.NewReader(body))
 	if err != nil {
-		return err
+		return "", nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("x-api-key", p.APIKey)
@@ -453,9 +630,12 @@ func (p *Provider) claudeChatStream(req CompletionRequest, callback func(delta s
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return err
+		return "", nil, err
 	}
 	defer resp.Body.Close()
+
+	var fullText string
+	agg := newToolCallAggregator()
 
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
@@ -468,44 +648,63 @@ func (p *Provider) claudeChatStream(req CompletionRequest, callback func(delta s
 		if json.Unmarshal([]byte(data), &event) != nil {
 			continue
 		}
-		if event["type"] == "content_block_delta" {
+		switch event["type"] {
+		case "content_block_start":
+			// tool_use block 起始：记录 id 与 name
+			if cb, ok := event["content_block"].(map[string]any); ok && cb["type"] == "tool_use" {
+				idx, _ := event["index"].(float64)
+				id, _ := cb["id"].(string)
+				name, _ := cb["name"].(string)
+				agg.add(int(idx), id, name, "")
+			}
+		case "content_block_delta":
 			delta, _ := event["delta"].(map[string]any)
 			if text, ok := delta["text"].(string); ok && text != "" {
-				callback(text)
+				fullText += text
+				if callback != nil {
+					callback(text)
+				}
+			}
+			// input_json_delta：arguments 分片拼接
+			if delta["type"] == "input_json_delta" {
+				idx, _ := event["index"].(float64)
+				partial, _ := delta["partial_json"].(string)
+				agg.add(int(idx), "", "", partial)
 			}
 		}
 	}
-	return scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return fullText, nil, err
+	}
+	return fullText, agg.result(), nil
 }
 
 // Gemini streaming.
-func (p *Provider) geminiChatStream(req CompletionRequest, callback func(delta string)) error {
-	var contents []map[string]any
-	for _, msg := range req.Messages {
-		role := "user"
-		if msg.Role == RoleAssistant {
-			role = "model"
-		}
-		contents = append(contents, map[string]any{
-			"role":  role,
-			"parts": []map[string]string{{"text": msg.Content}},
-		})
-	}
+func (p *Provider) geminiChatStream(req CompletionRequest, callback func(delta string)) (string, []ToolCall, error) {
+	contents := buildGeminiContents(req.Messages)
 	payload := map[string]any{"contents": contents}
+	if len(req.Tools) > 0 {
+		payload["tools"] = geminiTools(req.Tools)
+	}
 	body, _ := json.Marshal(payload)
 	url := fmt.Sprintf("%s/v1beta/models/%s:streamGenerateContent?key=%s", p.BaseURL, p.Model, p.APIKey)
 
 	httpReq, err := http.NewRequest("POST", url, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return "", nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return err
+		return "", nil, err
 	}
 	defer resp.Body.Close()
+
+	var fullText string
+	// Gemini 流式 functionCall：按函数名聚合 args map，结束时序列化为 JSON
+	fnArgs := map[string]map[string]any{}
+	var fnOrder []string
 
 	// Gemini streams JSON objects separated by newlines or in an array
 	scanner := bufio.NewScanner(resp.Body)
@@ -523,9 +722,28 @@ func (p *Provider) geminiChatStream(req CompletionRequest, callback func(delta s
 			if cand, ok := candidates[0].(map[string]any); ok {
 				if content, ok := cand["content"].(map[string]any); ok {
 					if parts, ok := content["parts"].([]any); ok && len(parts) > 0 {
-						if part, ok := parts[0].(map[string]any); ok {
+						for _, item := range parts {
+							part, ok := item.(map[string]any)
+							if !ok {
+								continue
+							}
 							if text, ok := part["text"].(string); ok && text != "" {
-								callback(text)
+								fullText += text
+								if callback != nil {
+									callback(text)
+								}
+							}
+							if fc, ok := part["functionCall"].(map[string]any); ok {
+								name, _ := fc["name"].(string)
+								if _, seen := fnArgs[name]; !seen {
+									fnArgs[name] = map[string]any{}
+									fnOrder = append(fnOrder, name)
+								}
+								if args, ok := fc["args"].(map[string]any); ok {
+									for k, v := range args {
+										fnArgs[name][k] = v
+									}
+								}
 							}
 						}
 					}
@@ -533,5 +751,13 @@ func (p *Provider) geminiChatStream(req CompletionRequest, callback func(delta s
 			}
 		}
 	}
-	return scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return fullText, nil, err
+	}
+	var toolCalls []ToolCall
+	for _, name := range fnOrder {
+		args, _ := json.Marshal(fnArgs[name])
+		toolCalls = append(toolCalls, ToolCall{Name: name, Arguments: string(args)})
+	}
+	return fullText, toolCalls, nil
 }

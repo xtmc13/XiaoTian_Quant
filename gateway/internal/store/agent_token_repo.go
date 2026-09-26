@@ -50,9 +50,9 @@ func (r *AgentTokenRepo) Create(t *AgentTokenRecord) error {
 }
 
 func (r *AgentTokenRepo) GetByTokenHash(hash string) (*AgentTokenRecord, error) {
-	row := db.QueryRow(`SELECT id, name, token_hash, token_prefix, scopes, rate_limit_rps, is_active, expires_at, last_used_at, created_at FROM agent_tokens WHERE token_hash=?`, hash)
+	row := db.QueryRow(`SELECT id, name, token_hash, token_prefix, scopes, rate_limit_rps, is_active, expires_at, last_used_at, created_at, user_id FROM agent_tokens WHERE token_hash=?`, hash)
 	var t AgentTokenRecord
-	err := row.Scan(&t.ID, &t.Name, &t.TokenHash, &t.TokenPrefix, &t.Scopes, &t.RateLimitRPS, &t.IsActive, &t.ExpiresAt, &t.LastUsedAt, &t.CreatedAt)
+	err := row.Scan(&t.ID, &t.Name, &t.TokenHash, &t.TokenPrefix, &t.Scopes, &t.RateLimitRPS, &t.IsActive, &t.ExpiresAt, &t.LastUsedAt, &t.CreatedAt, &t.UserID)
 	if err != nil {
 		return nil, err
 	}

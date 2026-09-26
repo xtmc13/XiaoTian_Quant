@@ -14,23 +14,26 @@ import (
 // ── Paper trading simulator for AI bots ──────────────────────────
 //
 // This simulator maintains in-memory paper positions for each running AI bot
-// instance.  It generates synthetic price action (real market price + small
-// random noise) and pseudo-random entry/exit signals.  When a position hits
-// TP/SL or is closed by signal, a trade row is persisted to ai_bot_trades.
-// Metrics (unrealized/realized PnL, total return, drawdown, sharpe, win rate,
-// total trades) are computed from the trade history + open positions and
-// returned to the snapshot worker so the DB stays authoritative.
+// instance. 开平仓由真实 AI 决策信号驱动：每个 tick 读取该用户 xt_ai_signals
+// 表中对应品种的最新信号（与实盘 ai_bot 策略同源），confidence ≥ 阈值且方向
+// 明确时开仓（long→LONG / short→SHORT），信号反向或跌破阈值时平仓；
+// TP/SL 仍作为独立的风控退出。当信号缺失/过期时不开新仓。
+// 撮合记账保留：平仓落 ai_bot_trades，指标由快照 worker 持久化。
+
+// aiBotPriceFn 行情价来源（测试可注入固定价保证确定性）。
+var aiBotPriceFn = fetchBinancePrice
 
 // paperPosition represents an open simulated trade.
 type paperPosition struct {
-	Symbol     string
-	Side       string // LONG / SHORT
-	Qty        float64
-	EntryPrice float64
+	Symbol      string
+	Side        string // LONG / SHORT
+	Qty         float64
+	EntryPrice  float64
 	MarketPrice float64
-	TPPrice    float64
-	SLPrice    float64
-	OpenedAt   int64
+	TPPrice     float64
+	SLPrice     float64
+	OpenedAt    int64
+	SignalID    string // 开仓依据的信号 id（防止同信号重复开仓）
 }
 
 // paperBotState holds runtime simulation state for one bot instance.
@@ -43,6 +46,7 @@ type paperBotState struct {
 	winCount      int
 	lossCount     int
 	totalRealized float64
+	signalRepo    *store.AISignalRepo
 }
 
 var (
@@ -59,9 +63,10 @@ func getOrCreatePaperState(botID string, symbol string, initialBalance float64) 
 		return s
 	}
 	s := &paperBotState{
-		positions: []*paperPosition{},
-		seedPrice: 0,
-		lastPrice: 0,
+		positions:  []*paperPosition{},
+		seedPrice:  0,
+		lastPrice:  0,
+		signalRepo: store.DefaultAISignalRepo(),
 	}
 	// Rehydrate realized PnL and win/loss counts from closed trades.
 	trades := store.GetAIBotTrades(botID, 10000)
@@ -118,13 +123,22 @@ func simulateAIBotStep(inst map[string]any) (unrealized, realized, totalReturn, 
 	if positionSizePct <= 0 {
 		positionSizePct = 10.0
 	}
+	// AI 信号参数：置信度阈值与信号有效期（秒）。
+	confidenceThreshold := getFloat(cfg, "confidence_threshold", 60)
+	if confidenceThreshold <= 0 {
+		confidenceThreshold = 60
+	}
+	signalTTL := int64(getInt(cfg, "signal_ttl_seconds", 1800))
+	if signalTTL <= 0 {
+		signalTTL = 1800
+	}
 
 	state := getOrCreatePaperState(id, symbol, initialBalance)
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
 	// 1. Determine current market price.
-	marketPrice := fetchBinancePrice(symbol)
+	marketPrice := aiBotPriceFn(symbol)
 	if marketPrice <= 0 {
 		// Fallback to synthetic random walk seeded by symbol hash.
 		marketPrice = syntheticPrice(symbol, state.lastPrice)
@@ -134,11 +148,19 @@ func simulateAIBotStep(inst map[string]any) (unrealized, realized, totalReturn, 
 	}
 	state.lastPrice = marketPrice
 
-	// 2. Update open positions and check TP/SL.
+	// 1b. 读取该用户该品种的最新 AI 决策信号（实盘/扫描 worker 落库）。
+	userID := int64OfAny(inst["user_id"])
+	sig := latestAISignal(state.signalRepo, userID, symbol)
+
+	// 2. Update open positions：先查 TP/SL，再查信号平仓（反向 / 跌破阈值）。
+	now := time.Now().Unix()
 	var remaining []*paperPosition
 	for _, pos := range state.positions {
 		pos.MarketPrice = marketPrice
 		exitPrice, reason, closed := checkPositionExit(pos, tpPct, slPct)
+		if !closed && sig != nil && signalClosesPosition(pos, sig, confidenceThreshold) {
+			exitPrice, reason, closed = marketPrice, "signal", true
+		}
 		if closed {
 			pnl, _ := closePosition(id, pos, exitPrice, reason)
 			state.totalRealized += pnl
@@ -154,11 +176,18 @@ func simulateAIBotStep(inst map[string]any) (unrealized, realized, totalReturn, 
 	}
 	state.positions = remaining
 
-	// 3. Possibly open a new position.
-	if len(state.positions) < maxPositions {
-		if shouldOpenPosition(state, symbol) {
+	// 3. 信号驱动开仓：方向明确 + 置信度达标 + 信号新鲜 + 未被同信号开过。
+	if len(state.positions) < maxPositions && signalOpenable(sig, confidenceThreshold, signalTTL, now) {
+		alreadyOpened := false
+		for _, pos := range state.positions {
+			if pos.SignalID == sig.ID {
+				alreadyOpened = true
+				break
+			}
+		}
+		if !alreadyOpened {
 			side := "LONG"
-			if rand.Float64() > 0.55 {
+			if sig.Signal == "short" {
 				side = "SHORT"
 			}
 			qty := (initialBalance * positionSizePct / 100) / marketPrice
@@ -166,6 +195,7 @@ func simulateAIBotStep(inst map[string]any) (unrealized, realized, totalReturn, 
 				qty = 0.001
 			}
 			pos := openPosition(symbol, side, qty, marketPrice, tpPct, slPct)
+			pos.SignalID = sig.ID
 			state.positions = append(state.positions, pos)
 		}
 	}
@@ -263,17 +293,74 @@ func positionUnrealizedPnl(pos *paperPosition) float64 {
 	return (pos.EntryPrice - pos.MarketPrice) * pos.Qty
 }
 
-// shouldOpenPosition returns true pseudo-randomly; bots that already have
-// positions are less likely to open more.
-func shouldOpenPosition(state *paperBotState, symbol string) bool {
-	// Deterministic but pseudo-random based on time and symbol.
-	h := hashSymbol(symbol) + time.Now().Unix()
-	r := rand.New(rand.NewSource(h))
-	baseProb := 0.08
-	if len(state.positions) > 0 {
-		baseProb = 0.03
+// ── AI 信号辅助 ────────────────────────────────────────────────
+
+// int64OfAny 把 any 规整成 int64。
+func int64OfAny(v any) int64 {
+	switch val := v.(type) {
+	case int:
+		return int64(val)
+	case int64:
+		return val
+	case float64:
+		return int64(val)
+	case json.Number:
+		n, _ := val.Int64()
+		return n
 	}
-	return r.Float64() < baseProb
+	return 0
+}
+
+// latestAISignal 读某用户某品种的最新 AI 信号；无记录/出错返回 nil。
+func latestAISignal(repo *store.AISignalRepo, userID int64, symbol string) *store.AISignalRecord {
+	if repo == nil {
+		return nil
+	}
+	sig, err := repo.LatestByUserSymbol(userID, symbol)
+	if err != nil || sig == nil {
+		return nil
+	}
+	return sig
+}
+
+// signalFresh 判断信号是否在有效期内。
+func signalFresh(sig *store.AISignalRecord, ttl int64, now int64) bool {
+	if sig == nil {
+		return false
+	}
+	if ttl <= 0 {
+		return true
+	}
+	age := now - sig.CreatedAt
+	if age < 0 {
+		age = -age
+	}
+	return age <= ttl
+}
+
+// signalOpenable 判断信号能否开仓：方向明确、confidence ≥ 阈值、未过期。
+func signalOpenable(sig *store.AISignalRecord, threshold float64, ttl int64, now int64) bool {
+	if sig == nil {
+		return false
+	}
+	if sig.Signal != "long" && sig.Signal != "short" {
+		return false
+	}
+	if sig.Confidence < threshold {
+		return false
+	}
+	return signalFresh(sig, ttl, now)
+}
+
+// signalClosesPosition 判断信号是否应平仓：方向反向，或置信度跌破阈值。
+func signalClosesPosition(pos *paperPosition, sig *store.AISignalRecord, threshold float64) bool {
+	if sig == nil || pos == nil {
+		return false
+	}
+	if (pos.Side == "LONG" && sig.Signal == "short") || (pos.Side == "SHORT" && sig.Signal == "long") {
+		return true
+	}
+	return sig.Signal != "neutral" && sig.Confidence < threshold
 }
 
 // syntheticPrice produces a random walk around a seeded price when real market

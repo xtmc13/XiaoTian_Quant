@@ -76,6 +76,10 @@ export interface SignalSource {
   signal_count_total: number
   last_signal_at?: string
   created_at?: string
+  /** 定价模型：free=免费 / fixed_monthly=固定月费 / profit_share=盈利分成 */
+  fee_model?: string
+  /** 费率百分比（profit_share 时有效） */
+  fee_percent?: number
   tp_sl_config?: {
     tp1_pct: number
     tp2_pct: number
@@ -83,6 +87,33 @@ export interface SignalSource {
     sl_pct: number
     position_size_pct: number
   }
+}
+
+/** GET /executor/stats 统计数据（与后端契约对齐）。 */
+export interface ExecutorPnlPoint {
+  date: string
+  pnl: number
+  signals: number
+}
+
+export interface ExecutorSymbolStat {
+  symbol: string
+  success_rate: number
+  pnl: number
+  signals: number
+}
+
+export interface ExecutorStats {
+  total_signals: number
+  today_signals: number
+  success_rate: number
+  tp1_rate: number
+  tp2_rate: number
+  tp3_rate: number
+  avg_signals_per_day: number
+  total_pnl: number
+  pnl_curve: ExecutorPnlPoint[]
+  by_symbol: ExecutorSymbolStat[]
 }
 
 // 与后端对齐（P1 假展示修复）：网关无交易所账户级数据源，数值无真实值时为

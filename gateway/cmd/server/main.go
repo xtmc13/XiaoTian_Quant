@@ -16,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/adapter"
 	"github.com/xiaotian-quant/gateway/internal/alerting"
+	"github.com/xiaotian-quant/gateway/internal/agent"
 	"github.com/xiaotian-quant/gateway/internal/alerts"
 	"github.com/xiaotian-quant/gateway/internal/app"
 	"github.com/xiaotian-quant/gateway/internal/config"
@@ -295,6 +296,12 @@ func main() {
 		appCtx.MatchingService.SetBalanceProvider(portfolioBalanceProvider{})
 	}
 
+	// ── Agent MCP 工具上下文注入一次：真实单例（撮合/组合/策略引擎）装配，
+	// MCP server 与后续 agent 对话端点共用（UserID 由调用侧按 token 覆盖）。 ──
+	agent.SetToolContext(agent.NewDefaultToolContext(agent.ToolDeps{
+		Matcher: appCtx.MatchingService,
+	}))
+
 	// ── Register strategy factories for combo engine ──
 	registerStrategyFactories()
 
@@ -426,8 +433,8 @@ func registerStrategyFactories() {
 	strategy.RegisterStrategyFactory("mono_optimus", func() strategy.Strategy { return strategies.NewGridTradingStrategy() })
 	strategy.RegisterStrategyFactory("mono_cyberbot", func() strategy.Strategy { return strategies.NewRSIStrategy() })
 	strategy.RegisterStrategyFactory("crypto_future", func() strategy.Strategy { return strategies.NewDualThrustStrategy() })
-	strategy.RegisterStrategyFactory("ai_alpha", func() strategy.Strategy { return strategies.NewEMACrossStrategy() })
-	strategy.RegisterStrategyFactory("ai_alpha_futures", func() strategy.Strategy { return strategies.NewDualThrustStrategy() })
+	strategy.RegisterStrategyFactory("ai_alpha", func() strategy.Strategy { return strategies.NewAIBotStrategy() })
+	strategy.RegisterStrategyFactory("ai_alpha_futures", func() strategy.Strategy { return strategies.NewAIBotStrategy() })
 	strategy.RegisterStrategyFactory("terminator_volatility", func() strategy.Strategy { return strategies.NewATRTrailingStopStrategy() })
 	strategy.RegisterStrategyFactory("alt_volatility", func() strategy.Strategy { return strategies.NewDualThrustStrategy() })
 	strategy.RegisterStrategyFactory("trade_holder", func() strategy.Strategy { return strategies.NewMartingaleStrategy() })

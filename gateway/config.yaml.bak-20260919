@@ -1,0 +1,71 @@
+ai: {}
+ai_providers:
+    claude:
+        base_url: https://api.anthropic.com/v1
+        enabled: false
+        model: claude-opus-4-7
+    deepseek:
+        base_url: https://api.deepseek.com/v1
+        enabled: false
+        model: deepseek-chat
+    openai:
+        base_url: https://api.openai.com/v1
+        enabled: false
+        model: gpt-4o
+arbitrage:
+    dry_run: true
+    enabled: false
+    max_position_usdt: 1000
+    min_spread_pct: 0.05
+default_ai_provider: deepseek
+default_exchange: binance
+exchanges:
+    binance:
+        api_key: 3pe4TYFXL2UMspgyjtaVDzZIyqYjJBHLfR8yGIRfQTa163RHBVeBNItglEBH3SJX
+        enabled: true
+        futures: true
+        secret: 78FRQhOQ0mK5zcdNGghlB1xcOV2G1K6RI2EvgI0ffu5vJXzfFHzDM7FW9WIjPhHz
+        testnet: false
+    bybit:
+        enabled: false
+        futures: false
+        testnet: true
+    gate:
+        enabled: false
+        futures: false
+        testnet: true
+    okx:
+        enabled: false
+        futures: false
+        tested: true
+        testnet: true
+paper_account:
+    enabled: true
+    initial_balance: 1000
+risk:
+    max_concurrent_orders: 5
+    position_limit_pct: 2500
+    profit_protection_enabled: false
+trading:
+    live_enabled: true
+triangular:
+    adaptive_qty_enabled: false
+    auto_execute: false
+    dry_run: true
+    exchange: binance
+    execution_mode: sequential
+    fee_rate: 0.001
+    max_execution_ms: 5000
+    max_positions: 2
+    max_slippage_pct: 0.5
+    min_order_qty: 0.001
+    min_profit_pct: 0.03
+    order_size: 500
+    quote_asset: USDT
+    symbols:
+        - BTCUSDT
+        - ETHUSDT
+        - ETHBTC
+ui:
+    language: zh-CN
+    theme: dark
