@@ -15,17 +15,17 @@ export function BotsAI() {
   const [tab, setTab] = useState<TabKey>('market')
 
   const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
-    { key: 'market', label: t('market.tabBoard', '策略市场'), icon: <Store className="h-3 w-3" /> },
-    { key: 'my-listings', label: t('market.tabMyListings', '我的上架'), icon: <ClipboardList className="h-3 w-3" /> },
-    { key: 'config', label: t('market.tabConfig', 'AI 配置与信号'), icon: <Settings2 className="h-3 w-3" /> },
+    { key: 'market', label: t('market.board.tab'), icon: <Store className="h-3 w-3" /> },
+    { key: 'my-listings', label: t('market.my.tab'), icon: <ClipboardList className="h-3 w-3" /> },
+    { key: 'config', label: t('market.page.tabConfig'), icon: <Settings2 className="h-3 w-3" /> },
   ]
 
   return (
     <div className="h-full overflow-y-auto p-5">
       <div className="mx-auto max-w-[1600px] space-y-5">
         <PageHeader
-          title={t('market.pageTitle', 'AI 机器人市场')}
-          subtitle={t('market.pageSubtitle', '上架须经过考核期与人工审核，卡片展示标准化透明统计')}
+          title={t('market.page.pageTitle')}
+          subtitle={t('market.page.pageSubtitle')}
           icon={<BrainCircuit className="w-5 h-5" />}
         />
         <div className="flex gap-1 bg-quant-bg-secondary rounded-lg p-0.5 w-fit">
@@ -44,17 +44,17 @@ export function BotsAI() {
           ))}
         </div>
         {tab === 'market' && (
-          <SectionCard title={t('market.tabBoard', '策略市场')} className="w-full">
+          <SectionCard title={t('market.board.tab')} className="w-full">
             <MarketBoard />
           </SectionCard>
         )}
         {tab === 'my-listings' && (
-          <SectionCard title={t('market.tabMyListings', '我的上架')} className="w-full">
+          <SectionCard title={t('market.my.tab')} className="w-full">
             <MyListings />
           </SectionCard>
         )}
         {tab === 'config' && (
-          <SectionCard title={t('market.tabConfig', 'AI 配置与信号')} className="w-full">
+          <SectionCard title={t('market.page.tabConfig')} className="w-full">
             <AIRobotPanel />
           </SectionCard>
         )}

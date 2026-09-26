@@ -7,12 +7,12 @@ import { useI18n } from '@/i18n'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { toast } from '@/lib/useToast'
 
-const QUEUE_TABS: { key: MarketListingStatus; labelKey: string; fallback: string }[] = [
-  { key: 'pending_review', labelKey: 'market.statusPendingReview', fallback: '待审核' },
-  { key: 'probation', labelKey: 'market.statusProbation', fallback: '考核中' },
-  { key: 'listed', labelKey: 'market.statusListed', fallback: '已上架' },
-  { key: 'rejected', labelKey: 'market.statusRejected', fallback: '已驳回' },
-  { key: 'delisted', labelKey: 'market.statusDelisted', fallback: '已下架' },
+const QUEUE_TABS: { key: MarketListingStatus; labelKey: string }[] = [
+  { key: 'pending_review', labelKey: 'market.status.pendingReview' },
+  { key: 'probation', labelKey: 'market.status.probation' },
+  { key: 'listed', labelKey: 'market.status.listed' },
+  { key: 'rejected', labelKey: 'market.status.rejected' },
+  { key: 'delisted', labelKey: 'market.status.delisted' },
 ]
 
 /** 管理员上架审核队列 + 考核规则配置（嵌入 UserManage 的「上架审核」tab）。 */
@@ -40,15 +40,15 @@ export function AdminMarketReview() {
     onSuccess: async (_, v) => {
       const msg =
         v.action === 'approve'
-          ? t('market.approveOk', '已通过并上架')
+          ? t('market.admin.approveOk')
           : v.action === 'reject'
-            ? t('market.rejectOk', '已驳回')
-            : t('market.delistOk', '已强制下架')
+            ? t('market.admin.rejectOk')
+            : t('market.admin.delistOk')
       toast('success', msg)
       await invalidate()
       await queryClient.invalidateQueries({ queryKey: ['market'] })
     },
-    onError: (e) => toast('error', e instanceof Error ? e.message : t('market.actionFail', '操作失败')),
+    onError: (e) => toast('error', e instanceof Error ? e.message : t('market.admin.actionFail')),
   })
 
   const rulesMut = useMutation({
@@ -59,11 +59,11 @@ export function AdminMarketReview() {
         max_drawdown_pct: parseFloat(rulesForm?.max_drawdown_pct || '50'),
       }),
     onSuccess: async () => {
-      toast('success', t('market.rulesSaved', '考核规则已更新'))
+      toast('success', t('market.admin.rulesSaved'))
       setRulesForm(null)
       await queryClient.invalidateQueries({ queryKey: ['market', 'rules'] })
     },
-    onError: (e) => toast('error', e instanceof Error ? e.message : t('market.rulesSaveFail', '规则保存失败')),
+    onError: (e) => toast('error', e instanceof Error ? e.message : t('market.admin.rulesSaveFail')),
   })
 
   const act = (l: MarketListing, action: 'approve' | 'reject' | 'delist') => {
@@ -71,7 +71,7 @@ export function AdminMarketReview() {
       reviewMut.mutate({ id: l.id, action })
       return
     }
-    const label = action === 'reject' ? t('market.rejectReasonPrompt', '请输入驳回原因（作者可见）') : t('market.delistReasonPrompt', '请输入下架原因')
+    const label = action === 'reject' ? t('market.admin.rejectReasonPrompt') : t('market.admin.delistReasonPrompt')
     const reason = window.prompt(label)
     if (!reason || !reason.trim()) return
     reviewMut.mutate({ id: l.id, action, reason: reason.trim() })
@@ -79,15 +79,15 @@ export function AdminMarketReview() {
 
   const statText = (l: MarketListing) => {
     const s = l.stats
-    if (!s) return t('market.noStats', '统计数据生成中')
+    if (!s) return t('market.stats.noStats')
     const pct = (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`
     return [
-      `${t('market.totalReturn', '总收益')} ${pct(s.total_return_pct)}`,
-      `${t('market.maxDrawdown', '最大回撤')} ${s.max_drawdown_pct.toFixed(2)}%`,
-      `${t('market.winRate', '胜率')} ${s.win_rate.toFixed(1)}%`,
-      `${t('market.totalTrades', '交易数')} ${s.total_trades}`,
-      `${t('market.runningDays', '运行天数')} ${s.running_days}`,
-      `${t('market.followers', '跟踪')} ${s.followers}`,
+      `${t('market.stats.totalReturn')} ${pct(s.total_return_pct)}`,
+      `${t('market.stats.maxDrawdown')} ${s.max_drawdown_pct.toFixed(2)}%`,
+      `${t('market.stats.winRate')} ${s.win_rate.toFixed(1)}%`,
+      `${t('market.stats.totalTrades')} ${s.total_trades}`,
+      `${t('market.stats.runningDays')} ${s.running_days}`,
+      `${t('market.stats.followers')} ${s.followers}`,
     ].join(' · ')
   }
 
@@ -99,10 +99,13 @@ export function AdminMarketReview() {
       <div className="rounded-xl border border-quant-border bg-quant-bg-secondary p-4">
         <div className="flex items-center gap-2 flex-wrap">
           <ShieldCheck className="w-4 h-4 text-quant-gold" />
-          <span className="text-sm font-medium">{t('market.rulesTitle', '上架考核规则')}</span>
+          <span className="text-sm font-medium">{t('market.admin.rulesTitle')}</span>
           <span className="text-xs text-muted-foreground">
             {rules &&
-              t('market.rulesHint', `当前：≥${rules.min_days} 天 · ≥${rules.min_trades} 笔交易 · 回撤 <${rules.max_drawdown_pct}%`)}
+              t('market.admin.rulesCurrent')
+                .replace('{days}', String(rules.min_days))
+                .replace('{trades}', String(rules.min_trades))
+                .replace('{dd}', String(rules.max_drawdown_pct))}
           </span>
           <span className="flex-1" />
           {rulesForm == null ? (
@@ -116,7 +119,7 @@ export function AdminMarketReview() {
               }
               className="px-3 py-1.5 rounded-lg border border-quant-border text-xs text-muted-foreground hover:text-foreground"
             >
-              {t('market.editRules', '调整规则')}
+              {t('market.admin.editRules')}
             </button>
           ) : (
             <div className="flex items-center gap-2">
@@ -128,10 +131,10 @@ export function AdminMarketReview() {
                 disabled={rulesMut.isPending}
                 className="px-3 py-1.5 rounded-lg bg-quant-gold text-white text-xs font-medium hover:opacity-90 disabled:opacity-50"
               >
-                {t('common.save', '保存')}
+                {t('market.admin.save')}
               </button>
               <button onClick={() => setRulesForm(null)} className="px-3 py-1.5 rounded-lg border border-quant-border text-xs text-muted-foreground">
-                {t('common.cancel', '取消')}
+                {t('market.admin.cancel')}
               </button>
             </div>
           )}
@@ -149,7 +152,7 @@ export function AdminMarketReview() {
               status === tab.key ? 'bg-quant-gold text-white' : 'text-muted-foreground hover:text-foreground'
             )}
           >
-            {t(tab.labelKey, tab.fallback)}
+            {t(tab.labelKey)}
           </button>
         ))}
       </div>
@@ -162,7 +165,7 @@ export function AdminMarketReview() {
           ))}
         </div>
       ) : listings.length === 0 ? (
-        <div className="text-center py-10 text-muted-foreground text-sm">{t('market.queueEmpty', '当前队列暂无条目')}</div>
+        <div className="text-center py-10 text-muted-foreground text-sm">{t('market.admin.queueEmpty')}</div>
       ) : (
         <div className="space-y-2">
           {listings.map((l) => (
@@ -170,7 +173,7 @@ export function AdminMarketReview() {
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="font-bold text-xs text-foreground">{l.name}</span>
                 <span className="text-[10px] text-muted-foreground">
-                  #{l.id} · {t('market.author', '作者')} {l.author_user_id} · {l.kind}
+                  #{l.id} · {t('market.admin.author')} {l.author_user_id} · {l.kind === 'signal' ? t('market.board.kindSignal') : t('market.board.kindRobot')}
                 </span>
                 <span className="flex-1" />
                 {l.status === 'pending_review' && (
@@ -180,14 +183,14 @@ export function AdminMarketReview() {
                       disabled={reviewMut.isPending}
                       className="px-3 py-1 rounded bg-quant-green text-white text-[11px] font-medium hover:opacity-90 disabled:opacity-50"
                     >
-                      {t('market.approve', '通过上架')}
+                      {t('market.admin.approve')}
                     </button>
                     <button
                       onClick={() => act(l, 'reject')}
                       disabled={reviewMut.isPending}
                       className="px-3 py-1 rounded bg-quant-red text-white text-[11px] font-medium hover:opacity-90 disabled:opacity-50"
                     >
-                      {t('market.reject', '驳回')}
+                      {t('market.admin.reject')}
                     </button>
                   </>
                 )}
@@ -197,7 +200,7 @@ export function AdminMarketReview() {
                     disabled={reviewMut.isPending}
                     className="px-3 py-1 rounded bg-quant-red text-white text-[11px] font-medium hover:opacity-90 disabled:opacity-50"
                   >
-                    {t('market.delist', '强制下架')}
+                    {t('market.admin.delist')}
                   </button>
                 )}
               </div>
@@ -205,20 +208,20 @@ export function AdminMarketReview() {
               {l.progress && (l.status === 'probation' || l.status === 'pending_review') && (
                 <div className="mt-1 text-[10px]">
                   <span className={l.progress.days_ok ? 'text-quant-green' : 'text-muted-foreground'}>
-                    {t('market.probationDays', '考核天数')} {l.progress.days_elapsed}/{l.progress.min_days}
+                    {t('market.probation.days')} {l.progress.days_elapsed}/{l.progress.min_days}
                   </span>
                   <span className="mx-1.5 text-muted-foreground">·</span>
                   <span className={l.progress.trades_ok ? 'text-quant-green' : 'text-muted-foreground'}>
-                    {t('market.probationTrades', '交易数')} {l.progress.trades_in_window}/{l.progress.min_trades}
+                    {t('market.stats.totalTrades')} {l.progress.trades_in_window}/{l.progress.min_trades}
                   </span>
                   <span className="mx-1.5 text-muted-foreground">·</span>
                   <span className={l.progress.drawdown_ok ? 'text-quant-green' : 'text-quant-red'}>
-                    {t('market.drawdownLimit', '回撤红线')} {l.progress.max_drawdown_pct.toFixed(1)}%/{l.progress.max_drawdown_limit}%
+                    {t('market.probation.drawdownLimit')} {l.progress.max_drawdown_pct.toFixed(1)}%/{l.progress.max_drawdown_limit}%
                   </span>
                 </div>
               )}
               {l.status === 'rejected' && l.reject_reason && (
-                <div className="mt-1.5 text-[10px] text-quant-red">{t('market.rejectReason', '驳回原因')}：{l.reject_reason}</div>
+                <div className="mt-1.5 text-[10px] text-quant-red">{t('market.status.rejectReason')}：{l.reject_reason}</div>
               )}
             </div>
           ))}

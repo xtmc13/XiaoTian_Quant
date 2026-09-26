@@ -13,6 +13,9 @@ import '@/i18n/locales/dashboard'
 import '@/i18n/locales/arb'
 import '@/i18n/locales/chrome'
 import '@/i18n/locales/marketdata'
+import '@/i18n/locales/market'
+import '@/i18n/locales/portfolio'
+import '@/i18n/locales/trading'
 
 // 渲染前应用持久化的主题/缩放，避免刷新后外观回跳
 bootstrapAppearance()

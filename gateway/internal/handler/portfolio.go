@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -208,6 +209,61 @@ func PortfolioPositions(c *gin.Context) {
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{"positions": posList})
+}
+
+// ClosedPositions GET /api/positions/closed?limit=&offset=
+// 已平仓持仓列表（positions.status=CLOSED，平仓时间倒序，分页）。
+// 登录用户仅见本人持仓；admin 见全部。每行带 pnl_pct，前端资产页
+// 「已平仓持仓」列表与交易分享卡（/api/share/trade/:id/card）共用同一 id。
+func ClosedPositions(c *gin.Context) {
+	limit := 20
+	if v, err := strconv.Atoi(c.Query("limit")); err == nil && v > 0 {
+		limit = v
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	offset := 0
+	if v, err := strconv.Atoi(c.Query("offset")); err == nil && v > 0 {
+		offset = v
+	}
+
+	filter := map[string]any{"status": "CLOSED"}
+	if uid, injected := ctxUserID(c); injected && !ctxIsAdmin(c) {
+		filter["user_id"] = uid
+	}
+	list, err := store.NewPositionRepo().ListPaged(filter, limit, offset)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
+		return
+	}
+	items := make([]gin.H, 0, len(list))
+	for _, p := range list {
+		var pnlPct float64
+		if p.CostBasis > 0 {
+			pnlPct = p.RealizedPnL / p.CostBasis * 100
+		}
+		items = append(items, gin.H{
+			"id":              p.ID,
+			"symbol":          p.Symbol,
+			"side":            p.Side,
+			"quantity":        p.Quantity,
+			"avg_entry_price": p.AvgEntryPrice,
+			"exit_price":      p.CurrentPrice,
+			"realized_pnl":    p.RealizedPnL,
+			"cost_basis":      p.CostBasis,
+			"pnl_pct":         pnlPct,
+			"exchange":        p.Exchange,
+			"opened_at":       p.OpenedAt,
+			"closed_at":       p.ClosedAt,
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"positions": items,
+		"limit":     limit,
+		"offset":    offset,
+		"has_more":  len(items) == limit,
+	})
 }
 
 // PortfolioSnapshots returns recent equity snapshots.

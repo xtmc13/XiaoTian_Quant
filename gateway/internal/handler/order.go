@@ -474,7 +474,9 @@ func normalizeOrder(o map[string]any) map[string]any {
 // fillOrderAndUpdatePortfolio simulates immediate execution for market orders
 // and updates the portfolio manager balances and positions.
 // Supports both spot and contract (swap) trading.
-// NOTE: This is called from webhooks — basic sanity checks are applied.
+// NOTE: 仅用于 webhook 出场单（安全收口后入场单已全部改道 OMS 管线：
+// 风控 + AI 决策门 + 余额锁，见 webhook.go placeWebhookEntryViaOMS）；
+// 出场直发必须在调用方记审计（AI 不能拦出场，风控也不拦平仓）。
 func fillOrderAndUpdatePortfolio(order map[string]any) {
 	symbol := getString(order, "symbol", "BTCUSDT")
 	side := strings.ToUpper(getString(order, "side", "BUY"))
@@ -484,7 +486,7 @@ func fillOrderAndUpdatePortfolio(order map[string]any) {
 		return
 	}
 
-	// Basic sanity checks (bypass OrderManager risk checks — webhook path)
+	// Basic sanity checks（出场直发的底线防护；入场风控在 OMS 管线内）
 	if qty > 1000000 {
 		log.Printf("[risk] Webhook order quantity too large: %.4f %s", qty, symbol)
 		return

@@ -1,8 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import React from 'react'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+// 测试环境不经 main.tsx，需显式注册词条（默认语言 zh-CN）
 import '@/i18n/locales/zh-CN'
+import '@/i18n/locales/market'
 import { I18nProvider } from '@/i18n'
 import { MarketBoard } from '@/components/market/MarketBoard'
 import { MyListings } from '@/components/market/MyListings'
@@ -179,5 +181,47 @@ describe('AdminMarketReview（审核队列）', () => {
     expect(screen.getByText('驳回')).toBeTruthy()
     expect(screen.getByText('上架考核规则')).toBeTruthy()
     expect(screen.getByText(/马丁实验/)).toBeTruthy()
+  })
+})
+
+describe('i18n: English locale（切换 en-US 后关键文案渲染英文）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.setItem('xt-locale', 'en-US')
+  })
+  afterEach(() => localStorage.removeItem('xt-locale'))
+
+  it('MarketBoard renders English stats labels and badges', async () => {
+    render(<MarketBoard />, { wrapper: Wrapper })
+    await waitFor(() => expect(screen.getByText('稳健网格 Pro')).toBeTruthy())
+    expect(screen.getByText('Probation Passed')).toBeTruthy()
+    expect(screen.getByText('Monthly Return')).toBeTruthy()
+    expect(screen.getByText('Max Drawdown')).toBeTruthy()
+    expect(screen.getByText('Win Rate')).toBeTruthy()
+    expect(screen.getByText('Trades')).toBeTruthy()
+    expect(screen.getByText('Days Running')).toBeTruthy()
+    expect(screen.getByText('60d')).toBeTruthy() // running days + unit.day
+    expect(screen.getByText('Share 20%')).toBeTruthy() // fee badge
+    expect(screen.getByText(/By Return/)).toBeTruthy() // sort control (active, has ▼ suffix)
+  })
+
+  it('MyListings renders English status badge, progress and rules hint', async () => {
+    render(<MyListings />, { wrapper: Wrapper })
+    await waitFor(() => expect(screen.getByText('马丁实验')).toBeTruthy())
+    expect(screen.getByText('Probation')).toBeTruthy() // status badge
+    expect(screen.getByText(/Day 12\/30/)).toBeTruthy() // probation day progress
+    expect(screen.getByText(/18 days remaining/)).toBeTruthy()
+    expect(screen.getByText('Rejected')).toBeTruthy()
+    expect(screen.getByText(/Probation rules: ≥30 days · ≥10 trades · drawdown <50%/)).toBeTruthy()
+    expect(screen.getByText('Submit for Probation')).toBeTruthy()
+  })
+
+  it('AdminMarketReview renders English queue tabs and actions', async () => {
+    render(<AdminMarketReview />, { wrapper: Wrapper })
+    await waitFor(() => expect(screen.getByText('Approve')).toBeTruthy())
+    expect(screen.getByText('Reject')).toBeTruthy()
+    expect(screen.getByText('Listing Probation Rules')).toBeTruthy()
+    expect(screen.getByText('Under Review')).toBeTruthy()
+    expect(screen.getByText(/Total Return \+12\.50%/)).toBeTruthy() // statText line
   })
 })

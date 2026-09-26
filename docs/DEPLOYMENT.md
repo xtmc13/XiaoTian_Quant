@@ -308,12 +308,21 @@ server {
     ssl_certificate /etc/letsencrypt/live/api.xiaotianquant.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/api.xiaotianquant.com/privkey.pem;
 
+    # 安全响应头：CSP 必须走 HTTP 头（frame-ancestors 写在 <meta> 里会被浏览器忽略）。
+    # 指令与 web/index.html 的 meta CSP 保持一致，另加 frame-ancestors。
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss: http: https:; img-src 'self' data: blob: https:; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self';" always;
+
     # 前端静态资源
+    # 注意：location 内一旦出现 add_header，server 级安全头不再继承，需重复 CSP。
     location / {
         root /opt/xiaotian_quant/web/dist;
         try_files $uri $uri/ /index.html;
         expires 1d;
         add_header Cache-Control "public, immutable";
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss: http: https:; img-src 'self' data: blob: https:; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self';" always;
     }
 
     # API 代理

@@ -12,6 +12,7 @@ import {
 } from '@/lib/klineDatafeed'
 import { TRADING_INTERVALS } from '@/lib/constants'
 import { cn } from '@/lib/utils'
+import { useI18n } from '@/i18n'
 import { useWebSocket } from '@/hooks/useWebSocket'
 import { toast } from '@/lib/useToast'
 import { OrderBookPanel } from '@/components/trading/OrderBookPanel'
@@ -82,6 +83,7 @@ const LEVERAGES = CONTRACT_LEVERAGES
    CONTRACT TRADING PAGE — 币安合约风格
    ════════════════════════════════════════ */
 export function TradingContract() {
+  const { t } = useI18n()
   const [symbol, setSymbol] = useState('BTCUSDT')
   const [interval, setInterval] = useState('15m')
   const [side, setSide] = useState<'BUY' | 'SELL'>('BUY')
@@ -578,6 +580,16 @@ export function TradingContract() {
     [queryClient]
   )
 
+  /* 全部撤单：POST /orders/cancel-all（后端路由已存在，此处补上 UI 入口） */
+  const cancelAllMut = useMutation({
+    mutationFn: () => orderApi.cancelAll(),
+    onSuccess: () => {
+      toast('success', t('trading.cancelAllOk', '已提交全部撤单'))
+      queryClient.invalidateQueries({ queryKey: ['orders'] })
+    },
+    onError: (err: Error) => toast('error', err.message),
+  })
+
   const handleClosePosition = useCallback(
     async (pos: PositionItem) => {
       const isLong = (pos.side || '').toUpperCase() === 'LONG' || (pos.side || '').toUpperCase() === 'BUY'
@@ -810,14 +822,14 @@ export function TradingContract() {
 
           {/* Order Form */}
           <div className="flex-1 p-3 flex flex-col gap-3 overflow-y-auto">
-            {/* 订单类型切换 */}
-            <div className="flex gap-1 bg-quant-bg p-0.5 rounded">
+            {/* 订单类型切换：3 列网格两行排布，310px 窄面板下 6 个按钮不挤压折字 */}
+            <div className="grid grid-cols-3 gap-1 bg-quant-bg p-0.5 rounded" data-testid="order-type-row">
               {(['LIMIT', 'MARKET', 'STOP_LIMIT'] as const).map((t) => (
                 <button
                   key={t}
                   onClick={() => setOrderType(t)}
                   className={cn(
-                    'flex-1 py-1 text-[11px] font-medium rounded transition-colors',
+                    'py-1 text-[11px] font-medium rounded transition-colors whitespace-nowrap',
                     orderType === t
                       ? 'bg-quant-bg-secondary text-foreground'
                       : 'text-muted-foreground hover:text-foreground'
@@ -829,7 +841,7 @@ export function TradingContract() {
               <button
                 onClick={() => setShowTpSl(!showTpSl)}
                 className={cn(
-                  'flex-1 py-1 text-[11px] rounded transition-colors',
+                  'py-1 text-[11px] rounded transition-colors whitespace-nowrap',
                   showTpSl ? 'bg-quant-bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground'
                 )}
               >
@@ -838,7 +850,7 @@ export function TradingContract() {
               <button
                 onClick={() => setShowAdvanced(!showAdvanced)}
                 className={cn(
-                  'flex-1 py-1 text-[11px] rounded transition-colors',
+                  'py-1 text-[11px] rounded transition-colors whitespace-nowrap',
                   showAdvanced ? 'bg-quant-bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground'
                 )}
               >
@@ -847,7 +859,7 @@ export function TradingContract() {
               <button
                 onClick={() => setShowLadder(!showLadder)}
                 className={cn(
-                  'flex-1 py-1 text-[11px] rounded transition-colors',
+                  'py-1 text-[11px] rounded transition-colors whitespace-nowrap',
                   showLadder ? 'bg-quant-bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground'
                 )}
               >
@@ -1626,6 +1638,19 @@ export function TradingContract() {
             )}
             {activeBottomTab === 'orders' && (
               <div>
+                {(orders?.length ?? 0) > 0 && (
+                  <div className="flex justify-end px-3 py-1.5 border-b border-quant-border/40">
+                    <button
+                      onClick={() => cancelAllMut.mutate()}
+                      disabled={cancelAllMut.isPending}
+                      className="px-2 py-0.5 rounded text-[10px] font-medium bg-[#F6465D]/10 text-[#F6465D] hover:bg-[#F6465D]/20 transition-colors disabled:opacity-50"
+                    >
+                      {cancelAllMut.isPending
+                        ? t('trading.cancelAllPending', '撤单中...')
+                        : t('trading.cancelAll', '全部撤单')}
+                    </button>
+                  </div>
+                )}
                 {ordersLoading ? (
                   <div className="p-4 space-y-2">
                     {Array.from({ length: 4 }).map((_, i) => (

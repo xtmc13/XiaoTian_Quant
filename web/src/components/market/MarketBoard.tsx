@@ -32,15 +32,15 @@ export function MarketListingCard({ listing }: { listing: MarketListing }) {
         <span className="font-bold text-xs text-foreground truncate">{listing.name}</span>
         {listing.monthly_fee > 0 ? (
           <span className="px-1.5 py-0.5 rounded bg-quant-gold/15 text-quant-gold border border-quant-gold/40 text-[10px] shrink-0">
-            ${formatCurrency(listing.monthly_fee)}/{t('market.month', '月')}
+            ${formatCurrency(listing.monthly_fee)}/{t('market.unit.month')}
           </span>
         ) : listing.fee_percent > 0 ? (
           <span className="px-1.5 py-0.5 rounded bg-quant-gold/15 text-quant-gold border border-quant-gold/40 text-[10px] shrink-0">
-            {t('market.profitShare', '分成')} {listing.fee_percent}%
+            {t('market.board.profitShare')} {listing.fee_percent}%
           </span>
         ) : (
           <span className="px-1.5 py-0.5 rounded bg-quant-bg text-muted-foreground border border-quant-border text-[10px] shrink-0">
-            {t('market.free', '免费')}
+            {t('market.board.free')}
           </span>
         )}
       </div>
@@ -48,12 +48,12 @@ export function MarketListingCard({ listing }: { listing: MarketListing }) {
       {/* 行2：类型 + 考核通过标识 + 跟踪数 */}
       <div className="mt-1.5 flex items-center gap-1.5 text-[10px] text-muted-foreground min-w-0">
         <span className="px-1 py-0.5 rounded bg-cyan-500/15 text-cyan-400 shrink-0">
-          {listing.kind === 'signal' ? t('market.kindSignal', '信号') : t('market.kindRobot', '机器人')}
+          {listing.kind === 'signal' ? t('market.board.kindSignal') : t('market.board.kindRobot')}
         </span>
         {listing.probation_passed && (
           <span className="inline-flex items-center gap-0.5 px-1 py-0.5 rounded bg-quant-green/15 text-quant-green border border-quant-green/40 shrink-0">
             <BadgeCheck className="w-3 h-3" />
-            {t('market.probationPassed', '考核通过')}
+            {t('market.status.probationPassed')}
           </span>
         )}
         <span className="ml-auto inline-flex items-center gap-0.5 shrink-0">
@@ -65,15 +65,15 @@ export function MarketListingCard({ listing }: { listing: MarketListing }) {
       {/* 行3：标准化透明统计（最新日快照） */}
       {s ? (
         <div className="grid grid-cols-3 gap-1.5 mt-2.5">
-          <StatCell label={t('market.monthlyReturn', '月均收益')} value={pct(s.monthly_return_pct)} tone={s.monthly_return_pct >= 0 ? 'up' : 'down'} />
-          <StatCell label={t('market.maxDrawdown', '最大回撤')} value={`-${Math.abs(s.max_drawdown_pct).toFixed(2)}%`} tone="down" />
-          <StatCell label={t('market.winRate', '胜率')} value={`${s.win_rate.toFixed(1)}%`} />
-          <StatCell label={t('market.totalTrades', '交易数')} value={String(s.total_trades)} />
-          <StatCell label={t('market.runningDays', '运行天数')} value={`${s.running_days}${t('market.day', '天')}`} />
-          <StatCell label={t('market.totalReturn', '总收益')} value={pct(s.total_return_pct)} tone={s.total_return_pct >= 0 ? 'up' : 'down'} />
+          <StatCell label={t('market.stats.monthlyReturn')} value={pct(s.monthly_return_pct)} tone={s.monthly_return_pct >= 0 ? 'up' : 'down'} />
+          <StatCell label={t('market.stats.maxDrawdown')} value={`-${Math.abs(s.max_drawdown_pct).toFixed(2)}%`} tone="down" />
+          <StatCell label={t('market.stats.winRate')} value={`${s.win_rate.toFixed(1)}%`} />
+          <StatCell label={t('market.stats.totalTrades')} value={String(s.total_trades)} />
+          <StatCell label={t('market.stats.runningDays')} value={`${s.running_days}${t('market.unit.day')}`} />
+          <StatCell label={t('market.stats.totalReturn')} value={pct(s.total_return_pct)} tone={s.total_return_pct >= 0 ? 'up' : 'down'} />
         </div>
       ) : (
-        <div className="mt-2.5 text-[10px] text-muted-foreground py-4 text-center">{t('market.noStats', '统计数据生成中')}</div>
+        <div className="mt-2.5 text-[10px] text-muted-foreground py-4 text-center">{t('market.stats.noStats')}</div>
       )}
     </div>
   )
@@ -97,16 +97,16 @@ export function MarketBoard() {
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
   const SORTS: { key: SortKey; label: string }[] = [
-    { key: 'return', label: t('market.sortReturn', '按收益') },
-    { key: 'drawdown', label: t('market.sortDrawdown', '按回撤') },
-    { key: 'followers', label: t('market.sortFollowers', '按跟踪数') },
+    { key: 'return', label: t('market.board.sortReturn') },
+    { key: 'drawdown', label: t('market.board.sortDrawdown') },
+    { key: 'followers', label: t('market.board.sortFollowers') },
   ]
 
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-xs text-muted-foreground">
-          {t('market.listedCount', '已上架')} {total}
+          {t('market.board.listedCount')} {total}
         </span>
         <span className="flex-1" />
         {SORTS.map((s) => (
@@ -142,8 +142,8 @@ export function MarketBoard() {
       ) : listings.length === 0 ? (
         <EmptyState
           icon={<Store className="w-8 h-8" />}
-          title={t('market.emptyTitle', '暂无上架条目')}
-          description={t('market.emptyDesc', '通过考核期与人工审核的策略将在此展示标准化统计')}
+          title={t('market.board.emptyTitle')}
+          description={t('market.board.emptyDesc')}
         />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">

@@ -716,4 +716,109 @@ test.describe('interactions @audit', () => {
     const bodyText = await authPage.locator('body').innerText()
     expect(bodyText.includes('页面加载异常')).toBe(false)
   })
+
+  test('资产监测: 已平仓持仓列表 → 分享按钮 → 交易分享卡弹窗', async ({ authPage }) => {
+    await stubAllWebSockets(authPage)
+    await applyAuditMocks(authPage)
+    await authPage.route('**/api/positions/closed*', async (route) =>
+      fulfillJson(route, {
+        positions: [
+          {
+            id: 'pos-audit-1', symbol: 'BTCUSDT', side: 'LONG', quantity: 0.5,
+            avg_entry_price: 60000, exit_price: 66000, realized_pnl: 3000, cost_basis: 30000,
+            pnl_pct: 10, exchange: 'BINANCE', opened_at: Date.now() - 3600_000, closed_at: Date.now(),
+          },
+        ],
+        limit: 10, offset: 0, has_more: false,
+      }),
+    )
+    let cardFetched = false
+    await authPage.route('**/api/share/trade/**/card*', async (route) => {
+      cardFetched = true
+      return fulfillJson(route, {
+        kind: 'trade', id: 'pos-audit-1', symbol: 'BTCUSDT', side: 'LONG', exchange: 'BINANCE',
+        entry_price: 60000, exit_price: 66000, quantity: 0.5, cost_basis: 30000,
+        pnl: 3000, pnl_pct: 10, opened_at: Date.now() - 3600_000, closed_at: Date.now(), hold_ms: 3600_000,
+        nickname: 'E***', amount_mode: 'pct', share_url: '/share/trade/pos-audit-1', generated_at: Date.now(),
+      })
+    })
+    await authPage.goto('/portfolio')
+    await authPage.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {})
+
+    // 已平仓持仓区渲染：列齐全 + 行数据
+    await expect(authPage.locator('text=已平仓持仓').first()).toBeVisible({ timeout: 15000 })
+    for (const col of ['交易对', '方向', '开仓价', '平仓价', '盈亏额', '盈亏%', '平仓时间']) {
+      await expect(authPage.locator(`th:text-is("${col}")`).first()).toBeVisible()
+    }
+    await expect(authPage.getByRole('cell', { name: 'BTCUSDT' }).first()).toBeVisible()
+
+    // 分享按钮 → 交易分享卡弹窗
+    await authPage.getByRole('button', { name: '分享', exact: true }).click()
+    const dialog = authPage.getByRole('dialog')
+    await expect(dialog).toBeVisible({ timeout: 10000 })
+    await expect(dialog).toContainText('交易收益分享卡')
+    await expect(dialog).toContainText('BTCUSDT')
+    await expect(dialog).toContainText('+10.00%')
+    expect(cardFetched, '应调用 GET /share/trade/:id/card').toBe(true)
+    await dialog.getByRole('button', { name: '关闭' }).click()
+    await expect(dialog).toHaveCount(0)
+  })
+
+  test('合约交易: 订单类型 6 按钮行在 1280/1440/1920 不溢出、不换行挤压', async ({ authPage }) => {
+    await stubAllWebSockets(authPage)
+    await applyAuditMocks(authPage)
+    await authPage.goto('/trading/contract')
+    await authPage.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {})
+
+    for (const width of [1280, 1440, 1920]) {
+      await authPage.setViewportSize({ width, height: 800 })
+      await authPage.waitForTimeout(300)
+      const row = authPage.getByTestId('order-type-row')
+      await expect(row).toBeVisible()
+      const metrics = await row.evaluate((el) => {
+        const rowRect = el.getBoundingClientRect()
+        const btns = Array.from(el.querySelectorAll('button')).map((b) => {
+          const r = b.getBoundingClientRect()
+          return { top: r.top, right: r.right, height: r.height, text: b.textContent }
+        })
+        return { rowRight: rowRect.right, btns }
+      })
+      expect(metrics.btns.length, `${width}px: 应有 6 个按钮`).toBe(6)
+      const rows = new Set(metrics.btns.map((b) => Math.round(b.top)))
+      expect(rows.size, `${width}px: 按钮应排成两行网格（不允许同按钮内折字/溢出）`).toBeLessThanOrEqual(2)
+      for (const b of metrics.btns) {
+        expect(b.right, `${width}px: 按钮「${b.text}」右缘不得超出容器`).toBeLessThanOrEqual(metrics.rowRight + 1)
+      }
+    }
+  })
+
+  test('合约交易: 当前委托 tab → 全部撤单调用 cancel-all', async ({ authPage }) => {
+    await stubAllWebSockets(authPage)
+    await applyAuditMocks(authPage)
+    // 注意：请求带 ?_t= 缓存戳，必须用正则或带尾通配的 glob 才能匹配 query
+    await authPage.route(/\/api\/orders(\?.*)?$/, async (route) => {
+      if (route.request().method() === 'GET') {
+        return fulfillJson(route, {
+          orders: [
+            { id: 'ord-audit-1', symbol: 'BTCUSDT', side: 'BUY', type: 'LIMIT', price: 60000, quantity: 0.1, status: 'open', created_at: Date.now() },
+          ],
+        })
+      }
+      return route.fallback()
+    })
+    let cancelAllCalled = false
+    await authPage.route('**/api/orders/cancel-all*', async (route) => {
+      cancelAllCalled = true
+      return fulfillJson(route, { success: true })
+    })
+    await authPage.goto('/trading/contract')
+    await authPage.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {})
+
+    await authPage.getByRole('button', { name: /当前委托/ }).click()
+    const cancelAllBtn = authPage.getByRole('button', { name: /全部撤单/ })
+    await expect(cancelAllBtn).toBeVisible({ timeout: 15000 })
+    await cancelAllBtn.click()
+    await authPage.waitForTimeout(600)
+    expect(cancelAllCalled, '应调用 POST /orders/cancel-all').toBe(true)
+  })
 })

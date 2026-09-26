@@ -66,6 +66,8 @@ const SHAPES: [string, (() => unknown) | unknown][] = [
   ['/portfolio/summary', { spot_balance: 100000, futures_balance: 50000, total_equity: 150000 }],
   ['/portfolio/positions', { positions: [] }],
   ['/portfolio/snapshots', { snapshots: [] }],
+  // 已平仓持仓（资产页分享卡数据源）
+  ['/positions/closed', { positions: [], limit: 20, offset: 0, has_more: false }],
   // ── Health / status / alerts / integrations ──
   ['/health/components', []],
   ['/alerts/active', { alerts: [] }],

@@ -1,13 +1,16 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { portfolioApi, accountApi } from '@/lib/api'
+import { portfolioApi, accountApi, shareApi, type ClosedPosition, type ShareTradeCard } from '@/lib/api'
 import { cn, formatCurrency } from '@/lib/utils'
+import { useI18n } from '@/i18n'
 import { getEcharts } from '@/lib/echarts'
 import { DataTable } from '@/components/DataTable'
 import { KPICard } from '@/components/ui/KPICard'
 import { SectionCard } from '@/components/ui/SectionCard'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { EmptyState } from '@/components/ui/EmptyState'
+import { ShareCardModal } from '@/components/ShareCardModal'
+import { toast } from '@/lib/useToast'
 import {
   Wallet,
   TrendingUp,
@@ -17,6 +20,7 @@ import {
   Layers,
   ChevronLeft,
   ChevronRight,
+  Share2,
 } from 'lucide-react'
 
 /* ── Types ───────────────────────────────────────────────────────── */
@@ -305,7 +309,10 @@ function ProfitCalendar({ months, isLoading }: { months?: CalendarMonth[]; isLoa
 
 /* ── Main Page ───────────────────────────────────────────────────── */
 
+const CLOSED_PAGE_SIZE = 10
+
 export function Portfolio() {
+  const { t } = useI18n()
   const { data: portfolio, isLoading: portfolioLoading } = useQuery({
     queryKey: ['portfolio-summary'],
     queryFn: () => portfolioApi.summary(),
@@ -334,6 +341,32 @@ export function Portfolio() {
     queryFn: () => accountApi.balance(),
     refetchInterval: 10000,
   })
+
+  /* ── 已平仓持仓（分页）+ 交易分享卡 ── */
+  const [closedPage, setClosedPage] = useState(0)
+  const { data: closedData, isLoading: closedLoading } = useQuery({
+    queryKey: ['closed-positions', closedPage],
+    queryFn: () => portfolioApi.closedPositions({ limit: CLOSED_PAGE_SIZE, offset: closedPage * CLOSED_PAGE_SIZE }),
+  })
+  const closedPositions: ClosedPosition[] = useMemo(() => {
+    // e2e mock 等异常形状兜底：{positions:[...]} 之外一律按空列表处理
+    const raw = closedData?.positions
+    return Array.isArray(raw) ? raw : []
+  }, [closedData])
+  const closedHasMore = closedData?.has_more === true
+
+  const [tradeCard, setTradeCard] = useState<ShareTradeCard | null>(null)
+  const [shareLoadingId, setShareLoadingId] = useState<string | null>(null)
+  const openTradeCard = async (id: string) => {
+    setShareLoadingId(id)
+    try {
+      setTradeCard(await shareApi.tradeCard(id))
+    } catch (err) {
+      toast('error', `${t('portfolio.closed.shareFail', '分享卡生成失败')}: ${(err as Error).message}`)
+    } finally {
+      setShareLoadingId(null)
+    }
+  }
 
   const positions: PositionItem[] = useMemo(() => {
     const raw = positionsData?.positions || positionsData || []
@@ -497,7 +530,87 @@ export function Portfolio() {
             <ProfitCalendar months={calendarMonths} isLoading={calLoading} />
           </SectionCard>
         </div>
+
+        {/* 已平仓持仓（含交易分享卡入口） */}
+        <SectionCard title={t('portfolio.closed.title', '已平仓持仓')}>
+          {closedLoading ? (
+            <div className="space-y-2">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <Skeleton key={i} variant="rect" height={40} />
+              ))}
+            </div>
+          ) : closedPositions.length > 0 ? (
+            <>
+              <DataTable<ClosedPosition>
+                data={closedPositions}
+                columns={[
+                  { key: 'symbol', title: t('portfolio.closed.symbol', '交易对'), render: (p) => <span className="font-semibold text-foreground">{p.symbol}</span> },
+                  { key: 'side', title: t('portfolio.closed.side', '方向'), render: (p) => {
+                    const isLong = (p.side || '').toUpperCase() === 'LONG' || (p.side || '').toUpperCase() === 'BUY'
+                    return (
+                      <span className={cn('font-medium', isLong ? 'text-quant-green' : 'text-quant-red')}>
+                        {isLong ? t('portfolio.closed.long', '多') : t('portfolio.closed.short', '空')}
+                      </span>
+                    )
+                  }},
+                  { key: 'entry', title: t('portfolio.closed.entry', '开仓价'), render: (p) => <span className="font-mono text-muted-foreground">${formatCurrency(p.avg_entry_price)}</span> },
+                  { key: 'exit', title: t('portfolio.closed.exit', '平仓价'), render: (p) => <span className="font-mono text-foreground">${formatCurrency(p.exit_price || 0)}</span> },
+                  { key: 'pnl', title: t('portfolio.closed.pnl', '盈亏额'), render: (p) => (
+                    <span className={cn('font-mono font-bold', p.realized_pnl >= 0 ? 'text-quant-green' : 'text-quant-red')}>
+                      {p.realized_pnl >= 0 ? '+' : ''}${formatCurrency(p.realized_pnl)}
+                    </span>
+                  )},
+                  { key: 'pnlPct', title: t('portfolio.closed.pnlPct', '盈亏%'), render: (p) => (
+                    <span className={cn('font-mono', p.pnl_pct >= 0 ? 'text-quant-green' : 'text-quant-red')}>
+                      {p.pnl_pct >= 0 ? '+' : ''}{p.pnl_pct.toFixed(2)}%
+                    </span>
+                  )},
+                  { key: 'closedAt', title: t('portfolio.closed.closedAt', '平仓时间'), render: (p) => (
+                    <span className="text-muted-foreground">{p.closed_at ? new Date(p.closed_at).toLocaleString() : '--'}</span>
+                  )},
+                  { key: 'actions', title: t('portfolio.closed.actions', '操作'), render: (p) => (
+                    <button
+                      onClick={() => openTradeCard(p.id)}
+                      disabled={shareLoadingId === p.id}
+                      aria-label={t('portfolio.closed.share', '分享')}
+                      className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium text-quant-gold bg-quant-gold/10 hover:bg-quant-gold/20 transition-colors disabled:opacity-50"
+                    >
+                      <Share2 className="h-3 w-3" />
+                      {shareLoadingId === p.id ? t('common.loading', '加载中...') : t('portfolio.closed.share', '分享')}
+                    </button>
+                  )},
+                ]}
+                keyExtractor={(p) => p.id}
+              />
+              <div className="mt-3 flex items-center justify-end gap-2 text-xs">
+                <button
+                  onClick={() => setClosedPage((p) => Math.max(0, p - 1))}
+                  disabled={closedPage === 0}
+                  className="rounded px-2 py-1 text-muted-foreground hover:bg-white/5 disabled:opacity-30 transition-colors"
+                >
+                  {t('portfolio.closed.prev', '上一页')}
+                </button>
+                <span className="text-muted-foreground tabular-nums">
+                  {t('portfolio.closed.page', '第 {page} 页').replace('{page}', String(closedPage + 1))}
+                </span>
+                <button
+                  onClick={() => setClosedPage((p) => p + 1)}
+                  disabled={!closedHasMore}
+                  className="rounded px-2 py-1 text-muted-foreground hover:bg-white/5 disabled:opacity-30 transition-colors"
+                >
+                  {t('portfolio.closed.next', '下一页')}
+                </button>
+              </div>
+            </>
+          ) : (
+            <EmptyState
+              title={t('portfolio.closed.empty', '暂无已平仓持仓')}
+              description={t('portfolio.closed.emptyDesc', '平仓后的持仓会出现在这里，可生成分享卡')}
+            />
+          )}
+        </SectionCard>
       </div>
+      <ShareCardModal card={tradeCard} onClose={() => setTradeCard(null)} />
     </div>
   )
 }

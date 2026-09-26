@@ -115,7 +115,6 @@ import {
   type ExecutorPosition,
   type ExecutionRecord,
   type SignalSource,
-  type AIRobotConfig,
   type AISignal,
   type ContractParams,
   type ContractMarginInfo,
@@ -474,9 +473,33 @@ export const dashboardApi = {
 }
 
 // ── Portfolio ──
+// ── 已平仓持仓（GET /positions/closed，分页）──
+export interface ClosedPosition {
+  id: string
+  symbol: string
+  side: string
+  quantity: number
+  avg_entry_price: number
+  exit_price: number
+  realized_pnl: number
+  cost_basis: number
+  pnl_pct: number
+  exchange: string
+  opened_at: number
+  closed_at: number
+}
+
 export const portfolioApi = {
   summary: () => api.get<PortfolioSummary>('/portfolio/summary'),
   positions: () => api.get<{ positions: PortfolioPosition[] }>('/portfolio/positions'),
+  closedPositions: (params?: { limit?: number; offset?: number }) => {
+    const qs = params ? '?' + new URLSearchParams(
+      Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)]))
+    ).toString() : ''
+    return api.get<{ positions: ClosedPosition[]; limit: number; offset: number; has_more: boolean }>(
+      `/positions/closed${qs}`
+    )
+  },
   snapshots: (days?: number) =>
     api.get<{ snapshots: EquitySnapshot[] }>(`/portfolio/snapshots${days ? '?days=' + days : ''}`),
   calendar: (year?: number, month?: number) =>
@@ -1778,13 +1801,12 @@ export const executorApi = {
 }
 
 // ── AI Robot ──
+// 后端无 /api/ai-robot/* 路由（机器人配置走 /ai-bots/*，模型走 /ai/models）；
+// 仅保留真实存在的 /ai/status、/ai/signals。
 export const aiRobotApi = {
-  getConfig: () => axiosInstance.get<AIRobotConfig>('/ai-robot/config'),
-  saveConfig: (config: AIRobotConfig) => axiosInstance.post<AIRobotConfig>('/ai-robot/config', config),
   getStatus: () => axiosInstance.get<{ success: boolean; data: AIStatus }>('/ai/status').then((r) => r.data?.data),
   getSignals: (params?: { limit?: number; symbol?: string }) =>
     axiosInstance.get<{ signals: AISignal[] }>('/ai/signals', { params }).then((r) => r.data?.signals || []),
-  getModels: () => axiosInstance.get<{ models: string[] }>('/ai-robot/models'),
 }
 
 // ── Contract Trading ──
@@ -2083,7 +2105,7 @@ export interface AnalysisJob {
   id: string
   user_id: number
   kind: 'lookahead' | 'recursive'
-  status: 'running' | 'completed' | 'failed'
+  status: 'running' | 'completed' | 'failed' | 'cancelled'
   symbol: string
   interval: string
   strategy_type: string
@@ -2145,6 +2167,14 @@ export interface AnalysisUnstablePoint {
   by_lens: Record<string, string>
 }
 
+export interface AnalysisVariantGroup {
+  kind: 'prefix' | 'start_offset'
+  levels: AnalysisPrefixLevel[]
+  compared_points: number
+  unstable_points: AnalysisUnstablePoint[]
+  unstable_count: number
+}
+
 export interface RecursiveResult {
   conclusion: 'recursive' | 'stable' | 'inconclusive'
   recursive: boolean
@@ -2153,13 +2183,16 @@ export interface RecursiveResult {
   unstable_points: AnalysisUnstablePoint[]
   unstable_count: number
   compared_points: number
+  // groups 按组承载全部维度明细：prefix（同起点前缀递增）+ start_offset
+  // （固定终点起点右移，捕捉 warmup 不收敛类递归偏差）。
+  groups?: AnalysisVariantGroup[]
   summary: string
 }
 
 export interface AnalysisJobDetail {
   id: string
   kind: 'lookahead' | 'recursive'
-  status: 'running' | 'completed' | 'failed'
+  status: 'running' | 'completed' | 'failed' | 'cancelled'
   symbol: string
   interval: string
   strategy_type: string
@@ -2181,6 +2214,8 @@ export const analysisApi = {
       .get<{ jobs: AnalysisJob[] }>('/analysis/jobs', { params: kind ? { kind } : {} })
       .then((d) => d?.jobs ?? []),
   job: (id: string) => api.get<AnalysisJobDetail>(`/analysis/jobs/${id}`),
+  cancel: (id: string) => api.post<{ status: string }>(`/analysis/jobs/${id}/cancel`),
+  remove: (id: string) => api.del<{ status: string }>(`/analysis/jobs/${id}`),
 }
 
 // ── Paper / Live Trading Safety ──

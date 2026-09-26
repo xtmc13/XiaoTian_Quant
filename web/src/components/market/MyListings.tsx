@@ -9,13 +9,13 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { Button } from '@/components/ui/Button'
 import { toast } from '@/lib/useToast'
 
-const STATUS_META: Record<MarketListingStatus, { labelKey: string; fallback: string; cls: string }> = {
-  draft: { labelKey: 'market.statusDraft', fallback: '草稿', cls: 'bg-quant-bg text-muted-foreground border-quant-border' },
-  probation: { labelKey: 'market.statusProbation', fallback: '考核中', cls: 'bg-blue-500/15 text-blue-400 border-blue-500/40' },
-  pending_review: { labelKey: 'market.statusPendingReview', fallback: '待审核', cls: 'bg-quant-gold/15 text-quant-gold border-quant-gold/40' },
-  listed: { labelKey: 'market.statusListed', fallback: '已上架', cls: 'bg-quant-green/15 text-quant-green border-quant-green/40' },
-  rejected: { labelKey: 'market.statusRejected', fallback: '已驳回', cls: 'bg-quant-red/15 text-quant-red border-quant-red/40' },
-  delisted: { labelKey: 'market.statusDelisted', fallback: '已下架', cls: 'bg-quant-bg text-muted-foreground border-quant-border' },
+const STATUS_META: Record<MarketListingStatus, { labelKey: string; cls: string }> = {
+  draft: { labelKey: 'market.status.draft', cls: 'bg-quant-bg text-muted-foreground border-quant-border' },
+  probation: { labelKey: 'market.status.probation', cls: 'bg-blue-500/15 text-blue-400 border-blue-500/40' },
+  pending_review: { labelKey: 'market.status.pendingReview', cls: 'bg-quant-gold/15 text-quant-gold border-quant-gold/40' },
+  listed: { labelKey: 'market.status.listed', cls: 'bg-quant-green/15 text-quant-green border-quant-green/40' },
+  rejected: { labelKey: 'market.status.rejected', cls: 'bg-quant-red/15 text-quant-red border-quant-red/40' },
+  delisted: { labelKey: 'market.status.delisted', cls: 'bg-quant-bg text-muted-foreground border-quant-border' },
 }
 
 function StatusBadge({ status }: { status: MarketListingStatus }) {
@@ -23,7 +23,7 @@ function StatusBadge({ status }: { status: MarketListingStatus }) {
   const meta = STATUS_META[status] ?? STATUS_META.draft
   return (
     <span className={cn('px-1.5 py-0.5 rounded border text-[10px] font-semibold shrink-0', meta.cls)}>
-      {t(meta.labelKey, meta.fallback)}
+      {t(meta.labelKey)}
     </span>
   )
 }
@@ -40,10 +40,10 @@ function ProbationProgressBar({ listing }: { listing: MarketListing }) {
     <div className="mt-2 space-y-1.5">
       <div>
         <div className="flex justify-between text-[10px] text-muted-foreground mb-0.5">
-          <span>{t('market.probationDays', '考核天数')}</span>
+          <span>{t('market.probation.days')}</span>
           <span>
-            {t('market.dayN', '第')} {p.days_elapsed}/{p.min_days} {t('market.day', '天')}
-            {p.remaining_days > 0 && ` · ${t('market.remainingDays', '还差')} ${p.remaining_days} ${t('market.day', '天')}`}
+            {t('market.probation.dayProgress').replace('{a}', String(p.days_elapsed)).replace('{b}', String(p.min_days))}
+            {p.remaining_days > 0 && ` · ${t('market.probation.remainingDays').replace('{n}', String(p.remaining_days))}`}
           </span>
         </div>
         <div className="h-1.5 rounded-full bg-quant-bg overflow-hidden">
@@ -52,10 +52,10 @@ function ProbationProgressBar({ listing }: { listing: MarketListing }) {
       </div>
       <div>
         <div className="flex justify-between text-[10px] text-muted-foreground mb-0.5">
-          <span>{t('market.probationTrades', '交易数')}</span>
+          <span>{t('market.stats.totalTrades')}</span>
           <span>
             {p.trades_in_window}/{p.min_trades}
-            {p.remaining_trades > 0 && ` · ${t('market.remainingTrades', '还差')} ${p.remaining_trades} ${t('market.tradeUnit', '笔')}`}
+            {p.remaining_trades > 0 && ` · ${t('market.probation.remainingTrades').replace('{n}', String(p.remaining_trades))}`}
           </span>
         </div>
         <div className="h-1.5 rounded-full bg-quant-bg overflow-hidden">
@@ -63,10 +63,10 @@ function ProbationProgressBar({ listing }: { listing: MarketListing }) {
         </div>
       </div>
       <div className="flex justify-between text-[10px]">
-        <span className="text-muted-foreground">{t('market.drawdownLimit', '回撤红线')}</span>
+        <span className="text-muted-foreground">{t('market.probation.drawdownLimit')}</span>
         <span className={ddOK ? 'text-quant-green' : 'text-quant-red'}>
           {p.max_drawdown_pct.toFixed(2)}% / {p.max_drawdown_limit}%
-          {ddOK ? ` · ${t('market.ok', '达标')}` : ` · ${t('market.breached', '越线')}`}
+          {ddOK ? ` · ${t('market.probation.ok')}` : ` · ${t('market.probation.breached')}`}
         </span>
       </div>
     </div>
@@ -106,23 +106,23 @@ export function MyListings() {
         submit: true,
       }),
     onSuccess: async () => {
-      toast('success', t('market.submitOk', '已提交考核'))
+      toast('success', t('market.my.submitOk'))
       setShowForm(false)
       setInstanceID('')
       setName('')
       await invalidate()
     },
-    onError: (e) => toast('error', e instanceof Error ? e.message : t('market.submitFail', '提交失败')),
+    onError: (e) => toast('error', e instanceof Error ? e.message : t('market.my.submitFail')),
   })
 
   const actionMut = useMutation({
     mutationFn: ({ id, action }: { id: string; action: 'submit' | 'cancel' }) =>
       action === 'submit' ? marketListingApi.submit(id) : marketListingApi.cancel(id),
     onSuccess: async (_, v) => {
-      toast('success', v.action === 'submit' ? t('market.submitOk', '已提交考核') : t('market.cancelOk', '已撤回考核'))
+      toast('success', v.action === 'submit' ? t('market.my.submitOk') : t('market.my.cancelOk'))
       await invalidate()
     },
-    onError: (e) => toast('error', e instanceof Error ? e.message : t('market.actionFail', '操作失败')),
+    onError: (e) => toast('error', e instanceof Error ? e.message : t('market.my.actionFail')),
   })
 
   const listedInstanceIDs = new Set(listings.filter((l) => l.status === 'probation' || l.status === 'pending_review' || l.status === 'listed').map((l) => l.bot_instance_id))
@@ -135,20 +135,24 @@ export function MyListings() {
     <div className="space-y-3">
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-xs text-muted-foreground">
-          {rules && t('market.rulesHint', `考核规则：≥${rules.min_days} 天 · ≥${rules.min_trades} 笔交易 · 回撤 <${rules.max_drawdown_pct}%`)}
+          {rules &&
+            t('market.my.rulesHint')
+              .replace('{days}', String(rules.min_days))
+              .replace('{trades}', String(rules.min_trades))
+              .replace('{dd}', String(rules.max_drawdown_pct))}
         </span>
         <span className="flex-1" />
         <Button variant="primary" size="sm" leftIcon={<Plus className="w-3 h-3" />} onClick={() => setShowForm((v) => !v)}>
-          {t('market.submitProbation', '提交考核')}
+          {t('market.my.submitProbation')}
         </Button>
       </div>
 
       {showForm && (
         <div className="bg-quant-card border border-quant-border rounded-xl p-4 space-y-3">
           <div>
-            <label className="text-[11px] text-muted-foreground mb-1 block">{t('market.selectInstance', '选择考核实例（paper/实盘均可）')}</label>
+            <label className="text-[11px] text-muted-foreground mb-1 block">{t('market.my.selectInstance')}</label>
             <select value={instanceID} onChange={(e) => setInstanceID(e.target.value)} className={inputCls}>
-              <option value="">{t('market.selectInstancePlaceholder', '— 选择 AI 机器人实例 —')}</option>
+              <option value="">{t('market.my.selectInstancePlaceholder')}</option>
               {candidateInstances.map((i) => (
                 <option key={i.id} value={i.id}>
                   {i.name} · {i.symbol} · {i.execution_mode}
@@ -157,27 +161,27 @@ export function MyListings() {
             </select>
           </div>
           <div>
-            <label className="text-[11px] text-muted-foreground mb-1 block">{t('market.listingName', '条目名称')}</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} className={inputCls} placeholder={t('market.listingNamePh', '展示在市场卡片上的名称')} />
+            <label className="text-[11px] text-muted-foreground mb-1 block">{t('market.my.listingName')}</label>
+            <input value={name} onChange={(e) => setName(e.target.value)} className={inputCls} placeholder={t('market.my.listingNamePh')} />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
-              <label className="text-[11px] text-muted-foreground mb-1 block">{t('market.feeModel', '付费模式')}</label>
+              <label className="text-[11px] text-muted-foreground mb-1 block">{t('market.my.feeModel')}</label>
               <select value={feeModel} onChange={(e) => setFeeModel(e.target.value as typeof feeModel)} className={inputCls}>
-                <option value="free">{t('market.free', '免费')}</option>
-                <option value="monthly">{t('market.monthlyFee', '月费')}</option>
-                <option value="profit_share">{t('market.profitShare', '利润分成')}</option>
+                <option value="free">{t('market.my.feeFree')}</option>
+                <option value="monthly">{t('market.my.feeMonthly')}</option>
+                <option value="profit_share">{t('market.my.feeProfitShare')}</option>
               </select>
             </div>
             {feeModel === 'monthly' && (
               <div>
-                <label className="text-[11px] text-muted-foreground mb-1 block">{t('market.monthlyFeeAmount', '月费 (USDT)')}</label>
+                <label className="text-[11px] text-muted-foreground mb-1 block">{t('market.my.monthlyFeeAmount')}</label>
                 <input type="number" value={monthlyFee} onChange={(e) => setMonthlyFee(e.target.value)} className={inputCls} />
               </div>
             )}
             {feeModel === 'profit_share' && (
               <div>
-                <label className="text-[11px] text-muted-foreground mb-1 block">{t('market.feePercent', '分成比例 (%)')}</label>
+                <label className="text-[11px] text-muted-foreground mb-1 block">{t('market.my.feePercent')}</label>
                 <input type="number" value={feePercent} onChange={(e) => setFeePercent(e.target.value)} className={inputCls} />
               </div>
             )}
@@ -187,11 +191,11 @@ export function MyListings() {
             className="w-full"
             isLoading={createMut.isPending}
             onClick={() => {
-              if (!instanceID) return toast('warning', t('market.needInstance', '请选择考核实例'))
+              if (!instanceID) return toast('warning', t('market.my.needInstance'))
               createMut.mutate()
             }}
           >
-            {t('market.confirmSubmit', '提交并进入考核期')}
+            {t('market.my.confirmSubmit')}
           </Button>
         </div>
       )}
@@ -205,8 +209,8 @@ export function MyListings() {
       ) : listings.length === 0 ? (
         <EmptyState
           icon={<ClipboardList className="w-8 h-8" />}
-          title={t('market.myEmptyTitle', '暂无上架条目')}
-          description={t('market.myEmptyDesc', '选择一个 AI 机器人实例提交考核，达标并通过审核后即可在市场出售')}
+          title={t('market.my.emptyTitle')}
+          description={t('market.my.emptyDesc')}
         />
       ) : (
         <div className="space-y-2">
@@ -222,7 +226,7 @@ export function MyListings() {
                     className="px-2.5 py-1 rounded bg-quant-gold text-white text-[11px] font-medium hover:opacity-90 disabled:opacity-50"
                     disabled={actionMut.isPending}
                   >
-                    {l.status === 'draft' ? t('market.submitProbation', '提交考核') : t('market.resubmit', '重新提交考核')}
+                    {l.status === 'draft' ? t('market.my.submitProbation') : t('market.my.resubmit')}
                   </button>
                 )}
                 {l.status === 'probation' && (
@@ -232,26 +236,26 @@ export function MyListings() {
                     disabled={actionMut.isPending}
                   >
                     <XCircle className="w-3 h-3" />
-                    {t('market.cancelProbation', '撤回考核')}
+                    {t('market.my.cancelProbation')}
                   </button>
                 )}
               </div>
               {l.status === 'probation' && <ProbationProgressBar listing={l} />}
               {l.status === 'rejected' && l.reject_reason && (
                 <div className="mt-2 text-[11px] text-quant-red bg-quant-red/10 border border-quant-red/20 rounded-lg px-2.5 py-1.5">
-                  {t('market.rejectReason', '驳回原因')}：{l.reject_reason}
+                  {t('market.status.rejectReason')}：{l.reject_reason}
                 </div>
               )}
               {l.status === 'delisted' && l.delist_reason && (
                 <div className="mt-2 text-[11px] text-muted-foreground bg-quant-bg border border-quant-border rounded-lg px-2.5 py-1.5">
-                  {t('market.delistReason', '下架原因')}：{l.delist_reason}
+                  {t('market.status.delistReason')}：{l.delist_reason}
                 </div>
               )}
               {l.status === 'listed' && l.stats && (
                 <div className="mt-2 flex gap-3 text-[10px] text-muted-foreground flex-wrap">
-                  <span>{t('market.monthlyReturn', '月均收益')} {l.stats.monthly_return_pct >= 0 ? '+' : ''}{l.stats.monthly_return_pct.toFixed(2)}%</span>
-                  <span>{t('market.winRate', '胜率')} {l.stats.win_rate.toFixed(1)}%</span>
-                  <span>{t('market.followers', '跟踪')} {l.stats.followers}</span>
+                  <span>{t('market.stats.monthlyReturn')} {l.stats.monthly_return_pct >= 0 ? '+' : ''}{l.stats.monthly_return_pct.toFixed(2)}%</span>
+                  <span>{t('market.stats.winRate')} {l.stats.win_rate.toFixed(1)}%</span>
+                  <span>{t('market.stats.followers')} {l.stats.followers}</span>
                 </div>
               )}
             </div>

@@ -532,6 +532,7 @@ func registerPortfolioRoutes(api *gin.RouterGroup) {
 	private.GET("/portfolio/calendar", handler.PortfolioCalendar)
 	private.GET("/exchange/usdcny", handler.UsdCnyRate)
 	private.GET("/positions", handler.PortfolioPositions)
+	private.GET("/positions/closed", handler.ClosedPositions)
 }
 
 func registerPairlistRoutes(api *gin.RouterGroup) {
@@ -1015,6 +1016,9 @@ func registerAnalysisRoutes(api *gin.RouterGroup) {
 	private.POST("/analysis/recursive", handler.StartRecursiveAnalysis)
 	private.GET("/analysis/jobs", handler.ListAnalysisJobs)
 	private.GET("/analysis/jobs/:id", handler.GetAnalysisJob)
+	// 任务管理（对标 hyperopt 的 cancel/delete 模式）：context 取消 + 仅终态可删。
+	private.POST("/analysis/jobs/:id/cancel", handler.CancelAnalysisJob)
+	private.DELETE("/analysis/jobs/:id", handler.DeleteAnalysisJob)
 }
 
 // registerAIGateRoutes AI 交易决策门（对标 QuantDinger JEV 决策门）：

@@ -62,6 +62,11 @@ func (r *PositionRepo) GetByID(id string) (*PositionRecord, error) {
 }
 
 func (r *PositionRepo) List(filter map[string]any, limit int) ([]*PositionRecord, error) {
+	return r.ListPaged(filter, limit, 0)
+}
+
+// ListPaged 在 List 之上支持 offset 分页（已平仓列表等前端分页场景）。
+func (r *PositionRepo) ListPaged(filter map[string]any, limit, offset int) ([]*PositionRecord, error) {
 	query := "SELECT " + positionColumns + " FROM positions"
 	allowedCols := map[string]bool{
 		"id": true, "user_id": true, "symbol": true, "side": true, "exchange": true, "status": true,
@@ -71,10 +76,14 @@ func (r *PositionRepo) List(filter map[string]any, limit int) ([]*PositionRecord
 	if where != "" {
 		query += " WHERE " + where
 	}
-	query += " ORDER BY updated_at DESC"
+	query += " ORDER BY closed_at DESC, updated_at DESC"
 	if limit > 0 {
 		query += " LIMIT ?"
 		args = append(args, limit)
+		if offset > 0 {
+			query += " OFFSET ?"
+			args = append(args, offset)
+		}
 	}
 	rows, err := db.Query(query, args...)
 	if err != nil {
