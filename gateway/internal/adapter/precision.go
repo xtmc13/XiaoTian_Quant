@@ -128,6 +128,32 @@ func FloorToStep(quantity float64, stepSize string) (string, float64, error) {
 	return quantize(quantity, stepSize, -1)
 }
 
+// decimalsStep 返回 10^-decimals 的步进串（0→"1"，3→"0.001"），
+// 供"按小数位数"表述规则的交易所（Kraken pair_decimals/lot_decimals 等）
+// 复用同一 quantize 核心，避免另造一套取整实现。
+func decimalsStep(decimals int) string {
+	if decimals <= 0 {
+		return "1"
+	}
+	return "0." + strings.Repeat("0", decimals-1) + "1"
+}
+
+// FloorToDecimals 数量向下取整到指定小数位（语义同 FloorToStep，step=10^-decimals）。
+func FloorToDecimals(value float64, decimals int) (string, float64, error) {
+	if decimals < 0 {
+		return "", 0, fmt.Errorf("decimals must be >= 0, got %d", decimals)
+	}
+	return quantize(value, decimalsStep(decimals), -1)
+}
+
+// RoundToDecimals 价格四舍五入（half-up）到指定小数位（语义同 RoundToTick）。
+func RoundToDecimals(value float64, decimals int) (string, float64, error) {
+	if decimals < 0 {
+		return "", 0, fmt.Errorf("decimals must be >= 0, got %d", decimals)
+	}
+	return quantize(value, decimalsStep(decimals), 1)
+}
+
 // RoundToTick 把价格取整为 tickSize 的整数倍（nearest，half-up；
 // freqtrade price_to_precision 默认 ROUND 语义）。
 func RoundToTick(price float64, tickSize string) (string, float64, error) {

@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -86,6 +87,15 @@ func (g *GateIOAdapter) OnKline(fn func(bar model.Bar))              { g.onKline
 
 // ── Gate.io Signing (HMAC-SHA512 of body hashed to hex) ──
 
+// restURL 返回 REST base URL，支持 GATEIO_REST_URL 环境变量覆盖
+// （与 Binance BINANCE_REST_URL 同一惯例：测试/自建网关用）。
+func (g *GateIOAdapter) restURL() string {
+	if env := os.Getenv("GATEIO_REST_URL"); env != "" {
+		return env
+	}
+	return GateIORestURL
+}
+
 func (g *GateIOAdapter) sign(method, path, query, body string, timestamp string) string {
 	payload := strings.ToUpper(method) + "\n" + path + "\n" + query + "\n" + body + "\n" + timestamp
 	mac := hmac.New(sha512.New, []byte(g.secretKey))
@@ -107,7 +117,7 @@ func (g *GateIOAdapter) request(method, path string, params url.Values, body map
 		queryStr = params.Encode()
 	}
 
-	reqURL := GateIORestURL + path
+	reqURL := g.restURL() + path
 	if queryStr != "" {
 		reqURL += "?" + queryStr
 	}
@@ -153,7 +163,7 @@ func (g *GateIOAdapter) GetKlines(symbol, interval string, limit int) ([][]any, 
 	params.Set("interval", interval)
 	params.Set("limit", fmt.Sprintf("%d", limit))
 
-	u, _ := url.Parse(GateIORestURL + "/spot/candlesticks")
+	u, _ := url.Parse(g.restURL() + "/spot/candlesticks")
 	u.RawQuery = params.Encode()
 
 	resp, err := g.httpClient.Get(u.String())
@@ -179,7 +189,7 @@ func (g *GateIOAdapter) GetTicker(symbol string) (map[string]any, error) {
 	params := url.Values{}
 	params.Set("currency_pair", toGateIOPair(symbol))
 
-	u, _ := url.Parse(GateIORestURL + "/spot/tickers")
+	u, _ := url.Parse(g.restURL() + "/spot/tickers")
 	u.RawQuery = params.Encode()
 
 	resp, err := g.httpClient.Get(u.String())
@@ -205,14 +215,19 @@ func (g *GateIOAdapter) GetTicker(symbol string) (map[string]any, error) {
 // ── REST Trading ──
 
 func (g *GateIOAdapter) PlaceOrder(symbol, side, orderType string, price, quantity float64) (map[string]any, error) {
+	pair := toGateIOPair(symbol)
+	amountStr, priceStr, err := g.normalizeGateSpotOrder(pair, orderType, price, quantity)
+	if err != nil {
+		return nil, err
+	}
 	body := map[string]any{
-		"currency_pair": toGateIOPair(symbol),
+		"currency_pair": pair,
 		"side":          strings.ToLower(side),
 		"type":          strings.ToLower(orderType),
-		"amount":        fmt.Sprintf("%.6f", quantity),
+		"amount":        amountStr,
 	}
 	if strings.ToLower(orderType) == "limit" {
-		body["price"] = fmt.Sprintf("%.2f", price)
+		body["price"] = priceStr
 		body["time_in_force"] = "gtc"
 	}
 	return g.request("POST", "/spot/orders", nil, body)

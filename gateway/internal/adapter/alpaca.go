@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -62,6 +63,10 @@ func (a *AlpacaAdapter) Name() string {
 func (a *AlpacaAdapter) Start() error  { return nil }
 
 func (a *AlpacaAdapter) baseURL() string {
+	// ALPACA_REST_URL 是测试/自托管逃生门（与 Binance 的 BINANCE_REST_URL 同模式）。
+	if env := os.Getenv("ALPACA_REST_URL"); env != "" {
+		return env
+	}
 	if a.paper {
 		return AlpacaPaperURL
 	}
@@ -189,16 +194,22 @@ func (a *AlpacaAdapter) GetPositions() ([]map[string]any, error) {
 // ── Orders ─────────────────────────────────────────────────────
 
 func (a *AlpacaAdapter) PlaceOrder(symbol, side, orderType string, price, quantity float64) (map[string]any, error) {
+	// 下单前按 assets 规则规整精度；本地规则拒绝（*OrderConstraintError）直接中止。
+	qtyStr, priceStr, err := a.normalizeAlpacaOrder(symbol, orderType, price, quantity)
+	if err != nil {
+		return nil, err
+	}
+
 	body := map[string]any{
 		"symbol":        strings.ToUpper(symbol),
 		"side":          strings.ToLower(side),
 		"type":          strings.ToLower(orderType),
-		"qty":           fmt.Sprintf("%.6f", quantity),
+		"qty":           qtyStr,
 		"time_in_force": "day",
 	}
 
 	if strings.ToLower(orderType) == "limit" {
-		body["limit_price"] = fmt.Sprintf("%.2f", price)
+		body["limit_price"] = priceStr
 	}
 
 	result, err := a.post("/orders", body)

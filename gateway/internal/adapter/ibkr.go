@@ -796,19 +796,25 @@ func (a *IBKRAdapter) PlaceOrder(symbol, side, orderType string, price, quantity
 	}
 
 	ot := ibkrOrderType(orderType)
+	// 下单前本地规整精度（IBKR 无公开 symbol 规则 REST，保守近似见
+	// ibkr_precision.go）；碎尘量/非法精度本地拒绝，不发注定被拒的单。
+	qtyStr, priceStr, perr := normalizeIBKROrder(symbol, orderType, price, quantity)
+	if perr != nil {
+		return nil, perr
+	}
 	order := map[string]any{
 		"conid":                     c,
 		"side":                      ibkrSide(side),
-		"quantity":                  strconv.FormatFloat(quantity, 'f', -1, 64),
+		"quantity":                  qtyStr,
 		"orderType":                 ot,
 		"tif":                       "DAY",
 		"outsideRegularTradingHour": true,
 	}
 	switch ot {
 	case "LMT":
-		order["price"] = strconv.FormatFloat(price, 'f', -1, 64)
+		order["price"] = priceStr
 	case "STP":
-		order["auxPrice"] = strconv.FormatFloat(price, 'f', -1, 64)
+		order["auxPrice"] = priceStr
 	}
 
 	body := map[string]any{"orders": []any{order}}

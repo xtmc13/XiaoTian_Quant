@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -75,6 +76,15 @@ func (cb *CoinbaseAdapter) sign(timestamp, method, path, body string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
+// restURL 返回 Coinbase Advanced Trade REST base URL。COINBASE_REST_URL 是
+// 测试/自托管逃生门（与 Binance 的 BINANCE_REST_URL 同模式）。
+func (cb *CoinbaseAdapter) restURL() string {
+	if env := os.Getenv("COINBASE_REST_URL"); env != "" {
+		return env
+	}
+	return CoinbaseRestURL
+}
+
 func (cb *CoinbaseAdapter) request(method, path string, body map[string]any) (map[string]any, error) {
 	var bodyStr string
 	var bodyReader io.Reader
@@ -84,7 +94,7 @@ func (cb *CoinbaseAdapter) request(method, path string, body map[string]any) (ma
 		bodyReader = strings.NewReader(bodyStr)
 	}
 
-	reqURL := CoinbaseRestURL + path
+	reqURL := cb.restURL() + path
 	req, err := http.NewRequest(method, reqURL, bodyReader)
 	if err != nil {
 		return nil, err
@@ -111,7 +121,7 @@ func (cb *CoinbaseAdapter) request(method, path string, body map[string]any) (ma
 // ── REST Market Data ──
 
 func (cb *CoinbaseAdapter) GetKlines(symbol, interval string, limit int) ([][]any, error) {
-	u, _ := url.Parse(CoinbaseRestURL + "/products/" + symbol + "/candles")
+	u, _ := url.Parse(cb.restURL() + "/products/" + symbol + "/candles")
 	params := url.Values{}
 	params.Set("granularity", coinbaseGranularity(interval))
 	params.Set("limit", fmt.Sprintf("%d", limit))
@@ -138,7 +148,7 @@ func (cb *CoinbaseAdapter) GetKlines(symbol, interval string, limit int) ([][]an
 }
 
 func (cb *CoinbaseAdapter) GetTicker(symbol string) (map[string]any, error) {
-	u := CoinbaseRestURL + "/products/" + symbol
+	u := cb.restURL() + "/products/" + symbol
 	resp, err := cb.httpClient.Get(u)
 	if err != nil {
 		return nil, err
@@ -154,13 +164,18 @@ func (cb *CoinbaseAdapter) GetTicker(symbol string) (map[string]any, error) {
 // ── REST Trading ──
 
 func (cb *CoinbaseAdapter) PlaceOrder(symbol, side, orderType string, price, quantity float64) (map[string]any, error) {
+	// 下单前按 products 规则规整精度；本地规则拒绝（*OrderConstraintError）直接中止。
+	qtyStr, priceStr, err := cb.normalizeCoinbaseOrder(symbol, orderType, price, quantity)
+	if err != nil {
+		return nil, err
+	}
 	body := map[string]any{
 		"product_id":    symbol,
 		"side":          strings.ToUpper(side),
 		"order_configuration": map[string]any{
 			strings.ToLower(orderType) + "_gtc": map[string]any{
-				"base_size":   fmt.Sprintf("%.6f", quantity),
-				"limit_price": fmt.Sprintf("%.2f", price),
+				"base_size":   qtyStr,
+				"limit_price": priceStr,
 			},
 		},
 	}

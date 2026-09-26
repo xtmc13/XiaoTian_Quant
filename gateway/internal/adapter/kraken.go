@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -159,11 +160,20 @@ func (k *KrakenAdapter) signKraken(path string, postData url.Values) (string, in
 	return sign, nonce
 }
 
+// restURL 返回 Kraken REST base URL。KRAKEN_REST_URL 是测试/自托管逃生门
+// （与 Binance 的 BINANCE_REST_URL 同模式），可把适配器指向 httptest server。
+func (k *KrakenAdapter) restURL() string {
+	if env := os.Getenv("KRAKEN_REST_URL"); env != "" {
+		return env
+	}
+	return KrakenRestURL
+}
+
 // privateRequest makes an authenticated request to Kraken.
 func (k *KrakenAdapter) privateRequest(path string, postData url.Values) (map[string]any, error) {
 	sign, _ := k.signKraken(path, postData)
 
-	req, _ := http.NewRequest("POST", KrakenRestURL+path, strings.NewReader(postData.Encode()))
+	req, _ := http.NewRequest("POST", k.restURL()+path, strings.NewReader(postData.Encode()))
 	req.Header.Set("API-Key", k.apiKey)
 	req.Header.Set("API-Sign", sign)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -189,7 +199,7 @@ func (k *KrakenAdapter) privateRequest(path string, postData url.Values) (map[st
 
 // publicRequest makes a public (unauthenticated) request.
 func (k *KrakenAdapter) publicRequest(path string) (map[string]any, error) {
-	resp, err := k.httpClient.Get(KrakenRestURL + path)
+	resp, err := k.httpClient.Get(k.restURL() + path)
 	if err != nil {
 		return nil, fmt.Errorf("kraken public: %w", err)
 	}
@@ -333,14 +343,20 @@ func (k *KrakenAdapter) PlaceOrder(symbol, side, orderType string, price, quanti
 	krakenSide := strings.ToLower(side)  // "buy" or "sell"
 	krakenType := strings.ToLower(orderType) // "limit" or "market"
 
+	// 下单前按 AssetPairs 规则规整精度；本地规则拒绝（*OrderConstraintError）直接中止。
+	qtyStr, priceStr, err := k.normalizeKrakenOrder(symbol, krakenPair, krakenType, price, quantity)
+	if err != nil {
+		return nil, err
+	}
+
 	postData := url.Values{}
 	postData.Set("pair", krakenPair)
 	postData.Set("type", krakenSide)
 	postData.Set("ordertype", krakenType)
-	postData.Set("volume", fmt.Sprintf("%.6f", quantity))
+	postData.Set("volume", qtyStr)
 
 	if krakenType == "limit" {
-		postData.Set("price", fmt.Sprintf("%.2f", price))
+		postData.Set("price", priceStr)
 	}
 
 	result, err := k.privateRequest("/0/private/AddOrder", postData)

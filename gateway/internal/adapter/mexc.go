@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -72,6 +73,25 @@ func (mx *MEXCAdapter) OnKline(fn func(bar model.Bar))              { mx.onKline
 
 // ── MEXC Signing (HMAC-SHA256, same pattern as Binance) ──
 
+// restURL 返回现货 REST base URL，支持 MEXC_REST_URL 环境变量覆盖
+// （与 Binance BINANCE_REST_URL 同一惯例：测试/自建网关用）。
+func (mx *MEXCAdapter) restURL() string {
+	if env := os.Getenv("MEXC_REST_URL"); env != "" {
+		return env
+	}
+	return MEXCRestURL
+}
+
+// contractBaseURL 返回合约 REST base（不含路径），支持 MEXC_CONTRACT_URL
+// 环境变量覆盖。合约公共元数据 /api/v1/contract/detail 与私有下单
+// /api/v1/private/order/submit 共用该 base。
+func (mx *MEXCAdapter) contractBaseURL() string {
+	if env := os.Getenv("MEXC_CONTRACT_URL"); env != "" {
+		return env
+	}
+	return "https://contract.mexc.com"
+}
+
 func (mx *MEXCAdapter) sign(params url.Values) string {
 	mac := hmac.New(sha256.New, []byte(mx.secretKey))
 	mac.Write([]byte(params.Encode()))
@@ -89,11 +109,11 @@ func (mx *MEXCAdapter) request(method, path string, params url.Values, signed bo
 	var body io.Reader
 
 	if method == "GET" || method == "DELETE" {
-		u, _ := url.Parse(MEXCRestURL + path)
+		u, _ := url.Parse(mx.restURL() + path)
 		u.RawQuery = params.Encode()
 		reqURL = u.String()
 	} else {
-		reqURL = MEXCRestURL + path
+		reqURL = mx.restURL() + path
 		body = strings.NewReader(params.Encode())
 	}
 
@@ -127,7 +147,7 @@ func (mx *MEXCAdapter) GetKlines(symbol, interval string, limit int) ([][]any, e
 	params.Set("interval", interval)
 	params.Set("limit", fmt.Sprintf("%d", limit))
 
-	u, _ := url.Parse(MEXCRestURL + "/klines")
+	u, _ := url.Parse(mx.restURL() + "/klines")
 	u.RawQuery = params.Encode()
 
 	resp, err := mx.httpClient.Get(u.String())
@@ -158,13 +178,17 @@ func (mx *MEXCAdapter) GetTicker(symbol string) (map[string]any, error) {
 // ── REST Trading ──
 
 func (mx *MEXCAdapter) PlaceOrder(symbol, side, orderType string, price, quantity float64) (map[string]any, error) {
+	qtyStr, priceStr, err := mx.normalizeMEXCSpotOrder(symbol, orderType, price, quantity)
+	if err != nil {
+		return nil, err
+	}
 	params := url.Values{}
 	params.Set("symbol", symbol)
 	params.Set("side", strings.ToUpper(side))
 	params.Set("type", strings.ToUpper(orderType))
-	params.Set("quantity", fmt.Sprintf("%.6f", quantity))
+	params.Set("quantity", qtyStr)
 	if strings.ToUpper(orderType) == "LIMIT" {
-		params.Set("price", fmt.Sprintf("%.2f", price))
+		params.Set("price", priceStr)
 	}
 	return mx.request("POST", "/order", params, true)
 }
@@ -208,19 +232,28 @@ func (mx *MEXCAdapter) GetPositions() ([]map[string]any, error) {
 	return positions, nil
 }
 
-// MEXC futures base URL
+// MEXC futures base URL（默认值；实际请求经 contractBaseURL() 构造，
+// 支持 MEXC_CONTRACT_URL 环境变量覆盖）
 const MEXCFuturesURL = "https://contract.mexc.com/api/v1/private"
 
 func (mx *MEXCAdapter) PlaceFuturesOrder(symbol, side, orderType string, price, quantity, leverage float64, positionSide string) (map[string]any, error) {
 	// MEXC futures contract API uses a different endpoint structure than spot.
 	// Attempt the futures endpoint; fall back to spot if unavailable.
+	// 注意：vol 单位是张（contracts），quantity（币数量）在
+	// normalizeMEXCFuturesOrder 内按 contractSize 换算为张数后取整；
+	// 约束违反会在发 HTTP 前直接报错返回。
+	contractSymbol := strings.Replace(symbol, "USDT", "_USDT", 1)
+	volStr, priceStr, err := mx.normalizeMEXCFuturesOrder(contractSymbol, orderType, price, quantity)
+	if err != nil {
+		return nil, err
+	}
 	params := url.Values{}
-	params.Set("symbol", strings.Replace(symbol, "USDT", "_USDT", 1))
+	params.Set("symbol", contractSymbol)
 	params.Set("side", fmt.Sprintf("%d", mapSideToMEXCInt(side)))
 	params.Set("openType", fmt.Sprintf("%d", mapOrderTypeToMEXCInt(orderType)))
-	params.Set("vol", fmt.Sprintf("%.4f", quantity))
+	params.Set("vol", volStr)
 	if orderType == "LIMIT" && price > 0 {
-		params.Set("price", fmt.Sprintf("%.2f", price))
+		params.Set("price", priceStr)
 	}
 	if leverage > 0 {
 		params.Set("leverage", fmt.Sprintf("%.0f", leverage))
@@ -234,7 +267,7 @@ func (mx *MEXCAdapter) PlaceFuturesOrder(symbol, side, orderType string, price, 
 	signature := mx.sign(params)
 	params.Set("signature", signature)
 
-	req, err := http.NewRequest("POST", MEXCFuturesURL+"/order/submit", strings.NewReader(params.Encode()))
+	req, err := http.NewRequest("POST", mx.contractBaseURL()+"/api/v1/private/order/submit", strings.NewReader(params.Encode()))
 	if err != nil {
 		return nil, err
 	}

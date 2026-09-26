@@ -34,6 +34,20 @@ type MatchingEngine struct {
 
 	// balance 可选资金校验（nil = 不校验，兼容旧行为/模拟做市）。
 	balance BalanceProvider
+
+	// onFill 可选成交回写钩子（C2.3）：每笔成交后对买卖双方各触发一次，
+	// 推送该订单的累计成交量与 VWAP 均价（绝对量语义，重复/乱序事件收敛，
+	// 天然幂等）。paper LIMIT 挂单（maker）被后续对手单成交时，OMS 靠它回写
+	// 状态。注意：回调在引擎锁内触发，实现不得再调用本引擎方法（防死锁），
+	// 重活应异步化。
+	onFill func(orderID uint64, filledQty, avgPrice float64)
+}
+
+// SetOnFill 注入成交回写钩子（生产由撮合服务接到 OMS）。
+func (e *MatchingEngine) SetOnFill(fn func(orderID uint64, filledQty, avgPrice float64)) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.onFill = fn
 }
 
 // SetBalanceProvider 注入可用资金校验（生产由撮合服务接上层账本）。
@@ -62,6 +76,7 @@ type order struct {
 	Price     float64
 	Quantity  float64
 	Filled    float64
+	notional  float64 // 累计成交额（Fill 回写算 VWAP 用）
 	UserID    uint64
 	Timestamp int64
 }
@@ -350,6 +365,13 @@ func (e *MatchingEngine) recordTrade(buyer, seller *order, price, qty float64) {
 	e.trades = append(e.trades, trade)
 	if len(e.trades) > 1000 {
 		e.trades = e.trades[len(e.trades)-1000:]
+	}
+	// Fill 回写钩子：向双方推送累计成交量/VWAP（绝对量语义，OMS 端幂等收敛）。
+	for _, ord := range []*order{buyer, seller} {
+		ord.notional += price * qty
+		if e.onFill != nil && ord.Filled > 0 {
+			e.onFill(ord.ID, ord.Filled, ord.notional/ord.Filled)
+		}
 	}
 }
 

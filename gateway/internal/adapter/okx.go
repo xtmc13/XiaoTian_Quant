@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -78,6 +79,15 @@ func (o *OKXAdapter) OnKline(fn func(bar model.Bar))              { o.onKline = 
 
 // ── OKX Signing ──
 
+// restURL 返回 REST base URL，支持 OKX_REST_URL 环境变量覆盖
+// （与 Binance BINANCE_REST_URL 同一惯例：测试/自建网关用）。
+func (o *OKXAdapter) restURL() string {
+	if env := os.Getenv("OKX_REST_URL"); env != "" {
+		return env
+	}
+	return OKXRestURL
+}
+
 func (o *OKXAdapter) sign(timestamp, method, path, body string) string {
 	preHash := timestamp + method + path + body
 	mac := hmac.New(sha256.New, []byte(o.secretKey))
@@ -86,7 +96,7 @@ func (o *OKXAdapter) sign(timestamp, method, path, body string) string {
 }
 
 func (o *OKXAdapter) request(method, path string, body map[string]any) (map[string]any, error) {
-	u, _ := url.Parse(OKXRestURL + path)
+	u, _ := url.Parse(o.restURL() + path)
 	var bodyStr string
 	var bodyReader io.Reader
 	if body != nil {
@@ -134,7 +144,7 @@ func (o *OKXAdapter) request(method, path string, body map[string]any) (map[stri
 
 func (o *OKXAdapter) GetKlines(symbol, interval string, limit int) ([][]any, error) {
 	instID := toOKXInstID(symbol)
-	u, _ := url.Parse(OKXRestURL + "/api/v5/market/candles")
+	u, _ := url.Parse(o.restURL() + "/api/v5/market/candles")
 	params := url.Values{}
 	params.Set("instId", instID)
 	params.Set("bar", interval)
@@ -180,15 +190,19 @@ func (o *OKXAdapter) GetTicker(symbol string) (map[string]any, error) {
 
 func (o *OKXAdapter) PlaceOrder(symbol, side, orderType string, price, quantity float64) (map[string]any, error) {
 	instID := toOKXInstID(symbol)
+	szStr, pxStr, err := o.normalizeOKXSpotOrder(instID, orderType, price, quantity)
+	if err != nil {
+		return nil, err
+	}
 	body := map[string]any{
 		"instId":  instID,
 		"tdMode":  "cash",
 		"side":    strings.ToLower(side),
 		"ordType": strings.ToLower(orderType),
-		"sz":      fmt.Sprintf("%.6f", quantity),
+		"sz":      szStr,
 	}
 	if strings.ToLower(orderType) == "limit" {
-		body["px"] = fmt.Sprintf("%.2f", price)
+		body["px"] = pxStr
 	} else {
 		body["ordType"] = "market"
 	}
@@ -196,8 +210,14 @@ func (o *OKXAdapter) PlaceOrder(symbol, side, orderType string, price, quantity 
 }
 
 // PlaceFuturesOrder places a futures (swap) order on OKX.
+// 注意：SWAP 合约的 sz 单位是张（contracts），quantity（币数量）在
+// normalizeOKXSwapOrder 内按 ctVal 换算为张数后取整。
 func (o *OKXAdapter) PlaceFuturesOrder(symbol, side, orderType string, price, quantity, leverage float64, positionSide string) (map[string]any, error) {
 	instID := toOKXInstID(symbol)
+	szStr, pxStr, err := o.normalizeOKXSwapOrder(instID, orderType, price, quantity)
+	if err != nil {
+		return nil, err
+	}
 	tdMode := "cross" // default cross margin
 	if positionSide == "isolated" {
 		tdMode = "isolated"
@@ -209,7 +229,7 @@ func (o *OKXAdapter) PlaceFuturesOrder(symbol, side, orderType string, price, qu
 		"tdMode":   tdMode,
 		"side":     strings.ToLower(side),
 		"ordType":  strings.ToLower(orderType),
-		"sz":       fmt.Sprintf("%.6f", quantity),
+		"sz":       szStr,
 		"lever":    fmt.Sprintf("%.0f", leverage),
 	}
 
@@ -219,7 +239,7 @@ func (o *OKXAdapter) PlaceFuturesOrder(symbol, side, orderType string, price, qu
 	}
 
 	if strings.ToLower(orderType) == "limit" {
-		body["px"] = fmt.Sprintf("%.2f", price)
+		body["px"] = pxStr
 	} else {
 		body["ordType"] = "market"
 	}

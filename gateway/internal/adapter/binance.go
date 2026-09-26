@@ -27,9 +27,10 @@ const (
 	BinanceTestWsURL = "wss://testnet.binance.vision/ws"
 
 	// Futures
-	BinanceFuturesRestURL  = "https://fapi.binance.com"
-	BinanceSapiRestURL     = "https://api.binance.com"
-	BinanceFuturesFapiPath = "/fapi/v2"
+	BinanceFuturesRestURL     = "https://fapi.binance.com"
+	BinanceFuturesTestRestURL = "https://testnet.binancefuture.com"
+	BinanceSapiRestURL        = "https://api.binance.com"
+	BinanceFuturesFapiPath    = "/fapi/v2"
 )
 
 // BinanceAdapter provides full Binance exchange integration including WebSocket streams.
@@ -1295,11 +1296,17 @@ type ReportedPnLIncome struct {
 }
 
 // fapiBaseURL returns the USDT-M futures REST base URL. Mirrors baseURL()'s
-// BINANCE_REST_URL escape hatch: tests/self-hosted gateways may override via
-// BINANCE_FAPI_URL so the reported-PnL methods can be aimed at an httptest server.
+// testnet switch (spot testnet → testnet.binance.vision, futures testnet →
+// testnet.binancefuture.com) and the BINANCE_FAPI_URL escape hatch:
+// tests/self-hosted gateways may override so the reported-PnL methods can be
+// aimed at an httptest server. 修复前 testnet=true 时合约仍指向生产
+// fapi.binance.com，testnet 凭证会被生产网关拒签。
 func (b *BinanceAdapter) fapiBaseURL() string {
 	if env := os.Getenv("BINANCE_FAPI_URL"); env != "" {
 		return env
+	}
+	if b.testnet {
+		return BinanceFuturesTestRestURL
 	}
 	return BinanceFuturesRestURL
 }

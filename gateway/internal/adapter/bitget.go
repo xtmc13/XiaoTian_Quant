@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -61,6 +62,15 @@ func (b *BitgetAdapter) Start() error     { return nil }
 
 // ── Auth ───────────────────────────────────────────────────────
 
+// restURL 返回 REST base URL，支持 BITGET_REST_URL 环境变量覆盖
+// （与 Binance BINANCE_REST_URL 同一惯例：测试/自建网关用）。
+func (b *BitgetAdapter) restURL() string {
+	if env := os.Getenv("BITGET_REST_URL"); env != "" {
+		return env
+	}
+	return BitgetRestURL
+}
+
 func (b *BitgetAdapter) signBitget(timestamp, method, path, body string) string {
 	preSign := fmt.Sprintf("%s%s%s%s", timestamp, method, path, body)
 	mac := hmac.New(sha256.New, []byte(b.secretKey))
@@ -83,7 +93,7 @@ func (b *BitgetAdapter) signedRequest(method, path string, bodyMap map[string]an
 		bodyReader = strings.NewReader(bodyStr)
 	}
 
-	req, _ := http.NewRequest(method, BitgetRestURL+path, bodyReader)
+	req, _ := http.NewRequest(method, b.restURL()+path, bodyReader)
 	req.Header.Set("ACCESS-KEY", b.apiKey)
 	req.Header.Set("ACCESS-SIGN", sign)
 	req.Header.Set("ACCESS-TIMESTAMP", timestamp)
@@ -185,15 +195,19 @@ func (b *BitgetAdapter) GetBalance() ([]map[string]any, error) {
 // ── Orders ─────────────────────────────────────────────────────
 
 func (b *BitgetAdapter) PlaceOrder(symbol, side, orderType string, price, quantity float64) (map[string]any, error) {
+	qtyStr, priceStr, err := b.normalizeBitgetOrder(symbol, orderType, price, quantity, false)
+	if err != nil {
+		return nil, err
+	}
 	body := map[string]any{
 		"symbol":    symbol,
 		"side":      strings.ToLower(side),
 		"orderType": strings.ToLower(orderType),
 		"force":     "gtc",
-		"quantity":  fmt.Sprintf("%.6f", quantity),
+		"quantity":  qtyStr,
 	}
 	if strings.ToLower(orderType) == "limit" {
-		body["price"] = fmt.Sprintf("%.2f", price)
+		body["price"] = priceStr
 	}
 
 	result, err := b.signedRequest("POST", "/spot/trade/place-order", body)

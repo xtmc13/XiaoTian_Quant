@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -87,6 +88,10 @@ func (b *BybitAdapter) Stop() error {
 // ── REST Helpers ───────────────────────────────────────────────
 
 func (b *BybitAdapter) baseURL() string {
+	// 与 Binance BINANCE_REST_URL 同一惯例：测试/自建网关可用环境变量覆盖。
+	if env := os.Getenv("BYBIT_REST_URL"); env != "" {
+		return env
+	}
 	if b.testnet {
 		return BybitTestURL
 	}
@@ -278,16 +283,20 @@ func (b *BybitAdapter) GetBalance() ([]map[string]any, error) {
 
 // PlaceFuturesOrder places a USDT-M perpetual futures order on Bybit.
 func (b *BybitAdapter) PlaceFuturesOrder(symbol, side, orderType string, price, quantity, leverage float64, positionSide string) (map[string]any, error) {
+	qtyStr, priceStr, err := b.normalizeBybitOrder(symbol, orderType, price, quantity, true)
+	if err != nil {
+		return nil, err
+	}
 	body := map[string]any{
 		"category":  "linear",
 		"symbol":    symbol,
 		"side":      strings.ToUpper(side),
 		"orderType": strings.ToUpper(orderType),
-		"qty":       fmt.Sprintf("%.6f", quantity),
+		"qty":       qtyStr,
 	}
 
 	if strings.ToUpper(orderType) == "LIMIT" {
-		body["price"] = fmt.Sprintf("%.2f", price)
+		body["price"] = priceStr
 	}
 
 	// Position index for hedge mode
@@ -453,16 +462,20 @@ func (b *BybitAdapter) SubscribeKline(symbol, interval string, callback func(bar
 // ── Orders ─────────────────────────────────────────────────────
 
 func (b *BybitAdapter) PlaceOrder(symbol, side, orderType string, price, quantity float64) (map[string]any, error) {
+	qtyStr, priceStr, err := b.normalizeBybitOrder(symbol, orderType, price, quantity, false)
+	if err != nil {
+		return nil, err
+	}
 	body := map[string]any{
 		"category": "spot",
 		"symbol":   symbol,
 		"side":     strings.ToUpper(side),
 		"orderType": strings.ToUpper(orderType),
-		"qty":      fmt.Sprintf("%.6f", quantity),
+		"qty":      qtyStr,
 	}
 
 	if strings.ToUpper(orderType) == "LIMIT" {
-		body["price"] = fmt.Sprintf("%.2f", price)
+		body["price"] = priceStr
 	}
 
 	result, err := b.signedPost("/order/create", body)

@@ -230,7 +230,7 @@ func TestIBKRPlaceOrder(t *testing.T) {
 	if o["conid"] != float64(479724371) {
 		t.Fatalf("conid = %v", o["conid"])
 	}
-	if o["side"] != "BUY" || o["orderType"] != "LMT" || o["price"] != "50000.5" || o["tif"] != "DAY" {
+	if o["side"] != "BUY" || o["orderType"] != "LMT" || o["price"] != "50000.50" || o["tif"] != "DAY" {
 		t.Fatalf("order 字段异常: %v", o)
 	}
 }
