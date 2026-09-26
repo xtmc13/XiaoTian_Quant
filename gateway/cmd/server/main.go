@@ -15,8 +15,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/adapter"
-	"github.com/xiaotian-quant/gateway/internal/alerting"
 	"github.com/xiaotian-quant/gateway/internal/agent"
+	"github.com/xiaotian-quant/gateway/internal/ai"
+	"github.com/xiaotian-quant/gateway/internal/alerting"
 	"github.com/xiaotian-quant/gateway/internal/alerts"
 	"github.com/xiaotian-quant/gateway/internal/app"
 	"github.com/xiaotian-quant/gateway/internal/config"
@@ -64,6 +65,11 @@ func main() {
 		log.Printf("WARNING: SQLite init skipped: %v", err)
 	}
 	store.LoadConfig()
+	// 启动即应用设置页保存的 AI 配置（api_key/model/base_url）到 provider 注册表，
+	// 不依赖 env 也能让配置的 key 在重启后生效。
+	if aiCfg, ok := store.GetConfig()["ai"].(map[string]any); ok {
+		ai.ApplyConfig(aiCfg)
+	}
 	store.LoadStrategyConfigs()
 
 	// ── 凭证安全（P0-4）：启动期主密钥检查（production 未设 → fatal，与

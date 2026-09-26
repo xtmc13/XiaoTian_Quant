@@ -110,13 +110,21 @@ func AgentChatStream(c *gin.Context) {
 		return // 已回 401
 	}
 
-	// ── Provider：agent.ai.provider，默认 deepseek ──
+	// ── Provider：统一解析链（见 configuredAgentAIProvider）──
 	provider, providerName := configuredAgentAIProvider()
 	if provider == nil || provider.APIKey == "" {
-		c.JSON(http.StatusOK, gin.H{
-			"status": "error",
-			"reply":  fmt.Sprintf("AI provider '%s' not configured. Please set API key in Settings → AI.", providerName),
-		})
+		msg := fmt.Sprintf("AI provider '%s' 未配置 API Key，请到 设置 → AI 模型 填写并保存", providerName)
+		if reqBody.Stream {
+			// 流式请求必须回 SSE error 事件：前端按事件协议解析，回 JSON 会静默落空。
+			c.Header("Content-Type", "text/event-stream")
+			c.Header("Cache-Control", "no-cache")
+			c.Header("Connection", "keep-alive")
+			c.Header("X-Accel-Buffering", "no")
+			fmt.Fprintf(c.Writer, "event: error\ndata: {\"message\":%q}\n\ndata: [DONE]\n\n", msg)
+			c.Writer.Flush()
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "error", "reply": msg})
 		return
 	}
 
@@ -173,18 +181,72 @@ func AgentChatStream(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"content": finalContent, "tool_calls": r.records})
 }
 
-// configuredAgentAIProvider 读取 store 配置 agent.ai.provider（默认 deepseek）。
+// configuredAgentAIProvider 解析 agent 对话实际使用的 provider。
+// 名称优先级：agent.ai.provider（agent 专属覆盖）> ai.defaults.provider >
+// ai.provider > 顶层 default_ai_provider（设置页"默认 AI 提供商"写入处）> deepseek。
+// 凭证优先级：ai.{name} 配置中的 api_key/model/base_url（设置页保存）> env 注入的注册表默认。
 func configuredAgentAIProvider() (*ai.Provider, string) {
 	cfg := store.GetConfig()
-	agentCfg, _ := cfg["agent"].(map[string]any)
-	aiCfg, _ := agentCfg["ai"].(map[string]any)
 	providerName := "deepseek"
-	if aiCfg != nil {
-		if p, ok := aiCfg["provider"].(string); ok && p != "" {
+	if v, ok := cfg["default_ai_provider"].(string); ok && v != "" {
+		providerName = v
+	}
+	var aiCfg map[string]any
+	if ac, ok := cfg["ai"].(map[string]any); ok {
+		aiCfg = ac
+		if p := getString(aiCfg, "provider", ""); p != "" {
 			providerName = p
 		}
+		if defaults, ok := aiCfg["defaults"].(map[string]any); ok {
+			if p := getString(defaults, "provider", ""); p != "" {
+				providerName = p
+			}
+		}
 	}
-	return ai.GetProvider(providerName), providerName
+	agentCfg, _ := cfg["agent"].(map[string]any)
+	if aai, ok := agentCfg["ai"].(map[string]any); ok {
+		if p := getString(aai, "provider", ""); p != "" {
+			providerName = p // agent 专属配置最高优先级
+		}
+	}
+	providerName = ai.NormalizeProviderName(providerName)
+
+	// 设置页保存的 per-provider 配置（key/model/base_url）。
+	var providerCfg map[string]any
+	if aiCfg != nil {
+		providerCfg, _ = aiCfg[providerName].(map[string]any)
+		if providerCfg == nil {
+			if legacy := ai.LegacyProviderName(providerName); legacy != "" {
+				providerCfg, _ = aiCfg[legacy].(map[string]any)
+			}
+		}
+		if providerCfg == nil {
+			if nested, ok := aiCfg["providers"].(map[string]any); ok {
+				providerCfg, _ = nested[providerName].(map[string]any)
+			}
+		}
+	}
+
+	p := ai.GetProvider(providerName)
+	if p == nil {
+		return nil, providerName
+	}
+	// 配置里有 key → 克隆覆盖（不动注册表，避免影响其他调用方）。
+	if providerCfg != nil {
+		key := getString(providerCfg, "api_key", "")
+		if key != "" {
+			clone := *p
+			clone.APIKey = key
+			if m := getString(providerCfg, "model", ""); m != "" {
+				clone.Model = m
+			}
+			if bu := getString(providerCfg, "base_url", ""); bu != "" {
+				clone.BaseURL = bu
+			}
+			return &clone, providerName
+		}
+	}
+	return p, providerName
 }
 
 // resolveAgentChatIdentity 双路径鉴权：X-Agent-Token 优先于 JWT。

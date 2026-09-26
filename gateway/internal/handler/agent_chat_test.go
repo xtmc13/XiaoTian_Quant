@@ -606,14 +606,26 @@ func TestAgentChat_SSE_ProviderError(t *testing.T) {
 func TestAgentChat_ProviderNotConfigured(t *testing.T) {
 	withAgentAIProvider(t, "ghost-provider-not-registered")
 
+	// 非流式：JSON error。
 	w := doAgentChat(t, `{"messages":[{"role":"user","content":"hi"}]}`, nil, 0)
 	assertEq(t, w.Code, http.StatusOK, "status code")
 	var body map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("parse body: %v", err)
 	}
-	if body["status"] != "error" || !strings.Contains(fmt.Sprint(body["reply"]), "not configured") {
+	if body["status"] != "error" || !strings.Contains(fmt.Sprint(body["reply"]), "API Key") {
 		t.Fatalf("body = %v", body)
+	}
+
+	// 流式：必须回 SSE error 事件（前端按事件协议解析，JSON 会静默落空）。
+	w = doAgentChat(t, `{"messages":[{"role":"user","content":"hi"}],"stream":true}`, nil, 0)
+	assertEq(t, w.Code, http.StatusOK, "stream status code")
+	if ct := w.Header().Get("Content-Type"); ct != "text/event-stream" {
+		t.Fatalf("Content-Type = %q", ct)
+	}
+	s := w.Body.String()
+	if !strings.Contains(s, "event: error") || !strings.Contains(s, "API Key") {
+		t.Fatalf("sse body = %q", s)
 	}
 }
 
@@ -749,6 +761,68 @@ func TestAgentChat_JWTUserIDPropagates(t *testing.T) {
 		t.Fatal("audit record missing")
 	}
 	assertEq(t, rec.TokenID, 0, "JWT path audit token_id = 0")
+}
+
+// 解析链：未设 agent.ai.provider 时，回落到设置页的 default_ai_provider，
+// 并采用 ai.{name} 里保存的 api_key（设置页保存路径）。
+func TestConfiguredAgentAIProvider_ResolutionChain(t *testing.T) {
+	cfg := store.GetConfig()
+	prevDefault, hadDefault := cfg["default_ai_provider"]
+	prevAI, hadAI := cfg["ai"]
+	prevAgent, hadAgent := cfg["agent"]
+	t.Cleanup(func() {
+		restoreCfgKey(t, cfg, "default_ai_provider", prevDefault, hadDefault)
+		restoreCfgKey(t, cfg, "ai", prevAI, hadAI)
+		restoreCfgKey(t, cfg, "agent", prevAgent, hadAgent)
+	})
+
+	cfg["default_ai_provider"] = "kimi"
+	cfg["ai"] = map[string]any{
+		"kimi": map[string]any{"api_key": "sk-kimi-from-settings", "model": "kimi-k2.5"},
+	}
+	// 清掉 agent.ai.provider，验证回落链。
+	agentCfg, _ := cfg["agent"].(map[string]any)
+	if agentCfg != nil {
+		delete(agentCfg, "ai")
+	}
+	if err := store.SaveConfig(cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	p, name := configuredAgentAIProvider()
+	if name != "kimi" {
+		t.Fatalf("provider name = %s, want kimi", name)
+	}
+	if p == nil || p.APIKey != "sk-kimi-from-settings" {
+		t.Fatalf("provider = %+v, want key from ai.kimi config", p)
+	}
+	if p.Model != "kimi-k2.5" {
+		t.Fatalf("model = %s, want kimi-k2.5", p.Model)
+	}
+
+	// agent.ai.provider 显式设置时优先级最高。
+	agentCfg = map[string]any{}
+	cfg["agent"] = agentCfg
+	agentCfg["ai"] = map[string]any{"provider": "deepseek"}
+	if err := store.SaveConfig(cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	_, name = configuredAgentAIProvider()
+	if name != "deepseek" {
+		t.Fatalf("agent.ai.provider 应优先，得到 %s", name)
+	}
+}
+
+func restoreCfgKey(t *testing.T, cfg map[string]any, key string, prev any, had bool) {
+	t.Helper()
+	if had {
+		cfg[key] = prev
+	} else {
+		delete(cfg, key)
+	}
+	if err := store.SaveConfig(cfg); err != nil {
+		t.Fatalf("restore config: %v", err)
+	}
 }
 
 // 请求校验：无 user 消息 / 非法角色 → 400。

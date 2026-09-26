@@ -91,15 +91,19 @@ func getActiveAIProvider() *ai.Provider {
 	var providerCfg map[string]any
 
 	// 1. Read configured provider name from store
+	// 优先级：ai.defaults.provider > ai.provider > 顶层 default_ai_provider（设置页写入处）。
+	if v, ok := cfg["default_ai_provider"].(string); ok {
+		providerName = ai.NormalizeProviderName(v)
+	}
 	if aiCfg, ok := cfg["ai"].(map[string]any); ok {
 		if defaults, ok := aiCfg["defaults"].(map[string]any); ok {
-			providerName = getStringFromMap(defaults, "provider", "")
+			if p := getStringFromMap(defaults, "provider", ""); p != "" {
+				providerName = ai.NormalizeProviderName(p)
+			}
 		}
-		if providerName == "" {
-			providerName = getStringFromMap(aiCfg, "provider", "")
+		if p := getStringFromMap(aiCfg, "provider", ""); p != "" {
+			providerName = ai.NormalizeProviderName(p)
 		}
-		// legacy 名归一：旧配置/旧前端可能写 anthropic，注册表为 claude。
-		providerName = ai.NormalizeProviderName(providerName)
 		// Read provider-specific config from store (frontend saves as ai.{provider_name})
 		if providerName != "" {
 			providerCfg, _ = aiCfg[providerName].(map[string]any)

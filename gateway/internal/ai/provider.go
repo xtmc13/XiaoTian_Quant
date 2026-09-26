@@ -138,6 +138,16 @@ func SetProviderModel(name, model string) {
 	}
 }
 
+// SetProviderBaseURL updates the base URL for a registered provider.
+// 不做尾缀归一：chatCompletionsURL 已能处理 base 带/不带版本段两种形态。
+func SetProviderBaseURL(name, baseURL string) {
+	providersMu.Lock()
+	defer providersMu.Unlock()
+	if p, ok := providers[name]; ok && baseURL != "" {
+		p.BaseURL = strings.TrimRight(baseURL, "/")
+	}
+}
+
 // ListProviders returns all registered provider names.
 func ListProviders() []string {
 	providersMu.RLock()

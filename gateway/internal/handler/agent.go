@@ -333,8 +333,16 @@ func GetAgentAIConfig(c *gin.Context) {
 	if aiCfg == nil {
 		aiCfg = make(map[string]any)
 	}
+	// 面板头部展示"实际生效"的 provider/model：与对话端点同一解析链，
+	// agent.ai 未显式配置时回落到设置页的默认提供商。
+	provider, providerName := configuredAgentAIProvider()
+	model := getString(aiCfg, "model", "")
+	if provider != nil && provider.Model != "" {
+		model = provider.Model
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"model":          getString(aiCfg, "model", "deepseek-chat"),
+		"provider":       providerName,
+		"model":          model,
 		"temperature":    0.7,
 		"max_tokens":     2048,
 		"system_prompt":  getString(aiCfg, "system_prompt", ""),

@@ -37,6 +37,11 @@ func SaveConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	// 保存即生效：把 ai.{provider} 的 key/model/base_url 应用到运行时注册表，
+	// 无需重启即可被决策 worker / 多智能体管线 / 各 AI handler 使用。
+	if aiCfg, ok := data["ai"].(map[string]any); ok {
+		ai.ApplyConfig(aiCfg)
+	}
 	c.JSON(http.StatusOK, data)
 }
 
