@@ -1,12 +1,15 @@
 package handler
 
 import (
+	"crypto/sha1"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -293,6 +296,87 @@ func aiModelsWithRuntimeStatus() map[string]any {
 }
 
 // GetConversionRate returns USD/CNY conversion rate.
+// ── 实时模型列表（设置页"拉取模型"按钮）──
+
+var listModelsCacheMu sync.RWMutex
+var listModelsCache = map[string]listModelsCacheEntry{}
+
+type listModelsCacheEntry struct {
+	models    []string
+	fetchedAt time.Time
+}
+
+const listModelsCacheTTL = 5 * time.Minute
+
+type listModelsRequest struct {
+	Provider string `json:"provider"`
+	APIKey   string `json:"api_key"`
+	BaseURL  string `json:"base_url"`
+}
+
+// ListAIProviderModels 从厂商 API 实时拉取模型列表。
+// POST /config/ai-provider-models，body {provider, api_key?, base_url?}；
+// 凭证回落顺序：请求体 → 已存配置 ai.{provider} → 运行时注册表 → 目录默认。
+// 结果按 provider+key 哈希缓存 5 分钟，避免重复点击打满厂商限流。
+func ListAIProviderModels(c *gin.Context) {
+	var body listModelsRequest
+	if err := c.ShouldBindJSON(&body); err != nil || body.Provider == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "provider is required"})
+		return
+	}
+	id := ai.NormalizeProviderName(body.Provider)
+
+	// 与 runAITest 同一套回落链解析凭证。
+	cfg := store.GetConfig()
+	var saved map[string]any
+	if aiCfg, ok := cfg["ai"].(map[string]any); ok {
+		saved, _ = aiCfg[id].(map[string]any)
+		if saved == nil {
+			if legacy := ai.LegacyProviderName(id); legacy != "" {
+				saved, _ = aiCfg[legacy].(map[string]any)
+			}
+		}
+	}
+	apiKey := firstNonEmpty(body.APIKey, getString(saved, "api_key", ""))
+	model := getString(saved, "model", "")
+	baseURL := firstNonEmpty(body.BaseURL, getString(saved, "base_url", ""))
+	if reg := ai.GetProvider(id); reg != nil {
+		apiKey = firstNonEmpty(apiKey, reg.APIKey)
+		baseURL = firstNonEmpty(baseURL, reg.BaseURL)
+		model = firstNonEmpty(model, reg.Model)
+	}
+	for _, p := range defaultAIModels["providers"].([]map[string]any) {
+		if p["key"] == id {
+			baseURL = firstNonEmpty(baseURL, getString(p, "baseUrl", ""))
+			break
+		}
+	}
+	if apiKey == "" {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": id + " 未配置 API Key，请先填写并保存"})
+		return
+	}
+
+	cacheKey := id + "|" + fmt.Sprintf("%x", sha1.Sum([]byte(apiKey)))
+	listModelsCacheMu.RLock()
+	entry, hit := listModelsCache[cacheKey]
+	listModelsCacheMu.RUnlock()
+	if hit && time.Since(entry.fetchedAt) < listModelsCacheTTL {
+		c.JSON(http.StatusOK, gin.H{"success": true, "models": entry.models, "cached": true})
+		return
+	}
+
+	models, err := ai.ListModels(id, baseURL, apiKey)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": id + " 拉取失败: " + err.Error()})
+		return
+	}
+	listModelsCacheMu.Lock()
+	listModelsCache[cacheKey] = listModelsCacheEntry{models: models, fetchedAt: time.Now()}
+	listModelsCacheMu.Unlock()
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "models": models, "current": model})
+}
+
 func GetConversionRate(c *gin.Context) {
 	// Try to fetch from a simple external API first
 	rate := fetchUSDCNYRate()

@@ -1288,6 +1288,11 @@ export const configApi = {
   currencySet: (currency: string) => api.put<{ currency: string }>('/settings/currency', { currency }),
   aiTest: (data: Record<string, unknown>) =>
     api.post<{ success: boolean; message?: string; latency_ms?: number }>('/ai/test', data),
+  listProviderModels: (data: { provider: string; api_key?: string; base_url?: string }) =>
+    api.post<{ success: boolean; message?: string; models?: string[]; current?: string; cached?: boolean }>(
+      '/config/ai-provider-models',
+      data
+    ),
   aiSave: (data: Record<string, unknown>) => api.post<{ success: boolean }>('/ai/save', data),
   // Dynamic config endpoints (backend-driven)
   getMarkets: () =>

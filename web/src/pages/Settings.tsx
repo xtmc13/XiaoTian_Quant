@@ -35,6 +35,7 @@ import {
   Route,
   Info,
   Terminal,
+  RefreshCw,
 } from 'lucide-react'
 
 /* ------------------------------------------------------------------ */
@@ -598,6 +599,34 @@ export function Settings() {
     },
   })
 
+  // 从厂商 API 实时拉取模型列表，拉到的候选灌进对应 provider 的模型 datalist。
+  const [fetchedModels, setFetchedModels] = useState<Record<string, string[]>>({})
+  const fetchModelsMut = useMutation<
+    { success: boolean; message?: string; models?: string[] },
+    Error,
+    { provider: string; cfg: AIProviderConfig }
+  >({
+    mutationFn: async ({ provider, cfg }) => {
+      const prov = aiCatalog.find((p) => p.key === provider)
+      return configApi.listProviderModels({
+        provider,
+        api_key: cfg.api_key || '',
+        base_url: cfg.base_url || prov?.baseUrl || '',
+      })
+    },
+    onSuccess: (data, vars) => {
+      if (data?.success && Array.isArray(data.models)) {
+        setFetchedModels((prev) => ({ ...prev, [vars.provider]: data.models as string[] }))
+        toast('success', t('settings.ai.modelsFetched').replace('{n}', String(data.models?.length ?? 0)))
+      } else {
+        toast('error', data?.message || t('settings.ai.fetchFailed'))
+      }
+    },
+    onError: (err: Error) => {
+      toast('error', err.message || t('settings.ai.fetchFailed'))
+    },
+  })
+
   /* ── Local settings persist ── */
   const persistLocal = useCallback(() => {
     saveLocal('xt-notify-email', notifyEmail)
@@ -998,7 +1027,26 @@ export function Settings() {
                         />
                       </div>
                       <div>
-                        <label className="mb-1.5 block text-xs text-muted-foreground">{t('settings.ai.defaultModel')}</label>
+                        <div className="mb-1.5 flex items-center justify-between">
+                          <label className="block text-xs text-muted-foreground">{t('settings.ai.defaultModel')}</label>
+                          <button
+                            onClick={() =>
+                              fetchModelsMut.mutate({
+                                provider: prov.key,
+                                cfg: { ...cfg, base_url: cfg.base_url || prov.baseUrl },
+                              })
+                            }
+                            disabled={fetchModelsMut.isPending && fetchModelsMut.variables?.provider === prov.key}
+                            className="flex items-center gap-1 rounded border border-quant-border bg-quant-card px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:border-quant-gold/30 hover:text-foreground disabled:opacity-50"
+                          >
+                            {fetchModelsMut.isPending && fetchModelsMut.variables?.provider === prov.key ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <RefreshCw className="h-3 w-3" />
+                            )}
+                            {t('settings.ai.fetchModels')}
+                          </button>
+                        </div>
                         <input
                           list={`ai-models-${prov.key}`}
                           value={effectiveModel}
@@ -1008,7 +1056,7 @@ export function Settings() {
                           className="w-full rounded-md border border-quant-border bg-quant-bg px-3 py-2 text-sm text-foreground outline-none transition-colors focus:border-quant-gold"
                         />
                         <datalist id={`ai-models-${prov.key}`}>
-                          {prov.models.map((m) => (
+                          {(fetchedModels[prov.key] ?? prov.models).map((m) => (
                             <option key={m} value={m} />
                           ))}
                         </datalist>

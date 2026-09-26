@@ -18,6 +18,7 @@ vi.mock('@/lib/api', async () => {
       save: vi.fn(),
       aiTest: vi.fn(),
       aiModels: vi.fn(),
+      listProviderModels: vi.fn(),
       exchangesConfigured: vi.fn(),
       saveExchangeCredentials: vi.fn(),
     },
@@ -148,5 +149,49 @@ describe('Settings AI 模型设置', () => {
     fireEvent.click(tab)
     await waitFor(() => expect(screen.getAllByText('智谱 GLM').length).toBeGreaterThan(0))
     expect(screen.getAllByText('Kimi（月之暗面）').length).toBeGreaterThan(0)
+  })
+
+  it('拉取模型按钮调 listProviderModels 并填充 datalist 候选', async () => {
+    vi.mocked(configApi.get).mockResolvedValue({
+      default_ai_provider: 'claude',
+      ai: { claude: { api_key: 'sk-ant', model: 'claude-opus-4-7' } },
+    } as never)
+    vi.mocked(configApi.listProviderModels).mockResolvedValue({
+      success: true,
+      models: ['claude-opus-4-7', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
+    } as never)
+    await renderAITab()
+    // 每个 provider 卡片各有一个按钮：目录顺序 openai(0)/claude(1)/deepseek(2)
+    fireEvent.click(screen.getAllByText('拉取模型')[1])
+    await waitFor(() =>
+      expect(configApi.listProviderModels).toHaveBeenCalledWith({
+        provider: 'claude',
+        api_key: 'sk-ant',
+        base_url: 'https://api.anthropic.com',
+      })
+    )
+    // datalist 被实时列表替换
+    await waitFor(() => {
+      const dl = document.getElementById('ai-models-claude') as HTMLDataListElement
+      expect(dl.options.length).toBe(3)
+      expect(dl.options[2].value).toBe('claude-haiku-4-5')
+    })
+    await waitFor(() =>
+      expect(useToastModule.toast).toHaveBeenCalledWith('success', expect.stringContaining('3'))
+    )
+  })
+
+  it('拉取失败时 toast 报错且不改 datalist', async () => {
+    vi.mocked(configApi.listProviderModels).mockResolvedValue({
+      success: false,
+      message: 'deepseek 拉取失败: HTTP 401',
+    } as never)
+    await renderAITab()
+    fireEvent.click(screen.getAllByText('拉取模型')[2])
+    await waitFor(() =>
+      expect(useToastModule.toast).toHaveBeenCalledWith('error', 'deepseek 拉取失败: HTTP 401')
+    )
+    const dl = document.getElementById('ai-models-deepseek') as HTMLDataListElement
+    expect(dl.options.length).toBe(1) // 回落目录候选数不变
   })
 })
