@@ -175,10 +175,10 @@ func TestProvider_ChatCompletionStream_OpenAI_ToolCalls(t *testing.T) {
 	p := newMockProvider("stream-tools", server.URL, "sk", "gpt-4o")
 
 	var deltas []string
-	text, calls, err := p.ChatCompletionStreamEx(CompletionRequest{
+	text, reasoning, calls, err := p.ChatCompletionStreamEx(CompletionRequest{
 		Messages: []ChatMessage{{Role: RoleUser, Content: "买入 BTC"}},
 		Tools:    sampleTools(),
-	}, func(delta string) {
+	}, func(delta, _ string) {
 		deltas = append(deltas, delta)
 	})
 	if err != nil {
@@ -186,6 +186,9 @@ func TestProvider_ChatCompletionStream_OpenAI_ToolCalls(t *testing.T) {
 	}
 	if text != "已完成" {
 		t.Errorf("full text = %q, want 已完成", text)
+	}
+	if reasoning != "" {
+		t.Errorf("reasoning = %q, want empty", reasoning)
 	}
 	if strings.Join(deltas, "") != "已完成" {
 		t.Errorf("deltas = %v, want [已完成]", deltas)
@@ -379,15 +382,18 @@ func TestProvider_ChatCompletionStream_Claude_ToolUse(t *testing.T) {
 	p := newMockProvider("claude", server.URL, "sk-ant", "claude-sonnet-4-6")
 
 	var deltas []string
-	text, calls, err := p.ChatCompletionStreamEx(CompletionRequest{
+	text, reasoning, calls, err := p.ChatCompletionStreamEx(CompletionRequest{
 		Messages: []ChatMessage{{Role: RoleUser, Content: "BTC 价格"}},
 		Tools:    sampleTools(),
-	}, func(d string) { deltas = append(deltas, d) })
+	}, func(d, _ string) { deltas = append(deltas, d) })
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if text != "查询中" {
 		t.Errorf("text = %q, want 查询中", text)
+	}
+	if reasoning != "" {
+		t.Errorf("reasoning = %q, want empty", reasoning)
 	}
 	if strings.Join(deltas, "") != "查询中" {
 		t.Errorf("deltas = %v", deltas)

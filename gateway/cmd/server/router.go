@@ -705,6 +705,11 @@ func registerAgentRoutes(api *gin.RouterGroup) {
 		agent.POST("/ai-config", handler.SaveAgentAIConfig)
 		agent.POST("/ai-test", handler.AgentAITest)
 		agent.POST("/chat", handler.AgentChatStream)
+		agent.POST("/conversations", handler.AgentConversationCreate)
+		agent.GET("/conversations", handler.AgentConversationsList)
+		agent.GET("/conversations/:id", handler.AgentConversationGet)
+		agent.PUT("/conversations/:id", handler.AgentConversationRename)
+		agent.DELETE("/conversations/:id", handler.AgentConversationDelete)
 	}
 }
 

@@ -1121,23 +1121,79 @@ export interface AgentToolCall {
   result_summary?: string
 }
 
+/** chat 请求体：会话相关字段均为可选（首条消息不带 conversation_id，由 conversation 事件回传） */
+export interface AgentChatRequest {
+  messages: AgentChatMessage[]
+  stream?: boolean
+  conversation_id?: string
+  /** 形如 "provider" 或 "provider:model"；缺省表示后端默认模型 */
+  model?: string
+  regenerate?: boolean
+  replace_history?: boolean
+  system_prompt?: string
+  temperature?: number
+}
+
+/** SSE conversation 事件：done 前下发一次，携带（新建的）会话 id 与标题 */
+export interface AgentConversationEvent {
+  id: string
+  title: string
+}
+
 export interface AgentChatDoneMessage {
   content: string
   tool_calls?: AgentToolCall[]
+  reasoning?: string
+  conversation_id?: string
 }
 
 export interface AgentChatHandlers {
   onDelta?: (delta: string) => void
+  /** 思考内容分片（JSON 编码字符串），流式追加 */
+  onReasoning?: (delta: string) => void
   onToolCall?: (toolCall: AgentToolCall) => void
+  onConversation?: (conversation: AgentConversationEvent) => void
   onDone?: (message: AgentChatDoneMessage) => void
   onError?: (message: string) => void
 }
 
+// ── Agent 会话 CRUD ──
+export interface AgentConversationSummary {
+  id: string
+  title: string
+  model?: string
+  created_at?: number | string
+  updated_at?: number | string
+}
+
+export interface AgentConversationDetail extends AgentConversationSummary {
+  messages: AgentConversationMessage[]
+}
+
+export interface AgentConversationMessage {
+  id: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  reasoning?: string
+  tool_calls?: AgentToolCall[]
+  created_at?: number | string
+}
+
+export const agentConversationApi = {
+  list: (limit = 50, offset = 0) =>
+    api.get<{ success: boolean; conversations: AgentConversationSummary[] }>('/agent/conversations', {
+      params: { limit, offset },
+    }),
+  create: (title?: string) =>
+    api.post<{ success: boolean; id: string; title: string }>('/agent/conversations', title ? { title } : {}),
+  get: (id: string) => api.get<AgentConversationDetail>(`/agent/conversations/${encodeURIComponent(id)}`),
+  rename: (id: string, title: string) =>
+    api.put<{ success: boolean }>(`/agent/conversations/${encodeURIComponent(id)}`, { title }),
+  remove: (id: string) => api.del<{ success: boolean }>(`/agent/conversations/${encodeURIComponent(id)}`),
+}
+
 export const agentChatApi = {
-  chat: (
-    messages: AgentChatMessage[],
-    handlers: AgentChatHandlers
-  ): { abort: () => void; promise: Promise<void> } => {
+  chat: (params: AgentChatRequest, handlers: AgentChatHandlers): { abort: () => void; promise: Promise<void> } => {
     const controller = new AbortController()
     const token = localStorage.getItem('xt-token') || ''
     const url = `${API_BASE_URL}/agent/chat`
@@ -1152,7 +1208,7 @@ export const agentChatApi = {
             Authorization: `Bearer ${token}`,
             'Access-Token': token,
           },
-          body: JSON.stringify({ messages, stream: true }),
+          body: JSON.stringify({ stream: true, ...params }),
           signal: controller.signal,
         })
       } catch (e) {
@@ -1213,6 +1269,11 @@ export const agentChatApi = {
           if (currentEvent === 'message') {
             // 默认事件 = 文本分片，直接追加
             handlers.onDelta?.(currentData)
+          } else if (currentEvent === 'reasoning') {
+            // 思考内容分片（JSON 编码字符串）
+            handlers.onReasoning?.(JSON.parse(currentData))
+          } else if (currentEvent === 'conversation') {
+            handlers.onConversation?.(JSON.parse(currentData))
           } else if (currentEvent === 'tool_call') {
             handlers.onToolCall?.(JSON.parse(currentData))
           } else if (currentEvent === 'done') {

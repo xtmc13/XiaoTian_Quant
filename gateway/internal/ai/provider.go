@@ -171,11 +171,12 @@ const (
 )
 
 type ChatMessage struct {
-	Role       Role        `json:"role"`
-	Content    string      `json:"content"`
-	ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`   // assistant 发起的工具调用
-	ToolCallID string      `json:"tool_call_id,omitempty"` // tool 角色回传结果时对应的原调用 id（OpenAI）
-	ToolResult *ToolResult `json:"-"`                      // 结构化工具结果（Anthropic tool_result / Gemini functionResponse 序列化时优先使用）
+	Role             Role        `json:"role"`
+	Content          string      `json:"content"`
+	ReasoningContent string      `json:"reasoning_content,omitempty"` // 推理内容（DeepSeek/Kimi 等 reasoning_content、Claude thinking、Gemini thought）
+	ToolCalls        []ToolCall  `json:"tool_calls,omitempty"`        // assistant 发起的工具调用
+	ToolCallID       string      `json:"tool_call_id,omitempty"`      // tool 角色回传结果时对应的原调用 id（OpenAI）
+	ToolResult       *ToolResult `json:"-"`                           // 结构化工具结果（Anthropic tool_result / Gemini functionResponse 序列化时优先使用）
 }
 
 // ── Completion Request/Response ──
@@ -396,6 +397,7 @@ func (p *Provider) claudeChat(req CompletionRequest) (*CompletionResponse, error
 	}
 	if content, ok := claudeResp["content"].([]any); ok && len(content) > 0 {
 		var text string
+		var reasoning string
 		var toolCalls []ToolCall
 		for _, cb := range content {
 			block, ok := cb.(map[string]any)
@@ -411,13 +413,20 @@ func (p *Provider) claudeChat(req CompletionRequest) (*CompletionResponse, error
 				})
 				continue
 			}
+			// thinking block：推理内容透传（Claude 对标展示的"思考过程"）
+			if block["type"] == "thinking" {
+				if t, ok := block["thinking"].(string); ok {
+					reasoning += t
+				}
+				continue
+			}
 			if t, ok := block["text"].(string); ok {
 				text += t
 			}
 		}
 		result.Choices = []Choice{{
 			Index:   0,
-			Message: ChatMessage{Role: RoleAssistant, Content: text, ToolCalls: toolCalls},
+			Message: ChatMessage{Role: RoleAssistant, Content: text, ReasoningContent: reasoning, ToolCalls: toolCalls},
 		}}
 	}
 	return result, nil
@@ -527,6 +536,7 @@ func (p *Provider) geminiChat(req CompletionRequest) (*CompletionResponse, error
 			if content, ok := cand["content"].(map[string]any); ok {
 				if parts, ok := content["parts"].([]any); ok && len(parts) > 0 {
 					var text string
+					var reasoning string
 					var toolCalls []ToolCall
 					for _, item := range parts {
 						part, ok := item.(map[string]any)
@@ -534,7 +544,12 @@ func (p *Provider) geminiChat(req CompletionRequest) (*CompletionResponse, error
 							continue
 						}
 						if t, ok := part["text"].(string); ok {
-							text += t
+							// thought 分片为模型推理内容，其余为正文
+							if thought, _ := part["thought"].(bool); thought {
+								reasoning += t
+							} else {
+								text += t
+							}
 						}
 						if fc, ok := part["functionCall"].(map[string]any); ok {
 							args, _ := json.Marshal(fc["args"])
@@ -546,7 +561,7 @@ func (p *Provider) geminiChat(req CompletionRequest) (*CompletionResponse, error
 					}
 					result.Choices = []Choice{{
 						Index:   0,
-						Message: ChatMessage{Role: RoleAssistant, Content: text, ToolCalls: toolCalls},
+						Message: ChatMessage{Role: RoleAssistant, Content: text, ReasoningContent: reasoning, ToolCalls: toolCalls},
 					}}
 				}
 			}
@@ -565,19 +580,25 @@ func (p *Provider) SupportsStream() bool {
 }
 
 // ChatCompletionStream streams the response token by token.
+// 旧签名：reasoning 分片被丢弃，仅回调正文增量。
 func (p *Provider) ChatCompletionStream(req CompletionRequest, callback func(delta string)) error {
-	_, _, err := p.chatCompletionStream(req, callback)
+	_, _, _, err := p.chatCompletionStream(req, func(delta, _ string) {
+		if callback != nil {
+			callback(delta)
+		}
+	})
 	return err
 }
 
-// ChatCompletionStreamEx 流式聊天：文本增量通过回调返回，
-// 同时聚合 tool calls（含分片拼接），返回完整文本与工具调用列表。
-func (p *Provider) ChatCompletionStreamEx(req CompletionRequest, callback func(delta string)) (string, []ToolCall, error) {
+// ChatCompletionStreamEx 流式聊天：正文与推理内容增量通过回调返回
+// （第二参为 reasoning 分片），同时聚合 tool calls（含分片拼接），
+// 返回完整文本、聚合推理内容与工具调用列表。
+func (p *Provider) ChatCompletionStreamEx(req CompletionRequest, callback func(delta, reasoningDelta string)) (string, string, []ToolCall, error) {
 	return p.chatCompletionStream(req, callback)
 }
 
-// chatCompletionStream 流式实现：按协议分发，回调文本增量并聚合工具调用
-func (p *Provider) chatCompletionStream(req CompletionRequest, callback func(delta string)) (string, []ToolCall, error) {
+// chatCompletionStream 流式实现：按协议分发，回调正文/推理增量并聚合工具调用
+func (p *Provider) chatCompletionStream(req CompletionRequest, callback func(delta, reasoningDelta string)) (string, string, []ToolCall, error) {
 	if p.Name == "claude" {
 		return p.claudeChatStream(req, callback)
 	}
@@ -587,7 +608,7 @@ func (p *Provider) chatCompletionStream(req CompletionRequest, callback func(del
 	return p.openAICompatibleStream(req, callback)
 }
 
-func (p *Provider) openAICompatibleStream(req CompletionRequest, callback func(delta string)) (string, []ToolCall, error) {
+func (p *Provider) openAICompatibleStream(req CompletionRequest, callback func(delta, reasoningDelta string)) (string, string, []ToolCall, error) {
 	req.Stream = true
 	req.Model = p.Model
 
@@ -595,7 +616,7 @@ func (p *Provider) openAICompatibleStream(req CompletionRequest, callback func(d
 	body, _ := json.Marshal(req)
 	httpReq, err := http.NewRequest("POST", url, bytes.NewReader(body))
 	if err != nil {
-		return "", nil, err
+		return "", "", nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+p.APIKey)
@@ -603,11 +624,12 @@ func (p *Provider) openAICompatibleStream(req CompletionRequest, callback func(d
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return "", nil, err
+		return "", "", nil, err
 	}
 	defer resp.Body.Close()
 
 	var fullText string
+	var reasoning string
 	agg := newToolCallAggregator()
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -633,7 +655,14 @@ func (p *Provider) openAICompatibleStream(req CompletionRequest, callback func(d
 		if content, ok := delta["content"].(string); ok && content != "" {
 			fullText += content
 			if callback != nil {
-				callback(content)
+				callback(content, "")
+			}
+		}
+		// delta.reasoning_content 推理分片：聚合的同时透传给回调
+		if rc, ok := delta["reasoning_content"].(string); ok && rc != "" {
+			reasoning += rc
+			if callback != nil {
+				callback("", rc)
 			}
 		}
 		// delta.tool_calls 分片按 index 聚合（arguments 为分片字符串，需拼接）
@@ -655,13 +684,13 @@ func (p *Provider) openAICompatibleStream(req CompletionRequest, callback func(d
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return fullText, nil, err
+		return fullText, reasoning, nil, err
 	}
-	return fullText, agg.result(), nil
+	return fullText, reasoning, agg.result(), nil
 }
 
 // Anthropic streaming via SSE.
-func (p *Provider) claudeChatStream(req CompletionRequest, callback func(delta string)) (string, []ToolCall, error) {
+func (p *Provider) claudeChatStream(req CompletionRequest, callback func(delta, reasoningDelta string)) (string, string, []ToolCall, error) {
 	systemMsg, anthropicMsgs := buildAnthropicMessages(req.Messages)
 	payload := map[string]any{
 		"model":      p.Model,
@@ -682,7 +711,7 @@ func (p *Provider) claudeChatStream(req CompletionRequest, callback func(delta s
 	body, _ := json.Marshal(payload)
 	httpReq, err := http.NewRequest("POST", p.BaseURL+"/v1/messages", bytes.NewReader(body))
 	if err != nil {
-		return "", nil, err
+		return "", "", nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("x-api-key", p.APIKey)
@@ -691,11 +720,12 @@ func (p *Provider) claudeChatStream(req CompletionRequest, callback func(delta s
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return "", nil, err
+		return "", "", nil, err
 	}
 	defer resp.Body.Close()
 
 	var fullText string
+	var reasoning string
 	agg := newToolCallAggregator()
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -723,7 +753,16 @@ func (p *Provider) claudeChatStream(req CompletionRequest, callback func(delta s
 			if text, ok := delta["text"].(string); ok && text != "" {
 				fullText += text
 				if callback != nil {
-					callback(text)
+					callback(text, "")
+				}
+			}
+			// thinking_delta：推理内容分片聚合 + 透传
+			if delta["type"] == "thinking_delta" {
+				if t, ok := delta["thinking"].(string); ok && t != "" {
+					reasoning += t
+					if callback != nil {
+						callback("", t)
+					}
 				}
 			}
 			// input_json_delta：arguments 分片拼接
@@ -735,13 +774,13 @@ func (p *Provider) claudeChatStream(req CompletionRequest, callback func(delta s
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return fullText, nil, err
+		return fullText, reasoning, nil, err
 	}
-	return fullText, agg.result(), nil
+	return fullText, reasoning, agg.result(), nil
 }
 
 // Gemini streaming.
-func (p *Provider) geminiChatStream(req CompletionRequest, callback func(delta string)) (string, []ToolCall, error) {
+func (p *Provider) geminiChatStream(req CompletionRequest, callback func(delta, reasoningDelta string)) (string, string, []ToolCall, error) {
 	contents := buildGeminiContents(req.Messages)
 	payload := map[string]any{"contents": contents}
 	if len(req.Tools) > 0 {
@@ -752,17 +791,18 @@ func (p *Provider) geminiChatStream(req CompletionRequest, callback func(delta s
 
 	httpReq, err := http.NewRequest("POST", url, bytes.NewReader(body))
 	if err != nil {
-		return "", nil, err
+		return "", "", nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return "", nil, err
+		return "", "", nil, err
 	}
 	defer resp.Body.Close()
 
 	var fullText string
+	var reasoning string
 	// Gemini 流式 functionCall：按函数名聚合 args map，结束时序列化为 JSON
 	fnArgs := map[string]map[string]any{}
 	var fnOrder []string
@@ -789,9 +829,17 @@ func (p *Provider) geminiChatStream(req CompletionRequest, callback func(delta s
 								continue
 							}
 							if text, ok := part["text"].(string); ok && text != "" {
-								fullText += text
-								if callback != nil {
-									callback(text)
+								// thought 分片为模型推理内容
+								if thought, _ := part["thought"].(bool); thought {
+									reasoning += text
+									if callback != nil {
+										callback("", text)
+									}
+								} else {
+									fullText += text
+									if callback != nil {
+										callback(text, "")
+									}
 								}
 							}
 							if fc, ok := part["functionCall"].(map[string]any); ok {
@@ -813,12 +861,12 @@ func (p *Provider) geminiChatStream(req CompletionRequest, callback func(delta s
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return fullText, nil, err
+		return fullText, reasoning, nil, err
 	}
 	var toolCalls []ToolCall
 	for _, name := range fnOrder {
 		args, _ := json.Marshal(fnArgs[name])
 		toolCalls = append(toolCalls, ToolCall{Name: name, Arguments: string(args)})
 	}
-	return fullText, toolCalls, nil
+	return fullText, reasoning, toolCalls, nil
 }
