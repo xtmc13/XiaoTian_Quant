@@ -165,14 +165,28 @@ func ExchangeSave(c *gin.Context) {
 func ExchangeTest(c *gin.Context) {
 	var data map[string]any
 	c.ShouldBindJSON(&data)
-	apiKey := getString(data, "api_key", "")
-	secret := getString(data, "secret", "")
+	name := getString(data, "name", "")
+	apiKey := strings.TrimSpace(getString(data, "api_key", ""))
+	secret := strings.TrimSpace(getString(data, "secret", ""))
+	passphrase := strings.TrimSpace(getString(data, "passphrase", ""))
+	// 留空 = 测已存凭证（与 SaveExchangeCredentials 的"留空保留"语义一致）：
+	// 前端表单不回显密钥，空字段必须回落到 env→保险库→config 的凭证解析。
+	if apiKey == "" || secret == "" {
+		vKey, vSecret, vPass := adapter.GetCredential(name)
+		if apiKey == "" {
+			apiKey = vKey
+		}
+		if secret == "" {
+			secret = vSecret
+		}
+		if passphrase == "" {
+			passphrase = vPass
+		}
+	}
 	if apiKey == "" || secret == "" {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "API key and secret required"})
 		return
 	}
-	name := getString(data, "name", "")
-	passphrase := getString(data, "passphrase", "")
 
 	// Build exchange-specific auth and request
 	client := &http.Client{Timeout: 10 * time.Second}

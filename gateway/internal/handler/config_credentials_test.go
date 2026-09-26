@@ -84,3 +84,35 @@ func TestSaveConfigStripsExchangeSecrets(t *testing.T) {
 	assertTrue(t, !strings.Contains(string(raw), "PLAINTEXT_K"), "yaml must not contain plaintext key")
 	assertTrue(t, strings.Contains(string(raw), "testnet: true"), "non-secret fields persist")
 }
+
+// ExchangeTest 凭证回落：表单留空（"留空保持不变"）时必须从保险库取已存凭证，
+// 而不是直接报 "API key and secret required"（生产回归：用户已配置却测不了）。
+func TestExchangeTestFallsBackToVault(t *testing.T) {
+	r := setupRouter()
+	r.POST("/exchange/test", ExchangeTest)
+
+	post := func(body string) map[string]any {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("POST", "/exchange/test", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		r.ServeHTTP(w, req)
+		var resp map[string]any
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		return resp
+	}
+
+	// 保险库无凭证 → 仍然报缺凭证。
+	resp := post(`{"name":"phemex","api_key":"","secret":""}`)
+	assertTrue(t, resp["success"] == false, "no creds must fail")
+	assertTrue(t, strings.Contains(resp["message"].(string), "required"), "expect required msg")
+
+	// 保险库有凭证（zb 走"适配器未实现"分支，不触网）→ 空表单应回落到 vault 并越过凭证检查。
+	assertTrue(t, store.GetVault().Store("zb", "zb", "VAULT_K", "VAULT_S", "VAULT_P") == nil, "seed vault")
+	resp = post(`{"name":"zb","api_key":"","secret":""}`)
+	assertTrue(t, !strings.Contains(resp["message"].(string), "required"), "vault creds must be used")
+	assertTrue(t, strings.Contains(resp["message"].(string), "尚未实现"), "expect adapter-not-implemented branch")
+
+	// 表单只给 api_key 时 secret 从 vault 补齐（部分回落）。
+	resp = post(`{"name":"zb","api_key":"FORM_K","secret":""}`)
+	assertTrue(t, strings.Contains(resp["message"].(string), "尚未实现"), "partial merge must pass credential gate")
+}
