@@ -1,13 +1,17 @@
-//go:build cgo
-// +build cgo
+//go:build cgo && xtengine
+// +build cgo,xtengine
 
 // Package adapter provides CGo bridge to the Rust matching engine.
 // The Rust library is compiled as a cdylib (.dll on Windows, .so on Linux, .dylib on macOS).
 //
+// This path is opt-in via the xtengine tag (benchmark/参照 only, not the main
+// path — the pure-Go engine in matching.go is the production default and is
+// used whenever xtengine is absent, regardless of CGO).
+//
 // Build:
 //
 //	cd engine && cargo build --release
-//	go build -tags cgo ./cmd/server/
+//	go build -tags xtengine ./cmd/server/
 package adapter
 
 /*
@@ -164,3 +168,17 @@ func (e *MatchingEngine) Destroy() {
 	C.engine_destroy(cs)
 	delete(engines, e.symbol)
 }
+
+// BalanceProvider 与纯 Go 引擎（matching.go）同名的资金校验接口，
+// 供 internal/service 统一编译。Rust FFI 侧不做资金校验（该路径仅为基准参照），
+// 注入后被忽略。
+type BalanceProvider interface {
+	Available(userID uint64, asset string) float64
+}
+
+// SetBalanceProvider 在 FFI 路径为 no-op：资金校验是纯 Go 引擎的生产能力。
+func (e *MatchingEngine) SetBalanceProvider(p BalanceProvider) {}
+
+// SetOnFill 在 FFI 路径为 no-op：成交回写钩子是纯 Go 引擎的生产能力，
+// FFI 路径的成交只能经 GetTrades 轮询读取。
+func (e *MatchingEngine) SetOnFill(fn func(orderID uint64, filledQty, avgPrice float64)) {}

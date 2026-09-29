@@ -71,8 +71,8 @@ cp ../.env.example .env        # 修改你的配置
 # 3. 运行
 go run ./cmd/server/
 
-# 4. 带 CGO 标签构建
-go build -tags cgo -o gateway-server ./cmd/server/
+# 4. 带 Rust 引擎构建（需先完成步骤 1 的 cargo build --release）
+go build -tags xtengine -o gateway-server ./cmd/server/
 ```
 
 ## API

@@ -69,7 +69,7 @@ else
     # If gcc is unavailable, fall back to pure-Go matching engine.
     if command -v gcc &> /dev/null && [ "$RUST_LIB_COPIED" = true ]; then
         echo "C compiler found; building with CGO + Rust matching engine"
-        CGO_ENABLED=1 go build -tags cgo \
+        CGO_ENABLED=1 go build -tags xtengine \
             -ldflags="-s -w -X main.version=$VERSION -X main.buildTime=$BUILD_TIME" \
             -o "$ROOT/dist/gateway" ./cmd/server
     else

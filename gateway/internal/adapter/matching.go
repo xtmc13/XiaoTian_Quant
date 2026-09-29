@@ -1,9 +1,12 @@
-//go:build !cgo
-// +build !cgo
+//go:build !cgo || !xtengine
+// +build !cgo !xtengine
 
-// Pure-Go matching engine (price-time priority) — the non-cgo production path.
-// Activated when CGO_ENABLED=0 (no Rust engine); behavior is aligned with the
-// Rust FFI version (gateway/internal/adapter/../engine/src/ffi.rs): identical
+// Pure-Go matching engine (price-time priority) — the production path.
+// Activated whenever the xtengine tag is absent (with or without CGO);
+// the Rust FFI bridge (cgo_bridge.go) only takes over with
+// `-tags xtengine` + CGO_ENABLED=1 + a prebuilt libxt_matching.
+// Behavior is aligned with the Rust FFI version
+// (gateway/internal/adapter/../engine/src/ffi.rs): identical
 // JSON result/snapshot/trade format, plus exchange-like balance enforcement —
 // when a BalanceProvider is wired, orders are validated against available
 // funds (insufficient → reject or partial fill, never a negative balance).
