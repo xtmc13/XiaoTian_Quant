@@ -220,6 +220,14 @@ func (p *Provider) ChatCompletion(req CompletionRequest) (*CompletionResponse, e
 
 	req.Model = p.Model
 
+	// Kimi（moonshot）模型只接受 temperature=1，传其它值直接 HTTP 400
+	// "invalid temperature: only 1 is allowed for this model"——ai_auto_trader
+	// 的 decide/gate/review 传 0.2~0.3，导致策略每轮决策失败、无法开仓
+	// （666 现货策略实证 2026-09-30）。按 provider 钳制，调用方无感。
+	if p.Name == "kimi" && req.Temperature != 0 && req.Temperature != 1 {
+		req.Temperature = 1
+	}
+
 	// Claude uses Anthropic Messages API
 	if p.Name == "claude" {
 		return p.claudeChat(req)
