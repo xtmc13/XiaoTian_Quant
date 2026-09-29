@@ -344,10 +344,13 @@ export function useStrategyCreateForm(
     setPresetKey(null)
   }, [strategyType, market])
 
-  // Keep the main timeframe in sync with active indicator periods (no hardcoding).
+  // Keep the main timeframe in sync with active indicator periods (no hardcoding)。
+  // 支撑回踩反弹例外：工作K线是策略语义的一部分（默认 4h，创建时锁定），
+  // 不随指标周期推导覆盖。
   useEffect(() => {
+    if (strategyType === 'support_rebound') return
     setTimeframe(deriveTimeframeFromCRA(craParams))
-  }, [craParams])
+  }, [craParams, strategyType])
 
   // 编辑回填（现货网格）：自定义键 price_lower/price_upper/grid_count/per_grid_amount
   // 优先；缺省从 CRA 键回退（first_order_amount→每格金额、order_count→格数，
