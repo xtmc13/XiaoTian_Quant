@@ -324,7 +324,8 @@ export function useStrategyCreateForm(
     const profile = market === 'spot' ? SPOT_TYPE_PROFILES[strategyType] : undefined
     setName('')
     setSymbol('BTCUSDT')
-    setTimeframe(deriveTimeframeFromCRA(defaults))
+    // 支撑回踩反弹以 4h 为工作K线，其余类型沿用指标推导周期。
+    setTimeframe(strategyType === 'support_rebound' ? '4h' : deriveTimeframeFromCRA(defaults))
     setSelectedExchanges([])
     setNotifyChannels(['browser'])
     if (isGridProfile(profile)) {

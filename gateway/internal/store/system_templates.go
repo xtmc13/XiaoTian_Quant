@@ -7,13 +7,13 @@ import (
 
 // ── 系统预设策略模板（A1.5 CTA/组合策略模板）──
 //
-// 12 个 QuantDinger 对标的系统预设：8 个 CTA 单策略 + 4 个组合策略。
+// 13 个 QuantDinger 对标的系统预设：8 个 CTA 单策略 + 4 个组合策略 + 1 个现货策略。
 // user_id=0 表示系统模板，对全部用户可见（StrategyTemplateRepo.List 改为
 // user_id=? OR user_id=0）；用户模板删除条件 user_id=? 天然保护系统模板
-// 不被普通用户删除。ID 固定（tpl-cta-* / tpl-combo-*），INSERT OR IGNORE
+// 不被普通用户删除。ID 固定（tpl-cta-* / tpl-combo-* / tpl-spot-*），INSERT OR IGNORE
 // 幂等，重启/重复初始化不会重复插入，也不覆盖用户已改过名的同 ID 记录。
 
-// SystemTemplates 返回 12 个系统预设模板的完整定义。
+// SystemTemplates 返回 13 个系统预设模板的完整定义。
 func SystemTemplates() []StrategyTemplateRecord {
 	cta := func(id, name, stype, desc string, cfg map[string]any) StrategyTemplateRecord {
 		raw, _ := json.Marshal(cfg)
@@ -35,6 +35,18 @@ func SystemTemplates() []StrategyTemplateRecord {
 			Name:              name,
 			Category:          "contract",
 			StrategyType:      "combo",
+			Description:       desc,
+			DefaultConfigJSON: string(raw),
+		}
+	}
+	spot := func(id, name, stype, desc string, cfg map[string]any) StrategyTemplateRecord {
+		raw, _ := json.Marshal(cfg)
+		return StrategyTemplateRecord{
+			ID:                id,
+			UserID:            0,
+			Name:              name,
+			Category:          "spot",
+			StrategyType:      stype,
 			Description:       desc,
 			DefaultConfigJSON: string(raw),
 		}
@@ -138,6 +150,20 @@ func SystemTemplates() []StrategyTemplateRecord {
 					{"strategy_name": "rsi", "weight": 0.4, "enabled": true},
 					{"strategy_name": "bollinger_bands", "weight": 0.2, "enabled": true},
 				},
+			}),
+
+		// ── 1 个现货策略（4h 工作 K 线，只做多，四步入场：确认支撑位 → 放量暴跌
+		//（异常成交量恐慌）→ 暴跌之后反弹确认 → 关键回踩支撑 → 放量阳线入场）──
+		spot("tpl-spot-support-rebound", "支撑回踩反弹 (现货)", "support_rebound",
+			"现货左侧抄底：4h 级别先确认多次触及的支撑位，等放量暴跌（恐慌量 ≥ 量能均线×2、回撤 ≥12%）后反弹，回踩支撑带守稳时首根放量阳线入场；止损放支撑下沿 2%，目标 min(暴跌参考高, +15%)，浮盈 5% 后保本移损，90 根超时离场。",
+			map[string]any{
+				"symbol": "BTCUSDT", "timeframe": "4h", "trade_direction": "long",
+				"lookback_bars": 120, "support_touch_tolerance_pct": 0.015, "min_support_touches": 2,
+				"crash_lookback_bars": 6, "crash_drop_pct": 0.12,
+				"volume_sma_period": 20, "volume_spike_mult": 2.0,
+				"rebound_pct": 0.05, "pullback_bars": 12, "entry_volume_mult": 1.5,
+				"stop_buffer_pct": 0.02, "take_profit_pct": 0.15,
+				"position_size": 500, "max_hold_bars": 90,
 			}),
 	}
 }

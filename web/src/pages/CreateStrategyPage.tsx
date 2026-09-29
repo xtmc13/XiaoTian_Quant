@@ -55,10 +55,18 @@ export function CreateStrategyPage() {
     }
   })()
 
+  // 快捷入口支持 ?type=xxx（如 /create?market=spot&type=support_rebound）：
+  // 新创建场景直接以该类型初始化（策略参数定义由后端 param-defs 驱动渲染）。
+  const urlType = searchParams.get('type') || undefined
+
   const form = useStrategyCreateForm(
     market,
     () => navigate('/bots'),
-    editId && editingItem ? { editId, initialType: editingItem.strategy_type, initialConfig: editConfig } : undefined
+    editId && editingItem
+      ? { editId, initialType: editingItem.strategy_type, initialConfig: editConfig }
+      : urlType
+        ? { initialType: urlType }
+        : undefined
   )
 
   // 编辑回填（现货/合约同一套原创建表单）：config_json → CRAParams（指标

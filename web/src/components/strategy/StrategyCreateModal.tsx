@@ -4,7 +4,15 @@ import { strategyApi, backtestApi, configApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { toast } from '@/lib/useToast'
 import type { StrategyTemplate } from '@/types/strategies'
-import { FormField, STRAT_TYPES, getDefaultStrategyCode, type StrategyRow } from './StrategyFormFields'
+import type { StrategyParamDef } from '@/types'
+import {
+  FormField,
+  STRAT_TYPES,
+  getDefaultStrategyCode,
+  DynamicParamField,
+  TIMEFRAMES,
+  type StrategyRow,
+} from './StrategyFormFields'
 import { CRAParamForm, craParamsToApiPayload, type CRAParams } from './CRAParamForm'
 import { STRATEGY_PRESETS, type Preset, type PresetKey } from './StrategyPresets'
 import { ExchangeSelectModal } from './ExchangeSelectModal'
@@ -33,6 +41,31 @@ function inferTimeframeFromCRAParams(cra: CRAParams): string {
   const periods = candidates.filter((p): p is string => p !== null)
   return periods[0] || '15m'
 }
+
+/* ─── 支撑回踩反弹（support_rebound）参数定义 ─────────────────────
+ * 与后端 gateway/internal/strategy/strategies/support_rebound.go 的
+ * ParamRegistry 一一对应（14 个参数；symbol/timeframe 为顶层通用字段，
+ * 不在此列）。分类：buy=入场/识别，stoploss=止损缓冲，roi=止盈/超时。
+ */
+const SUPPORT_REBOUND_PARAM_DEFS: StrategyParamDef[] = [
+  { name: 'lookback_bars', type: 'int', default: 120, min: 50, max: 300, step: 1, label: '支撑观察窗口（根）', description: '支撑位识别窗口，120×4h≈20 天' },
+  { name: 'support_touch_tolerance_pct', type: 'float', default: 0.015, min: 0.005, max: 0.05, step: 0.001, label: '支撑带容差', description: '支撑带 = 窗口最低价×(1±容差)，默认 ±1.5%' },
+  { name: 'min_support_touches', type: 'int', default: 2, min: 2, max: 6, step: 1, label: '最少触及次数', description: '窗口内 Low 落入支撑带的最少 bar 数（双底=2）' },
+  { name: 'crash_lookback_bars', type: 'int', default: 6, min: 3, max: 24, step: 1, label: '暴跌检测窗口（根）', description: '回撤与恐慌量的检测窗口，6×4h=24h' },
+  { name: 'crash_drop_pct', type: 'float', default: 0.12, min: 0.05, max: 0.35, step: 0.01, label: '暴跌幅度', description: '窗口内最低 bar 自最高价回撤 ≥12% 才算恐慌暴跌' },
+  { name: 'volume_sma_period', type: 'int', default: 20, min: 10, max: 60, step: 1, label: '量能均线周期', description: '异常成交量的均线基准' },
+  { name: 'volume_spike_mult', type: 'float', default: 2.0, min: 1.2, max: 5, step: 0.1, label: '异常量倍数（暴跌）', description: '暴跌 K 成交量 ≥ 量能均线×该倍数' },
+  { name: 'rebound_pct', type: 'float', default: 0.05, min: 0.02, max: 0.15, step: 0.005, label: '反弹确认幅度', description: '自暴跌低点反弹该幅度确认企稳' },
+  { name: 'pullback_bars', type: 'int', default: 12, min: 3, max: 48, step: 1, label: '回踩有效窗口（根）', description: '反弹后该窗口内须回踩支撑带，过期形态失效' },
+  { name: 'entry_volume_mult', type: 'float', default: 1.5, min: 1.0, max: 4, step: 0.1, label: '入场放量倍数', description: '入场阳线成交量 ≥ 量能均线×该倍数' },
+  { name: 'stop_buffer_pct', type: 'float', default: 0.02, min: 0.005, max: 0.05, step: 0.005, label: '止损缓冲', description: '止损 = 支撑下沿×(1−缓冲)，默认再让 2%' },
+  { name: 'take_profit_pct', type: 'float', default: 0.15, min: 0.03, max: 0.5, step: 0.01, label: '目标涨幅上限', description: '止盈目标 = min(暴跌参考高, 入场价×(1+该值))' },
+  { name: 'position_size', type: 'float', default: 500, min: 50, max: 10000, step: 50, label: '每单金额 (USDT)', description: '每笔入场投入的 USDT 金额' },
+  { name: 'max_hold_bars', type: 'int', default: 90, min: 20, max: 400, step: 1, label: '超时离场（根）', description: '持仓 K 线数上限，超时强制平仓' },
+]
+
+const createDefaultSupportReboundParams = (): Record<string, unknown> =>
+  Object.fromEntries(SUPPORT_REBOUND_PARAM_DEFS.map((d) => [d.name, d.default]))
 
 /* ─── Collapsible Section ─── */
 function CollapsibleSection({
@@ -193,6 +226,12 @@ export function StrategyCreateModal({
 
   // CRA params (initialized from market-specific defaults)
   const [craParams, setCraParams] = useState<CRAParams>(() => createDefaultCRAParams(market))
+
+  // 支撑回踩反弹（support_rebound）专属参数与工作 K 线周期（顶层 timeframe 字段）
+  const [supportReboundParams, setSupportReboundParams] = useState<Record<string, unknown>>(
+    createDefaultSupportReboundParams
+  )
+  const [supportReboundTimeframe, setSupportReboundTimeframe] = useState('4h')
 
   // ── My strategy templates ──
   const [templates, setTemplates] = useState<StrategyTemplate[]>([])
@@ -382,6 +421,7 @@ export function StrategyCreateModal({
     // "残废配置"（运行时会被参数注册表静默丢弃）。
     const config: Record<string, unknown> = {
       ...(craType ? craParamsToApiPayload(craParams) : {}),
+      ...(strategyType === 'support_rebound' ? supportReboundParams : {}),
       market_type: market === 'spot' ? 'spot' : 'swap',
       position_side: craParams.direction === 'long' ? 'LONG' : craParams.direction === 'short' ? 'SHORT' : 'BOTH',
       margin_mode: 'cross',
@@ -407,6 +447,9 @@ export function StrategyCreateModal({
       coin: symbol.trim().toUpperCase().replace('USDT', '').replace('USD', ''),
       direction: market === 'spot' ? 'long' : craParams.direction,
       initial_capital: initialCapital,
+      // support_rebound：工作 K 线周期随顶层 timeframe 落库（K 线供给管按它订阅）；
+      // 其余类型不新增该字段，维持原默认（15m）。
+      ...(strategyType === 'support_rebound' ? { timeframe: supportReboundTimeframe } : {}),
     }
     if (mode === 'script') {
       payload.strategy_code = codeWorkspace
@@ -659,6 +702,38 @@ export function StrategyCreateModal({
 
                   <CollapsibleSection title="CRA 量化参数" count={4} defaultOpen>
                     <CRAParamForm value={craParams} onChange={setCraParams} market={market} />
+                  </CollapsibleSection>
+                </>
+              ) : strategyType === 'support_rebound' ? (
+                <>
+                  <div className="text-xs text-muted-foreground mb-2 leading-relaxed">
+                    四步入场：确认支撑位（多次触及）→ 放量暴跌恐慌 → 暴跌后反弹确认 → 回踩支撑守稳时放量阳线入场（只做多）
+                  </div>
+                  <CollapsibleSection title="支撑回踩反弹参数" count={SUPPORT_REBOUND_PARAM_DEFS.length} defaultOpen>
+                    <FormField label="工作K线周期">
+                      <select
+                        value={supportReboundTimeframe}
+                        onChange={(e) => setSupportReboundTimeframe(e.target.value)}
+                        className={inputCls}
+                      >
+                        {TIMEFRAMES.map((tf) => (
+                          <option key={tf} value={tf}>
+                            {tf}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-[10px] text-muted-foreground mt-1">
+                        策略按该周期闭合 K 线判定支撑/暴跌/反弹/回踩，默认 4h
+                      </p>
+                    </FormField>
+                    {SUPPORT_REBOUND_PARAM_DEFS.map((def) => (
+                      <DynamicParamField
+                        key={def.name}
+                        def={def}
+                        value={supportReboundParams[def.name]}
+                        onChange={(val) => setSupportReboundParams((prev) => ({ ...prev, [def.name]: val }))}
+                      />
+                    ))}
                   </CollapsibleSection>
                 </>
               ) : !strategyType ? (

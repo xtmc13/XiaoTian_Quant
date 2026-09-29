@@ -20,6 +20,7 @@ export type StrategyRow = StrategyItem & {
 export const STRAT_TYPES: Record<string, { value: string; label: string }[]> = {
   spot: [
     { value: 'cra_spot', label: '现货网格' },
+    { value: 'support_rebound', label: '支撑回踩反弹' },
     { value: 'martin_trend', label: '马丁趋势' },
     { value: 'wallstreet', label: '华尔街' },
     { value: 'aggressive', label: '激进' },

@@ -1742,6 +1742,8 @@ func GetStrategyParamDefs(c *gin.Context) {
 		defs = s.ParamDefs()
 	case "universe_rotation":
 		defs = strategies.NewUniverseRotationStrategy().ParamDefs()
+	case "support_rebound":
+		defs = strategies.NewSupportReboundStrategy().ParamDefs()
 	case "trend_long_mt":
 		defs = strategies.NewTrendLongStrategy().ParamDefs()
 	case "trend_short_mt":
