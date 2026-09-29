@@ -367,7 +367,7 @@ func TestSupportReboundParams(t *testing.T) {
 		t.Fatal("expected range error for lookback_bars=10")
 	}
 
-	// ApplyParams 从 map 同步（含 symbol/timeframe 引擎级键）。
+	// ApplyParams 从 map 同步。timeframe 为策略固定语义（恒 4h），传入 1h 也必须被忽略。
 	err := s.ApplyParams(map[string]any{
 		"symbol":                      "ethusdt",
 		"timeframe":                   "1h",
@@ -389,8 +389,11 @@ func TestSupportReboundParams(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyParams: %v", err)
 	}
-	if s.symbol != "ETHUSDT" || s.timeframe != "1h" {
-		t.Fatalf("symbol/timeframe = %s/%s", s.symbol, s.timeframe)
+	if s.symbol != "ETHUSDT" {
+		t.Fatalf("symbol = %s", s.symbol)
+	}
+	if s.timeframe != "4h" {
+		t.Fatalf("timeframe 应固定 4h，得到 %s", s.timeframe)
 	}
 	if s.lookbackBars != 200 || math.Abs(s.crashDropPct-0.2) > 1e-12 || s.positionSize != 800 {
 		t.Fatalf("params not synced: %d/%f/%f", s.lookbackBars, s.crashDropPct, s.positionSize)
@@ -399,8 +402,8 @@ func TestSupportReboundParams(t *testing.T) {
 	if err := s.ApplyParams(map[string]any{"rebound_pct": 0.5}); err == nil {
 		t.Fatal("expected error for rebound_pct=0.5 (out of range)")
 	}
-	// PrimaryTimeframe 声明与 PrimaryTimeframer 接口。
-	if s.PrimaryTimeframe() != "1h" {
+	// PrimaryTimeframe 声明与 PrimaryTimeframer 接口（固定 4h）。
+	if s.PrimaryTimeframe() != "4h" {
 		t.Fatalf("PrimaryTimeframe = %s", s.PrimaryTimeframe())
 	}
 	// ParamDefs 供前端渲染。

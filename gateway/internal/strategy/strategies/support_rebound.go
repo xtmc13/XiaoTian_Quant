@@ -298,9 +298,9 @@ func (s *SupportReboundStrategy) ApplyParams(m map[string]any) error {
 	if sym := getString(m, "symbol", ""); sym != "" {
 		s.symbol = strings.ToUpper(strings.TrimSpace(sym))
 	}
-	if tf := getString(m, "timeframe", ""); tf != "" {
-		s.timeframe = strings.ToLower(strings.TrimSpace(tf))
-	}
+	// 工作K线固定 4h：策略语义（支撑窗口/暴跌窗口/超时）全部按 4h 设计，
+	// 不接收 timeframe 参数，任何创建路径进来的实例都恒为 4h。
+	s.timeframe = "4h"
 	return nil
 }
 
