@@ -1,6 +1,7 @@
 package strategies
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/event"
 	"github.com/xiaotian-quant/gateway/internal/model"
 	"github.com/xiaotian-quant/gateway/internal/strategy"
+	"github.com/xiaotian-quant/gateway/internal/strategy/cra"
 )
 
 // ── SupportReboundStrategy（支撑回踩反弹，现货只做多）────────────────
@@ -28,6 +30,10 @@ import (
 // armed 期间（含反弹/回踩子态）若 Close < supportBottom → 支撑失效，
 // 回 IDLE 重新找支撑。持仓管理（OnBar/OnTick）：触止损/触目标/超时离场，
 // 浮盈 ≥ rebound_pct 后止损上移到 max(stop, entry×1.002) 保本。
+// 参数含 CRA 专属键（first_order_amount/add_positions/take_profit_method/
+// moving_take_profit_tiers/stop_loss_ratio）时改走 CRA 仓位管理（补仓梯度
+// + 移动止盈，见 manageCRAPosition），原固定 target/保本移损禁用，仅保留
+// 超时平仓作最后安全闸。
 
 // 支撑回踩反弹状态机状态。
 const (
@@ -86,6 +92,13 @@ type SupportReboundStrategy struct {
 	targetPrice          float64
 	holdBars             int
 	stopMovedToBreakeven bool
+
+	// ── CRA 仓位管理（可选）：参数含任一 CRA 专属键时启用 ──
+	// 复用 cra 包的参数解析与状态机，实现与 CRA 一致的补仓梯度 +
+	// 移动止盈；未启用时完全走上方固定止损/目标逻辑（向后兼容）。
+	craEnabled bool
+	craParams  *cra.CRAParams
+	craState   *cra.CRAState
 
 	params *strategy.ParamRegistry
 }
@@ -186,6 +199,36 @@ func (s *SupportReboundStrategy) Start(params map[string]any) error {
 	// 重新启动 = 全新状态机：清空 K 线与持仓/找支撑状态，重新预热。
 	s.bars = nil
 	s.resetToIdleLocked()
+
+	// CRA 模式判定：参数中只要出现任一 CRA 专属键即启用 CRA 仓位管理。
+	// 必须按「键存在」判定而非 ParseCRAParams 的默认值——老实例没有这些
+	// 键时必须保持原固定止损/目标行为。
+	s.craEnabled = false
+	s.craParams = nil
+	s.craState = nil
+	if hasCRAKeys(params) {
+		data, err := json.Marshal(params)
+		if err != nil {
+			return fmt.Errorf("support_rebound cra: marshal params: %w", err)
+		}
+		cp, err := cra.ParseCRAParams(string(data))
+		if err != nil {
+			return fmt.Errorf("support_rebound cra: parse params: %w", err)
+		}
+		if err := cp.Validate(); err != nil {
+			return fmt.Errorf("support_rebound cra: validate: %w", err)
+		}
+		// CRA 合约默认关闭止损；此处只要配了 stop_loss_ratio 即视为启用
+		// 比例止损（现货语义，与 CRA 合约的 StopLossEnabled 开关解耦）。
+		if cp.StopLossRatio > 0 {
+			cp.StopLossEnabled = true
+			cp.StopLossType = "ratio"
+		}
+		s.craParams = cp
+		s.craState = &cra.CRAState{}
+		s.craEnabled = true
+	}
+
 	s.running = true
 	return nil
 }
@@ -196,7 +239,26 @@ func (s *SupportReboundStrategy) Stop() error {
 	s.running = false
 	s.bars = nil
 	s.resetToIdleLocked()
+	s.craEnabled = false
+	s.craParams = nil
+	s.craState = nil
 	return nil
+}
+
+// hasCRAKeys 判定参数 map 是否含任一 CRA 专属键（presence 判定）。
+func hasCRAKeys(m map[string]any) bool {
+	for _, k := range []string{
+		"first_order_amount",
+		"add_positions",
+		"take_profit_method",
+		"moving_take_profit_tiers",
+		"stop_loss_ratio",
+	} {
+		if _, ok := m[k]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // ── 参数系统实现 ────────────────────────────────────────────────
@@ -252,16 +314,21 @@ func (s *SupportReboundStrategy) ParamDefs() []map[string]any {
 // CustomStakeAmount 把 position_size（USDT）折算为下单数量：
 // 引擎信号出口对 LONG/SHORT 信号自动按最新价换算 Qty = stake / price。
 // 可用余额不足时退化为全额可用（现货只做多，不做杠杆）。
+// CRA 模式下首单金额改用 first_order_amount。
 func (s *SupportReboundStrategy) CustomStakeAmount(availableBalance float64, _ *model.Signal) float64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.positionSize <= 0 {
+	stake := s.positionSize
+	if s.craEnabled && s.craParams != nil && s.craParams.FirstOrderAmount > 0 {
+		stake = s.craParams.FirstOrderAmount
+	}
+	if stake <= 0 {
 		return 0
 	}
-	if availableBalance > 0 && s.positionSize > availableBalance {
+	if availableBalance > 0 && stake > availableBalance {
 		return availableBalance
 	}
-	return s.positionSize
+	return stake
 }
 
 // RuntimeStatus 暴露状态机快照，供机器人页运行监控面板展示。
@@ -287,6 +354,37 @@ func (s *SupportReboundStrategy) RuntimeStatus() map[string]any {
 		m["hold_bars"] = s.holdBars
 		m["stop_moved_to_breakeven"] = s.stopMovedToBreakeven
 	}
+	// CRA 仓位管理快照（启用时才输出）。
+	m["cra_enabled"] = s.craEnabled
+	if s.craEnabled && s.craParams != nil && s.craState != nil {
+		st := s.craState
+		p := s.craParams
+		m["cra_position_count"] = st.PositionCount
+		m["cra_pending_add_count"] = st.PendingAddCount
+		m["cra_order_count"] = p.OrderCount
+		m["cra_waterfall_paused"] = st.WaterfallPaused
+		if st.AvgEntryPrice > 0 {
+			m["cra_avg_entry_price"] = st.AvgEntryPrice
+		}
+		// 下一档补仓触发价：与 ShouldAddPosition 同一基准（首次成交价的
+		// (1−spread)），从 add_positions 推导。
+		next := st.PositionCount + st.PendingAddCount + 1
+		if cfg := p.AddPositionForOrder(next); cfg != nil && st.EntryPrice > 0 {
+			m["cra_next_add_order"] = next
+			m["cra_next_add_price"] = st.EntryPrice * (1 - cfg.Spread)
+		}
+		// 移动止盈激活档位（最高浮盈触及的最高档，1 起）。
+		activeTier := 0
+		for i, t := range p.MovingTakeProfitTiers {
+			if t != nil && st.HighestProfitPct >= t.Ratio {
+				activeTier = i + 1
+			}
+		}
+		if activeTier > 0 {
+			m["cra_moving_tp_tier"] = activeTier
+		}
+		m["cra_highest_profit_pct"] = st.HighestProfitPct
+	}
 	return m
 }
 
@@ -294,7 +392,34 @@ func (s *SupportReboundStrategy) OnOrderBook(_ model.OrderBookData, _ *event.Eve
 	return nil, nil
 }
 
-func (s *SupportReboundStrategy) OnOrderUpdate(_ model.OrderData, _ *event.EventBus) (*model.Signal, error) {
+// OnOrderUpdate 成交回填（CRA 模式）：买单成交 → PendingAddCount--、
+// PositionCount++、RecordFill 更新均价/数量；首笔买单成交时 EnterPosition
+// 建立 CRA 持仓基准（EntryPrice = 首单成交价，后续补仓以此算回撤）；
+// 清仓单成交 → ExitPosition。非 CRA 模式本策略不下单跟踪，保持空壳。
+func (s *SupportReboundStrategy) OnOrderUpdate(order model.OrderData, _ *event.EventBus) (*model.Signal, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.running || !s.craEnabled || s.craState == nil {
+		return nil, nil
+	}
+
+	if order.Status == model.StatusFilled {
+		if order.ClosePosition {
+			s.craState.ExitPosition()
+			return nil, nil
+		}
+		if order.Side == model.SideBuy {
+			// 首笔成交才正式入场（信号发出≠成交，基准价用实际成交价）。
+			if !s.craState.InPosition {
+				s.craState.EnterPosition(order.AvgFillPrice, cra.SideLong)
+			}
+			if s.craState.PendingAddCount > 0 {
+				s.craState.PendingAddCount--
+			}
+			s.craState.PositionCount++
+			s.craState.RecordFill(order.AvgFillPrice, order.Filled, cra.SideBuy)
+		}
+	}
 	return nil, nil
 }
 
@@ -304,6 +429,9 @@ func (s *SupportReboundStrategy) OnTick(tick model.Tick, _ *event.EventBus) (*mo
 	defer s.mu.Unlock()
 	if !s.running || !s.inPosition || tick.Last <= 0 {
 		return nil, nil
+	}
+	if s.craEnabled {
+		return s.manageCRAPosition(tick.Last, tick.Timestamp, false), nil
 	}
 	return s.checkPositionExit(tick.Last, tick.Timestamp, false), nil
 }
@@ -325,8 +453,11 @@ func (s *SupportReboundStrategy) OnBar(bar model.Bar, _ *event.EventBus) (*model
 		return nil, nil
 	}
 
-	// 持仓管理优先：止损 / 止盈 / 超时 / 保本移损。
+	// 持仓管理优先：CRA 模式走 CRA 管理，否则固定止损/止盈/超时/保本移损。
 	if s.inPosition {
+		if s.craEnabled {
+			return s.manageCRAPosition(bar.Close, bar.Time, true), nil
+		}
 		return s.checkPositionExit(bar.Close, bar.Time, true), nil
 	}
 
@@ -489,13 +620,17 @@ func (s *SupportReboundStrategy) enterLong(bar model.Bar) *model.Signal {
 	s.holdBars = 0
 	s.stopMovedToBreakeven = false
 	s.state = srStatePosition
+	reason := fmt.Sprintf("支撑回踩反弹入场: 支撑带[%.4f, %.4f] 暴跌低点 %.4f 反弹确认后放量阳线",
+		s.supportBottom, s.supportTop, s.crashLow)
+	if s.craEnabled {
+		reason += " [CRA]"
+	}
 	return &model.Signal{
 		Symbol:    s.symbol,
 		Direction: "LONG",
 		Strength:  0.8,
 		Strategy:  s.name,
-		Reason: fmt.Sprintf("支撑回踩反弹入场: 支撑带[%.4f, %.4f] 暴跌低点 %.4f 反弹确认后放量阳线",
-			s.supportBottom, s.supportTop, s.crashLow),
+		Reason:    reason,
 		Timestamp: bar.Time,
 	}
 }
@@ -537,6 +672,84 @@ func (s *SupportReboundStrategy) checkPositionExit(price float64, ts int64, coun
 	}
 	if countHold && s.holdBars >= s.maxHoldBars {
 		return closePosition("支撑回踩反弹持仓超时离场")
+	}
+	return nil
+}
+
+// manageCRAPosition CRA 模式持仓管理（OnBar 与 OnTick 共用，价格取 Close/
+// 最新价）。复用 cra 包状态机，语义与 CRA 一致：
+//  1. stop_loss_ratio > 0 且触及比例止损 → CLOSE("cra stop loss")；
+//  2. 移动止盈（配了 moving_take_profit_tiers 时）否则静态止盈 →
+//     CLOSE("cra take profit")；
+//  3. 补仓：PositionCount+PendingAddCount < OrderCount 且未瀑布暂停时，
+//     按 add_positions 下一档的 spread/callback 触发，发 LONG 信号
+//     Qty = FirstOrderAmount×multiplier/price（reason "cra add position #N"）；
+//  4. max_hold_bars 超时平仓仅作最后安全闸（"timeout (cra safety)"）。
+//
+// CRA 模式下原固定 target/保本移损被禁用（与 CRA 均价止盈语义冲突）。
+// 平仓统一 ExitPosition + 回 IDLE。countHold=true 时累计持仓 K 线数（OnBar）。
+func (s *SupportReboundStrategy) manageCRAPosition(price float64, ts int64, countHold bool) *model.Signal {
+	p := s.craParams
+	st := s.craState
+	if p == nil || st == nil {
+		return nil
+	}
+	if countHold {
+		s.holdBars++
+	}
+	st.UpdateExtremes(price)
+
+	closePosition := func(reason string) *model.Signal {
+		st.ExitPosition()
+		s.resetToIdleLocked()
+		return &model.Signal{
+			Symbol:    s.symbol,
+			Direction: "CLOSE",
+			Strength:  1.0,
+			Strategy:  s.name,
+			Reason:    reason,
+			Timestamp: ts,
+		}
+	}
+
+	// 1. 比例止损。
+	if p.StopLossRatio > 0 && st.CheckStopLoss(price, p) {
+		return closePosition("cra stop loss")
+	}
+
+	// 2. 止盈：移动止盈档位优先，否则静态止盈（full/tail/head_tail）。
+	tpHit := false
+	if len(p.MovingTakeProfitTiers) > 0 {
+		tpHit = st.CheckMovingTakeProfit(price, p.MovingTakeProfitTiers)
+	} else {
+		tpHit = st.CheckStaticTakeProfit(price, p.TakeProfitMethod, p.TakeProfitRatio, p.ProfitCallback)
+	}
+	if tpHit {
+		return closePosition("cra take profit")
+	}
+
+	// 3. 补仓（加仓梯度）。
+	if p.EnableAddPosition && st.PositionCount+st.PendingAddCount < p.OrderCount && !st.WaterfallPaused {
+		next := st.PositionCount + st.PendingAddCount + 1
+		cfg := p.AddPositionForOrder(next)
+		if cfg != nil && st.ShouldAddPosition(price, cfg) {
+			st.PendingAddCount++
+			qty := cra.RoundQty(p.FirstOrderAmount * cfg.Multiplier / price)
+			return &model.Signal{
+				Symbol:    s.symbol,
+				Direction: "LONG",
+				Strength:  0.8,
+				Strategy:  s.name,
+				Reason:    fmt.Sprintf("cra add position #%d", next),
+				Timestamp: ts,
+				Qty:       qty,
+			}
+		}
+	}
+
+	// 4. 超时安全闸（CRA 禁用固定 target 后的最后保护）。
+	if countHold && s.holdBars >= s.maxHoldBars {
+		return closePosition("timeout (cra safety)")
 	}
 	return nil
 }
