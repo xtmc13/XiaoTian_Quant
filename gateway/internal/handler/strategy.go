@@ -705,6 +705,9 @@ var craCompatibleTypes = map[string]bool{
 	"counter_stable":      true,
 	"counter_safe":        true,
 	"head_tail_arbitrage": true,
+	// 支撑回踩反弹：信号态自制，仓位管理复用 CRA 补仓/移动止盈（见
+	// strategies.SupportReboundStrategy 的 hasCRAKeys 模式判定）。
+	"support_rebound": true,
 }
 
 // checkStrategyTypeConfigMatch 类型-参数防呆：
