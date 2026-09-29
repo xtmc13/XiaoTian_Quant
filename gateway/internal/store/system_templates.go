@@ -7,7 +7,7 @@ import (
 
 // ── 系统预设策略模板（A1.5 CTA/组合策略模板）──
 //
-// 13 个 QuantDinger 对标的系统预设：8 个 CTA 单策略 + 4 个组合策略 + 1 个现货策略。
+// 14 个 QuantDinger 对标的系统预设：8 个 CTA 单策略 + 4 个组合策略 + 2 个现货策略。
 // user_id=0 表示系统模板，对全部用户可见（StrategyTemplateRepo.List 改为
 // user_id=? OR user_id=0）；用户模板删除条件 user_id=? 天然保护系统模板
 // 不被普通用户删除。ID 固定（tpl-cta-* / tpl-combo-* / tpl-spot-*），INSERT OR IGNORE
@@ -164,6 +164,25 @@ func SystemTemplates() []StrategyTemplateRecord {
 				"rebound_pct": 0.05, "pullback_bars": 12, "entry_volume_mult": 1.5,
 				"stop_buffer_pct": 0.02, "take_profit_pct": 0.15,
 				"position_size": 500, "max_hold_bars": 90,
+			}),
+		spot("tpl-spot-ai-auto-trader", "AI 全自动交易员 (现货·Paper)", "ai_auto_trader",
+			"量化+LLM 混合闭环：①量化信号——内部异步 worker 周期性调 AI 决策引擎（fast 单 LLM/deep 7-agent 管线），非 long 或置信度不足直接过滤；②LLM 闸门——信号摘要+近 5 条经验喂给 LLM 输出 approve/veto/reduce，veto 不出单、reduce 降仓，provider 不可用默认放行；③持仓管理——止损/止盈/超时/移动止损（峰值利润回撤 30%）；④平仓学习——LLM 复盘生成可执行教训入库，反哺下轮闸门；另有自适应阈值（连亏收紧/连胜放宽）与日亏闸。",
+			map[string]any{
+				"symbol": "BTCUSDT", "timeframe": "15m", "trade_direction": "long",
+				"execution_mode":        "paper",
+				"scan_interval_minutes": 30,
+				"mode":                  "fast",
+				"provider":              "",
+				"confidence_threshold":  60,
+				"max_position_usdt":     500,
+				"take_profit_pct":       0.08,
+				"stop_loss_pct":         0.04,
+				"max_hold_bars":         96,
+				"enable_llm_gate":       true,
+				"gate_size_cap_pct":     100,
+				"experience_window":     5,
+				"learning_enabled":      true,
+				"daily_loss_limit_usdt": 200,
 			}),
 	}
 }
