@@ -187,6 +187,8 @@ export const CRA_COMPATIBLE_TYPES: ReadonlySet<string> = new Set([
   'head_tail_arbitrage',
   // 支撑回踩反弹：信号态自制（支撑位/暴跌/回踩），仓位管理复用 CRA 补仓/移动止盈
   'support_rebound',
+  // 流动性热力扫反：信号态自制（流动性池/扫反包），仓位管理复用 CRA（池触发补仓）
+  'liquidity_heat',
 ])
 
 export function isCRAStrategyType(strategyType: string): boolean {

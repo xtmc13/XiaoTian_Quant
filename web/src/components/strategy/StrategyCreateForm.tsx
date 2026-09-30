@@ -139,6 +139,8 @@ export interface StrategyCreateFormState {
   strategyType: string
   /** 改选策略类型（现货：现货网格/马丁趋势/华尔街/激进）。 */
   setStrategyType: (t: string) => void
+  /** 类型锁定（三级选项/编辑进入）：true 时界面不显示类型下拉。 */
+  typeLocked: boolean
   name: string
   setName: Dispatch<SetStateAction<string>>
   symbol: string
@@ -179,6 +181,8 @@ export interface StrategyCreateFormOptions {
   editId?: string
   /** 编辑回填：记录 config_json 解析结果（现货网格自定义键优先还原，CRA 键回退）。 */
   initialConfig?: Record<string, unknown>
+  /** 类型锁定：经三级选项/编辑进入时不再显示策略类型下拉（用户已选定）。 */
+  lockType?: boolean
 }
 
 export function useStrategyCreateForm(
@@ -188,6 +192,9 @@ export function useStrategyCreateForm(
 ): StrategyCreateFormState {
   const initialType = options?.initialType
   const editId = options?.editId
+  // 类型锁定：经三级选项（?type=xx）或编辑（?id=xx）进入时类型已确定，
+  // 基础信息不再显示类型下拉（用户 2026-09-30："策略选择进来了就不要再选择策略了"）。
+  const typeLocked = !!initialType
   // 类型默认按市场派生（contract→cra_contract，spot→cra_spot）；用户可用
   // setStrategyType 在表单里改选（如现货的 马丁趋势/华尔街/激进），编辑时
   // initialType 作为初始值且不强制覆盖用户改选。
@@ -503,6 +510,7 @@ export function useStrategyCreateForm(
     market,
     strategyType,
     setStrategyType,
+    typeLocked,
     name,
     setName,
     symbol,
@@ -559,6 +567,7 @@ export function StrategyCreateFormSections({
     setSymbol,
     timeframe,
     setTimeframe,
+    typeLocked,
     selectedExchanges,
     setSelectedExchanges,
     showExchangeModal,
@@ -611,24 +620,34 @@ export function StrategyCreateFormSections({
       <SectionCard title="基础信息">
         <div id="create-sec-basic" className="scroll-mt-20 -m-1 p-1">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {/* 策略类型（现货可选；合约自动=合约网格） */}
-            {market === 'spot' && (
-              <div>
-                <label className="text-[11px] text-muted-foreground mb-1.5 block">策略类型</label>
-                <select
-                  value={strategyType}
-                  onChange={(e) => setStrategyType(e.target.value)}
-                  className={inputCls}
-                >
-                  {STRAT_TYPES.spot.map((t) => (
-                    <option key={t.value} value={t.value}>
-                      {t.label}
-                    </option>
-                  ))}
-                </select>
-                <div className="text-[10px] text-muted-foreground mt-1">选择类型将套用对应参数档案，可继续微调</div>
-              </div>
-            )}
+            {/* 策略类型：三级选项/编辑进入时类型已锁定，只读展示，不再提供改选
+                （用户 2026-09-30："策略选择进来了就不要再选择策略了"） */}
+            {market === 'spot' &&
+              (typeLocked ? (
+                <div>
+                  <label className="text-[11px] text-muted-foreground mb-1.5 block">策略类型</label>
+                  <div className={cn(inputCls, 'text-foreground flex items-center justify-between')}>
+                    <span>{STRAT_TYPES.spot.find((t) => t.value === strategyType)?.label || strategyType}</span>
+                    <span className="text-[10px] text-muted-foreground">已锁定</span>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <label className="text-[11px] text-muted-foreground mb-1.5 block">策略类型</label>
+                  <select
+                    value={strategyType}
+                    onChange={(e) => setStrategyType(e.target.value)}
+                    className={inputCls}
+                  >
+                    {STRAT_TYPES.spot.map((t) => (
+                      <option key={t.value} value={t.value}>
+                        {t.label}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="text-[10px] text-muted-foreground mt-1">选择类型将套用对应参数档案，可继续微调</div>
+                </div>
+              ))}
             {/* 策略名称 */}
             <div>
               <label className="text-[11px] text-muted-foreground mb-1.5 block">策略名称</label>

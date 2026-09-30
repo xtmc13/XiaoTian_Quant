@@ -708,6 +708,9 @@ var craCompatibleTypes = map[string]bool{
 	// 支撑回踩反弹：信号态自制，仓位管理复用 CRA 补仓/移动止盈（见
 	// strategies.SupportReboundStrategy 的 hasCRAKeys 模式判定）。
 	"support_rebound": true,
+	// 流动性热力扫反：信号态自制（流动性池/扫反包），仓位管理复用 CRA
+	// （池触发补仓/CRA 止盈，现货无止损——strategies.LiquidityHeatStrategy）。
+	"liquidity_heat": true,
 }
 
 // checkStrategyTypeConfigMatch 类型-参数防呆：
