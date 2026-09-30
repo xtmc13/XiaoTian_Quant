@@ -103,3 +103,13 @@
   已压回 paper`；前端已重新构建部署。教训：前端"信号通知"选项文案与后端语义
   长期不一致（号称不下单实际直连交易所），UI 文案不可信，安全红线必须在后端。
 - 2026-09-17：UI 收官（main=89dbce0）。最终形态：机器人中心=唯一管理页（现货策略/合约策略/网格/马丁/华尔街/AI 八类 chips 统一卡片，详情弹层=RuntimePanel+资金三件套）；创建独立页 /create（现货/合约同一套原版 CRA 表单，现货基础信息含策略类型选择：现货网格/马丁趋势/华尔街/激进，合约由指标选择器的顺势多/空承担身份）；新建机器人模板四卡=现货/合约策略机器人+AI+AI自定义。服务器已同步，333 自动恢复跑单中。
+- 2026-09-30：【666 无法开仓根因=Kimi temperature 400】用户新建现货 AI 全自动交易员
+  666（ai_auto_trader）running 但永不开仓。日志每 30min 一轮
+  `decide failed: llm: kimi: HTTP 400 — invalid temperature: only 1 is allowed
+  for this model`：decide(0.3)/gate(0.2)/review(0.3) 传的 temperature 均被
+  kimi-for-coding 模型拒绝，决策链全断（gate/review 有兜底所以只有 decide 是致命的）。
+  修复：provider.ChatCompletion 对 kimi 钳制 temperature=1（provider.go），调用方无感。
+  commit 537d09e 已部署。另注意：666 落库 execution_mode=live 是合法的——期间另一会话
+  已把红线升级为实盘总闸（trading.live_enabled: true，三态开关），且现货/合约
+  新记录默认 live；用户币安 key 为只读，真实下单会被币安拒绝，需用户知悉。
+  工作区遗留：web/package-lock.json 有未提交改动（非本次会话产生，未动）。
