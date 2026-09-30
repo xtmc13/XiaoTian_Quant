@@ -348,7 +348,10 @@ export function useStrategyCreateForm(
         addPositions: prev.addPositions,
       }))
     } else {
-      setCraParams(profile ? { ...defaults, ...expandSpotProfile(profile) } : defaults)
+      const next = profile ? { ...defaults, ...expandSpotProfile(profile) } : defaults
+      // 流动性热力：默认移动止盈（档位式"涨得越多锁得越紧"，用户 2026-09-30
+      // 指定），档位表在下方止盈设置区可视可编辑。
+      setCraParams(strategyType === 'liquidity_heat' ? { ...next, tpMode: 'moving' } : next)
     }
     setPresetKey(null)
   }, [strategyType, market])

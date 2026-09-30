@@ -20,6 +20,10 @@ interface IndicatorPickerProps {
   params: Record<string, IndicatorParamValue>
   custom: { code_id: number; name: string } | null
   disabled?: boolean
+  /** 策略 tile：经三级选项进入的自定义策略（如流动性热力扫反），作为一排指标
+   *  卡中的一员展示；选中态 = indicator 为 'none'（策略自带信号，不设指标门槛），
+   *  参数 UI 由调用方在卡下方面板提供（用户 2026-09-30："像个指标一样，默认选中"）。 */
+  strategyTile?: { key: string; label: string; desc: string } | null
   onChange: (next: IndicatorSelection) => void
 }
 
@@ -37,7 +41,7 @@ function summarizeParams(key: OpenIndicatorKey, params: Record<string, Indicator
  * 开仓指标选择器：一排可点选的指标卡。选中高亮；每个指标带"参数"按钮
  * 弹出 IndicatorParamModal 编辑参数；"未设置"表示使用壳默认（无开仓门槛）。
  */
-export function IndicatorPicker({ indicator, params, custom, disabled, onChange }: IndicatorPickerProps) {
+export function IndicatorPicker({ indicator, params, custom, disabled, strategyTile = null, onChange }: IndicatorPickerProps) {
   const [paramModalKey, setParamModalKey] = useState<OpenIndicatorKey | null>(null)
 
   const select = (key: OpenIndicatorKey) => {
@@ -127,6 +131,34 @@ export function IndicatorPicker({ indicator, params, custom, disabled, onChange 
             </div>
           )
         })}
+
+        {/* 策略 tile：与指标卡同排同外观；选中=使用策略自带信号（不设指标门槛） */}
+        {strategyTile && (
+          <div
+            className={cn(
+              'inline-flex items-center rounded-lg border transition-colors overflow-hidden',
+              indicator === 'none'
+                ? 'border-quant-gold/40 bg-quant-gold/10'
+                : 'border-quant-border hover:border-quant-gold/20',
+              disabled && 'opacity-40'
+            )}
+          >
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => select('none')}
+              title={strategyTile.desc}
+              className="px-3 py-2 text-left"
+            >
+              <div className={cn('text-xs font-medium flex items-center gap-1', indicator === 'none' ? 'text-quant-gold' : 'text-foreground')}>
+                {strategyTile.label}
+              </div>
+              <div className="text-[9px] text-muted-foreground mt-0.5">
+                {indicator === 'none' ? '已选 · 参数见下方策略面板' : strategyTile.desc}
+              </div>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* 说明行 */}

@@ -358,6 +358,11 @@ export function CRAParamForm({ value, onChange, market, className, openFields = 
               indicator={value.openIndicator}
               params={value.openIndicatorParams}
               custom={value.openIndicatorCustom}
+              strategyTile={
+                strategyAddon
+                  ? { key: 'strategy', label: strategyAddon.label, desc: '策略自带入场信号（不设指标门槛），参数在下方策略面板调节' }
+                  : null
+              }
               onChange={(sel) => {
                 // 选择器为唯一事实源：由选择派生引擎兼容键（旧 open_* 字段
                 // 同步写入，供周期推断等既有消费方使用），复合指标锁定方向。
