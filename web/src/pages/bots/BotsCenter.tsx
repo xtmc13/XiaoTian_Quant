@@ -287,14 +287,13 @@ function MartinWallstreetForm({
 
 /* ── 新建机器人：模板选择（与右上角「新建机器人」一致） ── */
 const TEMPLATES: {
-  key: 'spot' | 'contract' | 'ai' | 'custom' | 'support_rebound' | 'ai_auto_trader'
+  key: 'spot' | 'contract' | 'ai' | 'custom' | 'support_rebound'
   title: string
   desc: string
   icon: React.ReactNode
 }[] = [
   { key: 'spot', title: '现货策略机器人', desc: '现货网格/补仓策略，开仓指标可选（MACD/顺势多等）', icon: <TrendingUp className="w-5 h-5" /> },
   { key: 'support_rebound', title: '支撑回踩反弹 (现货)', desc: '4h 周期：支撑位确认→放量暴跌→反弹→回踩→放量阳线入场，全自动风控', icon: <ShieldCheck className="w-5 h-5" /> },
-  { key: 'ai_auto_trader', title: 'AI 全自动交易员', desc: '量化信号+LLM闸门+复盘学习闭环，自动分析自动下单（Paper）', icon: <BrainCircuit className="w-5 h-5" /> },
   { key: 'contract', title: '合约策略机器人', desc: '支持杠杆/逐全仓、开仓指标选择器与补仓壳', icon: <BarChart3 className="w-5 h-5" /> },
   { key: 'ai', title: 'AI 机器人', desc: 'AI 生成的策略机器人实例库', icon: <BrainCircuit className="w-5 h-5" /> },
   { key: 'custom', title: 'AI 自定义机器人', desc: '用自然语言描述策略，AI 生成参数', icon: <Bot className="w-5 h-5" /> },
@@ -962,7 +961,6 @@ export function BotsCenter() {
                   setWizard(null)
                   if (t.key === 'spot') navigate('/create?market=spot')
                   else if (t.key === 'support_rebound') navigate('/create?market=spot&type=support_rebound')
-                  else if (t.key === 'ai_auto_trader') navigate('/create?market=spot&type=ai_auto_trader')
                   else if (t.key === 'contract') navigate('/create?market=contract')
                   else if (t.key === 'ai') navigate('/bots/ai')
                   else setWizard('custom')

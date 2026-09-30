@@ -23,10 +23,9 @@ func registerTemplateFactories() {
 	f("breakout", func() strategy.Strategy { return strategies.NewBreakoutStrategy() })
 	f("grid_trading", func() strategy.Strategy { return strategies.NewGridTradingStrategy() })
 	f("support_rebound", func() strategy.Strategy { return strategies.NewSupportReboundStrategy() })
-	f("ai_auto_trader", func() strategy.Strategy { return strategies.NewAIAutoTraderStrategy() })
 }
 
-// TestSystemCTATemplatesInstantiable: 8 个 CTA 模板 + 2 个现货模板的
+// TestSystemCTATemplatesInstantiable: 8 个 CTA 模板 + 1 个现货模板的
 // strategy_type 都能从工厂创建实例，且 default_config 可通过
 // ApplyParams + ValidateParams（即「能直接实例化运行」）。
 func TestSystemCTATemplatesInstantiable(t *testing.T) {
@@ -59,8 +58,8 @@ func TestSystemCTATemplatesInstantiable(t *testing.T) {
 			t.Errorf("template %s: symbol empty after apply", tpl.ID)
 		}
 	}
-	if cta != 10 {
-		t.Errorf("cta templates = %d, want 10", cta)
+	if cta != 9 {
+		t.Errorf("cta templates = %d, want 9", cta)
 	}
 }
 

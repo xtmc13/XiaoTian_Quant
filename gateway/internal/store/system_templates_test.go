@@ -5,8 +5,8 @@ import (
 )
 
 // TestEnsureSystemTemplates: 系统预设模板幂等注册——两次调用不重复，
-// 任意用户 List 可见（user_id=0 OR user_id=?），且完整覆盖 14 个模板
-// （10 非组合 + 4 组合；含 2 个现货模板：支撑回踩反弹、AI 全自动交易员）。
+// 任意用户 List 可见（user_id=0 OR user_id=?），且完整覆盖 13 个模板
+// （9 非组合 + 4 组合；含 1 个现货支撑回踩反弹模板）。
 func TestEnsureSystemTemplates(t *testing.T) {
 	cleanup := setupTestDB(t)
 	defer cleanup()
@@ -46,8 +46,8 @@ func TestEnsureSystemTemplates(t *testing.T) {
 			cta++
 		}
 	}
-	if cta != 10 || combo != 4 {
-		t.Errorf("cta=%d combo=%d, want 10/4", cta, combo)
+	if cta != 9 || combo != 4 {
+		t.Errorf("cta=%d combo=%d, want 9/4", cta, combo)
 	}
 }
 

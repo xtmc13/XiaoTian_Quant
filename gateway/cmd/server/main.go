@@ -418,7 +418,6 @@ func registerStrategyFactories() {
 	strategy.RegisterStrategyFactory("trend_long_mt", func() strategy.Strategy { return strategies.NewTrendLongStrategy() })
 	strategy.RegisterStrategyFactory("trend_short_mt", func() strategy.Strategy { return strategies.NewTrendShortStrategy() })
 	strategy.RegisterStrategyFactory("support_rebound", func() strategy.Strategy { return strategies.NewSupportReboundStrategy() })
-	strategy.RegisterStrategyFactory("ai_auto_trader", func() strategy.Strategy { return strategies.NewAIAutoTraderStrategy() })
 	strategy.RegisterStrategyFactory("wallstreet", func() strategy.Strategy { return strategies.NewWallstreetStrategy() })
 	strategy.RegisterStrategyFactory("wallstreet_v2", func() strategy.Strategy { return strategy.NewWallStreetStrategy() })
 

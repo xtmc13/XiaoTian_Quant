@@ -21,7 +21,6 @@ export const STRAT_TYPES: Record<string, { value: string; label: string }[]> = {
   spot: [
     { value: 'cra_spot', label: '现货网格' },
     { value: 'support_rebound', label: '支撑回踩反弹' },
-    { value: 'ai_auto_trader', label: 'AI 全自动交易员' },
     { value: 'martin_trend', label: '马丁趋势' },
     { value: 'wallstreet', label: '华尔街' },
     { value: 'aggressive', label: '激进' },
