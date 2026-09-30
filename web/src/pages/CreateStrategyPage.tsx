@@ -63,7 +63,13 @@ export function CreateStrategyPage() {
     market,
     () => navigate('/bots'),
     editId && editingItem
-      ? { editId, initialType: editingItem.strategy_type, initialConfig: editConfig }
+      ? {
+          editId,
+          // 列表/详情接口归一化后策略类型在 type/strategy_name 字段
+          // （strategy_type 恒为空——曾导致编辑页回退 cra_spot 显示错表单）。
+          initialType: editingItem.strategy_type ?? editingItem.type,
+          initialConfig: editConfig,
+        }
       : urlType
         ? { initialType: urlType }
         : undefined
@@ -84,6 +90,7 @@ export function CreateStrategyPage() {
     }
     form.setName(editingItem.name || '')
     if (editingItem.symbol) form.setSymbol(editingItem.symbol)
+    if (editingItem.timeframe) form.setTimeframe(editingItem.timeframe)
     if (Array.isArray(cfg.selected_exchanges)) form.setSelectedExchanges(cfg.selected_exchanges as string[])
     form.setCraParams(apiPayloadToCraParams(cfg))
     // eslint-disable-next-line react-hooks/exhaustive-deps

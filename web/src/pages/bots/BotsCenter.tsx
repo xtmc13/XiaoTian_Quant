@@ -12,13 +12,13 @@ import {
   BrainCircuit,
   Bot,
   Settings2,
-  ShieldCheck,
 } from 'lucide-react'
 import { cn, formatCurrency } from '@/lib/utils'
 import { gridApi, strategyApi, strategyConfigApi } from '@/lib/api'
 import type { GridBot, GridBotDetail, GridBotPayload, GridLegView } from '@/lib/api'
 import type { StrategyItem } from '@/types'
 import { RuntimePanel } from '@/components/strategy/RuntimePanel'
+import { STRAT_TYPES } from '@/components/strategy/StrategyFormFields'
 import type { BotItem } from '@/hooks/useBotData'
 import { SectionCard } from '@/components/ui/SectionCard'
 import { Button } from '@/components/ui/Button'
@@ -285,16 +285,18 @@ function MartinWallstreetForm({
   )
 }
 
-/* ── 新建机器人：模板选择（与右上角「新建机器人」一致） ── */
-const TEMPLATES: {
-  key: 'spot' | 'contract' | 'ai' | 'custom' | 'support_rebound'
+/* ── 新建机器人：三级选项（2026-09-30 用户要求的跳转结构）────────
+ * 第 1 级：现货策略 / 合约策略 / AI 机器人 / AI 自定义机器人
+ * 第 2 级：对应市场的具体策略类型列表（STRAT_TYPES 驱动，与后端 param-defs 对齐）
+ * 选中后跳 /create?market=xx&type=xx 直达对应表单。 */
+const LEVEL1_TEMPLATES: {
+  key: 'spot' | 'contract' | 'ai' | 'custom'
   title: string
   desc: string
   icon: React.ReactNode
 }[] = [
-  { key: 'spot', title: '现货策略机器人', desc: '现货网格/补仓策略，开仓指标可选（MACD/顺势多等）', icon: <TrendingUp className="w-5 h-5" /> },
-  { key: 'support_rebound', title: '支撑回踩反弹 (现货)', desc: '4h 周期：支撑位确认→放量暴跌→反弹→回踩→放量阳线入场，全自动风控', icon: <ShieldCheck className="w-5 h-5" /> },
-  { key: 'contract', title: '合约策略机器人', desc: '支持杠杆/逐全仓、开仓指标选择器与补仓壳', icon: <BarChart3 className="w-5 h-5" /> },
+  { key: 'spot', title: '现货策略', desc: '现货网格 / 马丁 / 华尔街 / 支撑回踩 / 流动性热力 等', icon: <TrendingUp className="w-5 h-5" /> },
+  { key: 'contract', title: '合约策略', desc: '合约网格 / 顺势多空 / 逆势 / 高频 / 首尾套利', icon: <BarChart3 className="w-5 h-5" /> },
   { key: 'ai', title: 'AI 机器人', desc: 'AI 生成的策略机器人实例库', icon: <BrainCircuit className="w-5 h-5" /> },
   { key: 'custom', title: 'AI 自定义机器人', desc: '用自然语言描述策略，AI 生成参数', icon: <Bot className="w-5 h-5" /> },
 ]
@@ -951,19 +953,22 @@ export function BotsCenter() {
       </div>
 
       {/* 新建入口：现货/合约策略 → /create；AI → 机器人页/参数向导 */}
+      {/* 第 1 级：现货/合约/AI */}
       {wizard === 'menu' && (
-        <ModalShell title="新建机器人" subtitle="选择机器人类型模板" onClose={() => setWizard(null)}>
+        <ModalShell title="新建机器人" subtitle="第 1 步：选择市场" onClose={() => setWizard(null)}>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {TEMPLATES.map((t) => (
+            {LEVEL1_TEMPLATES.map((t) => (
               <button
                 key={t.key}
                 onClick={() => {
-                  setWizard(null)
-                  if (t.key === 'spot') navigate('/create?market=spot')
-                  else if (t.key === 'support_rebound') navigate('/create?market=spot&type=support_rebound')
-                  else if (t.key === 'contract') navigate('/create?market=contract')
-                  else if (t.key === 'ai') navigate('/bots/ai')
-                  else setWizard('custom')
+                  if (t.key === 'ai') {
+                    setWizard(null)
+                    navigate('/bots/ai')
+                  } else if (t.key === 'custom') {
+                    setWizard('custom')
+                  } else {
+                    setWizard(t.key)
+                  }
                 }}
                 className="flex items-start gap-3 p-4 rounded-xl border border-quant-border text-left transition-all hover:border-quant-gold/30 hover:bg-quant-gold/5"
               >
@@ -973,6 +978,34 @@ export function BotsCenter() {
                 <div className="min-w-0">
                   <div className="text-xs font-semibold text-foreground">{t.title}</div>
                   <div className="text-[10px] text-muted-foreground leading-relaxed mt-0.5">{t.desc}</div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </ModalShell>
+      )}
+
+      {/* 第 2 级：现货/合约的具体策略类型（STRAT_TYPES 驱动，与后端 param-defs 对齐） */}
+      {(wizard === 'spot' || wizard === 'contract') && (
+        <ModalShell
+          title={wizard === 'spot' ? '现货策略' : '合约策略'}
+          subtitle="第 2 步：选择策略类型"
+          onClose={() => setWizard('menu')}
+        >
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {(STRAT_TYPES[wizard] || []).map((t) => (
+              <button
+                key={t.value}
+                onClick={() => {
+                  setWizard(null)
+                  navigate(`/create?market=${wizard}&type=${t.value}`)
+                }}
+                className="flex items-center gap-3 p-4 rounded-xl border border-quant-border text-left transition-all hover:border-quant-gold/30 hover:bg-quant-gold/5"
+              >
+                <div className="w-2 h-2 rounded-full bg-quant-gold shrink-0" />
+                <div className="min-w-0">
+                  <div className="text-xs font-semibold text-foreground">{t.label}</div>
+                  <div className="text-[10px] text-muted-foreground mt-0.5">{t.value}</div>
                 </div>
               </button>
             ))}

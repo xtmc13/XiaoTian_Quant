@@ -7,7 +7,7 @@ import { useStrategyData } from '@/hooks/useStrategyData'
 import { SectionCard } from '@/components/ui/SectionCard'
 import { CRAParamForm, craParamsToApiPayload, type CRAParams } from './CRAParamForm'
 import { ExchangeSelectModal } from './ExchangeSelectModal'
-import { DynamicParamField, STRAT_TYPES } from './StrategyFormFields'
+import { DynamicParamField, STRAT_TYPES, TIMEFRAMES } from './StrategyFormFields'
 import { STRATEGY_PRESETS, type Preset } from './StrategyPresets'
 import { createDefaultCRAParams, isCRAStrategyType, CRA_FEATURE_KEYS } from '@/lib/strategyUtils'
 import type { StrategyParamDefs, ExchangeConfiguredStatus, AddPositionItem } from '@/types'
@@ -144,6 +144,7 @@ export interface StrategyCreateFormState {
   symbol: string
   setSymbol: Dispatch<SetStateAction<string>>
   timeframe: string
+  setTimeframe: Dispatch<SetStateAction<string>>
   selectedExchanges: string[]
   setSelectedExchanges: Dispatch<SetStateAction<string[]>>
   showExchangeModal: boolean
@@ -324,8 +325,9 @@ export function useStrategyCreateForm(
     const profile = market === 'spot' ? SPOT_TYPE_PROFILES[strategyType] : undefined
     setName('')
     setSymbol('BTCUSDT')
-    // 支撑回踩反弹以 4h 为工作K线，其余类型沿用指标推导周期。
-    setTimeframe(strategyType === 'support_rebound' ? '4h' : deriveTimeframeFromCRA(defaults))
+    // 支撑回踩反弹以 4h 为工作K线，流动性热力默认 1h 且创建时可选，
+    // 其余类型沿用指标推导周期。
+    setTimeframe(strategyType === 'support_rebound' ? '4h' : strategyType === 'liquidity_heat' ? '1h' : deriveTimeframeFromCRA(defaults))
     setSelectedExchanges([])
     setNotifyChannels(['browser'])
     if (isGridProfile(profile)) {
@@ -346,9 +348,10 @@ export function useStrategyCreateForm(
 
   // Keep the main timeframe in sync with active indicator periods (no hardcoding)。
   // 支撑回踩反弹例外：工作K线是策略语义的一部分（默认 4h，创建时锁定），
-  // 不随指标周期推导覆盖。
+  // 不随指标周期推导覆盖。流动性热力同样例外：工作周期由用户手动选择
+  // （2026-09-30 用户明确"不要 15m、周期可选"，默认 1h）。
   useEffect(() => {
-    if (strategyType === 'support_rebound') return
+    if (strategyType === 'support_rebound' || strategyType === 'liquidity_heat') return
     setTimeframe(deriveTimeframeFromCRA(craParams))
   }, [craParams, strategyType])
 
@@ -505,6 +508,7 @@ export function useStrategyCreateForm(
     symbol,
     setSymbol,
     timeframe,
+    setTimeframe,
     selectedExchanges,
     setSelectedExchanges,
     showExchangeModal,
@@ -554,6 +558,7 @@ export function StrategyCreateFormSections({
     symbol,
     setSymbol,
     timeframe,
+    setTimeframe,
     selectedExchanges,
     setSelectedExchanges,
     showExchangeModal,
@@ -644,6 +649,26 @@ export function StrategyCreateFormSections({
                 placeholder="BTCUSDT"
               />
             </div>
+            {/* 工作周期（流动性热力：用户手动选择，不随指标推导） */}
+            {strategyType === 'liquidity_heat' && (
+              <div>
+                <label className="text-[11px] text-muted-foreground mb-1.5 block">工作周期</label>
+                <select
+                  value={timeframe}
+                  onChange={(e) => setTimeframe(e.target.value)}
+                  className={inputCls}
+                >
+                  {TIMEFRAMES.map((tf) => (
+                    <option key={tf} value={tf}>
+                      {tf}
+                    </option>
+                  ))}
+                </select>
+                <div className="text-[10px] text-muted-foreground mt-1">
+                  流动性池构建的工作 K 线：越小信号越多噪音越大，推荐 1h 及以上
+                </div>
+              </div>
+            )}
             {/* 交易所选择 */}
             <div>
               <label className="text-[11px] text-muted-foreground mb-1.5 block">选择交易所</label>
