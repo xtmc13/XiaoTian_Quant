@@ -332,9 +332,9 @@ export function useStrategyCreateForm(
     const profile = market === 'spot' ? SPOT_TYPE_PROFILES[strategyType] : undefined
     setName('')
     setSymbol('BTCUSDT')
-    // 支撑回踩反弹以 4h 为工作K线，流动性热力默认 1h 且创建时可选，
-    // 其余类型沿用指标推导周期。
-    setTimeframe(strategyType === 'support_rebound' ? '4h' : strategyType === 'liquidity_heat' ? '1h' : deriveTimeframeFromCRA(defaults))
+    // 支撑回踩反弹以 4h 为工作K线（策略语义锁定）；流动性热力不默认任何周期，
+    // 由用户手动选择（2026-09-30 用户明确"不要默认 1h"）；其余类型沿用指标推导周期。
+    setTimeframe(strategyType === 'support_rebound' ? '4h' : strategyType === 'liquidity_heat' ? '' : deriveTimeframeFromCRA(defaults))
     setSelectedExchanges([])
     setNotifyChannels(['browser'])
     if (isGridProfile(profile)) {
@@ -425,6 +425,11 @@ export function useStrategyCreateForm(
     }
     if (selectedExchanges.length === 0) {
       toast('error', '请至少选择一个交易所')
+      return
+    }
+    // 流动性热力：工作周期由用户显式选择，无默认（避免再出现"不想要 15m"的错位）。
+    if (strategyType === 'liquidity_heat' && !timeframe) {
+      toast('error', '请选择工作周期')
       return
     }
     // 现货网格：区间/格数/每格金额即时校验（后端 validateSpotParams 兜底）。
@@ -677,6 +682,9 @@ export function StrategyCreateFormSections({
                   onChange={(e) => setTimeframe(e.target.value)}
                   className={inputCls}
                 >
+                  <option value="" disabled>
+                    请选择工作周期
+                  </option>
                   {TIMEFRAMES.map((tf) => (
                     <option key={tf} value={tf}>
                       {tf}
@@ -788,6 +796,17 @@ export function StrategyCreateFormSections({
             market={market}
             openFields={market === 'spot' && strategyType === 'cra_spot' ? 'indicator-only' : 'full'}
             hideAddPosition={market === 'spot' && strategyType === 'cra_spot'}
+            strategyAddon={
+              !CRA_ONLY_TYPES.has(strategyType) && (paramDefsLoading || paramDefs.length > 0)
+                ? {
+                    label: strategyTypeLabel(strategyType, market),
+                    paramDefs,
+                    loading: paramDefsLoading,
+                    values: dynamicParams,
+                    onChange: (key, val) => setDynamicParams((prev) => ({ ...prev, [key]: val })),
+                  }
+                : null
+            }
           />
         ) : (
           <SectionCard title="参数">
@@ -797,7 +816,9 @@ export function StrategyCreateFormSections({
           </SectionCard>
         )}
 
-        {!CRA_ONLY_TYPES.has(strategyType) && (paramDefsLoading || paramDefs.length > 0) && (
+        {/* 动态策略参数独立卡片：仅非 CRA 表单类型需要（CRA 兼容类型的动态参数
+            已内嵌进开仓指标的"已选策略"面板）。 */}
+        {!isCRAStrategyType(strategyType) && !CRA_ONLY_TYPES.has(strategyType) && (paramDefsLoading || paramDefs.length > 0) && (
           <SectionCard title="动态策略参数">
             {paramDefsLoading && <div className="text-xs text-muted-foreground py-2">加载参数定义...</div>}
             {paramDefs.length > 0 && (
