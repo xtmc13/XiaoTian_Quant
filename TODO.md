@@ -113,3 +113,11 @@
   已把红线升级为实盘总闸（trading.live_enabled: true，三态开关），且现货/合约
   新记录默认 live；用户币安 key 为只读，真实下单会被币安拒绝，需用户知悉。
   工作区遗留：web/package-lock.json 有未提交改动（非本次会话产生，未动）。
+- 2026-09-30：【流动性热力扫单反包上线】用户选定 BigBeluga 的 TradingView 指标
+  「Dynamic Liquidity HeatMap Profile」做现货自动交易，入场=A 扫流动性反包，
+  分钟级工作 K 线。Go 移植 liquidity_heat.go（引擎忠实移植：pivot 外侧挂止损池/
+  ATR 偏移/消耗移除/bins 聚合 POC；交易层：跌破买方池同根收回→做多、止盈=上方
+  最近存活卖方池、止损=被扫池价−0.5×ATR、96 根超时、强度≥30% POC、一池一单）。
+  接：工厂/paramDefs/系统模板/前端类型；数量走引擎 applyTradeHooks 折算。
+  实测：BTCUSDT 15m paper 实例（bfecd53b）暖机 99 根 → 43 存活池（买25/卖18）、
+  POC 82215，扫描中。单测 7 项全绿。commit 1fdee4d。
