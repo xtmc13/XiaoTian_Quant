@@ -121,3 +121,13 @@
   接：工厂/paramDefs/系统模板/前端类型；数量走引擎 applyTradeHooks 折算。
   实测：BTCUSDT 15m paper 实例（bfecd53b）暖机 99 根 → 43 存活池（买25/卖18）、
   POC 82215，扫描中。单测 7 项全绿。commit 1fdee4d。
+- 2026-09-30：【流动性热力 CRA 化 + 三个前端问题修复】①按用户指定语义接入 CRA：
+  现货无止损、止盈按 CRA（移动止盈档位优先）、补仓=跌破下一个存活买方池并收回
+  （池价在均价下方）触发、金额=first_order_amount×CRA 阶梯乘数递增（非百分比间距），
+  超时为最后安全闸。单测+2（完整流程/深跌不割肉）。②揪出并修复一个影响全部
+  CRA 扩展策略的运行时 bug：启动前 param 过滤剥除 CRA 键，support_rebound 的
+  CRA 模式从未真正激活（222 实证 cra_enabled 恒 False）→ 过滤白名单补 CRA 键；
+  实测 222 重启后 cra_enabled=True。③编辑页显示错表单根因：接口归一化后类型在
+  type 字段，前端读 strategy_type 恒空 → 双向修复（后端直通 strategy_type +
+  前端 ?? type 兜底）。④新建机器人改三级选项（市场→具体策略类型→表单）。
+  ⑤流动性热力工作周期可选（默认 1h，不再锁定 15m）。commit 1c82209 + 2274b4d。
