@@ -165,6 +165,20 @@ func SystemTemplates() []StrategyTemplateRecord {
 				"stop_buffer_pct": 0.02, "take_profit_pct": 0.15,
 				"position_size": 500, "max_hold_bars": 90,
 			}),
+		// ── 流动性热力扫单反包（现货只做多，分钟级工作 K 线）──
+		// Pine「Dynamic Liquidity HeatMap Profile [BigBeluga]」移植：在摆动
+		// 高低点外侧挂流动性池（止损密集区），价格跌破买方池但收盘收回池
+		// 上方（止损被猎后反包）→ 入场；止盈=上方最近存活卖方池，止损=被扫
+		// 池价−0.5×ATR，96 根超时。只打强度≥POC 30% 的池。
+		spot("tpl-spot-liquidity-heat", "流动性热力扫反 (现货)", "liquidity_heat",
+			"现货右侧反包：按 BigBeluga 流动性热力图在 pivot 高低点外侧追踪存活止损池（量加权、被扫即移除）；价格跌破买方池后同根收回 → 做多被猎止损的反包；止盈挂上方最近存活卖方池（磁吸），止损被扫池价−0.5×ATR，96 根超时。",
+			map[string]any{
+				"symbol": "BTCUSDT", "timeframe": "15m", "trade_direction": "long",
+				"lookback_bars": 300, "bins": 50, "volume_len": 10, "atr_len": 5,
+				"pivot_bars": 2, "min_pool_strength_pct": 30,
+				"tp_min_pool_strength_pct": 15, "tp_fallback_pct": 0.03,
+				"sl_buffer_atr": 0.5, "position_size": 100, "max_hold_bars": 96,
+			}),
 	}
 }
 
