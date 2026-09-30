@@ -1,6 +1,7 @@
 package strategies
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/event"
 	"github.com/xiaotian-quant/gateway/internal/model"
 	"github.com/xiaotian-quant/gateway/internal/strategy"
+	"github.com/xiaotian-quant/gateway/internal/strategy/cra"
 )
 
 // ── LiquidityHeatStrategy（流动性热力扫单反包，现货只做多）────────────
@@ -26,17 +28,21 @@ import (
 //  4. profile：存活池按量聚合到 bins 档（窗口=high+offset ~ low−offset），
 //     POC=量最大档，池子强度=池量/POC量。
 //
-// 交易层（A：扫流动性反包，用户在 2026-09-30 选定）：
+// 交易层（A：扫流动性反包，用户在 2026-09-30 选定，分钟级工作 K 线、周期可选）：
 //  - 入场：价格跌破买方池（止损被触发）但同根收盘 reclaim 回池上方
 //    （close>池价）→ 做多；只打强度≥min_pool_strength_pct×POC 的池，
 //    一个池只打一次（打掉即被消耗）。
-//  - 止损：被扫池价 − sl_buffer_atr×ATR(5)（池下沿缓冲）。
-//  - 止盈：上方最近的存活卖方池（下一个磁吸），强度不足时退化为
-//    固定 tp_fallback_pct。
+//  - 非 CRA 模式：止损=被扫池价−sl_buffer_atr×ATR(5)；止盈=上方最近存活
+//    卖方池（下一个磁吸），强度不足时退化为固定 tp_fallback_pct。
+//  - CRA 模式（config 含 CRA 键即启用，现货语义 2026-09-30 用户明确）：
+//    不带止损；止盈按 CRA（移动止盈档位优先，否则静态 full/tail/head_tail）；
+//    补仓触发=跌破下一个存活买方池并收回（同入场判定，池价须在均价下方），
+//    金额=first_order_amount×CRA 阶梯乘数（递增，非百分比间距）；超时平仓
+//    仅作最后安全闸。
 //  - 超时：持仓满 max_hold_bars 根离场。单仓位，现货只做多。
 //
 // 数量：信号不带 Qty，由引擎 applyTradeHooks 按 CustomStakeAmount
-// （position_size USDT ÷ 最新价）自动折算。
+// （CRA 模式=first_order_amount，否则 position_size USDT ÷ 最新价）折算。
 
 const (
 	lhStateIdle      = "IDLE"     // 未持仓，扫描扫单反包机会
@@ -89,12 +95,18 @@ type LiquidityHeatStrategy struct {
 	// ── 持仓状态 ──
 	inPosition     bool
 	entryPrice     float64
-	entryPoolPrice float64 // 被扫的买方池价（SL 基准）
+	entryPoolPrice float64 // 被扫的买方池价（SL 基准，非 CRA 模式）
 	stopPrice      float64
 	targetPrice    float64
-	targetIsPool   bool    // 当前止盈是否挂在卖方池上
+	targetIsPool   bool    // 当前止盈是否挂在卖方池上（非 CRA 模式）
 	holdBars       int
 	closeEmitted   bool // 平仓信号已发、成交回报前防重复
+
+	// ── CRA 仓位管理（可选）：config 含任一 CRA 键即启用（现货语义：无止损，
+	// 池触发补仓 + CRA 止盈；超时为最后安全闸）。须持锁访问。
+	craEnabled bool
+	craParams  *cra.CRAParams
+	craState   *cra.CRAState
 
 	params *strategy.ParamRegistry
 }
@@ -194,6 +206,32 @@ func (s *LiquidityHeatStrategy) Start(params map[string]any) error {
 	s.pools = nil
 	s.resetPositionLocked()
 
+	// CRA 模式判定：参数中只要出现任一 CRA 专属键即启用（presence 判定，
+	// 与 support_rebound 同）。现货语义（用户 2026-09-30 明确）：不带止损
+	// ——无论是否配 stop_loss_ratio 都禁用比例止损；止盈/补仓阶梯按 CRA。
+	s.craEnabled = false
+	s.craParams = nil
+	s.craState = nil
+	if hasCRAKeys(params) {
+		data, err := json.Marshal(params)
+		if err != nil {
+			return fmt.Errorf("liquidity_heat cra: marshal params: %w", err)
+		}
+		cp, err := cra.ParseCRAParams(string(data))
+		if err != nil {
+			return fmt.Errorf("liquidity_heat cra: parse params: %w", err)
+		}
+		if err := cp.Validate(); err != nil {
+			return fmt.Errorf("liquidity_heat cra: validate: %w", err)
+		}
+		cp.StopLossEnabled = false
+		cp.StopLossType = ""
+		cp.StopLossRatio = 0
+		s.craParams = cp
+		s.craState = &cra.CRAState{}
+		s.craEnabled = true
+	}
+
 	s.running = true
 	return nil
 }
@@ -205,6 +243,9 @@ func (s *LiquidityHeatStrategy) Stop() error {
 	s.bars = nil
 	s.pools = nil
 	s.resetPositionLocked()
+	s.craEnabled = false
+	s.craParams = nil
+	s.craState = nil
 	return nil
 }
 
@@ -261,12 +302,16 @@ func (s *LiquidityHeatStrategy) ParamDefs() []map[string]any {
 	return s.params.ToJSONDefs()
 }
 
-// CustomStakeAmount：position_size（USDT）经引擎 applyTradeHooks 折算
-// 为下单数量（Qty=stake/最新价）；余额不足退化为全额可用（现货只做多）。
+// CustomStakeAmount：引擎 applyTradeHooks 折算下单数量（Qty=stake/最新价）；
+// CRA 模式首单/补仓语义用 first_order_amount，否则 position_size（USDT）；
+// 可用余额不足退化为全额可用（现货只做多）。
 func (s *LiquidityHeatStrategy) CustomStakeAmount(availableBalance float64, _ *model.Signal) float64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	stake := s.positionSize
+	if s.craEnabled && s.craParams != nil && s.craParams.FirstOrderAmount > 0 {
+		stake = s.craParams.FirstOrderAmount
+	}
 	if stake <= 0 {
 		return 0
 	}
@@ -319,34 +364,84 @@ func (s *LiquidityHeatStrategy) RuntimeStatus() map[string]any {
 		m["target_is_pool"] = s.targetIsPool
 		m["hold_bars"] = s.holdBars
 	}
+	// CRA 仓位管理快照（启用时输出；现货语义无止损）。
+	m["cra_enabled"] = s.craEnabled
+	if s.craEnabled && s.craParams != nil && s.craState != nil {
+		st, p := s.craState, s.craParams
+		m["cra_position_count"] = st.PositionCount
+		m["cra_pending_add_count"] = st.PendingAddCount
+		m["cra_order_count"] = p.OrderCount
+		if st.AvgEntryPrice > 0 {
+			m["cra_avg_entry_price"] = st.AvgEntryPrice
+			// 下一个补仓池 = 均价下方最近的存活买方池。
+			ref := s.nearestBuyPoolBelowLocked(st.AvgEntryPrice)
+			if ref > 0 {
+				m["cra_next_add_pool"] = ref
+			}
+		}
+		m["cra_highest_profit_pct"] = st.HighestProfitPct
+	}
 	return m
+}
+
+// nearestBuyPoolBelowLocked 返回低于 ref 的最高存活买方池价（下一个支撑位）。
+func (s *LiquidityHeatStrategy) nearestBuyPoolBelowLocked(ref float64) float64 {
+	best := 0.0
+	for _, p := range s.pools {
+		if !p.isBuy || p.price >= ref {
+			continue
+		}
+		if p.price > best {
+			best = p.price
+		}
+	}
+	return best
 }
 
 func (s *LiquidityHeatStrategy) OnOrderBook(_ model.OrderBookData, _ *event.EventBus) (*model.Signal, error) {
 	return nil, nil
 }
 
-// OnOrderUpdate 成交回填：首笔买单成交 → 以实际成交价建持仓基准；
-// 清仓单成交 → 清状态（兜底：平仓信号路径已自行复位，成交回执双保险）。
+// OnOrderUpdate 成交回填：
+//  - CRA 模式：首笔买单成交 → EnterPosition（均价=实际成交价）；补仓成交 →
+//    PendingAddCount--/PositionCount++/RecordFill；清仓单 → ExitPosition。
+//  - 非 CRA：首笔买单成交 → 以实际成交均价重挂止盈；清仓 → 复位状态。
 func (s *LiquidityHeatStrategy) OnOrderUpdate(order model.OrderData, _ *event.EventBus) (*model.Signal, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.running {
+	if !s.running || order.Status != model.StatusFilled {
 		return nil, nil
 	}
-	if order.Status != model.StatusFilled {
-		return nil, nil
-	}
+
 	if order.ClosePosition || order.Side == model.SideSell {
+		if s.craEnabled && s.craState != nil {
+			s.craState.ExitPosition()
+		}
 		if s.inPosition {
 			s.resetPositionLocked()
 		}
 		return nil, nil
 	}
-	// 买单成交：信号价换实际成交均价（信号发出≠成交）。
-	if order.Side == model.SideBuy && s.inPosition && order.AvgFillPrice > 0 {
+
+	if order.Side != model.SideBuy || order.AvgFillPrice <= 0 {
+		return nil, nil
+	}
+
+	if s.craEnabled && s.craState != nil {
+		if !s.craState.InPosition {
+			s.craState.EnterPosition(order.AvgFillPrice, cra.SideLong)
+		}
+		if s.craState.PendingAddCount > 0 {
+			s.craState.PendingAddCount--
+		}
+		s.craState.PositionCount++
+		s.craState.RecordFill(order.AvgFillPrice, order.Filled, cra.SideBuy)
+		return nil, nil
+	}
+
+	// 非 CRA：信号价换实际成交均价，止盈按成交价重挂最近的存活卖方池。
+	if s.inPosition {
 		fill := order.AvgFillPrice
-		// 止损锚定被扫池价不变；止盈按成交价重挂最近的存活卖方池。
 		s.entryPrice = fill
 		if tp, ok := s.tpFromPoolLocked(fill); ok {
 			s.targetPrice = tp
@@ -364,6 +459,10 @@ func (s *LiquidityHeatStrategy) OnTick(tick model.Tick, _ *event.EventBus) (*mod
 	defer s.mu.Unlock()
 	if !s.running || !s.inPosition || tick.Last <= 0 {
 		return nil, nil
+	}
+	if s.craEnabled {
+		// tick 只做止盈判定（移动/静态），补仓只在 K 线闭合时评估。
+		return s.manageCRAExitsLocked(tick.Last, tick.Timestamp), nil
 	}
 	return s.checkPositionExitLocked(tick.Last, tick.Timestamp, false), nil
 }
@@ -388,6 +487,9 @@ func (s *LiquidityHeatStrategy) OnBar(bar model.Bar, _ *event.EventBus) (*model.
 
 	// 2. 持仓管理优先（收盘价判定；K 线计数只在此累计）。
 	if s.inPosition {
+		if s.craEnabled {
+			return s.manageCRAPositionLocked(bar, true), nil
+		}
 		// 止盈挂在卖方池上且该池被本 bar 打掉（high≥池价）→ 按池价离场。
 		if s.targetIsPool && s.targetPrice > 0 && bar.High >= s.targetPrice {
 			return s.closePositionLocked(fmt.Sprintf(
@@ -680,7 +782,107 @@ func (s *LiquidityHeatStrategy) scanSweepReclaimLocked(bar model.Bar) *model.Sig
 	}
 }
 
-// checkPositionExitLocked 持仓管理（Close/最新价判定）：
+// manageCRAExitsLocked CRA 模式止盈判定（OnTick 与 manageCRAPositionLocked
+// 共用）：移动止盈档位优先，否则静态止盈（full/tail/head_tail）。
+func (s *LiquidityHeatStrategy) manageCRAExitsLocked(price float64, ts int64) *model.Signal {
+	if !s.inPosition || s.closeEmitted || s.craState == nil || s.craParams == nil {
+		return nil
+	}
+	p, st := s.craParams, s.craState
+	st.UpdateExtremes(price)
+	var tpHit bool
+	if len(p.MovingTakeProfitTiers) > 0 {
+		tpHit = st.CheckMovingTakeProfit(price, p.MovingTakeProfitTiers)
+	} else {
+		tpHit = st.CheckStaticTakeProfit(price, p.TakeProfitMethod, p.TakeProfitRatio, p.ProfitCallback)
+	}
+	if tpHit {
+		st.ExitPosition()
+		s.resetPositionLocked()
+		return &model.Signal{
+			Symbol:    s.symbol,
+			Direction: "CLOSE",
+			Strength:  1.0,
+			Strategy:  s.name,
+			Reason:    "流动性热力 CRA 止盈离场",
+			Timestamp: ts,
+		}
+	}
+	return nil
+}
+
+// manageCRAPositionLocked CRA 模式持仓管理（OnBar 入口）：
+//  1. 止盈：同 manageCRAExitsLocked（tick 已判过的会重复判——CheckMovingTakeProfit
+//     对已离场状态安全，二次判定无副作用）；
+//  2. 池触发补仓：下一个存活买方池（池价 < CRA 均价）被本 bar 跌破收回 →
+//     按 CRA 阶梯乘数加一档（Qty=first_order_amount×multiplier/price）；
+//  3. 超时平仓仅作最后安全闸。
+// 现货不带止损（用户 2026-09-30 明确），比例止损入口在此刻意缺省。
+func (s *LiquidityHeatStrategy) manageCRAPositionLocked(bar model.Bar, countHold bool) *model.Signal {
+	p, st := s.craParams, s.craState
+	if p == nil || st == nil || !s.inPosition {
+		return nil
+	}
+	if countHold {
+		s.holdBars++
+	}
+	if sig := s.manageCRAExitsLocked(bar.Close, bar.Time); sig != nil {
+		return sig
+	}
+	// 池触发补仓（消耗规则保证一个池只补一次）。
+	if p.EnableAddPosition && st.InPosition &&
+		st.PositionCount+st.PendingAddCount < p.OrderCount && !st.WaterfallPaused {
+		if pool := s.sweptReclaimPoolLocked(bar, st.AvgEntryPrice); pool != nil {
+			next := st.PositionCount + st.PendingAddCount + 1
+			cfg := p.AddPositionForOrder(next)
+			if cfg != nil {
+				st.PendingAddCount++
+				qty := cra.RoundQty(p.FirstOrderAmount * cfg.Multiplier / bar.Close)
+				return &model.Signal{
+					Symbol:    s.symbol,
+					Direction: "LONG",
+					Strength:  0.8,
+					Strategy:  s.name,
+					Reason:    fmt.Sprintf("流动性热力 CRA 补仓 #%d @买方池 %.4f", next, pool.price),
+					Timestamp: bar.Time,
+					Qty:       qty,
+				}
+			}
+		}
+	}
+	if countHold && s.holdBars >= s.maxHoldBars {
+		st.ExitPosition()
+		s.resetPositionLocked()
+		return &model.Signal{
+			Symbol:    s.symbol,
+			Direction: "CLOSE",
+			Strength:  1.0,
+			Strategy:  s.name,
+			Reason:    "流动性热力持仓超时离场 (cra safety)",
+			Timestamp: bar.Time,
+		}
+	}
+	return nil
+}
+
+// sweptReclaimPoolLocked 找到被本 bar 跌破且收回、且池价在 belowRef 下方的
+// 存活买方池（池价最高者优先 = 最近的下一个支撑位）。须持锁。
+func (s *LiquidityHeatStrategy) sweptReclaimPoolLocked(bar model.Bar, belowRef float64) *lhPool {
+	var best *lhPool
+	for _, p := range s.pools {
+		if !p.isBuy || p.price >= belowRef {
+			continue
+		}
+		if bar.Low < p.price && bar.Close > p.price {
+			if best == nil || p.price > best.price {
+				best = p
+			}
+		}
+	}
+	return best
+}
+
+// checkPositionExitLocked 非 CRA 模式持仓管理（Close/最新价判定）：
 //  1. Close ≤ 止损（被扫池价−buffer×ATR）→ 止损离场；
 //  2. Close ≥ 目标（卖方池磁吸或固定比例）→ 止盈离场；
 //  3. 持仓满 max_hold_bars 根 → 超时离场。

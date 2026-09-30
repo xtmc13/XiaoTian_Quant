@@ -1199,6 +1199,18 @@ func startStrategyInEngine(id string, item map[string]any) error {
 				filtered[k] = v
 			}
 		}
+		// CRA 仓位管理键（support_rebound/liquidity_heat 等声明 hasCRAKeys
+		// 的策略）：不在各策略 registry 里，但 Start 靠键存在性激活 CRA 模式——
+		// 被过滤会让 CRA 静默不生效（222 实证：配置全套 CRA 键，运行时
+		// cra_enabled=False，补仓/移动止盈从未真正跑过）。见 commit 修复记录。
+		for _, k := range craFormMarkers {
+			if v, ok := params[k]; ok {
+				filtered[k] = v
+			}
+		}
+		if v, ok := params["order_count"]; ok {
+			filtered["order_count"] = v
+		}
 		params = filtered
 	}
 
@@ -1802,20 +1814,24 @@ func GetStrategyParamDefs(c *gin.Context) {
 func normalizeStrategyConfig(it map[string]any) map[string]any {
 	result := make(map[string]any)
 
-	// Copy basic fields
-	for _, k := range []string{"id", "name", "symbol", "status", "leverage", "timeframe", "initial_capital", "current_equity", "total_pnl", "total_pnl_percent", "group_id", "group_name", "indicator_name", "market_type", "margin_mode", "config", "config_json", "bot_type", "trading_config"} {
+	// Copy basic fields（strategy_type 直通：历史前端读这个键，归一化曾把它
+	// 改名成 type/strategy_name 导致编辑页回退默认类型、显示错表单——2026-09-30
+	// 用户反馈"点击策略编辑不是对应的策略信息和配置"的根因）
+	for _, k := range []string{"id", "name", "symbol", "status", "leverage", "timeframe", "initial_capital", "current_equity", "total_pnl", "total_pnl_percent", "group_id", "group_name", "indicator_name", "market_type", "margin_mode", "config", "config_json", "bot_type", "trading_config", "strategy_type"} {
 		if v, ok := it[k]; ok {
 			result[k] = v
 		}
 	}
 
-	// Field name mappings
+	// Field name mappings（三个键互相兜底，前端按任一读取都能拿到类型）
 	if v, ok := it["strategy_type"].(string); ok && v != "" {
 		result["type"] = v
 		result["strategy_name"] = v
+		result["strategy_type"] = v
 	} else if v, ok := it["type"].(string); ok {
 		result["type"] = v
 		result["strategy_name"] = v
+		result["strategy_type"] = v
 	}
 
 	if v, ok := it["execution_mode"].(string); ok && v != "" {

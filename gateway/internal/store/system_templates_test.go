@@ -46,8 +46,8 @@ func TestEnsureSystemTemplates(t *testing.T) {
 			cta++
 		}
 	}
-	if cta != 9 || combo != 4 {
-		t.Errorf("cta=%d combo=%d, want 9/4", cta, combo)
+	if cta != 10 || combo != 4 {
+		t.Errorf("cta=%d combo=%d, want 10/4", cta, combo)
 	}
 }
 

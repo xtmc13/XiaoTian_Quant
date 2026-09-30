@@ -23,6 +23,7 @@ func registerTemplateFactories() {
 	f("breakout", func() strategy.Strategy { return strategies.NewBreakoutStrategy() })
 	f("grid_trading", func() strategy.Strategy { return strategies.NewGridTradingStrategy() })
 	f("support_rebound", func() strategy.Strategy { return strategies.NewSupportReboundStrategy() })
+	f("liquidity_heat", func() strategy.Strategy { return strategies.NewLiquidityHeatStrategy() })
 }
 
 // TestSystemCTATemplatesInstantiable: 8 个 CTA 模板 + 1 个现货模板的
@@ -58,8 +59,8 @@ func TestSystemCTATemplatesInstantiable(t *testing.T) {
 			t.Errorf("template %s: symbol empty after apply", tpl.ID)
 		}
 	}
-	if cta != 9 {
-		t.Errorf("cta templates = %d, want 9", cta)
+	if cta != 10 {
+		t.Errorf("cta templates = %d, want 10", cta)
 	}
 }
 

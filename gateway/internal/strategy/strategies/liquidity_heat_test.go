@@ -1,6 +1,7 @@
 package strategies
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -239,5 +240,123 @@ func TestLiquidityHeatCustomStake(t *testing.T) {
 	}
 	if got := s.CustomStakeAmount(50, nil); got != 50 {
 		t.Fatalf("stake degrade = %v, want 50", got)
+	}
+}
+
+// startLHCRA 以 CRA 参数启动（现货语义：无止损，池触发补仓 + CRA 止盈）。
+func startLHCRA(t *testing.T) *LiquidityHeatStrategy {
+	t.Helper()
+	s := NewLiquidityHeatStrategy()
+	err := s.Start(map[string]any{
+		"symbol": "BTCUSDT", "timeframe": "15m",
+		"lookback_bars": 50, "bins": 20, "volume_len": 3, "atr_len": 2,
+		"pivot_bars": 2, "min_pool_strength_pct": 30,
+		"tp_min_pool_strength_pct": 15, "tp_fallback_pct": 0.02,
+		"sl_buffer_atr": 0.5, "position_size": 100, "max_hold_bars": 10,
+		// CRA 参数包（键存在即启用 CRA 模式）。
+		"first_order_amount": 100, "order_count": 3, "enable_add_position": true,
+		"add_positions": []map[string]any{
+			{"order": 2, "multiplier": 1.5, "spread": 0.01, "callback": 0.01},
+			{"order": 3, "multiplier": 2.0, "spread": 0.01, "callback": 0.01},
+		},
+		"tp_mode": "static", "take_profit_method": "full", "take_profit_ratio": 0.05,
+		"profit_callback": 0,
+	})
+	if err != nil {
+		t.Fatalf("start cra: %v", err)
+	}
+	if !s.craEnabled {
+		t.Fatal("craEnabled should be true with CRA keys")
+	}
+	if s.craParams.StopLossRatio != 0 {
+		t.Fatal("spot CRA mode must disable stop loss")
+	}
+	return s
+}
+
+func fillBuy(s *LiquidityHeatStrategy, price, qty float64) {
+	s.OnOrderUpdate(model.OrderData{
+		Status: model.StatusFilled, Side: model.SideBuy,
+		AvgFillPrice: price, Filled: qty,
+	}, nil)
+}
+
+// TestLiquidityHeatCRAFlow 入场→成交→跌破下一个池补仓（CRA 乘数量）→CRA 止盈。
+func TestLiquidityHeatCRAFlow(t *testing.T) {
+	s := startLHCRA(t)
+	next := feedBaseline(s, 0, 30)
+	s.OnBar(mkLHBar(next, 100, 100.5, 99.3, 100, 300), nil) // 强买方池
+	next++
+	pool := strongBuyPool(s)
+
+	// 入场：扫反包强池。
+	sig, _ := s.OnBar(mkLHBar(next, 100, 100.2, pool.price-0.5, 99.9, 2), nil)
+	if sig == nil || sig.Direction != "LONG" {
+		t.Fatalf("entry failed: %v", sig)
+	}
+	fillBuy(s, 99.9, 1.0) // 首单成交 → CRA 入场
+	if !s.craState.InPosition {
+		t.Fatal("cra should be in position after first fill")
+	}
+
+	// 造一个更低的强买方池（放量 pivot 低 97.5）。
+	s.OnBar(mkLHBar(next+1, 98.5, 99.0, 97.5, 98.2, 300), nil)
+	next += 2
+
+	// 扫反包那个更低的池 → CRA 补仓 #2，Qty=100×1.5/close。
+	lowPool := strongBuyPool(s)
+	if lowPool == nil || lowPool == pool {
+		t.Fatal("expected a second strong buy pool below entry")
+	}
+	addBar := mkLHBar(next, 97.0, 98.5, lowPool.price-0.3, 98.0, 2)
+	sig, _ = s.OnBar(addBar, nil)
+	if sig == nil || sig.Direction != "LONG" {
+		t.Fatalf("expect CRA add signal, got %v", sig)
+	}
+	if !strings.Contains(sig.Reason, "补仓 #2") {
+		t.Fatalf("expect add #2, reason: %s", sig.Reason)
+	}
+	wantQty := 100 * 1.5 / 98.0
+	if math.Abs(sig.Qty-wantQty) > 1e-3 {
+		t.Fatalf("add qty %.6f != first×1.5/close %.6f", sig.Qty, wantQty)
+	}
+	fillBuy(s, 98.0, sig.Qty)
+	if s.craState.PositionCount != 2 {
+		t.Fatalf("cra position count = %d, want 2", s.craState.PositionCount)
+	}
+
+	// CRA 静态止盈（full，+5% 均价）：均价上方 6% 收盘 → CLOSE。
+	avg := s.craState.AvgEntryPrice
+	tpBar := mkLHBar(next+1, avg*1.05, avg*1.065, avg*1.045, avg*1.06, 2)
+	sig, _ = s.OnBar(tpBar, nil)
+	if sig == nil || sig.Direction != "CLOSE" || !strings.Contains(sig.Reason, "CRA 止盈") {
+		t.Fatalf("expect CRA TP close, got %v", sig)
+	}
+	if s.inPosition || s.craState.InPosition {
+		t.Fatal("position should be flat after TP")
+	}
+}
+
+// TestLiquidityHeatCRANoStopLoss 现货 CRA 模式无止损：价格深跌不割肉，
+// 持仓保持（等补仓/止盈/超时）。
+func TestLiquidityHeatCRANoStopLoss(t *testing.T) {
+	s := startLHCRA(t)
+	next := feedBaseline(s, 0, 30)
+	s.OnBar(mkLHBar(next, 100, 100.5, 99.3, 100, 300), nil)
+	next++
+	pool := strongBuyPool(s)
+	sig, _ := s.OnBar(mkLHBar(next, 100, 100.2, pool.price-0.5, 99.9, 2), nil)
+	if sig == nil {
+		t.Fatal("entry failed")
+	}
+	fillBuy(s, 99.9, 1.0)
+
+	// 暴跌 15%：无止损 → 不平仓（CRA 模式刻意缺省止损入口）。
+	sig, _ = s.OnBar(mkLHBar(next+1, 90, 91, 84.5, 85.5, 2), nil)
+	if sig != nil && sig.Direction == "CLOSE" {
+		t.Fatalf("CRA spot mode must not stop-loss, got %v", sig.Reason)
+	}
+	if !s.craState.InPosition {
+		t.Fatal("position must survive crash without stop loss")
 	}
 }
