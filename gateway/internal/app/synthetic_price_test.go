@@ -14,6 +14,15 @@ func TestGetLastPriceSource(t *testing.T) {
 	origProbe := priceRestProbe
 	t.Cleanup(func() { priceRestProbe = origProbe })
 
+	// 隔离 Tier 1（WS 缓存）：同包其他用例在网络可达环境下可能已把真实价格
+	// 灌进 BinanceWS 缓存，缓存命中会让被测函数越过此处 mock 的探针，
+	// 本用例因此抖动（服务器实测 RUN 3/6 失败）。临时摘除 WS 流只走探针路径。
+	if appCtx := Get(); appCtx != nil {
+		origWS := appCtx.BinanceWS
+		appCtx.BinanceWS = nil
+		t.Cleanup(func() { appCtx.BinanceWS = origWS })
+	}
+
 	// REST 探针失败 → 合成锚点（BTCUSDT=50000）。
 	priceRestProbe = func(norm string) (float64, bool) { return 0, false }
 	p, synthetic := getLastPriceSource("BTCUSDT")
