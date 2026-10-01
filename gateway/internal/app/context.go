@@ -1749,9 +1749,43 @@ func (ctx *Context) resolveExchange(symbol string) string {
 // closePositionFromSignal closes the opposite position when a CLOSE signal is received.
 func (ctx *Context) closePositionFromSignal(signal model.Signal) {
 	acct := ctx.PortfolioManager.GetAccount("default")
-	if acct == nil {
+	closedAny := false
+	if acct != nil {
+		closedAny = ctx.closeMirroredPositions(signal, acct)
+	}
+	if closedAny {
 		return
 	}
+	// 兜底：本地组合镜像没有该持仓（现货仓位不镜像/被交易所同步覆盖，
+	// closePositionFromSignal 按 LONG/SHORT 键而现货成交按 BUY/SELL 键——
+	// 两条键空间永不相遇），但策略成交账本有净持仓 → 按账本净额市价出场。
+	// 没有这一步 CLOSE 信号会空转：引擎发出即复位为空仓，下一次入场形态
+	// 又真买——无限买入直到余额耗尽（2026-10-01 用户质疑的正是这条路径）。
+	if qty, _, err := store.NetFilledByStrategy(signal.Strategy, signal.Symbol); err == nil && qty > 0 {
+		ctx.Logger.Info("Close from strategy ledger (no mirrored position)",
+			"strategy", signal.Strategy, "symbol", signal.Symbol, "qty", qty)
+		req := &order.Request{
+			Symbol:    signal.Symbol,
+			Side:      model.SideSell,
+			OrderType: model.TypeMarket,
+			Price:     0,
+			Quantity:  qty,
+			Exchange:  ctx.resolveExchange(signal.Symbol),
+			ClientOID: fmt.Sprintf("sig:%s:%d", signal.Strategy, time.Now().UnixNano()),
+			Source:    "signal:" + signal.Strategy,
+		}
+		if ord, err := order.GetOrderManager().PlaceOrder(req); err != nil {
+			ctx.Logger.Warn("Ledger close order failed",
+				"strategy", signal.Strategy, "symbol", signal.Symbol, "error", err.Error())
+		} else {
+			ctx.Logger.Info("Ledger close order placed", "order_id", ord.ID, "qty", qty)
+		}
+	}
+}
+
+// closeMirroredPositions 按本地组合镜像平仓（原 closePositionFromSignal 主路径）。
+func (ctx *Context) closeMirroredPositions(signal model.Signal, acct *model.AccountData) bool {
+	closed := false
 	// Try both LONG and SHORT positions for this symbol
 	for _, side := range []model.PositionSide{model.PositionLong, model.PositionShort} {
 		posID := signal.Symbol + "-" + string(side)
@@ -1794,12 +1828,14 @@ func (ctx *Context) closePositionFromSignal(signal model.Signal) {
 			continue
 		}
 		ctx.Logger.Info("Position closed from signal", "symbol", signal.Symbol, "side", side, "qty", closeQty, "full", fullClose, "order_id", ord.ID)
+		closed = true
 
 		if fullClose {
 			// Release displayed capital for this strategy since position is closed.
 			ctx.releaseStrategyCapital(signal.Strategy)
 		}
 	}
+	return closed
 }
 
 // updateStrategyCapitalFromOrder adds the estimated margin/cost of an opening order
