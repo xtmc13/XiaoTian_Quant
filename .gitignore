@@ -124,3 +124,4 @@ web/ios/
 
 # ML 训练产物
 sandbox/ml_server/trained_models/
+gateway/.tmp/

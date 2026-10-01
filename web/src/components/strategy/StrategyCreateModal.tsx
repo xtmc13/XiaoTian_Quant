@@ -9,8 +9,6 @@ import {
   FormField,
   STRAT_TYPES,
   getDefaultStrategyCode,
-  DynamicParamField,
-  TIMEFRAMES,
   type StrategyRow,
 } from './StrategyFormFields'
 import { CRAParamForm, craParamsToApiPayload, type CRAParams } from './CRAParamForm'
@@ -701,39 +699,23 @@ export function StrategyCreateModal({
                   <div className="text-xs text-muted-foreground mb-2">调整策略参数，或使用预设快速填充</div>
 
                   <CollapsibleSection title="CRA 量化参数" count={4} defaultOpen>
-                    <CRAParamForm value={craParams} onChange={setCraParams} market={market} />
-                  </CollapsibleSection>
-                </>
-              ) : strategyType === 'support_rebound' ? (
-                <>
-                  <div className="text-xs text-muted-foreground mb-2 leading-relaxed">
-                    四步入场：确认支撑位（多次触及）→ 放量暴跌恐慌 → 暴跌后反弹确认 → 回踩支撑守稳时放量阳线入场（只做多）
-                  </div>
-                  <CollapsibleSection title="支撑回踩反弹参数" count={SUPPORT_REBOUND_PARAM_DEFS.length} defaultOpen>
-                    <FormField label="工作K线周期">
-                      <select
-                        value={supportReboundTimeframe}
-                        onChange={(e) => setSupportReboundTimeframe(e.target.value)}
-                        className={inputCls}
-                      >
-                        {TIMEFRAMES.map((tf) => (
-                          <option key={tf} value={tf}>
-                            {tf}
-                          </option>
-                        ))}
-                      </select>
-                      <p className="text-[10px] text-muted-foreground mt-1">
-                        策略按该周期闭合 K 线判定支撑/暴跌/反弹/回踩，默认 4h
-                      </p>
-                    </FormField>
-                    {SUPPORT_REBOUND_PARAM_DEFS.map((def) => (
-                      <DynamicParamField
-                        key={def.name}
-                        def={def}
-                        value={supportReboundParams[def.name]}
-                        onChange={(val) => setSupportReboundParams((prev) => ({ ...prev, [def.name]: val }))}
-                      />
-                    ))}
+                    <CRAParamForm
+                      value={craParams}
+                      onChange={setCraParams}
+                      market={market}
+                      strategyAddon={
+                        strategyType === 'support_rebound'
+                          ? {
+                              label: '支撑回踩反弹',
+                              desc: '四步入场：确认支撑位（多次触及）→ 放量暴跌恐慌 → 暴跌后反弹确认 → 回踩支撑守稳时放量阳线入场（只做多）',
+                              paramDefs: SUPPORT_REBOUND_PARAM_DEFS,
+                              loading: false,
+                              values: supportReboundParams,
+                              onConfirm: (next) => setSupportReboundParams((prev) => ({ ...prev, ...next })),
+                            }
+                          : null
+                      }
+                    />
                   </CollapsibleSection>
                 </>
               ) : !strategyType ? (

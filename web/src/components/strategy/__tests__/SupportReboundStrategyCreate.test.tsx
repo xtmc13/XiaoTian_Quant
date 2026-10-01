@@ -37,7 +37,7 @@ describe('StrategyCreateModal 支撑回踩反弹（support_rebound）', () => {
     vi.mocked(strategyApi.update).mockResolvedValue({} as never)
   })
 
-  it('选中 support_rebound → 参数区渲染「暴跌幅度」等字段 → 提交 config_json 含参数', async () => {
+  it('选中 support_rebound → CRA参数区 + 策略指标卡弹窗编辑专属参数 → 提交 config_json 含参数', async () => {
     const create = vi.mocked(strategyApi.create)
     render(<StrategyCreateModal editing={null} defaultMarket="spot" inline onClose={vi.fn()} onSaved={vi.fn()} />, {
       wrapper,
@@ -52,19 +52,27 @@ describe('StrategyCreateModal 支撑回踩反弹（support_rebound）', () => {
     fireEvent.click(screen.getByText('确认选择'))
     fireEvent.click(screen.getByText('下一步'))
 
-    // ── Step 1 参数配置：渲染支撑回踩反弹专属参数区 ──
-    await waitFor(() => expect(screen.getByText('支撑回踩反弹参数')).toBeTruthy())
+    // ── Step 1 参数配置：CRA 量化参数区 + 开仓指标区的策略卡 ──
+    // 2026-09-30 设计：support_rebound 属 CRA 兼容类型（仓位管理复用 CRA），
+    // 14 个专属参数经开仓指标区的策略卡 → StrategyParamModal 弹窗编辑。
+    await waitFor(() => expect(screen.getByText('CRA 量化参数')).toBeTruthy())
+    await waitFor(() => expect(screen.getAllByText('支撑回踩反弹').length).toBeGreaterThan(0))
+
+    // 打开策略参数弹窗（⚙ 按钮）。
+    fireEvent.click(screen.getByLabelText('支撑回踩反弹 参数'))
+    await waitFor(() => expect(screen.getByText('支撑回踩反弹 · 参数')).toBeTruthy())
     expect(screen.getByText('暴跌幅度')).toBeTruthy()
     expect(screen.getByText('支撑观察窗口（根）')).toBeTruthy()
     expect(screen.getByText('异常量倍数（暴跌）')).toBeTruthy()
     expect(screen.getByText('每单金额 (USDT)')).toBeTruthy()
     expect(screen.getByText('超时离场（根）')).toBeTruthy()
-    expect(screen.getByText('工作K线周期')).toBeTruthy()
 
-    // 修改暴跌幅度 0.12 → 0.20（标签父级 label 内的 number input）。
+    // 修改暴跌幅度 0.12 → 0.20（弹窗内标签父级 label 的 number input）。
     const dropLabel = screen.getByText('暴跌幅度').closest('label')
     expect(dropLabel).toBeTruthy()
     fireEvent.change(dropLabel!.querySelector('input')!, { target: { value: '0.2' } })
+    fireEvent.click(screen.getByRole('button', { name: '确认' }))
+    await waitFor(() => expect(screen.queryByText('支撑回踩反弹 · 参数')).toBeNull())
 
     // ── 走到最后一步提交 ──
     fireEvent.click(screen.getByText('下一步')) // step 2 回测预览
@@ -95,8 +103,8 @@ describe('StrategyCreateModal 支撑回踩反弹（support_rebound）', () => {
     expect(config.take_profit_pct).toBe(0.15)
     expect(config.position_size).toBe(500)
     expect(config.max_hold_bars).toBe(90)
-    // 非 CRA 类型：CRA 专属键一律不写入。
-    expect(config.first_order_amount).toBeUndefined()
-    expect(config.add_positions).toBeUndefined()
+    // 2026-09-30 起 support_rebound 为 CRA 兼容类型：CRA 仓位管理键随配置写入。
+    expect(config.first_order_amount).toBeDefined()
+    expect(config.add_positions).toBeDefined()
   })
 })
