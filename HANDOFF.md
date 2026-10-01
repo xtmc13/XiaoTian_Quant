@@ -1,4 +1,4 @@
-# HANDOFF — 会话交接文档（2026-09-16）
+# HANDOFF — 会话交接文档（2026-09-16 建立，2026-09-29 刷新）
 
 > 本文档供新会话（尤其是服务器上的 Kimi Code CLI 实例）快速接手。
 > 规则：读完本文 + TODO.md 即可继续工作；工作过程中持续更新这两份文档。
@@ -7,7 +7,10 @@
 
 XiaoTian_Quant（小天量化 v3.0）已完成"从用不了到全链路真实数据跑通"：
 真实币安行情/权益 → MACD/CRA 策略信号 → paper 撮合成交；网格机器人上线；
-前端部署；GitHub 同步。当前主部署在服务器（见下）。
+前端部署；GitHub 同步。2026-09-19~26 完成对标 QuantDinger 补齐批次
+（47 项全部落地，权威记录见《对标QuantDinger补齐清单.md》，2026-09-25 全勾），
+当前在 `feature/gap-remediation-2026-09-20` 分支（31 提交，已推送 origin）。
+主部署在服务器（见下）。
 
 ## 部署拓扑
 
@@ -45,12 +48,21 @@ XiaoTian_Quant（小天量化 v3.0）已完成"从用不了到全链路真实数
    重入 Publish 与并发 Subscribe 成环（Start 请求永久挂死、174 个 goroutine 堆积、SIGTERM
    都杀不掉）。修法=event.dispatch 快照订阅后放锁再调 handler + Engine 补订阅退订。
    已验证：333/222/MACD 启动均 <12ms 返回，333 全链路（首根 15m K线→cra 首单→paper FILLED）实测跑通。
-   详见 TODO.md 验证记录末节。
+   详见 TODO.md 验证记录。
 2. ~~**待用户答复**：333 是在 UI 哪个页面菜单创建的~~ ✅ 2026-09-17 已解决：用户确认
    333/444 均从"合约策略"页创建；"保存暗道"已三重封堵（commit b285d5b + d0ab758：
    后端非 paper 一律压回 paper 并留痕、信号下单白名单、前端创建入口下线"实盘交易"
    选项），详见 TODO.md 2026-09-17 验证记录。
-3. **待用户操作**：云控制台安全组放行 TCP 8088 和 3000。
+3. **待用户确认（可能已过时）**：云控制台安全组放行 TCP 8088 和 3000——2026-09-16 提出，
+   若服务器外网已可访问则无需处理。
+4. **分支收尾**：`feature/gap-remediation-2026-09-20`（31 提交）已推送 origin
+   （2026-09-29），**尚未合并回 main**；合并前建议在服务器上按 DEPLOYMENT.md 流程
+   走一遍部署验证。
+5. **2026-09-29 构建修复**：默认 `go build ./...`（CGO 开启）曾因 cgo 变体缺
+   BalanceProvider/SetOnFill API 而编译失败。已将 Rust FFI 路径改为显式 opt-in
+   `-tags xtengine`（cgo_bridge.go），纯 Go 引擎在 xtengine 缺席时无条件生效
+   （无论 CGO 开关）。现在 `go build ./...` 与 `CGO_ENABLED=0 go build ./...`
+   双模式均通过，`go test ./...` 双模式全绿（2026-09-29 实测）。
 
 ## 已知坑（血泪史，别再踩）
 
@@ -66,15 +78,21 @@ XiaoTian_Quant（小天量化 v3.0）已完成"从用不了到全链路真实数
   `PaperEquity()`=模拟账本。风控上下文按订单执行目标选基准（paper 单用 paper 权益）。
   真实币安账户当前只有 ~0.2U，权益显示个位数是正常的，不是 bug。
 - 币安 WS 客户端以前会发"伪 1m Bar"（ticker 伪造），已移除；别恢复。
+- 撮合引擎双实现按 build tag 分流：`matching.go`（纯 Go，生产路径）=
+  `!xtengine`；`cgo_bridge.go`（Rust FFI，仅基准）= `cgo && xtengine` 且需预编译
+  `libxt_matching`。**不要再用 `-tags cgo`**（旧写法会让 FFI 路径在缺 Rust 库时
+  链接失败）；BUILD_RUST=1 的 build.sh 已改用 `-tags xtengine`。
+- 本机 `go` 不在默认 PATH：`export PATH=$PATH:/usr/local/go/bin`（Go 1.25.3）。
 - 手机 proot 环境：`/usr/local/go` 曾有 2024 旧版残留污染（ZeroValSize 重定义），
   装 Go 前必须 `rm -rf /usr/local/go`；绑定 <1024 端口会被 proot 拒绝（nginx 用 8088）。
 
 ## 关键文件地图
 
-- 活文档：`TODO.md`（清单+验证记录，持续更新）
+- 活文档：`TODO.md`（清单+验证记录，持续更新）、`对标QuantDinger补齐清单.md`（补齐批次权威记录）
 - 网格机器人：`internal/grid/`（engine/runner）、`handler/grid_bot.go`、`migrations/sql/0002`
 - K线供给管：`internal/market/kline_feeder.go`（回补+PublishSync）
 - 策略执行链：`internal/strategy/`（engine+firstbar 观测）、`internal/app/context.go`（信号→下单）
+- 撮合引擎：`internal/adapter/matching.go`（纯 Go，生产）、`internal/adapter/cgo_bridge.go`（Rust FFI，`-tags xtengine` opt-in）、`internal/service/matching.go`（撮合服务，OMS 回写）
 - 响应包装器：`internal/middleware/response_wrapper.go`（曾吞 body，已修，改时注意透传）
 - 前端：`web/src/pages/bots/BotsGrid.tsx`（网格页）
 

@@ -13,7 +13,9 @@
 > 链上模块、社区/论坛、多券商接入。
 
 > 规则：做完一条，勾一条，立即 `commit + push`。
-> 不再生成任何新的宏观审计报告；项目真实状态只以本文件为准。
+> 不再生成任何新的宏观审计报告；项目真实状态只以本文件为准
+> （例外：2026-09-19~25 对标 QuantDinger 补齐批次的权威记录是
+> 《对标QuantDinger补齐清单.md》，47 项已全部勾选；该批次的基线验证记录见本文末节 2026-09-29 条）。
 > 背景：根目录 29 份历史报告（2026-08-27）结论互相矛盾、多数已过时，
 > 其有效结论已浓缩进本清单，原文件待归档（见第 7 条）。
 
@@ -103,6 +105,7 @@
   已压回 paper`；前端已重新构建部署。教训：前端"信号通知"选项文案与后端语义
   长期不一致（号称不下单实际直连交易所），UI 文案不可信，安全红线必须在后端。
 - 2026-09-17：UI 收官（main=89dbce0）。最终形态：机器人中心=唯一管理页（现货策略/合约策略/网格/马丁/华尔街/AI 八类 chips 统一卡片，详情弹层=RuntimePanel+资金三件套）；创建独立页 /create（现货/合约同一套原版 CRA 表单，现货基础信息含策略类型选择：现货网格/马丁趋势/华尔街/激进，合约由指标选择器的顺势多/空承担身份）；新建机器人模板四卡=现货/合约策略机器人+AI+AI自定义。服务器已同步，333 自动恢复跑单中。
+- 2026-09-29：【健康检查 + 构建修复】对 `feature/gap-remediation-2026-09-20`（HEAD 3bca9c3，工作区干净）做全量体检：前端 `vite build` 通过、`vitest` 266/266、`tsc --noEmit` 零错误；后端 `CGO_ENABLED=0 go build ./...` 与全量 `go test` 全绿。发现默认 `go build ./...`（CGO 开启）编译失败：cgo 变体 `cgo_bridge.go` 缺纯 Go 引擎独有的 `BalanceProvider/SetBalanceProvider/SetOnFill`（c5868fd 引入），且 `cmd/download` 经 `internal/data` 传递依赖 FFI 链接 `-lxt_matching` 必失败。修复：Rust FFI 路径改为显式 opt-in `-tags xtengine`（cgo_bridge.go tag=`cgo && xtengine`，补同名 no-op API 保持 service 层可编译）；纯 Go 引擎 tag 放宽为 `!cgo || !xtengine`，xtengine 缺席时无条件生效；三个测试文件 tag 同步；build.sh/gateway README 的 `-tags cgo` 改 `-tags xtengine`。修复后双模式 `go build ./...` 与双模式 `go test -count=1 ./...` 全绿（本机 arm64 无 cargo，FFI 链接路径未经实链，仅编译期验证通过）。分支已推送 origin（`-u` 建上游）。另清理 /root 下过期快照 `XiaoTian_Quant-local-changes-20260915.diff`。文档同步：HANDOFF 刷新至 2026-09-29、CHANGELOG 补 [3.1.0]。遗留：feature 分支尚未合并回 main（合并前建议服务器走一遍 DEPLOYMENT 验证）。
 - 2026-09-30：【666 无法开仓根因=Kimi temperature 400】用户新建现货 AI 全自动交易员
   666（ai_auto_trader）running 但永不开仓。日志每 30min 一轮
   `decide failed: llm: kimi: HTTP 400 — invalid temperature: only 1 is allowed
