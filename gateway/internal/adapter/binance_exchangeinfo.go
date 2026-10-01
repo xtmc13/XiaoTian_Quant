@@ -214,12 +214,25 @@ func (b *BinanceAdapter) normalizeBinanceOrder(symbol, orderType string, price, 
 		return qtyStr, priceStr, nil
 	}
 
-	// 市价单优先用 MARKET_LOT_SIZE 的步进（若交易所单独给出）。
+	// 市价单优先用 MARKET_LOT_SIZE 的步进与最小量（若交易所单独给出且为正值）。
+	// 币安大量交易对 MARKET_LOT_SIZE.stepSize="0.00000000"（交易所语义：无市价
+	// 步进约束）——非正值一律沿用 LOT_SIZE，否则 quantize 会因 step≤0 报错，
+	// 把市价单全部在本地拦死（2026-10-01 生产冷启动实测，信号单连发被拒）。
 	qtyFilters := f.LotFilters
-	if !isLimit && f.marketStepSize != "" {
-		qtyFilters.StepSize = f.marketStepSize
-		if f.marketMinQty != "" {
+	if !isLimit {
+		if r, err := parseDecimal(f.marketStepSize); err == nil && r.Sign() > 0 {
+			qtyFilters.StepSize = f.marketStepSize
+		}
+		if m, err := parseDecimal(f.marketMinQty); err == nil && m.Sign() > 0 {
 			qtyFilters.MinQty = f.marketMinQty
+		}
+	}
+	// 最终防线：LOT_SIZE.stepSize 本身为 "0.00000000"（个别停牌/下市交易对）
+	// 时同样视为"无步进约束"，清空后走 min/max/notional 校验，不因 step≤0 拦单。
+	if qtyFilters.StepSize != "" {
+		if r, err := parseDecimal(qtyFilters.StepSize); err != nil || r.Sign() <= 0 {
+			log.Printf("[Binance] WARN %s: non-positive stepSize %q treated as unconstrained", ctx, qtyFilters.StepSize)
+			qtyFilters.StepSize = ""
 		}
 	}
 
@@ -230,7 +243,14 @@ func (b *BinanceAdapter) normalizeBinanceOrder(symbol, orderType string, price, 
 
 	p := price
 	if isLimit {
-		priceStr, p, err = NormalizePrice(&f.LotFilters, price, ctx)
+		priceFilters := f.LotFilters
+		if priceFilters.TickSize != "" {
+			if r, err := parseDecimal(priceFilters.TickSize); err != nil || r.Sign() <= 0 {
+				log.Printf("[Binance] WARN %s: non-positive tickSize %q treated as unconstrained", ctx, priceFilters.TickSize)
+				priceFilters.TickSize = ""
+			}
+		}
+		priceStr, p, err = NormalizePrice(&priceFilters, price, ctx)
 		if err != nil {
 			return "", "", err
 		}

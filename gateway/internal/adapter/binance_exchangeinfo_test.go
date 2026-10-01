@@ -45,6 +45,17 @@ const futuresExchangeInfoFixture = `{
       {"filterType": "PRICE_FILTER", "minPrice": "0.01", "maxPrice": "100000", "tickSize": "0.01"},
       {"filterType": "LOT_SIZE", "minQty": "0.01", "maxQty": "10000", "stepSize": "0.001"},
       {"filterType": "NOTIONAL", "minNotional": "5"}
+    ]},
+    {"symbol": "SOLUSDT", "status": "TRADING", "filters": [
+      {"filterType": "PRICE_FILTER", "minPrice": "0.01", "maxPrice": "10000", "tickSize": "0.01"},
+      {"filterType": "LOT_SIZE", "minQty": "0.1", "maxQty": "100000", "stepSize": "0.1"},
+      {"filterType": "MARKET_LOT_SIZE", "minQty": "0.00000000", "maxQty": "5000", "stepSize": "0.00000000"},
+      {"filterType": "MIN_NOTIONAL", "notional": "5"}
+    ]},
+    {"symbol": "DOGEUSDT", "status": "TRADING", "filters": [
+      {"filterType": "PRICE_FILTER", "minPrice": "0.00001000", "maxPrice": "10.00000000", "tickSize": "0.00001000"},
+      {"filterType": "LOT_SIZE", "minQty": "1.00000000", "maxQty": "10000000.00000000", "stepSize": "0.00000000"},
+      {"filterType": "MIN_NOTIONAL", "notional": "5"}
     ]}
   ]
 }`
@@ -54,6 +65,7 @@ const spotExchangeInfoFixture = `{
     {"symbol": "BTCUSDT", "status": "TRADING", "filters": [
       {"filterType": "PRICE_FILTER", "minPrice": "0.01", "maxPrice": "1000000.00000000", "tickSize": "0.01"},
       {"filterType": "LOT_SIZE", "minQty": "0.00001000", "maxQty": "9000.00000000", "stepSize": "0.00001000"},
+      {"filterType": "MARKET_LOT_SIZE", "minQty": "0.00000000", "maxQty": "9000.00000000", "stepSize": "0.00000000"},
       {"filterType": "MIN_NOTIONAL", "minNotional": "5.00000000"}
     ]}
   ]
@@ -358,4 +370,46 @@ func TestAllOrderFormsAreCleanDecimals(t *testing.T) {
 		btAssert(t, json.Unmarshal([]byte(q), &jq) == nil, "qty parses as JSON number")
 		btAssert(t, json.Unmarshal([]byte(p), &jp) == nil, "price parses as JSON number")
 	}
+}
+
+/* ── 零步进交易规则：MARKET_LOT_SIZE/LOT_SIZE stepSize="0.00000000" ──
+ * 币安部分交易对 MARKET_LOT_SIZE.stepSize（及个别停牌交易对的
+ * LOT_SIZE.stepSize）为 "0.00000000"，交易所语义是"无步进约束"。
+ * 2026-10-01 生产冷启动实测：旧代码盲目采用零步进 → quantize
+ * "step must be positive" 把市价单全部在本地拦死（live 信号单
+ * 连发皆被拒）。修复：非正值一律视为无约束，沿用 LOT_SIZE / 跳过步进。
+ */
+
+// 现货 BTCUSDT：MARKET_LOT_SIZE.stepSize="0.00000000" → 市价单沿用 LOT_SIZE。
+func TestPlaceSpotOrderMarketZeroMarketStepFallsBackToLotSize(t *testing.T) {
+	env := newBinanceOrderTestEnv(t)
+	b := newTestBinanceAdapter()
+
+	_, err := b.PlaceOrder("BTCUSDT", "BUY", "MARKET", 0, 0.001234567)
+	btAssert(t, err == nil, "zero MARKET_LOT_SIZE step must not block market order")
+	form := env.form()
+	btAssertEq(t, form.Get("quantity"), "0.00123", "market qty floored to LOT_SIZE step 0.00001")
+	btAssertEq(t, form.Get("price"), "", "market order carries no price")
+}
+
+// 合约 SOLUSDT：MARKET_LOT_SIZE.stepSize="0.00000000" → 市价单沿用 LOT_SIZE 0.1。
+func TestPlaceFuturesOrderMarketZeroMarketStepFallsBackToLotSize(t *testing.T) {
+	env := newBinanceOrderTestEnv(t)
+	b := newTestBinanceAdapter()
+
+	_, err := b.PlaceFuturesOrder("SOLUSDT", "BUY", "MARKET", 0, 1.23456789, 10, "LONG")
+	btAssert(t, err == nil, "zero MARKET_LOT_SIZE step must not block market order")
+	btAssertEq(t, env.form().Get("quantity"), "1.2", "market qty floored to LOT_SIZE step 0.1")
+}
+
+// 合约 DOGEUSDT：LOT_SIZE.stepSize 本身为 "0.00000000" → 视为无步进约束。
+func TestPlaceFuturesOrderZeroLotSizeStepUnconstrained(t *testing.T) {
+	env := newBinanceOrderTestEnv(t)
+	b := newTestBinanceAdapter()
+
+	_, err := b.PlaceFuturesOrder("DOGEUSDT", "BUY", "LIMIT", 0.123456, 123.456789, 10, "LONG")
+	btAssert(t, err == nil, "zero LOT_SIZE step must not block order")
+	form := env.form()
+	btAssertEq(t, form.Get("quantity"), "123.456789", "qty passes through unconstrained")
+	btAssertEq(t, form.Get("price"), "0.12346", "price still rounded to tick 0.00001")
 }
