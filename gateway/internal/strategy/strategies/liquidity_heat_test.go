@@ -532,3 +532,30 @@ func TestLiquidityHeatStartAppliesRestoredPosition(t *testing.T) {
 		t.Fatalf("restored position must not re-enter on replay: %s", sig.Reason)
 	}
 }
+
+// TestLiquidityHeatRestorePositionFullCRA 重建的 CRA 持仓按满档处理：
+// 666 实证——重建只按 EnterPosition(=1 档) 会让引擎认为还差两档，
+// 重放 K 线里的池形态触发连环补仓单（真买）。满档后不得再发补仓。
+func TestLiquidityHeatRestorePositionFullCRA(t *testing.T) {
+	s := startLHCRA(t)
+	feedBaseline(s, 0, 30) // ATR/池就绪
+
+	if err := s.RestorePosition(0.00055, 83868.2); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if s.craState.PositionCount != s.craParams.OrderCount {
+		t.Fatalf("restored CRA must be full-ladder: count=%d want %d",
+			s.craState.PositionCount, s.craParams.OrderCount)
+	}
+
+	// 构造更低强池 + 扫反包（正常会触发 CRA 补仓的形态）→ 不得再发 LONG。
+	s.OnBar(mkLHBar(31, 98.5, 99.0, 97.5, 98.2, 300), nil)
+	lowPool := strongBuyPool(s)
+	if lowPool == nil {
+		t.Fatal("need a lower strong pool")
+	}
+	sig, _ := s.OnBar(mkLHBar(32, 97.0, 98.5, lowPool.price-0.3, 98.0, 2), nil)
+	if sig != nil && sig.Direction == "LONG" {
+		t.Fatalf("full-ladder restored position must not add: %s", sig.Reason)
+	}
+}

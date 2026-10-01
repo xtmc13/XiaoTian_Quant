@@ -547,6 +547,12 @@ func (s *LiquidityHeatStrategy) restorePositionLocked(qty, avgPrice float64) {
 	s.closeEmitted = false
 	if s.craEnabled && s.craState != nil && !s.craState.InPosition {
 		s.craState.EnterPosition(avgPrice, cra.SideLong)
+		// 重建持仓的档位无法从账本精确反推（金额加权 ≠ 档位数，且 666 实证
+		// 重启失忆期间把 5 笔全算成"只持仓 1 档"→ 重放风暴连环发补仓单真金
+		// 白银买货）。保守按满档处理：重建后不补仓，只管理止盈/超时离场。
+		if s.craParams != nil {
+			s.craState.PositionCount = s.craParams.OrderCount
+		}
 	}
 	log.Printf("[liquidity_heat] %s 重启仓位重建: qty=%.8f vwap=%.2f (cra=%v)",
 		s.name, qty, avgPrice, s.craEnabled)
