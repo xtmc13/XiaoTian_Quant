@@ -7,6 +7,7 @@ import (
 	"math"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/xiaotian-quant/gateway/internal/event"
 	"github.com/xiaotian-quant/gateway/internal/model"
@@ -97,6 +98,10 @@ type LiquidityHeatStrategy struct {
 	inPosition     bool
 	entryPending   bool // 入场单已发未成交（乐观记账待确认；终态未成交须回滚）
 	restored       bool // 重启仓位重建恢复出的持仓，待下一根 K 线重挂止损/目标
+	// 持仓 K 线计数起点：早于该时间戳的 bar（暖机重放的历史 K 线）不计入
+	// 超时离场的 holdBars——否则每次重启重放 99 根历史 K 线会瞬间把持仓
+	// 时长顶满，持仓中的策略一重启就秒发超时平仓（2026-10-01 重启重建时实测）。
+	holdCountFrom  int64
 	entryPrice     float64
 	entryPoolPrice float64 // 被扫的买方池价（SL 基准，非 CRA 模式）
 	stopPrice      float64
@@ -235,6 +240,15 @@ func (s *LiquidityHeatStrategy) Start(params map[string]any) error {
 		s.craEnabled = true
 	}
 
+	// 重启仓位重建（handler 按本地成交账本注入 Start 参数）：在 Start 清态
+	// 之后、暖机重放之前恢复持仓态——恢复若发生在 Start 之前会被上面的
+	// resetPositionLocked 清掉，若发生在重放之后则已重复入场（竞态窗口）。
+	if q, ok := params["restored_position_qty"].(float64); ok && q > 0 {
+		v, _ := params["restored_position_vwap"].(float64)
+		s.restorePositionLocked(q, v)
+	}
+
+	s.holdCountFrom = time.Now().UnixMilli()
 	s.running = true
 	return nil
 }
@@ -507,13 +521,20 @@ func (s *LiquidityHeatStrategy) handleUnfilledTerminalLocked(order model.OrderDa
 // RestorePosition 重启仓位重建（strategy.PositionRestorer 接口）：
 // 本地成交账本显示该策略仍有净买入持仓时恢复状态机——引擎的持仓状态
 // 只在进程内存里，重启靠 K 线重放重建会"失忆"重复入场（2026-10-01
-// 666 实证三次重启三次重复买入）。止损/目标价留空，由下一根有足够
-// 池/ATR 的 K 线按恢复均价重挂（recomputeRestoredLevelsLocked）。
+// 666 实证三次重启三次重复买入）。生产调用路径是 handler 把账本净持仓
+// 注入 Start 参数、由 Start 收尾调 restorePositionLocked（见该处注释）。
 func (s *LiquidityHeatStrategy) RestorePosition(qty, avgPrice float64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.restorePositionLocked(qty, avgPrice)
+	return nil
+}
+
+// restorePositionLocked 仓位重建实现。须持锁。止损/目标价留空，由下一根
+// 有足够池/ATR 的 K 线按恢复均价重挂（recomputeRestoredLevelsLocked）。
+func (s *LiquidityHeatStrategy) restorePositionLocked(qty, avgPrice float64) {
 	if qty <= 0 || avgPrice <= 0 {
-		return nil
+		return
 	}
 	s.inPosition = true
 	s.entryPending = false
@@ -529,7 +550,6 @@ func (s *LiquidityHeatStrategy) RestorePosition(qty, avgPrice float64) error {
 	}
 	log.Printf("[liquidity_heat] %s 重启仓位重建: qty=%.8f vwap=%.2f (cra=%v)",
 		s.name, qty, avgPrice, s.craEnabled)
-	return nil
 }
 
 // recomputeRestoredLevelsLocked 恢复持仓的首根可用 K 线重挂止损/目标。
@@ -593,17 +613,19 @@ func (s *LiquidityHeatStrategy) OnBar(bar model.Bar, _ *event.EventBus) (*model.
 		s.recomputeRestoredLevelsLocked()
 	}
 
-	// 2. 持仓管理优先（收盘价判定；K 线计数只在此累计）。
+	// 2. 持仓管理优先（收盘价判定；K 线计数只在此累计，且只计策略启动
+	// 之后闭合的真实 K 线——暖机重放的历史 bar 不算持仓时长）。
+	countHold := bar.Time >= s.holdCountFrom
 	if s.inPosition {
 		if s.craEnabled {
-			return s.manageCRAPositionLocked(bar, true), nil
+			return s.manageCRAPositionLocked(bar, countHold), nil
 		}
 		// 止盈挂在卖方池上且该池被本 bar 打掉（high≥池价）→ 按池价离场。
 		if s.targetIsPool && s.targetPrice > 0 && bar.High >= s.targetPrice {
 			return s.closePositionLocked(fmt.Sprintf(
 				"流动性热力止盈离场: 触及卖方池 %.4f", s.targetPrice), bar.Time), nil
 		}
-		return s.checkPositionExitLocked(bar.Close, bar.Time, true), nil
+		return s.checkPositionExitLocked(bar.Close, bar.Time, countHold), nil
 	}
 
 	// 3. 未持仓：扫描扫单反包（用本 bar 之前仍存活的池）。
@@ -1003,11 +1025,13 @@ func (s *LiquidityHeatStrategy) checkPositionExitLocked(price float64, ts int64,
 	if countHold {
 		s.holdBars++
 	}
-	if price <= s.stopPrice {
+	if s.stopPrice > 0 && price <= s.stopPrice {
 		return s.closePositionLocked(fmt.Sprintf("流动性热力止损离场: %.4f ≤ 池 %.4f−%.1f×ATR",
 			price, s.entryPoolPrice, s.slBufferATR), ts)
 	}
-	if price >= s.targetPrice {
+	// targetPrice>0 守卫：重启仓位重建后止损/目标价留空、由首根可用 K 线
+	// 重挂——0 值时任意 price≥0 都会误触固定止盈（2026-10-01 重建后秒平实证）。
+	if s.targetPrice > 0 && price >= s.targetPrice {
 		kind := "固定止盈"
 		if s.targetIsPool {
 			kind = "卖方池止盈"

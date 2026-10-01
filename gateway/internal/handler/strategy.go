@@ -1225,19 +1225,17 @@ func startStrategyInEngine(id string, item map[string]any) error {
 	}
 
 	// Register and start
-	// 重启仓位重建：本地账本里该策略仍有净买入持仓时，在注册/启动前恢复
-	// 进状态机（重放 K 线到达时已是持仓态，不会重复入场）。2026-10-01
-	// 666 实证：三次重启重放触发三次重复买入，全因状态机重启失忆。
+	// 重启仓位重建：把本地账本净持仓注入 Start 参数，由策略在 Start 清态
+	// 之后、暖机重放之前自行恢复（恢复若发生在 Start 之前会被清态抹掉，
+	// 若晚于重放开始则已重复入场——2026-10-01 实证两败）。见 liquidity_heat
+	// Start 收尾的 restored_position_qty 处理。
 	if _, isRestorer := strategy.UnwrapStrategy(wrapped).(strategy.PositionRestorer); isRestorer {
 		if sym, _ := params["symbol"].(string); sym != "" {
 			if net, vwap, err := store.NetFilledByStrategy(id, sym); err != nil {
 				log.Printf("[strategy] %s 仓位重建查询失败: %v", id, err)
 			} else if net > 0 {
-				if err := wrapped.RestorePosition(net, vwap); err != nil {
-					log.Printf("[strategy] %s 仓位重建失败: %v", id, err)
-				} else {
-					log.Printf("[strategy] %s 重启仓位重建: net=%.8f vwap=%.2f", id, net, vwap)
-				}
+				params["restored_position_qty"] = net
+				params["restored_position_vwap"] = vwap
 			}
 		}
 	}

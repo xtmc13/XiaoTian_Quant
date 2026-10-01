@@ -4,6 +4,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xiaotian-quant/gateway/internal/model"
 )
@@ -216,8 +217,11 @@ func TestLiquidityHeatExits(t *testing.T) {
 		s, _, next := entry(t)
 		var sig *model.Signal
 		// max_hold_bars=10：第 10 根持仓 K 线应超时离场。
+		// bar 时间戳必须用真实"当前"时间——持仓时长只计策略启动后闭合的
+		// K 线（holdCountFrom 门），暖机重放的历史 bar 不算（2026-10-01 修）。
 		for i := 0; i < 10; i++ {
 			bar := mkLHBar(next+i, 99.9, 100.1, 99.7, 99.9, 2)
+			bar.Time = time.Now().UnixMilli() + int64(i)*900000
 			// 避免触发池止盈（high 打到上方卖池）：限制 high。
 			s.mu.RLock()
 			if s.targetIsPool && s.targetPrice < bar.High {
@@ -491,5 +495,40 @@ func TestLiquidityHeatRestorePosition(t *testing.T) {
 	sig, _ := s.OnBar(mkLHBar(41, 99.8, 100.1, 98.9, 99.2, 2), nil)
 	if sig != nil && sig.Direction == "LONG" {
 		t.Fatalf("restored position must not re-enter: %s", sig.Reason)
+	}
+}
+
+// TestLiquidityHeatStartAppliesRestoredPosition 注入式恢复（生产路径）：
+// handler 把账本净持仓注入 Start 参数，Start 清态后必须恢复——回归
+// 2026-10-01 部署事故：恢复发生在 Start 之前，被 resetPositionLocked
+// 清掉，暖机重放又触发一次真实买入（第 5 笔）。
+func TestLiquidityHeatStartAppliesRestoredPosition(t *testing.T) {
+	s := NewLiquidityHeatStrategy()
+	err := s.Start(map[string]any{
+		"symbol": "BTCUSDT", "timeframe": "15m",
+		"lookback_bars": 50, "bins": 20, "volume_len": 3, "atr_len": 2,
+		"pivot_bars": 2, "min_pool_strength_pct": 30,
+		"tp_min_pool_strength_pct": 15, "tp_fallback_pct": 0.02,
+		"sl_buffer_atr": 0.5, "position_size": 100, "max_hold_bars": 10,
+		"restored_position_qty": 0.00033, "restored_position_vwap": 83675.5,
+	})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if !s.inPosition || !s.restored {
+		t.Fatal("Start must apply restored position after its own reset")
+	}
+	if math.Abs(s.entryPrice-83675.5) > 1e-9 {
+		t.Fatalf("entryPrice = %v, want restored vwap", s.entryPrice)
+	}
+
+	// 已持仓：喂入场形态（强池被扫反包）不得再发入场信号。
+	next := feedBaseline(s, 0, 30)
+	s.OnBar(mkLHBar(next, 100, 100.5, 99.3, 100, 300), nil)
+	next++
+	pool := strongBuyPool(s)
+	sig, _ := s.OnBar(mkLHBar(next, 100, 100.2, pool.price-0.5, 99.9, 2), nil)
+	if sig != nil && sig.Direction == "LONG" {
+		t.Fatalf("restored position must not re-enter on replay: %s", sig.Reason)
 	}
 }
