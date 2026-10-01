@@ -559,3 +559,38 @@ func TestLiquidityHeatRestorePositionFullCRA(t *testing.T) {
 		t.Fatalf("full-ladder restored position must not add: %s", sig.Reason)
 	}
 }
+
+// TestLiquidityHeatRejectedExitRetries 出场单被拒 → 30s 后无条件重试（不等
+// 条件再触发——那可能是数小时后的下一根 K 线，风险敞口无人接管）。
+func TestLiquidityHeatRejectedExitRetries(t *testing.T) {
+	s := startLH(t)
+	next := feedBaseline(s, 0, 30)
+	s.OnBar(mkLHBar(next, 100, 100.5, 99.3, 100, 300), nil)
+	next++
+	pool := strongBuyPool(s)
+	sig, _ := s.OnBar(mkLHBar(next, 100, 100.2, pool.price-0.5, 99.9, 2), nil)
+	if sig == nil {
+		t.Fatal("entry failed")
+	}
+	fillBuy(s, 99.9, 1.0)
+	s.closeEmitted = true
+
+	// 出场单被拒（如 -1013 限速）：closeEmitted 复位 + 30s 重试时刻
+	s.OnOrderUpdate(model.OrderData{
+		Symbol: "BTCUSDT", Side: model.SideSell,
+		Status: model.StatusRejected, ClientOID: "sig:test:9",
+	}, nil)
+	if s.closeEmitted {
+		t.Fatal("rejected exit must reset closeEmitted")
+	}
+	if s.exitRetryAt <= 0 {
+		t.Fatal("rejected exit must schedule retry")
+	}
+
+	// 价格弹回条件外（高于止损/目标）→ 条件重试不会发；到点的无条件重试必须发。
+	s.exitRetryAt = time.Now().UnixMilli() - 1 // 模拟已过 30s
+	sig, _ = s.OnTick(model.Tick{Symbol: "BTCUSDT", Last: 100.0, Timestamp: time.Now().UnixMilli()}, nil)
+	if sig == nil || sig.Direction != "CLOSE" || !strings.Contains(sig.Reason, "被拒重试") {
+		t.Fatalf("exit retry must fire unconditionally, got %v", sig)
+	}
+}

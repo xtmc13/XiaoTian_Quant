@@ -102,6 +102,10 @@ type LiquidityHeatStrategy struct {
 	// 超时离场的 holdBars——否则每次重启重放 99 根历史 K 线会瞬间把持仓
 	// 时长顶满，持仓中的策略一重启就秒发超时平仓（2026-10-01 重启重建时实测）。
 	holdCountFrom  int64
+	// 出场拒单重试时刻（unix ms）：出场单被拒后 30s 无条件重试一次——
+	// 出场判定虽是 tick 级，但拒单后若价格弹回条件外，等条件再触发可能
+	// 是数小时后的下一根 K 线，风险敞口无人接管（用户 2026-10-01 质疑点）。
+	exitRetryAt    int64
 	entryPrice     float64
 	entryPoolPrice float64 // 被扫的买方池价（SL 基准，非 CRA 模式）
 	stopPrice      float64
@@ -270,6 +274,7 @@ func (s *LiquidityHeatStrategy) resetPositionLocked() {
 	s.inPosition = false
 	s.entryPending = false
 	s.restored = false
+	s.exitRetryAt = 0
 	s.entryPrice, s.entryPoolPrice = 0, 0
 	s.stopPrice, s.targetPrice = 0, 0
 	s.targetIsPool = false
@@ -489,13 +494,31 @@ func (s *LiquidityHeatStrategy) OnOrderUpdate(order model.OrderData, _ *event.Ev
 	return nil, nil
 }
 
+// exitRetryDelayMs 出场拒单重试延迟：30s。每次拒单顺延一次，tick 级触发。
+const exitRetryDelayMs = 30_000
+
+// tryExitRetryLocked 出场拒单后的到点无条件重试。须持锁。返回非 nil 表示
+// 已发出重试平仓信号。
+func (s *LiquidityHeatStrategy) tryExitRetryLocked(ts int64) *model.Signal {
+	if s.exitRetryAt <= 0 || ts < s.exitRetryAt {
+		return nil
+	}
+	s.exitRetryAt = 0
+	if !s.inPosition || s.closeEmitted {
+		return nil
+	}
+	return s.closePositionLocked("流动性热力出场单被拒重试", ts)
+}
+
 // handleUnfilledTerminalLocked 终态未成交订单的处置。须持锁。
 // 2026-10-01 实证：入场信号发出即乐观记账（inPosition=true），交易所拒单
 // 若不回滚，引擎永久"虚持仓"（面板上有多仓、实际没买成、止盈/补仓乱发）。
 func (s *LiquidityHeatStrategy) handleUnfilledTerminalLocked(order model.OrderData) {
 	if order.Side == model.SideSell || order.ClosePosition {
-		// 出场单被拒：仓位仍在，允许下一根 K 线重试离场。
+		// 出场单被拒：仓位仍在。30s 后无条件重试（不等条件再触发——那可能
+		// 是数小时后的下一根 K 线），期间 closeEmitted 复位允许重发。
 		s.closeEmitted = false
+		s.exitRetryAt = time.Now().UnixMilli() + exitRetryDelayMs
 		return
 	}
 	if order.Side != model.SideBuy {
@@ -589,6 +612,9 @@ func (s *LiquidityHeatStrategy) OnTick(tick model.Tick, _ *event.EventBus) (*mod
 	if !s.running || !s.inPosition || tick.Last <= 0 {
 		return nil, nil
 	}
+	if sig := s.tryExitRetryLocked(tick.Timestamp); sig != nil {
+		return sig, nil
+	}
 	if s.craEnabled {
 		// tick 只做止盈判定（移动/静态），补仓只在 K 线闭合时评估。
 		return s.manageCRAExitsLocked(tick.Last, tick.Timestamp), nil
@@ -623,6 +649,9 @@ func (s *LiquidityHeatStrategy) OnBar(bar model.Bar, _ *event.EventBus) (*model.
 	// 之后闭合的真实 K 线——暖机重放的历史 bar 不算持仓时长）。
 	countHold := bar.Time >= s.holdCountFrom
 	if s.inPosition {
+		if sig := s.tryExitRetryLocked(bar.Time); sig != nil {
+			return sig, nil
+		}
 		if s.craEnabled {
 			return s.manageCRAPositionLocked(bar, countHold), nil
 		}
