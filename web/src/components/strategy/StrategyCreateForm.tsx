@@ -803,10 +803,11 @@ export function StrategyCreateFormSections({
               !CRA_ONLY_TYPES.has(strategyType) && (paramDefsLoading || paramDefs.length > 0)
                 ? {
                     label: strategyTypeLabel(strategyType, market),
+                    desc: '策略自带入场信号（不设指标门槛）',
                     paramDefs,
                     loading: paramDefsLoading,
                     values: dynamicParams,
-                    onChange: (key, val) => setDynamicParams((prev) => ({ ...prev, [key]: val })),
+                    onConfirm: (next) => setDynamicParams((prev) => ({ ...prev, ...next })),
                   }
                 : null
             }

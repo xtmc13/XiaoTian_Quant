@@ -8,6 +8,8 @@ import {
   type OpenIndicatorKey,
 } from './indicatorPresets'
 import { IndicatorParamModal } from './IndicatorParamModal'
+import { StrategyParamModal } from './StrategyParamModal'
+import type { StrategyParamDef } from '@/types'
 
 export interface IndicatorSelection {
   indicator: OpenIndicatorKey
@@ -21,9 +23,18 @@ interface IndicatorPickerProps {
   custom: { code_id: number; name: string } | null
   disabled?: boolean
   /** 策略 tile：经三级选项进入的自定义策略（如流动性热力扫反），作为一排指标
-   *  卡中的一员展示；选中态 = indicator 为 'none'（策略自带信号，不设指标门槛），
-   *  参数 UI 由调用方在卡下方面板提供（用户 2026-09-30："像个指标一样，默认选中"）。 */
-  strategyTile?: { key: string; label: string; desc: string } | null
+   *  卡中的一员展示；选中态 = indicator 为 'none'（策略自带信号，不设指标门槛）。
+   *  参数走与指标一致的弹窗（点击 tile 或 ⚙ 打开，用户 2026-09-30 明确
+   *  "原本是点击这个才弹窗"，不接受内嵌面板）。 */
+  strategyTile?: {
+    key: string
+    label: string
+    desc: string
+    paramDefs: StrategyParamDef[]
+    loading: boolean
+    values: Record<string, unknown>
+    onConfirm: (next: Record<string, unknown>) => void
+  } | null
   onChange: (next: IndicatorSelection) => void
 }
 
@@ -43,6 +54,12 @@ function summarizeParams(key: OpenIndicatorKey, params: Record<string, Indicator
  */
 export function IndicatorPicker({ indicator, params, custom, disabled, strategyTile = null, onChange }: IndicatorPickerProps) {
   const [paramModalKey, setParamModalKey] = useState<OpenIndicatorKey | null>(null)
+  const [strategyModalOpen, setStrategyModalOpen] = useState(false)
+
+  const openStrategyModal = () => {
+    if (!strategyTile) return
+    setStrategyModalOpen(true)
+  }
 
   const select = (key: OpenIndicatorKey) => {
     if (disabled) return
@@ -66,23 +83,26 @@ export function IndicatorPicker({ indicator, params, custom, disabled, strategyT
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap gap-2">
-        {/* 未设置（壳默认） */}
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => select('none')}
-          title="未设置（将使用壳默认）"
-          className={cn(
-            'inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border text-xs font-medium transition-colors',
-            indicator === 'none'
-              ? 'bg-quant-gold/10 border-quant-gold/30 text-quant-gold'
-              : 'border-quant-border text-muted-foreground hover:text-foreground hover:border-quant-gold/20',
-            disabled && 'opacity-40 cursor-not-allowed'
-          )}
-        >
-          <Ban className="w-3 h-3" />
-          未设置
-        </button>
+        {/* 未设置（壳默认）：存在策略 tile 时隐藏——"未设置"语义由策略卡承担，
+            避免双选中（2026-09-30 用户截图指出"未设置和策略同时选中"） */}
+        {!strategyTile && (
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => select('none')}
+            title="未设置（将使用壳默认）"
+            className={cn(
+              'inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border text-xs font-medium transition-colors',
+              indicator === 'none'
+                ? 'bg-quant-gold/10 border-quant-gold/30 text-quant-gold'
+                : 'border-quant-border text-muted-foreground hover:text-foreground hover:border-quant-gold/20',
+              disabled && 'opacity-40 cursor-not-allowed'
+            )}
+          >
+            <Ban className="w-3 h-3" />
+            未设置
+          </button>
+        )}
 
         {OPEN_INDICATORS.map((def) => {
           const active = indicator === def.key
@@ -132,7 +152,8 @@ export function IndicatorPicker({ indicator, params, custom, disabled, strategyT
           )
         })}
 
-        {/* 策略 tile：与指标卡同排同外观；选中=使用策略自带信号（不设指标门槛） */}
+        {/* 策略 tile：与指标卡同排同外观；选中=使用策略自带信号（不设指标门槛）；
+            点击或 ⚙ 弹策略参数窗（与指标点击行为一致） */}
         {strategyTile && (
           <div
             className={cn(
@@ -146,7 +167,10 @@ export function IndicatorPicker({ indicator, params, custom, disabled, strategyT
             <button
               type="button"
               disabled={disabled}
-              onClick={() => select('none')}
+              onClick={() => {
+                select('none')
+                setStrategyModalOpen(true)
+              }}
               title={strategyTile.desc}
               className="px-3 py-2 text-left"
             >
@@ -154,17 +178,35 @@ export function IndicatorPicker({ indicator, params, custom, disabled, strategyT
                 {strategyTile.label}
               </div>
               <div className="text-[9px] text-muted-foreground mt-0.5">
-                {indicator === 'none' ? '已选 · 参数见下方策略面板' : strategyTile.desc}
+                {indicator === 'none' ? '已选 · 点击可调参数' : strategyTile.desc}
               </div>
             </button>
+            {indicator === 'none' && (
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={openStrategyModal}
+                aria-label={`${strategyTile.label} 参数`}
+                className="px-2 py-2 text-muted-foreground hover:text-quant-gold transition-colors border-l border-quant-gold/20"
+              >
+                <Settings2 className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
         )}
       </div>
 
-      {/* 说明行 */}
+      {/* 说明行：策略在场时"未设置"语义由策略承担，不再显示壳默认文案 */}
       <div className="text-[10px] text-muted-foreground leading-relaxed">
         {indicator === 'none' ? (
-          '未设置（将使用壳默认）：首单不受指标门槛限制。'
+          strategyTile ? (
+          <>
+            当前策略：<span className="text-foreground font-medium">{strategyTile.label}</span>
+            <span className="ml-1">（策略自带入场信号，不设指标门槛；点卡片或 ⚙ 调节参数）</span>
+          </>
+          ) : (
+            '未设置（将使用壳默认）：首单不受指标门槛限制。'
+          )
         ) : (
           <>
             当前开仓指标：<span className="text-foreground font-medium">{activeDef?.label}</span>
@@ -185,6 +227,23 @@ export function IndicatorPicker({ indicator, params, custom, disabled, strategyT
           onChange({ indicator: paramModalKey, params: nextValues, custom: nextCustom })
         }}
       />
+
+      {/* 策略参数弹窗：与指标参数弹窗同款体验（StrategyParamModal，点击策略卡或 ⚙ 打开） */}
+      {strategyTile && (
+        <StrategyParamModal
+          open={strategyModalOpen}
+          title={`${strategyTile.label} · 参数`}
+          desc={strategyTile.desc}
+          paramDefs={strategyTile.paramDefs}
+          loading={strategyTile.loading}
+          values={strategyTile.values}
+          onClose={() => setStrategyModalOpen(false)}
+          onConfirm={(next) => {
+            strategyTile.onConfirm(next)
+            setStrategyModalOpen(false)
+          }}
+        />
+      )}
     </div>
   )
 }

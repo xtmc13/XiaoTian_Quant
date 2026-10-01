@@ -6,7 +6,6 @@ import { percentToDecimal, decimalToPercent, PERCENTAGE_FIELD_THRESHOLDS } from 
 import { AddPositionModal } from './AddPositionModal'
 import { MovingTPModal } from './MovingTPModal'
 import { IndicatorPicker } from './IndicatorPicker'
-import { DynamicParamField } from './StrategyFormFields'
 import type { StrategyParamDef } from '@/types'
 import {
   buildOpenIndicatorConfig,
@@ -214,14 +213,16 @@ interface CRAParamFormProps {
   openFields?: 'full' | 'indicator-only'
   /** 隐藏补仓设置区（现货网格：ladder 由区间/格数自动生成）。 */
   hideAddPosition?: boolean
-  /** 已选策略内嵌面板：经三级选项进入的策略类型，其动态参数直接展示在
-   *  开仓指标（策略选择）区内可调（用户 2026-09-30）。 */
+  /** 已选策略：经三级选项进入的策略类型，其动态参数走与指标一致的弹窗
+   *  （点击策略卡/⚙ 打开，确认后整批回写；用户明确"原本是点击这个才弹窗"，
+   *  不接受内嵌面板）。 */
   strategyAddon?: {
     label: string
+    desc?: string
     paramDefs: StrategyParamDef[]
     loading: boolean
     values: Record<string, unknown>
-    onChange: (key: string, val: unknown) => void
+    onConfirm: (next: Record<string, unknown>) => void
   } | null
 }
 
@@ -360,7 +361,15 @@ export function CRAParamForm({ value, onChange, market, className, openFields = 
               custom={value.openIndicatorCustom}
               strategyTile={
                 strategyAddon
-                  ? { key: 'strategy', label: strategyAddon.label, desc: '策略自带入场信号（不设指标门槛），参数在下方策略面板调节' }
+                  ? {
+                      key: 'strategy',
+                      label: strategyAddon.label,
+                      desc: strategyAddon.desc ?? '策略自带入场信号（不设指标门槛）',
+                      paramDefs: strategyAddon.paramDefs,
+                      loading: strategyAddon.loading,
+                      values: strategyAddon.values,
+                      onConfirm: strategyAddon.onConfirm,
+                    }
                   : null
               }
               onChange={(sel) => {
@@ -381,31 +390,6 @@ export function CRAParamForm({ value, onChange, market, className, openFields = 
                 })
               }}
             />
-            {/* 已选策略内嵌面板：三级选项带进来的策略类型自动选中，参数就地可调 */}
-            {strategyAddon && (
-              <div className="rounded-lg border border-quant-gold/25 bg-quant-gold/5 p-3 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-medium text-foreground">已选策略：{strategyAddon.label}</span>
-                  <span className="text-[10px] text-quant-gold">自动选中 · 参数可就地调节</span>
-                </div>
-                {strategyAddon.loading ? (
-                  <div className="text-[10px] text-muted-foreground py-1">加载参数定义...</div>
-                ) : strategyAddon.paramDefs.length === 0 ? (
-                  <div className="text-[10px] text-muted-foreground py-1">该策略无可调参数</div>
-                ) : (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {strategyAddon.paramDefs.map((def) => (
-                      <DynamicParamField
-                        key={def.name}
-                        def={def}
-                        value={strategyAddon.values[def.name]}
-                        onChange={(v) => strategyAddon.onChange(def.name, v)}
-                      />
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
           </div>
 
         {showOpenFields && (
