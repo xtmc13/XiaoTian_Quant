@@ -494,7 +494,9 @@ func scanAIBotCatalogRows(rows *sql.Rows) []map[string]any {
 	for rows.Next() {
 		var id, name, description, strategyType, marketType, riskLevel, feeModel string
 		var feePercent, monthlyFee float64
-		var performanceJSON, configJSON string
+		// performance_json 种子数据为 NULL，必须用 NullString 承接，否则整行 Scan
+		// 报错被 continue 跳过，catalog 列表恒为空（线上实测踩坑）。
+		var performanceJSON, configJSON sql.NullString
 		var isBuiltin, isActive int
 		var createdAt, updatedAt int64
 		if err := rows.Scan(&id, &name, &description, &strategyType, &marketType, &riskLevel,
@@ -507,7 +509,7 @@ func scanAIBotCatalogRows(rows *sql.Rows) []map[string]any {
 			"strategy_type": strategyType, "market_type": marketType,
 			"risk_level": riskLevel, "fee_model": feeModel,
 			"fee_percent": feePercent, "monthly_fee": monthlyFee,
-			"performance_json": performanceJSON, "config_json": configJSON,
+			"performance_json": nullStr(performanceJSON), "config_json": nullStr(configJSON),
 			"is_builtin": isBuiltin, "is_active": isActive,
 			"created_at": createdAt, "updated_at": updatedAt,
 		})
@@ -518,7 +520,7 @@ func scanAIBotCatalogRows(rows *sql.Rows) []map[string]any {
 func scanAIBotCatalogRow(row *sql.Row) map[string]any {
 	var id, name, description, strategyType, marketType, riskLevel, feeModel string
 	var feePercent, monthlyFee float64
-	var performanceJSON, configJSON string
+	var performanceJSON, configJSON sql.NullString
 	var isBuiltin, isActive int
 	var createdAt, updatedAt int64
 	err := row.Scan(&id, &name, &description, &strategyType, &marketType, &riskLevel,
@@ -532,16 +534,25 @@ func scanAIBotCatalogRow(row *sql.Row) map[string]any {
 		"strategy_type": strategyType, "market_type": marketType,
 		"risk_level": riskLevel, "fee_model": feeModel,
 		"fee_percent": feePercent, "monthly_fee": monthlyFee,
-		"performance_json": performanceJSON, "config_json": configJSON,
+		"performance_json": nullStr(performanceJSON), "config_json": nullStr(configJSON),
 		"is_builtin": isBuiltin, "is_active": isActive,
 		"created_at": createdAt, "updated_at": updatedAt,
 	}
 }
 
+// nullStr 把 sql.NullString 转成普通 string（NULL → 空串）。
+func nullStr(ns sql.NullString) string {
+	if !ns.Valid {
+		return ""
+	}
+	return ns.String
+}
+
 func scanAIBotInstanceRows(rows *sql.Rows) []map[string]any {
 	var result []map[string]any
 	for rows.Next() {
-		var id, catalogID, name, strategyType, symbol, marketType, status, executionMode, configJSON, exchangeID, errorMessage string
+		var id, catalogID, name, strategyType, symbol, marketType, status, executionMode, configJSON string
+		var exchangeID, errorMessage sql.NullString
 		var userID int
 		var unrealizedPnl, realizedPnl, totalReturnPct, maxDrawdownPct, sharpeRatio, winRate, initialBalance float64
 		var totalTrades int
@@ -558,11 +569,11 @@ func scanAIBotInstanceRows(rows *sql.Rows) []map[string]any {
 			"name": name, "strategy_type": strategyType, "symbol": symbol,
 			"market_type": marketType, "status": status,
 			"execution_mode": executionMode, "config_json": configJSON,
-			"exchange_id":    exchangeID,
+			"exchange_id":    nullStr(exchangeID),
 			"unrealized_pnl": unrealizedPnl, "realized_pnl": realizedPnl,
 			"total_return_pct": totalReturnPct, "max_drawdown_pct": maxDrawdownPct,
 			"sharpe_ratio": sharpeRatio, "win_rate": winRate,
-			"total_trades": totalTrades, "initial_balance": initialBalance, "error_message": errorMessage,
+			"total_trades": totalTrades, "initial_balance": initialBalance, "error_message": nullStr(errorMessage),
 			"created_at": createdAt, "updated_at": updatedAt,
 			"started_at": startedAt, "stopped_at": stoppedAt,
 		})
@@ -571,7 +582,8 @@ func scanAIBotInstanceRows(rows *sql.Rows) []map[string]any {
 }
 
 func scanAIBotInstanceRow(row *sql.Row) map[string]any {
-	var id, catalogID, name, strategyType, symbol, marketType, status, executionMode, configJSON, exchangeID, errorMessage string
+	var id, catalogID, name, strategyType, symbol, marketType, status, executionMode, configJSON string
+		var exchangeID, errorMessage sql.NullString
 	var userID int
 	var unrealizedPnl, realizedPnl, totalReturnPct, maxDrawdownPct, sharpeRatio, winRate, initialBalance float64
 	var totalTrades int
@@ -589,11 +601,11 @@ func scanAIBotInstanceRow(row *sql.Row) map[string]any {
 		"name": name, "strategy_type": strategyType, "symbol": symbol,
 		"market_type": marketType, "status": status,
 		"execution_mode": executionMode, "config_json": configJSON,
-		"exchange_id":    exchangeID,
+		"exchange_id":    nullStr(exchangeID),
 		"unrealized_pnl": unrealizedPnl, "realized_pnl": realizedPnl,
 		"total_return_pct": totalReturnPct, "max_drawdown_pct": maxDrawdownPct,
 		"sharpe_ratio": sharpeRatio, "win_rate": winRate,
-		"total_trades": totalTrades, "initial_balance": initialBalance, "error_message": errorMessage,
+		"total_trades": totalTrades, "initial_balance": initialBalance, "error_message": nullStr(errorMessage),
 		"created_at": createdAt, "updated_at": updatedAt,
 		"started_at": startedAt, "stopped_at": stoppedAt,
 	}

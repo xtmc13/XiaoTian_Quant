@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 )
@@ -63,9 +64,15 @@ type TensorBoardClient struct {
 }
 
 // NewTensorBoardClient creates a new TensorBoard client.
+// baseURL 为空时依次读 ML_SERVER_URL 环境变量、默认 http://localhost:8001
+// （与 ml/client.go 保持一致，容器部署经 compose 注入指向 sandbox）。
 func NewTensorBoardClient(baseURL string) *TensorBoardClient {
 	if baseURL == "" {
-		baseURL = "http://localhost:8001"
+		if v := os.Getenv("ML_SERVER_URL"); v != "" {
+			baseURL = v
+		} else {
+			baseURL = "http://localhost:8001"
+		}
 	}
 	return &TensorBoardClient{
 		baseURL:    baseURL,

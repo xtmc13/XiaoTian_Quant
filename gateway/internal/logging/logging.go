@@ -229,9 +229,22 @@ func toFields(args ...any) map[string]any {
 		return nil
 	}
 	fields := make(map[string]any)
-	for i := 0; i < len(args)-1; i += 2 {
-		key := fmt.Sprint(args[i])
-		fields[key] = args[i+1]
+	i := 0
+	// 成对解析 key,value 风格
+	for ; i+1 < len(args); i += 2 {
+		fields[fmt.Sprint(args[i])] = args[i+1]
+	}
+	// 奇数个参数且最后一个是 map（如 RequestLogger 传单个 map）时合并其键值对，
+	// 否则该 map 会被静默丢弃，text 日志看不到 status/path 等关键字段。
+	if i < len(args) {
+		if m, ok := args[i].(map[string]any); ok {
+			for k, v := range m {
+				fields[k] = v
+			}
+		}
+	}
+	if len(fields) == 0 {
+		return nil
 	}
 	return fields
 }

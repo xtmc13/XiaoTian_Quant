@@ -653,6 +653,10 @@ export function Backtest() {
   const isContractStrategy = CONTRACT_CRA_STRATEGIES.has(strategyType)
   const [initialBalance, setInitialBalance] = useState(10000)
   const [fromDate, setFromDate] = useState(daysAgo(180))
+  // 高级参数（freqtrade 对齐）：手续费率 / 滑点率 / 滑点随机种子
+  const [commissionPct, setCommissionPct] = useState(0.1)
+  const [slippagePct, setSlippagePct] = useState(0.05)
+  const [slippageSeed, setSlippageSeed] = useState(1)
   const [toDate, setToDate] = useState(dateToISO(new Date()))
   const [activePreset, setActivePreset] = useState<string | null>('最近6月')
 
@@ -738,6 +742,10 @@ export function Backtest() {
     initial_balance: { USDT: initialBalance },
     from: fromDate,
     to: toDate,
+    // 高级参数：百分比 → 小数（freqtrade 对齐；服务端可复现滑点）
+    commission: commissionPct / 100,
+    slippage: slippagePct / 100,
+    slippage_seed: slippageSeed,
     ...craParamsToApiPayload(craParams),
   })
 
@@ -1058,6 +1066,45 @@ export function Backtest() {
                   }}
                   className={inputCls}
                   aria-label="结束日期"
+                />
+              </div>
+            </div>
+            {/* 高级参数：手续费 / 滑点（freqtrade 对齐） */}
+            <div className="mt-3 grid grid-cols-1 gap-3 rounded-md border border-border/60 p-3 md:grid-cols-3">
+              <div>
+                <label className="mb-1 block text-[11px] text-muted-foreground">手续费率 (%/笔)</label>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={commissionPct}
+                  onChange={(e) => setCommissionPct(Number(e.target.value))}
+                  className={inputCls}
+                  aria-label="手续费率"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] text-muted-foreground">滑点率 (%)</label>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={slippagePct}
+                  onChange={(e) => setSlippagePct(Number(e.target.value))}
+                  className={inputCls}
+                  aria-label="滑点率"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] text-muted-foreground">滑点随机种子 (0=随机)</label>
+                <input
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={slippageSeed}
+                  onChange={(e) => setSlippageSeed(Number(e.target.value))}
+                  className={inputCls}
+                  aria-label="滑点随机种子"
                 />
               </div>
             </div>

@@ -357,7 +357,7 @@ func AIBacktest(c *gin.Context) {
 			Close:    getFloat(k, "close", 0),
 			Volume:   getFloat(k, "volume", 0),
 			Interval: interval,
-			Time:     int64(getFloat(k, "time", 0)),
+			Time:     int64(getFloat(k, "timestamp", getFloat(k, "time", 0))),
 		})
 	}
 
@@ -487,7 +487,7 @@ func AIOptimize(c *gin.Context) {
 			Close:    getFloat(k, "close", 0),
 			Volume:   getFloat(k, "volume", 0),
 			Interval: interval,
-			Time:     int64(getFloat(k, "time", 0)),
+			Time:     int64(getFloat(k, "timestamp", getFloat(k, "time", 0))),
 		})
 	}
 

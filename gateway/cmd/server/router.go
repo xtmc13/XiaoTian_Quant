@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"path"
 
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/community"
@@ -15,6 +16,7 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/social"
 	"github.com/xiaotian-quant/gateway/internal/store"
 	"github.com/xiaotian-quant/gateway/internal/ws"
+	"github.com/xiaotian-quant/gateway/spa"
 	"os"
 	"strings"
 )
@@ -28,8 +30,38 @@ type serverConfig struct {
 // Public routes (no auth) are registered at the top level,
 // while private routes are under the /api group with AuthRequired middleware.
 func setupRoutes(r *gin.Engine, cfg *serverConfig) *gin.Engine {
-	// Gateway no longer serves the frontend SPA. The frontend is deployed
-	// independently and communicates via /api and /ws.
+	// ── Embedded frontend SPA ──
+	// web/dist 构建产物经 gateway/spa 的 //go:embed 打入二进制；
+	// 非 /api、/ws 路径由 NoRoute 回退到 index.html（SPA 前端路由）。
+	r.GET("/", handler.Index)
+	r.StaticFS("/assets", spa.AssetsFS())
+	r.GET("/favicon.svg", spa.ServeRootFile("favicon.svg"))
+	r.GET("/manifest.json", spa.ServeRootFile("manifest.json"))
+	r.GET("/sw.js", spa.ServeRootFile("sw.js"))
+	r.NoRoute(func(c *gin.Context) {
+		p := c.Request.URL.Path
+		if strings.HasPrefix(p, "/api/") || strings.HasPrefix(p, "/ws") ||
+			strings.HasPrefix(p, "/debug/") || p == "/metrics" {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		// 带文件后缀的未匹配路径（深链接下相对资产 404 后会走到这里）直接 404，
+		// 不能返回 index.html——浏览器会把 HTML 当 JS/CSS 执行导致白屏。
+		if strings.Contains(path.Base(p), ".") {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		// 直接读 embed 文件返回。不能用 c.FileFromFS/FileServer：
+		// FileServer 的 redirect 修正会把它收到的原始请求路径（如 /trading/spot）
+		// 301 重定向掉，造成 ERR_TOO_MANY_REDIRECTS 无限循环。
+		data, err := spa.ReadFile("index.html")
+		if err != nil {
+			c.Status(http.StatusInternalServerError)
+			return
+		}
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		c.Data(http.StatusOK, "text/html; charset=utf-8", data)
+	})
 
 	api := r.Group("/api")
 	{

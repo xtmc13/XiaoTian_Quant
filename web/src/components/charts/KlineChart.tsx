@@ -3,11 +3,21 @@
  * signal overlays, and theme support.  Ported from XiaoTianQuant KlineChart.vue.
  */
 import { useEffect, useLayoutEffect, useRef, useState, useCallback, memo } from 'react'
-import { init, dispose, registerOverlay } from 'klinecharts'
+import { init, dispose } from 'klinecharts'
 import type { Chart } from 'klinecharts'
 import { cn } from '@/lib/utils'
 import type { KLineBar } from '@/lib/technicalIndicators'
 import { useDebounce } from '@/hooks/useAsyncData'
+import {
+  registerRuntimeOverlays,
+  renderIndicatorOutput,
+  setIndicatorRuntimeTheme,
+  setIndicatorRuntimePrecision,
+  detectPrecision,
+  type IndicatorOutput,
+  type CreatedResource,
+  type KLineLike,
+} from './indicatorRuntime'
 import {
   PenLine, Minus, Columns2, Columns3, ArrowRight, GripHorizontal,
   DollarSign, Frame, TrendingUp, Eraser, Settings, X,
@@ -48,6 +58,13 @@ interface IndicatorTemplate {
 interface KlineChartEnhancedProps {
   data?: KLineBar[]
   signals?: Signal[]
+  /**
+   * 指标执行返回的原始 output（QuantDinger 契约：plots/signals/layers）。
+   * 由 indicatorRuntime 按量化丁格同款管线渲染：
+   * plots→指标（line/bar/circle+逐点颜色尺寸，主图叠加或副图）、
+   * signals→signalTag 标记（锚定 K 线高/低点）、layers→区域/线段/标签。
+   */
+  indicatorOutput?: IndicatorOutput | null
   loading?: boolean
   error?: string | null
   theme?: 'dark' | 'light'
@@ -122,57 +139,6 @@ const INDICATOR_TEMPLATES: IndicatorTemplate[] = [
 const INDICATOR_COLORS_DARK = ['#13c2c2', '#e040fb', '#ffeb3b', '#00e676', '#ff6d00', '#9c27b0']
 const INDICATOR_COLORS_LIGHT = ['#13c2c2', '#9c27b0', '#f57c00', '#1976d2', '#c2185b', '#7b1fa2']
 
-/* ── Register signal overlay ───────────────────────────────────── */
-
-function ensureSignalOverlay() {
-  try {
-    registerOverlay({
-      name: 'signalTag',
-      totalStep: 1,
-      lock: true,
-      needDefaultPointFigure: false,
-      needDefaultXAxisFigure: false,
-      needDefaultYAxisFigure: false,
-      createPointFigures: ({ coordinates, overlay }: any) => {
-        if (!coordinates[0]) return []
-        const x = coordinates[0].x
-        const signalY = coordinates[0].y
-        const color = overlay.extendData?.color || '#555'
-        const text = String(overlay.extendData?.text || '')
-        const isBuy = overlay.extendData?.side === 'buy'
-        const fontSize = 11
-        const boxPaddingX = 6
-        const boxPaddingY = 3
-        const textWidth = text.length * 7
-        const boxWidth = Math.max(textWidth + boxPaddingX * 2, 20)
-        const boxHeight = fontSize + boxPaddingY * 2
-        const boxY = isBuy ? signalY : signalY - boxHeight
-
-        return [
-          {
-            type: 'circle',
-            attrs: { x, y: signalY, r: 3.5 },
-            styles: { style: 'fill', color },
-            ignoreEvent: true,
-          },
-          {
-            type: 'rect',
-            attrs: { x: x - boxWidth / 2, y: boxY, width: boxWidth, height: boxHeight, r: 3 },
-            styles: { style: 'fill', color, borderSize: 0 },
-            ignoreEvent: true,
-          },
-          {
-            type: 'text',
-            attrs: { x, y: boxY + boxHeight / 2, text, align: 'center', baseline: 'middle' },
-            styles: { color: '#ffffff', size: fontSize, weight: 'bold' },
-            ignoreEvent: true,
-          },
-        ]
-      },
-    })
-  } catch { /* ignore */ }
-}
-
 /* ═════════════════════════════════════════════════════════════════ */
 /*  Main Component                                                   */
 /* ═════════════════════════════════════════════════════════════════ */
@@ -180,6 +146,7 @@ function ensureSignalOverlay() {
 export const KlineChart = memo(function KlineChart({
   data,
   signals,
+  indicatorOutput,
   loading,
   error,
   theme = 'dark',
@@ -195,18 +162,50 @@ export const KlineChart = memo(function KlineChart({
   const [activeDrawingTool, setActiveDrawingTool] = useState<string | null>(null)
   const [editorTarget, setEditorTarget] = useState<IndicatorConfig | null>(null)
   const [editorForm, setEditorForm] = useState<Record<string, number>>({})
-  const signalIdsRef = useRef<string[]>([])
   const drawingIdsRef = useRef<string[]>([])
+  /** 指标运行时创建的资源（指标实例 + overlay），重跑前整组清理 */
+  const runtimeCreatedRef = useRef<CreatedResource>({ indicators: [], overlays: [] })
+  const legacySignalIdsRef = useRef<string[]>([])
+  const indicatorOutputRef = useRef<IndicatorOutput | null>(null)
+  indicatorOutputRef.current = indicatorOutput ?? null
 
   // Throttle data updates to avoid render storms from high-frequency WS pushes
   const debouncedData = useDebounce(data, 300)
   const debouncedSignals = useDebounce(signals, 200)
+  const debouncedIndicatorOutput = useDebounce(indicatorOutput, 250)
 
   const isDark = theme === 'dark'
   const colors = isDark ? INDICATOR_COLORS_DARK : INDICATOR_COLORS_LIGHT
 
-  // Ensure overlays and indicators are registered
-  useEffect(() => { ensureSignalOverlay() }, [])
+  // Register runtime overlays once (idempotent)
+  useEffect(() => { registerRuntimeOverlays() }, [])
+
+  /* ─── QuantDinger-style indicator runtime render ───
+   * 清理上一次创建的资源 → 渲染当前 output。
+   * calc 闭包按时间戳对齐，K 线推送更新时图表自动重算，无需重复渲染。
+   */
+  const renderRuntime = useCallback(() => {
+    const chart = chartRef.current as unknown as {
+      removeIndicator?: (paneId: string, name: string) => void
+      removeOverlay?: (id: string) => void
+    } | null
+    if (!chart) return
+    setIndicatorRuntimeTheme(isDark ? 'dark' : 'light')
+    setIndicatorRuntimePrecision(detectPrecision((debouncedData ?? []) as KLineLike[]))
+    runtimeCreatedRef.current.indicators.forEach(({ paneId, name }) => {
+      try { chart.removeIndicator?.(paneId, name) } catch { /* ignore */ }
+    })
+    runtimeCreatedRef.current.overlays.forEach((id) => {
+      try { chart.removeOverlay?.(id) } catch { /* ignore */ }
+    })
+    runtimeCreatedRef.current = { indicators: [], overlays: [] }
+    const output = indicatorOutputRef.current
+    const klines = (debouncedData ?? []) as unknown as KLineLike[]
+    if (!output || !klines.length) return
+    renderIndicatorOutput(chart as never, output, klines, runtimeCreatedRef.current)
+  }, [isDark, debouncedData])
+
+  useEffect(() => { renderRuntime() }, [debouncedIndicatorOutput, renderRuntime])
 
   /* ─── Chart Init (re-runs when loading ends and container is available) ─── */
   useLayoutEffect(() => {
@@ -235,11 +234,15 @@ export const KlineChart = memo(function KlineChart({
       })
       if (!chart) return
       chartRef.current = chart
+      ;(window as unknown as Record<string, unknown>).__kcChart = chart
 
       // Apply data that arrived before chart init
       if (pendingDataRef.current?.length) {
         chart.applyNewData(toChartData(pendingDataRef.current))
       }
+
+      // 图表重建后重新渲染指标运行时资源（旧实例已随 dispose 销毁）
+      renderRuntime()
 
       const ro = new ResizeObserver(() => { try { chart.resize() } catch { /* ignore */ } })
       ro.observe(el)
@@ -252,7 +255,7 @@ export const KlineChart = memo(function KlineChart({
     } catch {
       // 图表初始化错误，已在 UI 中处理
     }
-  }, [loading])
+  }, [loading, renderRuntime])
 
   /* ─── Helper: convert KLineBar[] to klinecharts format ─── */
   function toChartData(src: KLineBar[]) {
@@ -274,29 +277,34 @@ export const KlineChart = memo(function KlineChart({
     try { chartRef.current.scrollToRealTime() } catch { /* ignore */ }
   }, [debouncedData])
 
-  /* ─── Apply signals ─── */
+  /* ─── Apply signals（旧点位格式，回测等场景） ─── */
   useEffect(() => {
-    if (!chartRef.current || !debouncedSignals?.length) return
-    // Clear previous
-    signalIdsRef.current.forEach(id => {
-      try { chartRef.current?.removeOverlay?.(id) } catch { /* ignore */ }
+    const chart = chartRef.current as unknown as {
+      createOverlay?: (overlay: unknown, paneId?: string) => string | null
+      removeOverlay?: (id: string) => void
+    } | null
+    if (!chart?.createOverlay) return
+    legacySignalIdsRef.current.forEach(id => {
+      try { chart.removeOverlay?.(id) } catch { /* ignore */ }
     })
-    signalIdsRef.current = []
+    legacySignalIdsRef.current = []
+    if (!debouncedSignals?.length) return
 
     debouncedSignals.forEach(s => {
       try {
-        const overlayId = (chartRef.current as unknown as { createOverlay?: (...args: unknown[]) => unknown })?.createOverlay?.({
+        const overlayId = chart.createOverlay?.({
           name: 'signalTag',
-          points: [{ timestamp: s.timestamp, value: s.price, dataIndex: 0 }],
+          points: [{ timestamp: s.timestamp, value: s.price }],
           extendData: {
-            text: s.text || (s.side === 'buy' ? '买' : '卖'),
-            color: s.color || (s.side === 'buy' ? '#03A66D' : '#CF304A'),
+            text: s.text || (s.side === 'buy' ? 'B' : 'S'),
+            color: s.color || (s.side === 'buy' ? '#22C55E' : '#EF4444'),
             side: s.side,
             markerStyle: s.markerStyle || 'solid',
             source: s.source || '',
           },
-        })
-        if (overlayId) signalIdsRef.current.push(String(overlayId))
+          lock: true,
+        }, 'candle_pane')
+        if (overlayId) legacySignalIdsRef.current.push(String(overlayId))
       } catch { /* ignore */ }
     })
   }, [debouncedSignals])

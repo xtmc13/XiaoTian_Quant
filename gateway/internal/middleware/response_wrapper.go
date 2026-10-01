@@ -60,6 +60,11 @@ func UnifiedResponseWrapper() gin.HandlerFunc {
 		"/ws":                 true,
 		"/ws/v2":              true,
 		"/ws/stats":           true,
+		// PWA/静态文件必须原样返回：manifest.json 若被包成统一信封
+		// （{success,data,...}），浏览器 PWA 安装解析会失败
+		"/manifest.json": true,
+		"/sw.js":         true,
+		"/favicon.svg":   true,
 	}
 
 	return func(c *gin.Context) {
@@ -143,6 +148,10 @@ func UnifiedResponseWrapper() gin.HandlerFunc {
 
 		// Replace the response
 		c.Writer = writer.ResponseWriter
+		// 必须删除 handler 侧（如 http.FileServer serveContent）已设置的旧
+		// Content-Length——信封包装后 body 长度变化，旧值会导致客户端
+		// IncompleteRead（Content-Length 与实际 body 不符）。
+		c.Writer.Header().Del("Content-Length")
 		c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 		c.Writer.WriteHeader(status)
 		json.NewEncoder(c.Writer).Encode(envelope)
@@ -215,6 +224,8 @@ func wrapPrimitive(c *gin.Context, writer *responseBuffer, status int, data []by
 	}
 
 	c.Writer = writer.ResponseWriter
+	// 同主分支：信封长度与原始 body 不同，须清除旧 Content-Length
+	c.Writer.Header().Del("Content-Length")
 	c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 	c.Writer.WriteHeader(status)
 	json.NewEncoder(c.Writer).Encode(envelope)

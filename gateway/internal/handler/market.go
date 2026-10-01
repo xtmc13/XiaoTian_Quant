@@ -159,6 +159,10 @@ func parseFloat(v any) float64 {
 	switch val := v.(type) {
 	case float64:
 		return val
+	case int64:
+		return float64(val)
+	case int:
+		return float64(val)
 	case string:
 		var f float64
 		fmt.Sscanf(val, "%f", &f)
@@ -439,6 +443,12 @@ func RunBacktest(c *gin.Context) {
 		// Convert to model.Bar
 		bars = make([]model.Bar, 0, len(klines))
 		for _, k := range klines {
+			// fetchBinanceKlines 返回的 map 使用 "timestamp" 键（Binance 数组首位），
+			// 旧代码读 "time" 导致所有 K 线时间为 0，资金曲线横轴塌缩、end_date 显示 1970。
+			ts := getFloat(k, "timestamp", 0)
+			if ts == 0 {
+				ts = getFloat(k, "time", 0)
+			}
 			bars = append(bars, model.Bar{
 				Symbol:   symbol,
 				Open:     getFloat(k, "open", 0),
@@ -447,7 +457,7 @@ func RunBacktest(c *gin.Context) {
 				Close:    getFloat(k, "close", 0),
 				Volume:   getFloat(k, "volume", 0),
 				Interval: interval,
-				Time:     int64(getFloat(k, "time", 0)),
+				Time:     int64(ts),
 			})
 		}
 
@@ -464,6 +474,16 @@ func RunBacktest(c *gin.Context) {
 	cfg.InitialBalance = initialBalance
 	cfg.StartTime = fromMs
 	cfg.EndTime = toMs
+	// 高级参数（freqtrade 对齐）：手续费 / 滑点 / 滑点随机种子，请求体可覆盖
+	if _, ok := body["commission"]; ok {
+		cfg.Commission = getFloat(body, "commission", cfg.Commission)
+	}
+	if _, ok := body["slippage"]; ok {
+		cfg.Slippage = getFloat(body, "slippage", cfg.Slippage)
+	}
+	if _, ok := body["slippage_seed"]; ok {
+		cfg.SlippageSeed = int64(getFloat(body, "slippage_seed", float64(cfg.SlippageSeed)))
+	}
 	runner := backtest.NewRunner(cfg)
 	runner.LoadBars(symbol, bars)
 
@@ -687,6 +707,10 @@ func getFloat(m map[string]any, key string, def float64) float64 {
 	switch v := m[key].(type) {
 	case float64:
 		return v
+	case int64:
+		return float64(v)
+	case int:
+		return float64(v)
 	case string:
 		var f float64
 		fmt.Sscanf(v, "%f", &f)

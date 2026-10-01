@@ -6,6 +6,7 @@ import path from 'path'
 
 export default defineConfig(({ mode }) => ({
   // 相对路径:Electron file:// 直接加载构建产物;子路径部署(nginx)同样适用
+  // Docker 内嵌部署会由 Dockerfile 以 `--base=/` 覆盖（深链接场景必须绝对路径）
   base: './',
   test: {
     environment: 'jsdom',

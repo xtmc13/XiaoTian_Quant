@@ -21,8 +21,16 @@ services:
     environment:
       - PORT=8080
       - GIN_MODE=release
+      - DB_PATH=/app/data/gateway.db
+      - SECRET_KEY=${SECRET_KEY}
+      - ML_SERVER_URL=http://sandbox:8001
+      - SANDBOX_URL=http://sandbox:9000
+      - CCXT_BRIDGE_URL=http://sandbox:8002
+      - PYTHON_STRATEGY_URL=http://sandbox:8003
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LOG_FORMAT=${LOG_FORMAT:-text}
+      # API 文档（Swagger UI，默认开启；规范无敏感数据，生产可用 nginx 加访问控制）
+      - API_DOCS_ENABLED=${API_DOCS_ENABLED:-true}
       # Exchange API keys
       - BINANCE_API_KEY=${BINANCE_API_KEY:-}
       - BINANCE_API_SECRET=${BINANCE_API_SECRET:-}
@@ -62,6 +70,32 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+    networks:
+      - xiaotian
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  sandbox:
+    build:
+      context: ./sandbox
+      dockerfile: Dockerfile
+    container_name: xiaotian-sandbox
+    expose:
+      - "9000"
+    environment:
+      - SANDBOX_PORT=9000
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     networks:
       - xiaotian
     logging:

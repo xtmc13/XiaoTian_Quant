@@ -16,6 +16,10 @@ FROM rust:1-alpine AS rust-builder
 
 RUN apk add --no-cache git musl-dev
 
+# musl 默认静态链接(crt-static)，与 cdylib 不兼容会导致 .so 无法生成；
+# 关闭 crt-static 以输出动态库（运行时同为 musl 的 alpine 可正常加载）。
+ENV RUSTFLAGS="-C target-feature=-crt-static"
+
 WORKDIR /src/engine
 
 COPY engine/Cargo.toml engine/Cargo.lock ./
@@ -43,12 +47,17 @@ WORKDIR /src/web
 COPY web/package*.json ./
 RUN npm ci --silent
 COPY web/ ./
-RUN npm run build
+# 容器内嵌部署必须用绝对基路径：相对路径在深链接（如 /trading/spot）下
+# 会解析成 /trading/assets/... 导致资产 404 白屏。注意不能写 `npm run build -- --base=/`
+# （npm 会把参数追加到整条命令末尾，vite 收不到），必须直接调 vite。
+# Electron/本地构建仍走 package.json 的 build 脚本（vite.config.ts 里 base: './'）。
+RUN npx vite build --base=/ \
+ && sed -i "s/const CACHE_VERSION = 'v4'/const CACHE_VERSION = 'v$(date +%s)'/" dist/sw.js
 
 # ── Stage 2: Go backend builder (CGO enabled to link Rust cdylib) ──
-FROM golang:1.23-alpine AS go-builder
+FROM golang:1.25-alpine AS go-builder
 
-RUN apk add --no-cache git ca-certificates tzdata musl-dev gcc
+RUN apk add --no-cache git ca-certificates tzdata musl-dev gcc g++
 
 WORKDIR /src
 
@@ -59,11 +68,12 @@ COPY --from=rust-builder /engine-dist/ /engine-dist/
 COPY gateway/go.mod gateway/go.sum ./
 RUN go mod download
 
-# Copy pre-built web assets into spa/ directory (embedded via //go:embed)
-COPY --from=web-builder /src/web/dist/ ./spa/
-
 # Copy Go source
 COPY gateway/ ./
+
+# Copy pre-built web assets into spa/ directory (embedded via //go:embed)
+# 必须放在 COPY gateway/ 之后，否则 repo 内 spa/ 占位文件会覆盖前端产物
+COPY --from=web-builder /src/web/dist/ ./spa/
 
 # Ensure go.sum is complete with all dependencies
 RUN go mod tidy

@@ -12,6 +12,11 @@ import (
 //go:embed *
 var content embed.FS
 
+// ReadFile returns the raw bytes of an embedded root file.
+func ReadFile(name string) ([]byte, error) {
+	return content.ReadFile(name)
+}
+
 var fsContent = http.FS(content)
 
 // IndexHTML returns the embedded index.html bytes.

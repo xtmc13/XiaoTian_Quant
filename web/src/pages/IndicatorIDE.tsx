@@ -18,6 +18,7 @@ import {
 } from '@/components/strategy/CRAParamForm'
 import { createDefaultCRAParams } from '@/lib/strategyUtils'
 import { KlineChart } from '@/components/charts/KlineChart'
+import type { IndicatorOutput } from '@/components/charts/indicatorRuntime'
 import { CodeEditor } from '@/components/ide/CodeEditor'
 import { ParamPanel } from '@/components/ide/ParamPanel'
 import { ValidationBanner } from '@/components/ide/ValidationBanner'
@@ -185,10 +186,9 @@ export function IndicatorIDE() {
   const [optimizer, setOptimizer] = useState<'de' | 'tpe'>('de')
   // Saved indicators
   const [indicators, setIndicators] = useState<SavedIndicator[]>([])
-  // Chart signals from indicator execution
-  const [chartSignals, setChartSignals] = useState<
-    Array<{ timestamp: number; price: number; side: 'buy' | 'sell'; text: string; color: string }>
-  >([])
+  // 指标执行的原始 output（QuantDinger 契约），由 KlineChart 的
+  // indicatorRuntime 按量化丁格同款管线渲染（plots/signals/layers）
+  const [chartOutput, setChartOutput] = useState<IndicatorOutput | null>(null)
 
   const reloadIndicators = useCallback(() => {
     indicatorApi
@@ -270,7 +270,7 @@ export function IndicatorIDE() {
   /* ── Execute indicator on chart when running ── */
   useEffect(() => {
     if (!chartIndicatorRunning || klines.length === 0) {
-      setChartSignals([])
+      setChartOutput(null)
       return
     }
     let cancelled = false
@@ -289,41 +289,15 @@ export function IndicatorIDE() {
           params: paramValues,
           df_json: dfJSON,
         })) as unknown as {
-          data?: {
-            output?: {
-              signals?: Array<{ type: string; text?: string; data?: (number | null)[]; color?: string }>
-              plots?: Array<{ name: string; data: unknown[]; color?: string; overlay?: boolean }>
-            }
-          }
+          data?: { output?: IndicatorOutput }
           success?: boolean
         }
         if (cancelled) return
-        const output = res?.data?.output
-        if (!output?.signals) {
-          setChartSignals([])
-          return
-        }
-        const signals: Array<{ timestamp: number; price: number; side: 'buy' | 'sell'; text: string; color: string }> =
-          []
-        for (const sig of output.signals) {
-          if (!sig.data) continue
-          for (let i = 0; i < sig.data.length; i++) {
-            const price = sig.data[i]
-            if (price === null || price === undefined) continue
-            const kline = klines[i]
-            if (!kline) continue
-            signals.push({
-              timestamp: kline.timestamp ?? 0,
-              price: Number(price),
-              side: sig.type === 'buy' ? 'buy' : 'sell',
-              text: sig.text || (sig.type === 'buy' ? 'B' : 'S'),
-              color: sig.color || (sig.type === 'buy' ? '#00E676' : '#FF5252'),
-            })
-          }
-        }
-        if (!cancelled) setChartSignals(signals)
+        // 原样透传 output，渲染交给 KlineChart 的 QuantDinger 同款运行时
+        // （plots→指标、signals→signalTag 标记、layers→区域/线段/标签）
+        setChartOutput(res?.data?.output ?? null)
       } catch {
-        if (!cancelled) setChartSignals([])
+        if (!cancelled) setChartOutput(null)
       }
     }
     runIndicator()
@@ -1244,7 +1218,7 @@ export function IndicatorIDE() {
               <KlineChart
                 data={klines}
                 loading={klLoading}
-                signals={chartSignals}
+                indicatorOutput={chartOutput}
                 activeIndicators={activeIndicators}
                 onActiveIndicatorsChange={setActiveIndicators}
                 theme="dark"
@@ -1284,7 +1258,7 @@ export function IndicatorIDE() {
                 <KlineChart
                   data={klines}
                   loading={klLoading}
-                  signals={chartSignals}
+                  indicatorOutput={chartOutput}
                   activeIndicators={activeIndicators}
                   onActiveIndicatorsChange={setActiveIndicators}
                   theme="dark"

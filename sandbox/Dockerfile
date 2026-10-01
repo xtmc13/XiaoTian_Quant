@@ -33,12 +33,15 @@ RUN pip install --no-cache-dir "TA-Lib>=0.6.5" \
 # Copy all sandbox code
 COPY . .
 
-# Install additional deps for ml_server and ccxt_bridge (only if requirements exist)
+# Install additional deps for ml_server, ccxt_bridge and strategy_engine
 RUN if [ -f ccxt_bridge/requirements.txt ]; then \
         pip install --no-cache-dir -r ccxt_bridge/requirements.txt || true; \
     fi; \
     if [ -f ml_server/requirements.txt ]; then \
         pip install --no-cache-dir -r ml_server/requirements.txt || true; \
+    fi; \
+    if [ -f strategy_engine/requirements.txt ]; then \
+        pip install --no-cache-dir -r strategy_engine/requirements.txt || true; \
     fi
 
 # Run as non-root
@@ -51,4 +54,9 @@ ENV PYTHONUNBUFFERED=1
 
 EXPOSE 9000 8001 8002
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "9000", "--log-level", "info"]
+# 沙箱内全部四个服务随容器启动：
+#   main.py          :9000  指标/策略代码执行器（SANDBOX_URL）
+#   ml_server.server :8001  ML/RL/TensorBoard（ML_SERVER_URL）
+#   ccxt_bridge.main :8002  CCXT 交易所桥（CCXT_BRIDGE_URL）
+#   strategy_engine  :8003  Python 策略引擎（PYTHON_STRATEGY_URL）
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port 9000 --log-level info & uvicorn ml_server.server:app --host 0.0.0.0 --port 8001 --log-level info & uvicorn ccxt_bridge.main:app --host 0.0.0.0 --port 8002 --log-level info & uvicorn strategy_engine.main:app --host 0.0.0.0 --port 8003 --log-level info & wait"]
