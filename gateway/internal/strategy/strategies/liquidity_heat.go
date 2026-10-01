@@ -3,6 +3,7 @@ package strategies
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"strings"
 	"sync"
@@ -94,6 +95,8 @@ type LiquidityHeatStrategy struct {
 
 	// ── 持仓状态 ──
 	inPosition     bool
+	entryPending   bool // 入场单已发未成交（乐观记账待确认；终态未成交须回滚）
+	restored       bool // 重启仓位重建恢复出的持仓，待下一根 K 线重挂止损/目标
 	entryPrice     float64
 	entryPoolPrice float64 // 被扫的买方池价（SL 基准，非 CRA 模式）
 	stopPrice      float64
@@ -251,6 +254,8 @@ func (s *LiquidityHeatStrategy) Stop() error {
 
 func (s *LiquidityHeatStrategy) resetPositionLocked() {
 	s.inPosition = false
+	s.entryPending = false
+	s.restored = false
 	s.entryPrice, s.entryPoolPrice = 0, 0
 	s.stopPrice, s.targetPrice = 0, 0
 	s.targetIsPool = false
@@ -402,18 +407,33 @@ func (s *LiquidityHeatStrategy) OnOrderBook(_ model.OrderBookData, _ *event.Even
 	return nil, nil
 }
 
-// OnOrderUpdate 成交回填：
+// OnOrderUpdate 成交/拒单回填：
 //  - CRA 模式：首笔买单成交 → EnterPosition（均价=实际成交价）；补仓成交 →
 //    PendingAddCount--/PositionCount++/RecordFill；清仓单 → ExitPosition。
 //  - 非 CRA：首笔买单成交 → 以实际成交均价重挂止盈；清仓 → 复位状态。
+//  - 终态未成交（拒单/撤销/过期，2026-10-01 起 OMS 拒绝路径也会广播）：
+//    入场单被拒 → 回滚乐观记账（治"虚持仓"）；补仓单被拒 → 只减挂起计数；
+//    出场单被拒 → 复位 closeEmitted 允许重试离场。
 func (s *LiquidityHeatStrategy) OnOrderUpdate(order model.OrderData, _ *event.EventBus) (*model.Signal, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.running || order.Status != model.StatusFilled {
+	if !s.running {
+		return nil, nil
+	}
+
+	// 终态未成交：回滚/清理挂起计数（2026-10-01 实证：-2010 余额不足
+	// 的入场单被拒后引擎仍自认持仓，永久虚持仓）。
+	if order.Status == model.StatusRejected || order.Status == model.StatusCancelled || order.Status == model.StatusExpired {
+		s.handleUnfilledTerminalLocked(order)
+		return nil, nil
+	}
+
+	if order.Status != model.StatusFilled {
 		return nil, nil
 	}
 
 	if order.ClosePosition || order.Side == model.SideSell {
+		s.entryPending = false
 		if s.craEnabled && s.craState != nil {
 			s.craState.ExitPosition()
 		}
@@ -426,6 +446,7 @@ func (s *LiquidityHeatStrategy) OnOrderUpdate(order model.OrderData, _ *event.Ev
 	if order.Side != model.SideBuy || order.AvgFillPrice <= 0 {
 		return nil, nil
 	}
+	s.entryPending = false // 入场/补仓成交：乐观记账确认
 
 	if s.craEnabled && s.craState != nil {
 		if !s.craState.InPosition {
@@ -452,6 +473,88 @@ func (s *LiquidityHeatStrategy) OnOrderUpdate(order model.OrderData, _ *event.Ev
 		}
 	}
 	return nil, nil
+}
+
+// handleUnfilledTerminalLocked 终态未成交订单的处置。须持锁。
+// 2026-10-01 实证：入场信号发出即乐观记账（inPosition=true），交易所拒单
+// 若不回滚，引擎永久"虚持仓"（面板上有多仓、实际没买成、止盈/补仓乱发）。
+func (s *LiquidityHeatStrategy) handleUnfilledTerminalLocked(order model.OrderData) {
+	if order.Side == model.SideSell || order.ClosePosition {
+		// 出场单被拒：仓位仍在，允许下一根 K 线重试离场。
+		s.closeEmitted = false
+		return
+	}
+	if order.Side != model.SideBuy {
+		return
+	}
+	if s.entryPending {
+		// 入场单终态未成交：回滚乐观记账，CRA 同步退出。
+		s.entryPending = false
+		if s.craEnabled && s.craState != nil && s.craState.InPosition {
+			s.craState.ExitPosition()
+		}
+		if s.inPosition {
+			s.resetPositionLocked()
+		}
+		return
+	}
+	// 补仓单被拒：回补 CRA 挂起计数（该档不再重试，等下一个池）。
+	if s.craEnabled && s.craState != nil && s.craState.PendingAddCount > 0 {
+		s.craState.PendingAddCount--
+	}
+}
+
+// RestorePosition 重启仓位重建（strategy.PositionRestorer 接口）：
+// 本地成交账本显示该策略仍有净买入持仓时恢复状态机——引擎的持仓状态
+// 只在进程内存里，重启靠 K 线重放重建会"失忆"重复入场（2026-10-01
+// 666 实证三次重启三次重复买入）。止损/目标价留空，由下一根有足够
+// 池/ATR 的 K 线按恢复均价重挂（recomputeRestoredLevelsLocked）。
+func (s *LiquidityHeatStrategy) RestorePosition(qty, avgPrice float64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if qty <= 0 || avgPrice <= 0 {
+		return nil
+	}
+	s.inPosition = true
+	s.entryPending = false
+	s.restored = true
+	s.entryPrice = avgPrice
+	s.entryPoolPrice = 0
+	s.stopPrice, s.targetPrice = 0, 0
+	s.targetIsPool = false
+	s.holdBars = 0
+	s.closeEmitted = false
+	if s.craEnabled && s.craState != nil && !s.craState.InPosition {
+		s.craState.EnterPosition(avgPrice, cra.SideLong)
+	}
+	log.Printf("[liquidity_heat] %s 重启仓位重建: qty=%.8f vwap=%.2f (cra=%v)",
+		s.name, qty, avgPrice, s.craEnabled)
+	return nil
+}
+
+// recomputeRestoredLevelsLocked 恢复持仓的首根可用 K 线重挂止损/目标。
+// CRA 模式的移动止盈/止损由 CRA 状态机管理，无需重挂。须持锁。
+func (s *LiquidityHeatStrategy) recomputeRestoredLevelsLocked() {
+	s.restored = false
+	if s.craEnabled {
+		return
+	}
+	ref := s.entryPrice
+	if pool := s.nearestBuyPoolBelowLocked(ref); pool > 0 {
+		s.entryPoolPrice = pool
+		s.stopPrice = pool - s.slBufferATR*s.atrRaw
+	} else {
+		// 无存活买池可锚：按恢复价让 2% 作为保护止损（仅非 CRA 模式）。
+		s.entryPoolPrice = ref
+		s.stopPrice = ref * 0.98
+	}
+	if tp, ok := s.tpFromPoolLocked(ref); ok {
+		s.targetPrice, s.targetIsPool = tp, true
+	} else {
+		s.targetPrice, s.targetIsPool = ref*(1+s.tpFallbackPct), false
+	}
+	log.Printf("[liquidity_heat] %s 恢复持仓重挂: entry=%.2f stop=%.2f target=%.2f",
+		s.name, ref, s.stopPrice, s.targetPrice)
 }
 
 func (s *LiquidityHeatStrategy) OnTick(tick model.Tick, _ *event.EventBus) (*model.Signal, error) {
@@ -484,6 +587,11 @@ func (s *LiquidityHeatStrategy) OnBar(bar model.Bar, _ *event.EventBus) (*model.
 
 	// 1. 指标与池子推进：本 bar 注册 pivot 池、计算 offset/ATR。
 	s.advanceIndicatorsLocked(bar)
+
+	// 1a. 重启恢复的持仓：首根有足够池/ATR 的 K 线重挂止损/目标价。
+	if s.restored && s.inPosition && s.stopPrice <= 0 && s.atrRaw > 0 && len(s.pools) > 0 {
+		s.recomputeRestoredLevelsLocked()
+	}
 
 	// 2. 持仓管理优先（收盘价判定；K 线计数只在此累计）。
 	if s.inPosition {
@@ -757,6 +865,7 @@ func (s *LiquidityHeatStrategy) scanSweepReclaimLocked(bar model.Bar) *model.Sig
 	}
 
 	s.inPosition = true
+	s.entryPending = true // 乐观记账：成交确认(清)或终态未成交(回滚)二选一
 	s.entryPrice = bar.Close
 	s.entryPoolPrice = best.price
 	s.stopPrice = best.price - s.slBufferATR*s.atrRaw

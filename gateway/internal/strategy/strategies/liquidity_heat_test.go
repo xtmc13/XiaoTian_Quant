@@ -360,3 +360,136 @@ func TestLiquidityHeatCRANoStopLoss(t *testing.T) {
 		t.Fatal("position must survive crash without stop loss")
 	}
 }
+
+/* ── 虚持仓回滚 / 重启仓位重建（2026-10-01 666 实盘实证修复）── */
+
+// TestLiquidityHeatRejectedEntryRollsBack 入场单终态未成交（交易所拒单）必须
+// 回滚乐观记账：修复前引擎在信号发出即 inPosition=true，拒单不可见 →
+// 永久虚持仓（666 的 -2010 余额不足单实证）。
+func TestLiquidityHeatRejectedEntryRollsBack(t *testing.T) {
+	s := startLH(t)
+	next := feedBaseline(s, 0, 30)
+	s.OnBar(mkLHBar(next, 100, 100.5, 99.3, 100, 300), nil)
+	next++
+	pool := strongBuyPool(s)
+	sig, _ := s.OnBar(mkLHBar(next, 100, 100.2, pool.price-0.5, 99.9, 2), nil)
+	if sig == nil || sig.Direction != "LONG" {
+		t.Fatalf("entry failed: %v", sig)
+	}
+	if !s.inPosition || !s.entryPending {
+		t.Fatal("entry must be optimistic-tracked (inPosition + entryPending)")
+	}
+
+	// 交易所拒单（-2010 余额不足场景）。
+	s.OnOrderUpdate(model.OrderData{
+		Symbol: "BTCUSDT", Side: model.SideBuy,
+		Status: model.StatusRejected, ClientOID: "sig:test:1",
+	}, nil)
+	if s.inPosition || s.entryPending {
+		t.Fatalf("rejected entry must roll back: inPosition=%v pending=%v", s.inPosition, s.entryPending)
+	}
+}
+
+// TestLiquidityHeatRejectedAddKeepsPosition 补仓单被拒：不清仓，只减 CRA 挂起计数。
+func TestLiquidityHeatRejectedAddKeepsPosition(t *testing.T) {
+	s := startLHCRA(t)
+	next := feedBaseline(s, 0, 30)
+	s.OnBar(mkLHBar(next, 100, 100.5, 99.3, 100, 300), nil)
+	next++
+	pool := strongBuyPool(s)
+	sig, _ := s.OnBar(mkLHBar(next, 100, 100.2, pool.price-0.5, 99.9, 2), nil)
+	if sig == nil || sig.Direction != "LONG" {
+		t.Fatalf("entry failed: %v", sig)
+	}
+	fillBuy(s, 99.9, 1.0)
+
+	s.craState.PendingAddCount = 2 // 等价于两档补仓已发未成交
+	s.OnOrderUpdate(model.OrderData{
+		Symbol: "BTCUSDT", Side: model.SideBuy,
+		Status: model.StatusRejected, ClientOID: "sig:test:2",
+	}, nil)
+	if !s.inPosition || !s.craState.InPosition {
+		t.Fatal("rejected add must NOT close the position")
+	}
+	if s.craState.PendingAddCount != 1 {
+		t.Fatalf("pending adds = %d, want 1", s.craState.PendingAddCount)
+	}
+}
+
+// TestLiquidityHeatRejectedExitAllowsRetry 出场单被拒：仓位仍在，允许重试离场。
+func TestLiquidityHeatRejectedExitAllowsRetry(t *testing.T) {
+	s := startLH(t)
+	next := feedBaseline(s, 0, 30)
+	s.OnBar(mkLHBar(next, 100, 100.5, 99.3, 100, 300), nil)
+	next++
+	pool := strongBuyPool(s)
+	sig, _ := s.OnBar(mkLHBar(next, 100, 100.2, pool.price-0.5, 99.9, 2), nil)
+	if sig == nil {
+		t.Fatal("entry failed")
+	}
+	fillBuy(s, 99.9, 1.0)
+	s.closeEmitted = true // 出场信号已发
+
+	s.OnOrderUpdate(model.OrderData{
+		Symbol: "BTCUSDT", Side: model.SideSell,
+		Status: model.StatusRejected, ClientOID: "sig:test:3",
+	}, nil)
+	if s.closeEmitted {
+		t.Fatal("rejected exit must reset closeEmitted for retry")
+	}
+	if !s.inPosition {
+		t.Fatal("rejected exit must NOT close the position")
+	}
+}
+
+// TestLiquidityHeatFillConfirmsEntry 成交确认：清 entryPending、entryPrice 换实际成交均价。
+func TestLiquidityHeatFillConfirmsEntry(t *testing.T) {
+	s := startLH(t)
+	next := feedBaseline(s, 0, 30)
+	s.OnBar(mkLHBar(next, 100, 100.5, 99.3, 100, 300), nil)
+	next++
+	pool := strongBuyPool(s)
+	sig, _ := s.OnBar(mkLHBar(next, 100, 100.2, pool.price-0.5, 99.9, 2), nil)
+	if sig == nil {
+		t.Fatal("entry failed")
+	}
+	fillBuy(s, 99.9, 1.0)
+	if s.entryPending {
+		t.Fatal("fill must clear entryPending")
+	}
+	if math.Abs(s.entryPrice-99.9) > 1e-9 {
+		t.Fatalf("entryPrice = %v, want fill price 99.9", s.entryPrice)
+	}
+}
+
+// TestLiquidityHeatRestorePosition 重启仓位重建：恢复持仓态 + 首根可用 K 线
+// 重挂止损/目标；重放不得重复入场（666 三次重启三次重复买入的根治）。
+func TestLiquidityHeatRestorePosition(t *testing.T) {
+	s := startLH(t)
+	feedBaseline(s, 0, 30) // ATR/池就绪
+
+	if err := s.RestorePosition(0.00033, 83675.5); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if !s.inPosition || !s.restored {
+		t.Fatal("restore must set inPosition + restored")
+	}
+	if s.stopPrice != 0 || s.targetPrice != 0 {
+		t.Fatal("levels must stay empty until first bar recompute")
+	}
+
+	// 首根带量 K 线：有存活池 + ATR → 触发重挂。
+	s.OnBar(mkLHBar(40, 100, 100.5, 99.3, 100, 300), nil)
+	if s.restored {
+		t.Fatal("restored flag must clear after recompute")
+	}
+	if s.stopPrice <= 0 || s.targetPrice <= s.entryPrice {
+		t.Fatalf("levels recomputed wrong: stop=%v target=%v entry=%v", s.stopPrice, s.targetPrice, s.entryPrice)
+	}
+
+	// 已持仓：随后的扫反包形态不得再发入场信号。
+	sig, _ := s.OnBar(mkLHBar(41, 99.8, 100.1, 98.9, 99.2, 2), nil)
+	if sig != nil && sig.Direction == "LONG" {
+		t.Fatalf("restored position must not re-enter: %s", sig.Reason)
+	}
+}

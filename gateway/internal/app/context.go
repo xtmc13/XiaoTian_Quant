@@ -1558,6 +1558,9 @@ func (ctx *Context) wireStrategyEngine() {
 			Price:     0,
 			Quantity:  qty,
 			Exchange:  ctx.resolveExchange(signal.Symbol),
+			// 归属打标：引擎 wrapper 按 "sig:<配置id>:" 前缀把订单更新精确
+			// 路由回本策略（拒单回滚/成交确认的前提），重启仓位重建也靠它归因。
+			ClientOID: fmt.Sprintf("sig:%s:%d", signal.Strategy, time.Now().UnixNano()),
 			// AI 决策门来源标记（不动 ClientOID，避免干扰 A8.2 成交恢复路由）。
 			Source: "signal:" + signal.Strategy,
 		}
@@ -1781,6 +1784,9 @@ func (ctx *Context) closePositionFromSignal(signal model.Signal) {
 			Leverage:      pos.Leverage,
 			MarginMode:    pos.MarginMode,
 			ClosePosition: true,
+			// 归属打标（同 handleStrategySignal）：出场单被拒/成交要路由回本策略
+			//（closeEmitted 重试、重启仓位重建的净卖出轧差都靠它）。
+			ClientOID: fmt.Sprintf("sig:%s:%d", signal.Strategy, time.Now().UnixNano()),
 		}
 		ord, err := order.GetOrderManager().PlaceOrder(req)
 		if err != nil {

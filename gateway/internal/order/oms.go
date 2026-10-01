@@ -174,6 +174,7 @@ func (om *OrderManager) PlaceOrder(req *Request) (*model.OrderData, error) {
 		if err := om.RiskCheck(req); err != nil {
 			order.Status = model.StatusRejected
 			om.storeOrder(order)
+			om.fireOrderUpdate(order)
 			return order, fmt.Errorf("risk check: %w", err)
 		}
 	}
@@ -186,6 +187,7 @@ func (om *OrderManager) PlaceOrder(req *Request) (*model.OrderData, error) {
 		if err != nil {
 			order.Status = model.StatusRejected
 			om.storeOrder(order)
+			om.fireOrderUpdate(order)
 			if id != "" && om.AIGateOutcome != nil {
 				om.AIGateOutcome(id, order.ID, false)
 			}
@@ -199,6 +201,7 @@ func (om *OrderManager) PlaceOrder(req *Request) (*model.OrderData, error) {
 		if err := om.LockBalance(req); err != nil {
 			order.Status = model.StatusRejected
 			om.storeOrder(order)
+			om.fireOrderUpdate(order)
 			om.reportGateOutcome(gateDecisionID, order.ID, false)
 			return order, fmt.Errorf("balance lock: %w", err)
 		}
@@ -214,6 +217,10 @@ func (om *OrderManager) PlaceOrder(req *Request) (*model.OrderData, error) {
 			order.Status = model.StatusRejected
 			order.UpdatedAt = time.Now().UnixMilli()
 			om.storeOrder(order)
+			// 拒单必须让策略层可见：signal 策略在信号发出时即乐观记账
+			// （inPosition=true），收不到拒单会永久"虚持仓"
+			// （2026-10-01 实证：-2010 余额不足单被拒后引擎仍自认持仓）。
+			om.fireOrderUpdate(order)
 			if om.UnlockBalance != nil {
 				om.UnlockBalance(order)
 			}
@@ -444,6 +451,14 @@ func (om *OrderManager) reportGateOutcome(decisionID, orderID string, executed b
 		return
 	}
 	om.AIGateOutcome(decisionID, orderID, executed)
+}
+
+// fireOrderUpdate 订单状态翻转后广播给订阅者（REJECTED 也必须可达——
+// signal 策略靠订单更新回滚乐观记账/确认成交）。
+func (om *OrderManager) fireOrderUpdate(o *model.OrderData) {
+	if om.OnOrderUpdate != nil {
+		om.OnOrderUpdate(o)
+	}
 }
 
 func (om *OrderManager) storeOrder(order *model.OrderData) {

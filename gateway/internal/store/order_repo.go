@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -229,4 +230,44 @@ func (r *OrderRepo) ListRecent(sinceMs int64, limit int) ([]*OrderRecord, error)
 		result = append(result, &o)
 	}
 	return result, nil
+}
+
+// NetFilledByStrategy 汇总某策略的已成交净买量与买入 VWAP：
+// signal 下单链路给订单打标 client_oid "sig:<策略配置id>:<nonce>"，
+// 据此把成交归属到策略（orders 表无 strategy 列，Source 不落库）。
+// 重启仓位重建用：净买量 = Σ买入filled − Σ卖出filled；VWAP 按各买单
+// avg_fill_price 加权。无记录返回 0。
+func NetFilledByStrategy(strategyID, symbol string) (netQty, buyVWAP float64, err error) {
+	prefix := "sig:" + strategyID + ":%"
+	rows, err := db.Query(
+		`SELECT side, COALESCE(SUM(filled),0), COALESCE(SUM(filled*avg_fill_price),0)
+		 FROM xt_orders WHERE client_oid LIKE ? AND UPPER(symbol)=UPPER(?)
+		 AND status='FILLED' AND filled>0 AND avg_fill_price>0 GROUP BY side`,
+		prefix, symbol)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer rows.Close()
+	var buyQty, sellQty, buyCost float64
+	for rows.Next() {
+		var side string
+		var qty, cost float64
+		if err := rows.Scan(&side, &qty, &cost); err != nil {
+			return 0, 0, err
+		}
+		switch strings.ToUpper(side) {
+		case "BUY":
+			buyQty, buyCost = qty, cost
+		case "SELL":
+			sellQty = qty
+		}
+	}
+	netQty = buyQty - sellQty
+	if buyQty > 0 {
+		buyVWAP = buyCost / buyQty
+	}
+	if netQty < 0 {
+		netQty = 0 // 净卖出/无持仓不恢复
+	}
+	return netQty, buyVWAP, nil
 }

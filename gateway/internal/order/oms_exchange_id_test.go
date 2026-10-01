@@ -1,6 +1,7 @@
 package order
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/xiaotian-quant/gateway/internal/model"
@@ -50,4 +51,36 @@ func TestPlaceOrderCapturesExchangeOrderID(t *testing.T) {
 	if rec.ID != ord.ID || len(rec.ID) < 4 || rec.ID[:4] != "ord-" {
 		t.Fatalf("本地订单号被覆盖: %q", rec.ID)
 	}
+}
+
+// 拒单必须触达 OnOrderUpdate：signal 策略在信号发出时即乐观记账
+// （inPosition=true），收不到拒单事件会永久"虚持仓"
+//（2026-10-01 实证：-2010 余额不足单被拒后引擎仍自认持仓）。
+func TestPlaceOrderRejectedFiresOrderUpdate(t *testing.T) {
+	om := GetOrderManager()
+	origSubmit, origUpdate := om.SubmitToExchange, om.OnOrderUpdate
+	t.Cleanup(func() { om.SubmitToExchange, om.OnOrderUpdate = origSubmit, origUpdate })
+
+	rejected := make(chan *model.OrderData, 1)
+	om.OnOrderUpdate = func(o *model.OrderData) { rejected <- o }
+	om.SubmitToExchange = func(order *model.OrderData) (map[string]any, error) {
+		return nil, fmt.Errorf("binance POST /order: HTTP 400 code=-2010 insufficient balance")
+	}
+
+	ord, err := om.PlaceOrder(&Request{
+		Symbol: "REJUSDT", Side: model.SideBuy, OrderType: model.TypeMarket,
+		Price: 0, Quantity: 0.001, Exchange: "binance",
+	})
+	if err == nil {
+		t.Fatal("expected rejection error")
+	}
+	select {
+	case o := <-rejected:
+		if o.Status != model.StatusRejected {
+			t.Fatalf("fired status = %s, want REJECTED", o.Status)
+		}
+	default:
+		t.Fatal("rejected order must fire OnOrderUpdate (strategy rollback depends on it)")
+	}
+	_ = ord
 }

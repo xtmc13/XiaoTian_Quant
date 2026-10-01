@@ -89,3 +89,54 @@ func TestOrderRepoGetByIDRealTimestampColumns(t *testing.T) {
 		t.Fatalf("missing id should return error (sql.ErrNoRows), got %v", missing)
 	}
 }
+
+// NetFilledByStrategy：sig:<策略id>: 前缀归因的净买量与买入 VWAP——
+// 重启仓位重建的数据源（2026-10-01 666 三次重启三次重复买入的根治）。
+func TestNetFilledByStrategy(t *testing.T) {
+	cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewOrderRepo()
+	nowMs := time.Now().UnixMilli()
+	mk := func(id, side, oid string, qty, avg float64) *OrderRecord {
+		return &OrderRecord{
+			ID: id, Symbol: "BTCUSDT", Side: side, OrderType: "MARKET",
+			Quantity: qty, Filled: qty, Status: "FILLED", Exchange: "binance",
+			ClientOID: oid, AvgFillPrice: avg, CreatedAt: nowMs, UpdatedAt: nowMs,
+		}
+	}
+	// 该策略两笔买单 0.1@50000 + 0.2@51000 → 净 0.3，VWAP=50666.67
+	if err := repo.Create(mk("ord-n1", "BUY", "sig:cfg9:1", 0.1, 50000)); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Create(mk("ord-n2", "BUY", "sig:cfg9:2", 0.2, 51000)); err != nil {
+		t.Fatal(err)
+	}
+	// 卖出一半 + 其他策略的同 symbol 单（不得混入）
+	if err := repo.Create(mk("ord-n3", "SELL", "sig:cfg9:3", 0.1, 52000)); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Create(mk("ord-n4", "BUY", "sig:other:1", 9.9, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Create(mk("ord-n5", "BUY", "", 9.9, 1)); err != nil {
+		t.Fatal(err)
+	}
+
+	net, vwap, err := NetFilledByStrategy("cfg9", "BTCUSDT")
+	if err != nil {
+		t.Fatalf("net: %v", err)
+	}
+	if net < 0.1999 || net > 0.2001 {
+		t.Fatalf("net = %v, want 0.2", net)
+	}
+	wantVWAP := (0.1*50000 + 0.2*51000) / 0.3
+	if vwap < wantVWAP-0.01 || vwap > wantVWAP+0.01 {
+		t.Fatalf("vwap = %v, want %v", vwap, wantVWAP)
+	}
+
+	// 无记录策略 → 0
+	if net, _, err := NetFilledByStrategy("nope", "BTCUSDT"); err != nil || net != 0 {
+		t.Fatalf("empty strategy: net=%v err=%v", net, err)
+	}
+}

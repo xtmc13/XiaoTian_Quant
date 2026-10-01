@@ -16,6 +16,13 @@ import (
 )
 
 // Strategy defines the interface all trading strategies must implement.
+// PositionRestorer 可选实现：启动前从本地成交账本恢复持仓状态机，
+// 防止进程重启后重放历史 K 线时状态机"失忆"重复入场。
+// 由 handler 在 Register/Start 之前调用（见 startStrategyInEngine）。
+type PositionRestorer interface {
+	RestorePosition(qty, avgPrice float64) error
+}
+
 type Strategy interface {
 	Name() string
 	Symbol() string
