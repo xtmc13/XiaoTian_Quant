@@ -241,3 +241,26 @@ P2 功能差距未动（止损三件套/图表下单/利润分成/MCP/移动端�
 
 **排查工具备忘**：gateway.db 是 WAL 模式，`docker cp` 只拷 `gateway.db` 会丢未
 checkpoint 的数据，必须连 `-wal`/`-shm` 一起拷。
+
+## 第六轮修复（2026-10-02 上午，止损三件套之 K 线收盘止损）
+
+**盘点结论**：三件套中 Trailing TP 与 Breakeven SL **早已存在**——
+executor_tpsl.go 有完整实现（TP1 触发后 trailing_pct 回撤全平 + move_sl_after/
+move_sl_to 移动止损到保本位）；order/ladder.go 有 breakeven_after_target。
+真正缺的是 **Candle Close SL（K 线收盘止损，防插针）**，全仓零匹配。
+
+**实现**（迁移 0037 + store/handler 四层贯通）：
+- `xt_signal_executions` 新增 `candle_close_sl` / `candle_close_interval`（默认 1m）；
+- `SignalExecution` 结构体 + sigExecCols + scan/Create/Update 全量接线；
+- 创建入口 `executor_signal.go` 解析 `candle_close_sl`/`candle_close_interval`；
+- `evalTPSL`：开启后盘中 tick 不再触发 SL；
+- 新增 `TickExecutorBarClose(symbol, barClosePrice)`：收盘价跌破（涨破）CurrentSL 才平仓；
+- `tpslPriceLoop` 每 5s 轮询开启该模式的 symbol 的最近 K 线（取倒数第二根已收盘柱），
+  按 symbol|interval 去重，新收盘柱才判定一次。
+
+**验证**：编译通过、迁移生效（两列存在）、容器 healthy。
+行为语义：盘中插针跌破止损线不触发；只有判定周期 K 线收盘价跌破才平仓。
+信号源在 execute 请求体带 `candle_close_sl:true, "candle_close_interval":"5m"` 即启用。
+
+**遗留**：前端执行面板暂无手动触发入口（面板是只读监控），参数经信号 API 传入；
+TickExecutorBarClose 已导出可单测，建议后续补 table-driven 测试。

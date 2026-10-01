@@ -143,13 +143,38 @@ func evalTPSL(e *store.SignalExecution, price float64) []tpslAction {
 	}
 
 	// ── 止损（trailing 全平优先，未触发才看 SL）──
-	if e.CurrentSL > 0 && e.RemainingQty > 0 {
+	// K 线收盘止损模式下盘中不触发，改由 TickExecutorBarClose 在 K 线收盘时判定。
+	if e.CurrentSL > 0 && e.RemainingQty > 0 && !e.CandleCloseSL {
 		hit := (isLong && price <= e.CurrentSL) || (!isLong && price >= e.CurrentSL)
 		if hit {
 			actions = append(actions, tpslAction{Kind: tpslActionSL, ExecID: e.ID, Symbol: e.Symbol, Price: e.CurrentSL, Quantity: e.RemainingQty})
 		}
 	}
 	return actions
+}
+
+// TickExecutorBarClose 供 K 线收盘源驱动：仅处理开启 candle_close_sl 的执行，
+// 收盘价跌破（涨破）CurrentSL 才触发止损平仓（防插针/影线假跌破）。
+func TickExecutorBarClose(symbol string, barClosePrice float64) int {
+	if barClosePrice <= 0 {
+		return 0
+	}
+	n := 0
+	for _, e := range sigTPSLManager.activeExecutions() {
+		if e.Symbol != symbol || !e.CandleCloseSL {
+			continue
+		}
+		if e.CurrentSL <= 0 || e.RemainingQty <= 0 {
+			continue
+		}
+		isLong := e.Direction != "SHORT"
+		hit := (isLong && barClosePrice <= e.CurrentSL) || (!isLong && barClosePrice >= e.CurrentSL)
+		if hit {
+			applyTPSLAction(e, tpslAction{Kind: tpslActionSL, ExecID: e.ID, Symbol: e.Symbol, Price: e.CurrentSL, Quantity: e.RemainingQty})
+			n++
+		}
+	}
+	return n
 }
 
 // TickExecutorTPSL 供外部价格源驱动状态机（后台循环与单测均走这里）。
@@ -319,10 +344,19 @@ func startTPSLLoop() {
 func tpslPriceLoop() {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+	lastBarCloseAt := map[string]int64{} // key=symbol|interval，上次已判定的收盘时间
 	for range ticker.C {
 		symbols := map[string]bool{}
+		candleSymbols := map[string]string{} // symbol → 判定周期
 		for _, e := range sigTPSLManager.activeExecutions() {
 			symbols[e.Symbol] = true
+			if e.CandleCloseSL {
+				interval := e.CandleCloseInterval
+				if interval == "" {
+					interval = "1m"
+				}
+				candleSymbols[e.Symbol] = interval
+			}
 		}
 		for symbol := range symbols {
 			price := executorFetchPrice(symbol)
@@ -330,7 +364,44 @@ func tpslPriceLoop() {
 				TickExecutorTPSL(symbol, price)
 			}
 		}
+		// K 线收盘止损：轮询最近 K 线，发现新收盘柱则用收盘价判定一次
+		for symbol, interval := range candleSymbols {
+			closedAt, closePrice, ok := executorFetchLastClosedKline(symbol, interval)
+			if !ok {
+				continue
+			}
+			key := symbol + "|" + interval
+			if lastBarCloseAt[key] == closedAt {
+				continue
+			}
+			lastBarCloseAt[key] = closedAt
+			TickExecutorBarClose(symbol, closePrice)
+		}
 	}
+}
+
+// executorFetchLastClosedKline 拉最近两根 K 线，返回最后一根"已收盘"柱的
+// 收盘时间和收盘价（Binance klines 末元素为未收盘的当前柱，故取倒数第二根）。
+func executorFetchLastClosedKline(symbol, interval string) (closedAt int64, closePrice float64, ok bool) {
+	client := &http.Client{Timeout: 4 * time.Second}
+	url := "https://api.binance.com/api/v3/klines?symbol=" + symbol + "&interval=" + interval + "&limit=2"
+	resp, err := client.Get(url)
+	if err != nil {
+		return 0, 0, false
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	var klines [][]any
+	if err := json.Unmarshal(body, &klines); err != nil || len(klines) < 2 {
+		return 0, 0, false
+	}
+	closed := klines[len(klines)-2]
+	if len(closed) < 5 {
+		return 0, 0, false
+	}
+	closedAt = int64OfAny(closed[6]) // 柱收盘时间 ms
+	closePrice, _ = strconv.ParseFloat(closed[4].(string), 64)
+	return closedAt, closePrice, closePrice > 0
 }
 
 // executorFetchPrice 从币安公共行情拉最新价（与 portfolio.getBinancePrice

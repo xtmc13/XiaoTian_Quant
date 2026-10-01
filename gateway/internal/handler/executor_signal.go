@@ -240,8 +240,11 @@ func executeSignalRecord(sig *store.SignalRecord, body map[string]any) (*store.S
 		MoveSLAfter:  getFloat(body, "move_sl_after", 0),
 		MoveSLTo:     getFloat(body, "move_sl_to", 0),
 		TrailingPct:  getFloat(body, "trailing_pct", getFloat(body, "trailing_sl", 0)),
-		RemainingQty: qty,
-		CreatedAt:    now,
+		// K 线收盘止损（对标 CryptoRobotics）：盘中跌破不平，收盘跌破才平
+		CandleCloseSL:       body["candle_close_sl"] == true,
+		CandleCloseInterval: getString(body, "candle_close_interval", "1m"),
+		RemainingQty:        qty,
+		CreatedAt:           now,
 	}
 	// 当前有效 TP = 第一个未触发档位
 	for _, lv := range []float64{tp1, tp2, tp3} {

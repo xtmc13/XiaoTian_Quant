@@ -54,6 +54,10 @@ type SignalExecution struct {
 	TrailingPct    float64 `json:"trailing_pct"`
 	TrailingPeak   float64 `json:"trailing_peak"`
 
+	// K 线收盘止损（对标 CryptoRobotics）：盘中跌破 SL 不触发，收盘价跌破才平仓
+	CandleCloseSL       bool   `json:"candle_close_sl"`
+	CandleCloseInterval string `json:"candle_close_interval"` // 判定用 K 线周期，默认 1m
+
 	// 当前有效 TP/SL 与剩余持仓
 	CurrentTP    float64 `json:"current_tp"`
 	CurrentSL    float64 `json:"current_sl"`
@@ -70,7 +74,7 @@ type SignalExecutionRepo struct{ mu sync.RWMutex }
 
 func NewSignalExecutionRepo() *SignalExecutionRepo { return &SignalExecutionRepo{} }
 
-const sigExecCols = `id, signal_id, source_id, symbol, direction, margin_mode, position_side, position_id, status, entry_order_id, entry_price, entry_qty, entry_time, tp1_price, tp1_qty, tp1_time, tp1_filled, tp2_price, tp2_qty, tp2_time, tp2_filled, tp3_price, tp3_qty, tp3_time, tp3_filled, sl_price, sl_triggered, sl_time, move_sl_after, move_sl_to, trailing_active, trailing_pct, trailing_peak, current_tp, current_sl, remaining_qty, realized_pnl, close_reason, closed_at, created_at`
+const sigExecCols = `id, signal_id, source_id, symbol, direction, margin_mode, position_side, position_id, status, entry_order_id, entry_price, entry_qty, entry_time, tp1_price, tp1_qty, tp1_time, tp1_filled, tp2_price, tp2_qty, tp2_time, tp2_filled, tp3_price, tp3_qty, tp3_time, tp3_filled, sl_price, sl_triggered, sl_time, move_sl_after, move_sl_to, trailing_active, trailing_pct, trailing_peak, candle_close_sl, candle_close_interval, current_tp, current_sl, remaining_qty, realized_pnl, close_reason, closed_at, created_at`
 
 func scanSignalExecution(row interface{ Scan(...any) error }) (*SignalExecution, error) {
 	var e SignalExecution
@@ -78,6 +82,7 @@ func scanSignalExecution(row interface{ Scan(...any) error }) (*SignalExecution,
 		&e.TP1Price, &e.TP1Qty, &e.TP1Time, &e.TP1Filled, &e.TP2Price, &e.TP2Qty, &e.TP2Time, &e.TP2Filled,
 		&e.TP3Price, &e.TP3Qty, &e.TP3Time, &e.TP3Filled, &e.SLPrice, &e.SLTriggered, &e.SLTime,
 		&e.MoveSLAfter, &e.MoveSLTo, &e.TrailingActive, &e.TrailingPct, &e.TrailingPeak,
+		&e.CandleCloseSL, &e.CandleCloseInterval,
 		&e.CurrentTP, &e.CurrentSL, &e.RemainingQty, &e.RealizedPnL, &e.CloseReason, &e.ClosedAt, &e.CreatedAt)
 	if err != nil {
 		return nil, err
@@ -94,11 +99,12 @@ func (r *SignalExecutionRepo) Create(e *SignalExecution) error {
 	}
 	_, err := db.Exec(
 		`INSERT INTO xt_signal_executions (`+sigExecCols+`)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		e.ID, e.SignalID, e.SourceID, e.Symbol, e.Direction, e.MarginMode, e.PositionSide, e.PositionID, e.Status, e.EntryOrderID, e.EntryPrice, e.EntryQty, e.EntryTime,
 		e.TP1Price, e.TP1Qty, e.TP1Time, e.TP1Filled, e.TP2Price, e.TP2Qty, e.TP2Time, e.TP2Filled,
 		e.TP3Price, e.TP3Qty, e.TP3Time, e.TP3Filled, e.SLPrice, e.SLTriggered, e.SLTime,
 		e.MoveSLAfter, e.MoveSLTo, e.TrailingActive, e.TrailingPct, e.TrailingPeak,
+		e.CandleCloseSL, e.CandleCloseInterval,
 		e.CurrentTP, e.CurrentSL, e.RemainingQty, e.RealizedPnL, e.CloseReason, e.ClosedAt, e.CreatedAt,
 	)
 	return err
@@ -189,12 +195,14 @@ func (r *SignalExecutionRepo) Update(e *SignalExecution) error {
 		 tp1_price=?, tp1_qty=?, tp1_time=?, tp1_filled=?, tp2_price=?, tp2_qty=?, tp2_time=?, tp2_filled=?,
 		 tp3_price=?, tp3_qty=?, tp3_time=?, tp3_filled=?, sl_price=?, sl_triggered=?, sl_time=?,
 		 move_sl_after=?, move_sl_to=?, trailing_active=?, trailing_pct=?, trailing_peak=?,
+		 candle_close_sl=?, candle_close_interval=?,
 		 current_tp=?, current_sl=?, remaining_qty=?, realized_pnl=?, close_reason=?, closed_at=?
 		 WHERE id=?`,
 		e.Status, e.EntryOrderID, e.EntryPrice, e.EntryQty, e.EntryTime,
 		e.TP1Price, e.TP1Qty, e.TP1Time, e.TP1Filled, e.TP2Price, e.TP2Qty, e.TP2Time, e.TP2Filled,
 		e.TP3Price, e.TP3Qty, e.TP3Time, e.TP3Filled, e.SLPrice, e.SLTriggered, e.SLTime,
 		e.MoveSLAfter, e.MoveSLTo, e.TrailingActive, e.TrailingPct, e.TrailingPeak,
+		e.CandleCloseSL, e.CandleCloseInterval,
 		e.CurrentTP, e.CurrentSL, e.RemainingQty, e.RealizedPnL, e.CloseReason, e.ClosedAt, e.ID,
 	)
 	return err
