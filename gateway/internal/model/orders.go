@@ -97,6 +97,7 @@ type OrderData struct {
 	Exchange      string      `json:"exchange"`
 	UserID        uint64      `json:"user_id"`
 	ClientOID     string      `json:"client_oid,omitempty"`
+	ExchangeOrderID string  `json:"exchange_order_id,omitempty"` // 交易所侧订单号（成交恢复/reconcile 查询用）
 	AvgFillPrice  float64     `json:"avg_fill_price,omitempty"`
 	CreatedAt     int64       `json:"created_at"`
 	UpdatedAt     int64       `json:"updated_at"`

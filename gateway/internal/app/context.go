@@ -882,14 +882,18 @@ func (ctx *Context) maybeProtectProfit(ord *model.OrderData) {
 
 // finalizeLiveSubmitResult 实盘下单结果处置（P0-2）：成功→NEW；失败或空结果
 // （凭证缺失/未下单）→ REJECTED + 返回错误，绝不转 paper（消除"假成交"）。
+// 成功时把交易所 orderId 同时放入 exchange_order_id（规整为字符串）——
+// JSON 解析后的 float64 直接被 .(string) 断言丢弃，导致 reconcile 拿着
+// 本地 ord-* ID 永远查不到交易所订单（2026-10-01 生产实测 OMS 永停 NEW）。
 func finalizeLiveSubmitResult(log *logging.Logger, ord *model.OrderData, result map[string]any, err error) (map[string]any, error) {
 	if err == nil && result != nil {
 		log.Info("Order submitted to exchange", "symbol", ord.Symbol, "side", ord.Side, "exchange", ord.Exchange, "id", result["orderId"])
 		return map[string]any{
-			"order_id": result["orderId"],
-			"status":   "NEW",
-			"filled":   0.0,
-			"exchange": ord.Exchange,
+			"order_id":          result["orderId"],
+			"exchange_order_id": stringifyOrderID(result["orderId"]),
+			"status":            "NEW",
+			"filled":            0.0,
+			"exchange":          ord.Exchange,
 		}, nil
 	}
 	ord.Status = model.StatusRejected
@@ -899,6 +903,29 @@ func finalizeLiveSubmitResult(log *logging.Logger, ord *model.OrderData, result 
 	}
 	log.Warn("Live exchange order rejected: empty result (credentials missing?)", "exchange", ord.Exchange)
 	return nil, fmt.Errorf("live order rejected: exchange %s returned no result (credentials missing)", ord.Exchange)
+}
+
+// stringifyOrderID 把交易所 ACK 里的 orderId 转成干净十进制字符串。
+// Binance 等所的 orderId 是 uint64：JSON 解析后为 float64（日志里会打
+// 成科学计数法 6.7e+10），.(string) 断言直接丢弃；2^53 以内整数 float64
+// 可精确表示，FormatFloat(-1) 输出完整数字。
+func stringifyOrderID(v any) string {
+	switch n := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(n)
+	case json.Number:
+		return n.String()
+	case float64:
+		return strconv.FormatFloat(n, 'f', -1, 64)
+	case int64:
+		return strconv.FormatInt(n, 10)
+	case int:
+		return strconv.Itoa(n)
+	default:
+		return fmt.Sprintf("%v", v)
+	}
 }
 
 func (ctx *Context) updatePortfolioFromFill(ord *model.OrderData) {

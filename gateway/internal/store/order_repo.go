@@ -21,6 +21,9 @@ type OrderRecord struct {
 	Exchange     string  `json:"exchange"`
 	UserID       uint64  `json:"user_id"`
 	ClientOID    string  `json:"client_oid"`
+	// ExchangeOrderID 交易所侧订单号（如币安数字 orderId），下单ACK后回填，
+	// 成交恢复(reconcile)按它查询交易所最新状态/成交明细。
+	ExchangeOrderID string `json:"exchange_order_id"`
 	AvgFillPrice float64 `json:"avg_fill_price"`
 	CreatedAt    int64   `json:"created_at"`
 	UpdatedAt    int64   `json:"updated_at"`
@@ -58,23 +61,23 @@ func (r *OrderRepo) Create(o *OrderRecord) error {
 		o.Exchange = "BINANCE"
 	}
 	_, err := db.Exec(
-		`INSERT INTO xt_orders (id, symbol, side, order_type, price, stop_price, quantity, filled, status, exchange, user_id, client_oid, avg_fill_price, created_at, updated_at, market_type, position_side, leverage, margin_mode, tp_price, sl_price, close_position)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO xt_orders (id, symbol, side, order_type, price, stop_price, quantity, filled, status, exchange, user_id, client_oid, exchange_order_id, avg_fill_price, created_at, updated_at, market_type, position_side, leverage, margin_mode, tp_price, sl_price, close_position)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		o.ID, o.Symbol, o.Side, o.OrderType, o.Price, o.StopPrice, o.Quantity, o.Filled, o.Status, o.Exchange,
-		o.UserID, o.ClientOID, o.AvgFillPrice, o.CreatedAt, o.UpdatedAt,
+		o.UserID, o.ClientOID, o.ExchangeOrderID, o.AvgFillPrice, o.CreatedAt, o.UpdatedAt,
 		o.MarketType, o.PositionSide, o.Leverage, o.MarginMode, o.TPPrice, o.SLPrice, o.ClosePosition,
 	)
 	return err
 }
 
 func (r *OrderRepo) GetByID(id string) (*OrderRecord, error) {
-	row := db.QueryRow(`SELECT id, symbol, side, order_type, price, stop_price, quantity, filled, status, exchange, user_id, client_oid, avg_fill_price, created_at, updated_at, market_type, position_side, leverage, margin_mode, tp_price, sl_price, close_position FROM xt_orders WHERE id=?`, id)
+	row := db.QueryRow(`SELECT id, symbol, side, order_type, price, stop_price, quantity, filled, status, exchange, user_id, client_oid, exchange_order_id, avg_fill_price, created_at, updated_at, market_type, position_side, leverage, margin_mode, tp_price, sl_price, close_position FROM xt_orders WHERE id=?`, id)
 	var o OrderRecord
 	// xt_orders.created_at/updated_at 为历史 REAL 列，驱动可能返回 float64，
 	// 大时间戳会以科学计数法走字符串解析而失败——先收 float64 再显式转换。
 	var createdF, updatedF float64
 	err := row.Scan(&o.ID, &o.Symbol, &o.Side, &o.OrderType, &o.Price, &o.StopPrice, &o.Quantity, &o.Filled, &o.Status, &o.Exchange,
-		&o.UserID, &o.ClientOID, &o.AvgFillPrice, &createdF, &updatedF,
+		&o.UserID, &o.ClientOID, &o.ExchangeOrderID, &o.AvgFillPrice, &createdF, &updatedF,
 		&o.MarketType, &o.PositionSide, &o.Leverage, &o.MarginMode, &o.TPPrice, &o.SLPrice, &o.ClosePosition)
 	if err != nil {
 		return nil, err
@@ -85,10 +88,10 @@ func (r *OrderRepo) GetByID(id string) (*OrderRecord, error) {
 }
 
 func (r *OrderRepo) List(filter map[string]any, limit int) ([]*OrderRecord, error) {
-	query := "SELECT id, symbol, side, order_type, price, stop_price, quantity, filled, status, exchange, user_id, client_oid, avg_fill_price, created_at, updated_at, market_type, position_side, leverage, margin_mode, tp_price, sl_price, close_position FROM xt_orders"
+	query := "SELECT id, symbol, side, order_type, price, stop_price, quantity, filled, status, exchange, user_id, client_oid, exchange_order_id, avg_fill_price, created_at, updated_at, market_type, position_side, leverage, margin_mode, tp_price, sl_price, close_position FROM xt_orders"
 	allowedCols := map[string]bool{
 		"id": true, "symbol": true, "side": true, "order_type": true, "status": true,
-		"exchange": true, "user_id": true, "client_oid": true, "market_type": true,
+		"exchange": true, "user_id": true, "client_oid": true, "exchange_order_id": true, "market_type": true,
 		"position_side": true, "created_at": true, "updated_at": true,
 	}
 	args, where := buildFilter(filter, allowedCols)
@@ -112,7 +115,7 @@ func (r *OrderRepo) List(filter map[string]any, limit int) ([]*OrderRecord, erro
 		// 大时间戳会以科学计数法走字符串解析而失败——先收 float64 再显式转换。
 		var createdF, updatedF float64
 		if err := rows.Scan(&o.ID, &o.Symbol, &o.Side, &o.OrderType, &o.Price, &o.StopPrice, &o.Quantity, &o.Filled, &o.Status, &o.Exchange,
-			&o.UserID, &o.ClientOID, &o.AvgFillPrice, &createdF, &updatedF,
+			&o.UserID, &o.ClientOID, &o.ExchangeOrderID, &o.AvgFillPrice, &createdF, &updatedF,
 			&o.MarketType, &o.PositionSide, &o.Leverage, &o.MarginMode, &o.TPPrice, &o.SLPrice, &o.ClosePosition); err != nil {
 			return nil, err
 		}
@@ -127,7 +130,7 @@ func (r *OrderRepo) List(filter map[string]any, limit int) ([]*OrderRecord, erro
 // （NEW/PENDING/PARTIALLY_FILLED）的订单，按创建时间升序。
 // ltm 重启恢复扫描用：父单前缀 "ltm-"，市价补单前缀 "ltm-mkt:<parentID>"。
 func (r *OrderRepo) ListActiveByClientOIDPrefix(prefix string) ([]*OrderRecord, error) {
-	rows, err := db.Query(`SELECT id, symbol, side, order_type, price, stop_price, quantity, filled, status, exchange, user_id, client_oid, avg_fill_price, created_at, updated_at, market_type, position_side, leverage, margin_mode, tp_price, sl_price, close_position
+	rows, err := db.Query(`SELECT id, symbol, side, order_type, price, stop_price, quantity, filled, status, exchange, user_id, client_oid, exchange_order_id, avg_fill_price, created_at, updated_at, market_type, position_side, leverage, margin_mode, tp_price, sl_price, close_position
 		FROM xt_orders WHERE client_oid LIKE ? AND status IN ('NEW','PENDING','PARTIALLY_FILLED') ORDER BY created_at ASC`, prefix+"%")
 	if err != nil {
 		return nil, err
@@ -140,7 +143,7 @@ func (r *OrderRepo) ListActiveByClientOIDPrefix(prefix string) ([]*OrderRecord, 
 		// 大时间戳会以科学计数法走字符串解析而失败——先收 float64 再显式转换。
 		var createdF, updatedF float64
 		if err := rows.Scan(&o.ID, &o.Symbol, &o.Side, &o.OrderType, &o.Price, &o.StopPrice, &o.Quantity, &o.Filled, &o.Status, &o.Exchange,
-			&o.UserID, &o.ClientOID, &o.AvgFillPrice, &createdF, &updatedF,
+			&o.UserID, &o.ClientOID, &o.ExchangeOrderID, &o.AvgFillPrice, &createdF, &updatedF,
 			&o.MarketType, &o.PositionSide, &o.Leverage, &o.MarginMode, &o.TPPrice, &o.SLPrice, &o.ClosePosition); err != nil {
 			return nil, err
 		}
@@ -154,9 +157,9 @@ func (r *OrderRepo) ListActiveByClientOIDPrefix(prefix string) ([]*OrderRecord, 
 func (r *OrderRepo) Update(o *OrderRecord) error {
 	o.UpdatedAt = time.Now().UnixMilli()
 	_, err := db.Exec(
-		`UPDATE xt_orders SET symbol=?, side=?, order_type=?, price=?, stop_price=?, quantity=?, filled=?, status=?, exchange=?, user_id=?, client_oid=?, avg_fill_price=?, market_type=?, position_side=?, leverage=?, margin_mode=?, tp_price=?, sl_price=?, close_position=? WHERE id=?`,
+		`UPDATE xt_orders SET symbol=?, side=?, order_type=?, price=?, stop_price=?, quantity=?, filled=?, status=?, exchange=?, user_id=?, client_oid=?, exchange_order_id=?, avg_fill_price=?, market_type=?, position_side=?, leverage=?, margin_mode=?, tp_price=?, sl_price=?, close_position=? WHERE id=?`,
 		o.Symbol, o.Side, o.OrderType, o.Price, o.StopPrice, o.Quantity, o.Filled, o.Status, o.Exchange, o.UserID,
-		o.ClientOID, o.AvgFillPrice, o.MarketType, o.PositionSide, o.Leverage, o.MarginMode, o.TPPrice, o.SLPrice, o.ClosePosition, o.ID,
+		o.ClientOID, o.ExchangeOrderID, o.AvgFillPrice, o.MarketType, o.PositionSide, o.Leverage, o.MarginMode, o.TPPrice, o.SLPrice, o.ClosePosition, o.ID,
 	)
 	return err
 }
@@ -179,16 +182,16 @@ func (r *OrderRepo) Upsert(o *OrderRecord) error {
 		o.Exchange = "BINANCE"
 	}
 	_, err := db.Exec(
-		`INSERT INTO xt_orders (id, symbol, side, order_type, price, stop_price, quantity, filled, status, exchange, user_id, client_oid, avg_fill_price, created_at, updated_at, market_type, position_side, leverage, margin_mode, tp_price, sl_price, close_position)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		`INSERT INTO xt_orders (id, symbol, side, order_type, price, stop_price, quantity, filled, status, exchange, user_id, client_oid, exchange_order_id, avg_fill_price, created_at, updated_at, market_type, position_side, leverage, margin_mode, tp_price, sl_price, close_position)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT(id) DO UPDATE SET symbol=excluded.symbol, side=excluded.side, order_type=excluded.order_type,
 		 price=excluded.price, stop_price=excluded.stop_price, quantity=excluded.quantity, filled=excluded.filled,
 		 status=excluded.status, exchange=excluded.exchange, user_id=excluded.user_id, client_oid=excluded.client_oid,
-		 avg_fill_price=excluded.avg_fill_price, updated_at=excluded.updated_at, market_type=excluded.market_type,
+		 exchange_order_id=excluded.exchange_order_id, avg_fill_price=excluded.avg_fill_price, updated_at=excluded.updated_at, market_type=excluded.market_type,
 		 position_side=excluded.position_side, leverage=excluded.leverage, margin_mode=excluded.margin_mode,
 		 tp_price=excluded.tp_price, sl_price=excluded.sl_price, close_position=excluded.close_position`,
 		o.ID, o.Symbol, o.Side, o.OrderType, o.Price, o.StopPrice, o.Quantity, o.Filled, o.Status, o.Exchange,
-		o.UserID, o.ClientOID, o.AvgFillPrice, o.CreatedAt, o.UpdatedAt,
+		o.UserID, o.ClientOID, o.ExchangeOrderID, o.AvgFillPrice, o.CreatedAt, o.UpdatedAt,
 		o.MarketType, o.PositionSide, o.Leverage, o.MarginMode, o.TPPrice, o.SLPrice, o.ClosePosition,
 	)
 	return err
@@ -204,7 +207,7 @@ func (r *OrderRepo) ListRecent(sinceMs int64, limit int) ([]*OrderRecord, error)
 	if limit <= 0 {
 		limit = 500
 	}
-	rows, err := db.Query(`SELECT id, symbol, side, order_type, price, stop_price, quantity, filled, status, exchange, user_id, client_oid, avg_fill_price, created_at, updated_at, market_type, position_side, leverage, margin_mode, tp_price, sl_price, close_position
+	rows, err := db.Query(`SELECT id, symbol, side, order_type, price, stop_price, quantity, filled, status, exchange, user_id, client_oid, exchange_order_id, avg_fill_price, created_at, updated_at, market_type, position_side, leverage, margin_mode, tp_price, sl_price, close_position
 		FROM xt_orders WHERE updated_at >= ? ORDER BY updated_at DESC LIMIT ?`, sinceMs, limit)
 	if err != nil {
 		return nil, err
@@ -217,7 +220,7 @@ func (r *OrderRepo) ListRecent(sinceMs int64, limit int) ([]*OrderRecord, error)
 		// 大时间戳会以科学计数法走字符串解析而失败——先收 float64 再显式转换。
 		var createdF, updatedF float64
 		if err := rows.Scan(&o.ID, &o.Symbol, &o.Side, &o.OrderType, &o.Price, &o.StopPrice, &o.Quantity, &o.Filled, &o.Status, &o.Exchange,
-			&o.UserID, &o.ClientOID, &o.AvgFillPrice, &createdF, &updatedF,
+			&o.UserID, &o.ClientOID, &o.ExchangeOrderID, &o.AvgFillPrice, &createdF, &updatedF,
 			&o.MarketType, &o.PositionSide, &o.Leverage, &o.MarginMode, &o.TPPrice, &o.SLPrice, &o.ClosePosition); err != nil {
 			return nil, err
 		}

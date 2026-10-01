@@ -38,9 +38,11 @@ type fakeQuerierAdapter struct {
 	status   OrderStatusInfo
 	statusOK bool
 	incomes  []FundingIncome
+	gotOrderID string // 最近一次查询收到的订单号（验证 exchange_order_id 优先）
 }
 
 func (f *fakeQuerierAdapter) GetOrderTrades(symbol, orderID string) ([]AccountTradeLike, error) {
+	f.gotOrderID = orderID
 	return f.trades, nil
 }
 
@@ -356,5 +358,40 @@ func TestServiceConfigUpdate(t *testing.T) {
 	svc2 := NewService(repo, func(name string) any { return nil })
 	if svc2.CurrentConfig().SlippagePct != 1.5 {
 		t.Fatalf("设置表覆盖未持久化: %+v", svc2.CurrentConfig())
+	}
+}
+
+// 交易所订单号优先：xt_orders.exchange_order_id 存在时必须用它查询
+// （本地 ord-* ID 交易所不认识）。2026-10-01 生产实测币安接受实盘单后
+// OMS 永停 NEW，根因之一是拿本地 ID 查交易所必然查不到。
+func TestFillRecoveryPrefersExchangeOrderID(t *testing.T) {
+	repo := setupTestDB(t)
+	orderRepo := store.GetOrderRepo()
+
+	ord := &store.OrderRecord{
+		ID: "ord-local-9", ExchangeOrderID: "671122224734",
+		Symbol: "BTCUSDT", Side: "BUY", OrderType: "MARKET",
+		Price: 0, Quantity: 0.00011, Filled: 0, Status: "NEW",
+		Exchange: "binance", UserID: 1, CreatedAt: 1, UpdatedAt: 1,
+	}
+	if err := orderRepo.Create(ord); err != nil {
+		t.Fatalf("create order: %v", err)
+	}
+
+	fake := &fakeQuerierAdapter{
+		status:   OrderStatusInfo{Status: "FILLED", FilledQty: 0.00011, AvgPrice: 83475.9},
+		statusOK: true,
+	}
+	fr := NewFillRecoverer(repo, func(name string) any { return fake })
+
+	if _, err := fr.Run(); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if fake.gotOrderID != "671122224734" {
+		t.Fatalf("应以 exchange_order_id 查询交易所, got=%q", fake.gotOrderID)
+	}
+	got, _ := orderRepo.GetByID("ord-local-9")
+	if got.Status != "FILLED" || got.Filled != 0.00011 || got.AvgFillPrice != 83475.9 {
+		t.Fatalf("订单状态未推进: %+v", got)
 	}
 }

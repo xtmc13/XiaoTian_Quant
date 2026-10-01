@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/xiaotian-quant/gateway/internal/config"
+	"github.com/xiaotian-quant/gateway/internal/reconcile"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
@@ -1029,25 +1030,25 @@ func (a *IBKRAdapter) GetTrades() ([]map[string]any, error) {
 }
 
 // GetOrderTrades 指定订单的成交明细（/iserver/account/trades 按 order_ref 过滤）。
-// 签名与 adapter 层惯例对齐（同 binance_reconcile.go），供对账窄接口使用。
-func (a *IBKRAdapter) GetOrderTrades(symbol, orderID string) ([]AccountTrade, error) {
+// 返回 reconcile.AccountTradeLike（窄接口契约，同 binance_reconcile.go）。
+func (a *IBKRAdapter) GetOrderTrades(symbol, orderID string) ([]reconcile.AccountTradeLike, error) {
 	all, err := a.GetTrades()
 	if err != nil {
 		return nil, err
 	}
-	out := make([]AccountTrade, 0, len(all))
+	out := make([]reconcile.AccountTradeLike, 0, len(all))
 	for _, t := range all {
 		if !strings.EqualFold(getString(t, "order_id", ""), orderID) {
 			continue
 		}
-		out = append(out, AccountTrade{
-			ID:       getString(t, "trade_id", ""),
-			OrderID:  orderID,
-			Symbol:   getString(t, "symbol", symbol),
-			Side:     getString(t, "side", ""),
-			Price:    parseFloatSafe(t["price"]),
-			Quantity: parseFloatSafe(t["qty"]),
-			Time:     int64Of(t["time"]),
+		out = append(out, reconcile.AccountTradeLike{
+			TradeID:   getString(t, "trade_id", ""),
+			OrderID:   orderID,
+			Symbol:    getString(t, "symbol", symbol),
+			Side:      getString(t, "side", ""),
+			Price:     parseFloatSafe(t["price"]),
+			Quantity:  parseFloatSafe(t["qty"]),
+			Timestamp: int64Of(t["time"]),
 		})
 	}
 	return out, nil
@@ -1055,13 +1056,13 @@ func (a *IBKRAdapter) GetOrderTrades(symbol, orderID string) ([]AccountTrade, er
 
 // QueryOrderStatus 订单状态查询：GET /iserver/account/order/status/{orderId}。
 // 返回归一化状态（NEW/PARTIALLY_FILLED/FILLED/CANCELLED/EXPIRED）。
-func (a *IBKRAdapter) QueryOrderStatus(symbol, orderID string) (OrderStatusInfo, error) {
+func (a *IBKRAdapter) QueryOrderStatus(symbol, orderID string) (reconcile.OrderStatusInfo, error) {
 	if err := a.ensureAuth(); err != nil {
-		return OrderStatusInfo{}, err
+		return reconcile.OrderStatusInfo{}, err
 	}
 	raw, err := a.api("GET", "/iserver/account/order/status/"+url.PathEscape(orderID), nil, nil, true)
 	if err != nil {
-		return OrderStatusInfo{}, err
+		return reconcile.OrderStatusInfo{}, err
 	}
 	var r struct {
 		OrderID   string `json:"order_id"`
@@ -1072,17 +1073,17 @@ func (a *IBKRAdapter) QueryOrderStatus(symbol, orderID string) (OrderStatusInfo,
 		Error     string `json:"error"`
 	}
 	if err := json.Unmarshal(raw, &r); err != nil {
-		return OrderStatusInfo{}, fmt.Errorf("ibkr parse order status: %w", err)
+		return reconcile.OrderStatusInfo{}, fmt.Errorf("ibkr parse order status: %w", err)
 	}
 	if r.Error != "" {
-		return OrderStatusInfo{}, fmt.Errorf("ibkr order status: %s", r.Error)
+		return reconcile.OrderStatusInfo{}, fmt.Errorf("ibkr order status: %s", r.Error)
 	}
 	status := ibkrStatusNormalize(r.Status)
 	filled := parseQty(r.FilledQty)
 	if status == "NEW" && filled > 0 {
 		status = "PARTIALLY_FILLED"
 	}
-	return OrderStatusInfo{
+	return reconcile.OrderStatusInfo{
 		Status:    status,
 		FilledQty: filled,
 		AvgPrice:  parseQty(r.AvgPrice),

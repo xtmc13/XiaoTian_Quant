@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/xiaotian-quant/gateway/internal/reconcile"
 )
 
 // A8 对账体系所需的 Binance 查询接口：订单状态/订单成交明细/资金费流水。
@@ -20,13 +22,17 @@ func (b *BinanceAdapter) futuresRawRequest(method, path string, params url.Value
 	params.Set("recvWindow", "5000")
 	params.Set("signature", b.sign(params))
 
-	u, _ := url.Parse(BinanceFuturesRestURL + path)
+	// fapiBaseURL() 读取 BINANCE_FAPI_URL env（测试注入 mock）与 testnet 开关，
+	// 与 fetchExchangeInfo 等路径统一；旧实现直引包级常量导致 reconcile
+	// 的合约查询在测试/测试网里永远打到正式网。
+	base := b.fapiBaseURL()
+	u, _ := url.Parse(base + path)
 	u.RawQuery = params.Encode()
 
 	var body io.Reader
 	reqURL := u.String()
 	if method != "GET" && method != "DELETE" {
-		reqURL = BinanceFuturesRestURL + path
+		reqURL = base + path
 		body = strings.NewReader(params.Encode())
 	}
 	req, err := http.NewRequest(method, reqURL, body)
@@ -61,29 +67,26 @@ func truncateStr(s string, n int) string {
 }
 
 // ── Order Status Query（A8.2 成交恢复）──
-
-// OrderStatusInfo 单个订单的最新状态。
-type OrderStatusInfo struct {
-	Status    string  // NEW|PARTIALLY_FILLED|FILLED|CANCELED|REJECTED|EXPIRED
-	FilledQty float64 // 累计成交量
-	AvgPrice  float64 // 累计成交均价（futures 直接给，spot 用成交额/成交量算）
-}
+//
+// 返回类型必须用 reconcile 包的 OrderStatusInfo / AccountTradeLike：
+// reconcile 通过窄接口（OrderStatusQuerier/OrderTradesQuerier）做类型断言，
+// 用 adapter 私有类型会导致断言永远失败（"未实现订单查询接口"）。
 
 // QueryOrderStatus 查询订单最新状态：U 本位合约优先，现货兜底。
-func (b *BinanceAdapter) QueryOrderStatus(symbol, orderID string) (OrderStatusInfo, error) {
+func (b *BinanceAdapter) QueryOrderStatus(symbol, orderID string) (reconcile.OrderStatusInfo, error) {
 	if info, err := b.futuresOrderStatus(symbol, orderID); err == nil {
 		return info, nil
 	}
 	return b.spotOrderStatus(symbol, orderID)
 }
 
-func (b *BinanceAdapter) futuresOrderStatus(symbol, orderID string) (OrderStatusInfo, error) {
+func (b *BinanceAdapter) futuresOrderStatus(symbol, orderID string) (reconcile.OrderStatusInfo, error) {
 	params := url.Values{}
 	params.Set("symbol", symbol)
 	params.Set("orderId", orderID)
 	raw, err := b.futuresRawRequest("GET", "/fapi/v1/order", params)
 	if err != nil {
-		return OrderStatusInfo{}, err
+		return reconcile.OrderStatusInfo{}, err
 	}
 	var r struct {
 		Status      string `json:"status"`
@@ -91,19 +94,19 @@ func (b *BinanceAdapter) futuresOrderStatus(symbol, orderID string) (OrderStatus
 		AvgPrice    string `json:"avgPrice"`
 	}
 	if err := json.Unmarshal(raw, &r); err != nil {
-		return OrderStatusInfo{}, fmt.Errorf("parse futures order: %w", err)
+		return reconcile.OrderStatusInfo{}, fmt.Errorf("parse futures order: %w", err)
 	}
 	if r.Status == "" {
-		return OrderStatusInfo{}, fmt.Errorf("empty futures order status")
+		return reconcile.OrderStatusInfo{}, fmt.Errorf("empty futures order status")
 	}
-	return OrderStatusInfo{
+	return reconcile.OrderStatusInfo{
 		Status:    r.Status,
 		FilledQty: parseQty(r.ExecutedQty),
 		AvgPrice:  parseQty(r.AvgPrice),
 	}, nil
 }
 
-func (b *BinanceAdapter) spotOrderStatus(symbol, orderID string) (OrderStatusInfo, error) {
+func (b *BinanceAdapter) spotOrderStatus(symbol, orderID string) (reconcile.OrderStatusInfo, error) {
 	params := url.Values{}
 	params.Set("symbol", symbol)
 	params.Set("orderId", orderID)
@@ -111,21 +114,21 @@ func (b *BinanceAdapter) spotOrderStatus(symbol, orderID string) (OrderStatusInf
 	params.Set("recvWindow", "5000")
 	params.Set("signature", b.sign(params))
 
-	u, _ := url.Parse(b.baseURL() + "/api/v3/order")
+	u, _ := url.Parse(b.baseURL() + "/order") // baseURL 已含 /api/v3 前缀，勿重复
 	u.RawQuery = params.Encode()
 	req, err := http.NewRequest("GET", u.String(), nil)
 	if err != nil {
-		return OrderStatusInfo{}, err
+		return reconcile.OrderStatusInfo{}, err
 	}
 	req.Header.Set("X-MBX-APIKEY", b.apiKey)
 	resp, err := b.httpClient.Do(req)
 	if err != nil {
-		return OrderStatusInfo{}, err
+		return reconcile.OrderStatusInfo{}, err
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode != http.StatusOK {
-		return OrderStatusInfo{}, fmt.Errorf("binance spot order status: status %d: %s", resp.StatusCode, truncateStr(string(raw), 200))
+		return reconcile.OrderStatusInfo{}, fmt.Errorf("binance spot order status: status %d: %s", resp.StatusCode, truncateStr(string(raw), 200))
 	}
 	var r struct {
 		Status              string `json:"status"`
@@ -133,9 +136,9 @@ func (b *BinanceAdapter) spotOrderStatus(symbol, orderID string) (OrderStatusInf
 		CummulativeQuoteQty string `json:"cummulativeQuoteQty"`
 	}
 	if err := json.Unmarshal(raw, &r); err != nil {
-		return OrderStatusInfo{}, fmt.Errorf("parse spot order: %w", err)
+		return reconcile.OrderStatusInfo{}, fmt.Errorf("parse spot order: %w", err)
 	}
-	info := OrderStatusInfo{Status: r.Status, FilledQty: parseQty(r.ExecutedQty)}
+	info := reconcile.OrderStatusInfo{Status: r.Status, FilledQty: parseQty(r.ExecutedQty)}
 	if info.FilledQty > 0 {
 		info.AvgPrice = parseQty(r.CummulativeQuoteQty) / info.FilledQty
 	}
@@ -151,7 +154,8 @@ func parseQty(s string) float64 {
 
 // GetOrderTrades 拉取指定订单的成交明细：合约 userTrades(orderId) 优先，现货 myTrades 兜底。
 // Binance 各字段数字/字符串混排，统一走 json.Number 宽松解析。
-func (b *BinanceAdapter) GetOrderTrades(symbol, orderID string) ([]AccountTrade, error) {
+// 出参映射为 reconcile.AccountTradeLike（窄接口契约）。
+func (b *BinanceAdapter) GetOrderTrades(symbol, orderID string) ([]reconcile.AccountTradeLike, error) {
 	params := url.Values{}
 	params.Set("symbol", symbol)
 	params.Set("orderId", orderID)
@@ -159,11 +163,11 @@ func (b *BinanceAdapter) GetOrderTrades(symbol, orderID string) ([]AccountTrade,
 	raw, err := b.futuresRawRequest("GET", "/fapi/v1/userTrades", params)
 	if err == nil {
 		if trades := parseAccountTrades(raw, orderID); len(trades) > 0 {
-			return trades, nil
+			return accountTradesToLike(trades), nil
 		}
 	}
 	// 现货兜底
-	sp, err := url.Parse(b.baseURL() + "/api/v3/myTrades")
+	sp, err := url.Parse(b.baseURL() + "/myTrades") // 同上
 	if err != nil {
 		return nil, err
 	}
@@ -189,7 +193,26 @@ func (b *BinanceAdapter) GetOrderTrades(symbol, orderID string) ([]AccountTrade,
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("binance myTrades: status %d: %s", resp.StatusCode, truncateStr(string(body), 200))
 	}
-	return parseAccountTrades(body, orderID), nil
+	return accountTradesToLike(parseAccountTrades(body, orderID)), nil
+}
+
+// accountTradesToLike adapter.AccountTrade → reconcile.AccountTradeLike（字段名对齐）。
+func accountTradesToLike(trades []AccountTrade) []reconcile.AccountTradeLike {
+	out := make([]reconcile.AccountTradeLike, 0, len(trades))
+	for _, t := range trades {
+		out = append(out, reconcile.AccountTradeLike{
+			TradeID:   t.ID,
+			OrderID:   t.OrderID,
+			Symbol:    t.Symbol,
+			Side:      t.Side,
+			Price:     t.Price,
+			Quantity:  t.Quantity,
+			Fee:       t.Commission,
+			FeeAsset:  t.CommissionAsset,
+			Timestamp: t.Time,
+		})
+	}
+	return out
 }
 
 // parseAccountTrades 宽松解析 userTrades/myTrades 响应（字段可能是数字或字符串）。

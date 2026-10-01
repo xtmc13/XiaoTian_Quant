@@ -225,6 +225,11 @@ func (om *OrderManager) PlaceOrder(req *Request) (*model.OrderData, error) {
 		if id, ok := result["order_id"].(string); ok {
 			order.ID = id
 		}
+		// 交易所侧订单号（成交恢复/reconcile 查询用）：float64 兼容，
+		// 由 finalizeLiveSubmitResult 规整为字符串放入 exchange_order_id。
+		if exID, ok := result["exchange_order_id"].(string); ok {
+			order.ExchangeOrderID = exID
+		}
 		if status, ok := result["status"].(string); ok {
 			order.Status = model.OrderStatus(status)
 		}
@@ -462,6 +467,7 @@ func (om *OrderManager) storeOrder(order *model.OrderData) {
 		Exchange:      copy_.Exchange,
 		UserID:        copy_.UserID,
 		ClientOID:     copy_.ClientOID,
+		ExchangeOrderID: copy_.ExchangeOrderID,
 		AvgFillPrice:  copy_.AvgFillPrice,
 		CreatedAt:     copy_.CreatedAt,
 		UpdatedAt:     copy_.UpdatedAt,

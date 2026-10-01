@@ -403,7 +403,7 @@ func TestIBKRGetTrades(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetOrderTrades: %v", err)
 	}
-	if len(ot) != 1 || ot[0].ID != "0000e0d5.def" || ot[0].Side != "SELL" || ot[0].Price != 195.0 {
+	if len(ot) != 1 || ot[0].TradeID != "0000e0d5.def" || ot[0].Side != "SELL" || ot[0].Price != 195.0 {
 		t.Fatalf("order trades = %+v", ot)
 	}
 }

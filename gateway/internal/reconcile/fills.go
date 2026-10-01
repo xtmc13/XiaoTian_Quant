@@ -168,17 +168,23 @@ func (r *FillRecoverer) recoverOne(o *store.OrderRecord) (int, bool, error) {
 		return 0, false, fmt.Errorf("交易所 %s 未实现订单查询接口", o.Exchange)
 	}
 
+	// 交易所侧订单号优先（本地 ord-* ID 交易所不认识）；无映射时退回本地 ID。
+	qid := o.ExchangeOrderID
+	if qid == "" {
+		qid = o.ID
+	}
+
 	// 1) 成交明细补录（按交易所 trade id 幂等）。
 	newTrades := 0
 	var recoveredQty, recoveredCost float64
 	tradeRepo := store.NewTradeRepo()
 	if okTrade {
-		trades, err := tradeQ.GetOrderTrades(o.Symbol, o.ID)
+		trades, err := tradeQ.GetOrderTrades(o.Symbol, qid)
 		if err != nil {
 			return 0, false, fmt.Errorf("query trades: %w", err)
 		}
 		for _, t := range trades {
-			if !strings.EqualFold(t.OrderID, o.ID) {
+			if !strings.EqualFold(t.OrderID, qid) && !strings.EqualFold(t.OrderID, o.ID) {
 				continue
 			}
 			tradeID := fmt.Sprintf("%s:%s", strings.ToLower(o.Exchange), t.TradeID)
@@ -230,7 +236,7 @@ func (r *FillRecoverer) recoverOne(o *store.OrderRecord) (int, bool, error) {
 	if !okStatus {
 		return newTrades, false, nil
 	}
-	info, err := statusQ.QueryOrderStatus(o.Symbol, o.ID)
+	info, err := statusQ.QueryOrderStatus(o.Symbol, qid)
 	if err != nil {
 		// 订单在交易所查不到（可能已撤/已完结被清理）：不强行推进，下轮再看。
 		return newTrades, false, fmt.Errorf("query status: %w", err)

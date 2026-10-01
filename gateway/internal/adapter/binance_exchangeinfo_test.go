@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/xiaotian-quant/gateway/internal/reconcile"
 )
 
 /* ── 合约/现货 exchangeInfo + 下单的 mock 交易所 ───────────── */
@@ -27,6 +29,9 @@ type binanceOrderTestEnv struct {
 	futOrderHits         atomic.Int32
 	spotOrderHits        atomic.Int32
 	failExchangeInfo     atomic.Bool
+	spotOrderStatusJSON  string // GET /api/v3/order 响应（默认 FILLED 变体）
+	futOrderStatusJSON   string // GET /fapi/v1/order 响应（默认空 → 400 → 现货兜底）
+	spotMyTradesJSON     string // GET /api/v3/myTrades 响应（默认空数组）
 
 	mu       sync.Mutex
 	lastForm url.Values
@@ -107,11 +112,28 @@ func newBinanceOrderTestEnv(t *testing.T) *binanceOrderTestEnv {
 		writeJSON(w, spotExchangeInfoFixture)
 	})
 	mux.HandleFunc("/fapi/v1/order", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			writeJSON(w, env.futOrderStatusJSON) // 默认 "" → 让 futuresRawRequest 报非 200 → 现货兜底
+			return
+		}
 		recordOrder(w, r, &env.futOrderHits)
 	})
 	mux.HandleFunc("/api/v3/order", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			writeJSON(w, env.spotOrderStatusJSON)
+			return
+		}
 		recordOrder(w, r, &env.spotOrderHits)
 	})
+	mux.HandleFunc("/fapi/v1/userTrades", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, `[]`) // 默认无合约成交 → 现货 myTrades 兜底
+	})
+	mux.HandleFunc("/api/v3/myTrades", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, env.spotMyTradesJSON)
+	})
+
+	env.spotOrderStatusJSON = `{"status":"FILLED","executedQty":"0.00011000","cummulativeQuoteQty":"9.18235"}`
+	env.spotMyTradesJSON = `[]`
 
 	env.srv = httptest.NewServer(mux)
 	t.Cleanup(env.srv.Close)
@@ -412,4 +434,71 @@ func TestPlaceFuturesOrderZeroLotSizeStepUnconstrained(t *testing.T) {
 	form := env.form()
 	btAssertEq(t, form.Get("quantity"), "123.456789", "qty passes through unconstrained")
 	btAssertEq(t, form.Get("price"), "0.12346", "price still rounded to tick 0.00001")
+}
+
+/* ── 成交恢复窄接口（A8.2）：类型契约与现货/合约双路径 ──
+ * 2026-10-01 生产事故：以下两个方法此前返回 adapter 私有类型，
+ * reconcile 的类型断言永远失败 → 实盘订单 OMS 永停 NEW、
+ * 成交恢复每轮刷"交易所 binance 未实现订单查询接口"。
+ */
+
+// 编译期断言：BinanceAdapter 满足 reconcile 的成交恢复窄接口。
+var _ reconcile.OrderStatusQuerier = (*BinanceAdapter)(nil)
+var _ reconcile.OrderTradesQuerier = (*BinanceAdapter)(nil)
+
+// 现货兜底路径：合约查单失败 → GET /api/v3/order；
+// avgPrice 由 cummulativeQuoteQty/executedQty 推算。
+func TestBinanceQueryOrderStatusSpotFallback(t *testing.T) {
+	newBinanceOrderTestEnv(t) // 默认 futures 查单失败 → 现货兜底
+	b := newTestBinanceAdapter()
+
+	info, err := b.QueryOrderStatus("BTCUSDT", "671122224734")
+	btAssert(t, err == nil, "spot status query ok")
+	btAssertEq(t, info.Status, "FILLED", "status passthrough")
+	btAssert(t, abs(info.FilledQty-0.00011) < 1e-9, "executedQty parsed")
+	// 9.18235 / 0.00011 = 83475.90909...
+	btAssert(t, abs(info.AvgPrice-83475.9090909091) < 0.01, "avgPrice = quoteQty/qty")
+}
+
+// 合约优先路径：GET /fapi/v1/order 命中时直接用交易所 avgPrice。
+func TestBinanceQueryOrderStatusFuturesWins(t *testing.T) {
+	env := newBinanceOrderTestEnv(t)
+	env.futOrderStatusJSON = `{"status":"FILLED","executedQty":"0.500","avgPrice":"50000.50"}`
+	b := newTestBinanceAdapter()
+
+	info, err := b.QueryOrderStatus("BTCUSDT", "671122224734")
+	btAssert(t, err == nil, "futures status query ok")
+	btAssertEq(t, info.Status, "FILLED", "status")
+	btAssert(t, abs(info.FilledQty-0.5) < 1e-9, "executedQty")
+	btAssert(t, abs(info.AvgPrice-50000.5) < 0.001, "futures avgPrice direct")
+}
+
+// 成交明细：合约 userTrades 空 → 现货 myTrades 兜底；
+// AccountTrade → reconcile.AccountTradeLike 字段映射（Fee/FeeAsset/Timestamp）。
+func TestBinanceGetOrderTradesMapsToAccountTradeLike(t *testing.T) {
+	env := newBinanceOrderTestEnv(t)
+	env.spotMyTradesJSON = `[{"id":1001,"orderId":671122224734,"symbol":"BTCUSDT","isBuyer":true,
+		"price":"83475.90000000","qty":"0.00011000","quoteQty":"9.18235000",
+		"commission":"0.00000011","commissionAsset":"BTC","time":1790000000000}]`
+	b := newTestBinanceAdapter()
+
+	trades, err := b.GetOrderTrades("BTCUSDT", "671122224734")
+	btAssert(t, err == nil, "trades query ok")
+	btAssertEq(t, len(trades), 1, "one trade")
+	t0 := trades[0]
+	btAssertEq(t, t0.TradeID, "1001", "trade id")
+	btAssertEq(t, t0.OrderID, "671122224734", "exchange order id")
+	btAssertEq(t, t0.Side, "BUY", "isBuyer → BUY")
+	btAssert(t, abs(t0.Price-83475.9) < 0.001, "price")
+	btAssert(t, abs(t0.Quantity-0.00011) < 1e-9, "qty")
+	btAssert(t, abs(t0.Fee-1.1e-7) < 1e-12, "fee ← commission")
+	btAssertEq(t, t0.FeeAsset, "BTC", "fee asset ← commissionAsset")
+	btAssertEq(t, t0.Timestamp, int64(1790000000000), "timestamp ← time")
+}
+
+func abs(f float64) float64 {
+	if f < 0 {
+		return -f
+	}
+	return f
 }
