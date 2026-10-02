@@ -810,6 +810,8 @@ func registerAgentRoutes(api *gin.RouterGroup) {
 		agent.POST("/qq/pair-code", handler.AgentQqPairCode)
 		agent.POST("/qq/unlink", handler.AgentQqUnlink)
 		agent.POST("/qq/url-link", handler.AgentQqUrlLink)
+		agent.POST("/qq/connector/qr", handler.AgentQqConnectorQr)
+		agent.GET("/qq/connector/status", handler.AgentQqConnectorStatus)
 		agent.GET("/weixin/status", handler.AgentWeixinStatus)
 		agent.POST("/weixin/qrcode", handler.AgentWeixinQrcode)
 		agent.GET("/weixin/qrcode-status", handler.AgentWeixinQrcodeStatus)

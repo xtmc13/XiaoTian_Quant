@@ -123,6 +123,22 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  qqbot-connector:
+    build:
+      context: ./qqbot-connector
+    container_name: xiaotian-qqbot-connector
+    environment:
+      - PORT=8787
+      - DATA_DIR=/data
+      # 扫码页「第三方机器人」展示名（留空用 SDK 默认）
+      - QQ_CONNECTOR_SOURCE=${QQ_CONNECTOR_SOURCE:-}
+    volumes:
+      # 与 gateway 共享数据卷：凭据落盘持久化，重建容器不丢
+      - gateway_data:/data
+    restart: unless-stopped
+    networks:
+      - xiaotian
+
 volumes:
   gateway_data:
   redis_data:

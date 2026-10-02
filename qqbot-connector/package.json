@@ -1,0 +1,18 @@
+{
+  "name": "xiaotian-qqbot-connector",
+  "version": "1.0.0",
+  "description": "QQ bot QR-connect sidecar for XiaoTian gateway",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@tencent-connect/qqbot-connector": "^1.2.0",
+    "express": "^5.2.1"
+  },
+  "private": true,
+  "type": "module"
+}

@@ -54,12 +54,114 @@ type RunRequest struct {
 // Executor 支持 ctx 中断（/stop）的执行器（main 注入 headless runner）。
 type Executor func(ctx context.Context, req *RunRequest) (string, error)
 
-// credentials 解析 QQ 开放平台凭据（环境变量）。
-func credentials() (appID, appSecret string) {
-	return strings.TrimSpace(os.Getenv("QQ_APP_ID")), strings.TrimSpace(os.Getenv("QQ_APP_SECRET"))
+// credentials 解析 QQ 开放平台凭据：环境变量优先，其次扫码连接器（sidecar）。
+// 连接器模式：QQ_CONNECTOR_URL（默认 http://qqbot-connector:8787）提供
+// /credentials；用户手机 QQ 扫码绑定后 sidecar 持久化凭据，网关自动接管。
+var (
+	connectorCredsMu sync.RWMutex
+	connectorCreds   = map[string]string{} // app_id → app_secret（由 EnsureConnectorCredentials 填充）
+)
+
+// ConnectorBase 扫码连接器地址（测试可注入覆盖）。
+var ConnectorBase = func() string {
+	if v := strings.TrimSpace(os.Getenv("QQ_CONNECTOR_URL")); v != "" {
+		return strings.TrimSuffix(v, "/")
+	}
+	return "http://qqbot-connector:8787"
 }
 
-// Configured 应用凭据是否已配置（未配置 = 通道惰性：status configured=false，WS 不启动）。
+// credentials 解析 QQ 开放平台凭据（环境变量 > 扫码连接器）。
+func credentials() (appID, appSecret string) {
+	if id, secret := strings.TrimSpace(os.Getenv("QQ_APP_ID")), strings.TrimSpace(os.Getenv("QQ_APP_SECRET")); id != "" && secret != "" {
+		return id, secret
+	}
+	connectorCredsMu.RLock()
+	defer connectorCredsMu.RUnlock()
+	for id, secret := range connectorCreds {
+		if id != "" && secret != "" {
+			return id, secret
+		}
+	}
+	return "", ""
+}
+
+// EnsureConnectorCredentials 从扫码连接器拉取已绑定凭据（幂等；sidecar 未就绪/未绑定返回 false）。
+// 由 builtin 启动流程与 connector 扫码成功回调调用。
+func EnsureConnectorCredentials() bool {
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(ConnectorBase() + "/credentials")
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	var out struct {
+		AppID     string `json:"app_id"`
+		AppSecret string `json:"app_secret"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || out.AppID == "" || out.AppSecret == "" {
+		return false
+	}
+	SetConnectorCredentials(out.AppID, out.AppSecret)
+	return true
+}
+
+// SetConnectorCredentials 注入扫码连接器凭据（connector 扫码成功回调 / 启动拉取）。
+func SetConnectorCredentials(appID, appSecret string) {
+	connectorCredsMu.Lock()
+	defer connectorCredsMu.Unlock()
+	connectorCreds = map[string]string{appID: appSecret}
+}
+
+// ConnectorQRStart 通知连接器开始/复用扫码会话，返回二维码落地页 URL。
+func ConnectorQRStart(restart bool) (string, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	ep := ConnectorBase() + "/qr/start"
+	if restart {
+		ep = ConnectorBase() + "/qr/restart"
+	}
+	resp, err := client.Post(ep, "application/json", nil)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	var out struct {
+		QRURL string `json:"qr_url"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", err
+	}
+	return out.QRURL, nil
+}
+
+// ConnectorQRStatus 查询连接器扫码进展：state ∈ idle/waiting/success/error。
+// success 时同时注入凭据并返回 appID。
+func ConnectorQRStatus() (state, qrURL, appID, errMsg string) {
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(ConnectorBase() + "/qr/status")
+	if err != nil {
+		return "error", "", "", err.Error()
+	}
+	defer resp.Body.Close()
+	var out struct {
+		State    string `json:"state"`
+		QRURL    string `json:"qr_url"`
+		AppID    string `json:"app_id"`
+		AppSecret string `json:"app_secret"`
+		Error    string `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "error", "", "", err.Error()
+	}
+	if out.State == "success" && out.AppID != "" && out.AppSecret != "" {
+		SetConnectorCredentials(out.AppID, out.AppSecret)
+	}
+	return out.State, out.QRURL, out.AppID, out.Error
+}
+
+// Configured 应用凭据是否已配置（env 或扫码连接器；未配置 = 通道惰性）。
 func Configured() bool {
 	id, secret := credentials()
 	return id != "" && secret != ""

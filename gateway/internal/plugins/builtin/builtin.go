@@ -4,6 +4,7 @@ package builtin
 import (
 	"os"
 	"sync"
+	"time"
 
 	"github.com/xiaotian-quant/gateway/internal/agentcron"
 	"github.com/xiaotian-quant/gateway/internal/agentdingtalk"
@@ -232,10 +233,22 @@ func WeixinBot() *agentweixin.Bot {
 }
 
 // SetQqExecutor 注入 QQ 入站执行器（ctx 中断 / 会话绑定 / 模型覆盖）并启动 WSS 循环。
+// 凭据未配置时进入等待：轮询扫码连接器（sidecar），用户手机 QQ 扫码绑定后自动接管启动。
 func SetQqExecutor(exec agentqq.Executor) {
 	once.Do(build)
 	qqBot.SetExecutor(exec)
-	qqBot.Start()
+	if agentqq.Configured() {
+		qqBot.Start()
+		return
+	}
+	go func() {
+		for range time.Tick(10 * time.Second) {
+			if agentqq.Configured() || agentqq.EnsureConnectorCredentials() {
+				qqBot.Start()
+				return
+			}
+		}
+	}()
 }
 
 // SetWecomExecutor 注入企业微信入站执行器（ctx 中断 / 会话绑定 / 模型覆盖）。

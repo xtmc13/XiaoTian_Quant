@@ -25,6 +25,18 @@ export function QqPanel({ onClose, bare }: PlatformLinkPanelProps) {
           </>
         ),
         pairInstructions: <>扫码添加机器人（或搜索机器人名称），然后在 QQ 私聊中把配对码发送给它完成绑定：</>,
+        connectorQr: {
+          start: (restart) => agentQqApi.connectorQr(restart),
+          status: () => agentQqApi.connectorStatus(),
+          description: (
+            <>
+              还没配置 QQ 机器人？用手机 QQ 扫下方二维码一键接入：扫码确认后自动创建/绑定机器人并获取凭据，
+              无需手动申请 AppID/AppSecret、无需配置 IP 白名单。
+            </>
+          ),
+          waitingHint: '等待手机 QQ 扫码确认…',
+          successHint: '扫码绑定成功，凭据已自动注入网关，可以继续下面的配对绑定。',
+        },
         qrLink: {
           fetchUrl: () => agentQqApi.urlLink(),
           buttonLabel: '生成「添加机器人」二维码',

@@ -3198,6 +3198,13 @@ export const agentQqApi = {
   pairCode: () => api.post<{ code: string; expires_in: number }>('/agent/qq/pair-code', {}),
   unlink: () => api.post<{ success: boolean }>('/agent/qq/unlink', {}),
   urlLink: () => api.post<{ url: string }>('/agent/qq/url-link', {}),
+  // 扫码连接（官方 qqbot-connector：手机 QQ 扫码一键获取 AppID/AppSecret）
+  connectorQr: (restart = false) =>
+    api.post<{ qr_url: string }>('/agent/qq/connector/qr', { restart }),
+  connectorStatus: () =>
+    api.get<{ state: string; qr_url?: string; app_id?: string; error?: string }>(
+      '/agent/qq/connector/status',
+    ),
 }
 
 // ── 企业微信通道（wecom 插件；绑定 id 为 staff_id） ──

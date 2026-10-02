@@ -31,6 +31,15 @@ export interface PlatformLinkConfig<S> {
     buttonLabel: string
     hint: React.ReactNode
   }
+  /** 「扫码连接」官方连接器（如 QQ qqbot-connector）：未配置时替代 env 提示，
+   *  手机扫码一键获取凭据，成功后自动 invalidate 进入配对流程 */
+  connectorQr?: {
+    start: (restart: boolean) => Promise<{ qr_url: string }>
+    status: () => Promise<{ state: string; qr_url?: string; app_id?: string; error?: string }>
+    description: React.ReactNode
+    waitingHint: string
+    successHint: string
+  }
 }
 
 export interface PlatformLinkPanelProps {
@@ -58,6 +67,11 @@ export function PlatformLinkPanel<S>({
   const [confirmUnlink, setConfirmUnlink] = useState(false)
   const [qrUrl, setQrUrl] = useState<string | null>(null)
   const [qrLoading, setQrLoading] = useState(false)
+  // 扫码连接（connectorQr）：state ∈ idle/waiting/success/error
+  const [connQr, setConnQr] = useState<string | null>(null)
+  const [connState, setConnState] = useState<'idle' | 'waiting' | 'success' | 'error'>('idle')
+  const [connErr, setConnErr] = useState('')
+  const [connLoading, setConnLoading] = useState(false)
 
   const loadQr = async () => {
     if (!config.qrLink) return
@@ -71,6 +85,46 @@ export function PlatformLinkPanel<S>({
       setQrLoading(false)
     }
   }
+
+  // 启动扫码连接会话并开始轮询进展
+  const startConnector = async (restart: boolean) => {
+    if (!config.connectorQr) return
+    setConnLoading(true)
+    setConnErr('')
+    try {
+      const res = await config.connectorQr.start(restart)
+      if (res.qr_url) setConnQr(res.qr_url)
+      setConnState('waiting')
+    } catch (e) {
+      setConnState('error')
+      setConnErr(e instanceof Error ? e.message : '连接器不可用')
+    } finally {
+      setConnLoading(false)
+    }
+  }
+
+  // 扫码连接进展轮询：3s 间隔，直到 success/error
+  useEffect(() => {
+    const cq = config.connectorQr
+    if (connState !== 'waiting' || !cq) return
+    const t = setInterval(async () => {
+      try {
+        const s = await cq.status()
+        if (s.qr_url) setConnQr(s.qr_url)
+        if (s.state === 'success') {
+          setConnState('success')
+          invalidate()
+        } else if (s.state === 'error') {
+          setConnState('error')
+          setConnErr(s.error || '扫码绑定失败')
+        }
+      } catch {
+        /* 单次轮询失败忽略，下轮重试 */
+      }
+    }, 3000)
+    return () => clearInterval(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connState])
 
   // Esc 关闭
   useEffect(() => {
@@ -183,9 +237,46 @@ export function PlatformLinkPanel<S>({
 
         <div className="space-y-3 px-4 py-4">
           {/* 配置态 */}
-          {!configured && (
+          {!configured && !config.connectorQr && (
             <div className="rounded-xl border border-[var(--ag-amber)]/30 bg-[var(--ag-amber)]/6 px-3 py-2.5 text-[12px] leading-relaxed text-[var(--ag-text2)]">
               {config.notConfiguredHint}
+            </div>
+          )}
+
+          {/* 扫码连接（官方连接器，未配置时替代 env 提示） */}
+          {!configured && config.connectorQr && (
+            <div className="flex flex-col items-center gap-2 rounded-xl border border-[var(--ag-stroke3)] bg-[var(--ag-sidebar)]/60 px-3 py-3">
+              <p className="self-start text-[12px] leading-relaxed text-[var(--ag-text2)]">
+                {config.connectorQr.description}
+              </p>
+              {connState === 'waiting' && connQr ? (
+                <>
+                  <QRCodeSVG value={connQr} size={160} />
+                  <p className="text-[11px] text-[var(--ag-text3)]">{config.connectorQr.waitingHint}</p>
+                </>
+              ) : connState === 'success' ? (
+                <div className="flex items-center gap-1.5 self-start rounded-lg border border-[var(--ag-green)]/30 bg-[var(--ag-green)]/8 px-2.5 py-1.5 text-[12px] text-[var(--ag-green)]">
+                  <Check size={13} />
+                  {config.connectorQr.successHint}
+                </div>
+              ) : (
+                <>
+                  {connState === 'error' && (
+                    <p className="self-start text-[11px] text-[var(--ag-red)]">
+                      {connErr || '扫码绑定失败'}，可重试。
+                    </p>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => startConnector(connState === 'error')}
+                    disabled={connLoading}
+                    className="flex items-center gap-1.5 self-start rounded-md bg-[var(--ag-text1)] px-3 py-1.5 text-[12px] font-medium text-[var(--ag-bg)] hover:opacity-85 disabled:opacity-50"
+                  >
+                    <QrCode size={13} />
+                    {connLoading ? '启动中…' : connState === 'error' ? '重新生成二维码' : `${config.platform} 扫码登录`}
+                  </button>
+                </>
+              )}
             </div>
           )}
 

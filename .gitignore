@@ -129,3 +129,5 @@ gateway/.tmp/
 # 备份文件不入库（config 备份可能含密钥）
 gateway/server.bak-*
 gateway/config.yaml.bak-*
+qqbot-connector/node_modules
+qqbot-connector/package-lock.json
