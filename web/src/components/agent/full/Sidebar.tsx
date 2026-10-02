@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
+  Activity,
   Brain,
   Clock,
   Download,
@@ -15,6 +16,7 @@ import {
   FolderOpen,
   Search,
   Send,
+  Settings,
   Trash2,
   Zap,
 } from 'lucide-react'
@@ -26,6 +28,16 @@ import { cn } from '@/lib/utils'
 
 const PINNED_KEY = 'xt-agent-pinned'
 
+type GwState = 'ready' | 'connecting' | 'offline'
+
+async function pingGateway(): Promise<boolean> {
+  try {
+    const res = await fetch('/api/health', { cache: 'no-store' })
+    return res.ok
+  } catch {
+    return false
+  }
+}
 
 function loadPinned(): string[] {
   try {
@@ -107,6 +119,7 @@ export function AgentSidebar({
   onNew,
   onRename,
   onRemove,
+  onOpenSettings,
   pluginNav,
   onPluginNav,
 }: AgentSidebarProps) {
@@ -119,6 +132,7 @@ export function AgentSidebar({
   const [menuFor, setMenuFor] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)
+  const [gwState, setGwState] = useState<GwState>('connecting')
 
   // ── 折叠：与交易系统侧栏共用 appStore（hover 悬停展开 / 点击 logo 切换） ──
   const { sidebarCollapsed, setSidebarCollapsed, sidebarBehavior, toggleSidebar } = useAppStore()
@@ -132,6 +146,20 @@ export function AgentSidebar({
   const handleToggle = () => {
     if (!isHover) toggleSidebar()
   }
+
+  useEffect(() => {
+    let alive = true
+    const tick = async () => {
+      const ok = await pingGateway()
+      if (alive) setGwState(ok ? 'ready' : 'offline')
+    }
+    void tick()
+    const t = setInterval(tick, 30_000)
+    return () => {
+      alive = false
+      clearInterval(t)
+    }
+  }, [])
 
   // ── 服务端全文搜索：输入防抖 300ms ──
   useEffect(() => {
@@ -536,6 +564,48 @@ export function AgentSidebar({
       </div>
         </>
       )}
+
+      {/* 底部：设置 + Gateway 健康（mt-auto 钉底；位置/样式对齐交易系统侧栏底部） */}
+      <div className="mt-auto flex items-center gap-1 border-t border-[var(--ag-sidebar-edge)] p-2">
+        <button
+          type="button"
+          onClick={onOpenSettings}
+          title="设置"
+          className={cn(
+            'flex h-9 items-center gap-2 rounded-md px-2 text-[13px] font-medium transition-colors hover:bg-[var(--ag-active-hover)] hover:text-[var(--ag-text1)]',
+            sidebarCollapsed ? 'flex-1 justify-center' : 'flex-1'
+          )}
+        >
+          <Settings className="size-[18px] shrink-0" />
+          {!sidebarCollapsed && '设置'}
+        </button>
+        {!sidebarCollapsed && (
+          <span
+            title="后端网关健康状态"
+            aria-label="后端网关健康状态"
+            className={cn(
+              'flex shrink-0 items-center gap-1 text-[10px]',
+              gwState === 'ready'
+                ? 'text-[var(--ag-green)]'
+                : gwState === 'connecting'
+                  ? 'text-[var(--ag-amber)]'
+                  : 'text-[var(--ag-red)]'
+            )}
+          >
+            <Activity size={10} />
+            {gwState === 'ready' ? '就绪' : gwState === 'connecting' ? '连接中' : '离线'}
+          </span>
+        )}
+        {sidebarCollapsed && (
+          <span
+            title={gwState === 'ready' ? 'Gateway 就绪' : gwState === 'connecting' ? '连接中…' : 'Gateway 离线'}
+            className={cn(
+              'size-1.5 shrink-0 rounded-full',
+              gwState === 'ready' ? 'bg-[var(--ag-green)]' : gwState === 'connecting' ? 'bg-[var(--ag-amber)]' : 'bg-[var(--ag-red)]'
+            )}
+          />
+        )}
+      </div>
     </aside>
   )
 }
