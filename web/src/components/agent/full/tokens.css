@@ -1,15 +1,15 @@
 /* ── 小天助手全屏模式（1:1 对齐 dsh-tauri 桌面端浅色主题） ──
-   基准值取自 deepseek-harness-desktop PREVIEW：
-   聊天面 #ffffff / 侧栏 #f7f8fa / 浮层 #ffffff / hairline 8% 黑
-   正文 #1f232c / 次要 52% 黑 / 强调 #4d6bfe / 用户气泡浅蓝 #e9f1ff
-   扁平、hairline 分隔、壁纸模式转白色液态玻璃。 */
+   基准值取自 deepseek-harness-desktop PREVIEW 截图实测：
+   侧栏 #f9fafb / 聊天面 #ffffff / 选中项 ≈black/5(#f2f2f2) / hairline 8% 黑
+   用户气泡 #eceef7 淡薰衣草（右对齐 18px 大圆角） / 发送键 #b3c8f5(渐变 #a5b4fc→#8b9cf9)
+   强调 #4d6bfe(仅 Tab/链接) / 扁平、hairline 分隔、壁纸模式转白色液态玻璃。 */
 
 .xt-hermes {
   --ag-fg: #1f232c;
   --ag-bg: #ffffff; /* 聊天面 */
-  --ag-sidebar: #f7f8fa; /* 侧栏 */
+  --ag-sidebar: #f9fafb; /* 侧栏 / 状态条 */
   --ag-card: #ffffff; /* 浮层 / composer 填充 */
-  --ag-muted: #eef0f3; /* muted 填充 */
+  --ag-muted: #eceef0; /* muted 填充（选中态对标 #eceef0） */
   --ag-text1: rgba(31, 35, 44, 0.96); /* 94% */
   --ag-text2: rgba(31, 35, 44, 0.72); /* 74% */
   --ag-text3: rgba(31, 35, 44, 0.52); /* 54% */
@@ -20,11 +20,11 @@
   --ag-sidebar-edge: rgba(31, 35, 44, 0.08);
   --ag-accent: #4d6bfe;
   --ag-accent-fg: #ffffff; /* 主按钮前景 */
-  --ag-user-bubble: #e9f1ff; /* 用户气泡浅蓝（对标桌面版右对齐气泡） */
-  --ag-user-bubble-hover: #dce8fe;
-  --ag-send-bg: #e6ebff; /* 发送键浅蓝底（对标桌面版） */
-  --ag-send-bg-hover: #d8e1ff;
-  --ag-send-fg: #4d6bfe;
+  --ag-user-bubble: #eceef7; /* 淡薰衣草气泡（dsh 实测） */
+  --ag-user-bubble-hover: #e2e6f5;
+  --ag-send-bg: #b3c8f5; /* 发送键（dsh 实测，组件内用渐变） */
+  --ag-send-bg-hover: #a5b4fc;
+  --ag-send-fg: #ffffff;
   --ag-red: #e5484d;
   --ag-green: #2f9e6e;
   --ag-amber: #d97706;
@@ -57,9 +57,9 @@
 
 /* ── 壁纸模式：面板转半透明，让壁纸透出（液态玻璃·浅色） ── */
 .xt-hermes.has-wallpaper {
-  --ag-bg: rgba(255, 255, 255, 0.55);
-  --ag-sidebar: rgba(247, 248, 250, 0.6);
-  --ag-card: rgba(255, 255, 255, 0.66);
+  --ag-bg: rgba(255, 255, 255, 0.6);
+  --ag-sidebar: rgba(249, 250, 251, 0.66);
+  --ag-card: rgba(255, 255, 255, 0.7);
   --ag-sidebar-edge: rgba(31, 35, 44, 0.1);
 }
 .xt-hermes.has-wallpaper aside[aria-label='助手侧栏'] {

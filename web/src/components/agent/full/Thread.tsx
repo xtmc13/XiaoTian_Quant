@@ -222,7 +222,7 @@ function UserMessage({
   return (
     <div className="group flex flex-col items-end pt-3">
       <div className="xt-human-clamp max-w-[85%]">
-        <div className="xt-human-bubble rounded-xl bg-[var(--ag-user-bubble)] px-3.5 py-2 transition-colors group-hover:bg-[var(--ag-user-bubble-hover)]">
+         <div className="xt-human-bubble rounded-[1.125rem] bg-[var(--ag-user-bubble)] px-3.5 py-2 transition-colors group-hover:bg-[var(--ag-user-bubble-hover)]">
           <div className="xt-human-bubble-text whitespace-pre-wrap break-words text-[13px] leading-relaxed text-[var(--ag-text1)]">
             {msg.content}
           </div>

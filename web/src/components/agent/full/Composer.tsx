@@ -457,9 +457,9 @@ export function AgentComposer({
               onClick={onStop}
               title="停止生成（Esc）"
               aria-label="停止生成"
-              className="flex size-7 items-center justify-center rounded-full bg-[var(--ag-accent)] text-[var(--ag-accent-fg)] transition-opacity hover:opacity-85"
-            >
-              <SquareTerminal size={13} />
+               className="flex size-[32px] items-center justify-center rounded-full bg-[linear-gradient(135deg,#a5b4fc,#8b9cf9)] text-white transition-opacity hover:opacity-85"
+             >
+               <SquareTerminal size={13} />
             </button>
           ) : (
             <button
@@ -468,7 +468,7 @@ export function AgentComposer({
               disabled={!canSubmit}
               title={isStreaming ? '发送并重定向当前回复' : '发送'}
               aria-label="发送消息"
-              className="flex size-7 items-center justify-center rounded-full bg-[var(--ag-send-bg)] text-[var(--ag-send-fg)] transition-colors hover:bg-[var(--ag-send-bg-hover)] disabled:opacity-40"
+               className="flex size-[32px] items-center justify-center rounded-full bg-[linear-gradient(135deg,#a5b4fc,#8b9cf9)] text-white transition-opacity hover:opacity-85 disabled:opacity-30"
             >
               {isStreaming ? <Layers3 size={13} /> : <ArrowUp size={14} />}
             </button>
