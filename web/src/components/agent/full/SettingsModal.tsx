@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Info, KeyRound, Layers, Plus, SlidersHorizontal, Sparkles, Trash2, Users, X } from 'lucide-react'
+import { ChevronRight, Info, KeyRound, Layers, Plus, SlidersHorizontal, Sparkles, Trash2, Users, Wrench, X } from 'lucide-react'
 import { agentProfilesApi, agentUserAiConfigApi, type AgentProfile } from '@/lib/api'
 import { useAuthStore } from '@/stores/authStore'
 import { toast } from '@/lib/useToast'
@@ -156,12 +156,16 @@ export interface SettingsModalProps {
   onClose: () => void
   providers: ModelProvider[]
   version?: string
+  /** 侧栏放不下的扩展工具（收纳进"工具"页签） */
+  tools?: { id: string; label: string }[]
+  onTool?: (id: string) => void
 }
 
-type Section = 'general' | 'model' | 'profiles' | 'about'
+type Section = 'general' | 'tools' | 'model' | 'profiles' | 'about'
 
 const SECTIONS: { id: Section; label: string; icon: typeof Sparkles }[] = [
   { id: 'general', label: '通用', icon: SlidersHorizontal },
+  { id: 'tools', label: '工具', icon: Wrench },
   { id: 'model', label: '模型', icon: Sparkles },
   { id: 'profiles', label: '档案', icon: Layers },
   { id: 'about', label: '关于', icon: Info },
@@ -379,7 +383,7 @@ function ProfilesSection() {
 }
 
 // ── 大号居中设置窗（对标 dsh 桌面版"配置"弹窗：左侧图标导航 + 右侧内容区） ──
-export function SettingsModal({ settings, onSave, onClose, providers, version }: SettingsModalProps) {
+export function SettingsModal({ settings, onSave, onClose, providers, version, tools, onTool }: SettingsModalProps) {
   const [section, setSection] = useState<Section>('general')
   const [systemPrompt, setSystemPrompt] = useState(settings.system_prompt)
   const [temperature, setTemperature] = useState(String(settings.temperature))
@@ -517,6 +521,35 @@ export function SettingsModal({ settings, onSave, onClose, providers, version }:
                     />
                   </button>
                 </div>
+              </div>
+            )}
+
+            {section === 'tools' && (
+              <div className="max-w-lg">
+                <h3 className="mb-1 text-[15px] font-semibold">工具</h3>
+                <p className="mb-4 text-[12px] text-[var(--ag-text3)]">
+                  侧栏收纳的扩展功能，点击打开对应面板。
+                </p>
+                {(tools || []).length === 0 ? (
+                  <p className="text-[12px] text-[var(--ag-text4)]">暂无可用工具</p>
+                ) : (
+                  <div className="flex flex-col gap-1">
+                    {(tools || []).map((t) => (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => {
+                          onTool?.(t.id)
+                          onClose()
+                        }}
+                        className="flex h-9 items-center justify-between rounded-lg border border-[var(--ag-stroke3)] bg-[var(--ag-card)]/60 px-3 text-[13px] font-medium text-[var(--ag-text1)] transition-colors hover:border-[var(--ag-accent)]/40 hover:bg-[var(--ag-active-hover)]"
+                      >
+                        {t.label}
+                        <ChevronRight size={14} className="text-[var(--ag-text4)]" />
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 

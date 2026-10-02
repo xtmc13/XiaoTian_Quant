@@ -575,6 +575,9 @@ export function AgentChatPanel({ open, onClose, onUnread, variant = 'float' }: A
     clearTransient()
     setCurrentId(null)
     setMessages([])
+    // 清空输入草稿与附件，否则点击"新会话"看起来毫无反应
+    setInput('')
+    setAttachments([])
   }, [isStreaming, stop, clearTransient])
 
   // ── 切换会话：中止进行中的生成 ──

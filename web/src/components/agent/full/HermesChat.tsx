@@ -183,6 +183,11 @@ export function HermesChat({
     .map((p) => p.ui?.nav)
     .filter((n): n is NonNullable<typeof n> => Boolean(n))
 
+  // 侧栏只留核心三项，其余收纳进 设置→工具（侧栏太挤）
+  const SIDEBAR_CORE = ['cron', 'memory', 'skills']
+  const sidebarNav = pluginNav.filter((n) => SIDEBAR_CORE.includes(n.id))
+  const overflowNav = pluginNav.filter((n) => !SIDEBAR_CORE.includes(n.id))
+
   // 技能列表（调色板 + 面板共用）
   const { data: skillsData } = useQuery({
     queryKey: ['agent-skills'],
@@ -504,7 +509,7 @@ export function HermesChat({
           onRemove={removeConversation}
           onBranch={(id) => branchConversation(id)}
           onOpenSettings={() => setSettingsOpen(true)}
-          pluginNav={pluginNav}
+          pluginNav={sidebarNav}
           onPluginNav={(id) => {
             if (
               [
@@ -702,6 +707,8 @@ export function HermesChat({
               onClose={() => setSettingsOpen(false)}
               providers={providers}
               version={version ? `web v${version}` : ''}
+              tools={overflowNav.map((n) => ({ id: n.id, label: n.label }))}
+              onTool={(id) => setMainView(id as typeof mainView)}
             />
           )}
           {usageOpen && (
