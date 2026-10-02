@@ -79,7 +79,7 @@ export function UsagePanel({ messages, onClose }: UsagePanelProps) {
             type="button"
             onClick={onClose}
             aria-label="关闭用量面板"
-            className="rounded p-1 text-[var(--ag-text3)] hover:bg-white/8"
+            className="rounded p-1 text-[var(--ag-text3)] hover:bg-black/5"
           >
             <X size={15} />
           </button>

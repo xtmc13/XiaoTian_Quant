@@ -298,7 +298,7 @@ export function AgentComposer({
                 setPlusOpen(false)
                 fileInputRef.current?.click()
               }}
-              className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-[var(--ag-text2)] hover:bg-white/6"
+              className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-[var(--ag-text2)] hover:bg-black/5"
             >
               <Paperclip size={13} />
               添加文件（.txt/.md/.csv/.json ≤100KB）
@@ -316,7 +316,7 @@ export function AgentComposer({
                   onInputChange(input ? `${input}\n${s.text}` : s.text)
                   textareaRef.current?.focus()
                 }}
-                className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-[var(--ag-text2)] hover:bg-white/6"
+                className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-[var(--ag-text2)] hover:bg-black/5"
               >
                 <Sparkles size={13} />
                 {s.label}
@@ -388,7 +388,7 @@ export function AgentComposer({
           onChange={(e) => onInputChange(e.target.value)}
           onKeyDown={onKeyDown}
           rows={1}
-          placeholder="发消息或创建任务，/ 调用指令，Enter 发送"
+          placeholder="给智能体发消息，/ 调用指令"
           aria-label="消息输入框"
           className="min-h-[26px] max-h-[150px] w-full resize-none bg-transparent px-3 pt-2 text-[13px] leading-relaxed text-[var(--ag-text1)] placeholder:text-[var(--ag-text4)] focus:outline-none"
         />
@@ -412,7 +412,7 @@ export function AgentComposer({
             aria-label="打开附件菜单"
             aria-expanded={plusOpen}
             onClick={() => setPlusOpen((v) => !v)}
-            className="flex size-6 items-center justify-center rounded-full text-[var(--ag-text3)] transition-colors hover:bg-white/8 hover:text-[var(--ag-text1)]"
+            className="flex size-6 items-center justify-center rounded-full text-[var(--ag-text3)] transition-colors hover:bg-black/5 hover:text-[var(--ag-text1)]"
           >
             <Plus size={15} />
           </button>

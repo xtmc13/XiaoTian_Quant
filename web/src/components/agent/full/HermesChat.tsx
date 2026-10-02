@@ -219,7 +219,7 @@ export function HermesChat({
               onClick={() => setSettingsOpen(true)}
               title="助手设置"
               aria-label="助手设置"
-              className="shrink-0 rounded-md p-1.5 text-[var(--ag-text3)] transition-colors hover:bg-white/6 hover:text-[var(--ag-text1)]"
+              className="shrink-0 rounded-md p-1.5 text-[var(--ag-text3)] transition-colors hover:bg-black/5 hover:text-[var(--ag-text1)]"
             >
               <Settings size={14} />
             </button>
@@ -270,7 +270,7 @@ export function HermesChat({
           </div>
 
           {settingsOpen && (
-            <SettingsPopover settings={settings} onSave={updateSettings} onClose={() => setSettingsOpen(false)} />
+            <SettingsPopover light settings={settings} onSave={updateSettings} onClose={() => setSettingsOpen(false)} />
           )}
           {cronOpen && <CronPanel onClose={() => setCronOpen(false)} />}
           {memoryOpen && <MemoryPanel onClose={() => setMemoryOpen(false)} />}

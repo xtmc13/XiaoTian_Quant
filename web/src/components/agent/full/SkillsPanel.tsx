@@ -88,7 +88,7 @@ export function SkillsPanel({ onUse, onClose }: SkillsPanelProps) {
             type="button"
             onClick={onClose}
             aria-label="关闭技能面板"
-            className="rounded p-1 text-[var(--ag-text3)] hover:bg-white/8"
+            className="rounded p-1 text-[var(--ag-text3)] hover:bg-black/5"
           >
             <X size={15} />
           </button>
@@ -165,7 +165,7 @@ export function SkillsPanel({ onUse, onClose }: SkillsPanelProps) {
                   title="在会话中执行"
                   aria-label={`使用技能 ${s.name}`}
                   onClick={() => onUse({ name: s.name, body: s.body })}
-                  className="shrink-0 rounded p-1 text-[var(--ag-text3)] opacity-0 transition-opacity hover:bg-white/8 hover:text-[var(--ag-accent)] group-hover:opacity-100"
+                  className="shrink-0 rounded p-1 text-[var(--ag-text3)] opacity-0 transition-opacity hover:bg-black/5 hover:text-[var(--ag-accent)] group-hover:opacity-100"
                 >
                   <Play size={12} />
                 </button>
@@ -178,7 +178,7 @@ export function SkillsPanel({ onUse, onClose }: SkillsPanelProps) {
                     'shrink-0 rounded p-1 opacity-0 transition-opacity group-hover:opacity-100',
                     confirmDelete === s.id
                       ? 'bg-[var(--ag-red)]/10 text-[var(--ag-red)] opacity-100'
-                      : 'text-[var(--ag-text3)] hover:bg-white/8 hover:text-[var(--ag-red)]'
+                      : 'text-[var(--ag-text3)] hover:bg-black/5 hover:text-[var(--ag-red)]'
                   )}
                 >
                   <Trash2 size={12} />

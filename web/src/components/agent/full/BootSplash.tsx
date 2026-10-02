@@ -79,7 +79,7 @@ export function BootSplash({ version, onDone }: BootSplashProps) {
         <h1 className="bg-gradient-to-br from-white via-white to-[#8fb0ff] bg-clip-text text-center text-[13vmin] font-black leading-none tracking-tight text-transparent drop-shadow-[0_0_35px_rgba(77,107,254,0.35)]">
           小天量化
         </h1>
-        <p className="mt-4 flex items-center gap-2 text-[11px] tracking-[0.35em] text-white/50">
+        <p className="mt-4 flex items-center gap-2 text-[11px] tracking-[0.35em] text-black/50">
           <span className="h-px w-8 bg-white/25" />
           欢迎来到专业工作模式
           <span className="h-px w-8 bg-white/25" />
@@ -87,7 +87,7 @@ export function BootSplash({ version, onDone }: BootSplashProps) {
         <p className="mt-1.5 text-[9px] tracking-[0.5em] text-white/30">XIAOTIAN QUANT PROFESSIONAL MODE</p>
 
         {/* 进度条 */}
-        <div className="mt-10 h-[3px] w-[46vmin] max-w-xs overflow-hidden rounded-full bg-white/10">
+        <div className="mt-10 h-[3px] w-[46vmin] max-w-xs overflow-hidden rounded-full bg-black/10">
           <div
             className="h-full rounded-full bg-gradient-to-r from-[var(--ag-accent)] to-[#8fb0ff] transition-[width] duration-100"
             style={{ width: `${progress}%` }}

@@ -183,7 +183,7 @@ function WallpaperEngine() {
           aria-pressed={!wp.active}
           className={cn(
             'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[11px] transition-colors',
-            !wp.active ? 'bg-[var(--ag-accent)]/10 text-[var(--ag-accent)]' : 'text-[var(--ag-text3)] hover:bg-white/5'
+            !wp.active ? 'bg-[var(--ag-accent)]/10 text-[var(--ag-accent)]' : 'text-[var(--ag-text3)] hover:bg-black/5'
           )}
         >
           <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-gradient-to-br from-[var(--ag-accent)]/40 to-[#7aa2ff]/30 text-[var(--ag-text2)]">
@@ -202,7 +202,7 @@ function WallpaperEngine() {
             aria-pressed={wp.active?.id === w.id}
             className={cn(
               'group flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors',
-              wp.active?.id === w.id ? 'bg-[var(--ag-accent)]/10' : 'hover:bg-white/5'
+              wp.active?.id === w.id ? 'bg-[var(--ag-accent)]/10' : 'hover:bg-black/5'
             )}
           >
             {w.kind === 'video' ? (
@@ -306,7 +306,7 @@ export function PetSettings({ config, onChange, onResetPos, onClose }: PetSettin
           type="button"
           onClick={onClose}
           aria-label="关闭桌宠设置"
-          className="rounded p-1 text-[var(--ag-text3)] hover:bg-white/6"
+          className="rounded p-1 text-[var(--ag-text3)] hover:bg-black/5"
         >
           <X size={13} />
         </button>

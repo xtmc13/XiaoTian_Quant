@@ -78,7 +78,7 @@ export function TelegramPanel({ onClose }: TelegramPanelProps) {
             type="button"
             onClick={onClose}
             aria-label="关闭 Telegram 面板"
-            className="rounded p-1 text-[var(--ag-text3)] hover:bg-white/8"
+            className="rounded p-1 text-[var(--ag-text3)] hover:bg-black/5"
           >
             <X size={15} />
           </button>

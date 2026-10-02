@@ -102,7 +102,7 @@ export function MemoryPanel({ onClose }: MemoryPanelProps) {
             type="button"
             onClick={onClose}
             aria-label="关闭记忆面板"
-            className="rounded p-1 text-[var(--ag-text3)] hover:bg-white/8"
+            className="rounded p-1 text-[var(--ag-text3)] hover:bg-black/5"
           >
             <X size={15} />
           </button>
@@ -220,7 +220,7 @@ export function MemoryPanel({ onClose }: MemoryPanelProps) {
                 title="删除"
                 aria-label={`删除记忆 ${m.content.slice(0, 12)}`}
                 onClick={() => deleteMut.mutate(m.id)}
-                className="shrink-0 rounded p-1 text-[var(--ag-text3)] opacity-0 transition-opacity hover:bg-white/8 hover:text-[var(--ag-red)] group-hover:opacity-100"
+                className="shrink-0 rounded p-1 text-[var(--ag-text3)] opacity-0 transition-opacity hover:bg-black/5 hover:text-[var(--ag-red)] group-hover:opacity-100"
               >
                 <Trash2 size={12} />
               </button>

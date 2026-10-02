@@ -1,32 +1,32 @@
-/* ── 小天助手全屏模式（1:1 对齐 Hermes Desktop「nous」深色主题） ──
-   基准值取自 hermes-agent apps/shared theme-presets（nous darkColors）：
-   聊天面 #0d1117 / 侧栏 #010409 / 浮层 #161b22 / hairline #30363d
-   正文 #e6edf3 / 次要 #7d8590 / 强调 #4a84fe / 用户气泡 #07162c
-   扁平、hairline 分隔、scaffold 行 0.67 透明度。 */
+/* ── 小天助手全屏模式（1:1 对齐 dsh-tauri 桌面端浅色主题） ──
+   基准值取自 deepseek-harness-desktop PREVIEW：
+   聊天面 #f5f6f8 / 侧栏 #ffffff / 浮层 #ffffff / hairline 8% 黑
+   正文 #1f232c / 次要 52% 黑 / 强调 #4d6bfe / 用户气泡 #edeff3
+   扁平、hairline 分隔、壁纸模式转白色液态玻璃。 */
 
 .xt-hermes {
-  --ag-fg: #e6edf3;
-  --ag-bg: #0d1117; /* 聊天面（chrome） */
-  --ag-sidebar: #010409; /* 侧栏 / 状态条 */
-  --ag-card: #161b22; /* 浮层 / composer 填充 */
-  --ag-muted: #1a1e24; /* muted 填充 */
-  --ag-text1: rgba(230, 237, 243, 0.94); /* 94% */
-  --ag-text2: rgba(230, 237, 243, 0.72); /* ~7d8590 */
-  --ag-text3: rgba(230, 237, 243, 0.5); /* 54% */
-  --ag-text4: rgba(230, 237, 243, 0.36); /* 36% */
-  --ag-stroke1: rgba(230, 237, 243, 0.22);
-  --ag-stroke2: rgba(230, 237, 243, 0.14); /* ≈ #30363d 默认 hairline */
-  --ag-stroke3: rgba(230, 237, 243, 0.09);
-  --ag-sidebar-edge: rgba(230, 237, 243, 0.07);
-  --ag-accent: #4a84fe;
-  --ag-accent-fg: #10131a; /* 主按钮上的深色前景(nous primaryForeground #161616 微调) */
-  --ag-user-bubble: #07162c; /* nous userBubble 暗蓝实心 */
-  --ag-red: #e75e78;
-  --ag-green: #55a583;
-  --ag-amber: #d29922;
-  --ag-inline-code-bg: rgba(255, 255, 255, 0.07);
-  --ag-inline-code-fg: rgba(255, 255, 255, 0.88);
-  --ag-selection: rgba(255, 210, 74, 0.38); /* nous 暗色选区淡金 */
+  --ag-fg: #1f232c;
+  --ag-bg: #f5f6f8; /* 聊天面 */
+  --ag-sidebar: #ffffff; /* 侧栏 / 状态条 */
+  --ag-card: #ffffff; /* 浮层 / composer 填充 */
+  --ag-muted: #eef0f3; /* muted 填充 */
+  --ag-text1: rgba(31, 35, 44, 0.96); /* 94% */
+  --ag-text2: rgba(31, 35, 44, 0.72); /* 74% */
+  --ag-text3: rgba(31, 35, 44, 0.52); /* 54% */
+  --ag-text4: rgba(31, 35, 44, 0.34); /* 36% */
+  --ag-stroke1: rgba(31, 35, 44, 0.18);
+  --ag-stroke2: rgba(31, 35, 44, 0.11); /* 默认 hairline */
+  --ag-stroke3: rgba(31, 35, 44, 0.07);
+  --ag-sidebar-edge: rgba(31, 35, 44, 0.08);
+  --ag-accent: #4d6bfe;
+  --ag-accent-fg: #ffffff; /* 主按钮前景 */
+  --ag-user-bubble: #edeff3; /* 中性灰气泡（对标桌面版） */
+  --ag-red: #e5484d;
+  --ag-green: #2f9e6e;
+  --ag-amber: #d97706;
+  --ag-inline-code-bg: rgba(31, 35, 44, 0.06);
+  --ag-inline-code-fg: rgba(31, 35, 44, 0.88);
+  --ag-selection: rgba(77, 107, 254, 0.22);
   --ag-shadow-panel:
     0 0 0 1px rgba(23, 23, 26, 0.03), 0 4px 8px rgba(23, 23, 26, 0.04), 0 12px 24px rgba(23, 23, 26, 0.06),
     0 24px 48px rgba(23, 23, 26, 0.07);
@@ -44,16 +44,16 @@
   flex-direction: column;
   background: var(--ag-bg);
   color: var(--ag-text1);
-  color-scheme: dark;
+  color-scheme: light;
   font-size: 0.8125rem;
 }
 
-/* ── 壁纸模式：面板转半透明，让壁纸透出（液态玻璃） ── */
+/* ── 壁纸模式：面板转半透明，让壁纸透出（液态玻璃·浅色） ── */
 .xt-hermes.has-wallpaper {
-  --ag-bg: rgba(12, 13, 17, 0.4);
-  --ag-sidebar: rgba(15, 16, 21, 0.52);
-  --ag-card: rgba(23, 25, 32, 0.58);
-  --ag-sidebar-edge: rgba(255, 255, 255, 0.09);
+  --ag-bg: rgba(245, 246, 248, 0.55);
+  --ag-sidebar: rgba(255, 255, 255, 0.6);
+  --ag-card: rgba(255, 255, 255, 0.66);
+  --ag-sidebar-edge: rgba(31, 35, 44, 0.1);
 }
 .xt-hermes.has-wallpaper aside[aria-label='助手侧栏'] {
   backdrop-filter: blur(18px) saturate(1.1);
@@ -66,7 +66,7 @@
 }
 /* 消息承载面在壁纸模式下垫一层保底底色，保证正文可读 */
 .xt-hermes.has-wallpaper .xt-thread-inner {
-  background: linear-gradient(180deg, transparent, rgba(10, 11, 14, 0.35));
+  background: linear-gradient(180deg, transparent, rgba(255, 255, 255, 0.4));
 }
 
 .xt-hermes ::selection {
@@ -76,14 +76,14 @@
 /* 细滚动条 */
 .xt-hermes * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+  scrollbar-color: rgba(31, 35, 44, 0.16) transparent;
 }
 .xt-hermes *::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 .xt-hermes *::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.14);
+  background: rgba(31, 35, 44, 0.14);
   border-radius: 999px;
 }
 .xt-hermes *::-webkit-scrollbar-track {

@@ -59,10 +59,13 @@ describe('Hermes 全屏助手', () => {
     removeMock.mockResolvedValue({ success: true })
   })
 
-  it('空态：大字标 + 标语 + 侧栏分组 + 状态条', async () => {
+  it('空态：鲸鱼标语 + 徽章 + 侧栏分组 + 状态条', async () => {
     renderFull()
-    // 大字标
-    expect(screen.getByText('小天助手')).toBeTruthy()
+    // 空态（对标桌面版"探索未至之境"）
+    expect(screen.getByText('探索未至之境')).toBeTruthy()
+    expect(screen.getByText('预览版')).toBeTruthy()
+    // 品牌行 + 面包屑药丸各有一处"小天量化"
+    expect(screen.getAllByText('小天量化').length).toBeGreaterThanOrEqual(2)
     // 侧栏会话（c2 是今天）
     await waitFor(() => expect(screen.getByText('BTC 分析')).toBeTruthy())
     expect(screen.getByText('网格机器人')).toBeTruthy()

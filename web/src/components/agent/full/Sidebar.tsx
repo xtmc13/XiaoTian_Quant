@@ -244,7 +244,7 @@ export function AgentSidebar({
                     togglePin(c.id)
                     setMenuFor(null)
                   }}
-                  className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[12px] text-[var(--ag-text2)] hover:bg-white/6"
+                  className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[12px] text-[var(--ag-text2)] hover:bg-black/5"
                 >
                   {pinned.includes(c.id) ? <PinOff size={12} /> : <Pin size={12} />}
                   {pinned.includes(c.id) ? '取消置顶' : '置顶'}
@@ -257,7 +257,7 @@ export function AgentSidebar({
                     setEditingId(c.id)
                     setMenuFor(null)
                   }}
-                  className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[12px] text-[var(--ag-text2)] hover:bg-white/6"
+                  className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[12px] text-[var(--ag-text2)] hover:bg-black/5"
                 >
                   <Pencil size={12} />
                   重命名
@@ -267,7 +267,7 @@ export function AgentSidebar({
                   role="menuitem"
                   disabled={exporting}
                   onClick={() => exportConv(c)}
-                  className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[12px] text-[var(--ag-text2)] hover:bg-white/6 disabled:opacity-50"
+                  className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[12px] text-[var(--ag-text2)] hover:bg-black/5 disabled:opacity-50"
                 >
                   <Download size={12} />
                   导出 JSON
@@ -309,7 +309,7 @@ export function AgentSidebar({
         <button
           type="button"
           onClick={onNew}
-          className="flex h-8 items-center justify-center gap-1.5 rounded-lg bg-white/8 px-2 text-[13px] font-medium text-[var(--ag-text1)] transition-colors hover:bg-white/12"
+          className="flex h-8 items-center justify-center gap-1.5 rounded-lg border border-[var(--ag-stroke2)] bg-[var(--ag-card)] px-2 text-[13px] font-medium text-[var(--ag-text1)] transition-colors hover:border-[var(--ag-accent)]/50"
         >
           <Plus size={13} />
           新会话

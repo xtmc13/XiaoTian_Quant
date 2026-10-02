@@ -1,8 +1,22 @@
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Check, ChevronRight, CircleAlert, Clipboard, Loader2, Pencil, RotateCcw, Wrench, X } from 'lucide-react'
+import React, { useEffect, useState } from 'react'
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  CircleAlert,
+  Clipboard,
+  Folder,
+  Loader2,
+  Pencil,
+  RotateCcw,
+  Shield,
+  Wrench,
+  X,
+} from 'lucide-react'
 import type { AgentChatMsg } from '../types'
 import { copyText, toolLabel } from '../types'
 import { MarkdownView } from '../MarkdownView'
+import { DefaultPet } from '../pet/DefaultPet'
 import { cn } from '@/lib/utils'
 
 // ── 空态标语（按挂载随机轮换，交易场景文案） ──
@@ -15,48 +29,32 @@ const TAGLINES = [
   '一键复盘今日得失，让下一单更干净。',
 ]
 
-// ── 大字标：fit-text，自动撑满容器宽 ──
-function Wordmark({ text }: { text: string }) {
-  const boxRef = useRef<HTMLDivElement>(null)
-  const textRef = useRef<HTMLSpanElement>(null)
-  const [fontSize, setFontSize] = useState(44)
-
-  useLayoutEffect(() => {
-    const measure = () => {
-      const box = boxRef.current
-      const el = textRef.current
-      if (!box || !el) return
-      const base = 44
-      el.style.fontSize = `${base}px`
-      const w = el.scrollWidth || 1
-      const ratio = (box.clientWidth - 8) / w
-      setFontSize(Math.max(44, Math.min(base * ratio, 200)))
-    }
-    measure()
-    window.addEventListener('resize', measure)
-    return () => window.removeEventListener('resize', measure)
-  }, [text])
-
-  return (
-    <div ref={boxRef} className="w-full px-0.5">
-      <span
-        ref={textRef}
-        aria-hidden
-        className="block select-none whitespace-nowrap font-bold uppercase leading-[0.9] tracking-[0.08em] text-[var(--ag-accent)]"
-        style={{ fontSize, mixBlendMode: 'plus-lighter' }}
-      >
-        {text}
-      </span>
-    </div>
-  )
-}
-
 function EmptyState() {
   const [tagline] = useState(() => TAGLINES[Math.floor(Math.random() * TAGLINES.length)])
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-1 px-4 py-6">
-      <Wordmark text="小天助手" />
-      <p className="mt-2 max-w-md text-center text-[13px] text-[var(--ag-text3)]">{tagline}</p>
+    <div className="flex h-full flex-col items-center justify-center gap-2 px-4 py-6">
+      {/* 鲸鱼 + 标语（对标桌面版"探索未至之境"空态） */}
+      <div className="flex items-center gap-2.5">
+        <DefaultPet size={44} />
+        <span className="text-[24px] font-bold tracking-tight text-[var(--ag-text1)]">探索未至之境</span>
+        <span className="rounded-full border border-[var(--ag-accent)]/40 px-1.5 py-0.5 text-[10px] text-[var(--ag-accent)]">
+          预览版
+        </span>
+      </div>
+      <p className="max-w-md text-center text-[12px] text-[var(--ag-text3)]">{tagline}</p>
+      {/* 面包屑药丸：工作区 / 模式 / 工作树（对标桌面版） */}
+      <div className="mt-4 flex items-center gap-2">
+        <span className="flex items-center gap-1 rounded-lg border border-[var(--ag-stroke3)] bg-[var(--ag-card)]/70 px-2.5 py-1.5 text-[12px] text-[var(--ag-text2)]">
+          <Folder size={13} className="text-[var(--ag-accent)]" />
+          小天量化
+          <ChevronDown size={12} className="text-[var(--ag-text4)]" />
+        </span>
+        <span className="flex items-center gap-1 rounded-lg border border-[var(--ag-stroke3)] bg-[var(--ag-card)]/70 px-2.5 py-1.5 text-[12px] text-[var(--ag-text2)]">
+          <Shield size={13} className="text-[var(--ag-accent)]" />
+          标准模式
+          <ChevronDown size={12} className="text-[var(--ag-text4)]" />
+        </span>
+      </div>
     </div>
   )
 }
@@ -91,8 +89,9 @@ function ThinkingDisclosure({ reasoning, streaming }: { reasoning: string; strea
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        className="flex items-center gap-1 rounded px-1 py-0.5 text-[11px] text-[var(--ag-text3)] transition-colors hover:bg-white/6"
+        className="flex items-center gap-1 rounded px-1 py-0.5 text-[11px] text-[var(--ag-text3)] transition-colors hover:bg-black/5"
       >
+        <DefaultPet size={14} />
         <ChevronRight size={12} className={cn('shrink-0 transition-transform duration-150', open && 'rotate-90')} />
         <span className={cn(streaming && 'xt-shimmer-text')}>{label}</span>
       </button>
@@ -133,7 +132,7 @@ function ToolScaffoldRow({ tool }: { tool: NonNullable<AgentChatMsg['toolCalls']
             aria-label={open ? `收起 ${toolLabel(tool.name)} 详情` : `展开 ${toolLabel(tool.name)} 详情`}
             aria-expanded={open}
             onClick={() => setOpen((v) => !v)}
-            className="shrink-0 rounded p-0.5 text-[var(--ag-text4)] hover:bg-white/6 hover:text-[var(--ag-text2)]"
+            className="shrink-0 rounded p-0.5 text-[var(--ag-text4)] hover:bg-black/5 hover:text-[var(--ag-text2)]"
           >
             <ChevronRight size={11} className={cn('transition-transform duration-150', open && 'rotate-90')} />
           </button>
@@ -189,7 +188,7 @@ function UserMessage({
               setEditing(false)
               setEditValue(msg.content)
             }}
-            className="flex items-center gap-1 rounded-md border border-[var(--ag-stroke2)] px-2 py-1 text-[11px] text-[var(--ag-text3)] hover:bg-white/6"
+            className="flex items-center gap-1 rounded-md border border-[var(--ag-stroke2)] px-2 py-1 text-[11px] text-[var(--ag-text3)] hover:bg-black/5"
           >
             <X size={11} />
             取消
@@ -309,7 +308,7 @@ function AssistantMessage({
             title={copied ? '已复制' : '复制'}
             aria-label={copied ? '已复制' : '复制回复'}
             onClick={doCopy}
-            className="rounded p-1 text-[var(--ag-text3)] hover:bg-white/6 hover:text-[var(--ag-text1)]"
+            className="rounded p-1 text-[var(--ag-text3)] hover:bg-black/5 hover:text-[var(--ag-text1)]"
           >
             {copied ? <Check size={12} className="text-[var(--ag-green)]" /> : <Clipboard size={12} />}
           </button>
@@ -319,7 +318,7 @@ function AssistantMessage({
             aria-label="重新生成回复"
             disabled={isStreaming}
             onClick={onRegenerate}
-            className="rounded p-1 text-[var(--ag-text3)] hover:bg-white/6 hover:text-[var(--ag-text1)] disabled:opacity-40"
+            className="rounded p-1 text-[var(--ag-text3)] hover:bg-black/5 hover:text-[var(--ag-text1)] disabled:opacity-40"
           >
             <RotateCcw size={12} />
           </button>
