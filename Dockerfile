@@ -47,6 +47,9 @@ WORKDIR /src/web
 COPY web/package*.json ./
 RUN npm ci --silent
 COPY web/ ./
+# 给 @klinecharts/pro 打运行时补丁：ref API 追加 getSize/convertFromPixel 等
+# 透传方法（官方 0.1.1 只暴露 12 个方法，缺图上点价下单必需的坐标换算）。
+RUN node patches/patch-klinecharts-pro.cjs
 # 容器内嵌部署必须用绝对基路径：相对路径在深链接（如 /trading/spot）下
 # 会解析成 /trading/assets/... 导致资产 404 白屏。注意不能写 `npm run build -- --base=/`
 # （npm 会把参数追加到整条命令末尾，vite 收不到），必须直接调 vite。

@@ -25,8 +25,9 @@ export interface ChartTradingProps {
   /** 持仓线图例文案(现货为估算成本时可传 "持仓成本") */
   positionLabel?: string
   pricePrecision: number
-  /** 图表上选定价格后的回调(填入限价输入框等),页面负责视觉反馈 */
-  onPriceSelect: (price: number) => void
+  /** 图表上选定价格后的回调(填入限价输入框等),页面负责视觉反馈。
+   *  第二参为点击点在图表容器内的坐标(相对 chartContainerRef),供浮层定位。 */
+  onPriceSelect: (price: number, pos?: { x: number; y: number }) => void
 }
 
 interface CrosshairState {
@@ -159,7 +160,10 @@ export function ChartTrading({
     const handleClick = (e: MouseEvent) => {
       if (e.button !== 0 || isUiClick(e.target) || isDrawingOverlay()) return
       const price = priceAtPoint(e.clientX, e.clientY)
-      if (price != null) onPriceSelectRef.current(price)
+      if (price != null) {
+        const rect = container.getBoundingClientRect()
+        onPriceSelectRef.current(price, { x: e.clientX - rect.left, y: e.clientY - rect.top })
+      }
     }
 
     const handleMove = (e: MouseEvent) => {
