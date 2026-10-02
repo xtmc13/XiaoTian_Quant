@@ -156,7 +156,7 @@ export function WeixinPanel({ onClose, bare }: WeixinPanelProps) {
               {qrImg ? (
                 <>
                   <img
-                    src={`data:image/png;base64,${qrImg}`}
+                    src={qrImg.startsWith('http') ? qrImg : `data:image/png;base64,${qrImg}`}
                     alt="微信登录二维码"
                     className="size-44 rounded-lg border border-[var(--ag-stroke2)]"
                   />
