@@ -62,7 +62,7 @@ export function UsagePanel({ messages, onClose }: UsagePanelProps) {
 
   return (
     <div
-      className="absolute inset-0 z-20 flex items-center justify-center bg-black/25 p-4"
+      className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 p-4"
       onClick={onClose}
       role="dialog"
       aria-label="用量与概览"
@@ -79,7 +79,7 @@ export function UsagePanel({ messages, onClose }: UsagePanelProps) {
             type="button"
             onClick={onClose}
             aria-label="关闭用量面板"
-            className="rounded p-1 text-[var(--ag-text3)] hover:bg-black/5"
+            className="rounded p-1 text-[var(--ag-text3)] hover:bg-white/8"
           >
             <X size={15} />
           </button>

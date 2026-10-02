@@ -102,7 +102,7 @@ export function CronPanel({ onClose }: CronPanelProps) {
 
   return (
     <div
-      className="absolute inset-0 z-20 flex items-center justify-center bg-black/25 p-4"
+      className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 p-4"
       onClick={onClose}
       role="dialog"
       aria-label="定时任务"
@@ -129,7 +129,7 @@ export function CronPanel({ onClose }: CronPanelProps) {
             type="button"
             onClick={onClose}
             aria-label="关闭定时任务面板"
-            className="rounded p-1 text-[var(--ag-text3)] hover:bg-black/5"
+            className="rounded p-1 text-[var(--ag-text3)] hover:bg-white/8"
           >
             <X size={15} />
           </button>
@@ -250,7 +250,7 @@ export function CronPanel({ onClose }: CronPanelProps) {
                   title="立即运行一次"
                   aria-label={`立即运行 ${j.name}`}
                   onClick={() => runMut.mutate(j.id)}
-                  className="shrink-0 rounded p-1 text-[var(--ag-text3)] opacity-0 transition-opacity hover:bg-black/5 hover:text-[var(--ag-text1)] group-hover:opacity-100"
+                  className="shrink-0 rounded p-1 text-[var(--ag-text3)] opacity-0 transition-opacity hover:bg-white/8 hover:text-[var(--ag-text1)] group-hover:opacity-100"
                 >
                   <Play size={12} />
                 </button>
@@ -259,7 +259,7 @@ export function CronPanel({ onClose }: CronPanelProps) {
                   title="删除"
                   aria-label={`删除任务 ${j.name}`}
                   onClick={() => deleteMut.mutate(j.id)}
-                  className="shrink-0 rounded p-1 text-[var(--ag-text3)] opacity-0 transition-opacity hover:bg-black/5 hover:text-[var(--ag-red)] group-hover:opacity-100"
+                  className="shrink-0 rounded p-1 text-[var(--ag-text3)] opacity-0 transition-opacity hover:bg-white/8 hover:text-[var(--ag-red)] group-hover:opacity-100"
                 >
                   <Trash2 size={12} />
                 </button>

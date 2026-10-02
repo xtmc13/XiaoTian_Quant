@@ -4,6 +4,7 @@ import { Settings2 } from 'lucide-react'
 import { useAuthStore } from '@/stores/authStore'
 import { cn } from '@/lib/utils'
 import { AgentChatPanel } from './AgentChatPanel'
+import { BootSplash } from './full/BootSplash'
 import { DefaultPet } from './pet/DefaultPet'
 import {
   PetSettings,
@@ -32,6 +33,14 @@ export function DesktopPet() {
   const [pet, setPet] = useState<PetConfig>(loadPetConfig)
   const [pos, setPos] = useState<PetPosition | null>(loadPetPos)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [booting, setBooting] = useState(false)
+  const [wallpaper, setWallpaper] = useState<string>(() => {
+    try {
+      return localStorage.getItem('xt-agent-wallpaper') || ''
+    } catch {
+      return ''
+    }
+  })
   const dragRef = useRef<{ startX: number; startY: number; baseX: number; baseY: number; moved: boolean } | null>(null)
   const suppressClickRef = useRef(false)
   const [dragging, setDragging] = useState(false)
@@ -42,7 +51,10 @@ export function DesktopPet() {
   useEffect(() => {
     if (!expanded) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setExpanded(false)
+      if (e.key === 'Escape') {
+        setExpanded(false)
+        setBooting(false)
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -54,6 +66,7 @@ export function DesktopPet() {
   const toggle = () => {
     if (expanded) {
       setExpanded(false)
+      setBooting(false)
       return
     }
     const rect = petRef.current?.getBoundingClientRect()
@@ -61,8 +74,20 @@ export function DesktopPet() {
     setUnread(0)
     setSettingsOpen(false)
     setRendered(true)
+    // 开屏动画覆盖进入过程；动画结束或点击跳过后再露出聊天界面
+    setBooting(true)
     // 等 closed 态（clip 半径 0）先提交，再触发展开过渡
     requestAnimationFrame(() => requestAnimationFrame(() => setExpanded(true)))
+  }
+
+  const onWallpaperChange = (url: string) => {
+    setWallpaper(url)
+    try {
+      if (url) localStorage.setItem('xt-agent-wallpaper', url)
+      else localStorage.removeItem('xt-agent-wallpaper')
+    } catch {
+      /* 静默 */
+    }
   }
 
   // ── 拖动（Pointer Events，兼容触屏/鼠标） ──
@@ -202,6 +227,8 @@ export function DesktopPet() {
           <PetSettings
             config={pet}
             onChange={onPetChange}
+            wallpaper={wallpaper}
+            onWallpaperChange={onWallpaperChange}
             onResetPos={() => {
               savePetPos(null)
               setPos(null)
@@ -227,13 +254,21 @@ export function DesktopPet() {
           <AgentChatPanel
             variant="full"
             open
-            onClose={() => setExpanded(false)}
+            onClose={() => {
+              setExpanded(false)
+              setBooting(false)
+            }}
             onUnread={() => {
               // 收起状态下完成的生成计未读（全屏展开时由界面本身呈现）
               if (!expanded) setUnread((n) => Math.min(n + 1, 99))
             }}
           />
         </div>
+      )}
+
+      {/* 开屏动画（位于最上层，点击跳过） */}
+      {booting && (
+        <BootSplash wallpaper={wallpaper || undefined} version="xt-agent v2.0.0" onDone={() => setBooting(false)} />
       )}
     </>
   )

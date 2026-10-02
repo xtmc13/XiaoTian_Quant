@@ -91,7 +91,7 @@ function ThinkingDisclosure({ reasoning, streaming }: { reasoning: string; strea
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        className="flex items-center gap-1 rounded px-1 py-0.5 text-[11px] text-[var(--ag-text3)] transition-colors hover:bg-black/4"
+        className="flex items-center gap-1 rounded px-1 py-0.5 text-[11px] text-[var(--ag-text3)] transition-colors hover:bg-white/6"
       >
         <ChevronRight size={12} className={cn('shrink-0 transition-transform duration-150', open && 'rotate-90')} />
         <span className={cn(streaming && 'xt-shimmer-text')}>{label}</span>
@@ -133,7 +133,7 @@ function ToolScaffoldRow({ tool }: { tool: NonNullable<AgentChatMsg['toolCalls']
             aria-label={open ? `收起 ${toolLabel(tool.name)} 详情` : `展开 ${toolLabel(tool.name)} 详情`}
             aria-expanded={open}
             onClick={() => setOpen((v) => !v)}
-            className="shrink-0 rounded p-0.5 text-[var(--ag-text4)] hover:bg-black/4 hover:text-[var(--ag-text2)]"
+            className="shrink-0 rounded p-0.5 text-[var(--ag-text4)] hover:bg-white/6 hover:text-[var(--ag-text2)]"
           >
             <ChevronRight size={11} className={cn('transition-transform duration-150', open && 'rotate-90')} />
           </button>
@@ -189,7 +189,7 @@ function UserMessage({
               setEditing(false)
               setEditValue(msg.content)
             }}
-            className="flex items-center gap-1 rounded-md border border-[var(--ag-stroke2)] px-2 py-1 text-[11px] text-[var(--ag-text3)] hover:bg-black/4"
+            className="flex items-center gap-1 rounded-md border border-[var(--ag-stroke2)] px-2 py-1 text-[11px] text-[var(--ag-text3)] hover:bg-white/6"
           >
             <X size={11} />
             取消
@@ -309,7 +309,7 @@ function AssistantMessage({
             title={copied ? '已复制' : '复制'}
             aria-label={copied ? '已复制' : '复制回复'}
             onClick={doCopy}
-            className="rounded p-1 text-[var(--ag-text3)] hover:bg-black/4 hover:text-[var(--ag-text1)]"
+            className="rounded p-1 text-[var(--ag-text3)] hover:bg-white/6 hover:text-[var(--ag-text1)]"
           >
             {copied ? <Check size={12} className="text-[var(--ag-green)]" /> : <Clipboard size={12} />}
           </button>
@@ -319,7 +319,7 @@ function AssistantMessage({
             aria-label="重新生成回复"
             disabled={isStreaming}
             onClick={onRegenerate}
-            className="rounded p-1 text-[var(--ag-text3)] hover:bg-black/4 hover:text-[var(--ag-text1)] disabled:opacity-40"
+            className="rounded p-1 text-[var(--ag-text3)] hover:bg-white/6 hover:text-[var(--ag-text1)] disabled:opacity-40"
           >
             <RotateCcw size={12} />
           </button>

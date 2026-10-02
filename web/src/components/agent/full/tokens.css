@@ -2,26 +2,26 @@
    设计要点：种子色 + 透明度假生；扁平、hairline 分隔、悬浮面板统一阴影。 */
 
 .xt-hermes {
-  --ag-fg: #17171a;
-  --ag-bg: #f8faff; /* 聊天面 */
-  --ag-sidebar: #f3f7ff; /* 侧栏 / 状态条 */
-  --ag-card: #ffffff;
-  --ag-text1: #17171a; /* 94% */
-  --ag-text2: #45464d; /* 74% */
-  --ag-text3: #7a7b83; /* 54% */
-  --ag-text4: #a5a6ad; /* 36% */
-  --ag-stroke1: #d5d6de;
-  --ag-stroke2: #e2e3e9;
-  --ag-stroke3: #ebebf0; /* 默认 hairline */
-  --ag-sidebar-edge: rgba(23, 23, 26, 0.075);
-  --ag-accent: #0053fd;
-  --ag-user-bubble: #f0f4fe; /* accent 6% 混白 */
-  --ag-red: #cf2d56;
-  --ag-green: #1f8a65;
-  --ag-amber: #c08532;
-  --ag-inline-code-bg: rgba(20, 20, 20, 0.05);
-  --ag-inline-code-fg: rgba(20, 20, 20, 0.88);
-  --ag-selection: rgba(255, 210, 74, 0.55);
+  --ag-fg: #e8eaf0;
+  --ag-bg: #121316; /* 聊天面 */
+  --ag-sidebar: #191b20; /* 侧栏 / 状态条 */
+  --ag-card: #1e2128;
+  --ag-text1: rgba(235, 238, 245, 0.95); /* 94% */
+  --ag-text2: rgba(235, 238, 245, 0.7); /* 74% */
+  --ag-text3: rgba(235, 238, 245, 0.5); /* 54% */
+  --ag-text4: rgba(235, 238, 245, 0.32); /* 36% */
+  --ag-stroke1: rgba(255, 255, 255, 0.16);
+  --ag-stroke2: rgba(255, 255, 255, 0.1);
+  --ag-stroke3: rgba(255, 255, 255, 0.07); /* 默认 hairline */
+  --ag-sidebar-edge: rgba(255, 255, 255, 0.06);
+  --ag-accent: #4d6bfe;
+  --ag-user-bubble: rgba(77, 107, 254, 0.16); /* accent 透明填充 */
+  --ag-red: #e5484d;
+  --ag-green: #30a46c;
+  --ag-amber: #f5a524;
+  --ag-inline-code-bg: rgba(255, 255, 255, 0.09);
+  --ag-inline-code-fg: rgba(255, 255, 255, 0.88);
+  --ag-selection: rgba(77, 107, 254, 0.4);
   --ag-shadow-panel:
     0 0 0 1px rgba(23, 23, 26, 0.03), 0 4px 8px rgba(23, 23, 26, 0.04), 0 12px 24px rgba(23, 23, 26, 0.06),
     0 24px 48px rgba(23, 23, 26, 0.07);
@@ -39,7 +39,7 @@
   flex-direction: column;
   background: var(--ag-bg);
   color: var(--ag-text1);
-  color-scheme: light;
+  color-scheme: dark;
   font-size: 0.8125rem;
 }
 
@@ -50,14 +50,14 @@
 /* 细滚动条 */
 .xt-hermes * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(23, 23, 26, 0.18) transparent;
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
 }
 .xt-hermes *::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 .xt-hermes *::-webkit-scrollbar-thumb {
-  background: rgba(23, 23, 26, 0.16);
+  background: rgba(255, 255, 255, 0.14);
   border-radius: 999px;
 }
 .xt-hermes *::-webkit-scrollbar-track {

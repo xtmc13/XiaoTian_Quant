@@ -294,7 +294,7 @@ export function AgentComposer({
                 setPlusOpen(false)
                 fileInputRef.current?.click()
               }}
-              className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-[var(--ag-text2)] hover:bg-black/4"
+              className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-[var(--ag-text2)] hover:bg-white/6"
             >
               <Paperclip size={13} />
               添加文件（.txt/.md/.csv/.json ≤100KB）
@@ -312,7 +312,7 @@ export function AgentComposer({
                   onInputChange(input ? `${input}\n${s.text}` : s.text)
                   textareaRef.current?.focus()
                 }}
-                className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-[var(--ag-text2)] hover:bg-black/4"
+                className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-[var(--ag-text2)] hover:bg-white/6"
               >
                 <Sparkles size={13} />
                 {s.label}
@@ -408,7 +408,7 @@ export function AgentComposer({
             aria-label="打开附件菜单"
             aria-expanded={plusOpen}
             onClick={() => setPlusOpen((v) => !v)}
-            className="flex size-6 items-center justify-center rounded-full text-[var(--ag-text3)] transition-colors hover:bg-black/5 hover:text-[var(--ag-text1)]"
+            className="flex size-6 items-center justify-center rounded-full text-[var(--ag-text3)] transition-colors hover:bg-white/8 hover:text-[var(--ag-text1)]"
           >
             <Plus size={15} />
           </button>

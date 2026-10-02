@@ -238,7 +238,15 @@ export function HermesChat({
         </div>
       </div>
 
-      <AgentStatusBar model={settings.model} version={version ? `web v${version}` : ''} />
+      <AgentStatusBar
+        model={settings.model}
+        version={version ? `web v${version}` : ''}
+        stats={
+          messages.length > 0
+            ? `${messages.length} 条 · ≈${(messages.reduce((a, m) => a + (m.content?.length || 0) + (m.reasoning?.length || 0), 0) / 2 / 1000).toFixed(1)}k tok`
+            : ''
+        }
+      />
     </div>
   )
 }

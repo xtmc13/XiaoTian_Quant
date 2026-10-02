@@ -17,10 +17,12 @@ export interface AgentStatusBarProps {
   /** "provider" 或 "provider:model"，空串 = 默认 */
   model: string
   version: string
+  /** 会话统计，如 "5 条 · ≈1.2k tok" */
+  stats?: string
 }
 
-// ── 底部状态条：左 Gateway 健康，右 模型 + 版本 ──
-export function AgentStatusBar({ model, version }: AgentStatusBarProps) {
+// ── 底部状态条：左 Gateway 健康 + 会话统计，右 模型 + 版本 ──
+export function AgentStatusBar({ model, version, stats }: AgentStatusBarProps) {
   const [state, setState] = useState<GwState>('connecting')
 
   useEffect(() => {
@@ -54,6 +56,11 @@ export function AgentStatusBar({ model, version }: AgentStatusBarProps) {
         <Activity size={10} />
         {label}
       </span>
+      {stats && (
+        <span className="truncate text-[10px] tabular-nums text-[var(--ag-text4)]" title="会话消息数与估算上下文">
+          {stats}
+        </span>
+      )}
       <span className="min-w-0 flex-1" />
       {model ? (
         <span className="max-w-[40%] truncate font-mono text-[10px]" title="当前模型">

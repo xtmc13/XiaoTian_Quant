@@ -76,12 +76,24 @@ export interface PetSettingsProps {
   onChange: (cfg: PetConfig) => void
   onResetPos: () => void
   onClose: () => void
+  /** 助手开屏壁纸（dataURL/URL），空 = 默认光效 */
+  wallpaper?: string
+  onWallpaperChange?: (url: string) => void
 }
 
-// ── 桌宠设置弹层：自定义形象 / 尺寸 / 动画 / 重置 ──
-export function PetSettings({ config, onChange, onResetPos, onClose }: PetSettingsProps) {
+// ── 桌宠设置弹层：自定义形象 / 尺寸 / 动画 / 开屏壁纸 / 重置 ──
+export function PetSettings({
+  config,
+  onChange,
+  onResetPos,
+  onClose,
+  wallpaper = '',
+  onWallpaperChange,
+}: PetSettingsProps) {
   const fileRef = useRef<HTMLInputElement>(null)
+  const wallRef = useRef<HTMLInputElement>(null)
   const [url, setUrl] = useState('')
+  const [wallUrl, setWallUrl] = useState('')
   const [error, setError] = useState('')
 
   const applyImage = (dataURL: string) => {
@@ -122,7 +134,7 @@ export function PetSettings({ config, onChange, onResetPos, onClose }: PetSettin
           type="button"
           onClick={onClose}
           aria-label="关闭桌宠设置"
-          className="rounded p-1 text-[var(--ag-text3)] hover:bg-black/5"
+          className="rounded p-1 text-[var(--ag-text3)] hover:bg-white/8"
         >
           <X size={13} />
         </button>
@@ -218,6 +230,73 @@ export function PetSettings({ config, onChange, onResetPos, onClose }: PetSettin
           重置位置
         </button>
       </div>
+
+      {/* 开屏壁纸 */}
+      {onWallpaperChange && (
+        <>
+          <div className="mb-1 mt-2.5 flex items-center justify-between">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--ag-text4)]">
+              开屏壁纸
+            </span>
+            <button
+              type="button"
+              onClick={() => wallRef.current?.click()}
+              className="text-[10px] text-[var(--ag-accent)] hover:opacity-80"
+            >
+              上传
+            </button>
+          </div>
+          <input
+            ref={wallRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            aria-label="上传开屏壁纸"
+            onChange={(e) => {
+              const f = e.target.files?.[0]
+              e.target.value = ''
+              if (!f) return
+              if (f.size > 4 * 1024 * 1024) {
+                setError('壁纸不能超过 4MB')
+                return
+              }
+              const reader = new FileReader()
+              reader.onload = () => onWallpaperChange(String(reader.result || ''))
+              reader.readAsDataURL(f)
+            }}
+          />
+          <div className="flex gap-1">
+            <input
+              value={wallUrl}
+              onChange={(e) => setWallUrl(e.target.value)}
+              placeholder={wallpaper ? '已设置壁纸（可粘贴新链接替换）' : '粘贴壁纸图片 URL（可选）'}
+              aria-label="壁纸地址"
+              className="min-w-0 flex-1 rounded-lg border border-[var(--ag-stroke2)] bg-[var(--ag-card)] px-2 py-1 text-[11px] text-[var(--ag-text1)] placeholder:text-[var(--ag-text4)] focus:border-[var(--ag-accent)]/50 focus:outline-none"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                if (wallUrl.trim()) {
+                  onWallpaperChange(wallUrl.trim())
+                  setWallUrl('')
+                }
+              }}
+              disabled={!wallUrl.trim()}
+              className="shrink-0 rounded-lg bg-[var(--ag-text1)] px-2 py-1 text-[11px] text-[var(--ag-bg)] hover:opacity-85 disabled:opacity-40"
+            >
+              使用
+            </button>
+            <button
+              type="button"
+              onClick={() => onWallpaperChange('')}
+              disabled={!wallpaper}
+              className="shrink-0 rounded-lg border border-[var(--ag-stroke2)] px-2 py-1 text-[11px] text-[var(--ag-text3)] hover:text-[var(--ag-text1)] disabled:opacity-40"
+            >
+              清除
+            </button>
+          </div>
+        </>
+      )}
     </div>
   )
 }
