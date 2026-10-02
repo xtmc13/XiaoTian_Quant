@@ -152,6 +152,16 @@
   scroll-padding-top: 0.5rem;
 }
 
+/* 触屏滚动显式放行（修复安卓平板/手机无法下拉）：
+   pan-y 允许垂直平移，overscroll-contain 防止滚动链穿透到背景页 */
+.xt-hermes .xt-thread-scroll,
+.xt-hermes aside .xt-thread-scroll,
+.xt-hermes [role='dialog'] .overflow-y-auto {
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
 /* 打字活动点（尾条助手消息无内容时） */
 @keyframes xt-pulse-dot {
   0%,
