@@ -31,6 +31,22 @@ import '@klinecharts/pro/dist/klinecharts-pro.css'
 
 const WATCHLIST = SPOT_WATCHLIST
 
+/* 页面 UI 状态本地持久化:交易对/周期/面板开合/侧栏标签,重进页面恢复原样 */
+const UI_STATE_KEY = 'xt-trading-ui-contract'
+interface TradingUIState {
+  symbol?: string
+  interval?: string
+  panelOpen?: boolean
+  sideTab?: string
+}
+function loadUIState(): TradingUIState {
+  try {
+    return JSON.parse(localStorage.getItem(UI_STATE_KEY) || '{}') as TradingUIState
+  } catch {
+    return {}
+  }
+}
+
 /* Extended types for fields not yet in base definitions */
 interface HistoryOrder extends Order {
   updated_at?: string
@@ -77,11 +93,12 @@ interface ContractPosition {
 }
 
 export function TradingContract() {
-  const [symbol, setSymbol] = useState('BTCUSDT')
-  const [interval, setInterval] = useState('1h')
+  const initialUI = useMemo(loadUIState, [])
+  const [symbol, setSymbol] = useState(initialUI.symbol || 'BTCUSDT')
+  const [interval, setInterval] = useState(initialUI.interval || '1h')
   const [popup, setPopup] = useState<OrderPopupState | null>(null)
-  const [sideTab, setSideTab] = useState<SideTab>('book')
-  const [panelOpen, setPanelOpen] = useState(true)
+  const [sideTab, setSideTab] = useState<SideTab>((initialUI.sideTab as SideTab) || 'book')
+  const [panelOpen, setPanelOpen] = useState(initialUI.panelOpen ?? true)
   const [symbolOpen, setSymbolOpen] = useState(false)
   const [watchlistSearch, setWatchlistSearch] = useState('')
   const [obPrecision, setObPrecision] = useState('0.1')
@@ -345,7 +362,7 @@ export function TradingContract() {
     [precision.price]
   )
 
-  /* 长按拖动改价:实时参考线 */
+  /* 长按拖动改价:实时参考线;拖动起始即弹出下单卡并实时跟随价格 */
   const [dragPrice, setDragPrice] = useState<{ price: number; y: number } | null>(null)
   const handleChartPriceDrag = useCallback(
     (p: number, pos: { x: number; y: number }, phase: 'start' | 'move' | 'end') => {
@@ -354,10 +371,24 @@ export function TradingContract() {
         return
       }
       const formatted = formatLinePrice(p, precision.price)
-      setDragPrice({ price: parseFloat(formatted) || p, y: pos.y })
+      const price = parseFloat(formatted) || p
+      setDragPrice({ price, y: pos.y })
+      if (phase === 'start') {
+        setPopup({ price, x: pos.x, y: pos.y })
+      }
     },
     [precision.price]
   )
+
+  /* UI 状态持久化 */
+  useEffect(() => {
+    const state: TradingUIState = { symbol, interval, panelOpen, sideTab }
+    try {
+      localStorage.setItem(UI_STATE_KEY, JSON.stringify(state))
+    } catch {
+      /* ignore */
+    }
+  }, [symbol, interval, panelOpen, sideTab])
 
   const closePopup = useCallback(() => setPopup(null), [])
 
@@ -511,6 +542,7 @@ export function TradingContract() {
               precision={precision.price}
               availableQuote={spotBalance}
               contractPos={contractPos}
+              livePrice={dragPrice?.price ?? null}
               onClose={closePopup}
               onSubmitted={() => {
                 queryClient.invalidateQueries({ queryKey: ['orders'] })
@@ -700,12 +732,14 @@ interface ChartOrderPopupProps {
   availableQuote: number
   /** 当前合约持仓(用于平仓模式) */
   contractPos: ContractPosition | null
+  /** 长按拖动中的实时价格:非 null 时限价单价格输入框实时跟随 */
+  livePrice?: number | null
   onClose: () => void
   onSubmitted: () => void
 }
 
 function ChartOrderPopup({
-  symbol, price, pos, lastPrice, precision, availableQuote, contractPos, onClose, onSubmitted,
+  symbol, price, pos, lastPrice, precision, availableQuote, contractPos, livePrice, onClose, onSubmitted,
 }: ChartOrderPopupProps) {
   const [direction, setDirection] = useState<'LONG' | 'SHORT'>('LONG')
   const [orderType, setOrderType] = useState<'LIMIT' | 'MARKET'>('LIMIT')
@@ -718,6 +752,13 @@ function ChartOrderPopup({
   const [slPrice, setSlPrice] = useState('')
   const [showTpSl, setShowTpSl] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+
+  /* 长按拖动:价格实时跟随 */
+  useEffect(() => {
+    if (livePrice != null && orderType === 'LIMIT') {
+      setLimitPrice(String(livePrice))
+    }
+  }, [livePrice, orderType])
 
   // 定位：以图表容器为参照，防出界
   const vpW = typeof window !== 'undefined' ? window.innerWidth : 1280
