@@ -29,6 +29,7 @@ export interface SlashCommand {
     | 'dingtalk'
     | 'flask'
     | 'qq'
+    | 'weixin'
     | 'wecom'
     | 'moa'
 }
@@ -58,6 +59,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'feishu', description: '打开飞书接入面板', icon: 'feishu' },
   { name: 'dingtalk', description: '打开钉钉接入面板', icon: 'dingtalk' },
   { name: 'qq', description: '打开 QQ 接入面板', icon: 'qq' },
+  { name: 'weixin', description: '打开微信接入面板', icon: 'weixin' },
   { name: 'wecom', description: '打开企业微信接入面板', icon: 'wecom' },
   { name: 'evals', description: '打开评测面板', icon: 'flask' },
   { name: 'moa', description: '下一条消息使用 MoA 多模型综合', icon: 'moa' },

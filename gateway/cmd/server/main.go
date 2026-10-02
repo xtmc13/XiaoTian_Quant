@@ -21,6 +21,7 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/agentqq"
 	"github.com/xiaotian-quant/gateway/internal/agenttelegram"
 	"github.com/xiaotian-quant/gateway/internal/agentwecom"
+	"github.com/xiaotian-quant/gateway/internal/agentweixin"
 	"github.com/xiaotian-quant/gateway/internal/ai"
 	"github.com/xiaotian-quant/gateway/internal/alerting"
 	"github.com/xiaotian-quant/gateway/internal/alerts"
@@ -407,6 +408,17 @@ func main() {
 		})
 	})
 	builtin.SetWecomHealthProvider(handler.AgentGatewayHealthSummary)
+	// 微信入站：执行器（/stop ctx 中断、会话绑定、模型覆盖）+ /status 健康行
+	// （iLink 长轮询主循环随执行器注入启动；QR 扫码登录由前端面板触发，无需环境凭据）
+	builtin.SetWeixinExecutor(func(ctx context.Context, req *agentweixin.RunRequest) (string, error) {
+		return handler.RunAgentHeadlessCtx(ctx, handler.HeadlessOptions{
+			UserID:         req.UserID,
+			Prompt:         req.Prompt,
+			ConversationID: req.ConversationID,
+			Model:          req.Model,
+		})
+	})
+	builtin.SetWeixinHealthProvider(handler.AgentGatewayHealthSummary)
 	log.Printf("[plugins] 内置插件已装配: %d 个", len(builtin.Manager().Manifest()))
 
 	// ── Market data cache purger (every 30 seconds) ──

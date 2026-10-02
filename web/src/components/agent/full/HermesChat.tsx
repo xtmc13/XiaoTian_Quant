@@ -20,6 +20,7 @@ import { FeishuPanel } from './FeishuPanel'
 import { DingtalkPanel } from './DingtalkPanel'
 import { QqPanel } from './QqPanel'
 import { WecomPanel } from './WecomPanel'
+import { WeixinPanel } from './WeixinPanel'
 import { EvalsPanel } from './EvalsPanel'
 import { FilesPanel } from './FilesPanel'
 import { UsagePanel } from './UsagePanel'
@@ -142,6 +143,7 @@ export function HermesChat({
     | 'feishu'
     | 'dingtalk'
     | 'qq'
+    | 'weixin'
     | 'wecom'
     | 'files'
     | 'insights'
@@ -291,6 +293,9 @@ export function HermesChat({
           break
         case 'qq':
           setMainView('qq')
+          break
+        case 'weixin':
+          setMainView('weixin')
           break
         case 'wecom':
           setMainView('wecom')
@@ -520,6 +525,7 @@ export function HermesChat({
                 'feishu',
                 'dingtalk',
                 'qq',
+                'weixin',
                 'wecom',
                 'files',
                 'insights',
@@ -570,7 +576,9 @@ export function HermesChat({
                                       ? '钉钉'
                                       : mainView === 'qq'
                                         ? 'QQ'
-                                        : mainView === 'wecom'
+                                        : mainView === 'weixin'
+                                          ? '微信'
+                                          : mainView === 'wecom'
                                           ? '企业微信'
                                           : mainView === 'evals'
                                             ? '评测'
@@ -594,6 +602,7 @@ export function HermesChat({
                 {mainView === 'feishu' && <FeishuPanel bare onClose={() => setMainView('chat')} />}
                 {mainView === 'dingtalk' && <DingtalkPanel bare onClose={() => setMainView('chat')} />}
                 {mainView === 'qq' && <QqPanel bare onClose={() => setMainView('chat')} />}
+                {mainView === 'weixin' && <WeixinPanel bare onClose={() => setMainView('chat')} />}
                 {mainView === 'wecom' && <WecomPanel bare onClose={() => setMainView('chat')} />}
                 {mainView === 'evals' && <EvalsPanel bare onClose={() => setMainView('chat')} />}
                 {mainView === 'files' && <FilesPanel bare onClose={() => setMainView('chat')} />}

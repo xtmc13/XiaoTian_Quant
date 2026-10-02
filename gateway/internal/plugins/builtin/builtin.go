@@ -18,6 +18,7 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/agenttelegram"
 	"github.com/xiaotian-quant/gateway/internal/agentwebsearch"
 	"github.com/xiaotian-quant/gateway/internal/agentwecom"
+	"github.com/xiaotian-quant/gateway/internal/agentweixin"
 	"github.com/xiaotian-quant/gateway/internal/plugin"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
@@ -41,6 +42,7 @@ var (
 	feishuBot   *agentfeishu.Bot
 	dingtalkBot *agentdingtalk.Bot
 	qqBot       *agentqq.Bot
+	weixinBot   *agentweixin.Bot
 	wecomBot    *agentwecom.Bot
 	subPlugin   *agentsub.SubagentsPlugin
 	filesPlugin *agentfiles.Plugin
@@ -61,6 +63,8 @@ func build() {
 	// QQ（官方 WSS 网关）/ 企业微信（回调模式）双向通道；cron 每用户直发同上回落语义
 	qqBot = agentqq.NewBot(agentqq.NewRepo())
 	cronSched.SetQqSender(qqBot.SendToUser)
+	// 微信（腾讯官方 iLink Bot API，QR 扫码登录）双向通道；无需环境凭据
+	weixinBot = agentweixin.NewBot(agentweixin.NewRepo())
 	wecomBot = agentwecom.NewBot(agentwecom.NewRepo())
 	cronSched.SetWecomSender(wecomBot.SendToUser)
 	subPlugin = &agentsub.SubagentsPlugin{}
@@ -131,6 +135,8 @@ func build() {
 		&agentfeishu.FeishuPlugin{Repo: agentfeishu.NewRepo(), Bot: feishuBot},
 		&agentdingtalk.DingtalkPlugin{Repo: agentdingtalk.NewRepo(), Bot: dingtalkBot},
 		&agentqq.QQPlugin{Repo: agentqq.NewRepo(), Bot: qqBot},
+		// 微信导航排在企业微信之前（iLink QR 登录通道）
+		&agentweixin.WeixinPlugin{Repo: agentweixin.NewRepo(), Bot: weixinBot},
 		&agentwecom.WecomPlugin{Repo: agentwecom.NewRepo(), Bot: wecomBot},
 		subPlugin,
 		// P3-C：联网搜索（Brave key 从 config 注入，空则走 DuckDuckGo 兜底）。
@@ -219,6 +225,12 @@ func WecomBot() *agentwecom.Bot {
 	return wecomBot
 }
 
+// WeixinBot 微信通道单例（iLink 长轮询与 QR 登录共用）。
+func WeixinBot() *agentweixin.Bot {
+	once.Do(build)
+	return weixinBot
+}
+
 // SetQqExecutor 注入 QQ 入站执行器（ctx 中断 / 会话绑定 / 模型覆盖）并启动 WSS 循环。
 func SetQqExecutor(exec agentqq.Executor) {
 	once.Do(build)
@@ -230,6 +242,19 @@ func SetQqExecutor(exec agentqq.Executor) {
 func SetWecomExecutor(exec agentwecom.Executor) {
 	once.Do(build)
 	wecomBot.SetExecutor(exec)
+}
+
+// SetWeixinExecutor 注入微信入站执行器（ctx 中断 / 会话绑定 / 模型覆盖）并启动长轮询主循环。
+func SetWeixinExecutor(exec agentweixin.Executor) {
+	once.Do(build)
+	weixinBot.SetExecutor(exec)
+	weixinBot.Start()
+}
+
+// SetWeixinHealthProvider 注入微信 /status 的网关健康行。
+func SetWeixinHealthProvider(fn func() string) {
+	once.Do(build)
+	weixinBot.SetHealthProvider(fn)
 }
 
 // SetQqHealthProvider 注入 QQ /status 的网关健康行。

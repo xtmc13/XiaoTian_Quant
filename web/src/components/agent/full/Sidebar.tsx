@@ -13,6 +13,7 @@ import {
   FlaskConical,
   GitBranch,
   History,
+  MessageCircle,
   MessageSquare,
   MessagesSquare,
   MoreHorizontal,
@@ -506,6 +507,8 @@ export function AgentSidebar({
                 <FlaskConical size={13} />
               ) : n.icon === 'qq' ? (
                 <BotMessageSquare size={13} />
+              ) : n.icon === 'weixin' ? (
+                <MessageCircle size={13} />
               ) : n.icon === 'wecom' ? (
                 <MessagesSquare size={13} />
               ) : (

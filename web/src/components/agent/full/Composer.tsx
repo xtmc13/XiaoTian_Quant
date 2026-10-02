@@ -17,6 +17,7 @@ import {
   GitBranch,
   History,
   Layers3,
+  MessageCircle,
   MessageCircleQuestion,
   MessagesSquare,
   Mic,
@@ -72,6 +73,7 @@ const SLASH_ICONS: Record<SlashCommand['icon'], React.ReactNode> = {
   dingtalk: <Bell size={13} />,
   flask: <FlaskConical size={13} />,
   qq: <BotMessageSquare size={13} />,
+  weixin: <MessageCircle size={13} />,
   wecom: <MessagesSquare size={13} />,
   moa: <Layers3 size={13} />,
 }

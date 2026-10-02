@@ -3213,6 +3213,22 @@ export const agentWecomApi = {
   unlink: () => api.post<{ success: boolean }>('/agent/wecom/unlink', {}),
 }
 
+// ── 微信通道（weixin 插件；腾讯官方 iLink Bot API，QR 扫码登录，绑定 id 为 wxid） ──
+export interface AgentWeixinStatus {
+  configured: boolean
+  logged_in: boolean
+  bot_id?: string
+  linked: boolean
+  wxid?: string
+}
+
+export const agentWeixinApi = {
+  status: () => api.get<AgentWeixinStatus>('/agent/weixin/status'),
+  qrcode: () => api.post<{ qrcode_img: string; expires_in: number }>('/agent/weixin/qrcode', {}),
+  qrcodeStatus: () => api.get<{ status: string }>('/agent/weixin/qrcode-status'),
+  unlink: () => api.post<{ success: boolean }>('/agent/weixin/unlink', {}),
+}
+
 // ── Agent 评测（evals 插件） ──
 export interface AgentEvalSuite {
   id: string

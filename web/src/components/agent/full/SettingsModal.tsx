@@ -35,6 +35,7 @@ import { KanbanPanel } from './KanbanPanel'
 import { QqPanel } from './QqPanel'
 import { TelegramPanel } from './TelegramPanel'
 import { WecomPanel } from './WecomPanel'
+import { WeixinPanel } from './WeixinPanel'
 
 interface ModelProvider {
   key: string
@@ -199,6 +200,7 @@ const TOOL_ICONS: Record<string, typeof Sparkles> = {
   feishu: MessageCircle,
   dingtalk: MessageCircle,
   qq: MessageCircle,
+  weixin: MessageCircle,
   wecom: MessageCircle,
 }
 
@@ -577,6 +579,7 @@ export function SettingsModal({ settings, onSave, onClose, providers, version, t
                   {t.id === 'feishu' && <FeishuPanel bare onClose={backToGeneral} />}
                   {t.id === 'dingtalk' && <DingtalkPanel bare onClose={backToGeneral} />}
                   {t.id === 'qq' && <QqPanel bare onClose={backToGeneral} />}
+                  {t.id === 'weixin' && <WeixinPanel bare onClose={backToGeneral} />}
                   {t.id === 'wecom' && <WecomPanel bare onClose={backToGeneral} />}
                 </div>
               )
