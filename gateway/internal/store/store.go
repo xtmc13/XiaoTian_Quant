@@ -147,19 +147,26 @@ func InitDB() error {
 	// return，但数据库与运行时路径仍应就位，否则 LoadConfig 读到空路径
 	// 静默产出空配置（交易所凭证等全部丢失）。
 	if configPath == "" {
-		configPath = "./config/config.yaml"
+		configPath = defaultConfigPath()
+	}
+	// 运行时 JSON 一律落到 DB 目录（/app/data 卷）：重建容器不丢策略配置/日志/模板/agent_tokens。
+	runtimeDir := "./runtime"
+	if db := os.Getenv("DB_PATH"); db != "" {
+		if dir := filepath.Dir(db); dir != "" && dir != "." {
+			runtimeDir = dir
+		}
 	}
 	if strategyConfigsPath == "" {
-		strategyConfigsPath = "./runtime/strategy_configs.json"
+		strategyConfigsPath = filepath.Join(runtimeDir, "strategy_configs.json")
 	}
 	if logsPath == "" {
-		logsPath = "./runtime/strategy_logs.json"
+		logsPath = filepath.Join(runtimeDir, "strategy_logs.json")
 	}
 	if templatesPath == "" {
-		templatesPath = "./runtime/strategy_templates.json"
+		templatesPath = filepath.Join(runtimeDir, "strategy_templates.json")
 	}
 	if agentTokensPath == "" {
-		agentTokensPath = "./runtime/agent_tokens.json"
+		agentTokensPath = filepath.Join(runtimeDir, "agent_tokens.json")
 	}
 
 	// ── JWT Secret ──
@@ -385,11 +392,27 @@ func deepCopySlice(s []any) []any {
 
 // ── Config ──
 
+// defaultConfigPath 解析配置文件落盘位置：
+// 1) CONFIG_PATH 环境变量显式指定（最高优先）；
+// 2) DB_PATH 所在目录（/app/data 卷，随数据库持久化——修复重建容器丢配置）；
+// 3) 兜底 ./config/config.yaml。
+func defaultConfigPath() string {
+	if p := os.Getenv("CONFIG_PATH"); p != "" {
+		return p
+	}
+	if db := os.Getenv("DB_PATH"); db != "" {
+		if dir := filepath.Dir(db); dir != "" && dir != "." {
+			return filepath.Join(dir, "config.yaml")
+		}
+	}
+	return "./config/config.yaml"
+}
+
 func LoadConfig() {
 	configMu.Lock()
 	defer configMu.Unlock()
 	if configPath == "" {
-		configPath = "./config/config.yaml"
+		configPath = defaultConfigPath()
 	}
 	data, err := os.ReadFile(configPath)
 	if err != nil {

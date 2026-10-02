@@ -39,11 +39,22 @@ func DefaultRoot(cfg map[string]any) (string, error) {
 		}
 	}
 	if root == "" {
+		// 默认落 DB 目录（/app/data 卷），重建容器不丢沙箱文件。
+		runtimeDir := "runtime"
+		if db := os.Getenv("DB_PATH"); db != "" {
+			if dir := filepath.Dir(db); dir != "" && dir != "." {
+				runtimeDir = dir
+			}
+		}
 		cwd, err := os.Getwd()
 		if err != nil {
 			return "", err
 		}
-		root = filepath.Join(cwd, "runtime", "agent_files")
+		if filepath.IsAbs(runtimeDir) {
+			root = filepath.Join(runtimeDir, "agent_files")
+		} else {
+			root = filepath.Join(cwd, runtimeDir, "agent_files")
+		}
 	}
 	return CanonicalRoot(root)
 }
