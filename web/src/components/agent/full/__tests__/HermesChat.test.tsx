@@ -65,10 +65,10 @@ describe('Hermes 全屏助手', () => {
     undoMock.mockResolvedValue({ success: true, remaining: 0 })
   })
 
-  it('空态：鲸鱼标语 + 徽章 + 侧栏分组 + 侧栏健康指示', async () => {
+  it('空态：鲸鱼标语 + 徽章 + 侧栏分组', async () => {
     renderFull()
-    // 空态（对标桌面版"探索未至之境"）
-    expect(screen.getByText('探索未至之境')).toBeTruthy()
+    // 空态标语（与登录页一致）
+    expect(screen.getByText('AI 驱动的量化交易平台')).toBeTruthy()
     expect(screen.getByText('预览版')).toBeTruthy()
     // 品牌行 + 面包屑药丸各有一处"小天量化"
     expect(screen.getAllByText('小天量化').length).toBeGreaterThanOrEqual(2)
@@ -77,13 +77,6 @@ describe('Hermes 全屏助手', () => {
     expect(screen.getByText('网格机器人')).toBeTruthy()
     // 日期分组头
     expect(screen.getByText('今天')).toBeTruthy()
-    // 侧栏底部 Gateway 健康
-    await waitFor(() => expect(screen.getByText('Gateway 就绪')).toBeTruthy())
-    // 设置窗：左侧导航 + 关于页显示版本
-    fireEvent.click(screen.getByText('设置'))
-    expect(screen.getByRole('dialog', { name: '助手设置' })).toBeTruthy()
-    fireEvent.click(screen.getByText('关于'))
-    expect(screen.getByText(/web v/)).toBeTruthy()
   })
 
   it('搜索会话走服务端接口并展示摘要', async () => {

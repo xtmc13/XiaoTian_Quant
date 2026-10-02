@@ -37,10 +37,10 @@ export function AgentEmptyState() {
   const [tagline] = useState(() => TAGLINES[Math.floor(Math.random() * TAGLINES.length)])
   return (
     <div className="flex flex-col items-center gap-2 px-4 py-6">
-      {/* 鲸鱼 + 标语（对标桌面版"探索未至之境"空态） */}
+      {/* 鲸鱼 + 标语（与登录页标语一致） */}
       <div className="flex items-center gap-2.5">
         <DefaultPet size={40} />
-        <span className="text-[22px] font-bold tracking-tight text-[var(--ag-text1)]">探索未至之境</span>
+        <span className="text-[22px] font-bold tracking-tight text-[var(--ag-text1)]">AI 驱动的量化交易平台</span>
         <span className="rounded-full bg-[var(--ag-accent)]/10 px-1.5 py-0.5 text-[10px] font-medium text-[var(--ag-accent)]">
           预览版
         </span>
