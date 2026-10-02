@@ -182,20 +182,33 @@ type ChatMessage struct {
 // ── Completion Request/Response ──
 
 type CompletionRequest struct {
-	Model       string        `json:"model"`
-	Messages    []ChatMessage `json:"messages"`
-	MaxTokens   int           `json:"max_tokens,omitempty"`
-	Temperature float64       `json:"temperature,omitempty"`
-	Stream      bool          `json:"stream,omitempty"`
-	Tools       []Tool        `json:"tools,omitempty"`
-	ToolChoice  string        `json:"tool_choice,omitempty"`
+	Model         string         `json:"model"`
+	Messages      []ChatMessage  `json:"messages"`
+	MaxTokens     int            `json:"max_tokens,omitempty"`
+	Temperature   float64        `json:"temperature,omitempty"`
+	Stream        bool           `json:"stream,omitempty"`
+	StreamOptions *StreamOptions `json:"stream_options,omitempty"`
+	Tools         []Tool         `json:"tools,omitempty"`
+	ToolChoice    string         `json:"tool_choice,omitempty"`
+}
+
+// StreamOptions OpenAI 兼容流式选项：开启后厂商在流尾上报 usage 块。
+type StreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
+}
+
+// openAIStreamIncludeUsage 已验证支持 stream_options.include_usage 的厂商；
+// 未列出的厂商（glm/hunyuan 等兼容性未确认）不发送该字段，避免 400。
+var openAIStreamIncludeUsage = map[string]bool{
+	"openai": true, "deepseek": true, "kimi": true, "qwen": true,
+	"doubao": true, "llama": true, "mistral": true, "openrouter": true,
 }
 
 type CompletionResponse struct {
-	ID      string        `json:"id"`
-	Model   string        `json:"model"`
-	Choices []Choice      `json:"choices"`
-	Usage   Usage         `json:"usage"`
+	ID      string   `json:"id"`
+	Model   string   `json:"model"`
+	Choices []Choice `json:"choices"`
+	Usage   Usage    `json:"usage"`
 }
 
 type Choice struct {
@@ -629,6 +642,9 @@ func (p *Provider) chatCompletionStream(req CompletionRequest, callback func(del
 func (p *Provider) openAICompatibleStream(req CompletionRequest, callback func(delta, reasoningDelta string), usageOut *Usage) (string, string, []ToolCall, error) {
 	req.Stream = true
 	req.Model = p.Model
+	if usageOut != nil && openAIStreamIncludeUsage[p.Name] {
+		req.StreamOptions = &StreamOptions{IncludeUsage: true}
+	}
 
 	url := chatCompletionsURL(p.BaseURL)
 	body, _ := json.Marshal(req)
