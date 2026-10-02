@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Settings, Shield } from 'lucide-react'
+import { ChevronDown, Shield } from 'lucide-react'
 import { toast } from '@/lib/useToast'
 import type { AgentConversationSummary } from '@/lib/api'
 import { agentPluginApi, agentSkillApi } from '@/lib/api'
@@ -83,6 +83,12 @@ export function HermesChat({
   const [settingsOpen, setSettingsOpen] = useState(false)
   const wp = useWallpaper()
   const hasWallpaper = Boolean(wp?.active)
+  const hasMessages = messages.length > 0
+  // 状态栏统计：轮数（助手消息数）/ 步数（工具调用数）/ 输入输出字符（1 tok ≈ 2 字符）
+  const rounds = messages.filter((m) => m.role === 'assistant').length
+  const steps = messages.reduce((a, m) => a + (m.toolCalls?.length || 0), 0)
+  const inChars = messages.reduce((a, m) => (m.role === 'user' ? a + (m.content?.length || 0) : a), 0)
+  const outChars = messages.reduce((a, m) => (m.role === 'assistant' ? a + (m.content?.length || 0) : a), 0)
   const [cronOpen, setCronOpen] = useState(false)
   const [memoryOpen, setMemoryOpen] = useState(false)
   const [skillsOpen, setSkillsOpen] = useState(false)
@@ -205,34 +211,38 @@ export function HermesChat({
         />
 
         <div className="relative flex min-w-0 flex-1 flex-col">
-          {/* 标题行：会话标题 + 模式徽章 + 右侧操作（对标 dsh 标题行） */}
-          <div className="flex items-center gap-2 border-b border-[var(--ag-stroke3)] px-5 pb-2 pt-3">
-            <span className="min-w-0 flex-1 truncate text-[15px] font-semibold text-[var(--ag-text1)]">
-              {conversations.find((c) => c.id === currentId)?.title || '新对话'}
-            </span>
-            <span className="flex shrink-0 items-center gap-1 rounded-md border border-[var(--ag-stroke2)] px-1.5 py-0.5 text-[10px] text-[var(--ag-text3)]">
-              <Shield size={10} />
-              标准模式
-            </span>
-            <button
-              type="button"
-              onClick={() => setSettingsOpen(true)}
-              title="助手设置"
-              aria-label="助手设置"
-              className="shrink-0 rounded-md p-1.5 text-[var(--ag-text3)] transition-colors hover:bg-black/5 hover:text-[var(--ag-text1)]"
-            >
-              <Settings size={14} />
-            </button>
-          </div>
-          {/* 页签行：对话 | 轨迹 */}
-          <div className="flex items-center gap-4 border-b border-[var(--ag-stroke3)] px-5">
-            <span className="border-b-2 border-[var(--ag-accent)] py-1.5 text-[12px] font-medium text-[var(--ag-text1)]">
-              对话
-            </span>
-            <span className="cursor-not-allowed py-1.5 text-[12px] text-[var(--ag-text4)]" title="敬请期待">
-              轨迹
-            </span>
-          </div>
+          {/* 标题行 + 页签：仅会话有消息时显示（空态时整块隐藏，对标桌面版） */}
+          {hasMessages && (
+            <>
+              <div className="flex items-center gap-2 px-5 pb-1 pt-3">
+                <span className="min-w-0 flex-1 truncate text-[15px] font-semibold text-[var(--ag-text1)]">
+                  {conversations.find((c) => c.id === currentId)?.title || '新对话'}
+                </span>
+                <span className="flex shrink-0 items-center gap-1 text-[11px] text-[var(--ag-text3)]">
+                  <Shield size={11} />
+                  标准模式
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setUsageOpen(true)}
+                  title="会话日志与用量"
+                  aria-label="会话日志"
+                  className="flex shrink-0 items-center gap-1 rounded-full border border-[var(--ag-stroke2)] bg-[var(--ag-card)] px-2.5 py-1 text-[11px] text-[var(--ag-text2)] transition-colors hover:border-[var(--ag-accent)]/50 hover:text-[var(--ag-accent)]"
+                >
+                  会话日志
+                  <ChevronDown size={11} />
+                </button>
+              </div>
+              <div className="flex items-center gap-4 border-b border-[var(--ag-stroke3)] px-5">
+                <span className="border-b-2 border-[var(--ag-accent)] py-1.5 text-[12px] font-medium text-[var(--ag-text1)]">
+                  对话
+                </span>
+                <span className="cursor-not-allowed py-1.5 text-[12px] text-[var(--ag-text4)]" title="敬请期待">
+                  轨迹
+                </span>
+              </div>
+            </>
+          )}
 
           <AgentThread
             messages={messages}
@@ -285,7 +295,7 @@ export function HermesChat({
           version={version ? `web v${version}` : ''}
           stats={
             messages.length > 0
-              ? `${messages.length} 条消息 · ≈${(messages.reduce((a, m) => a + (m.content?.length || 0) + (m.reasoning?.length || 0), 0) / 2 / 1000).toFixed(1)}k tok`
+              ? `${rounds} 轮 · ${steps} 步 | 📥 输入 ${(inChars / 2000).toFixed(1)}K tok · 输出 ${(outChars / 2000).toFixed(1)}K tok`
               : '就绪'
           }
         />

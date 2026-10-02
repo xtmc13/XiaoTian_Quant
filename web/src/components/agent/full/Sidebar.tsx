@@ -186,7 +186,7 @@ export function AgentSidebar({
         onKeyDown={(e) => e.key === 'Enter' && onSelect(c.id)}
         className={cn(
           'group relative flex min-h-[1.625rem] cursor-pointer items-center gap-1.5 rounded-md py-0.5 pl-2 pr-2',
-          active ? 'bg-[var(--ag-card)] text-[var(--ag-text1)]' : 'text-[var(--ag-text2)] hover:bg-[var(--ag-card)]/70'
+          active ? 'bg-black/5 text-[var(--ag-text1)]' : 'text-[var(--ag-text2)] hover:bg-black/4'
         )}
       >
         <MessageSquare size={12} className="size-3.5 shrink-0 text-[var(--ag-text4)]" />

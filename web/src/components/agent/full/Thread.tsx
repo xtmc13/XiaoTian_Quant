@@ -12,6 +12,8 @@ import {
   Shield,
   Wrench,
   X,
+  ThumbsDown,
+  ThumbsUp,
 } from 'lucide-react'
 import type { AgentChatMsg } from '../types'
 import { copyText, toolLabel } from '../types'
@@ -209,26 +211,40 @@ function UserMessage({
     )
   }
 
+  // 桌面版：用户消息为居中窄灰泡，气泡下方右侧小复制/编辑图标
   return (
-    <div className="xt-sticky-human xt-human-clamp group relative pt-1">
-      <div className="xt-human-bubble w-full rounded-xl border border-[var(--ag-stroke2)] bg-[var(--ag-user-bubble)] px-3 py-2 transition-colors group-hover:border-[var(--ag-stroke1)]">
-        <div className="xt-human-bubble-text whitespace-pre-wrap break-words text-[13px] leading-relaxed text-[var(--ag-text1)]">
-          {msg.content}
+    <div className="group flex flex-col items-center pt-2">
+      <div className="xt-human-clamp max-w-[85%]">
+        <div className="xt-human-bubble rounded-xl bg-[var(--ag-user-bubble)] px-3.5 py-2 transition-colors group-hover:bg-[var(--ag-muted)]">
+          <div className="xt-human-bubble-text whitespace-pre-wrap break-words text-[13px] leading-relaxed text-[var(--ag-text1)]">
+            {msg.content}
+          </div>
         </div>
       </div>
-      <button
-        type="button"
-        title="编辑并重新发送"
-        aria-label="编辑并重新发送"
-        disabled={isStreaming}
-        onClick={() => {
-          setEditValue(msg.content)
-          setEditing(true)
-        }}
-        className="absolute bottom-1.5 right-2 rounded bg-[var(--ag-card)]/90 p-1 text-[var(--ag-text3)] opacity-0 shadow-sm transition-opacity group-hover:opacity-100 hover:text-[var(--ag-text1)] disabled:opacity-0"
-      >
-        <Pencil size={11} />
-      </button>
+      <span className="mt-0.5 flex items-center gap-0.5 pl-2 opacity-0 transition-opacity group-hover:opacity-100">
+        <button
+          type="button"
+          title="复制"
+          aria-label="复制用户消息"
+          onClick={() => void copyText(msg.content)}
+          className="rounded p-0.5 text-[var(--ag-text4)] hover:text-[var(--ag-text2)]"
+        >
+          <Clipboard size={11} />
+        </button>
+        <button
+          type="button"
+          title="编辑并重新发送"
+          aria-label="编辑并重新发送"
+          disabled={isStreaming}
+          onClick={() => {
+            setEditValue(msg.content)
+            setEditing(true)
+          }}
+          className="rounded p-0.5 text-[var(--ag-text4)] hover:text-[var(--ag-text2)] disabled:opacity-0"
+        >
+          <Pencil size={11} />
+        </button>
+      </span>
     </div>
   )
 }
@@ -246,6 +262,7 @@ function AssistantMessage({
   onRegenerate: () => void
 }) {
   const [copied, setCopied] = useState(false)
+  const [feedback, setFeedback] = useState<'up' | 'down' | null>(null)
 
   const doCopy = async () => {
     if (await copyText(msg.content)) {
@@ -300,7 +317,7 @@ function AssistantMessage({
           </button>
         </div>
       )}
-      {/* hover 操作条（右对齐） */}
+      {/* hover 操作条：复制 / 👍 / 👎 / 重生成（对标桌面版消息操作） */}
       {(msg.content || msg.toolCalls?.length) && !msg.streaming && !msg.error && (
         <div className="mt-0.5 flex justify-end gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
           <button
@@ -311,6 +328,32 @@ function AssistantMessage({
             className="rounded p-1 text-[var(--ag-text3)] hover:bg-black/5 hover:text-[var(--ag-text1)]"
           >
             {copied ? <Check size={12} className="text-[var(--ag-green)]" /> : <Clipboard size={12} />}
+          </button>
+          <button
+            type="button"
+            title="有帮助"
+            aria-label="点赞回复"
+            aria-pressed={feedback === 'up'}
+            onClick={() => setFeedback(feedback === 'up' ? null : 'up')}
+            className={cn(
+              'rounded p-1 hover:bg-black/5',
+              feedback === 'up' ? 'text-[var(--ag-accent)]' : 'text-[var(--ag-text3)] hover:text-[var(--ag-text1)]'
+            )}
+          >
+            <ThumbsUp size={12} fill={feedback === 'up' ? 'currentColor' : 'none'} />
+          </button>
+          <button
+            type="button"
+            title="没帮助"
+            aria-label="点踩回复"
+            aria-pressed={feedback === 'down'}
+            onClick={() => setFeedback(feedback === 'down' ? null : 'down')}
+            className={cn(
+              'rounded p-1 hover:bg-black/5',
+              feedback === 'down' ? 'text-[var(--ag-red)]' : 'text-[var(--ag-text3)] hover:text-[var(--ag-text1)]'
+            )}
+          >
+            <ThumbsDown size={12} fill={feedback === 'down' ? 'currentColor' : 'none'} />
           </button>
           <button
             type="button"
