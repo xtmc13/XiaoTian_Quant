@@ -15,6 +15,8 @@ export function DefaultPet({ size }: { size: number }) {
       <ellipse cx="48" cy="52" rx="36" ry="28" fill="url(#xt-pet-body)" />
       {/* 肚皮 */}
       <ellipse cx="46" cy="62" rx="24" ry="14" fill="#eaf6ff" />
+      {/* 呆毛 */}
+      <path d="M40 24 Q38 14 46 12 Q44 18 48 22" fill="none" stroke="#5aa9f2" strokeWidth="3" strokeLinecap="round" />
       {/* 眼睛 */}
       <circle cx="38" cy="46" r="5.5" fill="#1d2b3f" />
       <circle cx="39.5" cy="44.5" r="2" fill="#fff" />

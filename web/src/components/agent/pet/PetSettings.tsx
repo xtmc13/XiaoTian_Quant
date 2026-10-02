@@ -1,6 +1,5 @@
 import { useRef, useState } from 'react'
 import { ImagePlus, RotateCcw, X } from 'lucide-react'
-import { cn } from '@/lib/utils'
 
 export interface PetConfig {
   /** 自定义形象 dataURL；空串 = 默认小天鲸 */
@@ -299,10 +298,6 @@ export function PetSettings({
       )}
     </div>
   )
-}
-
-export function petShadowClass(anim: boolean) {
-  return cn('absolute -bottom-1 left-1/2 h-2 w-3/5 -translate-x-1/2 rounded-full bg-black', anim && 'xt-pet-shadow')
 }
 
 export default PetSettings

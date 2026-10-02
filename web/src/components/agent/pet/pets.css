@@ -9,18 +9,6 @@
   }
 }
 
-@keyframes xt-pet-shadow {
-  0%,
-  100% {
-    transform: scaleX(1);
-    opacity: 0.35;
-  }
-  50% {
-    transform: scaleX(0.75);
-    opacity: 0.2;
-  }
-}
-
 /* 未读：更快更活泼的弹跳 */
 @keyframes xt-pet-excited {
   0%,
@@ -50,10 +38,6 @@
 
 .xt-pet-anim.xt-pet-excited {
   animation: xt-pet-excited 1.4s ease-in-out infinite;
-}
-
-.xt-pet-shadow {
-  animation: xt-pet-shadow 3.2s ease-in-out infinite;
 }
 
 .xt-pet-dragging {

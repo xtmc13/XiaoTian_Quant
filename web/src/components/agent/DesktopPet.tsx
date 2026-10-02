@@ -10,7 +10,6 @@ import {
   PetSettings,
   loadPetConfig,
   loadPetPos,
-  petShadowClass,
   savePetConfig,
   savePetPos,
   type PetConfig,
@@ -183,7 +182,6 @@ export function DesktopPet() {
           height: pet.size,
         }}
       >
-        <span className={petShadowClass(pet.anim)} style={{ opacity: dragging ? 0.15 : undefined }} />
         <span
           className={cn('block h-full w-full', pet.anim && 'xt-pet-anim', unread > 0 && !expanded && 'xt-pet-excited')}
         >
