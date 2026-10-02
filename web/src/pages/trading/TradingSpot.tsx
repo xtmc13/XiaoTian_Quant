@@ -315,6 +315,20 @@ export function TradingSpot() {
     [precision.price]
   )
 
+  /* 长按拖动改价:实时参考线 */
+  const [dragPrice, setDragPrice] = useState<{ price: number; y: number } | null>(null)
+  const handleChartPriceDrag = useCallback(
+    (p: number, pos: { x: number; y: number }, phase: 'start' | 'move' | 'end') => {
+      if (phase === 'end') {
+        setDragPrice(null)
+        return
+      }
+      const formatted = formatLinePrice(p, precision.price)
+      setDragPrice({ price: parseFloat(formatted) || p, y: pos.y })
+    },
+    [precision.price]
+  )
+
   const closePopup = useCallback(() => setPopup(null), [])
 
   const filteredWatchlist = useMemo(() => {
@@ -444,12 +458,18 @@ export function TradingSpot() {
             positionLabel="持仓成本"
             pricePrecision={precision.price}
             onPriceSelect={handleChartPriceSelect}
+            onPriceDrag={handleChartPriceDrag}
           />
 
-          {/* 图上操作提示 */}
-          <div className="absolute bottom-3 left-3 z-10 pointer-events-none rounded bg-quant-bg-secondary/80 px-2 py-1 text-[10px] text-muted-foreground">
-            点击图上任意价位快速下单 · 画线工具在图表左上角
-          </div>
+          {/* 长按拖动改价参考线 */}
+          {dragPrice && (
+            <div className="pointer-events-none absolute inset-x-0 z-20" style={{ top: dragPrice.y }}>
+              <div className="border-t border-dashed border-quant-gold" />
+              <div className="absolute left-2 -top-5 rounded bg-quant-gold/90 px-1.5 py-0.5 text-[10px] font-mono text-black">
+                {formatLinePrice(dragPrice.price, precision.price)}
+              </div>
+            </div>
+          )}
 
           {/* ── 下单浮卡 ── */}
           {popup && (

@@ -264,3 +264,41 @@ move_sl_to 移动止损到保本位）；order/ladder.go 有 breakeven_after_tar
 
 **遗留**：前端执行面板暂无手动触发入口（面板是只读监控），参数经信号 API 传入；
 TickExecutorBarClose 已导出可单测，建议后续补 table-driven 测试。
+
+## 第七轮：下单逻辑闭环 + 合约整页图表交易（2026-10-02）
+
+### 根因：限价单从未被撮合
+paper 适配器只处理市价单即时成交；限价单落库后无任何撮合方，永远停在 NEW。
+修复：`gateway/internal/handler/paper_matcher.go` 撮合循环（main.go 显式启动，
+同 RestorePairlistConfig 模式，规避 handler init() 早于 store.InitDB() 的坑）：
+- 每 2s 扫描 OMS paper 活动限价单，价格穿越限价即整单成交（买：市价≥限价；
+  卖：市价≤限价；成交价取限价，保守模拟）
+- 成交走三条更新路径：① order.RecordFill（OMS 状态+DB）② store.UpdateOrderFill
+  （store 内存订单表+xt_orders——GetOrders 读的是 store 表，不同步则永远显示 NEW，
+  这是部署后首测发现的第二层缺口）③ fillOrderAndUpdatePortfolio（余额/持仓）
+- 实测：ETHUSDT 限价单 4s 内成交，订单历史 FILLED，持仓到账
+
+### 合约页整页改造（TradingContract.tsx，969 行）
+旧 2507 行三栏版 git mv 为 TradingContractClassic.tsx。新版与现货同框架：
+- 整页图表 + 点击弹卡，卡片为合约专用：开多/开空、限价/市价、杠杆滑块
+  1-125x、全仓/逐仓、止盈止损、可开数量=可用×杠杆/价、占用保证金预估
+- 有持仓时卡片加 开仓/平仓 切换；持仓 tab 显示多/空徽标、开仓价、杠杆、
+  未实现盈亏，一键市价平仓（close_position=true）
+- 后端 side 字段实为 BUY/SELL（非 LONG/SHORT），前端兼容两种取值
+
+### 交互修正（现货+合约同改）
+- 隐藏 KLineChartPro 自带交易对搜索（顶栏已有自研搜索，省空间）：
+  index.css `.klinecharts-pro-period-bar > .symbol{display:none}`
+- 删除左下角操作提示
+- ChartTrading 新增长按拖动改价：pointerdown 450ms 未移动即进入拖动，
+  实时虚线参考线+价格标签（onPriceDrag 回调），松手弹出下单卡填入最终价；
+  移动超 8px 视为平移手势取消长按；拖动结束后抑制紧随的 click 防重复弹卡
+- @klinecharts/pro 补丁透传的方法在此复用：convertFromPixel（取价）+
+  getSize（主图区边界判定）
+
+### 验证
+- 市价开多 0.002 BTC 10x：FILLED，持仓 0.002@84782.16，保证金 16.96 USDT，
+  强平价 76643 ✓
+- 限价单撮合：挂单→4s 穿越成交→历史订单 FILLED→ETH 持仓 +0.06 ✓
+- 浏览器：普通点击弹卡 82784.95 ✓；长按拖动参考线 84609→松手弹卡 83614 ✓；
+  合约卡开多/开空/杠杆/逐全仓齐全 ✓；持仓 tab 平仓按钮 ✓

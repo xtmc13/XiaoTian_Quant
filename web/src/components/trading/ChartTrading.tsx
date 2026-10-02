@@ -28,6 +28,9 @@ export interface ChartTradingProps {
   /** 图表上选定价格后的回调(填入限价输入框等),页面负责视觉反馈。
    *  第二参为点击点在图表容器内的坐标(相对 chartContainerRef),供浮层定位。 */
   onPriceSelect: (price: number, pos?: { x: number; y: number }) => void
+  /** 长按拖动改价:phase=start/move 时随拖动实时上报价格与容器内 y 坐标,
+   *  end 时结束(页面撤掉参考线);随后会再收到一次 onPriceSelect 作为最终价。 */
+  onPriceDrag?: (price: number, pos: { x: number; y: number }, phase: 'start' | 'move' | 'end') => void
 }
 
 interface CrosshairState {
@@ -68,6 +71,7 @@ export function ChartTrading({
   positionLabel = '持仓均价',
   pricePrecision,
   onPriceSelect,
+  onPriceDrag,
 }: ChartTradingProps) {
   const lines = useMemo<ChartPriceLine[]>(
     () => [
@@ -112,13 +116,23 @@ export function ChartTrading({
 
   const onPriceSelectRef = useRef(onPriceSelect)
   onPriceSelectRef.current = onPriceSelect
+  const onPriceDragRef = useRef(onPriceDrag)
+  onPriceDragRef.current = onPriceDrag
   const [crosshair, setCrosshair] = useState<CrosshairState | null>(null)
 
-  /* 点击价格轴/K线区域 → 价格;移动 → 跟踪十字价 */
+  /* 点击价格轴/K线区域 → 价格;移动 → 跟踪十字价;长按拖动 → 实时改价 */
   useEffect(() => {
     const container = chartContainerRef.current
     if (!container) return
     let rafId = 0
+
+    /* 长按拖动改价状态 */
+    let lpTimer: number | null = null
+    let lpStart: { x: number; y: number } | null = null
+    let dragging = false
+    let suppressClick = false
+    const LP_DELAY = 450 /* ms,超过即进入拖动 */
+    const LP_SLOP = 8 /* px,移动超此即视为平移手势,取消长按 */
 
     const priceAtPoint = (clientX: number, clientY: number): number | null => {
       const api = chartApiRef.current
@@ -158,6 +172,10 @@ export function ChartTrading({
     }
 
     const handleClick = (e: MouseEvent) => {
+      if (suppressClick) {
+        suppressClick = false
+        return
+      }
       if (e.button !== 0 || isUiClick(e.target) || isDrawingOverlay()) return
       const price = priceAtPoint(e.clientX, e.clientY)
       if (price != null) {
@@ -166,15 +184,69 @@ export function ChartTrading({
       }
     }
 
+    const localPos = (e: { clientX: number; clientY: number }) => {
+      const rect = container.getBoundingClientRect()
+      return { x: e.clientX - rect.left, y: e.clientY - rect.top }
+    }
+
+    const handlePointerDown = (e: PointerEvent) => {
+      if (e.button !== 0 || isUiClick(e.target) || isDrawingOverlay()) return
+      lpStart = { x: e.clientX, y: e.clientY }
+      suppressClick = false
+      lpTimer = window.setTimeout(() => {
+        lpTimer = null
+        dragging = true
+        suppressClick = true
+        const price = lpStart ? priceAtPoint(lpStart.x, lpStart.y) : null
+        if (price != null) onPriceDragRef.current?.(price, localPos({ clientX: lpStart!.x, clientY: lpStart!.y }), 'start')
+      }, LP_DELAY)
+    }
+
+    const handlePointerMove = (e: PointerEvent) => {
+      /* 长按判定中:移动超阈值 = 平移/缩放手势,取消长按 */
+      if (lpTimer != null && lpStart) {
+        const dx = e.clientX - lpStart.x
+        const dy = e.clientY - lpStart.y
+        if (dx * dx + dy * dy > LP_SLOP * LP_SLOP) {
+          window.clearTimeout(lpTimer)
+          lpTimer = null
+          lpStart = null
+        }
+      }
+      if (dragging) {
+        const price = priceAtPoint(e.clientX, e.clientY)
+        if (price != null) onPriceDragRef.current?.(price, localPos(e), 'move')
+      }
+    }
+
+    const handlePointerUp = (e: PointerEvent) => {
+      if (lpTimer != null) {
+        /* 短按:未进拖动,交给 click 处理 */
+        window.clearTimeout(lpTimer)
+        lpTimer = null
+        lpStart = null
+        return
+      }
+      if (dragging) {
+        dragging = false
+        lpStart = null
+        const price = priceAtPoint(e.clientX, e.clientY)
+        if (price != null) {
+          onPriceDragRef.current?.(price, localPos(e), 'end')
+          onPriceSelectRef.current(price, localPos(e))
+        } else {
+          onPriceDragRef.current?.(0, { x: 0, y: 0 }, 'end')
+        }
+      }
+    }
+
     const handleMove = (e: MouseEvent) => {
       if (rafId) return
       rafId = window.requestAnimationFrame(() => {
         rafId = 0
-        const rect = container.getBoundingClientRect()
+        const p = localPos(e)
         const price = priceAtPoint(e.clientX, e.clientY)
-        setCrosshair(
-          price != null ? { price, x: e.clientX - rect.left, y: e.clientY - rect.top } : null
-        )
+        setCrosshair(price != null ? { price, x: p.x, y: p.y } : null)
       })
     }
 
@@ -183,10 +255,17 @@ export function ChartTrading({
     container.addEventListener('click', handleClick)
     container.addEventListener('mousemove', handleMove)
     container.addEventListener('mouseleave', handleLeave)
+    container.addEventListener('pointerdown', handlePointerDown)
+    container.addEventListener('pointermove', handlePointerMove)
+    container.addEventListener('pointerup', handlePointerUp)
     return () => {
+      if (lpTimer != null) window.clearTimeout(lpTimer)
       container.removeEventListener('click', handleClick)
       container.removeEventListener('mousemove', handleMove)
       container.removeEventListener('mouseleave', handleLeave)
+      container.removeEventListener('pointerdown', handlePointerDown)
+      container.removeEventListener('pointermove', handlePointerMove)
+      container.removeEventListener('pointerup', handlePointerUp)
       if (rafId) window.cancelAnimationFrame(rafId)
     }
   }, [chartContainerRef, chartApiRef])

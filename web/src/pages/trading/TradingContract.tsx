@@ -1,8 +1,7 @@
-import { useEffect, useRef, useCallback, useMemo, useState } from 'react'
-import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { NavLink } from 'react-router-dom'
 import { marketApi, orderApi, portfolioApi, accountApi, tradesApi } from '@/lib/api'
-import { KLineChartPro } from '@klinecharts/pro'
-import '@klinecharts/pro/dist/klinecharts-pro.css'
 import {
   createBackendDatafeed,
   handlePriceTick,
@@ -11,44 +10,26 @@ import {
   clearChartUpdater,
 } from '@/lib/klineDatafeed'
 import { TRADING_INTERVALS } from '@/lib/constants'
+import { extractArray, safeNumber, safeString } from '@/lib/typeHelpers'
 import { cn } from '@/lib/utils'
-import { useI18n } from '@/i18n'
 import { useWebSocket } from '@/hooks/useWebSocket'
 import { toast } from '@/lib/useToast'
 import { OrderBookPanel } from '@/components/trading/OrderBookPanel'
 import { ChartTrading } from '@/components/trading/ChartTrading'
-import { LadderPanel } from '@/components/trading/LadderPanel'
-import { formatLinePrice } from '@/components/trading/chartOverlays'
-import { EmptyState } from '@/components/ui/EmptyState'
-import { Skeleton } from '@/components/ui/Skeleton'
+import { computeSpotAvgEntryPrice, formatLinePrice } from '@/components/trading/chartOverlays'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
-import {
-  parseInterval,
-  formatPrice,
-  formatTime,
-  formatDateTime,
-  StatusTag,
-  CONTRACT_LEVERAGES,
-} from '@/lib/tradingHelpers'
+import { parseInterval, SPOT_WATCHLIST } from '@/lib/tradingHelpers'
 import { getPrecision } from '@/lib/tradingPrecision'
-import type { Trade, Order, PortfolioPosition, TickerSnapshot } from '@/types'
+import type { Trade, Order, TickerSnapshot } from '@/types'
 import type { ChartApi } from '@/lib/tradingHelpers'
 import {
-  TrendingUp,
-  Clock,
-  XCircle,
-  CheckCircle2,
-  AlertCircle,
-  Activity,
-  ChevronUp,
-  ChevronDown,
-  Settings,
-  X,
-  ArrowRightLeft,
-  Wallet,
-  Repeat,
-  DollarSign,
+  Search, Activity, X, ChevronRight, BookOpen, ListOrdered,
+  Briefcase, History, ArrowUp, ArrowDown,
 } from 'lucide-react'
+import { KLineChartPro } from '@klinecharts/pro'
+import '@klinecharts/pro/dist/klinecharts-pro.css'
+
+const WATCHLIST = SPOT_WATCHLIST
 
 /* Extended types for fields not yet in base definitions */
 interface HistoryOrder extends Order {
@@ -58,62 +39,52 @@ interface HistoryOrder extends Order {
   realized_pnl?: number
 }
 
-interface FillTrade extends Trade {
-  created_at?: string
-  timestamp?: number
-  avg_price?: number
-  filled_quantity?: number
-  fee?: number
+/* ════════════════════════════════════════════════════
+   CONTRACT (SWAP) TRADING — 整页图表交易版（TradingView 范式）
+   图表铺满全页；点击图上价位弹出下单卡（开多/开空、杠杆、
+   逐仓/全仓、止盈止损）；右侧滑出面板：订单簿 / 当前订单 /
+   持仓（可市价平仓）/ 成交。旧三栏布局见 TradingContractClassic.tsx。
+   ════════════════════════════════════════════════════ */
+
+type SideTab = 'book' | 'orders' | 'positions' | 'fills'
+
+const SIDE_TABS: { key: SideTab; label: string; icon: React.ReactNode }[] = [
+  { key: 'book', label: '订单簿', icon: <BookOpen className="w-3.5 h-3.5" /> },
+  { key: 'orders', label: '当前订单', icon: <ListOrdered className="w-3.5 h-3.5" /> },
+  { key: 'positions', label: '持仓', icon: <Briefcase className="w-3.5 h-3.5" /> },
+  { key: 'fills', label: '成交', icon: <History className="w-3.5 h-3.5" /> },
+]
+
+interface OrderPopupState {
+  price: number
+  x: number
+  y: number
 }
 
-interface PositionItem extends PortfolioPosition {
-  id?: string
-  entryPrice?: number
-  openPrice?: number
-  avgPrice?: number
-  amount?: number
-  positionMargin?: number
-  liquidationPrice?: number
-  liquidation?: number
+interface ContractPosition {
+  symbol: string
+  quantity: number
+  avg_entry_price: number
+  current_price: number
+  unrealized_pnl: number
+  realized_pnl: number
+  side: string
+  margin: number
+  liquidation_price: number
+  leverage: number
+  market_type: string
+  margin_mode: string
 }
 
-const LEVERAGES = CONTRACT_LEVERAGES
-
-/* ════════════════════════════════════════
-   CONTRACT TRADING PAGE — 币安合约风格
-   ════════════════════════════════════════ */
 export function TradingContract() {
-  const { t } = useI18n()
   const [symbol, setSymbol] = useState('BTCUSDT')
-  const [interval, setInterval] = useState('15m')
-  const [side, setSide] = useState<'BUY' | 'SELL'>('BUY')
-  const [orderType, setOrderType] = useState<'LIMIT' | 'MARKET' | 'STOP_LIMIT'>('LIMIT')
-  const [price, setPrice] = useState('')
-  const [quantity, setQuantity] = useState('')
-  const [leverage, setLeverage] = useState(10)
-  const [marginMode, setMarginMode] = useState<'cross' | 'isolated'>('cross')
-  const [positionMode, setPositionMode] = useState<'open' | 'close'>('open')
+  const [interval, setInterval] = useState('1h')
+  const [popup, setPopup] = useState<OrderPopupState | null>(null)
+  const [sideTab, setSideTab] = useState<SideTab>('book')
+  const [panelOpen, setPanelOpen] = useState(true)
+  const [symbolOpen, setSymbolOpen] = useState(false)
+  const [watchlistSearch, setWatchlistSearch] = useState('')
   const [obPrecision, setObPrecision] = useState('0.1')
-  const [activeBottomTab, setActiveBottomTab] = useState<
-    'positions' | 'orders' | 'history' | 'fills' | 'assets' | 'plans'
-  >('positions')
-  const [bottomHeight, setBottomHeight] = useState(0)
-  const bottomCollapsed = bottomHeight < 20
-  const dragRef = useRef<{ startY: number; startH: number } | null>(null)
-  const [tpPrice, setTpPrice] = useState('')
-  const [slPrice, setSlPrice] = useState('')
-  const [showTpSl, setShowTpSl] = useState(false)
-  const [submitting, setSubmitting] = useState(false)
-
-  // ── 新增：下单增强功能 ──
-  const [amountMode, setAmountMode] = useState<'quantity' | 'amount'>('quantity') // 数量/金额模式
-  const [amountValue, setAmountValue] = useState('') // 金额输入值（USDT）
-  const [sliderValue, setSliderValue] = useState(0) // 滑块值 0-100
-  const [timeInForce, setTimeInForce] = useState<'GTC' | 'IOC' | 'FOK'>('GTC') // 订单有效期
-  const [postOnly, setPostOnly] = useState(false) // 只做 Maker
-  const [slippage, setSlippage] = useState('0.5') // 滑点容忍度（%）
-  const [showAdvanced, setShowAdvanced] = useState(false) // 高级设置展开
-  const [showLadder, setShowLadder] = useState(false) // 阶梯智能单面板
 
   const chartRef = useRef<HTMLDivElement>(null)
   const chartApiRef = useRef<ChartApi | null>(null)
@@ -137,18 +108,12 @@ export function TradingContract() {
     queryFn: () => marketApi.trades(symbol, 50),
     refetchInterval: 3000,
   })
-  const { data: positionsRaw, isLoading: posLoading } = useQuery({
-    queryKey: ['positions'],
-    queryFn: () => portfolioApi.positions(),
-    refetchInterval: 5000,
-  })
-  const positions = Array.isArray(positionsRaw) ? positionsRaw : positionsRaw?.positions || []
-  const { data: orders, isLoading: ordersLoading } = useQuery({
+  const { data: orders } = useQuery({
     queryKey: ['orders'],
     queryFn: () => orderApi.list(),
     refetchInterval: 5000,
   })
-  const { data: historyOrders, isLoading: historyLoading } = useQuery({
+  const { data: historyOrders } = useQuery({
     queryKey: ['orders-history'],
     queryFn: () => orderApi.history({ status: 'filled' }),
     refetchInterval: 10000,
@@ -158,92 +123,62 @@ export function TradingContract() {
     queryFn: () => marketApi.snapshot(symbol).then((d) => d as TickerSnapshot),
     refetchInterval: 5000,
   })
-  const { data: fillTrades, isLoading: fillsLoading } = useQuery({
-    queryKey: ['fills'],
-    queryFn: () => tradesApi.list({ limit: '30' }),
-    refetchInterval: 5000,
-  })
   const { data: portfolio } = useQuery({
     queryKey: ['portfolio'],
     queryFn: () => portfolioApi.summary(),
     refetchInterval: 10000,
   })
-  const totalEstUsdt = useMemo(() => {
-    if (!portfolio) return 0
-    return parseFloat(String(portfolio.total_equity ?? 0)) || 0
-  }, [portfolio])
-  const futuresBalance = useMemo(() => {
-    if (!portfolio) return 0
-    return parseFloat(String(portfolio.futures_balance ?? 0)) || 0
-  }, [portfolio])
-  const { data: allBalances, isLoading: balLoading } = useQuery({
+  const { data: fillTrades } = useQuery({
+    queryKey: ['fills'],
+    queryFn: () => tradesApi.list({ limit: '30' }),
+    refetchInterval: 5000,
+  })
+  const { data: allBalances } = useQuery({
     queryKey: ['balances', 'all'],
     queryFn: () => accountApi.balance(),
     refetchInterval: 10000,
   })
 
-  /* ── Modal States ── */
-  const [showSettingsModal, setShowSettingsModal] = useState(false)
-  const [showTransferModal, setShowTransferModal] = useState(false)
-  const [showBuyModal, setShowBuyModal] = useState(false)
-  const [showSwapModal, setShowSwapModal] = useState(false)
+  const spotBalance = useMemo(() => {
+    if (!portfolio) return 0
+    return parseFloat(String(portfolio.spot_balance ?? 0)) || 0
+  }, [portfolio])
+  const holdingsList = useMemo(() => {
+    if (!allBalances) return []
+    const list = extractArray<Record<string, unknown>>(allBalances, 'balances', 'currencies', 'list', 'data', 'result')
+    return list.filter((b) => safeNumber(b.free ?? b.available) > 0)
+  }, [allBalances])
+  const baseHolding = useMemo(() => {
+    const base = symbol.replace('USDT', '')
+    const holding = holdingsList.find((b: unknown) => {
+      const bal = b as Record<string, unknown>
+      return String(bal.asset || bal.currency) === base
+    }) as Record<string, unknown> | undefined
+    if (!holding) return 0
+    return safeNumber(holding.free ?? holding.available)
+  }, [symbol, holdingsList])
 
-  /* ── Transfer Form ── */
-  const [transferFrom, setTransferFrom] = useState('futures')
-  const [transferTo, setTransferTo] = useState('spot')
-  const [transferCurrency, setTransferCurrency] = useState('USDT')
-  const [transferAmount, setTransferAmount] = useState('')
+  /* 现货持仓成本(由已有成交历史估算),用于图表持仓均价线 */
+  const spotPosition = useMemo(() => {
+    if (!(baseHolding > 0)) return null
+    const avg = computeSpotAvgEntryPrice(symbol, historyOrders as HistoryOrder[])
+    return avg != null ? { avg_entry_price: avg } : null
+  }, [symbol, baseHolding, historyOrders])
 
-  /* ── Buy Form ── */
-  const [buyCurrency, setBuyCurrency] = useState('BTC')
-  const [buyAmount, setBuyAmount] = useState('')
-  const [buyMethod, setBuyMethod] = useState('credit_card')
-
-  /* ── Swap Form ── */
-  const [swapFrom, setSwapFrom] = useState('BTC')
-  const [swapTo, setSwapTo] = useState('ETH')
-  const [swapAmount, setSwapAmount] = useState('')
-
-  /* ── Mutations ── */
-  const transferMut = useMutation({
-    mutationFn: (data: { from: string; to: string; currency: string; amount: number }) => accountApi.transfer(data),
-    onSuccess: (res) => {
-      if (res?.success) {
-        toast('success', res.message)
-        setShowTransferModal(false)
-        queryClient.invalidateQueries({ queryKey: ['portfolio'] })
-      } else {
-        toast('error', res?.message || '划转失败')
-      }
-    },
-    onError: (err: Error) => toast('error', err.message),
+  /* 合约持仓（swap） */
+  const { data: contractPositionsData } = useQuery({
+    queryKey: ['contract-positions'],
+    queryFn: () => portfolioApi.positions(),
+    refetchInterval: 5000,
   })
-  const buyMut = useMutation({
-    mutationFn: (data: { currency: string; amount: number; payment_method?: string }) => accountApi.buy(data),
-    onSuccess: (res) => {
-      if (res?.success) {
-        toast('success', res.message)
-        setShowBuyModal(false)
-        queryClient.invalidateQueries({ queryKey: ['portfolio'] })
-      } else {
-        toast('error', res?.message || '买入失败')
-      }
-    },
-    onError: (err: Error) => toast('error', err.message),
-  })
-  const swapMut = useMutation({
-    mutationFn: (data: { from_currency: string; to_currency: string; amount: number }) => accountApi.swap(data),
-    onSuccess: (res) => {
-      if (res?.success) {
-        toast('success', res.message)
-        setShowSwapModal(false)
-        queryClient.invalidateQueries({ queryKey: ['portfolio'] })
-      } else {
-        toast('error', res?.message || '兑换失败')
-      }
-    },
-    onError: (err: Error) => toast('error', err.message),
-  })
+  const contractPositions = useMemo(
+    () => (contractPositionsData?.positions ?? []) as ContractPosition[],
+    [contractPositionsData]
+  )
+  const contractPos = useMemo(
+    () => contractPositions.find((p) => p.symbol === symbol && safeNumber(p.quantity) > 0) ?? null,
+    [contractPositions, symbol]
+  )
 
   /* websocket */
   const { on: wsOn } = useWebSocket('/ws', {
@@ -286,7 +221,6 @@ export function TradingContract() {
     return unsub
   }, [wsOn])
 
-  /* clear liveTrades when symbol changes */
   useEffect(() => {
     setLiveTrades([])
   }, [symbol])
@@ -298,18 +232,6 @@ export function TradingContract() {
     if (klines?.length) return parseFloat(String(klines[klines.length - 1].close))
     return 0
   }, [snapshot, klines])
-
-  /* funding rate & mark price (after lastPrice is defined) */
-  const { data: fundingData } = useQuery({
-    queryKey: ['funding', symbol],
-    queryFn: () => marketApi.fundingRate(symbol),
-    refetchInterval: 30000,
-  })
-  // P1：拿不到资金费率时为 null（显示 "--"），绝不显示 0。
-  const fundingRate = fundingData?.fundingRate ?? null
-  const markPrice = fundingData?.markPrice ?? lastPrice
-  const nextFundingTime = fundingData?.nextFundingTime ?? 0
-
   const prevClose = useMemo(() => {
     if (klines && klines.length > 1) return parseFloat(String(klines[klines.length - 2].close))
     return lastPrice
@@ -320,49 +242,14 @@ export function TradingContract() {
   const bestBid = orderbook?.bids?.[0]?.[0] != null ? String(orderbook.bids[0][0]) : ''
   const bestAsk = orderbook?.asks?.[0]?.[0] != null ? String(orderbook.asks[0][0]) : ''
 
-  /* 当前合约持仓(用于图表持仓均价线)。find 返回的是 query 数据中的稳定引用 */
-  const currentPosition = positions.find((p) => p.symbol === symbol) ?? null
-
-  /* 图表点价后的视觉反馈:输入框高亮闪烁 */
-  const [priceFlash, setPriceFlash] = useState(false)
-  const priceFlashTimer = useRef<number | null>(null)
-  useEffect(() => {
-    return () => {
-      if (priceFlashTimer.current) window.clearTimeout(priceFlashTimer.current)
-    }
-  }, [])
-  const handleChartPriceSelect = useCallback(
-    (p: number) => {
-      const formatted = formatLinePrice(p, precision.price)
-      if (orderType === 'MARKET') {
-        setOrderType('LIMIT')
-        toast('info', `已切换为限价单,填入价格 ${formatted}`)
-      } else {
-        toast('success', `价格已填入 ${formatted}`)
-      }
-      setPrice(formatted)
-      if (priceFlashTimer.current) window.clearTimeout(priceFlashTimer.current)
-      setPriceFlash(true)
-      priceFlashTimer.current = window.setTimeout(() => setPriceFlash(false), 700)
-    },
-    [orderType, precision.price]
-  )
-
-  /* ─── KLineChartPro init (recreates when interval changes) ───
-   *
-   * KLineChartPro 0.1.1 has a SolidJS createEffect bug: setPeriod() does NOT
-   * trigger getHistoryKLineData, so we must re-create the chart on period change.
-   * Symbol changes use setSymbol() which works fine.
-   */
+  /* ─── KLineChartPro init（周期切换需重建，规避 SolidJS setPeriod bug）─── */
   const initChart = useCallback(() => {
     if (!chartRef.current) return
-    // Destroy previous instance
     if (klineProRef.current) {
       chartRef.current.innerHTML = ''
       klineProRef.current = null
       chartApiRef.current = null
     }
-
     let intervalId: number | null = null
     try {
       const chart = new KLineChartPro({
@@ -384,31 +271,16 @@ export function TradingContract() {
         locale: 'zh-CN',
       })
       klineProRef.current = chart
-
       const checkApi = () => {
         const chartApi = (chart as unknown as { _chartApi?: unknown })._chartApi as ChartApi | undefined
         if (chartApi) {
           chartApiRef.current = chartApi
-          // Zoom to show enough bars after data loads
-          try {
-            chartApi.scrollToRealTime()
-          } catch {
-            /* ignore */
-          }
-          try {
-            chartApi.setBarSpace(4)
-          } catch {
-            /* ignore */
-          }
-          // Wire running bar updates directly to chart (avoids timestamp conflict
-          // with the last historical bar for the current period)
+          ;(window as unknown as Record<string, unknown>).__chartApi = chartApi
+          try { chartApi.scrollToRealTime() } catch { /* ignore */ }
+          try { chartApi.setBarSpace(4) } catch { /* ignore */ }
           if (typeof chartApi.updateData === 'function') {
             setChartUpdater((bar) => {
-              try {
-                chartApi.updateData(bar)
-              } catch {
-                /* ignore */
-              }
+              try { chartApi.updateData(bar) } catch { /* ignore */ }
             })
           }
         } else {
@@ -417,14 +289,13 @@ export function TradingContract() {
       }
       checkApi()
     } catch {
-      /* KLineChartPro 初始化失败，已在 UI 中处理 */
+      /* KLineChartPro 初始化失败 */
     }
     return () => {
       if (intervalId) window.clearTimeout(intervalId)
     }
   }, [datafeed, symbol, interval])
 
-  // Init on mount & when interval changes (SolidJS setPeriod workaround)
   useEffect(() => {
     const el = chartRef.current
     const cancelTimer = initChart()
@@ -437,10 +308,7 @@ export function TradingContract() {
     }
   }, [initChart])
 
-  /* ─── Period click observer ───
-     KLineChartPro's period bar doesn't expose onChange.
-     We observe clicks and sync to React state — chart recreation is
-     triggered by [interval] dependency in the init effect above.   */
+  /* Period click observer（KLineChartPro 周期栏不暴露 onChange） */
   useEffect(() => {
     const el = chartRef.current
     if (!el) return
@@ -450,7 +318,6 @@ export function TradingContract() {
         if (t.classList?.contains('period') && t.parentElement?.classList?.contains('klinecharts-pro-period-bar')) {
           const txt = t.textContent?.trim()
           if (txt && TRADING_INTERVALS.includes(txt as (typeof TRADING_INTERVALS)[number])) {
-            // Don't stopPropagation — let KLineChartPro handle its own UI highlight
             setInterval(txt)
           }
           return
@@ -462,2046 +329,641 @@ export function TradingContract() {
     return () => el.removeEventListener('click', handleClick, true)
   }, [])
 
-  /* ─── Resize chart when bottom panel toggles ─── */
+  /* 面板开合时让图表自适应 */
   useEffect(() => {
     if (!klineProRef.current) return
-    const t = setTimeout(() => window.dispatchEvent(new Event('resize')), 100)
+    const t = setTimeout(() => window.dispatchEvent(new Event('resize')), 150)
     return () => clearTimeout(t)
-  }, [bottomCollapsed])
+  }, [panelOpen])
 
-  /* order handlers */
-  const handlePlaceOrder = useCallback(
-    async (orderSide: 'BUY' | 'SELL') => {
-      // 根据模式计算实际数量
-      let qty: number
-      if (amountMode === 'amount') {
-        // 金额模式：根据金额计算数量
-        const amount = parseFloat(amountValue)
-        if (!amount || amount <= 0) {
-          toast('error', '请输入有效金额')
-          return
-        }
-        const calcPrice = orderType === 'MARKET' ? lastPrice : parseFloat(price) || lastPrice
-        if (!calcPrice || calcPrice <= 0) {
-          toast('error', '无法获取有效价格')
-          return
-        }
-        // 合约：金额 = 数量 * 价格 / 杠杆
-        qty = (amount * leverage) / calcPrice
-      } else {
-        // 数量模式
-        qty = parseFloat(quantity)
-        if (!qty || qty <= 0) {
-          toast('error', '请输入有效数量')
-          return
-        }
-      }
-
-      if (orderType === 'LIMIT' || orderType === 'STOP_LIMIT') {
-        const p = parseFloat(price)
-        if (!p || p <= 0) {
-          toast('error', '请输入有效价格')
-          return
-        }
-      }
-      setSubmitting(true)
-      try {
-        const req: Record<string, unknown> = {
-          symbol,
-          side: orderSide,
-          order_type: orderType,
-          price: orderType === 'MARKET' ? 0 : parseFloat(price) || 0,
-          quantity: qty,
-          market_type: 'swap',
-          position_side: orderSide === 'BUY' ? 'LONG' : 'SHORT',
-          leverage,
-          margin_mode: marginMode,
-          time_in_force: timeInForce,
-          post_only: postOnly,
-          slippage: orderType === 'MARKET' ? parseFloat(slippage) / 100 : undefined,
-        }
-        if (orderType === 'STOP_LIMIT') {
-          req.stop_price = parseFloat(tpPrice) || 0
-        }
-        if (showTpSl) {
-          req.tp_price = tpPrice ? parseFloat(tpPrice) : undefined
-          req.sl_price = slPrice ? parseFloat(slPrice) : undefined
-        }
-        await orderApi.place(req)
-        setSide(orderSide)
-        toast('success', '订单已提交')
-        setQuantity('')
-        setPrice('')
-        setTpPrice('')
-        setSlPrice('')
-        setAmountValue('')
-        setSliderValue(0)
-        queryClient.invalidateQueries({ queryKey: ['orders'] })
-        queryClient.invalidateQueries({ queryKey: ['positions'] })
-        queryClient.invalidateQueries({ queryKey: ['portfolio'] })
-      } catch (e: unknown) {
-        const err = e instanceof Error ? e : new Error(String(e))
-        toast('error', err.message || '下单失败')
-      } finally {
-        setSubmitting(false)
-      }
+  /* ─── 图表点价 → 弹出下单卡 ─── */
+  const handleChartPriceSelect = useCallback(
+    (p: number, pos?: { x: number; y: number }) => {
+      const formatted = formatLinePrice(p, precision.price)
+      setPopup({ price: parseFloat(formatted) || p, x: pos?.x ?? 120, y: pos?.y ?? 120 })
     },
-    [
-      symbol,
-      orderType,
-      price,
-      quantity,
-      amountMode,
-      amountValue,
-      lastPrice,
-      leverage,
-      tpPrice,
-      slPrice,
-      showTpSl,
-      timeInForce,
-      postOnly,
-      slippage,
-      marginMode,
-      queryClient,
-    ]
+    [precision.price]
   )
 
-  const handleCancelOrder = useCallback(
-    async (id: string) => {
-      try {
-        await orderApi.cancel(id)
-        toast('success', '订单已取消')
-        queryClient.invalidateQueries({ queryKey: ['orders'] })
-      } catch (e: unknown) {
-        const err = e instanceof Error ? e : new Error(String(e))
-        toast('error', err.message || '取消失败')
-      }
-    },
-    [queryClient]
-  )
-
-  /* 全部撤单：POST /orders/cancel-all（后端路由已存在，此处补上 UI 入口） */
-  const cancelAllMut = useMutation({
-    mutationFn: () => orderApi.cancelAll(),
-    onSuccess: () => {
-      toast('success', t('trading.cancelAllOk', '已提交全部撤单'))
-      queryClient.invalidateQueries({ queryKey: ['orders'] })
-    },
-    onError: (err: Error) => toast('error', err.message),
-  })
-
-  const handleClosePosition = useCallback(
-    async (pos: PositionItem) => {
-      const isLong = (pos.side || '').toUpperCase() === 'LONG' || (pos.side || '').toUpperCase() === 'BUY'
-      const closeSide = isLong ? 'SELL' : 'BUY'
-      const qty = Number(pos.quantity || pos.amount || 0)
-      if (!qty || qty <= 0) {
-        toast('error', '持仓数量无效')
+  /* 长按拖动改价:实时参考线 */
+  const [dragPrice, setDragPrice] = useState<{ price: number; y: number } | null>(null)
+  const handleChartPriceDrag = useCallback(
+    (p: number, pos: { x: number; y: number }, phase: 'start' | 'move' | 'end') => {
+      if (phase === 'end') {
+        setDragPrice(null)
         return
       }
-      setSubmitting(true)
-      try {
-        await orderApi.place({
-          symbol: pos.symbol || symbol,
-          side: closeSide,
-          order_type: 'MARKET',
-          price: 0,
-          quantity: qty,
-          market_type: 'swap',
-          position_side: isLong ? 'LONG' : 'SHORT',
-          leverage,
-          margin_mode: marginMode,
-          close_position: true,
-        })
-        toast('success', `平仓订单已提交: ${isLong ? '平多' : '平空'} ${qty} ${pos.symbol || symbol}`)
-        queryClient.invalidateQueries({ queryKey: ['orders'] })
-        queryClient.invalidateQueries({ queryKey: ['positions'] })
-        queryClient.invalidateQueries({ queryKey: ['portfolio'] })
-      } catch (e: unknown) {
-        const err = e instanceof Error ? e : new Error(String(e))
-        toast('error', err.message || '平仓失败')
-      } finally {
-        setSubmitting(false)
-      }
+      const formatted = formatLinePrice(p, precision.price)
+      setDragPrice({ price: parseFloat(formatted) || p, y: pos.y })
     },
-    [symbol, leverage, marginMode, queryClient]
+    [precision.price]
   )
 
-  /* contract preview */
-  const preview = useMemo(() => {
-    // 根据模式计算数量
-    let qty: number
-    if (amountMode === 'amount') {
-      const amount = parseFloat(amountValue) || 0
-      const calcPrice = orderType === 'MARKET' ? lastPrice : parseFloat(price) || lastPrice
-      // 合约：金额 = 数量 * 价格 / 杠杆
-      qty = calcPrice > 0 ? (amount * leverage) / calcPrice : 0
-    } else {
-      qty = parseFloat(quantity) || 0
-    }
-    const pr = orderType === 'MARKET' ? lastPrice : parseFloat(price) || lastPrice
-    const notional = qty * pr
-    const margin = leverage > 0 ? notional / leverage : notional
-    const feeRate = 0.0005
-    const fee = notional * feeRate
-    let maxLoss = 0
-    if (slPrice && parseFloat(slPrice) > 0) {
-      const sl = parseFloat(slPrice)
-      maxLoss = Math.abs(qty * (pr - sl))
-    }
-    return { notional, margin, fee, maxLoss, qty, pr }
-  }, [quantity, amountMode, amountValue, price, lastPrice, orderType, leverage, slPrice])
+  const closePopup = useCallback(() => setPopup(null), [])
+
+  const filteredWatchlist = useMemo(() => {
+    if (!watchlistSearch.trim()) return WATCHLIST
+    const q = watchlistSearch.toUpperCase()
+    return WATCHLIST.filter((s) => s.includes(q))
+  }, [watchlistSearch])
+
+  const openOrders = useMemo(
+    () => (orders ?? []).filter((o) => ['open', 'pending', 'new', 'partially_filled'].includes(String(o.status).toLowerCase())),
+    [orders]
+  )
 
   return (
-    <div className="h-full flex flex-col">
-      {/* MAIN GRID: Chart | Orderbook | Trade */}
-      <div className="flex-1 grid grid-cols-[1fr_270px_310px] gap-px bg-quant-border min-h-0">
-        {/* CHART (1fr) */}
-        <div className="bg-quant-bg flex flex-col min-h-0 overflow-hidden relative">
+    <div className="flex flex-col h-full min-h-0 bg-quant-bg">
+      {/* ── 顶栏：现货/合约切换 + 交易对 + 最新价 ── */}
+      <div className="flex items-center gap-2 px-3 h-11 border-b border-quant-border shrink-0">
+        <div className="flex items-center rounded-md border border-quant-border overflow-hidden text-xs">
+          <NavLink
+            to="/trading/spot"
+            className={({ isActive }) =>
+              cn('px-3 h-7 flex items-center', isActive ? 'bg-quant-gold/20 text-quant-gold font-medium' : 'text-muted-foreground hover:text-foreground')
+            }
+          >
+            现货
+          </NavLink>
+          <NavLink
+            to="/trading/contract"
+            className={({ isActive }) =>
+              cn('px-3 h-7 flex items-center', isActive ? 'bg-quant-gold/20 text-quant-gold font-medium' : 'text-muted-foreground hover:text-foreground')
+            }
+          >
+            合约
+          </NavLink>
+        </div>
+
+        {/* 交易对选择 */}
+        <div className="relative">
+          <button
+            onClick={() => setSymbolOpen((v) => !v)}
+            className="flex items-center gap-1.5 px-2 h-8 rounded hover:bg-quant-bg-secondary"
+            aria-label="选择交易对"
+          >
+            <span className="text-sm font-semibold">{symbol.replace('USDT', '/USDT')}</span>
+            <Search className="w-3.5 h-3.5 text-muted-foreground" />
+          </button>
+          {symbolOpen && (
+            <>
+              <div className="fixed inset-0 z-30" onClick={() => setSymbolOpen(false)} />
+              <div className="absolute left-0 top-9 z-40 w-64 rounded-md border border-quant-border bg-quant-bg-secondary shadow-xl">
+                <div className="p-2 border-b border-quant-border">
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                    <input
+                      autoFocus
+                      value={watchlistSearch}
+                      onChange={(e) => setWatchlistSearch(e.target.value)}
+                      placeholder="搜索交易对"
+                      className="w-full h-8 pl-7 pr-2 text-xs bg-quant-bg border border-quant-border rounded focus:outline-none focus:border-quant-gold"
+                    />
+                  </div>
+                </div>
+                <div className="max-h-72 overflow-y-auto">
+                  {filteredWatchlist.map((sym) => (
+                    <button
+                      key={sym}
+                      onClick={() => { setSymbol(sym); setSymbolOpen(false); setWatchlistSearch('') }}
+                      className={cn(
+                        'w-full flex items-center px-3 h-8 text-xs hover:bg-quant-bg',
+                        sym === symbol && 'text-quant-gold'
+                      )}
+                    >
+                      {sym.replace('USDT', '/USDT')}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* 最新价 */}
+        <div className="flex items-center gap-2 text-xs">
+          <span className={cn('text-base font-bold tabular-nums', isUp ? 'text-quant-up' : 'text-quant-down')}>
+            {lastPrice ? formatLinePrice(lastPrice, precision.price) : '—'}
+          </span>
+          <span className={cn('tabular-nums', isUp ? 'text-quant-up' : 'text-quant-down')}>
+            {isUp ? '+' : ''}{changePct.toFixed(2)}%
+          </span>
+        </div>
+
+        <div className="flex-1" />
+
+        {/* 面板开关 */}
+        <button
+          onClick={() => setPanelOpen((v) => !v)}
+          className="flex items-center gap-1 px-2 h-8 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-quant-bg-secondary"
+          aria-label={panelOpen ? '收起面板' : '展开面板'}
+        >
+          <ChevronRight className={cn('w-4 h-4 transition-transform', !panelOpen && 'rotate-180')} />
+          {panelOpen ? '收起' : '面板'}
+        </button>
+      </div>
+
+      {/* ── 主区：整页图表 + 滑出面板 ── */}
+      <div className="flex-1 flex min-h-0 relative">
+        {/* 图表 */}
+        <div className="flex-1 min-w-0 relative bg-quant-bg">
           <ErrorBoundary
             fallback={
-              <div className="flex-1 flex flex-col items-center justify-center text-red-400 text-sm">
+              <div className="absolute inset-0 flex flex-col items-center justify-center text-red-400 text-sm">
                 <Activity className="w-12 h-12 mb-3 opacity-50" />
                 <span>图表加载失败</span>
                 <span className="text-xs opacity-60 mt-1">请刷新页面重试</span>
               </div>
             }
           >
-            <div ref={chartRef} className="flex-1 min-h-0" />
+            <div ref={chartRef} className="absolute inset-0" />
           </ErrorBoundary>
+
           <ChartTrading
             chartContainerRef={chartRef}
             chartApiRef={chartApiRef}
             symbol={symbol}
             orders={orders}
-            position={currentPosition}
+            position={contractPos ? { avg_entry_price: contractPos.avg_entry_price } : null}
+            positionLabel="持仓成本"
             pricePrecision={precision.price}
             onPriceSelect={handleChartPriceSelect}
+            onPriceDrag={handleChartPriceDrag}
+          />
+
+          {/* 长按拖动改价参考线 */}
+          {dragPrice && (
+            <div className="pointer-events-none absolute inset-x-0 z-20" style={{ top: dragPrice.y }}>
+              <div className="border-t border-dashed border-quant-gold" />
+              <div className="absolute left-2 -top-5 rounded bg-quant-gold/90 px-1.5 py-0.5 text-[10px] font-mono text-black">
+                {formatLinePrice(dragPrice.price, precision.price)}
+              </div>
+            </div>
+          )}
+
+          {/* ── 下单浮卡 ── */}
+          {popup && (
+            <ChartOrderPopup
+              symbol={symbol}
+              price={popup.price}
+              pos={popup}
+              lastPrice={lastPrice}
+              precision={precision.price}
+              availableQuote={spotBalance}
+              contractPos={contractPos}
+              onClose={closePopup}
+              onSubmitted={() => {
+                queryClient.invalidateQueries({ queryKey: ['orders'] })
+                queryClient.invalidateQueries({ queryKey: ['portfolio'] })
+                queryClient.invalidateQueries({ queryKey: ['contract-positions'] })
+              }}
+            />
+          )}
+        </div>
+
+        {/* ── 右侧滑出面板 ── */}
+        <div
+          className={cn(
+            'shrink-0 border-l border-quant-border bg-quant-bg-secondary flex flex-col min-h-0 transition-all duration-200',
+            panelOpen ? 'w-[340px]' : 'w-0 border-l-0 overflow-hidden'
+          )}
+        >
+          {/* Tab 栏 */}
+          <div className="flex items-center h-9 border-b border-quant-border shrink-0">
+            {SIDE_TABS.map((t) => (
+              <button
+                key={t.key}
+                onClick={() => setSideTab(t.key)}
+                className={cn(
+                  'flex-1 h-9 flex items-center justify-center gap-1 text-xs',
+                  sideTab === t.key ? 'text-quant-gold border-b-2 border-quant-gold font-medium' : 'text-muted-foreground hover:text-foreground'
+                )}
+              >
+                {t.icon}
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+            {sideTab === 'book' && (
+              <div className="flex-1 min-h-0 overflow-hidden">
+                <OrderBookPanel
+                  orderbook={orderbook}
+                  obLoading={obLoading}
+                  obPrecision={obPrecision}
+                  onPrecisionChange={setObPrecision}
+                  onPriceClick={() => undefined}
+                  recentTrades={recentTrades}
+                  liveTrades={liveTrades}
+                  lastPrice={lastPrice}
+                  bestBid={bestBid}
+                  bestAsk={bestAsk}
+                  symbol={symbol}
+                />
+              </div>
+            )}
+
+            {sideTab === 'orders' && (
+              <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
+                {openOrders.length === 0 && (
+                  <div className="text-center text-xs text-muted-foreground py-8">暂无未成交订单</div>
+                )}
+                {openOrders.map((o) => (
+                  <div key={o.id} className="flex items-center justify-between rounded border border-quant-border px-2 py-1.5 text-xs">
+                    <div>
+                      <div className={cn('font-medium', o.side === 'BUY' ? 'text-quant-up' : 'text-quant-down')}>
+                        {o.side === 'BUY' ? '买入' : '卖出'} {String(o.order_type)}
+                      </div>
+                      <div className="text-muted-foreground tabular-nums">
+                        价 {safeString(o.price)} · 量 {safeString(o.quantity)}
+                      </div>
+                    </div>
+                    <button
+                      onClick={async () => {
+                        try {
+                          await orderApi.cancel(String(o.id))
+                          toast('success', '撤单成功')
+                          queryClient.invalidateQueries({ queryKey: ['orders'] })
+                        } catch (e) {
+                          toast('error', e instanceof Error ? e.message : '撤单失败')
+                        }
+                      }}
+                      className="px-2 h-6 rounded text-[10px] border border-quant-border text-muted-foreground hover:text-quant-down hover:border-quant-down"
+                    >
+                      撤单
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {sideTab === 'positions' && (
+              <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
+                {contractPositions.length === 0 && (
+                  <div className="text-center text-xs text-muted-foreground py-8">暂无持仓</div>
+                )}
+                {contractPositions.map((p) => {
+                  const qty = safeNumber(p.quantity)
+                  const pnl = safeNumber(p.unrealized_pnl)
+                  const isLong = ['LONG', 'BUY'].includes(String(p.side).toUpperCase())
+                  return (
+                    <div key={`${p.symbol}-${p.side}`} className="rounded border border-quant-border px-2 py-1.5 text-xs space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium">{p.symbol.replace('USDT', '/USDT')}</span>
+                        <span className={cn('px-1.5 rounded text-[10px]', isLong ? 'bg-quant-up/20 text-quant-up' : 'bg-quant-down/20 text-quant-down')}>
+                          {isLong ? '多' : '空'} {qty}
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-muted-foreground tabular-nums">
+                        <span>开仓 {formatLinePrice(safeNumber(p.avg_entry_price), precision.price)}</span>
+                        <span>杠杆 {safeNumber(p.leverage) > 0 ? `${safeNumber(p.leverage)}x` : '—'}</span>
+                      </div>
+                      <div className="flex justify-between tabular-nums">
+                        <span className="text-muted-foreground">未实现盈亏</span>
+                        <span className={pnl >= 0 ? 'text-quant-up' : 'text-quant-down'}>
+                          {pnl >= 0 ? '+' : ''}{pnl.toFixed(2)} USDT
+                        </span>
+                      </div>
+                      <button
+                        onClick={async () => {
+                          try {
+                            await orderApi.place({
+                              symbol: p.symbol,
+                              side: isLong ? 'SELL' : 'BUY',
+                              order_type: 'MARKET',
+                              price: 0,
+                              quantity: qty,
+                              market_type: 'swap',
+                              position_side: String(p.side).toUpperCase(),
+                              close_position: true,
+                            })
+                            toast('success', '平仓订单已提交')
+                            queryClient.invalidateQueries({ queryKey: ['orders'] })
+                            queryClient.invalidateQueries({ queryKey: ['contract-positions'] })
+                            queryClient.invalidateQueries({ queryKey: ['portfolio'] })
+                          } catch (e) {
+                            toast('error', e instanceof Error ? e.message : '平仓失败')
+                          }
+                        }}
+                        className="w-full h-6 rounded text-[10px] border border-quant-border text-muted-foreground hover:text-quant-down hover:border-quant-down"
+                      >
+                        市价平仓
+                      </button>
+                    </div>
+                  )
+                })}
+                <div className="text-[10px] text-muted-foreground px-1 pt-2">
+                  可用保证金 {spotBalance.toFixed(2)} USDT
+                </div>
+              </div>
+            )}
+
+            {sideTab === 'fills' && (
+              <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
+                {(!fillTrades || fillTrades.length === 0) && (
+                  <div className="text-center text-xs text-muted-foreground py-8">暂无成交记录</div>
+                )}
+                {(fillTrades ?? []).slice(0, 30).map((t: Trade) => (
+                  <div key={t.id ?? `${t.symbol}-${t.time}`} className="flex items-center justify-between rounded border border-quant-border px-2 py-1.5 text-xs">
+                    <div>
+                      <div className={cn('font-medium', t.side === 'buy' ? 'text-quant-up' : 'text-quant-down')}>
+                        {t.side === 'buy' ? '买入' : '卖出'} {t.symbol}
+                      </div>
+                      <div className="text-muted-foreground tabular-nums">
+                        {safeString(t.price)} × {safeString(t.quantity ?? t.amount)}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
+/* ════════════════════════════════════════════════════
+   合约下单浮卡：图上点击后弹出，支持 开多/开空、限价/市价、
+   杠杆(1-125x)、逐仓/全仓、余额百分比、止盈止损。
+   ════════════════════════════════════════════════════ */
+interface ChartOrderPopupProps {
+  symbol: string
+  price: number
+  pos: { x: number; y: number }
+  lastPrice: number
+  precision: number
+  /** 可用保证金(USDT) */
+  availableQuote: number
+  /** 当前合约持仓(用于平仓模式) */
+  contractPos: ContractPosition | null
+  onClose: () => void
+  onSubmitted: () => void
+}
+
+function ChartOrderPopup({
+  symbol, price, pos, lastPrice, precision, availableQuote, contractPos, onClose, onSubmitted,
+}: ChartOrderPopupProps) {
+  const [direction, setDirection] = useState<'LONG' | 'SHORT'>('LONG')
+  const [orderType, setOrderType] = useState<'LIMIT' | 'MARKET'>('LIMIT')
+  const [limitPrice, setLimitPrice] = useState(String(price))
+  const [quantity, setQuantity] = useState('')
+  const [leverage, setLeverage] = useState(10)
+  const [marginMode, setMarginMode] = useState<'cross' | 'isolated'>('cross')
+  const [mode, setMode] = useState<'open' | 'close'>('open')
+  const [tpPrice, setTpPrice] = useState('')
+  const [slPrice, setSlPrice] = useState('')
+  const [showTpSl, setShowTpSl] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+
+  // 定位：以图表容器为参照，防出界
+  const vpW = typeof window !== 'undefined' ? window.innerWidth : 1280
+  const vpH = typeof window !== 'undefined' ? window.innerHeight : 800
+  const left = Math.min(pos.x + 12, Math.max(0, vpW - 300))
+  const top = Math.min(Math.max(pos.y - 20, 8), Math.max(8, vpH - 520))
+
+  const effPrice = orderType === 'MARKET' ? lastPrice : parseFloat(limitPrice) || 0
+  const closing = mode === 'close' && contractPos != null
+  const maxBase =
+    closing && contractPos
+      ? safeNumber(contractPos.quantity)
+      : effPrice > 0
+        ? (availableQuote * leverage) / effPrice
+        : 0
+  const marginNeeded = effPrice > 0 ? (parseFloat(quantity) || 0) * effPrice / leverage : 0
+
+  const setPct = (pct: number) => {
+    if (maxBase > 0) {
+      setQuantity((maxBase * (pct / 100)).toFixed(6).replace(/0+$/, '').replace(/\.$/, ''))
+    }
+  }
+
+  const submit = async () => {
+    const qty = parseFloat(quantity)
+    if (!qty || qty <= 0) {
+      toast('error', '请输入有效数量')
+      return
+    }
+    if (orderType === 'LIMIT' && !(parseFloat(limitPrice) > 0)) {
+      toast('error', '请输入有效价格')
+      return
+    }
+    setSubmitting(true)
+    try {
+      const isLong = closing ? ['LONG', 'BUY'].includes(String(contractPos!.side).toUpperCase()) : direction === 'LONG'
+      await orderApi.place({
+        symbol,
+        side: closing ? (isLong ? 'SELL' : 'BUY') : direction === 'LONG' ? 'BUY' : 'SELL',
+        order_type: orderType,
+        price: orderType === 'MARKET' ? 0 : parseFloat(limitPrice),
+        quantity: qty,
+        market_type: 'swap',
+        position_side: isLong ? 'LONG' : 'SHORT',
+        leverage,
+        margin_mode: marginMode,
+        close_position: closing,
+        tp_price: tpPrice ? parseFloat(tpPrice) : undefined,
+        sl_price: slPrice ? parseFloat(slPrice) : undefined,
+      })
+      toast('success', closing ? '平仓订单已提交' : `${direction === 'LONG' ? '开多' : '开空'}订单已提交`)
+      onSubmitted()
+      onClose()
+    } catch (e) {
+      toast('error', e instanceof Error ? e.message : '下单失败')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <>
+      <div className="fixed inset-0 z-40" onClick={onClose} />
+      <div
+        className="absolute z-50 w-[268px] rounded-lg border border-quant-border bg-quant-bg-secondary shadow-2xl p-3 space-y-2.5"
+        style={{ left, top }}
+        role="dialog"
+        aria-label="合约图表下单"
+      >
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-semibold">{symbol.replace('USDT', '/USDT')} 合约</span>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground" aria-label="关闭">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        {/* 开仓/平仓 */}
+        {contractPos && (
+          <div className="flex items-center gap-1 text-[10px]">
+            {([['open', '开仓'], ['close', '平仓']] as const).map(([k, label]) => (
+              <button
+                key={k}
+                onClick={() => setMode(k)}
+                className={cn(
+                  'px-2 py-0.5 rounded',
+                  mode === k ? 'bg-quant-gold/20 text-quant-gold' : 'text-muted-foreground'
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* 开多/开空 */}
+        <div className="grid grid-cols-2 gap-1.5">
+          <button
+            onClick={() => { setDirection('LONG'); setMode('open') }}
+            className={cn(
+              'h-8 rounded text-xs font-medium flex items-center justify-center gap-1',
+              !closing && direction === 'LONG' ? 'bg-quant-up text-white' : 'border border-quant-border text-muted-foreground'
+            )}
+          >
+            <ArrowUp className="w-3 h-3" /> 开多
+          </button>
+          <button
+            onClick={() => { setDirection('SHORT'); setMode('open') }}
+            className={cn(
+              'h-8 rounded text-xs font-medium flex items-center justify-center gap-1',
+              !closing && direction === 'SHORT' ? 'bg-quant-down text-white' : 'border border-quant-border text-muted-foreground'
+            )}
+          >
+            <ArrowDown className="w-3 h-3" /> 开空
+          </button>
+        </div>
+
+        {/* 限价/市价 + 逐仓/全仓 */}
+        <div className="flex items-center justify-between text-[10px]">
+          <div className="flex items-center gap-1">
+            {(['LIMIT', 'MARKET'] as const).map((t) => (
+              <button
+                key={t}
+                onClick={() => setOrderType(t)}
+                className={cn(
+                  'px-2 py-0.5 rounded',
+                  orderType === t ? 'bg-quant-gold/20 text-quant-gold' : 'text-muted-foreground'
+                )}
+              >
+                {t === 'LIMIT' ? '限价' : '市价'}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-1">
+            {([['cross', '全仓'], ['isolated', '逐仓']] as const).map(([k, label]) => (
+              <button
+                key={k}
+                onClick={() => setMarginMode(k)}
+                className={cn(
+                  'px-2 py-0.5 rounded',
+                  marginMode === k ? 'bg-quant-gold/20 text-quant-gold' : 'text-muted-foreground'
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* 杠杆 */}
+        <div>
+          <div className="flex justify-between text-[10px] text-muted-foreground mb-0.5">
+            <span>杠杆</span>
+            <span className="text-quant-gold font-medium">{leverage}x</span>
+          </div>
+          <input
+            type="range"
+            min={1}
+            max={125}
+            value={leverage}
+            onChange={(e) => setLeverage(parseInt(e.target.value, 10))}
+            className="w-full h-1 accent-quant-gold"
           />
         </div>
 
-        {/* ORDERBOOK + TRADES (270px) */}
-        <OrderBookPanel
-          orderbook={orderbook}
-          obLoading={obLoading}
-          obPrecision={obPrecision}
-          onPrecisionChange={setObPrecision}
-          onPriceClick={(price) => setPrice(price)}
-          recentTrades={recentTrades}
-          liveTrades={liveTrades}
-          lastPrice={lastPrice}
-          bestBid={bestBid}
-          bestAsk={bestAsk}
-          symbol={symbol}
-          midPriceContent={
-            <div className="flex flex-col items-center">
-              <span className={cn('text-sm font-bold font-mono', isUp ? 'text-quant-green' : 'text-quant-red')}>
-                {markPrice ? markPrice.toFixed(2) : '--'}
-              </span>
-              <span className={cn('text-[10px] font-mono', isUp ? 'text-quant-green' : 'text-quant-red')}>
-                {isUp ? '+' : ''}
-                {changePct.toFixed(2)}%
-              </span>
-              {fundingRate != null && (
-                <span
-                  className={cn(
-                    'text-[10px] font-mono mt-0.5',
-                    fundingRate > 0 ? 'text-quant-red' : 'text-quant-green'
-                  )}
-                >
-                  资金费率 {fundingRate > 0 ? '+' : ''}
-                  {(fundingRate * 100).toFixed(4)}%
-                  {nextFundingTime > 0 && (
-                    <span className="text-muted-foreground ml-1">{formatTime(nextFundingTime)}</span>
-                  )}
-                </span>
-              )}
-            </div>
-          }
-          recentTradesHeader={
-            <>
-              <span className="text-[11px] font-medium text-foreground">最新成交</span>
-              <span className="text-[11px] text-muted-foreground cursor-pointer hover:text-foreground">市场异动</span>
-            </>
-          }
-        />
+        {/* 价格 */}
+        <div>
+          <label className="block text-[10px] text-muted-foreground mb-0.5">价格 (USDT)</label>
+          <input
+            type="number"
+            value={orderType === 'MARKET' ? '' : limitPrice}
+            disabled={orderType === 'MARKET'}
+            placeholder={orderType === 'MARKET' ? `市价 ≈ ${lastPrice ? formatLinePrice(lastPrice, precision) : '—'}` : ''}
+            onChange={(e) => setLimitPrice(e.target.value)}
+            className="w-full h-7 px-2 text-xs bg-quant-bg border border-quant-border rounded focus:outline-none focus:border-quant-gold tabular-nums disabled:opacity-50"
+          />
+        </div>
 
-        {/* RIGHT: Contract Trade Panel (310px) */}
-        <div className="bg-quant-bg-secondary overflow-y-auto flex flex-col">
-          {/* Position Mode: open/close */}
-          <div className="h-8 shrink-0 border-b border-quant-border flex items-center justify-between px-3">
-            <div className="flex gap-2">
+        {/* 数量 */}
+        <div>
+          <label className="block text-[10px] text-muted-foreground mb-0.5">数量 ({symbol.replace('USDT', '')})</label>
+          <input
+            type="number"
+            value={quantity}
+            onChange={(e) => setQuantity(e.target.value)}
+            placeholder="0.00"
+            className="w-full h-7 px-2 text-xs bg-quant-bg border border-quant-border rounded focus:outline-none focus:border-quant-gold tabular-nums"
+          />
+          <div className="flex gap-1 mt-1">
+            {[25, 50, 75, 100].map((p) => (
               <button
-                className={cn(
-                  'text-xs px-2 py-1 rounded font-medium',
-                  positionMode === 'open'
-                    ? 'bg-quant-gold/10 text-quant-gold'
-                    : 'text-muted-foreground hover:text-foreground'
-                )}
-                onClick={() => setPositionMode('open')}
+                key={p}
+                onClick={() => setPct(p)}
+                className="flex-1 h-5 rounded text-[9px] border border-quant-border text-muted-foreground hover:text-quant-gold hover:border-quant-gold"
               >
-                开仓
+                {p}%
               </button>
-              <button
-                className={cn(
-                  'text-xs px-2 py-1 rounded font-medium',
-                  positionMode === 'close'
-                    ? 'bg-quant-gold/10 text-quant-gold'
-                    : 'text-muted-foreground hover:text-foreground'
-                )}
-                onClick={() => {
-                  setPositionMode('close')
-                  if (positions.length === 0) {
-                    toast('info', '当前无持仓，无需平仓')
-                  } else {
-                    setActiveBottomTab('positions')
-                    setBottomHeight((h) => Math.max(h, 180))
-                  }
-                }}
-              >
-                平仓
-              </button>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-[11px] text-muted-foreground">{marginMode === 'cross' ? '全仓' : '逐仓'}</span>
-              <span className="text-[11px] text-quant-gold font-bold">{leverage}x</span>
-              <Settings
-                className="w-3.5 h-3.5 text-muted-foreground cursor-pointer hover:text-foreground"
-                onClick={() => setShowSettingsModal(true)}
-              />
-            </div>
+            ))}
           </div>
-
-          {/* Leverage & Margin */}
-          <div className="p-3 border-b border-quant-border">
-            <div className="flex justify-between items-center mb-2">
-              <span className="text-xs font-medium">杠杆</span>
-              <span className="text-xs text-quant-gold font-mono">{leverage}x</span>
-            </div>
-            <div className="flex gap-1 mb-2">
-              {LEVERAGES.map((l) => (
-                <button
-                  key={l}
-                  onClick={() => setLeverage(l)}
-                  className={cn(
-                    'flex-1 py-1 text-[10px] rounded border transition-colors',
-                    leverage === l
-                      ? 'border-quant-gold text-quant-gold bg-quant-gold/10'
-                      : 'border-quant-border text-muted-foreground hover:text-foreground'
-                  )}
-                >
-                  {l}x
-                </button>
-              ))}
-            </div>
-            <div className="flex gap-1">
-              <button
-                onClick={() => setMarginMode('cross')}
-                className={cn(
-                  'flex-1 py-1 text-[11px] rounded border transition-colors',
-                  marginMode === 'cross'
-                    ? 'border-quant-gold text-quant-gold bg-quant-gold/10'
-                    : 'border-quant-border text-muted-foreground'
-                )}
-              >
-                全仓
-              </button>
-              <button
-                onClick={() => setMarginMode('isolated')}
-                className={cn(
-                  'flex-1 py-1 text-[11px] rounded border transition-colors',
-                  marginMode === 'isolated'
-                    ? 'border-quant-gold text-quant-gold bg-quant-gold/10'
-                    : 'border-quant-border text-muted-foreground'
-                )}
-              >
-                逐仓
-              </button>
-            </div>
-          </div>
-
-          {/* Order Form */}
-          <div className="flex-1 p-3 flex flex-col gap-3 overflow-y-auto">
-            {/* 订单类型切换：3 列网格两行排布，310px 窄面板下 6 个按钮不挤压折字 */}
-            <div className="grid grid-cols-3 gap-1 bg-quant-bg p-0.5 rounded" data-testid="order-type-row">
-              {(['LIMIT', 'MARKET', 'STOP_LIMIT'] as const).map((t) => (
-                <button
-                  key={t}
-                  onClick={() => setOrderType(t)}
-                  className={cn(
-                    'py-1 text-[11px] font-medium rounded transition-colors whitespace-nowrap',
-                    orderType === t
-                      ? 'bg-quant-bg-secondary text-foreground'
-                      : 'text-muted-foreground hover:text-foreground'
-                  )}
-                >
-                  {t === 'LIMIT' ? '限价' : t === 'MARKET' ? '市价' : '条件'}
-                </button>
-              ))}
-              <button
-                onClick={() => setShowTpSl(!showTpSl)}
-                className={cn(
-                  'py-1 text-[11px] rounded transition-colors whitespace-nowrap',
-                  showTpSl ? 'bg-quant-bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground'
-                )}
-              >
-                止盈止损
-              </button>
-              <button
-                onClick={() => setShowAdvanced(!showAdvanced)}
-                className={cn(
-                  'py-1 text-[11px] rounded transition-colors whitespace-nowrap',
-                  showAdvanced ? 'bg-quant-bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground'
-                )}
-              >
-                高级
-              </button>
-              <button
-                onClick={() => setShowLadder(!showLadder)}
-                className={cn(
-                  'py-1 text-[11px] rounded transition-colors whitespace-nowrap',
-                  showLadder ? 'bg-quant-bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground'
-                )}
-              >
-                阶梯
-              </button>
-            </div>
-
-            {/* 触发价格输入 */}
-            {orderType === 'STOP_LIMIT' && (
-              <div className="flex flex-col gap-1.5">
-                <div className="flex justify-between text-[10px] text-muted-foreground">
-                  <span>触发价格</span>
-                  <span>USDT</span>
-                </div>
-                <div className="flex items-center bg-quant-bg border border-quant-border rounded-lg px-3 h-10 focus-within:border-quant-gold transition-all">
-                  <input
-                    value={tpPrice}
-                    onChange={(e) => setTpPrice(e.target.value)}
-                    placeholder={lastPrice ? lastPrice.toFixed(precision.price) : '0'.padEnd(precision.price + 2, '0')}
-                    aria-label="触发价格"
-                    className="flex-1 bg-transparent text-sm font-mono border-0 ring-0 focus:ring-0 focus:ring-offset-0 focus:outline-0 focus-visible:outline-0 text-foreground placeholder:text-muted-foreground"
-                  />
-                  <span className="text-[10px] text-muted-foreground ml-2">USDT</span>
-                </div>
-              </div>
-            )}
-
-            {/* 委托价格输入 + 快捷按钮 */}
-            {orderType === 'LIMIT' && (
-              <div className="flex flex-col gap-1.5">
-                <div className="flex justify-between text-[10px] text-muted-foreground">
-                  <span>委托价格</span>
-                  <span>USDT</span>
-                </div>
-                <div className="flex flex-col gap-1">
-                  <div
-                    className={cn(
-                      'flex items-center bg-quant-bg border border-quant-border rounded-lg px-3 h-10 focus-within:border-quant-gold transition-all',
-                      priceFlash && 'border-quant-gold ring-2 ring-quant-gold/40 bg-quant-gold/5'
-                    )}
-                  >
-                    <input
-                      value={price}
-                      onChange={(e) => setPrice(e.target.value)}
-                      placeholder={
-                        lastPrice ? lastPrice.toFixed(precision.price) : '0'.padEnd(precision.price + 2, '0')
-                      }
-                      aria-label="价格"
-                      className="flex-1 bg-transparent text-sm font-mono border-0 ring-0 focus:ring-0 focus:ring-offset-0 focus:outline-0 focus-visible:outline-0 text-foreground placeholder:text-muted-foreground"
-                    />
-                    <span className="text-[10px] text-muted-foreground ml-2">USDT</span>
-                  </div>
-                  {/* 价格快捷按钮 */}
-                  <div className="flex gap-1">
-                    <button
-                      onClick={() => {
-                        if (lastPrice) setPrice((lastPrice * 0.999).toFixed(precision.price))
-                      }}
-                      className="flex-1 py-1 text-[10px] text-muted-foreground hover:text-foreground bg-quant-bg border border-quant-border rounded hover:border-quant-gold/50 transition-colors"
-                    >
-                      -0.1%
-                    </button>
-                    <button
-                      onClick={() => {
-                        if (lastPrice) setPrice((lastPrice * 0.995).toFixed(precision.price))
-                      }}
-                      className="flex-1 py-1 text-[10px] text-muted-foreground hover:text-foreground bg-quant-bg border border-quant-border rounded hover:border-quant-gold/50 transition-colors"
-                    >
-                      -0.5%
-                    </button>
-                    <button
-                      onClick={() => {
-                        if (lastPrice) setPrice(lastPrice.toFixed(precision.price))
-                      }}
-                      className="flex-1 py-1 text-[10px] text-quant-gold hover:text-quant-gold/80 bg-quant-bg border border-quant-gold/30 rounded hover:bg-quant-gold/10 transition-colors"
-                    >
-                      最新价
-                    </button>
-                    <button
-                      onClick={() => {
-                        if (lastPrice) setPrice((lastPrice * 1.005).toFixed(precision.price))
-                      }}
-                      className="flex-1 py-1 text-[10px] text-muted-foreground hover:text-foreground bg-quant-bg border border-quant-border rounded hover:border-quant-gold/50 transition-colors"
-                    >
-                      +0.5%
-                    </button>
-                    <button
-                      onClick={() => {
-                        if (lastPrice) setPrice((lastPrice * 1.001).toFixed(precision.price))
-                      }}
-                      className="flex-1 py-1 text-[10px] text-muted-foreground hover:text-foreground bg-quant-bg border border-quant-border rounded hover:border-quant-gold/50 transition-colors"
-                    >
-                      +0.1%
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* 数量/金额输入 - 支持单位切换 */}
-            <div className="flex flex-col gap-1.5">
-              <div className="flex justify-between items-center text-[10px] text-muted-foreground">
-                <span>{amountMode === 'quantity' ? '数量' : '保证金'}</span>
-                <div className="flex gap-1">
-                  <button
-                    onClick={() => setAmountMode('quantity')}
-                    className={cn(
-                      'px-2 py-0.5 rounded text-[10px] transition-colors',
-                      amountMode === 'quantity' ? 'bg-quant-gold/20 text-quant-gold' : 'hover:bg-white/5'
-                    )}
-                  >
-                    {symbol.replace('USDT', '')}
-                  </button>
-                  <button
-                    onClick={() => setAmountMode('amount')}
-                    className={cn(
-                      'px-2 py-0.5 rounded text-[10px] transition-colors',
-                      amountMode === 'amount' ? 'bg-quant-gold/20 text-quant-gold' : 'hover:bg-white/5'
-                    )}
-                  >
-                    USDT
-                  </button>
-                </div>
-              </div>
-
-              {amountMode === 'quantity' ? (
-                // 数量模式
-                <>
-                  <div className="flex items-center bg-quant-bg border border-quant-border rounded-lg px-3 h-10 focus-within:border-quant-gold transition-all">
-                    <input
-                      value={quantity}
-                      onChange={(e) => {
-                        setQuantity(e.target.value)
-                        setSliderValue(0)
-                      }}
-                      placeholder={'0'.padEnd(precision.quantity + 2, '0')}
-                      aria-label="数量"
-                      className="flex-1 bg-transparent text-sm font-mono border-0 ring-0 focus:ring-0 focus:ring-offset-0 focus:outline-0 focus-visible:outline-0 text-foreground placeholder:text-muted-foreground"
-                    />
-                    <span className="text-[10px] text-muted-foreground ml-2">{symbol.replace('USDT', '')}</span>
-                  </div>
-                </>
-              ) : (
-                // 金额模式（USDT保证金）
-                <>
-                  <div className="flex items-center bg-quant-bg border border-quant-border rounded-lg px-3 h-10 focus-within:border-quant-gold transition-all">
-                    <input
-                      value={amountValue}
-                      onChange={(e) => {
-                        setAmountValue(e.target.value)
-                        setSliderValue(0)
-                      }}
-                      placeholder="0.00"
-                      aria-label="保证金"
-                      className="flex-1 bg-transparent text-sm font-mono border-0 ring-0 focus:ring-0 focus:ring-offset-0 focus:outline-0 focus-visible:outline-0 text-foreground placeholder:text-muted-foreground"
-                    />
-                    <span className="text-[10px] text-muted-foreground ml-2">USDT</span>
-                  </div>
-                  {/* 显示对应的数量 */}
-                  {(() => {
-                    const calcPrice = orderType === 'MARKET' ? lastPrice : parseFloat(price) || lastPrice
-                    const amount = parseFloat(amountValue) || 0
-                    const qty = calcPrice > 0 ? (amount * leverage) / calcPrice : 0
-                    return qty > 0 ? (
-                      <div className="text-[10px] text-muted-foreground text-right">
-                        ≈ {qty.toFixed(precision.quantity)} {symbol.replace('USDT', '')} (名义价值:{' '}
-                        {(qty * calcPrice).toFixed(2)} USDT)
-                      </div>
-                    ) : null
-                  })()}
-                </>
-              )}
-
-              {/* 滑块选择器 */}
-              <div className="flex flex-col gap-1">
-                <input
-                  type="range"
-                  min="0"
-                  max="100"
-                  step="1"
-                  value={sliderValue}
-                  onChange={(e) => {
-                    const val = parseInt(e.target.value)
-                    setSliderValue(val)
-                    const calcPrice = orderType === 'MARKET' ? lastPrice : parseFloat(price) || lastPrice
-                    const pct = val / 100
-
-                    if (amountMode === 'amount') {
-                      // 金额模式：保证金百分比
-                      const margin = futuresBalance * pct
-                      setAmountValue(margin > 0 ? margin.toFixed(2) : '')
-                    } else {
-                      // 数量模式：根据保证金计算数量
-                      const calcQty = calcPrice > 0 ? (futuresBalance * pct * leverage) / calcPrice : 0
-                      setQuantity(calcQty > 0 ? calcQty.toFixed(precision.quantity) : '')
-                    }
-                  }}
-                  className="w-full h-1 bg-quant-border rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-quant-gold [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer"
-                />
-                <div className="flex justify-between text-[9px] text-muted-foreground">
-                  <span>0%</span>
-                  <span>{sliderValue}%</span>
-                  <span>100%</span>
-                </div>
-              </div>
-
-              {/* 百分比快捷按钮 */}
-              <div className="flex gap-1">
-                {[0.25, 0.5, 0.75, 1].map((pct) => {
-                  const pctLabel = Math.round(pct * 100) + '%'
-                  return (
-                    <button
-                      key={pctLabel}
-                      onClick={() => {
-                        setSliderValue(Math.round(pct * 100))
-                        const calcPrice = orderType === 'MARKET' ? lastPrice : parseFloat(price) || lastPrice
-
-                        if (amountMode === 'amount') {
-                          const margin = futuresBalance * pct
-                          setAmountValue(margin > 0 ? margin.toFixed(2) : '')
-                        } else {
-                          const calcQty = calcPrice > 0 ? (futuresBalance * pct * leverage) / calcPrice : 0
-                          setQuantity(calcQty > 0 ? calcQty.toFixed(precision.quantity) : '')
-                        }
-                      }}
-                      className={cn(
-                        'flex-1 py-1.5 text-[10px] font-medium rounded-lg transition-all',
-                        sliderValue === Math.round(pct * 100)
-                          ? 'bg-quant-gold/20 text-quant-gold border border-quant-gold/50'
-                          : 'text-muted-foreground hover:text-foreground bg-quant-bg border border-quant-border hover:border-quant-gold/50'
-                      )}
-                    >
-                      {pctLabel}
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-
-            {/* 高级设置 */}
-            {showAdvanced && (
-              <div className="flex flex-col gap-2 p-2 bg-quant-bg/50 rounded-lg border border-quant-border/50">
-                {/* 订单有效期 */}
-                {orderType === 'LIMIT' && (
-                  <div className="flex flex-col gap-1.5">
-                    <span className="text-[10px] text-muted-foreground">订单有效期</span>
-                    <div className="flex gap-1">
-                      {(['GTC', 'IOC', 'FOK'] as const).map((t) => (
-                        <button
-                          key={t}
-                          onClick={() => setTimeInForce(t)}
-                          className={cn(
-                            'flex-1 py-1 text-[10px] rounded transition-colors',
-                            timeInForce === t
-                              ? 'bg-quant-gold/20 text-quant-gold border border-quant-gold/50'
-                              : 'text-muted-foreground hover:text-foreground bg-quant-bg border border-quant-border'
-                          )}
-                        >
-                          {t === 'GTC' ? '一直有效' : t === 'IOC' ? '立即成交' : '全部成交'}
-                        </button>
-                      ))}
-                    </div>
-                    <div className="text-[9px] text-muted-foreground">
-                      {timeInForce === 'GTC' && '订单会一直有效，直到被成交或取消'}
-                      {timeInForce === 'IOC' && '订单必须立即成交，未成交部分会被取消'}
-                      {timeInForce === 'FOK' && '订单必须全部立即成交，否则会被取消'}
-                    </div>
-                  </div>
-                )}
-
-                {/* 只做 Maker */}
-                {orderType === 'LIMIT' && (
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={postOnly}
-                      onChange={(e) => setPostOnly(e.target.checked)}
-                      className="w-3 h-3 accent-quant-gold"
-                    />
-                    <span className="text-[10px] text-muted-foreground">只做 Maker（Post-Only）</span>
-                    <span className="text-[9px] text-muted-foreground/60">确保订单只作为挂单成交</span>
-                  </label>
-                )}
-
-                {/* 市价单滑点 */}
-                {orderType === 'MARKET' && (
-                  <div className="flex flex-col gap-1.5">
-                    <span className="text-[10px] text-muted-foreground">滑点容忍度</span>
-                    <div className="flex items-center gap-2">
-                      <div className="flex gap-1">
-                        {['0.1', '0.5', '1', '2'].map((s) => (
-                          <button
-                            key={s}
-                            onClick={() => setSlippage(s)}
-                            className={cn(
-                              'px-2 py-1 text-[10px] rounded transition-colors',
-                              slippage === s
-                                ? 'bg-quant-gold/20 text-quant-gold border border-quant-gold/50'
-                                : 'text-muted-foreground hover:text-foreground bg-quant-bg border border-quant-border'
-                            )}
-                          >
-                            {s}%
-                          </button>
-                        ))}
-                      </div>
-                      <input
-                        value={slippage}
-                        onChange={(e) => setSlippage(e.target.value)}
-                        className="w-16 px-2 py-1 text-[10px] bg-quant-bg border border-quant-border rounded text-foreground"
-                        placeholder="0.5"
-                      />
-                      <span className="text-[10px] text-muted-foreground">%</span>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* TP/SL 设置 */}
-            {showTpSl && (
-              <div className="flex flex-col gap-2 p-2 bg-quant-bg/50 rounded-lg border border-quant-border/50">
-                <div className="flex items-center justify-between text-[10px] text-muted-foreground mb-1">
-                  <span>止盈止损</span>
-                  <button
-                    onClick={() => {
-                      if (lastPrice) {
-                        setTpPrice((lastPrice * 1.02).toFixed(precision.price))
-                        setSlPrice((lastPrice * 0.99).toFixed(precision.price))
-                      }
-                    }}
-                    className="text-[10px] text-quant-gold hover:text-quant-gold/80 transition-colors"
-                  >
-                    智能设置
-                  </button>
-                </div>
-                <div className="flex items-center bg-quant-bg border border-quant-border rounded-lg px-3 h-9 focus-within:border-quant-gold transition-all">
-                  <span className="text-[10px] text-[#0ECB81] w-6">止盈</span>
-                  <input
-                    value={tpPrice}
-                    onChange={(e) => setTpPrice(e.target.value)}
-                    placeholder="--"
-                    aria-label="止盈价格"
-                    className="flex-1 bg-transparent text-xs font-mono border-0 ring-0 focus:ring-0 focus:ring-offset-0 focus:outline-0 focus-visible:outline-0 text-foreground placeholder:text-muted-foreground"
-                  />
-                  <span className="text-[10px] text-muted-foreground ml-1">USDT</span>
-                </div>
-                <div className="flex items-center bg-quant-bg border border-quant-border rounded-lg px-3 h-9 focus-within:border-quant-gold transition-all">
-                  <span className="text-[10px] text-[#F6465D] w-6">止损</span>
-                  <input
-                    value={slPrice}
-                    onChange={(e) => setSlPrice(e.target.value)}
-                    placeholder="--"
-                    aria-label="止损价格"
-                    className="flex-1 bg-transparent text-xs font-mono border-0 ring-0 focus:ring-0 focus:ring-offset-0 focus:outline-0 focus-visible:outline-0 text-foreground placeholder:text-muted-foreground"
-                  />
-                  <span className="text-[10px] text-muted-foreground ml-1">USDT</span>
-                </div>
-              </div>
-            )}
-
-            {/* 阶梯智能单面板 */}
-            {showLadder && (
-              <div className="flex flex-col gap-2 p-2 bg-quant-bg/50 rounded-lg border border-quant-border/50">
-                <LadderPanel
-                  symbol={symbol}
-                  currentPrice={lastPrice}
-                  pricePrecision={precision.price}
-                  onClose={() => setShowLadder(false)}
-                />
-              </div>
-            )}
-
-            {/* 账户信息 */}
-            <div className="space-y-1.5 text-[10px]">
-              <div className="flex justify-between text-muted-foreground">
-                <span>可用保证金</span>
-                <span className="font-mono text-foreground">{futuresBalance.toFixed(2)} USDT</span>
-              </div>
-              <div className="flex justify-between text-muted-foreground">
-                <span>成交额</span>
-                <span className="font-mono text-foreground">
-                  {preview.notional > 0 ? preview.notional.toFixed(2) : '--'} USDT
-                </span>
-              </div>
-              <div className="flex justify-between text-muted-foreground">
-                <span>保证金</span>
-                <span className="font-mono text-foreground">
-                  {preview.margin > 0 ? preview.margin.toFixed(2) : '--'} USDT
-                </span>
-              </div>
-              <div className="flex justify-between text-muted-foreground">
-                <span>手续费</span>
-                <span className="font-mono text-foreground">
-                  {preview.fee > 0 ? preview.fee.toFixed(4) : '--'} USDT
-                </span>
-              </div>
-            </div>
-
-            {/* 主要下单按钮 */}
-            {positionMode === 'close' ? (
-              <div className="py-2 text-center text-[11px] text-muted-foreground">
-                当前为平仓模式，请在下方持仓列表中操作平仓
-              </div>
-            ) : (
-              <>
-                <button
-                  onClick={() => handlePlaceOrder('BUY')}
-                  disabled={submitting}
-                  className={cn(
-                    'w-full py-3 rounded-lg text-sm font-bold transition-all duration-200 shadow-lg disabled:opacity-60',
-                    submitting ? 'bg-[#0ECB81]' : 'bg-[#0ECB81] hover:bg-[#0ECB81]/90 active:scale-[0.98] text-black'
-                  )}
-                >
-                  {submitting ? '提交中...' : `开多 ${leverage}x`}
-                </button>
-                <button
-                  onClick={() => handlePlaceOrder('SELL')}
-                  disabled={submitting}
-                  className={cn(
-                    'w-full py-3 rounded-lg text-sm font-bold transition-all duration-200 shadow-lg disabled:opacity-60',
-                    submitting ? 'bg-[#F6465D]' : 'bg-[#F6465D] hover:bg-[#F6465D]/90 active:scale-[0.98] text-foreground'
-                  )}
-                >
-                  {submitting ? '提交中...' : `开空 ${leverage}x`}
-                </button>
-              </>
-            )}
-
-            {/* 快捷下单按钮 - 25%/50%/75%/100% */}
-            <div className="grid grid-cols-4 gap-1.5">
-              {[0.25, 0.5, 0.75, 1].map((pct) => {
-                const pctLabel = Math.round(pct * 100) + '%'
-                const calcPrice = orderType === 'MARKET' ? lastPrice : parseFloat(price) || lastPrice
-                const calcQty = calcPrice > 0 ? (futuresBalance * pct * leverage) / calcPrice : 0
-                const quickOrder = async (side: 'BUY' | 'SELL') => {
-                  if (!calcQty || calcQty <= 0) {
-                    toast('error', '可用保证金不足')
-                    return
-                  }
-                  setSubmitting(true)
-                  try {
-                    await orderApi.place({
-                      symbol,
-                      side,
-                      order_type: orderType,
-                      price: orderType === 'MARKET' ? 0 : parseFloat(price) || 0,
-                      quantity: calcQty,
-                      market_type: 'swap',
-                      position_side: side === 'BUY' ? 'LONG' : 'SHORT',
-                      leverage,
-                      margin_mode: marginMode,
-                      time_in_force: timeInForce,
-                      post_only: postOnly,
-                      slippage: orderType === 'MARKET' ? parseFloat(slippage) / 100 : undefined,
-                    })
-                    toast(
-                      'success',
-                      `${side === 'BUY' ? '开多' : '开空'} ${calcQty.toFixed(precision.quantity)} ${symbol.replace('USDT', '')} @${leverage}x`
-                    )
-                    queryClient.invalidateQueries({ queryKey: ['orders'] })
-                    queryClient.invalidateQueries({ queryKey: ['positions'] })
-                    queryClient.invalidateQueries({ queryKey: ['portfolio'] })
-                  } catch (e: unknown) {
-                    const err = e instanceof Error ? e : new Error(String(e))
-                    toast('error', err.message || '下单失败')
-                  } finally {
-                    setSubmitting(false)
-                  }
-                }
-                return (
-                  <div key={pctLabel} className="flex gap-1">
-                    <button
-                      onClick={() => quickOrder('BUY')}
-                      disabled={submitting}
-                      className="flex-1 py-2 text-[11px] font-bold rounded-lg transition-all duration-200 bg-[#0ECB81]/10 hover:bg-[#0ECB81]/20 text-[#0ECB81] border border-[#0ECB81]/20 hover:border-[#0ECB81]/40 disabled:opacity-50"
-                    >
-                      多{Math.round(pct * 100)}%
-                    </button>
-                    <button
-                      onClick={() => quickOrder('SELL')}
-                      disabled={submitting}
-                      className="flex-1 py-2 text-[11px] font-bold rounded-lg transition-all duration-200 bg-[#F6465D]/10 hover:bg-[#F6465D]/20 text-[#F6465D] border border-[#F6465D]/20 hover:border-[#F6465D]/40 disabled:opacity-50"
-                    >
-                      空{Math.round(pct * 100)}%
-                    </button>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-
-          {/* Account Info Panel */}
-          <div className="border-t border-quant-border p-3">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-medium text-foreground">账户</span>
-              <span
-                className="text-[10px] text-quant-gold cursor-pointer hover:underline"
-                onClick={() => setShowTransferModal(true)}
-              >
-                划转
-              </span>
-            </div>
-            <div className="space-y-1.5">
-              <div className="flex justify-between text-[10px]">
-                <span className="text-muted-foreground">账户总权益</span>
-                <span className="font-mono text-foreground">{totalEstUsdt.toFixed(4)} USDT</span>
-              </div>
-              <div className="flex justify-between text-[10px]">
-                <span className="text-muted-foreground">合约余额</span>
-                <span className="font-mono text-foreground">{futuresBalance.toFixed(6)} USDT</span>
-              </div>
-              <div className="flex justify-between text-[10px]">
-                <span className="text-muted-foreground">已用保证金</span>
-                <span className="font-mono text-foreground">
-                  {portfolio?.margin_used ? Number(portfolio.margin_used).toFixed(4) + ' USDT' : '--'}
-                </span>
-              </div>
-              <div className="flex justify-between text-[10px]">
-                <span className="text-muted-foreground">未实现盈亏</span>
-                <span
-                  className={cn(
-                    'font-mono',
-                    (portfolio?.futures_unrealized_pnl || 0) >= 0 ? 'text-[#0ECB81]' : 'text-[#F6465D]'
-                  )}
-                >
-                  {portfolio?.futures_unrealized_pnl
-                    ? (Number(portfolio.futures_unrealized_pnl) >= 0 ? '+' : '') +
-                      Number(portfolio.futures_unrealized_pnl).toFixed(4)
-                    : '--'}
-                </span>
-              </div>
-              <div className="flex justify-between text-[10px]">
-                <span className="text-muted-foreground">持仓数量</span>
-                <span className="font-mono text-foreground">{positions?.length || 0}</span>
-              </div>
-              <div className="flex justify-between text-[10px]">
-                <span className="text-muted-foreground">总盈亏</span>
-                <span
-                  className={cn('font-mono', (portfolio?.total_pnl || 0) >= 0 ? 'text-[#0ECB81]' : 'text-[#F6465D]')}
-                >
-                  {portfolio?.total_pnl
-                    ? (Number(portfolio.total_pnl) >= 0 ? '+' : '') + Number(portfolio.total_pnl).toFixed(4)
-                    : '--'}
-                </span>
-              </div>
-            </div>
-            <div className="flex gap-1 mt-3">
-              <button
-                onClick={() => setShowTransferModal(true)}
-                className="flex-1 py-1.5 text-[10px] bg-quant-bg border border-quant-border rounded text-muted-foreground hover:text-foreground transition-colors"
-              >
-                划转
-              </button>
-              <button
-                onClick={() => setShowBuyModal(true)}
-                className="flex-1 py-1.5 text-[10px] bg-quant-bg border border-quant-border rounded text-muted-foreground hover:text-foreground transition-colors"
-              >
-                买币
-              </button>
-              <button
-                onClick={() => setShowSwapModal(true)}
-                className="flex-1 py-1.5 text-[10px] bg-quant-bg border border-quant-border rounded text-muted-foreground hover:text-foreground transition-colors"
-              >
-                兑换
-              </button>
-            </div>
+          <div className="text-[9px] text-muted-foreground mt-0.5 tabular-nums">
+            可开: {maxBase.toFixed(6).replace(/0+$/, '').replace(/\.$/, '')} {symbol.replace('USDT', '')}（可用 {availableQuote.toFixed(2)} USDT × {leverage}x）
+            {marginNeeded > 0 && ` · 占用保证金 ≈ ${marginNeeded.toFixed(2)} USDT`}
           </div>
         </div>
-      </div>
 
-      {/* ─── Bottom Panel ─── */}
-      <div
-        className="shrink-0 border-t border-quant-border bg-quant-bg-secondary flex flex-col"
-        style={{ height: bottomCollapsed ? 'auto' : bottomHeight }}
-      >
-        <div
-          className="h-1.5 cursor-row-resize hover:bg-quant-gold/20 active:bg-quant-gold/30 shrink-0 relative"
-          onMouseDown={(e) => {
-            dragRef.current = { startY: e.clientY, startH: bottomHeight }
-            const onMove = (ev: MouseEvent) => {
-              if (!dragRef.current) return
-              const h = Math.max(60, Math.min(600, dragRef.current.startH - (ev.clientY - dragRef.current.startY)))
-              setBottomHeight(h)
-            }
-            const onUp = () => {
-              dragRef.current = null
-              document.removeEventListener('mousemove', onMove)
-              document.removeEventListener('mouseup', onUp)
-            }
-            document.addEventListener('mousemove', onMove)
-            document.addEventListener('mouseup', onUp)
-          }}
+        {/* 止盈止损 */}
+        <button
+          onClick={() => setShowTpSl((v) => !v)}
+          className="text-[10px] text-muted-foreground hover:text-foreground"
         >
-          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-0.5 rounded bg-quant-border/60" />
-        </div>
-        <div className="flex border-b border-quant-border px-2 items-center justify-between shrink-0">
-          <div className="flex">
-            {(
-              [
-                { key: 'positions', label: '持仓', count: positions?.length || 0, icon: TrendingUp },
-                { key: 'orders', label: '当前委托', count: orders?.length || 0, icon: Clock },
-                { key: 'plans', label: '计划委托', count: 0, icon: AlertCircle },
-                { key: 'history', label: '历史委托', count: historyOrders?.length || 0, icon: XCircle },
-                { key: 'fills', label: '成交记录', count: fillTrades?.length || 0, icon: CheckCircle2 },
-                { key: 'assets', label: '资产', count: 0, icon: Activity },
-              ] as const
-            ).map((t) => {
-              return (
-                <button
-                  key={t.key}
-                  onClick={() => {
-                    setActiveBottomTab(t.key)
-                    setBottomHeight((h) => Math.max(h, 180))
-                  }}
-                  className={cn(
-                    'px-4 py-2 text-xs font-medium transition-colors relative flex items-center gap-1.5',
-                    activeBottomTab === t.key ? 'text-quant-gold' : 'text-muted-foreground hover:text-foreground'
-                  )}
-                >
-                  <t.icon className="w-3.5 h-3.5" />
-                  {t.label}
-                  {t.count > 0 && (
-                    <span
-                      className={cn(
-                        'ml-1 px-1.5 py-0 rounded-full text-[10px] font-bold',
-                        activeBottomTab === t.key
-                          ? 'bg-quant-gold/20 text-quant-gold'
-                          : 'bg-quant-bg-tertiary text-muted-foreground'
-                      )}
-                    >
-                      {t.count}
-                    </span>
-                  )}
-                  {activeBottomTab === t.key && (
-                    <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-quant-gold" />
-                  )}
-                </button>
-              )
-            })}
-          </div>
-          <button
-            onClick={() => setBottomHeight((h) => (h < 20 ? 180 : 0))}
-            className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/5 transition-colors"
-            title={bottomCollapsed ? '展开' : '收起'}
-          >
-            {bottomCollapsed ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-          </button>
-        </div>
-        {!bottomCollapsed && (
-          <div className="overflow-y-auto flex-1" style={{ maxHeight: bottomHeight - 40 }}>
-            {activeBottomTab === 'positions' && (
-              <div className="overflow-x-auto">
-                {posLoading ? (
-                  <div className="p-4 space-y-2">
-                    {Array.from({ length: 3 }).map((_, i) => (
-                      <Skeleton key={i} variant="text" height={32} />
-                    ))}
-                  </div>
-                ) : positions?.length ? (
-                  <table className="w-full text-[11px] whitespace-nowrap">
-                    <thead className="sticky top-0 bg-quant-bg-secondary z-10">
-                      <tr className="text-muted-foreground border-b border-quant-border">
-                        <th scope="col" className="text-left font-medium px-3 py-2">
-                          合约
-                        </th>
-                        <th scope="col" className="text-left font-medium px-3 py-2">
-                          方向/数量
-                        </th>
-                        <th scope="col" className="text-right font-medium px-3 py-2">
-                          开仓价
-                        </th>
-                        <th scope="col" className="text-right font-medium px-3 py-2">
-                          标记价
-                        </th>
-                        <th scope="col" className="text-right font-medium px-3 py-2">
-                          强平价
-                        </th>
-                        <th scope="col" className="text-right font-medium px-3 py-2">
-                          保证金
-                        </th>
-                        <th scope="col" className="text-right font-medium px-3 py-2">
-                          未实现盈亏
-                        </th>
-                        <th scope="col" className="text-right font-medium px-3 py-2">
-                          保证金率/维持率
-                        </th>
-                        <th scope="col" className="text-right font-medium px-3 py-2">
-                          操作
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {positions.map((pos: PositionItem, i: number) => {
-                        const isLong =
-                          (pos.side || '').toUpperCase() === 'LONG' || (pos.side || '').toUpperCase() === 'BUY'
-                        const entryPx = Number(pos.entryPrice || pos.openPrice || pos.avgPrice || 0)
-                        const markPx = markPrice || lastPrice || 0
-                        const qty = Number(pos.quantity || pos.amount || 0)
-                        const margin = Number(pos.margin || pos.positionMargin || 0)
-                        const posLeverage = Number(pos.leverage || leverage || 1)
-                        const notional = qty * markPx
-                        const upnl = isLong ? (markPx - entryPx) * qty : (entryPx - markPx) * qty
-                        const upnlPct = margin > 0 ? (upnl / margin) * 100 : 0
-                        const liqPx = Number(pos.liquidationPrice || pos.liquidation || 0)
-                        // Margin ratio = margin / notional * 100
-                        const marginRatio = notional > 0 ? (margin / notional) * 100 : 0
-                        // Maintenance margin rate (simplified: 0.4% for tier 1)
-                        const mmRate = 0.4
-                        return (
-                          <tr key={pos.id || i} className="border-b border-quant-border/40 hover:bg-white/[0.03]">
-                            <td className="px-3 py-2.5 font-medium">{pos.symbol || symbol} 永续</td>
-                            <td className="px-3 py-2.5">
-                              <span
-                                className={cn(
-                                  'inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold',
-                                  isLong ? 'bg-[#0ECB81]/10 text-[#0ECB81]' : 'bg-[#F6465D]/10 text-[#F6465D]'
-                                )}
-                              >
-                                <span
-                                  className={cn('w-1.5 h-1.5 rounded-full', isLong ? 'bg-[#0ECB81]' : 'bg-[#F6465D]')}
-                                />
-                                {isLong ? '多' : '空'} {qty.toFixed(3)}
-                              </span>
-                              <span className="text-[10px] text-muted-foreground ml-1">{posLeverage}x</span>
-                            </td>
-                            <td className="px-3 py-2.5 text-right font-mono">
-                              {entryPx > 0 ? entryPx.toFixed(2) : '--'}
-                            </td>
-                            <td className="px-3 py-2.5 text-right font-mono">
-                              {markPx > 0 ? markPx.toFixed(2) : '--'}
-                            </td>
-                            <td className="px-3 py-2.5 text-right font-mono text-[#F6465D]">
-                              {liqPx > 0 ? liqPx.toFixed(2) : '--'}
-                            </td>
-                            <td className="px-3 py-2.5 text-right font-mono">
-                              {margin > 0 ? margin.toFixed(2) : '--'} USDT
-                            </td>
-                            <td className="px-3 py-2.5 text-right font-mono">
-                              <span className={cn(upnl >= 0 ? 'text-[#0ECB81]' : 'text-[#F6465D]')}>
-                                {upnl >= 0 ? '+' : ''}
-                                {upnl.toFixed(2)}
-                              </span>
-                              <span className="text-muted-foreground ml-1">
-                                ({upnlPct >= 0 ? '+' : ''}
-                                {upnlPct.toFixed(2)}%)
-                              </span>
-                            </td>
-                            <td className="px-3 py-2.5 text-right font-mono text-muted-foreground">
-                              {marginRatio > 0 ? marginRatio.toFixed(2) : '--'}% / {mmRate}%
-                            </td>
-                            <td className="px-3 py-2.5 text-right">
-                              <button
-                                onClick={() => handleClosePosition(pos)}
-                                disabled={submitting}
-                                className={cn(
-                                  'px-2 py-1 rounded text-[10px] font-medium transition-colors',
-                                  submitting
-                                    ? 'bg-muted text-muted-foreground cursor-not-allowed'
-                                    : isLong
-                                      ? 'bg-[#F6465D]/10 text-[#F6465D] hover:bg-[#F6465D]/20'
-                                      : 'bg-[#0ECB81]/10 text-[#0ECB81] hover:bg-[#0ECB81]/20'
-                                )}
-                              >
-                                {submitting ? '平仓中...' : `平${isLong ? '多' : '空'}`}
-                              </button>
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                ) : (
-                  <div className="py-8 text-center text-muted-foreground text-xs">暂无持仓</div>
-                )}
-              </div>
-            )}
-            {activeBottomTab === 'orders' && (
-              <div>
-                {(orders?.length ?? 0) > 0 && (
-                  <div className="flex justify-end px-3 py-1.5 border-b border-quant-border/40">
-                    <button
-                      onClick={() => cancelAllMut.mutate()}
-                      disabled={cancelAllMut.isPending}
-                      className="px-2 py-0.5 rounded text-[10px] font-medium bg-[#F6465D]/10 text-[#F6465D] hover:bg-[#F6465D]/20 transition-colors disabled:opacity-50"
-                    >
-                      {cancelAllMut.isPending
-                        ? t('trading.cancelAllPending', '撤单中...')
-                        : t('trading.cancelAll', '全部撤单')}
-                    </button>
-                  </div>
-                )}
-                {ordersLoading ? (
-                  <div className="p-4 space-y-2">
-                    {Array.from({ length: 4 }).map((_, i) => (
-                      <Skeleton key={i} variant="text" height={32} />
-                    ))}
-                  </div>
-                ) : orders?.length ? (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-[11px] whitespace-nowrap">
-                      <thead className="sticky top-0 bg-quant-bg-secondary z-10">
-                        <tr className="text-muted-foreground text-left">
-                          <th scope="col" className="px-1.5 py-1 font-medium">
-                            时间
-                          </th>
-                          <th scope="col" className="px-1.5 py-1 font-medium">
-                            币种
-                          </th>
-                          <th scope="col" className="px-1.5 py-1 font-medium">
-                            方向
-                          </th>
-                          <th scope="col" className="px-1.5 py-1 font-medium">
-                            类型
-                          </th>
-                          <th scope="col" className="px-1.5 py-1 font-medium">
-                            价格
-                          </th>
-                          <th scope="col" className="px-1.5 py-1 font-medium">
-                            数量
-                          </th>
-                          <th scope="col" className="px-1.5 py-1 font-medium">
-                            状态
-                          </th>
-                          <th scope="col" className="px-1.5 py-1 font-medium">
-                            操作
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(orders || []).map((o: Order) => {
-                          return (
-                            <tr key={o.id} className="border-t border-quant-border/40 hover:bg-white/[0.02]">
-                              <td className="px-1.5 py-1 text-muted-foreground">{formatDateTime(o.created_at)}</td>
-                              <td className="px-1.5 py-1 font-semibold">{o.symbol}</td>
-                              <td className="px-1.5 py-1">
-                                <span
-                                  className={cn(
-                                    'text-[9px] font-bold',
-                                    o.side === 'BUY' ? 'text-[#0ECB81]' : 'text-[#F6465D]'
-                                  )}
-                                >
-                                  {o.side === 'BUY' ? '买入' : '卖出'}
-                                </span>
-                              </td>
-                              <td className="px-1.5 py-1 text-muted-foreground">{o.type}</td>
-                              <td className="px-1.5 py-1 font-mono">${formatPrice(o.price, 2)}</td>
-                              <td className="px-1.5 py-1 font-mono">{formatPrice(o.quantity, 4)}</td>
-                              <td className="px-1.5 py-1">
-                                <StatusTag status={o.status} />
-                              </td>
-                              <td className="px-1.5 py-1">
-                                <button
-                                  onClick={() => handleCancelOrder(o.id)}
-                                  className="px-1.5 py-0.5 bg-[#F6465D]/10 text-[#F6465D] rounded text-[9px] font-medium hover:bg-[#F6465D]/20 transition-colors flex items-center gap-1"
-                                >
-                                  <XCircle className="w-3 h-3" />
-                                  取消
-                                </button>
-                              </td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <div className="py-6 flex items-center justify-center">
-                    <EmptyState
-                      title="暂无委托"
-                      description="当前没有进行中的委托订单"
-                      className="py-1 border-0 text-[10px] [&>div:first-child]:hidden"
-                    />
-                  </div>
-                )}
-              </div>
-            )}
-            {activeBottomTab === 'plans' && (
-              <div>
-                <div className="flex items-center justify-between px-3 py-2 border-b border-quant-border">
-                  <span className="text-xs font-medium text-foreground">计划委托</span>
-                  <span className="text-[10px] text-muted-foreground">止盈止损 / 条件单 / 跟踪止损</span>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-[11px] whitespace-nowrap">
-                    <thead className="sticky top-0 bg-quant-bg-secondary z-10">
-                      <tr className="text-muted-foreground border-b border-quant-border">
-                        <th scope="col" className="text-left font-medium px-3 py-2">
-                          类型
-                        </th>
-                        <th scope="col" className="text-left font-medium px-3 py-2">
-                          币种
-                        </th>
-                        <th scope="col" className="text-right font-medium px-3 py-2">
-                          触发价
-                        </th>
-                        <th scope="col" className="text-right font-medium px-3 py-2">
-                          委托价
-                        </th>
-                        <th scope="col" className="text-right font-medium px-3 py-2">
-                          数量
-                        </th>
-                        <th scope="col" className="text-right font-medium px-3 py-2">
-                          状态
-                        </th>
-                        <th scope="col" className="text-right font-medium px-3 py-2">
-                          操作
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {/* Show TP/SL from active orders that have tp_price or sl_price */}
-                      {(orders || [])
-                        .filter((o: Order) => o.tp_price || o.sl_price)
-                        .map((o: Order) => {
-                          return (
-                            <tr key={`tp-${o.id}`} className="border-b border-quant-border/40 hover:bg-white/[0.03]">
-                              <td className="px-3 py-2">
-                                <span
-                                  className={cn(
-                                    'text-[10px] px-1.5 py-0.5 rounded font-bold',
-                                    o.tp_price ? 'bg-[#0ECB81]/10 text-[#0ECB81]' : 'bg-[#F6465D]/10 text-[#F6465D]'
-                                  )}
-                                >
-                                  {o.tp_price ? '止盈' : '止损'}
-                                </span>
-                              </td>
-                              <td className="px-3 py-2 font-medium">{o.symbol}</td>
-                              <td className="px-3 py-2 text-right font-mono">
-                                {o.tp_price ? o.tp_price.toFixed(2) : o.sl_price?.toFixed(2)}
-                              </td>
-                              <td className="px-3 py-2 text-right font-mono text-muted-foreground">市价</td>
-                              <td className="px-3 py-2 text-right font-mono">{o.quantity.toFixed(4)}</td>
-                              <td className="px-3 py-2 text-right">
-                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-quant-bg-tertiary text-muted-foreground">
-                                  监控中
-                                </span>
-                              </td>
-                              <td className="px-3 py-2 text-right">
-                                <button
-                                  onClick={() => handleCancelOrder(o.id)}
-                                  className="px-2 py-0.5 rounded text-[10px] bg-[#F6465D]/10 text-[#F6465D] hover:bg-[#F6465D]/20 transition-colors"
-                                >
-                                  取消
-                                </button>
-                              </td>
-                            </tr>
-                          )
-                        })}
-                      {/* Show stop-limit orders */}
-                      {(orders || [])
-                        .filter((o: Order) => o.type === 'STOP_LIMIT')
-                        .map((o: Order) => {
-                          return (
-                            <tr key={`stop-${o.id}`} className="border-b border-quant-border/40 hover:bg-white/[0.03]">
-                              <td className="px-3 py-2">
-                                <span className="text-[10px] px-1.5 py-0.5 rounded font-bold bg-quant-gold/10 text-quant-gold">
-                                  条件单
-                                </span>
-                              </td>
-                              <td className="px-3 py-2 font-medium">{o.symbol}</td>
-                              <td className="px-3 py-2 text-right font-mono">
-                                {o.tp_price ? o.tp_price.toFixed(2) : '--'}
-                              </td>
-                              <td className="px-3 py-2 text-right font-mono">{o.price.toFixed(2)}</td>
-                              <td className="px-3 py-2 text-right font-mono">{o.quantity.toFixed(4)}</td>
-                              <td className="px-3 py-2 text-right">
-                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-quant-bg-tertiary text-muted-foreground">
-                                  {o.status}
-                                </span>
-                              </td>
-                              <td className="px-3 py-2 text-right">
-                                <button
-                                  onClick={() => handleCancelOrder(o.id)}
-                                  className="px-2 py-0.5 rounded text-[10px] bg-[#F6465D]/10 text-[#F6465D] hover:bg-[#F6465D]/20 transition-colors"
-                                >
-                                  取消
-                                </button>
-                              </td>
-                            </tr>
-                          )
-                        })}
-                    </tbody>
-                  </table>
-                  {(orders || []).filter((o: Order) => o.tp_price || o.sl_price || o.type === 'STOP_LIMIT').length ===
-                    0 && (
-                    <div className="py-6 flex items-center justify-center">
-                      <EmptyState
-                        title="暂无计划委托"
-                        description="计划委托包括止盈止损和条件委托"
-                        className="py-1 border-0 text-[10px] [&>div:first-child]:hidden"
-                      />
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-            {activeBottomTab === 'history' && (
-              <div>
-                {historyLoading ? (
-                  <div className="p-4 space-y-2">
-                    {Array.from({ length: 4 }).map((_, i) => (
-                      <Skeleton key={i} variant="text" height={32} />
-                    ))}
-                  </div>
-                ) : historyOrders?.length ? (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-[11px] whitespace-nowrap">
-                      <thead className="sticky top-0 bg-quant-bg-secondary z-10">
-                        <tr className="text-muted-foreground text-left">
-                          <th scope="col" className="px-1.5 py-1 font-medium">
-                            时间
-                          </th>
-                          <th scope="col" className="px-1.5 py-1 font-medium">
-                            币种
-                          </th>
-                          <th scope="col" className="px-1.5 py-1 font-medium">
-                            方向
-                          </th>
-                          <th scope="col" className="px-1.5 py-1 font-medium">
-                            价格
-                          </th>
-                          <th scope="col" className="px-1.5 py-1 font-medium">
-                            数量
-                          </th>
-                          <th scope="col" className="px-1.5 py-1 font-medium">
-                            盈亏
-                          </th>
-                          <th scope="col" className="px-1.5 py-1 font-medium">
-                            状态
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(historyOrders || []).map((o: HistoryOrder) => {
-                          const pnl = o.realized_pnl || 0
-                          return (
-                            <tr key={o.id} className="border-t border-quant-border/40 hover:bg-white/[0.02]">
-                              <td className="px-1.5 py-1 text-muted-foreground">
-                                {formatDateTime(o.updated_at || o.created_at)}
-                              </td>
-                              <td className="px-1.5 py-1 font-semibold">{o.symbol}</td>
-                              <td className="px-1.5 py-1">
-                                <span
-                                  className={cn(
-                                    'text-[9px] font-bold',
-                                    o.side === 'BUY' ? 'text-[#0ECB81]' : 'text-[#F6465D]'
-                                  )}
-                                >
-                                  {o.side === 'BUY' ? '买入' : '卖出'}
-                                </span>
-                              </td>
-                              <td className="px-1.5 py-1 font-mono">${formatPrice(o.avg_price || o.price, 2)}</td>
-                              <td className="px-1.5 py-1 font-mono">{formatPrice(o.filled_quantity, 4)}</td>
-                              <td
-                                className={cn(
-                                  'px-1.5 py-1 font-mono font-bold',
-                                  pnl >= 0 ? 'text-[#0ECB81]' : 'text-[#F6465D]'
-                                )}
-                              >
-                                {pnl >= 0 ? '+' : ''}
-                                {pnl.toFixed(2)}
-                              </td>
-                              <td className="px-1.5 py-1">
-                                <StatusTag status={o.status} />
-                              </td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <div className="py-6 flex items-center justify-center">
-                    <EmptyState
-                      title="暂无历史成交"
-                      description="还没有已成交的订单记录"
-                      className="py-1 border-0 text-[10px] [&>div:first-child]:hidden"
-                    />
-                  </div>
-                )}
-              </div>
-            )}
-            {activeBottomTab === 'fills' && (
-              <div>
-                {fillsLoading ? (
-                  <div className="p-4 space-y-2">
-                    {Array.from({ length: 4 }).map((_, i) => (
-                      <Skeleton key={i} variant="text" height={32} />
-                    ))}
-                  </div>
-                ) : fillTrades?.length ? (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-[11px] whitespace-nowrap">
-                      <thead className="sticky top-0 bg-quant-bg-secondary z-10">
-                        <tr className="text-muted-foreground text-left">
-                          <th scope="col" className="px-1.5 py-1 font-medium">
-                            时间
-                          </th>
-                          <th scope="col" className="px-1.5 py-1 font-medium">
-                            币种
-                          </th>
-                          <th scope="col" className="px-1.5 py-1 font-medium">
-                            方向
-                          </th>
-                          <th scope="col" className="px-1.5 py-1 font-medium">
-                            价格
-                          </th>
-                          <th scope="col" className="px-1.5 py-1 font-medium">
-                            数量
-                          </th>
-                          <th scope="col" className="px-1.5 py-1 font-medium">
-                            手续费
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(fillTrades || []).map((t: FillTrade, i: number) => {
-                          return (
-                            <tr key={t.id || i} className="border-t border-quant-border/40 hover:bg-white/[0.02]">
-                              <td className="px-1.5 py-1 text-muted-foreground">
-                                {formatDateTime(t.time || t.created_at || t.timestamp || 0)}
-                              </td>
-                              <td className="px-1.5 py-1 font-semibold">{t.symbol || symbol}</td>
-                              <td className="px-1.5 py-1">
-                                <span
-                                  className={cn(
-                                    'text-[9px] font-bold',
-                                    t.side === 'buy' ? 'text-[#0ECB81]' : 'text-[#F6465D]'
-                                  )}
-                                >
-                                  {t.side === 'buy' ? '买入' : '卖出'}
-                                </span>
-                              </td>
-                              <td className="px-1.5 py-1 font-mono">${formatPrice(t.price || t.avg_price, 2)}</td>
-                              <td className="px-1.5 py-1 font-mono">
-                                {formatPrice(t.quantity || t.filled_quantity, 4)}
-                              </td>
-                              <td className="px-1.5 py-1 font-mono text-muted-foreground">
-                                {t.fee ? formatPrice(t.fee, 4) : '--'}
-                              </td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <div className="py-6 flex items-center justify-center">
-                    <EmptyState
-                      title="暂无成交记录"
-                      description="还没有成交记录"
-                      className="py-1 border-0 text-[10px] [&>div:first-child]:hidden"
-                    />
-                  </div>
-                )}
-              </div>
-            )}
-            {activeBottomTab === 'assets' && (
-              <div>
-                {balLoading ? (
-                  <div className="p-4 space-y-2">
-                    {Array.from({ length: 3 }).map((_, i) => (
-                      <Skeleton key={i} variant="text" height={32} />
-                    ))}
-                  </div>
-                ) : (
-                  (() => {
-                    const raw = allBalances as Record<string, unknown>
-                    const list = ((raw?.balances as unknown[]) ||
-                      (raw?.currencies as unknown[]) ||
-                      (raw?.list as unknown[]) ||
-                      (Array.isArray(raw) ? raw : [])) as Record<string, unknown>[]
-                    if (!Array.isArray(list) || !list.length)
-                      return (
-                        <div className="py-6 flex items-center justify-center">
-                          <EmptyState
-                            title="暂无资产数据"
-                            description="等待资产数据加载..."
-                            className="py-1 border-0 text-[10px] [&>div:first-child]:hidden"
-                          />
-                        </div>
-                      )
-                    return (
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-[11px] whitespace-nowrap">
-                          <thead className="sticky top-0 bg-quant-bg-secondary z-10">
-                            <tr className="text-muted-foreground text-left">
-                              <th scope="col" className="px-3 py-2 font-medium">
-                                币种
-                              </th>
-                              <th scope="col" className="text-right px-3 py-2 font-medium">
-                                可用
-                              </th>
-                              <th scope="col" className="text-right px-3 py-2 font-medium">
-                                冻结
-                              </th>
-                              <th scope="col" className="text-right px-3 py-2 font-medium">
-                                总计
-                              </th>
-                              <th scope="col" className="text-right px-3 py-2 font-medium">
-                                估值(USDT)
-                              </th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {list.map((b, i: number) => {
-                              const free = parseFloat(String(b.free ?? b.available ?? b.balance ?? 0))
-                              const locked = parseFloat(String(b.locked ?? b.frozen ?? 0))
-                              const total = free + locked
-                              return (
-                                <tr
-                                  key={String(b.asset || b.symbol || i)}
-                                  className="border-t border-quant-border/40 hover:bg-white/[0.02]"
-                                >
-                                  <td className="px-3 py-2 font-semibold">{String(b.asset || b.symbol || '--')}</td>
-                                  <td className="px-3 py-2 text-right font-mono">{free.toFixed(4)}</td>
-                                  <td className="px-3 py-2 text-right font-mono">
-                                    {locked > 0 ? locked.toFixed(4) : '--'}
-                                  </td>
-                                  <td className="px-3 py-2 text-right font-mono">{total.toFixed(4)}</td>
-                                  <td className="px-3 py-2 text-right font-mono text-muted-foreground">--</td>
-                                </tr>
-                              )
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
-                    )
-                  })()
-                )}
-              </div>
-            )}
+          {showTpSl ? '▾' : '▸'} 止盈止损（可选）
+        </button>
+        {showTpSl && (
+          <div className="grid grid-cols-2 gap-1.5">
+            <input
+              type="number"
+              value={tpPrice}
+              onChange={(e) => setTpPrice(e.target.value)}
+              placeholder="止盈价"
+              className="h-7 px-2 text-xs bg-quant-bg border border-quant-border rounded focus:outline-none focus:border-quant-gold tabular-nums"
+            />
+            <input
+              type="number"
+              value={slPrice}
+              onChange={(e) => setSlPrice(e.target.value)}
+              placeholder="止损价"
+              className="h-7 px-2 text-xs bg-quant-bg border border-quant-border rounded focus:outline-none focus:border-quant-gold tabular-nums"
+            />
           </div>
         )}
+
+        {/* 提交 */}
+        <button
+          onClick={submit}
+          disabled={submitting}
+          className={cn(
+            'w-full h-8 rounded text-xs font-semibold text-white disabled:opacity-50',
+            closing || direction === 'LONG' ? 'bg-quant-up hover:opacity-90' : 'bg-quant-down hover:opacity-90'
+          )}
+        >
+          {submitting
+            ? '提交中…'
+            : closing
+              ? `平仓 ${symbol.replace('USDT', '')}`
+              : `${direction === 'LONG' ? '开多' : '开空'} ${symbol.replace('USDT', '')}`}
+        </button>
       </div>
-
-      {/* ═══════════════════════════════════════════════
-         Settings Modal
-         ═══════════════════════════════════════════════ */}
-      {showSettingsModal && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
-          onClick={() => setShowSettingsModal(false)}
-        >
-          <div
-            className="w-full max-w-md rounded-2xl border border-quant-border bg-quant-card shadow-2xl overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between px-5 py-4 border-b border-quant-border">
-              <h3 className="text-sm font-bold flex items-center gap-2">
-                <Settings className="w-4 h-4 text-quant-gold" /> 合约设置
-              </h3>
-              <button
-                onClick={() => setShowSettingsModal(false)}
-                className="p-1 rounded text-muted-foreground hover:text-foreground"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="p-5 space-y-6">
-              <div>
-                <label className="text-[11px] text-muted-foreground mb-2 block">杠杆倍数</label>
-                <div className="flex gap-1.5 flex-wrap">
-                  {LEVERAGES.map((l) => (
-                    <button
-                      key={l}
-                      onClick={() => setLeverage(l)}
-                      className={cn(
-                        'px-4 py-2 text-xs rounded-lg border transition-colors',
-                        leverage === l
-                          ? 'border-quant-gold text-quant-gold bg-quant-gold/10'
-                          : 'border-quant-border text-muted-foreground hover:text-foreground'
-                      )}
-                    >
-                      {l}x
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <label className="text-[11px] text-muted-foreground mb-2 block">保证金模式</label>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setMarginMode('cross')}
-                    className={cn(
-                      'flex-1 py-3 text-xs rounded-lg border transition-colors',
-                      marginMode === 'cross'
-                        ? 'border-quant-gold text-quant-gold bg-quant-gold/10'
-                        : 'border-quant-border text-muted-foreground hover:text-foreground'
-                    )}
-                  >
-                    全仓 (Cross)
-                  </button>
-                  <button
-                    onClick={() => setMarginMode('isolated')}
-                    className={cn(
-                      'flex-1 py-3 text-xs rounded-lg border transition-colors',
-                      marginMode === 'isolated'
-                        ? 'border-quant-gold text-quant-gold bg-quant-gold/10'
-                        : 'border-quant-border text-muted-foreground hover:text-foreground'
-                    )}
-                  >
-                    逐仓 (Isolated)
-                  </button>
-                </div>
-              </div>
-              <div>
-                <label className="text-[11px] text-muted-foreground mb-2 block">持仓模式</label>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setPositionMode('open')}
-                    className={cn(
-                      'flex-1 py-3 text-xs rounded-lg border transition-colors',
-                      positionMode === 'open'
-                        ? 'border-quant-gold text-quant-gold bg-quant-gold/10'
-                        : 'border-quant-border text-muted-foreground hover:text-foreground'
-                    )}
-                  >
-                    开仓
-                  </button>
-                  <button
-                    onClick={() => setPositionMode('close')}
-                    className={cn(
-                      'flex-1 py-3 text-xs rounded-lg border transition-colors',
-                      positionMode === 'close'
-                        ? 'border-quant-gold text-quant-gold bg-quant-gold/10'
-                        : 'border-quant-border text-muted-foreground hover:text-foreground'
-                    )}
-                  >
-                    平仓
-                  </button>
-                </div>
-              </div>
-              <div className="text-[10px] text-muted-foreground bg-quant-bg-secondary rounded-lg p-3">
-                调整杠杆和保证金模式会影响当前持仓。更改将在下一次开仓时生效。
-              </div>
-              <button
-                onClick={() => {
-                  setShowSettingsModal(false)
-                  toast('success', '合约设置已保存')
-                }}
-                className="w-full py-2.5 rounded-lg bg-quant-gold text-black text-xs font-bold hover:opacity-90 transition-opacity"
-              >
-                保存设置
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ═══════════════════════════════════════════════
-         Transfer Modal
-         ═══════════════════════════════════════════════ */}
-      {showTransferModal && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
-          onClick={() => setShowTransferModal(false)}
-        >
-          <div
-            className="w-full max-w-md rounded-2xl border border-quant-border bg-quant-card shadow-2xl overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between px-5 py-4 border-b border-quant-border">
-              <h3 className="text-sm font-bold flex items-center gap-2">
-                <ArrowRightLeft className="w-4 h-4 text-quant-gold" /> 资金划转
-              </h3>
-              <button
-                onClick={() => setShowTransferModal(false)}
-                className="p-1 rounded text-muted-foreground hover:text-foreground"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="p-5 space-y-5">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[10px] text-muted-foreground mb-1.5 block">从</label>
-                  <select
-                    value={transferFrom}
-                    onChange={(e) => {
-                      setTransferFrom(e.target.value)
-                      setTransferTo(e.target.value === 'spot' ? 'futures' : 'spot')
-                    }}
-                    className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2.5 text-xs text-foreground outline-none focus:border-quant-gold"
-                  >
-                    <option value="futures">合约钱包</option>
-                    <option value="spot">现货钱包</option>
-                    <option value="funding">资金钱包</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="text-[10px] text-muted-foreground mb-1.5 block">到</label>
-                  <select
-                    value={transferTo}
-                    onChange={(e) => setTransferTo(e.target.value)}
-                    className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2.5 text-xs text-foreground outline-none focus:border-quant-gold"
-                  >
-                    <option value="spot">现货钱包</option>
-                    <option value="futures">合约钱包</option>
-                    <option value="funding">资金钱包</option>
-                  </select>
-                </div>
-              </div>
-              <div>
-                <label className="text-[10px] text-muted-foreground mb-1.5 block">币种</label>
-                <select
-                  value={transferCurrency}
-                  onChange={(e) => setTransferCurrency(e.target.value)}
-                  className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2.5 text-xs text-foreground outline-none focus:border-quant-gold"
-                >
-                  <option value="USDT">USDT</option>
-                  <option value="BTC">BTC</option>
-                  <option value="ETH">ETH</option>
-                </select>
-              </div>
-              <div>
-                <label className="text-[10px] text-muted-foreground mb-1.5 block">数量</label>
-                <div className="flex items-center bg-quant-bg border border-quant-border rounded-lg px-3 h-10 focus-within:border-quant-gold transition-colors">
-                  <input
-                    type="number"
-                    value={transferAmount}
-                    onChange={(e) => setTransferAmount(e.target.value)}
-                    placeholder="0.00"
-                    min={0.01}
-                    step={0.01}
-                    className="flex-1 bg-transparent text-sm font-mono border-0 ring-0 focus:ring-0 outline-none text-foreground placeholder:text-muted-foreground"
-                  />
-                  <span className="text-[10px] text-muted-foreground ml-2">{transferCurrency}</span>
-                </div>
-              </div>
-              <button
-                onClick={() => {
-                  const amt = parseFloat(transferAmount)
-                  if (!amt || amt <= 0) {
-                    toast('error', '请输入有效数量')
-                    return
-                  }
-                  transferMut.mutate({ from: transferFrom, to: transferTo, currency: transferCurrency, amount: amt })
-                }}
-                disabled={transferMut.isPending}
-                className="w-full py-2.5 rounded-lg bg-quant-gold text-black text-xs font-bold hover:opacity-90 transition-opacity disabled:opacity-50"
-              >
-                {transferMut.isPending ? '划转中...' : '确认划转'}
-              </button>
-              <div className="text-[10px] text-muted-foreground bg-quant-bg-secondary rounded-lg p-3 leading-relaxed">
-                提示：划转将在内部钱包之间移动资金。实际划转可能需要交易所处理时间。
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ═══════════════════════════════════════════════
-         Buy Crypto Modal
-         ═══════════════════════════════════════════════ */}
-      {showBuyModal && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
-          onClick={() => setShowBuyModal(false)}
-        >
-          <div
-            className="w-full max-w-md rounded-2xl border border-quant-border bg-quant-card shadow-2xl overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between px-5 py-4 border-b border-quant-border">
-              <h3 className="text-sm font-bold flex items-center gap-2">
-                <DollarSign className="w-4 h-4 text-quant-gold" /> 买币
-              </h3>
-              <button
-                onClick={() => setShowBuyModal(false)}
-                className="p-1 rounded text-muted-foreground hover:text-foreground"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="p-5 space-y-5">
-              <div className="flex gap-3">
-                <div className="flex-1">
-                  <label className="text-[10px] text-muted-foreground mb-1.5 block">购买币种</label>
-                  <select
-                    value={buyCurrency}
-                    onChange={(e) => setBuyCurrency(e.target.value)}
-                    className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2.5 text-xs text-foreground outline-none focus:border-quant-gold"
-                  >
-                    <option value="BTC">BTC</option>
-                    <option value="ETH">ETH</option>
-                    <option value="SOL">SOL</option>
-                    <option value="BNB">BNB</option>
-                    <option value="USDT">USDT</option>
-                  </select>
-                </div>
-                <div className="flex-1">
-                  <label className="text-[10px] text-muted-foreground mb-1.5 block">支付方式</label>
-                  <select
-                    value={buyMethod}
-                    onChange={(e) => setBuyMethod(e.target.value)}
-                    className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2.5 text-xs text-foreground outline-none focus:border-quant-gold"
-                  >
-                    <option value="credit_card">信用卡</option>
-                    <option value="bank_transfer">银行卡</option>
-                    <option value="alipay">支付宝</option>
-                    <option value="wechat">微信支付</option>
-                  </select>
-                </div>
-              </div>
-              <div>
-                <label className="text-[10px] text-muted-foreground mb-1.5 block">金额 (USDT)</label>
-                <div className="flex items-center bg-quant-bg border border-quant-border rounded-lg px-3 h-10 focus-within:border-quant-gold transition-colors">
-                  <input
-                    type="number"
-                    value={buyAmount}
-                    onChange={(e) => setBuyAmount(e.target.value)}
-                    placeholder="100"
-                    min={1}
-                    step={1}
-                    className="flex-1 bg-transparent text-sm font-mono border-0 ring-0 focus:ring-0 outline-none text-foreground placeholder:text-muted-foreground"
-                  />
-                  <span className="text-[10px] text-muted-foreground">USDT</span>
-                </div>
-              </div>
-              <button
-                onClick={() => {
-                  const amt = parseFloat(buyAmount)
-                  if (!amt || amt <= 0) {
-                    toast('error', '请输入有效金额')
-                    return
-                  }
-                  buyMut.mutate({ currency: buyCurrency, amount: amt, payment_method: buyMethod })
-                }}
-                disabled={buyMut.isPending}
-                className="w-full py-2.5 rounded-lg bg-quant-gold text-black text-xs font-bold hover:opacity-90 transition-opacity disabled:opacity-50"
-              >
-                {buyMut.isPending
-                  ? '购买中...'
-                  : `使用 ${buyMethod === 'credit_card' ? '信用卡' : buyMethod === 'bank_transfer' ? '银行卡' : buyMethod === 'alipay' ? '支付宝' : '微信支付'} 购买 ${buyCurrency}`}
-              </button>
-              <div className="text-[10px] text-muted-foreground bg-quant-bg-secondary rounded-lg p-3 leading-relaxed">
-                买币功能通过第三方服务商提供。实际成交价格和可用性以服务商为准。
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ═══════════════════════════════════════════════
-         Swap Modal
-         ═══════════════════════════════════════════════ */}
-      {showSwapModal && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
-          onClick={() => setShowSwapModal(false)}
-        >
-          <div
-            className="w-full max-w-md rounded-2xl border border-quant-border bg-quant-card shadow-2xl overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between px-5 py-4 border-b border-quant-border">
-              <h3 className="text-sm font-bold flex items-center gap-2">
-                <Repeat className="w-4 h-4 text-quant-gold" /> 兑换
-              </h3>
-              <button
-                onClick={() => setShowSwapModal(false)}
-                className="p-1 rounded text-muted-foreground hover:text-foreground"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="p-5 space-y-5">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[10px] text-muted-foreground mb-1.5 block">从</label>
-                  <select
-                    value={swapFrom}
-                    onChange={(e) => setSwapFrom(e.target.value)}
-                    className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2.5 text-xs text-foreground outline-none focus:border-quant-gold"
-                  >
-                    <option value="BTC">BTC</option>
-                    <option value="ETH">ETH</option>
-                    <option value="SOL">SOL</option>
-                    <option value="BNB">BNB</option>
-                    <option value="USDT">USDT</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="text-[10px] text-muted-foreground mb-1.5 block">到</label>
-                  <select
-                    value={swapTo}
-                    onChange={(e) => setSwapTo(e.target.value)}
-                    className="w-full rounded-lg border border-quant-border bg-quant-bg px-3 py-2.5 text-xs text-foreground outline-none focus:border-quant-gold"
-                  >
-                    <option value="ETH">ETH</option>
-                    <option value="BTC">BTC</option>
-                    <option value="SOL">SOL</option>
-                    <option value="BNB">BNB</option>
-                    <option value="USDT">USDT</option>
-                  </select>
-                </div>
-              </div>
-              <div>
-                <label className="text-[10px] text-muted-foreground mb-1.5 block">数量</label>
-                <div className="flex items-center bg-quant-bg border border-quant-border rounded-lg px-3 h-10 focus-within:border-quant-gold transition-colors">
-                  <input
-                    type="number"
-                    value={swapAmount}
-                    onChange={(e) => setSwapAmount(e.target.value)}
-                    placeholder="0.00"
-                    min={0.001}
-                    step={0.001}
-                    className="flex-1 bg-transparent text-sm font-mono border-0 ring-0 focus:ring-0 outline-none text-foreground placeholder:text-muted-foreground"
-                  />
-                  <span className="text-[10px] text-muted-foreground ml-2">{swapFrom}</span>
-                </div>
-              </div>
-              <button
-                onClick={() => {
-                  const amt = parseFloat(swapAmount)
-                  if (!amt || amt <= 0) {
-                    toast('error', '请输入有效数量')
-                    return
-                  }
-                  swapMut.mutate({ from_currency: swapFrom, to_currency: swapTo, amount: amt })
-                }}
-                disabled={swapMut.isPending}
-                className="w-full py-2.5 rounded-lg bg-quant-gold text-black text-xs font-bold hover:opacity-90 transition-opacity disabled:opacity-50"
-              >
-                {swapMut.isPending ? '兑换中...' : `兑换 ${swapFrom} → ${swapTo}`}
-              </button>
-              <div className="text-[10px] text-muted-foreground bg-quant-bg-secondary rounded-lg p-3 leading-relaxed">
-                兑换价格参考币安实时行情，实际以成交价格为准。兑换将在现货钱包内完成。
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+    </>
   )
 }

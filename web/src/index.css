@@ -139,3 +139,8 @@
     padding-right: env(safe-area-inset-right, 0px);
   }
 }
+
+/* 整页图表交易页:隐藏 KLineChartPro 自带交易对搜索(顶栏已有自研搜索,省空间) */
+.klinecharts-pro-period-bar > .symbol {
+  display: none !important;
+}

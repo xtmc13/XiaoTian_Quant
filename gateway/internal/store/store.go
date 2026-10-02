@@ -1389,6 +1389,28 @@ func PlaceOrder(order map[string]any) string {
 	return rec.ID
 }
 
+// UpdateOrderFill 成交同步：更新内存订单表与 DB(xt_orders) 的
+// filled/avg_fill_price/status。paper 撮合循环（OMS RecordFill 只改 OMS
+// 自己的记录）和展示层 GetOrders（读 store 内存表）之间靠本函数对齐。
+func UpdateOrderFill(id string, filled, avgPrice float64, status string) {
+	ordersMu.Lock()
+	defer ordersMu.Unlock()
+	if o, ok := orders[id]; ok {
+		o.Filled = filled
+		if avgPrice > 0 {
+			o.AvgFillPrice = avgPrice
+		}
+		if status != "" {
+			o.Status = status
+		}
+		o.UpdatedAt = time.Now().UnixMilli()
+	}
+	if db != nil {
+		db.Exec(`UPDATE xt_orders SET filled=?, avg_fill_price=?, status=?, updated_at=? WHERE id=?`,
+			filled, avgPrice, status, time.Now().UnixMilli(), id)
+	}
+}
+
 func GetOrderByID(id string) map[string]any {
 	ordersMu.RLock()
 	defer ordersMu.RUnlock()
