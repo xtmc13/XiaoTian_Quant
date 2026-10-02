@@ -144,3 +144,11 @@
 .klinecharts-pro-period-bar > .symbol {
   display: none !important;
 }
+
+/* 图表区禁用长按复制/选中(手机端长按拖动改价会触发系统复制菜单) */
+.klinecharts-pro,
+.klinecharts-pro * {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  -webkit-touch-callout: none !important;
+}

@@ -37,7 +37,15 @@ const PASSTHROUGH = [
   'getVisibleRange',
   'applyNewData',
   'getDataList',
+  'createOverlay',
+  'removeOverlay',
 ]
+
+/* 指标/画线仓库挂在 chartStore 上,Chart 本身不暴露,经 getChartStore() 转发 */
+const CUSTOM_PASSTHROUGH = {
+  getIndicatorStore: '(...a) => (typeof n.getChartStore === "function" ? n.getChartStore().getIndicatorStore(...a) : undefined)',
+  getOverlayStore: '(...a) => (typeof n.getChartStore === "function" ? n.getChartStore().getOverlayStore(...a) : undefined)',
+}
 
 const marker = /getStyles: \(\) => n\.getStyles\(\)/
 const patchedFlag = '__xtProPatched'
@@ -54,7 +62,10 @@ for (const name of fs.readdirSync(distDir)) {
   }
   const extra =
     `, ${patchedFlag}: 1` +
-    PASSTHROUGH.map((m) => `, ${m}: (...args) => n.${m}.apply(n, args)`).join('')
+    PASSTHROUGH.map((m) => `, ${m}: (...args) => n.${m}.apply(n, args)`).join('') +
+    Object.entries(CUSTOM_PASSTHROUGH)
+      .map(([m, fn]) => `, ${m}: ${fn}`)
+      .join('')
   src = src.replace(marker, (mm) => mm + extra)
   fs.writeFileSync(file, src)
   patched++

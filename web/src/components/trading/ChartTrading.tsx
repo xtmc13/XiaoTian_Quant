@@ -252,12 +252,22 @@ export function ChartTrading({
 
     const handleLeave = () => setCrosshair(null)
 
+    /* 移动端长按防系统复制/呼出菜单 */
+    const handleContextMenu = (e: Event) => {
+      e.preventDefault()
+    }
+    const handleSelectStart = (e: Event) => {
+      e.preventDefault()
+    }
+
     container.addEventListener('click', handleClick)
     container.addEventListener('mousemove', handleMove)
     container.addEventListener('mouseleave', handleLeave)
     container.addEventListener('pointerdown', handlePointerDown)
     container.addEventListener('pointermove', handlePointerMove)
     container.addEventListener('pointerup', handlePointerUp)
+    container.addEventListener('contextmenu', handleContextMenu)
+    container.addEventListener('selectstart', handleSelectStart)
     return () => {
       if (lpTimer != null) window.clearTimeout(lpTimer)
       container.removeEventListener('click', handleClick)
@@ -266,6 +276,8 @@ export function ChartTrading({
       container.removeEventListener('pointerdown', handlePointerDown)
       container.removeEventListener('pointermove', handlePointerMove)
       container.removeEventListener('pointerup', handlePointerUp)
+      container.removeEventListener('contextmenu', handleContextMenu)
+      container.removeEventListener('selectstart', handleSelectStart)
       if (rafId) window.cancelAnimationFrame(rafId)
     }
   }, [chartContainerRef, chartApiRef])

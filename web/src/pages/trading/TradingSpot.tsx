@@ -20,6 +20,12 @@ import { computeSpotAvgEntryPrice, formatLinePrice } from '@/components/trading/
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { parseInterval, SPOT_WATCHLIST } from '@/lib/tradingHelpers'
 import { getPrecision } from '@/lib/tradingPrecision'
+import {
+  applyChartOverlays,
+  captureChartState,
+  loadChartState,
+  saveChartState,
+} from '@/lib/chartState'
 import type { Trade, Order, TickerSnapshot } from '@/types'
 import type { ChartApi } from '@/lib/tradingHelpers'
 import {
@@ -79,6 +85,7 @@ interface OrderPopupState {
 
 export function TradingSpot() {
   const initialUI = useMemo(loadUIState, [])
+  const savedChart = useMemo(() => loadChartState('spot'), [])
   const [symbol, setSymbol] = useState(initialUI.symbol || 'BTCUSDT')
   const [interval, setInterval] = useState(initialUI.interval || '1h')
   const [popup, setPopup] = useState<OrderPopupState | null>(null)
@@ -252,8 +259,8 @@ export function TradingSpot() {
         periods: TRADING_INTERVALS.map((i) => ({ ...parseInterval(i), text: i })),
         datafeed,
         drawingBarVisible: true,
-        mainIndicators: ['MA', 'EMA'],
-        subIndicators: ['VOL', 'MACD'],
+        mainIndicators: savedChart?.main?.length ? savedChart.main : ['MA', 'EMA'],
+        subIndicators: savedChart?.sub?.length ? savedChart.sub : ['VOL', 'MACD'],
         theme: 'dark',
         locale: 'zh-CN',
       })
@@ -265,6 +272,10 @@ export function TradingSpot() {
           ;(window as unknown as Record<string, unknown>).__chartApi = chartApi
           try { chartApi.scrollToRealTime() } catch { /* ignore */ }
           try { chartApi.setBarSpace(4) } catch { /* ignore */ }
+          /* 恢复用户画线(指标已在上方配置里恢复) */
+          try {
+            applyChartOverlays(chartApi, loadChartState('spot'))
+          } catch { /* ignore */ }
           if (typeof chartApi.updateData === 'function') {
             setChartUpdater((bar) => {
               try { chartApi.updateData(bar) } catch { /* ignore */ }
@@ -359,6 +370,26 @@ export function TradingSpot() {
       /* ignore */
     }
   }, [symbol, interval, panelOpen, sideTab])
+
+  /* 图表状态(指标+画线)周期捕获,变化时落盘 */
+  const lastChartStateJson = useRef('')
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const api = chartApiRef.current
+      if (!api) return
+      try {
+        const state = captureChartState(api)
+        const json = JSON.stringify(state)
+        if (json !== lastChartStateJson.current) {
+          lastChartStateJson.current = json
+          saveChartState('spot', state)
+        }
+      } catch {
+        /* ignore */
+      }
+    }, 5000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   const closePopup = useCallback(() => setPopup(null), [])
 
