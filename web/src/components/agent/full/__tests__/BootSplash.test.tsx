@@ -38,10 +38,24 @@ describe('BootSplash 开屏动画', () => {
     expect(onDone).toHaveBeenCalledTimes(1)
   })
 
-  it('自定义壁纸与版本号展示', () => {
-    render(<BootSplash wallpaper="https://example.com/w.jpg" version="v9.9.9" onDone={() => {}} />)
+  it('自定义壁纸与版本号展示（Provider 注入）', async () => {
+    const { WallpaperProvider } = await import('../../pet/WallpaperContext')
+    localStorage.setItem(
+      'xt-wallpapers',
+      JSON.stringify([{ id: 'w1', kind: 'video', src: 'https://example.com/w.mp4', name: 'w', addedAt: 0 }])
+    )
+    localStorage.setItem('xt-wallpaper-active', 'w1')
+    render(
+      <WallpaperProvider>
+        <BootSplash version="v9.9.9" onDone={() => {}} />
+      </WallpaperProvider>
+    )
     expect(screen.getByText('v9.9.9')).toBeTruthy()
-    const img = document.querySelector('img[alt=""]')
-    expect(img?.getAttribute('src')).toBe('https://example.com/w.jpg')
+    // 视频壁纸渲染 <video autoplay loop muted>
+    const video = document.querySelector('video') as HTMLVideoElement | null
+    expect(video?.getAttribute('src')).toBe('https://example.com/w.mp4')
+    expect(video?.hasAttribute('autoplay')).toBe(true)
+    expect(video?.hasAttribute('loop')).toBe(true)
+    expect(video?.muted).toBe(true)
   })
 })

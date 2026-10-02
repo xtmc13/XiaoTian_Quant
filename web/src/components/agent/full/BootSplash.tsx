@@ -1,4 +1,7 @@
 import { useEffect, useState } from 'react'
+import { useWallpaper } from '../pet/WallpaperContext'
+import { WallpaperMedia } from '../pet/WallpaperMedia'
+import { DEFAULT_FX } from '../pet/wallpaper'
 import { cn } from '@/lib/utils'
 
 /** 开屏总时长（ms）与淡出时长 */
@@ -6,14 +9,15 @@ const BOOT_MS = 2400
 const FADE_MS = 450
 
 export interface BootSplashProps {
-  /** 自定义壁纸（dataURL/URL）；空 = 默认光效背景 */
-  wallpaper?: string
   version?: string
   onDone: () => void
 }
 
 // ── 开屏动画：大 Logo + 欢迎语 + 进度条（对标 dsh-boot-animation） ──
-export function BootSplash({ wallpaper, version, onDone }: BootSplashProps) {
+export function BootSplash({ version, onDone }: BootSplashProps) {
+  const wp = useWallpaper()
+  const wallpaper = wp?.active ?? null
+  const fx = wp?.fx ?? DEFAULT_FX
   const [progress, setProgress] = useState(0)
   const [fading, setFading] = useState(false)
 
@@ -48,14 +52,11 @@ export function BootSplash({ wallpaper, version, onDone }: BootSplashProps) {
         fading && 'pointer-events-none opacity-0'
       )}
     >
-      {/* 背景：自定义壁纸 or 默认光效 */}
+      {/* 背景：壁纸（图片/视频循环） or 默认光效 */}
       {wallpaper ? (
-        <img
-          src={wallpaper}
-          alt=""
-          className="absolute inset-0 h-full w-full object-cover opacity-70"
-          draggable={false}
-        />
+        <div className="absolute inset-0 overflow-hidden">
+          <WallpaperMedia entry={wallpaper} fx={fx} className="absolute inset-0 h-full w-full" />
+        </div>
       ) : (
         <div className="absolute inset-0">
           <div className="absolute left-1/2 top-1/3 h-[60vmin] w-[80vmin] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[var(--ag-accent)]/16 blur-[110px]" />

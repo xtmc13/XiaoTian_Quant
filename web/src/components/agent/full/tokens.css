@@ -43,6 +43,27 @@
   font-size: 0.8125rem;
 }
 
+/* ── 壁纸模式：面板转半透明，让壁纸透出（液态玻璃） ── */
+.xt-hermes.has-wallpaper {
+  --ag-bg: rgba(12, 13, 17, 0.4);
+  --ag-sidebar: rgba(15, 16, 21, 0.52);
+  --ag-card: rgba(23, 25, 32, 0.58);
+  --ag-sidebar-edge: rgba(255, 255, 255, 0.09);
+}
+.xt-hermes.has-wallpaper aside[aria-label='助手侧栏'] {
+  backdrop-filter: blur(18px) saturate(1.1);
+}
+.xt-hermes.has-wallpaper .xt-composer-card {
+  backdrop-filter: blur(16px) saturate(1.1);
+}
+.xt-hermes.has-wallpaper footer[aria-label='状态条'] {
+  backdrop-filter: blur(12px);
+}
+/* 消息承载面在壁纸模式下垫一层保底底色，保证正文可读 */
+.xt-hermes.has-wallpaper .xt-thread-inner {
+  background: linear-gradient(180deg, transparent, rgba(10, 11, 14, 0.35));
+}
+
 .xt-hermes ::selection {
   background: var(--ag-selection);
 }

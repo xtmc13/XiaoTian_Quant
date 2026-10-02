@@ -6,6 +6,9 @@ import type { AgentConversationSummary } from '@/lib/api'
 import { agentPluginApi, agentSkillApi } from '@/lib/api'
 import type { AgentChatMsg, AgentSettings } from '../types'
 import { SettingsPopover } from '../SettingsPopover'
+import { useWallpaper } from '../pet/WallpaperContext'
+import { WallpaperMedia } from '../pet/WallpaperMedia'
+import { cn } from '@/lib/utils'
 import { AgentSidebar } from './Sidebar'
 import { AgentThread } from './Thread'
 import { AgentComposer } from './Composer'
@@ -78,6 +81,8 @@ export function HermesChat({
   onClose,
 }: HermesChatProps) {
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const wp = useWallpaper()
+  const hasWallpaper = Boolean(wp?.active)
   const [cronOpen, setCronOpen] = useState(false)
   const [memoryOpen, setMemoryOpen] = useState(false)
   const [skillsOpen, setSkillsOpen] = useState(false)
@@ -174,8 +179,14 @@ export function HermesChat({
   }, [textareaRef])
 
   return (
-    <div className="xt-hermes" role="dialog" aria-label="小天助手">
-      <div className="flex min-h-0 flex-1">
+    <div className={cn('xt-hermes', hasWallpaper && 'has-wallpaper')} role="dialog" aria-label="小天助手">
+      {/* 壁纸层（液态玻璃模式透出） */}
+      {wp?.active && (
+        <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
+          <WallpaperMedia entry={wp.active} fx={wp.fx} className="absolute inset-0 h-full w-full" />
+        </div>
+      )}
+      <div className="relative flex min-h-0 flex-1">
         <AgentSidebar
           conversations={conversations}
           currentId={currentId}
@@ -269,14 +280,16 @@ export function HermesChat({
         </div>
       </div>
 
-      <AgentStatusBar
-        version={version ? `web v${version}` : ''}
-        stats={
-          messages.length > 0
-            ? `${messages.length} 条消息 · ≈${(messages.reduce((a, m) => a + (m.content?.length || 0) + (m.reasoning?.length || 0), 0) / 2 / 1000).toFixed(1)}k tok`
-            : '就绪'
-        }
-      />
+      <div className="relative">
+        <AgentStatusBar
+          version={version ? `web v${version}` : ''}
+          stats={
+            messages.length > 0
+              ? `${messages.length} 条消息 · ≈${(messages.reduce((a, m) => a + (m.content?.length || 0) + (m.reasoning?.length || 0), 0) / 2 / 1000).toFixed(1)}k tok`
+              : '就绪'
+          }
+        />
+      </div>
     </div>
   )
 }

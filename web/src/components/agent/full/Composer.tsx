@@ -381,7 +381,7 @@ export function AgentComposer({
       )}
 
       {/* Composer 本体 */}
-      <div className="rounded-2xl border border-[var(--ag-stroke2)] bg-[var(--ag-card)]/90 shadow-[var(--ag-shadow-panel)] backdrop-blur-xl">
+      <div className="xt-composer-card rounded-2xl border border-[var(--ag-stroke2)] bg-[var(--ag-card)]/90 shadow-[var(--ag-shadow-panel)] backdrop-blur-xl">
         <textarea
           ref={textareaRef}
           value={input}

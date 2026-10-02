@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import { AgentChatPanel } from './AgentChatPanel'
 import { BootSplash } from './full/BootSplash'
 import { DefaultPet } from './pet/DefaultPet'
+import { WallpaperProvider } from './pet/WallpaperContext'
 import {
   PetSettings,
   loadPetConfig,
@@ -22,7 +23,8 @@ const EXPAND_MS = 450
 const DRAG_THRESHOLD = 6
 
 // ── 桌宠：默认右下角；可自由拖动；点击开/关全屏助手；形象/尺寸可自定义 ──
-export function DesktopPet() {
+// ── 桌宠本体（壁纸引擎状态由外层 WallpaperProvider 提供） ──
+function DesktopPetInner() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
   const location = useLocation()
   const [expanded, setExpanded] = useState(false)
@@ -33,13 +35,6 @@ export function DesktopPet() {
   const [pos, setPos] = useState<PetPosition | null>(loadPetPos)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [booting, setBooting] = useState(false)
-  const [wallpaper, setWallpaper] = useState<string>(() => {
-    try {
-      return localStorage.getItem('xt-agent-wallpaper') || ''
-    } catch {
-      return ''
-    }
-  })
   const dragRef = useRef<{ startX: number; startY: number; baseX: number; baseY: number; moved: boolean } | null>(null)
   const suppressClickRef = useRef(false)
   const [dragging, setDragging] = useState(false)
@@ -77,16 +72,6 @@ export function DesktopPet() {
     setBooting(true)
     // 等 closed 态（clip 半径 0）先提交，再触发展开过渡
     requestAnimationFrame(() => requestAnimationFrame(() => setExpanded(true)))
-  }
-
-  const onWallpaperChange = (url: string) => {
-    setWallpaper(url)
-    try {
-      if (url) localStorage.setItem('xt-agent-wallpaper', url)
-      else localStorage.removeItem('xt-agent-wallpaper')
-    } catch {
-      /* 静默 */
-    }
   }
 
   // ── 拖动（Pointer Events，兼容触屏/鼠标） ──
@@ -225,8 +210,6 @@ export function DesktopPet() {
           <PetSettings
             config={pet}
             onChange={onPetChange}
-            wallpaper={wallpaper}
-            onWallpaperChange={onWallpaperChange}
             onResetPos={() => {
               savePetPos(null)
               setPos(null)
@@ -264,11 +247,18 @@ export function DesktopPet() {
         </div>
       )}
 
-      {/* 开屏动画（位于最上层，点击跳过） */}
-      {booting && (
-        <BootSplash wallpaper={wallpaper || undefined} version="xt-agent v2.0.0" onDone={() => setBooting(false)} />
-      )}
+      {/* 开屏动画（位于最上层，点击跳过；壁纸由 WallpaperProvider 注入） */}
+      {booting && <BootSplash version="xt-agent v2.0.0" onDone={() => setBooting(false)} />}
     </>
+  )
+}
+
+// ── 桌宠 + 壁纸引擎入口 ──
+export function DesktopPet() {
+  return (
+    <WallpaperProvider>
+      <DesktopPetInner />
+    </WallpaperProvider>
   )
 }
 
