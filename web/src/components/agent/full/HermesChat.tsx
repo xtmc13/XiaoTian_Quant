@@ -708,7 +708,6 @@ export function HermesChat({
               providers={providers}
               version={version ? `web v${version}` : ''}
               tools={overflowNav.map((n) => ({ id: n.id, label: n.label }))}
-              onTool={(id) => setMainView(id as typeof mainView)}
             />
           )}
           {usageOpen && (

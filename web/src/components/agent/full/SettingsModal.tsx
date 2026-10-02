@@ -1,12 +1,40 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronRight, Info, KeyRound, Layers, Plus, SlidersHorizontal, Sparkles, Trash2, Users, Wrench, X } from 'lucide-react'
+import {
+  BarChart3,
+  FileClock,
+  Info,
+  Kanban,
+  KeyRound,
+  Layers,
+  MessageCircle,
+  Plus,
+  Puzzle,
+  Send,
+  SlidersHorizontal,
+  Sparkles,
+  Target,
+  Trash2,
+  TrendingUp,
+  Users,
+  X,
+} from 'lucide-react'
 import { agentProfilesApi, agentUserAiConfigApi, type AgentProfile } from '@/lib/api'
 import { useAuthStore } from '@/stores/authStore'
 import { toast } from '@/lib/useToast'
 import type { AgentSettings } from '../types'
 import { useTts } from '../useTts'
 import { cn } from '@/lib/utils'
+import { DingtalkPanel } from './DingtalkPanel'
+import { EvalsPanel } from './EvalsPanel'
+import { FeishuPanel } from './FeishuPanel'
+import { FilesPanel } from './FilesPanel'
+import { InsightsPanel } from './InsightsPanel'
+import { JourneyPanel } from './JourneyPanel'
+import { KanbanPanel } from './KanbanPanel'
+import { QqPanel } from './QqPanel'
+import { TelegramPanel } from './TelegramPanel'
+import { WecomPanel } from './WecomPanel'
 
 interface ModelProvider {
   key: string
@@ -156,16 +184,26 @@ export interface SettingsModalProps {
   onClose: () => void
   providers: ModelProvider[]
   version?: string
-  /** 侧栏放不下的扩展工具（收纳进"工具"页签） */
+  /** 侧栏收纳的扩展面板（每项在左侧导航各占一个入口，窗内打开） */
   tools?: { id: string; label: string }[]
-  onTool?: (id: string) => void
 }
 
-type Section = 'general' | 'tools' | 'model' | 'profiles' | 'about'
+/** 工具入口图标（按插件 id 映射，缺省 Puzzle） */
+const TOOL_ICONS: Record<string, typeof Sparkles> = {
+  insights: BarChart3,
+  journey: TrendingUp,
+  evals: Target,
+  kanban: Kanban,
+  files: FileClock,
+  telegram: Send,
+  feishu: MessageCircle,
+  dingtalk: MessageCircle,
+  qq: MessageCircle,
+  wecom: MessageCircle,
+}
 
-const SECTIONS: { id: Section; label: string; icon: typeof Sparkles }[] = [
+const STATIC_SECTIONS = [
   { id: 'general', label: '通用', icon: SlidersHorizontal },
-  { id: 'tools', label: '工具', icon: Wrench },
   { id: 'model', label: '模型', icon: Sparkles },
   { id: 'profiles', label: '档案', icon: Layers },
   { id: 'about', label: '关于', icon: Info },
@@ -383,8 +421,8 @@ function ProfilesSection() {
 }
 
 // ── 大号居中设置窗（对标 dsh 桌面版"配置"弹窗：左侧图标导航 + 右侧内容区） ──
-export function SettingsModal({ settings, onSave, onClose, providers, version, tools, onTool }: SettingsModalProps) {
-  const [section, setSection] = useState<Section>('general')
+export function SettingsModal({ settings, onSave, onClose, providers, version, tools }: SettingsModalProps) {
+  const [section, setSection] = useState<string>('general')
   const [systemPrompt, setSystemPrompt] = useState(settings.system_prompt)
   const [temperature, setTemperature] = useState(String(settings.temperature))
   const [model, setModel] = useState(settings.model)
@@ -445,7 +483,8 @@ export function SettingsModal({ settings, onSave, onClose, providers, version, t
             aria-label="设置导航"
             className="flex w-40 shrink-0 flex-col gap-0.5 border-r border-[var(--ag-stroke3)] p-2"
           >
-            {SECTIONS.map(({ id, label, icon: Icon }) => (
+            {[...STATIC_SECTIONS, ...(tools || []).map((t) => ({ id: t.id, label: t.label, icon: TOOL_ICONS[t.id] || Puzzle }))].map(
+              ({ id, label, icon: Icon }) => (
               <button
                 key={id}
                 type="button"
@@ -524,34 +563,24 @@ export function SettingsModal({ settings, onSave, onClose, providers, version, t
               </div>
             )}
 
-            {section === 'tools' && (
-              <div className="max-w-lg">
-                <h3 className="mb-1 text-[15px] font-semibold">工具</h3>
-                <p className="mb-4 text-[12px] text-[var(--ag-text3)]">
-                  侧栏收纳的扩展功能，点击打开对应面板。
-                </p>
-                {(tools || []).length === 0 ? (
-                  <p className="text-[12px] text-[var(--ag-text4)]">暂无可用工具</p>
-                ) : (
-                  <div className="flex flex-col gap-1">
-                    {(tools || []).map((t) => (
-                      <button
-                        key={t.id}
-                        type="button"
-                        onClick={() => {
-                          onTool?.(t.id)
-                          onClose()
-                        }}
-                        className="flex h-9 items-center justify-between rounded-lg border border-[var(--ag-stroke3)] bg-[var(--ag-card)]/60 px-3 text-[13px] font-medium text-[var(--ag-text1)] transition-colors hover:border-[var(--ag-accent)]/40 hover:bg-[var(--ag-active-hover)]"
-                      >
-                        {t.label}
-                        <ChevronRight size={14} className="text-[var(--ag-text4)]" />
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
+            {(tools || []).map((t) => {
+              if (section !== t.id) return null
+              const backToGeneral = () => setSection('general')
+              return (
+                <div key={t.id} className="flex h-full min-h-0 flex-col">
+                  {t.id === 'insights' && <InsightsPanel bare onClose={backToGeneral} />}
+                  {t.id === 'journey' && <JourneyPanel bare onClose={backToGeneral} />}
+                  {t.id === 'evals' && <EvalsPanel bare onClose={backToGeneral} />}
+                  {t.id === 'kanban' && <KanbanPanel bare onClose={backToGeneral} />}
+                  {t.id === 'files' && <FilesPanel bare onClose={backToGeneral} />}
+                  {t.id === 'telegram' && <TelegramPanel bare onClose={backToGeneral} />}
+                  {t.id === 'feishu' && <FeishuPanel bare onClose={backToGeneral} />}
+                  {t.id === 'dingtalk' && <DingtalkPanel bare onClose={backToGeneral} />}
+                  {t.id === 'qq' && <QqPanel bare onClose={backToGeneral} />}
+                  {t.id === 'wecom' && <WecomPanel bare onClose={backToGeneral} />}
+                </div>
+              )
+            })}
 
             {section === 'model' && (
               <div className="max-w-lg">
