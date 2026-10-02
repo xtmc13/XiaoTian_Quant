@@ -336,7 +336,7 @@ export function AgentComposer({
           <div
             role="dialog"
             aria-label="选择模型"
-            className="absolute bottom-full left-0 z-30 mb-2 w-72 rounded-2xl border border-[var(--ag-stroke3)] bg-[var(--ag-card)]/95 p-2.5 shadow-[var(--ag-shadow-panel)] backdrop-blur-xl"
+            className="absolute bottom-full right-0 z-30 mb-2 w-72 rounded-2xl border border-[var(--ag-stroke3)] bg-[var(--ag-card)]/95 p-2.5 shadow-[var(--ag-shadow-panel)] backdrop-blur-xl"
           >
             <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--ag-text4)]">
               厂商
@@ -430,7 +430,9 @@ export function AgentComposer({
             <ChevronDown size={11} className="shrink-0" />
           </button>
 
-          {/* 模型药丸 */}
+          <span className="min-w-0 flex-1" />
+
+          {/* 模型药丸（靠右贴发送键，对标 dsh 桌面版） */}
           <button
             type="button"
             title="切换模型"
@@ -442,8 +444,6 @@ export function AgentComposer({
             <span className="truncate">{modelLabel}</span>
             <ChevronDown size={11} className="shrink-0" />
           </button>
-
-          <span className="min-w-0 flex-1" />
 
           {/* 发送键状态机：忙+空 → Stop；其余可提交态 → 发送（忙时为重定向）；蓝色圆形（对标 dsh） */}
           {isStreaming && !input.trim() ? (

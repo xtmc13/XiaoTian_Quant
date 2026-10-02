@@ -217,17 +217,17 @@ function UserMessage({
     )
   }
 
-  // 桌面版：用户消息为居中窄灰泡，气泡下方右侧小复制/编辑图标
+  // 桌面版：用户消息为右对齐浅蓝气泡，气泡下方右侧小复制/编辑图标
   return (
-    <div className="group flex flex-col items-center pt-2">
+    <div className="group flex flex-col items-end pt-2">
       <div className="xt-human-clamp max-w-[85%]">
-        <div className="xt-human-bubble rounded-xl bg-[var(--ag-user-bubble)] px-3.5 py-2 transition-colors group-hover:bg-[var(--ag-muted)]">
+        <div className="xt-human-bubble rounded-xl bg-[var(--ag-user-bubble)] px-3.5 py-2 transition-colors group-hover:bg-[var(--ag-user-bubble-hover)]">
           <div className="xt-human-bubble-text whitespace-pre-wrap break-words text-[13px] leading-relaxed text-[var(--ag-text1)]">
             {msg.content}
           </div>
         </div>
       </div>
-      <span className="mt-0.5 flex items-center gap-0.5 pl-2 opacity-0 transition-opacity group-hover:opacity-100">
+      <span className="mt-0.5 flex items-center gap-0.5 pr-1 opacity-0 transition-opacity group-hover:opacity-100">
         <button
           type="button"
           title="复制"
@@ -389,7 +389,7 @@ export interface AgentThreadProps {
 export function AgentThread({ messages, isStreaming, onRegenerate, onEdit, messagesEndRef }: AgentThreadProps) {
   return (
     <div className="xt-thread-scroll min-h-0 flex-1 overflow-y-auto" aria-label="消息流">
-      <div className="mx-auto flex h-full w-full max-w-3xl flex-col px-6 pb-40 pt-2">
+      <div className="mx-auto flex h-full w-full max-w-[var(--ag-content-max-w)] flex-col px-6 pb-44 pt-2">
         {messages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center">
             <AgentEmptyState />

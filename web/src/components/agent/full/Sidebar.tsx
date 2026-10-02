@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
+  Activity,
   Brain,
   Clock,
   Download,
@@ -24,6 +25,17 @@ import { DefaultPet } from '../pet/DefaultPet'
 import { cn } from '@/lib/utils'
 
 const PINNED_KEY = 'xt-agent-pinned'
+
+type GwState = 'ready' | 'connecting' | 'offline'
+
+async function pingGateway(): Promise<boolean> {
+  try {
+    const res = await fetch('/api/health', { cache: 'no-store' })
+    return res.ok
+  } catch {
+    return false
+  }
+}
 
 function loadPinned(): string[] {
   try {
@@ -99,7 +111,22 @@ export function AgentSidebar({
   const [menuFor, setMenuFor] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)
+  const [gwState, setGwState] = useState<GwState>('connecting')
   const nickname = useAuthStore((s) => s.user?.nickname || s.user?.username || '')
+
+  useEffect(() => {
+    let alive = true
+    const tick = async () => {
+      const ok = await pingGateway()
+      if (alive) setGwState(ok ? 'ready' : 'offline')
+    }
+    void tick()
+    const t = setInterval(tick, 30_000)
+    return () => {
+      alive = false
+      clearInterval(t)
+    }
+  }, [])
 
   const togglePin = (id: string) => {
     setPinned((prev) => {
@@ -316,14 +343,11 @@ export function AgentSidebar({
           新会话
         </button>
         <div className="mt-1 flex flex-col">
-          <button
-            type="button"
-            onClick={onOpenSettings}
-            className="flex h-7 items-center gap-1.5 rounded-md px-2 text-[13px] font-medium text-[var(--ag-text2)] hover:bg-[var(--ag-card)] hover:text-[var(--ag-text1)]"
-          >
-            <Settings size={13} />
-            助手设置
-          </button>
+          {(pluginNav || []).length > 0 && (
+            <div className="px-2 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--ag-text4)]">
+              扩展
+            </div>
+          )}
           {(pluginNav || []).map((n) => (
             <button
               key={n.id}
