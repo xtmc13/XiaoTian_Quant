@@ -22,8 +22,7 @@ import {
 } from 'lucide-react'
 import type { AgentConversationDetail, AgentConversationSummary } from '@/lib/api'
 import { agentConversationApi } from '@/lib/api'
-import { useAuthStore } from '@/stores/authStore'
-import { DefaultPet } from '../pet/DefaultPet'
+import { useAppStore } from '@/stores/appStore'
 import { cn } from '@/lib/utils'
 
 const PINNED_KEY = 'xt-agent-pinned'
@@ -133,7 +132,19 @@ export function AgentSidebar({
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)
   const [gwState, setGwState] = useState<GwState>('connecting')
-  const nickname = useAuthStore((s) => s.user?.nickname || s.user?.username || '')
+
+  // ── 折叠：与交易系统侧栏共用 appStore（hover 悬停展开 / 点击 logo 切换） ──
+  const { sidebarCollapsed, setSidebarCollapsed, sidebarBehavior, toggleSidebar } = useAppStore()
+  const isHover = sidebarBehavior === 'hover'
+  const handleMouseEnter = () => {
+    if (isHover) setSidebarCollapsed(false)
+  }
+  const handleMouseLeave = () => {
+    if (isHover) setSidebarCollapsed(true)
+  }
+  const handleToggle = () => {
+    if (!isHover) toggleSidebar()
+  }
 
   useEffect(() => {
     let alive = true
@@ -264,8 +275,10 @@ export function AgentSidebar({
         onClick={() => onSelect(c.id)}
         onKeyDown={(e) => e.key === 'Enter' && onSelect(c.id)}
         className={cn(
-          'group relative flex min-h-[2rem] cursor-pointer items-center gap-1.5 rounded-md py-1 pl-2 pr-2',
-          active ? 'bg-black/5 text-[var(--ag-text1)]' : 'text-[var(--ag-text2)] hover:bg-black/4'
+          'group relative flex min-h-[1.625rem] cursor-pointer items-center gap-1.5 rounded-md py-0.5 pl-2 pr-2',
+          active
+            ? 'bg-[var(--ag-active-bg)] text-[var(--ag-text1)]'
+            : 'text-[var(--ag-text2)] hover:bg-[var(--ag-active-hover)]'
         )}
       >
         <MessageSquare size={13} className="size-3.5 shrink-0 text-[var(--ag-text4)]" />
@@ -323,7 +336,7 @@ export function AgentSidebar({
                     togglePin(c.id)
                     setMenuFor(null)
                   }}
-                  className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[12px] text-[var(--ag-text2)] hover:bg-black/5"
+                  className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[12px] text-[var(--ag-text2)] hover:bg-[var(--ag-active-hover)]"
                 >
                   {pinned.includes(c.id) ? <PinOff size={12} /> : <Pin size={12} />}
                   {pinned.includes(c.id) ? '取消置顶' : '置顶'}
@@ -336,7 +349,7 @@ export function AgentSidebar({
                     setEditingId(c.id)
                     setMenuFor(null)
                   }}
-                  className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[12px] text-[var(--ag-text2)] hover:bg-black/5"
+                  className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[12px] text-[var(--ag-text2)] hover:bg-[var(--ag-active-hover)]"
                 >
                   <Pencil size={12} />
                   重命名
@@ -346,7 +359,7 @@ export function AgentSidebar({
                   role="menuitem"
                   disabled={exporting}
                   onClick={() => exportConv(c)}
-                  className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[12px] text-[var(--ag-text2)] hover:bg-black/5 disabled:opacity-50"
+                  className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[12px] text-[var(--ag-text2)] hover:bg-[var(--ag-active-hover)] disabled:opacity-50"
                 >
                   <Download size={12} />
                   导出 JSON
@@ -356,7 +369,7 @@ export function AgentSidebar({
                   role="menuitem"
                   disabled={exporting}
                   onClick={() => exportConvMarkdown(c)}
-                  className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[12px] text-[var(--ag-text2)] hover:bg-black/5 disabled:opacity-50"
+                  className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[12px] text-[var(--ag-text2)] hover:bg-[var(--ag-active-hover)] disabled:opacity-50"
                 >
                   <FileText size={12} />
                   导出 Markdown
@@ -382,15 +395,25 @@ export function AgentSidebar({
   return (
     <aside
       aria-label="助手侧栏"
-      className="flex h-full w-[var(--ag-sidebar-w)] shrink-0 flex-col border-r border-[var(--ag-sidebar-edge)] bg-[var(--ag-sidebar)]"
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      className={cn(
+        'xt-agent-rail flex h-full shrink-0 flex-col border-r border-[var(--ag-sidebar-edge)] bg-[var(--ag-sidebar)]',
+        sidebarCollapsed ? 'w-14' : 'w-40'
+      )}
     >
-      {/* 品牌行（对标 deepseek HARNESS logo 区） */}
-      <div className="flex items-center gap-1.5 px-3.5 pb-2 pt-3.5">
-        <DefaultPet size={22} />
-        <span className="text-[15px] font-bold tracking-tight text-[var(--ag-text1)]">小天量化</span>
-        <span className="rounded-[4px] bg-[var(--ag-fg)] px-1 py-px text-[8px] font-semibold tracking-wider text-[var(--ag-bg)]">
-          AGENT
+      {/* 品牌行（对标交易系统导航 logo 区，点击折叠/展开） */}
+      <div
+        className="flex h-14 shrink-0 cursor-pointer items-center gap-2 border-b border-[var(--ag-sidebar-edge)] px-3"
+        onClick={handleToggle}
+        title={sidebarCollapsed ? '展开侧栏' : '折叠侧栏'}
+      >
+        <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-[#3699ff] text-sm font-black text-white">
+          小
         </span>
+        {!sidebarCollapsed && (
+          <span className="truncate text-sm font-bold tracking-tight text-[var(--ag-text1)]">小天量化</span>
+        )}
       </div>
 
       {/* 导航 */}
@@ -398,13 +421,17 @@ export function AgentSidebar({
         <button
           type="button"
           onClick={onNew}
-          className="flex h-9 items-center justify-center gap-1.5 rounded-lg border border-[var(--ag-stroke2)] bg-[var(--ag-card)] px-2 text-[13px] font-medium text-[var(--ag-text1)] transition-colors hover:border-[var(--ag-accent)]/50"
+          title="新会话"
+          className={cn(
+            'flex h-9 items-center gap-1.5 rounded-lg border border-[var(--ag-stroke2)] bg-[var(--ag-card)] px-2 text-[13px] font-medium text-[var(--ag-text1)] transition-colors hover:border-[var(--ag-accent)]/50',
+            sidebarCollapsed && 'justify-center'
+          )}
         >
           <Plus size={14} />
-          新会话
+          {!sidebarCollapsed && '新会话'}
         </button>
         <div className="mt-1 flex flex-col">
-          {(pluginNav || []).length > 0 && (
+          {(pluginNav || []).length > 0 && !sidebarCollapsed && (
             <div className="px-2 pb-0.5 pt-1 text-[11px] font-semibold tracking-[0.06em] text-[var(--ag-text4)]">
               扩展
             </div>
@@ -414,7 +441,11 @@ export function AgentSidebar({
               key={n.id}
               type="button"
               onClick={() => onPluginNav?.(n.id)}
-              className="flex h-7 items-center gap-1.5 rounded-md px-2 text-[13px] font-medium text-[var(--ag-text2)] hover:bg-[var(--ag-card)] hover:text-[var(--ag-text1)]"
+              title={n.label}
+              className={cn(
+                'flex h-7 items-center gap-1.5 rounded-md px-2 text-[13px] font-medium text-[var(--ag-text2)] hover:bg-[var(--ag-active-hover)] hover:text-[var(--ag-text1)]',
+                sidebarCollapsed && 'justify-center'
+              )}
             >
               {n.icon === 'clock' ? (
                 <Clock size={13} />
@@ -427,12 +458,14 @@ export function AgentSidebar({
               ) : (
                 <Puzzle size={13} />
               )}
-              {n.label}
+              {!sidebarCollapsed && n.label}
             </button>
           ))}
         </div>
       </nav>
 
+      {!sidebarCollapsed && (
+        <>
       {/* 文件夹行（对标工作区目录） */}
       <div className="mx-2.5 mb-0.5 flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[12px] text-[var(--ag-text2)]">
         <FolderOpen size={13} className="shrink-0 text-[var(--ag-accent)]" />
@@ -489,7 +522,7 @@ export function AgentSidebar({
                 onKeyDown={(e) => e.key === 'Enter' && onSelect(r.id)}
                 className={cn(
                   'flex cursor-pointer flex-col gap-0.5 rounded-md px-2 py-1.5',
-                  r.id === currentId ? 'bg-black/5' : 'hover:bg-black/4'
+                  r.id === currentId ? 'bg-[var(--ag-active-bg)]' : 'hover:bg-[var(--ag-active-hover)]'
                 )}
               >
                 <span className="truncate text-[12px] text-[var(--ag-text1)]">{r.title || '未命名会话'}</span>
@@ -525,38 +558,49 @@ export function AgentSidebar({
           </>
         )}
       </div>
+        </>
+      )}
 
-      {/* 底部：设置入口（对标 dsh 侧栏底部 ⚙ 设置） + Gateway 健康 + 弱化用户标识 */}
+      {/* 底部：设置入口 + Gateway 健康 + 用户标识（折叠态仅图标） */}
       <div className="flex items-center gap-1 border-t border-[var(--ag-sidebar-edge)] px-2 py-1.5">
         <button
           type="button"
           onClick={onOpenSettings}
-          className="flex h-7 flex-1 items-center gap-1.5 rounded-md px-1.5 text-[12px] text-[var(--ag-text2)] hover:bg-black/5 hover:text-[var(--ag-text1)]"
-        >
-          <Settings size={13} />
-          设置
-        </button>
-        <span
-          title="后端网关健康状态"
-          aria-label="后端网关健康状态"
+          title="设置"
           className={cn(
-            'flex shrink-0 items-center gap-1 text-[10px]',
-            gwState === 'ready'
-              ? 'text-[var(--ag-green)]'
-              : gwState === 'connecting'
-                ? 'text-[var(--ag-amber)]'
-                : 'text-[var(--ag-red)]'
+            'flex h-7 items-center gap-1.5 rounded-md px-1.5 text-[12px] text-[var(--ag-text2)] hover:bg-[var(--ag-active-hover)] hover:text-[var(--ag-text1)]',
+            sidebarCollapsed ? 'flex-1 justify-center' : 'flex-1'
           )}
         >
-          <Activity size={10} />
-          {gwState === 'ready' ? 'Gateway 就绪' : gwState === 'connecting' ? '连接中…' : 'Gateway 离线'}
-        </span>
-        <span
-          title={nickname || '小天用户'}
-          className="flex size-5 shrink-0 items-center justify-center rounded-full bg-[var(--ag-accent)]/15 text-[9px] font-bold text-[var(--ag-accent)]"
-        >
-          {(nickname || '天')[0].toUpperCase()}
-        </span>
+          <Settings size={13} />
+          {!sidebarCollapsed && '设置'}
+        </button>
+        {!sidebarCollapsed && (
+          <span
+            title="后端网关健康状态"
+            aria-label="后端网关健康状态"
+            className={cn(
+              'flex shrink-0 items-center gap-1 text-[10px]',
+              gwState === 'ready'
+                ? 'text-[var(--ag-green)]'
+                : gwState === 'connecting'
+                  ? 'text-[var(--ag-amber)]'
+                  : 'text-[var(--ag-red)]'
+            )}
+          >
+            <Activity size={10} />
+            {gwState === 'ready' ? '就绪' : gwState === 'connecting' ? '连接中' : '离线'}
+          </span>
+        )}
+        {sidebarCollapsed && (
+          <span
+            title={gwState === 'ready' ? 'Gateway 就绪' : gwState === 'connecting' ? '连接中…' : 'Gateway 离线'}
+            className={cn(
+              'size-1.5 shrink-0 rounded-full',
+              gwState === 'ready' ? 'bg-[var(--ag-green)]' : gwState === 'connecting' ? 'bg-[var(--ag-amber)]' : 'bg-[var(--ag-red)]'
+            )}
+          />
+        )}
       </div>
     </aside>
   )
