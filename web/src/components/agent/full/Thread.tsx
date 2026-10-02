@@ -6,19 +6,25 @@ import {
   CircleAlert,
   Clipboard,
   Folder,
+  GitBranch,
   Loader2,
   Pencil,
   RotateCcw,
   Shield,
+  ShieldAlert,
   Wrench,
   X,
   ThumbsDown,
   ThumbsUp,
   Sprout,
   Undo2,
+  Volume2,
+  VolumeX,
 } from 'lucide-react'
+import type { AgentApprovalRequest } from '@/lib/api'
 import type { AgentChatMsg } from '../types'
 import { copyText, toolLabel } from '../types'
+import { speakText, stopSpeak, ttsSupported } from '../useTts'
 import { MarkdownView } from '../MarkdownView'
 import { DefaultPet } from '../pet/DefaultPet'
 import { cn } from '@/lib/utils'
@@ -167,15 +173,65 @@ function ToolScaffoldRow({ tool }: { tool: NonNullable<AgentChatMsg['toolCalls']
   )
 }
 
+// ── 工具调用审批卡：回合暂停等待用户决定（批准/拒绝） ──
+function ApprovalCard({
+  approval,
+  onResolve,
+}: {
+  approval: AgentApprovalRequest
+  onResolve: (approve: boolean) => void
+}) {
+  return (
+    <div
+      role="alertdialog"
+      aria-label="工具调用审批"
+      className="mt-3 rounded-xl border border-[var(--ag-amber)]/40 bg-[var(--ag-amber)]/8 px-3.5 py-3"
+    >
+      <div className="flex items-center gap-1.5 text-[12.5px] font-medium text-[var(--ag-text1)]">
+        <ShieldAlert size={14} className="shrink-0 text-[var(--ag-amber)]" />
+        等待批准：{toolLabel(approval.tool)}
+      </div>
+      {approval.args_summary && (
+        <div className="mt-1 break-words pl-5 text-[11.5px] leading-relaxed text-[var(--ag-text3)]">
+          {approval.args_summary}
+        </div>
+      )}
+      <div className="mt-2.5 flex gap-1.5 pl-5">
+        <button
+          type="button"
+          aria-label="批准工具调用"
+          onClick={() => onResolve(true)}
+          className="flex items-center gap-1 rounded-lg bg-[var(--ag-accent)] px-3 py-1 text-[12px] font-medium text-[var(--ag-accent-fg)] transition-opacity hover:opacity-85"
+        >
+          <Check size={12} />
+          批准
+        </button>
+        <button
+          type="button"
+          aria-label="拒绝工具调用"
+          onClick={() => onResolve(false)}
+          className="flex items-center gap-1 rounded-lg border border-[var(--ag-stroke2)] px-3 py-1 text-[12px] text-[var(--ag-text2)] transition-colors hover:bg-black/5"
+        >
+          <X size={12} />
+          拒绝
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ── 用户消息：全宽 sticky 气泡（>2 行 clamp + 渐隐，hover 展开） ──
 function UserMessage({
   msg,
   isStreaming,
   onEdit,
+  onBranch,
 }: {
   msg: AgentChatMsg
   isStreaming: boolean
   onEdit: (content: string) => void
+  /** 从此条用户消息分叉新会话（user+assistant 列表下标已由外层换算） */
+  onBranch?: () => void
 }) {
   const [editing, setEditing] = useState(false)
   const [editValue, setEditValue] = useState(msg.content)
@@ -251,6 +307,18 @@ function UserMessage({
         >
           <Pencil size={11} />
         </button>
+        {onBranch && (
+          <button
+            type="button"
+            title="从此处分叉"
+            aria-label="从此处分叉"
+            disabled={isStreaming}
+            onClick={onBranch}
+            className="rounded p-0.5 text-[var(--ag-text4)] hover:text-[var(--ag-text2)] disabled:opacity-0"
+          >
+            <GitBranch size={11} />
+          </button>
+        )}
       </span>
     </div>
   )
@@ -274,12 +342,23 @@ function AssistantMessage({
 }) {
   const [copied, setCopied] = useState(false)
   const [feedback, setFeedback] = useState<'up' | 'down' | null>(null)
+  const [speaking, setSpeaking] = useState(false)
 
   const doCopy = async () => {
     if (await copyText(msg.content)) {
       setCopied(true)
       setTimeout(() => setCopied(false), 1500)
     }
+  }
+
+  // 手动朗读本条回复；再次点击停止（cancel 会触发 onend 复位状态）
+  const toggleSpeak = () => {
+    if (speaking) {
+      stopSpeak()
+      setSpeaking(false)
+      return
+    }
+    if (speakText(msg.content, { onend: () => setSpeaking(false) })) setSpeaking(true)
   }
 
   const thinking = msg.streaming ? msg.reasoning || '' : msg.reasoning || ''
@@ -340,6 +419,21 @@ function AssistantMessage({
           >
             {copied ? <Check size={12} className="text-[var(--ag-green)]" /> : <Clipboard size={12} />}
           </button>
+          {ttsSupported() && (
+            <button
+              type="button"
+              title={speaking ? '停止朗读' : '朗读'}
+              aria-label={speaking ? '停止朗读' : '朗读回复'}
+              aria-pressed={speaking}
+              onClick={toggleSpeak}
+              className={cn(
+                'rounded p-1 hover:bg-black/5',
+                speaking ? 'text-[var(--ag-accent)]' : 'text-[var(--ag-text3)] hover:text-[var(--ag-text1)]'
+              )}
+            >
+              {speaking ? <VolumeX size={12} /> : <Volume2 size={12} />}
+            </button>
+          )}
           <button
             type="button"
             title="有帮助"
@@ -402,15 +496,50 @@ export interface AgentThreadProps {
   /** 撤销最后一轮（仅最后一条助手消息上显示入口） */
   onUndo?: () => void
   messagesEndRef: React.RefObject<HTMLDivElement | null>
+  /** 待审批的工具调用（展示在消息流尾部，回合暂停中） */
+  pendingApproval?: AgentApprovalRequest | null
+  onResolveApproval?: (approve: boolean) => void
+  /** 自动压缩提示（条数）：一次性灰色提示，插在在途消息之前 */
+  compressedNotice?: number | null
+  /** 从某条用户消息分叉（参数为 user+assistant 列表下标） */
+  onBranch?: (uaIndex: number) => void
 }
 
 // ── 消息流：与 composer 同宽居中 ──
-export function AgentThread({ messages, isStreaming, onRegenerate, onEdit, onUndo, messagesEndRef }: AgentThreadProps) {
+export function AgentThread({
+  messages,
+  isStreaming,
+  onRegenerate,
+  onEdit,
+  onUndo,
+  messagesEndRef,
+  pendingApproval,
+  onResolveApproval,
+  compressedNotice,
+  onBranch,
+}: AgentThreadProps) {
   let lastAssistantIdx = -1
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i].role === 'assistant') {
       lastAssistantIdx = i
       break
+    }
+  }
+  // 压缩提示插入点：流式中插在在途消息（最后一条）之前，否则追加到末尾
+  const noticeIdx = isStreaming ? Math.max(messages.length - 1, 0) : messages.length
+  const notice =
+    compressedNotice != null ? (
+      <div className="pt-2 text-center text-[11px] text-[var(--ag-text4)]">
+        （已自动压缩 {compressedNotice} 条早期消息）
+      </div>
+    ) : null
+  // 每条消息在 user+assistant 列表中的下标（分叉用）
+  const uaIndices: number[] = []
+  {
+    let n = 0
+    for (const m of messages) {
+      if (m.role === 'user' || m.role === 'assistant') uaIndices.push(n++)
+      else uaIndices.push(-1)
     }
   }
   return (
@@ -421,21 +550,34 @@ export function AgentThread({ messages, isStreaming, onRegenerate, onEdit, onUnd
             <AgentEmptyState />
           </div>
         ) : (
-          messages.map((m, i) =>
-            m.role === 'user' ? (
-              <UserMessage key={m.id || i} msg={m} isStreaming={isStreaming} onEdit={(content) => onEdit(i, content)} />
-            ) : (
-              <AssistantMessage
-                key={m.id || i}
-                msg={m}
-                isLast={i === messages.length - 1}
-                isStreaming={isStreaming}
-                onRegenerate={onRegenerate}
-                showUndo={i === lastAssistantIdx && !m.streaming && !m.error}
-                onUndo={onUndo}
-              />
-            )
-          )
+          <>
+            {messages.map((m, i) => (
+              <React.Fragment key={m.id || i}>
+                {notice && i === noticeIdx && notice}
+                {m.role === 'user' ? (
+                  <UserMessage
+                    msg={m}
+                    isStreaming={isStreaming}
+                    onEdit={(content) => onEdit(i, content)}
+                    onBranch={onBranch && uaIndices[i] >= 0 ? () => onBranch(uaIndices[i]) : undefined}
+                  />
+                ) : (
+                  <AssistantMessage
+                    msg={m}
+                    isLast={i === messages.length - 1}
+                    isStreaming={isStreaming}
+                    onRegenerate={onRegenerate}
+                    showUndo={i === lastAssistantIdx && !m.streaming && !m.error}
+                    onUndo={onUndo}
+                  />
+                )}
+              </React.Fragment>
+            ))}
+            {notice && noticeIdx >= messages.length && notice}
+            {pendingApproval && onResolveApproval && (
+              <ApprovalCard approval={pendingApproval} onResolve={onResolveApproval} />
+            )}
+          </>
         )}
         <div ref={messagesEndRef} />
       </div>

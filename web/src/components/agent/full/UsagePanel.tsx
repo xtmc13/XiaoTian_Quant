@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { BarChart3, Gauge, MessageSquare, X } from 'lucide-react'
-import { agentUsageApi } from '@/lib/api'
+import { agentUsageApi, configApi } from '@/lib/api'
 import type { AgentChatMsg } from '../types'
 
 export interface UsagePanelProps {
@@ -9,6 +9,8 @@ export interface UsagePanelProps {
   onClose: () => void
   /** 当前会话 id（用于拉取该会话真实用量；未保存会话可缺省） */
   conversationId?: string | null
+  /** 当前模型（"provider" 或 "provider:model"），用于查 context_window */
+  model?: string
 }
 
 function fmtK(n: number): string {
@@ -19,8 +21,10 @@ function fmtMs(ms: number): string {
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`
 }
 
+const FALLBACK_CONTEXT_WINDOW = 131_072
+
 // ── /usage 概览：当前会话真实用量 + 上下文估算条 + 近 30 天统计 ──
-export function UsagePanel({ messages, onClose, conversationId }: UsagePanelProps) {
+export function UsagePanel({ messages, onClose, conversationId, model }: UsagePanelProps) {
   // Esc 关闭
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
@@ -31,8 +35,21 @@ export function UsagePanel({ messages, onClose, conversationId }: UsagePanelProp
   const chars = messages.reduce((acc, m) => acc + (m.content?.length || 0) + (m.reasoning?.length || 0), 0)
   // 中英混合粗估：1 token ≈ 2 字符
   const estTokens = Math.ceil(chars / 2)
-  // 估算条分母：按 128K 上下文粗估占比
-  const ctxPct = Math.min(100, Math.round((estTokens / 128_000) * 100))
+
+  // 当前模型的真实上下文窗口（与助手面板共用 ['agent-ai-models'] 缓存）
+  const { data: aiModels } = useQuery({
+    queryKey: ['agent-ai-models'],
+    queryFn: configApi.getAIModels,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  })
+  const providerKey = (model || '').split(':')[0]
+  const contextWindow =
+    (providerKey
+      ? aiModels?.providers?.find((p) => p.key === providerKey)?.context_window
+      : aiModels?.providers?.find((p) => p.configured)?.context_window) || FALLBACK_CONTEXT_WINDOW
+  const ctxPct = Math.min(100, Math.round((estTokens / contextWindow) * 100))
+  const ctxLabel = contextWindow >= 1024 ? `${Math.round(contextWindow / 1024)}K` : String(contextWindow)
 
   const { data: usage } = useQuery({
     queryKey: ['agent-usage', conversationId ?? null],
@@ -108,7 +125,9 @@ export function UsagePanel({ messages, onClose, conversationId }: UsagePanelProp
           <div className="border-t border-[var(--ag-stroke3)] px-4 py-3">
             <div className="flex items-center justify-between pb-1.5">
               <span className="text-[11px] font-semibold tracking-[0.06em] text-[var(--ag-text4)]">上下文估算</span>
-              <span className="text-[11px] tabular-nums text-[var(--ag-text3)]">≈ {fmtK(estTokens)} / 128K tok</span>
+              <span className="text-[11px] tabular-nums text-[var(--ag-text3)]">
+                ≈ {fmtK(estTokens)} / {ctxLabel} tok
+              </span>
             </div>
             <div
               role="progressbar"

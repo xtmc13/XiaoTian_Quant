@@ -1,17 +1,32 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowUp,
+  Ban,
+  Bell,
+  Bird,
+  Bot,
+  BotMessageSquare,
   Brain,
+  Check,
   ChevronDown,
   CircleStop,
   Clock,
+  FlaskConical,
+  FoldVertical,
   Gauge,
+  GitBranch,
+  History,
   Layers3,
+  MessageCircleQuestion,
+  MessagesSquare,
+  Mic,
   Paperclip,
   Plus,
   Send,
   Shield,
   Sparkles,
+  Sprout,
+  SquareKanban,
   SquareTerminal,
   SquarePen,
   RotateCcw,
@@ -22,6 +37,7 @@ import {
 import type { AgentSettings } from '../types'
 import { QUICK_COMMANDS } from '../types'
 import { completePalette, exactMatch, type PaletteItem, type SkillItem, type SlashCommand } from './slash'
+import { toast } from '@/lib/useToast'
 import { cn } from '@/lib/utils'
 
 // ── 提示词片段（+ 菜单 → Prompt snippets） ──
@@ -42,7 +58,22 @@ const SLASH_ICONS: Record<SlashCommand['icon'], React.ReactNode> = {
   zap: <Zap size={13} />,
   send: <Send size={13} />,
   gauge: <Gauge size={13} />,
+  sprout: <Sprout size={13} />,
   undo: <Undo2 size={13} />,
+  check: <Check size={13} />,
+  ban: <Ban size={13} />,
+  message: <MessageCircleQuestion size={13} />,
+  fold: <FoldVertical size={13} />,
+  branch: <GitBranch size={13} />,
+  bot: <Bot size={13} />,
+  kanban: <SquareKanban size={13} />,
+  rollback: <History size={13} />,
+  feishu: <Bird size={13} />,
+  dingtalk: <Bell size={13} />,
+  flask: <FlaskConical size={13} />,
+  qq: <BotMessageSquare size={13} />,
+  wecom: <MessagesSquare size={13} />,
+  moa: <Layers3 size={13} />,
 }
 
 interface ModelProvider {
@@ -55,7 +86,10 @@ interface ModelProvider {
 export interface AgentComposerProps {
   input: string
   onInputChange: (v: string) => void
+  /** Enter / 空闲时点击发送键（忙时由面板排队） */
   onSubmit: (text: string) => void
+  /** 忙时点击发送键：发送并打断当前回复（立即重定向） */
+  onSteer?: (text: string) => void
   onStop: () => void
   isStreaming: boolean
   attachments: { name: string; content: string }[]
@@ -86,6 +120,7 @@ export function AgentComposer({
   input,
   onInputChange,
   onSubmit,
+  onSteer,
   onStop,
   isStreaming,
   attachments,
@@ -109,6 +144,63 @@ export function AgentComposer({
   const [modelOpen, setModelOpen] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
+
+  // ── 语音输入（浏览器 SpeechRecognition，零后端；不支持的浏览器不渲染按钮） ──
+  const speechCtor =
+    typeof window !== 'undefined' ? window.SpeechRecognition || window.webkitSpeechRecognition || null : null
+  const [listening, setListening] = useState(false)
+  const recognitionRef = useRef<SpeechRecognition | null>(null)
+  // 开始识别时的输入基准 + 本会话已确认的最终文本（interim 追加显示，final 落锤）
+  const speechBaseRef = useRef('')
+  const speechFinalRef = useRef('')
+
+  // 卸载时中止识别
+  useEffect(() => {
+    return () => recognitionRef.current?.abort()
+  }, [])
+
+  const toggleListening = () => {
+    if (listening) {
+      recognitionRef.current?.stop()
+      return
+    }
+    if (!speechCtor) {
+      toast('warning', '当前浏览器不支持语音输入')
+      return
+    }
+    const rec = new speechCtor()
+    rec.lang = 'zh-CN'
+    rec.continuous = false
+    rec.interimResults = true
+    speechBaseRef.current = input
+    speechFinalRef.current = ''
+    rec.onresult = (e) => {
+      let interim = ''
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i]
+        if (r.isFinal) speechFinalRef.current += r[0].transcript
+        else interim += r[0].transcript
+      }
+      onInputChange(speechBaseRef.current + speechFinalRef.current + interim)
+    }
+    rec.onerror = () => {
+      setListening(false)
+      recognitionRef.current = null
+    }
+    rec.onend = () => {
+      setListening(false)
+      recognitionRef.current = null
+    }
+    recognitionRef.current = rec
+    setListening(true)
+    try {
+      rec.start()
+    } catch {
+      setListening(false)
+      recognitionRef.current = null
+      toast('warning', '语音输入启动失败')
+    }
+  }
 
   const candidates = useMemo(() => completePalette(input, skills || []), [input, skills])
   const paletteOpen = candidates !== null && candidates.length > 0
@@ -411,6 +503,24 @@ export function AgentComposer({
               if (f) onPickFile(f)
             }}
           />
+          {/* 语音输入（浏览器支持时才渲染） */}
+          {speechCtor && (
+            <button
+              type="button"
+              title={listening ? '停止语音输入' : '语音输入'}
+              aria-label={listening ? '停止语音输入' : '语音输入'}
+              aria-pressed={listening}
+              onClick={toggleListening}
+              className={cn(
+                'flex size-6 items-center justify-center rounded-full transition-colors',
+                listening
+                  ? 'animate-pulse bg-[var(--ag-red)]/15 text-[var(--ag-red)]'
+                  : 'text-[var(--ag-text3)] hover:bg-black/5 hover:text-[var(--ag-text1)]'
+              )}
+            >
+              <Mic size={14} />
+            </button>
+          )}
           <button
             type="button"
             title="添加附件或提示词"
@@ -450,7 +560,7 @@ export function AgentComposer({
             <ChevronDown size={11} className="shrink-0" />
           </button>
 
-          {/* 发送键状态机：忙+空 → Stop；其余可提交态 → 发送（忙时为重定向）；浅蓝圆形（对标 dsh） */}
+          {/* 发送键状态机：忙+空 → Stop；忙+有输入点击 → 打断重定向；Enter（onSubmit）忙时由面板排队；浅蓝圆形（对标 dsh） */}
           {isStreaming && !input.trim() ? (
             <button
               type="button"
@@ -464,9 +574,16 @@ export function AgentComposer({
           ) : (
             <button
               type="button"
-              onClick={submit}
+              onClick={() => {
+                const body = input.trim()
+                if (isStreaming && onSteer && body) {
+                  onSteer(body)
+                  return
+                }
+                submit()
+              }}
               disabled={!canSubmit}
-              title={isStreaming ? '发送并重定向当前回复' : '发送'}
+              title={isStreaming ? '发送并打断当前回复' : '发送'}
               aria-label="发送消息"
                className="flex size-[32px] items-center justify-center rounded-full bg-[linear-gradient(135deg,#a5b4fc,#8b9cf9)] text-white transition-opacity hover:opacity-85 disabled:opacity-30"
             >

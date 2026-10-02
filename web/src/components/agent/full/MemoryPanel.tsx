@@ -4,6 +4,7 @@ import { Brain, Plus, Search, Star, Trash2, X } from 'lucide-react'
 import { agentMemoryApi } from '@/lib/api'
 import { toast } from '@/lib/useToast'
 import { cn } from '@/lib/utils'
+import { ProfileChip } from './ProfileChip'
 
 const KINDS = [
   { value: '', label: '全部' },
@@ -96,6 +97,7 @@ export function MemoryPanel({ onClose, bare }: MemoryPanelProps) {
         <div className="flex items-center gap-2 border-b border-[var(--ag-stroke3)] px-4 py-3">
           <Brain size={15} className="text-[var(--ag-accent)]" />
           <span className="text-[13px] font-semibold text-[var(--ag-text1)]">记忆</span>
+          <ProfileChip />
           <span className="min-w-0 flex-1" />
           <button
             type="button"
@@ -221,7 +223,19 @@ export function MemoryPanel({ onClose, bare }: MemoryPanelProps) {
                 <p className="whitespace-pre-wrap break-words text-[12px] leading-relaxed text-[var(--ag-text1)]">
                   {m.content}
                 </p>
-                <p className="mt-0.5 text-[10px] text-[var(--ag-text4)]">{KIND_LABELS[m.kind] || m.kind}</p>
+                <p className="mt-0.5 flex items-center gap-1 text-[10px] text-[var(--ag-text4)]">
+                  {KIND_LABELS[m.kind] || m.kind}
+                  {m.origin === 'auto' && (
+                    <span className="rounded-full bg-[var(--ag-accent)]/10 px-1.5 py-px text-[9px] font-medium text-[var(--ag-accent)]">
+                      自动
+                    </span>
+                  )}
+                  {m.origin === 'agent' && (
+                    <span className="rounded-full bg-black/6 px-1.5 py-px text-[9px] font-medium text-[var(--ag-text3)]">
+                      助手
+                    </span>
+                  )}
+                </p>
               </div>
               <button
                 type="button"

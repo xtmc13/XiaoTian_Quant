@@ -6,6 +6,7 @@ import React from 'react'
 const listMock = vi.fn()
 const createMock = vi.fn()
 const removeMock = vi.fn()
+const profilesListMock = vi.fn()
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -15,6 +16,12 @@ vi.mock('@/lib/api', async (importOriginal) => {
       list: (...args: unknown[]) => listMock(...args),
       create: (...args: unknown[]) => createMock(...args),
       remove: (...args: unknown[]) => removeMock(...args),
+    },
+    agentProfilesApi: {
+      list: (...args: unknown[]) => profilesListMock(...args),
+      create: vi.fn(),
+      activate: vi.fn(),
+      remove: vi.fn(),
     },
   }
 })
@@ -50,6 +57,25 @@ describe('MemoryPanel 记忆面板', () => {
     listMock.mockResolvedValue({ memories: [MEM] })
     createMock.mockResolvedValue({ memory: MEM })
     removeMock.mockResolvedValue({ deleted: true })
+    profilesListMock.mockResolvedValue({ success: true, profiles: [] })
+  })
+
+  it('头部展示当前激活档案 chip', async () => {
+    profilesListMock.mockResolvedValue({
+      success: true,
+      profiles: [
+        { id: 1, name: '默认', is_active: false, is_default: true, created_at: 0 },
+        { id: 2, name: '工作', is_active: true, is_default: false, created_at: 0 },
+      ],
+    })
+    renderPanel()
+    await waitFor(() => expect(screen.getByLabelText('当前档案').textContent).toContain('档案:工作'))
+  })
+
+  it('无激活档案时不渲染 chip', async () => {
+    renderPanel()
+    await waitFor(() => expect(screen.getByText('偏好低杠杆短线')).toBeTruthy())
+    expect(screen.queryByLabelText('当前档案')).toBeNull()
   })
 
   it('列出记忆并展示类型标签', async () => {

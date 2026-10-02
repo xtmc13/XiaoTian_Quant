@@ -4,6 +4,7 @@ import { Play, Plus, Trash2, X, Zap } from 'lucide-react'
 import { agentSkillApi } from '@/lib/api'
 import { toast } from '@/lib/useToast'
 import { cn } from '@/lib/utils'
+import { ProfileChip } from './ProfileChip'
 
 export interface SkillsPanelProps {
   /** 「使用」技能：关闭面板并把技能正文发到当前会话执行 */
@@ -81,6 +82,7 @@ export function SkillsPanel({ onUse, onClose, bare }: SkillsPanelProps) {
         <div className="flex items-center gap-2 border-b border-[var(--ag-stroke3)] px-4 py-3">
           <Zap size={15} className="text-[var(--ag-accent)]" />
           <span className="text-[13px] font-semibold text-[var(--ag-text1)]">技能</span>
+          <ProfileChip />
           <span className="text-[10px] text-[var(--ag-text4)]">聊天输入 /技能名 直接调用</span>
           <span className="min-w-0 flex-1" />
           <button

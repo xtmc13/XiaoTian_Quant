@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowLeft, ChevronDown, CircleStop, Shield } from 'lucide-react'
+import { ArrowLeft, ChevronDown, CircleStop, Layers3, Loader2, MessageCircleQuestion, Shield, X } from 'lucide-react'
 import { toast } from '@/lib/useToast'
-import type { AgentConversationSummary } from '@/lib/api'
-import { agentPluginApi, agentSkillApi } from '@/lib/api'
+import type { AgentApprovalRequest, AgentConversationSummary } from '@/lib/api'
+import { agentFilesApi, agentPluginApi, agentSkillApi } from '@/lib/api'
 import type { AgentChatMsg, AgentSettings } from '../types'
 import { useWallpaper } from '../pet/WallpaperContext'
 import { WallpaperMedia } from '../pet/WallpaperMedia'
@@ -16,7 +16,17 @@ import { CronPanel } from './CronPanel'
 import { MemoryPanel } from './MemoryPanel'
 import { SkillsPanel } from './SkillsPanel'
 import { TelegramPanel } from './TelegramPanel'
+import { FeishuPanel } from './FeishuPanel'
+import { DingtalkPanel } from './DingtalkPanel'
+import { QqPanel } from './QqPanel'
+import { WecomPanel } from './WecomPanel'
+import { EvalsPanel } from './EvalsPanel'
+import { FilesPanel } from './FilesPanel'
 import { UsagePanel } from './UsagePanel'
+import { InsightsPanel } from './InsightsPanel'
+import { JourneyPanel } from './JourneyPanel'
+import { KanbanPanel } from './KanbanPanel'
+import { SubagentsPanel } from './SubagentsPanel'
 import type { SlashCommand } from './slash'
 import pkg from '../../../../package.json'
 import './tokens.css'
@@ -26,6 +36,13 @@ const { version } = pkg
 const ATTACH_MAX_BYTES = 100 * 1024
 const ATTACH_EXTS = ['.txt', '.md', '.csv', '.json']
 
+export interface HermesBtwState {
+  question: string | null
+  answer: string
+  streaming: boolean
+  error: string | null
+}
+
 export interface HermesChatProps {
   messages: AgentChatMsg[]
   isStreaming: boolean
@@ -34,7 +51,7 @@ export interface HermesChatProps {
   attachments: { name: string; content: string }[]
   setAttachments: React.Dispatch<React.SetStateAction<{ name: string; content: string }[]>>
   send: (text: string) => void
-  /** 忙时发送：打断当前回合后立刻以新输入重定向 */
+  /** 忙时点击发送键：打断当前回合后立刻以新输入重定向 */
   steer: (text: string) => void
   stop: () => void
   /** 撤销最后一轮（最后一条用户消息 + 其后的助手消息） */
@@ -53,6 +70,26 @@ export interface HermesChatProps {
   textareaRef: React.RefObject<HTMLTextAreaElement | null>
   messagesEndRef: React.RefObject<HTMLDivElement | null>
   onClose: () => void
+  /** 待审批的工具调用（回合暂停中） */
+  pendingApproval: AgentApprovalRequest | null
+  resolveApproval: (approve: boolean) => void
+  /** 忙时 Enter 排队的消息（当前回合结束后自动接续） */
+  queued: string[]
+  cancelQueued: (index: number) => void
+  /** 自动压缩提示（条数），一次性展示 */
+  compressedNotice: number | null
+  /** MoA 多模型综合：下一条消息启用（/moa 切换，发送后自动复位） */
+  moaNext: boolean
+  toggleMoa: () => void
+  /** MoA 综合提示（SSE moa 事件），展示在流式状态条 */
+  moaNotice: string | null
+  /** 旁问（/btw）瞬态状态 */
+  btw: HermesBtwState
+  sendBtw: (text: string) => void
+  dismissBtw: () => void
+  /** 从会话分叉（缺省 messageIndex = 会话末尾） */
+  branchConversation: (id: string, messageIndex?: number) => void
+  compressCurrent: () => void
 }
 
 // ── 全屏助手壳：侧栏 + 消息流 + composer + 指标行（Hermes 桌面版布局） ──
@@ -81,9 +118,40 @@ export function HermesChat({
   textareaRef,
   messagesEndRef,
   onClose,
+  pendingApproval,
+  resolveApproval,
+  queued,
+  cancelQueued,
+  compressedNotice,
+  moaNext,
+  toggleMoa,
+  moaNotice,
+  btw,
+  sendBtw,
+  dismissBtw,
+  branchConversation,
+  compressCurrent,
 }: HermesChatProps) {
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [mainView, setMainView] = useState<'chat' | 'cron' | 'memory' | 'skills' | 'telegram'>('chat')
+  const [mainView, setMainView] = useState<
+    | 'chat'
+    | 'cron'
+    | 'memory'
+    | 'skills'
+    | 'telegram'
+    | 'feishu'
+    | 'dingtalk'
+    | 'qq'
+    | 'wecom'
+    | 'files'
+    | 'insights'
+    | 'journey'
+    | 'agents'
+    | 'kanban'
+    | 'evals'
+  >('chat')
+  const [btwOpen, setBtwOpen] = useState(false)
+  const [btwInput, setBtwInput] = useState('')
   const wp = useWallpaper()
   const hasWallpaper = Boolean(wp?.active)
   const hasMessages = messages.length > 0
@@ -128,6 +196,24 @@ export function HermesChat({
     body: s.body,
   }))
 
+  // /rollback：确认后恢复最近一次文件检查点（管理员接口）
+  const rollbackLatest = useCallback(async () => {
+    try {
+      const res = await agentFilesApi.checkpoints()
+      const cps = res.checkpoints || []
+      if (cps.length === 0) {
+        toast('info', '暂无文件检查点')
+        return
+      }
+      const latest = [...cps].sort((a, b) => b.created_at - a.created_at)[0]
+      if (!window.confirm(`确认恢复最近的检查点？\n${latest.path}`)) return
+      const r = await agentFilesApi.rollback(latest.id)
+      toast('success', `已恢复 ${r.restored}`)
+    } catch (e) {
+      toast('error', (e as Error).message || '回滚失败')
+    }
+  }, [])
+
   const onSlash = useCallback(
     (cmd: SlashCommand) => {
       switch (cmd.name) {
@@ -144,6 +230,24 @@ export function HermesChat({
         case 'undo':
           undo()
           break
+        case 'approve':
+          if (pendingApproval) resolveApproval(true)
+          else toast('warning', '当前没有待批准的工具调用')
+          break
+        case 'deny':
+          if (pendingApproval) resolveApproval(false)
+          else toast('warning', '当前没有待拒绝的工具调用')
+          break
+        case 'btw':
+          setBtwOpen(true)
+          break
+        case 'compress':
+          compressCurrent()
+          break
+        case 'branch':
+          if (currentId) branchConversation(currentId)
+          else toast('warning', '当前会话尚未保存，无法分叉')
+          break
         case 'model':
           setModelSignal((n) => n + 1)
           break
@@ -159,12 +263,60 @@ export function HermesChat({
         case 'telegram':
           setMainView('telegram')
           break
+        case 'insights':
+          setMainView('insights')
+          break
+        case 'journey':
+          setMainView('journey')
+          break
+        case 'agents':
+          setMainView('agents')
+          break
+        case 'kanban':
+          setMainView('kanban')
+          break
+        case 'files':
+          setMainView('files')
+          break
+        case 'feishu':
+          setMainView('feishu')
+          break
+        case 'dingtalk':
+          setMainView('dingtalk')
+          break
+        case 'qq':
+          setMainView('qq')
+          break
+        case 'wecom':
+          setMainView('wecom')
+          break
+        case 'evals':
+          setMainView('evals')
+          break
+        case 'moa':
+          toggleMoa()
+          break
+        case 'rollback':
+          rollbackLatest()
+          break
         case 'usage':
           setUsageOpen(true)
           break
       }
     },
-    [newChat, stop, regenerate, undo]
+    [
+      newChat,
+      stop,
+      regenerate,
+      undo,
+      pendingApproval,
+      resolveApproval,
+      compressCurrent,
+      currentId,
+      branchConversation,
+      rollbackLatest,
+      toggleMoa,
+    ]
   )
 
   const onPickFile = useCallback(
@@ -198,7 +350,8 @@ export function HermesChat({
     <AgentComposer
       input={input}
       onInputChange={setInput}
-      onSubmit={(text) => (isStreaming ? steer(text) : send(text))}
+      onSubmit={send}
+      onSteer={steer}
       onStop={stop}
       isStreaming={isStreaming}
       attachments={attachments}
@@ -219,6 +372,120 @@ export function HermesChat({
     />
   )
 
+  // ── 旁问（/btw）：一行输入 → 瞬态回答卡片，不进入消息流 ──
+  const btwCard = (btwOpen || btw.question) && (
+    <div className="pointer-events-auto rounded-xl border border-[var(--ag-stroke3)] bg-[var(--ag-card)]/95 px-3 py-2 shadow-[var(--ag-shadow-panel)] backdrop-blur-xl">
+      <div className="flex items-center gap-1.5">
+        <MessageCircleQuestion size={13} className="shrink-0 text-[var(--ag-accent)]" />
+        <span className="shrink-0 text-[11px] font-medium text-[var(--ag-text2)]">旁问</span>
+        {btw.question && (
+          <span className="min-w-0 flex-1 truncate text-[11px] text-[var(--ag-text3)]">{btw.question}</span>
+        )}
+        <span className="min-w-0 flex-1" />
+        <button
+          type="button"
+          aria-label="关闭旁问"
+          title="关闭旁问"
+          onClick={() => {
+            dismissBtw()
+            setBtwOpen(false)
+            setBtwInput('')
+          }}
+          className="shrink-0 rounded p-0.5 text-[var(--ag-text4)] transition-colors hover:bg-black/5 hover:text-[var(--ag-text2)]"
+        >
+          <X size={12} />
+        </button>
+      </div>
+      {btw.question ? (
+        <div className="mt-1 max-h-36 overflow-y-auto text-[12.5px] leading-relaxed text-[var(--ag-text1)]">
+          {btw.error ? (
+            <span className="text-[var(--ag-red)]">{btw.error}</span>
+          ) : btw.answer ? (
+            <span className="whitespace-pre-wrap break-words">{btw.answer}</span>
+          ) : (
+            <span className="flex items-center gap-1 text-[var(--ag-text4)]">
+              <Loader2 size={11} className="animate-spin" />
+              思考中…
+            </span>
+          )}
+        </div>
+      ) : (
+        <input
+          value={btwInput}
+          onChange={(e) => setBtwInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.nativeEvent.isComposing) return
+            if (e.key === 'Enter' && btwInput.trim()) {
+              e.preventDefault()
+              sendBtw(btwInput)
+              setBtwInput('')
+            }
+            if (e.key === 'Escape') {
+              e.preventDefault()
+              setBtwOpen(false)
+              setBtwInput('')
+            }
+          }}
+          placeholder="问一句题外话，不影响当前对话…"
+          aria-label="旁问输入框"
+          autoFocus
+          className="mt-1 w-full rounded-lg border border-[var(--ag-stroke2)] bg-[var(--ag-card)] px-2 py-1 text-[12px] text-[var(--ag-text1)] placeholder:text-[var(--ag-text4)] focus:border-[var(--ag-accent)]/50 focus:outline-none"
+        />
+      )}
+    </div>
+  )
+
+  // ── MoA 模式 chip：/moa 切换，下一条消息走多模型综合（发送后自动复位） ──
+  const moaChip = moaNext && (
+    <div
+      aria-label="MoA 模式"
+      className="pointer-events-auto flex items-center gap-1.5 rounded-xl border border-[var(--ag-accent)]/40 bg-[var(--ag-accent)]/8 px-2.5 py-1.5 shadow-[var(--ag-shadow-panel)] backdrop-blur-xl"
+    >
+      <Layers3 size={12} className="shrink-0 text-[var(--ag-accent)]" />
+      <span className="text-[11px] font-medium text-[var(--ag-accent)]">MoA 多模型</span>
+      <span className="text-[10px] text-[var(--ag-text3)]">下一条消息生效</span>
+      <span className="min-w-0 flex-1" />
+      <button
+        type="button"
+        title="取消 MoA 模式"
+        aria-label="取消 MoA 模式"
+        onClick={toggleMoa}
+        className="shrink-0 rounded p-0.5 text-[var(--ag-accent)]/70 transition-colors hover:bg-black/5 hover:text-[var(--ag-accent)]"
+      >
+        <X size={11} />
+      </button>
+    </div>
+  )
+
+  // ── 排队消息 chips：忙时 Enter 进入队列，回合结束后自动接续 ──
+  const queueChips = queued.length > 0 && (
+    <div
+      aria-label="排队消息"
+      className="pointer-events-auto flex flex-wrap items-center gap-1 rounded-xl border border-[var(--ag-stroke3)] bg-[var(--ag-card)]/90 px-2 py-1.5 shadow-[var(--ag-shadow-panel)] backdrop-blur-xl"
+    >
+      <span className="shrink-0 px-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-[var(--ag-text4)]">
+        排队中
+      </span>
+      {queued.map((q, i) => (
+        <span
+          key={`${i}-${q}`}
+          className="flex max-w-[45%] items-center gap-1 rounded-full border border-[var(--ag-stroke3)] bg-[var(--ag-card)] px-2 py-0.5 text-[11px] text-[var(--ag-text2)]"
+        >
+          <span className="truncate">{q}</span>
+          <button
+            type="button"
+            title="取消排队"
+            aria-label={`取消排队 ${q}`}
+            onClick={() => cancelQueued(i)}
+            className="shrink-0 rounded p-0.5 text-[var(--ag-text4)] hover:text-[var(--ag-red)]"
+          >
+            <X size={10} />
+          </button>
+        </span>
+      ))}
+    </div>
+  )
+
   return (
     <div className={cn('xt-hermes', hasWallpaper && 'has-wallpaper')} role="dialog" aria-label="小天助手">
       {/* 壁纸层（液态玻璃模式透出） */}
@@ -235,10 +502,29 @@ export function HermesChat({
           onNew={newChat}
           onRename={renameConversation}
           onRemove={removeConversation}
+          onBranch={(id) => branchConversation(id)}
           onOpenSettings={() => setSettingsOpen(true)}
           pluginNav={pluginNav}
           onPluginNav={(id) => {
-            if (id === 'cron' || id === 'memory' || id === 'skills' || id === 'telegram') setMainView(id)
+            if (
+              [
+                'cron',
+                'memory',
+                'skills',
+                'telegram',
+                'feishu',
+                'dingtalk',
+                'qq',
+                'wecom',
+                'files',
+                'insights',
+                'journey',
+                'agents',
+                'kanban',
+                'evals',
+              ].includes(id)
+            )
+              setMainView(id as typeof mainView)
           }}
         />
 
@@ -263,7 +549,27 @@ export function HermesChat({
                       ? '记忆'
                       : mainView === 'skills'
                         ? '技能'
-                        : 'Telegram'}
+                        : mainView === 'insights'
+                          ? '用量报告'
+                          : mainView === 'journey'
+                            ? '学习轨迹'
+                            : mainView === 'agents'
+                              ? '子代理'
+                              : mainView === 'kanban'
+                                ? '看板'
+                                : mainView === 'files'
+                                  ? '文件回滚'
+                                  : mainView === 'feishu'
+                                    ? '飞书'
+                                    : mainView === 'dingtalk'
+                                      ? '钉钉'
+                                      : mainView === 'qq'
+                                        ? 'QQ'
+                                        : mainView === 'wecom'
+                                          ? '企业微信'
+                                          : mainView === 'evals'
+                                            ? '评测'
+                                            : 'Telegram'}
                 </span>
               </div>
               <div className="min-h-0 flex-1 p-4">
@@ -280,6 +586,16 @@ export function HermesChat({
                   />
                 )}
                 {mainView === 'telegram' && <TelegramPanel bare onClose={() => setMainView('chat')} />}
+                {mainView === 'feishu' && <FeishuPanel bare onClose={() => setMainView('chat')} />}
+                {mainView === 'dingtalk' && <DingtalkPanel bare onClose={() => setMainView('chat')} />}
+                {mainView === 'qq' && <QqPanel bare onClose={() => setMainView('chat')} />}
+                {mainView === 'wecom' && <WecomPanel bare onClose={() => setMainView('chat')} />}
+                {mainView === 'evals' && <EvalsPanel bare onClose={() => setMainView('chat')} />}
+                {mainView === 'files' && <FilesPanel bare onClose={() => setMainView('chat')} />}
+                {mainView === 'insights' && <InsightsPanel bare onClose={() => setMainView('chat')} />}
+                {mainView === 'journey' && <JourneyPanel bare onClose={() => setMainView('chat')} />}
+                {mainView === 'agents' && <SubagentsPanel bare onClose={() => setMainView('chat')} />}
+                {mainView === 'kanban' && <KanbanPanel bare onClose={() => setMainView('chat')} />}
               </div>
             </>
           ) : hasMessages ? (
@@ -320,16 +636,29 @@ export function HermesChat({
                 onEdit={editMessage}
                 onUndo={undo}
                 messagesEndRef={messagesEndRef}
+                pendingApproval={pendingApproval}
+                onResolveApproval={resolveApproval}
+                compressedNotice={compressedNotice}
+                onBranch={(idx) => {
+                  if (currentId) branchConversation(currentId, idx)
+                  else toast('warning', '当前会话尚未保存，无法分叉')
+                }}
               />
 
               {/* 流式状态条 + Composer + 指标行 停靠底部（对标桌面版 ConversationRoot） */}
               <div className="pointer-events-none absolute bottom-4 left-1/2 flex w-[calc(100%-2.5rem)] max-w-[var(--ag-composer-max-w)] -translate-x-1/2 flex-col gap-1.5">
+                {btwCard}
+                {queueChips}
+                {moaChip}
                 {isStreaming && (
                   <div
                     aria-label="生成状态"
                     className="pointer-events-auto flex h-9 items-center gap-2 rounded-xl border border-[var(--ag-stroke3)] bg-[var(--ag-card)]/90 px-3 shadow-[var(--ag-shadow-panel)] backdrop-blur-xl"
                   >
                     <span className="xt-shimmer-text text-[12px] font-medium">正在生成…</span>
+                    {moaNotice && (
+                      <span className="min-w-0 truncate text-[11px] text-[var(--ag-accent)]">{moaNotice}</span>
+                    )}
                     <span className="text-[11px] tabular-nums text-[var(--ag-text4)]">
                       {rounds} 轮 · {steps} 步
                     </span>
@@ -358,7 +687,11 @@ export function HermesChat({
             /* 空态：文案+药丸+Composer 整块垂直居中（对标桌面版预览0） */
             <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-5 px-6 pb-16">
               <AgentEmptyState />
-              <div className="w-[min(100%-2rem,var(--ag-composer-max-w))]">{composer}</div>
+              <div className="flex w-[min(100%-2rem,var(--ag-composer-max-w))] flex-col gap-1.5">
+                {btwCard}
+                {moaChip}
+                {composer}
+              </div>
             </div>
           )}
 
@@ -372,7 +705,12 @@ export function HermesChat({
             />
           )}
           {usageOpen && (
-            <UsagePanel messages={messages} conversationId={currentId} onClose={() => setUsageOpen(false)} />
+            <UsagePanel
+              messages={messages}
+              conversationId={currentId}
+              model={settings.model}
+              onClose={() => setUsageOpen(false)}
+            />
           )}
         </div>
       </div>

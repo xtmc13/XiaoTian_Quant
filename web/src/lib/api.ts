@@ -1140,6 +1140,10 @@ export interface AgentChatRequest {
   replace_history?: boolean
   system_prompt?: string
   temperature?: number
+  /** 旁问（/btw）：正常流式返回但不落库 */
+  ephemeral?: boolean
+  /** MoA 多模型综合（/moa）：多家模型提案后由主模型综合 */
+  moa?: boolean
 }
 
 /** SSE conversation 事件：done 前下发一次，携带（新建的）会话 id 与标题 */
@@ -1165,12 +1169,37 @@ export interface AgentChatDoneMessage {
   usage?: AgentTurnUsage
 }
 
+/** SSE approval_request 事件：工具调用需用户确认，回合暂停等待决定 */
+export interface AgentApprovalRequest {
+  id: string
+  tool: string
+  args_summary?: string
+}
+
+/** SSE compressed 事件：自动压缩触发（在 deltas 之前到达） */
+export interface AgentCompressedEvent {
+  compressed_count: number
+}
+
+/** SSE moa 事件：MoA 回合开始前下发一次（在 deltas 之前）；
+ * proposers 为空 + note 表示 MoA 不可用、已回退为普通单模型回复 */
+export interface AgentMoaEvent {
+  proposers: string[]
+  note?: string
+}
+
 export interface AgentChatHandlers {
   onDelta?: (delta: string) => void
   /** 思考内容分片（JSON 编码字符串），流式追加 */
   onReasoning?: (delta: string) => void
   onToolCall?: (toolCall: AgentToolCall) => void
   onConversation?: (conversation: AgentConversationEvent) => void
+  /** 工具调用审批请求（回合暂停，待 /agent/chat/approve 决定后续） */
+  onApprovalRequest?: (request: AgentApprovalRequest) => void
+  /** 自动压缩已触发（在分片之前到达） */
+  onCompressed?: (event: AgentCompressedEvent) => void
+  /** MoA 多模型综合信息（在分片之前到达一次） */
+  onMoa?: (event: AgentMoaEvent) => void
   onDone?: (message: AgentChatDoneMessage) => void
   onError?: (message: string) => void
 }
@@ -1217,6 +1246,16 @@ export const agentConversationApi = {
   /** 撤销最后一轮（删除最后一条用户消息及其后的助手消息） */
   undo: (id: string) =>
     api.post<{ success: boolean; remaining: number }>(`/agent/conversations/${encodeURIComponent(id)}/undo`),
+  /** 手动压缩会话历史 */
+  compress: (id: string) =>
+    api.post<{ success: boolean; summary?: string; compressed_count: number }>(
+      `/agent/conversations/${encodeURIComponent(id)}/compress`
+    ),
+  /** 从第 message_index 条（user+assistant 列表下标）分叉出新会话 */
+  branch: (id: string, messageIndex: number) =>
+    api.post<{ success: boolean; id: string; title: string }>(`/agent/conversations/${encodeURIComponent(id)}/branch`, {
+      message_index: messageIndex,
+    }),
 }
 
 // ── Agent 用量统计 ──
@@ -1241,6 +1280,68 @@ export const agentUsageApi = {
     api.get<AgentUsageResponse>('/agent/usage', {
       params: { conversation_id: conversationId || undefined, days },
     }),
+}
+
+// ── Agent 用量报告（insights 插件） ──
+export interface AgentInsights {
+  success: boolean
+  days: number
+  active_days: number
+  totals: AgentUsageStats
+  by_day: { date: string; prompt_tokens: number; completion_tokens: number; rounds: number }[]
+  by_model: { model: string; prompt_tokens: number; completion_tokens: number }[]
+  top_tools: { name: string; count: number }[]
+  top_skills: { name: string; count: number }[]
+  memories_added: number
+  skills_added: number
+}
+
+export const agentInsightsApi = {
+  get: (days = 30) => api.get<AgentInsights>('/agent/insights', { params: { days } }),
+}
+
+// ── Agent 学习轨迹（journey 插件） ──
+export interface AgentJourneyItem {
+  /** unix 秒 */
+  ts: number
+  kind: 'memory' | 'skill' | 'conversation'
+  title: string
+  detail: string
+}
+
+export const agentJourneyApi = {
+  get: (limit = 50) =>
+    api.get<{ success: boolean; items: AgentJourneyItem[] }>('/agent/journey', { params: { limit } }),
+}
+
+// ── Agent 子代理运行列表（subagents 插件；未就绪时前端降级为空态） ──
+export interface AgentSubagentRun {
+  id: string
+  task: string
+  status: 'running' | 'done' | 'error'
+  /** unix 秒 */
+  started_at: number
+  finished_ms: number
+  result_summary: string
+}
+
+export const agentSubagentsApi = {
+  list: () => api.get<{ success: boolean; runs: AgentSubagentRun[] }>('/agent/subagents'),
+}
+
+// ── Agent 个人 AI key 覆盖（key 永不回传；用户 key 优先于全局配置） ──
+export interface AgentUserAiConfig {
+  success: boolean
+  provider?: string
+  model?: string
+  has_key: boolean
+}
+
+export const agentUserAiConfigApi = {
+  get: () => api.get<AgentUserAiConfig>('/agent/user-ai-config'),
+  put: (data: { provider: string; api_key: string; model: string }) =>
+    api.put<{ success: boolean }>('/agent/user-ai-config', data),
+  remove: () => api.del<{ success: boolean }>('/agent/user-ai-config'),
 }
 
 export const agentChatApi = {
@@ -1327,6 +1428,12 @@ export const agentChatApi = {
             handlers.onConversation?.(JSON.parse(currentData))
           } else if (currentEvent === 'tool_call') {
             handlers.onToolCall?.(JSON.parse(currentData))
+          } else if (currentEvent === 'approval_request') {
+            handlers.onApprovalRequest?.(JSON.parse(currentData))
+          } else if (currentEvent === 'compressed') {
+            handlers.onCompressed?.(JSON.parse(currentData))
+          } else if (currentEvent === 'moa') {
+            handlers.onMoa?.(JSON.parse(currentData))
           } else if (currentEvent === 'done') {
             handlers.onDone?.(JSON.parse(currentData))
           } else if (currentEvent === 'error') {
@@ -1386,6 +1493,8 @@ export const agentChatApi = {
       promise,
     }
   },
+  /** 工具调用审批：批准/拒绝暂停中的回合（普通 POST，非 SSE） */
+  approve: (id: string, approve: boolean) => api.post<{ success: boolean }>('/agent/chat/approve', { id, approve }),
 }
 
 // ── Config (raw store config) ──
@@ -1430,6 +1539,8 @@ export const configApi = {
         default?: string
         configured?: boolean
         current_model?: string
+        /** 模型上下文窗口（tokens），缺省前端按 131072 估算 */
+        context_window?: number
       }>
     }>('/config/ai-models'),
   aiModels: () =>
@@ -1442,6 +1553,8 @@ export const configApi = {
         default?: string
         configured?: boolean
         current_model?: string
+        /** 模型上下文窗口（tokens），缺省前端按 131072 估算 */
+        context_window?: number
       }>
     }>('/config/ai-models'),
   getRate: () => api.get<{ rate: number; from: string; to: string; timestamp: number }>('/config/rate'),
@@ -2939,6 +3052,8 @@ export interface AgentMemory {
   content: string
   source_conversation_id: string
   importance: number
+  /** 来源：手动新增 / 助手主动记录 / 自动沉淀（旧后端可能缺省） */
+  origin?: 'manual' | 'agent' | 'auto'
   created_at: number
   updated_at: number
 }
@@ -2970,6 +3085,28 @@ export const agentSkillApi = {
   remove: (id: string) => api.del<{ deleted: boolean }>(`/agent/skills/${encodeURIComponent(id)}`),
 }
 
+// ── Agent 看板（kanban 插件） ──
+export interface AgentKanbanCard {
+  id: string
+  title: string
+  description: string
+  column: 'todo' | 'doing' | 'done'
+  assignee?: string
+  created_by: 'user' | 'agent'
+  comment?: string
+  created_at: number
+  updated_at: number
+}
+
+export const agentKanbanApi = {
+  list: () => api.get<{ success: boolean; cards: AgentKanbanCard[] }>('/agent/kanban'),
+  create: (body: { title: string; description?: string; column?: string }) =>
+    api.post<{ success: boolean; id: string }>('/agent/kanban', body),
+  update: (id: string, body: { column?: string; title?: string; description?: string; comment?: string }) =>
+    api.put<{ success: boolean }>(`/agent/kanban/${encodeURIComponent(id)}`, body),
+  remove: (id: string) => api.del<{ success: boolean }>(`/agent/kanban/${encodeURIComponent(id)}`),
+}
+
 // ── Telegram 通道（telegram 插件） ──
 export interface AgentTelegramStatus {
   configured: boolean
@@ -2982,4 +3119,135 @@ export const agentTelegramApi = {
   status: () => api.get<AgentTelegramStatus>('/agent/telegram/status'),
   pairCode: () => api.post<{ code: string; expires_in: number }>('/agent/telegram/pair-code', {}),
   unlink: () => api.post<{ unlinked: boolean }>('/agent/telegram/unlink', {}),
+}
+
+// ── Agent 档案（profiles 插件：记忆/技能等上下文按档案隔离） ──
+export interface AgentProfile {
+  id: number
+  name: string
+  is_active: boolean
+  is_default: boolean
+  created_at: number
+}
+
+export interface AgentProfilesResponse {
+  success: boolean
+  profiles: AgentProfile[]
+  /** 仅管理员返回：全部用户的档案分组 */
+  admin_all?: { user_id: number; username: string; profiles: AgentProfile[] }[]
+}
+
+export const agentProfilesApi = {
+  list: () => api.get<AgentProfilesResponse>('/agent/profiles'),
+  create: (name: string) => api.post<{ success: boolean; id: number }>('/agent/profiles', { name }),
+  activate: (id: number) => api.post<{ success: boolean }>(`/agent/profiles/${id}/activate`, {}),
+  remove: (id: number) => api.del<{ success: boolean }>(`/agent/profiles/${id}`),
+}
+
+// ── Agent 文件检查点（files 插件，仅管理员可回滚） ──
+export interface AgentFileCheckpoint {
+  id: string | number
+  path: string
+  size: number
+  conversation_id: string
+  created_at: number
+}
+
+export const agentFilesApi = {
+  checkpoints: () => api.get<{ success: boolean; checkpoints: AgentFileCheckpoint[] }>('/agent/files/checkpoints'),
+  rollback: (checkpoint_id: string | number) =>
+    api.post<{ success: boolean; restored: string }>('/agent/files/rollback', { checkpoint_id }),
+}
+
+// ── 飞书通道（feishu 插件） ──
+export interface AgentFeishuStatus {
+  configured: boolean
+  linked: boolean
+  open_id?: string
+}
+
+export const agentFeishuApi = {
+  status: () => api.get<AgentFeishuStatus>('/agent/feishu/status'),
+  pairCode: () => api.post<{ code: string; expires_in: number }>('/agent/feishu/pair-code', {}),
+  unlink: () => api.post<{ success: boolean }>('/agent/feishu/unlink', {}),
+}
+
+// ── 钉钉通道（dingtalk 插件；绑定 id 字段可能是 staff_id 或 open_id） ──
+export interface AgentDingtalkStatus {
+  configured: boolean
+  linked: boolean
+  staff_id?: string
+  open_id?: string
+}
+
+export const agentDingtalkApi = {
+  status: () => api.get<AgentDingtalkStatus>('/agent/dingtalk/status'),
+  pairCode: () => api.post<{ code: string; expires_in: number }>('/agent/dingtalk/pair-code', {}),
+  unlink: () => api.post<{ success: boolean }>('/agent/dingtalk/unlink', {}),
+}
+
+// ── QQ 通道（qq 插件；绑定 id 为 open_id） ──
+export interface AgentQqStatus {
+  configured: boolean
+  linked: boolean
+  open_id?: string
+}
+
+export const agentQqApi = {
+  status: () => api.get<AgentQqStatus>('/agent/qq/status'),
+  pairCode: () => api.post<{ code: string; expires_in: number }>('/agent/qq/pair-code', {}),
+  unlink: () => api.post<{ success: boolean }>('/agent/qq/unlink', {}),
+}
+
+// ── 企业微信通道（wecom 插件；绑定 id 为 staff_id） ──
+export interface AgentWecomStatus {
+  configured: boolean
+  linked: boolean
+  staff_id?: string
+}
+
+export const agentWecomApi = {
+  status: () => api.get<AgentWecomStatus>('/agent/wecom/status'),
+  pairCode: () => api.post<{ code: string; expires_in: number }>('/agent/wecom/pair-code', {}),
+  unlink: () => api.post<{ success: boolean }>('/agent/wecom/unlink', {}),
+}
+
+// ── Agent 评测（evals 插件） ──
+export interface AgentEvalSuite {
+  id: string
+  name: string
+  count: number
+}
+
+export interface AgentEvalRun {
+  id: string
+  suite: string
+  status: 'running' | 'done'
+  /** unix 秒 */
+  started_at: number
+  finished_ms: number
+  pass: number
+  total: number
+}
+
+export interface AgentEvalCase {
+  name: string
+  ok: boolean
+  expected_tools: string[]
+  used_tools: string[]
+  expected_keywords: string[]
+  missing_keywords: string[]
+  answer_summary: string
+}
+
+export interface AgentEvalRunDetail extends AgentEvalRun {
+  cases: AgentEvalCase[]
+}
+
+export const agentEvalsApi = {
+  list: () => api.get<{ success: boolean; suites: AgentEvalSuite[]; runs: AgentEvalRun[] }>('/agent/evals'),
+  /** 启动评测；已有评测在运行时后端返回 409 */
+  run: (suite: string) => api.post<{ success: boolean; run_id: string }>('/agent/evals/run', { suite }),
+  getRun: (id: string) =>
+    api.get<{ success: boolean } & AgentEvalRunDetail>(`/agent/evals/runs/${encodeURIComponent(id)}`),
 }

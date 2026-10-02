@@ -2,11 +2,19 @@ import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   Activity,
+  Bell,
+  Bird,
+  Bot,
+  BotMessageSquare,
   Brain,
   Clock,
   Download,
   FileText,
+  FlaskConical,
+  GitBranch,
+  History,
   MessageSquare,
+  MessagesSquare,
   MoreHorizontal,
   Pin,
   PinOff,
@@ -14,9 +22,12 @@ import {
   Plus,
   Puzzle,
   FolderOpen,
+  Gauge,
   Search,
   Send,
   Settings,
+  Sprout,
+  SquareKanban,
   Trash2,
   Zap,
 } from 'lucide-react'
@@ -105,6 +116,8 @@ export interface AgentSidebarProps {
   onNew: () => void
   onRename: (id: string, title: string) => void
   onRemove: (id: string) => void
+  /** 从会话末尾分叉新会话 */
+  onBranch?: (id: string) => void
   onOpenSettings: () => void
   /** 插件贡献的导航入口（来自 /api/agent/plugins 清单） */
   pluginNav?: PluginNavItem[]
@@ -119,6 +132,7 @@ export function AgentSidebar({
   onNew,
   onRename,
   onRemove,
+  onBranch,
   onOpenSettings,
   pluginNav,
   onPluginNav,
@@ -355,6 +369,21 @@ export function AgentSidebar({
                   <Pencil size={12} />
                   重命名
                 </button>
+                {onBranch && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    aria-label={`分叉会话 ${c.title}`}
+                    onClick={() => {
+                      setMenuFor(null)
+                      onBranch(c.id)
+                    }}
+                    className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[12px] text-[var(--ag-text2)] hover:bg-black/5"
+                  >
+                    <GitBranch size={12} />
+                    从此处分叉
+                  </button>
+                )}
                 <button
                   type="button"
                   role="menuitem"
@@ -459,6 +488,26 @@ export function AgentSidebar({
                 <Zap size={13} />
               ) : n.icon === 'send' ? (
                 <Send size={13} />
+              ) : n.icon === 'gauge' ? (
+                <Gauge size={13} />
+              ) : n.icon === 'sprout' ? (
+                <Sprout size={13} />
+              ) : n.icon === 'bot' ? (
+                <Bot size={13} />
+              ) : n.icon === 'kanban' ? (
+                <SquareKanban size={13} />
+              ) : n.icon === 'rollback' ? (
+                <History size={13} />
+              ) : n.icon === 'feishu' ? (
+                <Bird size={13} />
+              ) : n.icon === 'dingtalk' ? (
+                <Bell size={13} />
+              ) : n.icon === 'flask' ? (
+                <FlaskConical size={13} />
+              ) : n.icon === 'qq' ? (
+                <BotMessageSquare size={13} />
+              ) : n.icon === 'wecom' ? (
+                <MessagesSquare size={13} />
               ) : (
                 <Puzzle size={13} />
               )}

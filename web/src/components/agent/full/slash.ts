@@ -4,7 +4,33 @@ export interface SlashCommand {
   /** 无参命令在 Enter 时直接执行 */
   args?: string
   description: string
-  icon: 'new' | 'stop' | 'retry' | 'model' | 'clear' | 'clock' | 'brain' | 'zap' | 'send' | 'gauge' | 'undo'
+  icon:
+    | 'new'
+    | 'stop'
+    | 'retry'
+    | 'model'
+    | 'clear'
+    | 'clock'
+    | 'brain'
+    | 'zap'
+    | 'send'
+    | 'gauge'
+    | 'sprout'
+    | 'undo'
+    | 'check'
+    | 'ban'
+    | 'message'
+    | 'fold'
+    | 'branch'
+    | 'bot'
+    | 'kanban'
+    | 'rollback'
+    | 'feishu'
+    | 'dingtalk'
+    | 'flask'
+    | 'qq'
+    | 'wecom'
+    | 'moa'
 }
 
 export const SLASH_COMMANDS: SlashCommand[] = [
@@ -12,12 +38,29 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'stop', description: '停止当前正在生成的回复', icon: 'stop' },
   { name: 'retry', description: '重新生成上一条助手回复', icon: 'retry' },
   { name: 'undo', description: '撤销最后一轮对话', icon: 'undo' },
+  { name: 'approve', description: '批准待确认的工具调用', icon: 'check' },
+  { name: 'deny', description: '拒绝待确认的工具调用', icon: 'ban' },
+  { name: 'btw', description: '旁问：不打断当前对话问一句（不落库）', icon: 'message' },
+  { name: 'compress', description: '压缩当前会话的早期历史', icon: 'fold' },
+  { name: 'branch', description: '从当前会话末尾分叉新会话', icon: 'branch' },
   { name: 'model', description: '切换模型厂商与型号', icon: 'model' },
   { name: 'usage', description: '用量与概览', icon: 'gauge' },
+  { name: 'agents', description: '打开子代理面板', icon: 'bot' },
   { name: 'cron', description: '打开定时任务面板', icon: 'clock' },
   { name: 'memory', description: '打开记忆面板', icon: 'brain' },
   { name: 'skills', description: '打开技能面板', icon: 'zap' },
   { name: 'telegram', description: '打开 Telegram 接入面板', icon: 'send' },
+  { name: 'insights', description: '打开用量报告面板', icon: 'gauge' },
+  { name: 'journey', description: '打开学习轨迹面板', icon: 'sprout' },
+  { name: 'kanban', description: '打开看板面板', icon: 'kanban' },
+  { name: 'files', description: '打开文件回滚面板（管理员）', icon: 'rollback' },
+  { name: 'rollback', description: '恢复最近一次文件检查点（管理员）', icon: 'rollback' },
+  { name: 'feishu', description: '打开飞书接入面板', icon: 'feishu' },
+  { name: 'dingtalk', description: '打开钉钉接入面板', icon: 'dingtalk' },
+  { name: 'qq', description: '打开 QQ 接入面板', icon: 'qq' },
+  { name: 'wecom', description: '打开企业微信接入面板', icon: 'wecom' },
+  { name: 'evals', description: '打开评测面板', icon: 'flask' },
+  { name: 'moa', description: '下一条消息使用 MoA 多模型综合', icon: 'moa' },
   { name: 'clear', description: '清空当前对话（同 /new）', icon: 'clear' },
 ]
 
