@@ -3197,6 +3197,7 @@ export const agentQqApi = {
   status: () => api.get<AgentQqStatus>('/agent/qq/status'),
   pairCode: () => api.post<{ code: string; expires_in: number }>('/agent/qq/pair-code', {}),
   unlink: () => api.post<{ success: boolean }>('/agent/qq/unlink', {}),
+  urlLink: () => api.post<{ url: string }>('/agent/qq/url-link', {}),
 }
 
 // ── 企业微信通道（wecom 插件；绑定 id 为 staff_id） ──

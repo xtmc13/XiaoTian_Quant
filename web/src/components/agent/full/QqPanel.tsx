@@ -24,7 +24,12 @@ export function QqPanel({ onClose, bare }: PlatformLinkPanelProps) {
             后重启网关（在 QQ 开放平台创建机器人获取）。
           </>
         ),
-        pairInstructions: <>生成配对码后，在 QQ 私聊中把配对码发送给机器人完成绑定：</>,
+        pairInstructions: <>扫码添加机器人（或搜索机器人名称），然后在 QQ 私聊中把配对码发送给它完成绑定：</>,
+        qrLink: {
+          fetchUrl: () => agentQqApi.urlLink(),
+          buttonLabel: '生成「添加机器人」二维码',
+          hint: '用手机 QQ 扫描上方二维码，将机器人添加为好友后，在下面生成配对码并发给机器人完成绑定。',
+        },
         linkedHint: '现在可以直接在 QQ 私聊里给机器人发消息使唤助手；定时任务选择「QQ」投递也会发到你的私聊。',
       }}
     />

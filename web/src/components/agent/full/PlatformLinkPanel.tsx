@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, Copy, Link2, Unlink, X } from 'lucide-react'
+import { Check, Copy, Link2, QrCode, Unlink, X } from 'lucide-react'
+import { QRCodeSVG } from 'qrcode.react'
 import { toast } from '@/lib/useToast'
 import { copyText } from '../types'
 
@@ -24,6 +25,12 @@ export interface PlatformLinkConfig<S> {
   pairInstructions: React.ReactNode
   /** 已绑定后的补充说明 */
   linkedHint: string
+  /** 「扫码添加」能力（如 QQ url-link）：点击拉取链接并渲染二维码，可空 */
+  qrLink?: {
+    fetchUrl: () => Promise<{ url: string }>
+    buttonLabel: string
+    hint: React.ReactNode
+  }
 }
 
 export interface PlatformLinkPanelProps {
@@ -49,6 +56,21 @@ export function PlatformLinkPanel<S>({
   const [copied, setCopied] = useState(false)
   const [secondsLeft, setSecondsLeft] = useState(0)
   const [confirmUnlink, setConfirmUnlink] = useState(false)
+  const [qrUrl, setQrUrl] = useState<string | null>(null)
+  const [qrLoading, setQrLoading] = useState(false)
+
+  const loadQr = async () => {
+    if (!config.qrLink) return
+    setQrLoading(true)
+    try {
+      const res = await config.qrLink.fetchUrl()
+      setQrUrl(res.url)
+    } catch (e) {
+      toast('error', e instanceof Error ? e.message : '获取二维码失败')
+    } finally {
+      setQrLoading(false)
+    }
+  }
 
   // Esc 关闭
   useEffect(() => {
@@ -207,6 +229,28 @@ export function PlatformLinkPanel<S>({
           {/* 未绑定 → 配对 */}
           {configured && !linked && (
             <>
+              {config.qrLink && (
+                <div className="flex flex-col items-center gap-2 rounded-xl border border-[var(--ag-stroke3)] bg-[var(--ag-sidebar)]/60 px-3 py-3">
+                  {qrUrl ? (
+                    <>
+                      <QRCodeSVG value={qrUrl} size={150} />
+                      <p className="text-center text-[11px] leading-relaxed text-[var(--ag-text3)]">
+                        {config.qrLink.hint}
+                      </p>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={loadQr}
+                      disabled={qrLoading}
+                      className="flex items-center gap-1.5 rounded-md border border-[var(--ag-stroke2)] px-3 py-1.5 text-[12px] text-[var(--ag-text2)] hover:text-[var(--ag-text1)] disabled:opacity-50"
+                    >
+                      <QrCode size={13} />
+                      {qrLoading ? '生成中…' : config.qrLink.buttonLabel}
+                    </button>
+                  )}
+                </div>
+              )}
               <p className="text-[12px] leading-relaxed text-[var(--ag-text2)]">{config.pairInstructions}</p>
               {code ? (
                 <div className="flex items-center gap-2 rounded-xl border border-[var(--ag-stroke3)] bg-[var(--ag-sidebar)]/60 px-3 py-2.5">

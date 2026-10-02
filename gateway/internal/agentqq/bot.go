@@ -690,6 +690,48 @@ func (b *Bot) restBase() string {
 	return defaultAPIBase()
 }
 
+// GenerateURLLink 调用官方 /v2/generate_url_link 获取「添加机器人」分享链接，
+// 前端将链接渲染成二维码，手机 QQ 扫码即可添加机器人（FRIEND_ADD 场景 2003/2004）。
+func (b *Bot) GenerateURLLink(callbackData string) (string, error) {
+	if !Configured() {
+		return "", fmt.Errorf("QQ_APP_ID/QQ_APP_SECRET 未配置")
+	}
+	token, err := b.accessToken()
+	if err != nil {
+		return "", err
+	}
+	payload := map[string]any{}
+	if callbackData != "" {
+		payload["callback_data"] = callbackData
+	}
+	data, _ := json.Marshal(payload)
+	req, err := http.NewRequest(http.MethodPost, b.restBase()+"/v2/generate_url_link", strings.NewReader(string(data)))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "QQBot "+token)
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode >= 300 {
+		return "", fmt.Errorf("generate_url_link: status=%d body=%s", resp.StatusCode, truncate(string(body), 200))
+	}
+	var out struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return "", err
+	}
+	if out.URL == "" {
+		return "", fmt.Errorf("generate_url_link: 响应缺少 url 字段")
+	}
+	return out.URL, nil
+}
+
 // appTokenURL token 接口（注入值优先）。
 func (b *Bot) appTokenURL() string {
 	if b.tokenURL != "" {

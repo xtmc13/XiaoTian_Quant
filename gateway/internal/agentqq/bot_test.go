@@ -371,3 +371,46 @@ func TestTokenCached(t *testing.T) {
 		t.Errorf("token 应缓存，调用 %d 次", n)
 	}
 }
+
+// TestGenerateURLLink 「添加机器人」分享链接：路径、Bearer 鉴权、响应解析。
+func TestGenerateURLLink(t *testing.T) {
+	setupQQTestDB(t)
+	var gotPath, gotAuth, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/app/getAppAccessToken"):
+			fmt.Fprint(w, `{"access_token":"t-qq","expires_in":"7200"}`)
+		case strings.HasSuffix(r.URL.Path, "/v2/generate_url_link"):
+			gotPath = r.URL.Path
+			gotAuth = r.Header.Get("Authorization")
+			buf, _ := io.ReadAll(r.Body)
+			gotBody = string(buf)
+			fmt.Fprint(w, `{"url":"https://q.qq.com/qr/test-1"}`)
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+	t.Setenv("QQ_APP_ID", "app_test")
+	t.Setenv("QQ_APP_SECRET", "secret_test")
+	b := NewBot(NewRepo())
+	b.SetAPIBase(srv.URL)
+	b.SetTokenURL(srv.URL + "/app/getAppAccessToken")
+
+	url, err := b.GenerateURLLink("")
+	if err != nil {
+		t.Fatalf("GenerateURLLink: %v", err)
+	}
+	if url != "https://q.qq.com/qr/test-1" {
+		t.Errorf("url = %q", url)
+	}
+	if !strings.HasSuffix(gotPath, "/v2/generate_url_link") {
+		t.Errorf("path = %q", gotPath)
+	}
+	if gotAuth != "QQBot t-qq" {
+		t.Errorf("Authorization = %q", gotAuth)
+	}
+	if strings.Contains(gotBody, "callback_data") {
+		t.Errorf("空 callback_data 不应出现在请求体: %s", gotBody)
+	}
+}
