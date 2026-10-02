@@ -14,6 +14,7 @@ import {
   X,
   ThumbsDown,
   ThumbsUp,
+  Sprout,
 } from 'lucide-react'
 import type { AgentChatMsg } from '../types'
 import { copyText, toolLabel } from '../types'
@@ -31,10 +32,10 @@ const TAGLINES = [
   '一键复盘今日得失，让下一单更干净。',
 ]
 
-function EmptyState() {
+export function AgentEmptyState() {
   const [tagline] = useState(() => TAGLINES[Math.floor(Math.random() * TAGLINES.length)])
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-2 px-4 py-6">
+    <div className="flex flex-col items-center gap-2 px-4 py-6">
       {/* 鲸鱼 + 标语（对标桌面版"探索未至之境"空态） */}
       <div className="flex items-center gap-2.5">
         <DefaultPet size={44} />
@@ -54,6 +55,11 @@ function EmptyState() {
         <span className="flex items-center gap-1 rounded-lg border border-[var(--ag-stroke3)] bg-[var(--ag-card)]/70 px-2.5 py-1.5 text-[12px] text-[var(--ag-text2)]">
           <Shield size={13} className="text-[var(--ag-accent)]" />
           标准模式
+          <ChevronDown size={12} className="text-[var(--ag-text4)]" />
+        </span>
+        <span className="flex items-center gap-1 rounded-lg border border-[var(--ag-stroke3)] bg-[var(--ag-card)]/70 px-2.5 py-1.5 text-[12px] text-[var(--ag-text2)]">
+          <Sprout size={13} className="text-[var(--ag-accent)]" />
+          新建工作树
           <ChevronDown size={12} className="text-[var(--ag-text4)]" />
         </span>
       </div>
@@ -385,7 +391,9 @@ export function AgentThread({ messages, isStreaming, onRegenerate, onEdit, messa
     <div className="xt-thread-scroll min-h-0 flex-1 overflow-y-auto" aria-label="消息流">
       <div className="mx-auto flex h-full w-full max-w-3xl flex-col px-6 pb-40 pt-2">
         {messages.length === 0 ? (
-          <EmptyState />
+          <div className="flex h-full flex-col items-center justify-center">
+            <AgentEmptyState />
+          </div>
         ) : (
           messages.map((m, i) =>
             m.role === 'user' ? (

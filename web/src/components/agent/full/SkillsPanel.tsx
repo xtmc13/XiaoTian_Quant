@@ -9,10 +9,12 @@ export interface SkillsPanelProps {
   /** 「使用」技能：关闭面板并把技能正文发到当前会话执行 */
   onUse: (skill: { name: string; body: string }) => void
   onClose: () => void
+  /** 整页模式（嵌入主内容区，非弹窗） */
+  bare?: boolean
 }
 
 // ── 技能面板：浏览 / 创建 / 使用 / 删除（skills 插件的 UI 入口） ──
-export function SkillsPanel({ onUse, onClose }: SkillsPanelProps) {
+export function SkillsPanel({ onUse, onClose, bare }: SkillsPanelProps) {
   const queryClient = useQueryClient()
   const [showCreate, setShowCreate] = useState(false)
   const [name, setName] = useState('')
@@ -60,13 +62,19 @@ export function SkillsPanel({ onUse, onClose }: SkillsPanelProps) {
 
   return (
     <div
-      className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 p-4"
+      className={
+        bare ? 'flex h-full flex-col' : 'absolute inset-0 z-20 flex items-center justify-center bg-black/50 p-4'
+      }
       onClick={onClose}
       role="dialog"
       aria-label="技能"
     >
       <div
-        className="flex max-h-[85vh] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-[var(--ag-stroke3)] bg-[var(--ag-card)] shadow-[var(--ag-shadow-panel)]"
+        className={
+          bare
+            ? 'mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col overflow-hidden rounded-2xl border border-[var(--ag-stroke3)] bg-[var(--ag-card)] shadow-[var(--ag-shadow-panel)]'
+            : 'flex max-h-[85vh] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-[var(--ag-stroke3)] bg-[var(--ag-card)] shadow-[var(--ag-shadow-panel)]'
+        }
         onClick={(e) => e.stopPropagation()}
       >
         {/* 头部 */}

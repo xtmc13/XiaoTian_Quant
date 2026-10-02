@@ -10,6 +10,7 @@ import {
   Pencil,
   Plus,
   Puzzle,
+  FolderOpen,
   Search,
   Send,
   Settings,
@@ -347,6 +348,12 @@ export function AgentSidebar({
         </div>
       </nav>
 
+      {/* 文件夹行（对标工作区目录） */}
+      <div className="mx-2.5 mb-0.5 flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[12px] text-[var(--ag-text2)]">
+        <FolderOpen size={13} className="shrink-0 text-[var(--ag-accent)]" />
+        <span className="min-w-0 flex-1 truncate">全部会话</span>
+      </div>
+
       {/* 会话区头：标题 + 搜索图标（点击展开输入框，对标 dsh 工作区区头） */}
       <div className="flex items-center px-3 pb-0.5 pt-2">
         <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--ag-text4)]">会话</span>
@@ -409,13 +416,22 @@ export function AgentSidebar({
         ))}
       </div>
 
-      {/* 底部用户条（对标 dsh 侧栏底部） */}
-      <div className="flex items-center gap-2 border-t border-[var(--ag-sidebar-edge)] px-3 py-2">
-        <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-[var(--ag-accent)]/20 text-[11px] font-bold text-[var(--ag-accent)]">
+      {/* 底部：设置入口（对标 dsh 侧栏底部 ⚙ 设置） + 弱化用户标识 */}
+      <div className="flex items-center gap-1 border-t border-[var(--ag-sidebar-edge)] px-2 py-1.5">
+        <button
+          type="button"
+          onClick={onOpenSettings}
+          className="flex h-7 flex-1 items-center gap-1.5 rounded-md px-1.5 text-[12px] text-[var(--ag-text2)] hover:bg-black/5 hover:text-[var(--ag-text1)]"
+        >
+          <Settings size={13} />
+          设置
+        </button>
+        <span
+          title={nickname || '小天用户'}
+          className="flex size-5 shrink-0 items-center justify-center rounded-full bg-[var(--ag-accent)]/15 text-[9px] font-bold text-[var(--ag-accent)]"
+        >
           {(nickname || '天')[0].toUpperCase()}
         </span>
-        <span className="min-w-0 flex-1 truncate text-[12px] text-[var(--ag-text2)]">{nickname || '小天用户'}</span>
-        <span className="shrink-0 font-mono text-[9px] text-[var(--ag-text4)]">AGENT</span>
       </div>
     </aside>
   )

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ChevronDown, Shield } from 'lucide-react'
+import { ArrowLeft, ChevronDown, Shield } from 'lucide-react'
 import { toast } from '@/lib/useToast'
 import type { AgentConversationSummary } from '@/lib/api'
 import { agentPluginApi, agentSkillApi } from '@/lib/api'
@@ -10,7 +10,7 @@ import { useWallpaper } from '../pet/WallpaperContext'
 import { WallpaperMedia } from '../pet/WallpaperMedia'
 import { cn } from '@/lib/utils'
 import { AgentSidebar } from './Sidebar'
-import { AgentThread } from './Thread'
+import { AgentThread, AgentEmptyState } from './Thread'
 import { AgentComposer } from './Composer'
 import { AgentStatusBar } from './StatusBar'
 import { CronPanel } from './CronPanel'
@@ -81,6 +81,7 @@ export function HermesChat({
   onClose,
 }: HermesChatProps) {
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [mainView, setMainView] = useState<'chat' | 'cron' | 'memory' | 'skills' | 'telegram'>('chat')
   const wp = useWallpaper()
   const hasWallpaper = Boolean(wp?.active)
   const hasMessages = messages.length > 0
@@ -89,10 +90,6 @@ export function HermesChat({
   const steps = messages.reduce((a, m) => a + (m.toolCalls?.length || 0), 0)
   const inChars = messages.reduce((a, m) => (m.role === 'user' ? a + (m.content?.length || 0) : a), 0)
   const outChars = messages.reduce((a, m) => (m.role === 'assistant' ? a + (m.content?.length || 0) : a), 0)
-  const [cronOpen, setCronOpen] = useState(false)
-  const [memoryOpen, setMemoryOpen] = useState(false)
-  const [skillsOpen, setSkillsOpen] = useState(false)
-  const [telegramOpen, setTelegramOpen] = useState(false)
   const [usageOpen, setUsageOpen] = useState(false)
   const [modelSignal, setModelSignal] = useState(0)
   const fileReaderRef = useRef<FileReader | null>(null)
@@ -138,16 +135,16 @@ export function HermesChat({
           setModelSignal((n) => n + 1)
           break
         case 'cron':
-          setCronOpen(true)
+          setMainView('cron')
           break
         case 'memory':
-          setMemoryOpen(true)
+          setMainView('memory')
           break
         case 'skills':
-          setSkillsOpen(true)
+          setMainView('skills')
           break
         case 'telegram':
-          setTelegramOpen(true)
+          setMainView('telegram')
           break
         case 'usage':
           setUsageOpen(true)
@@ -184,6 +181,30 @@ export function HermesChat({
     textareaRef.current?.focus()
   }, [textareaRef])
 
+  const composer = (
+    <AgentComposer
+      input={input}
+      onInputChange={setInput}
+      onSubmit={(text) => (isStreaming ? steer(text) : send(text))}
+      onStop={stop}
+      isStreaming={isStreaming}
+      attachments={attachments}
+      onRemoveAttachment={(i) => setAttachments((prev) => prev.filter((_, j) => j !== i))}
+      onPickFile={onPickFile}
+      textareaRef={textareaRef}
+      settings={settings}
+      updateSettings={updateSettings}
+      providers={providers}
+      onSlash={onSlash}
+      onSuggestion={send}
+      showSuggestions={messages.length > 0}
+      openModelSignal={modelSignal}
+      skills={paletteSkills}
+      onUseSkill={(skill) => send(skill.body)}
+      onShowUsage={() => setUsageOpen(true)}
+    />
+  )
+
   return (
     <div className={cn('xt-hermes', hasWallpaper && 'has-wallpaper')} role="dialog" aria-label="小天助手">
       {/* 壁纸层（液态玻璃模式透出） */}
@@ -203,17 +224,53 @@ export function HermesChat({
           onOpenSettings={() => setSettingsOpen(true)}
           pluginNav={pluginNav}
           onPluginNav={(id) => {
-            if (id === 'cron') setCronOpen(true)
-            if (id === 'memory') setMemoryOpen(true)
-            if (id === 'skills') setSkillsOpen(true)
-            if (id === 'telegram') setTelegramOpen(true)
+            if (id === 'cron' || id === 'memory' || id === 'skills' || id === 'telegram') setMainView(id)
           }}
         />
 
         <div className="relative flex min-w-0 flex-1 flex-col">
-          {/* 标题行 + 页签：仅会话有消息时显示（空态时整块隐藏，对标桌面版） */}
-          {hasMessages && (
+          {mainView !== 'chat' ? (
+            /* ── 插件整页（对标桌面版扩展页：标题 + 返回 + 内容区） ── */
             <>
+              <div className="flex items-center gap-2 border-b border-[var(--ag-stroke3)] px-5 pb-2 pt-3">
+                <button
+                  type="button"
+                  onClick={() => setMainView('chat')}
+                  title="返回对话"
+                  aria-label="返回对话"
+                  className="shrink-0 rounded-md p-1 text-[var(--ag-text3)] transition-colors hover:bg-black/5 hover:text-[var(--ag-text1)]"
+                >
+                  <ArrowLeft size={15} />
+                </button>
+                <span className="text-[15px] font-semibold text-[var(--ag-text1)]">
+                  {mainView === 'cron'
+                    ? '定时任务'
+                    : mainView === 'memory'
+                      ? '记忆'
+                      : mainView === 'skills'
+                        ? '技能'
+                        : 'Telegram'}
+                </span>
+              </div>
+              <div className="min-h-0 flex-1 p-4">
+                {mainView === 'cron' && <CronPanel bare onClose={() => setMainView('chat')} />}
+                {mainView === 'memory' && <MemoryPanel bare onClose={() => setMainView('chat')} />}
+                {mainView === 'skills' && (
+                  <SkillsPanel
+                    bare
+                    onUse={(skill) => {
+                      setMainView('chat')
+                      send(skill.body)
+                    }}
+                    onClose={() => setMainView('chat')}
+                  />
+                )}
+                {mainView === 'telegram' && <TelegramPanel bare onClose={() => setMainView('chat')} />}
+              </div>
+            </>
+          ) : hasMessages ? (
+            <>
+              {/* 标题行 + 页签（会话态，对标桌面版） */}
               <div className="flex items-center gap-2 px-5 pb-1 pt-3">
                 <span className="min-w-0 flex-1 truncate text-[15px] font-semibold text-[var(--ag-text1)]">
                   {conversations.find((c) => c.id === currentId)?.title || '新对话'}
@@ -241,51 +298,31 @@ export function HermesChat({
                   轨迹
                 </span>
               </div>
-            </>
-          )}
 
-          <AgentThread
-            messages={messages}
-            isStreaming={isStreaming}
-            onRegenerate={regenerate}
-            onEdit={editMessage}
-            messagesEndRef={messagesEndRef}
-          />
-
-          {/* Composer 停靠底部（近全宽深色卡片） */}
-          <div className="pointer-events-none absolute bottom-4 left-1/2 w-[calc(100%-2.5rem)] max-w-5xl -translate-x-1/2">
-            <div className="pointer-events-auto">
-              <AgentComposer
-                input={input}
-                onInputChange={setInput}
-                onSubmit={(text) => (isStreaming ? steer(text) : send(text))}
-                onStop={stop}
+              <AgentThread
+                messages={messages}
                 isStreaming={isStreaming}
-                attachments={attachments}
-                onRemoveAttachment={(i) => setAttachments((prev) => prev.filter((_, j) => j !== i))}
-                onPickFile={onPickFile}
-                textareaRef={textareaRef}
-                settings={settings}
-                updateSettings={updateSettings}
-                providers={providers}
-                onSlash={onSlash}
-                onSuggestion={send}
-                showSuggestions={messages.length > 0}
-                openModelSignal={modelSignal}
-                skills={paletteSkills}
-                onUseSkill={(skill) => send(skill.body)}
-                onShowUsage={() => setUsageOpen(true)}
+                onRegenerate={regenerate}
+                onEdit={editMessage}
+                messagesEndRef={messagesEndRef}
               />
+
+              {/* Composer 停靠底部 */}
+              <div className="pointer-events-none absolute bottom-4 left-1/2 w-[calc(100%-2.5rem)] max-w-5xl -translate-x-1/2">
+                <div className="pointer-events-auto">{composer}</div>
+              </div>
+            </>
+          ) : (
+            /* 空态：文案+药丸+Composer 整块垂直居中（对标桌面版预览0） */
+            <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-5 px-6 pb-16">
+              <AgentEmptyState />
+              <div className="w-[min(100%-2rem,46rem)]">{composer}</div>
             </div>
-          </div>
+          )}
 
           {settingsOpen && (
             <SettingsPopover light settings={settings} onSave={updateSettings} onClose={() => setSettingsOpen(false)} />
           )}
-          {cronOpen && <CronPanel onClose={() => setCronOpen(false)} />}
-          {memoryOpen && <MemoryPanel onClose={() => setMemoryOpen(false)} />}
-          {skillsOpen && <SkillsPanel onUse={(skill) => send(skill.body)} onClose={() => setSkillsOpen(false)} />}
-          {telegramOpen && <TelegramPanel onClose={() => setTelegramOpen(false)} />}
           {usageOpen && <UsagePanel messages={messages} onClose={() => setUsageOpen(false)} />}
         </div>
       </div>

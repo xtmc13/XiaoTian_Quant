@@ -7,10 +7,12 @@ import { copyText } from '../types'
 
 export interface TelegramPanelProps {
   onClose: () => void
+  /** 整页模式（嵌入主内容区，非弹窗） */
+  bare?: boolean
 }
 
 // ── Telegram 接入面板：配对绑定 / 状态 / 解绑 ──
-export function TelegramPanel({ onClose }: TelegramPanelProps) {
+export function TelegramPanel({ onClose, bare }: TelegramPanelProps) {
   const queryClient = useQueryClient()
   const [code, setCode] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
@@ -61,13 +63,19 @@ export function TelegramPanel({ onClose }: TelegramPanelProps) {
 
   return (
     <div
-      className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 p-4"
+      className={
+        bare ? 'flex h-full flex-col' : 'absolute inset-0 z-20 flex items-center justify-center bg-black/50 p-4'
+      }
       onClick={onClose}
       role="dialog"
       aria-label="Telegram 接入"
     >
       <div
-        className="w-full max-w-md overflow-hidden rounded-2xl border border-[var(--ag-stroke3)] bg-[var(--ag-card)] shadow-[var(--ag-shadow-panel)]"
+        className={
+          bare
+            ? 'mx-auto flex min-h-0 w-full max-w-2xl flex-1 flex-col overflow-hidden rounded-2xl border border-[var(--ag-stroke3)] bg-[var(--ag-card)] shadow-[var(--ag-shadow-panel)]'
+            : 'w-full max-w-md overflow-hidden rounded-2xl border border-[var(--ag-stroke3)] bg-[var(--ag-card)] shadow-[var(--ag-shadow-panel)]'
+        }
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 border-b border-[var(--ag-stroke3)] px-4 py-3">

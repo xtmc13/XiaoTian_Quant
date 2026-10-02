@@ -144,8 +144,10 @@ describe('Hermes 全屏助手', () => {
     await waitFor(() => expect(chatMock).toHaveBeenCalledTimes(1))
 
     // 忙时发送第二条 → steer：abort 被调用
-    fireEvent.change(input, { target: { value: '第二条' } })
-    fireEvent.keyDown(input, { key: 'Enter' })
+    //（发送后布局从空态簇切到聊天视图，输入框重新挂载，需重新查询）
+    const input2 = screen.getByLabelText('消息输入框')
+    fireEvent.change(input2, { target: { value: '第二条' } })
+    fireEvent.keyDown(input2, { key: 'Enter' })
     await waitFor(() => expect(firstAbort).toHaveBeenCalled())
     resolveFirst()
 
@@ -172,9 +174,9 @@ describe('Hermes 全屏助手', () => {
     fireEvent.change(input, { target: { value: '等很久的回复' } })
     fireEvent.keyDown(input, { key: 'Enter' })
 
-    // 忙 + 空输入 → 停止键出现（发送中输入已被清空）
+    // 忙 + 空输入 → 停止键出现（发送后布局切换，重新查询元素）
     await waitFor(() => expect(screen.getByLabelText('停止生成')).toBeTruthy())
-    fireEvent.keyDown(input, { key: 'Escape' })
+    fireEvent.keyDown(screen.getByLabelText('消息输入框'), { key: 'Escape' })
     await waitFor(() => expect(abortFn).toHaveBeenCalled())
   })
 
