@@ -26,6 +26,15 @@ type serverConfig struct {
 	ServerMode string
 }
 
+// noStoreCache 禁缓存中间件：HTML 深链接回退 / sw.js / manifest 使用，
+// 保证发版后微信 webview 与普通浏览器立即拿到新资源（ stale 页面根因修复）。
+func noStoreCache(c *gin.Context) {
+	c.Header("Cache-Control", "no-cache, no-store, must-revalidate, max-age=0")
+	c.Header("Pragma", "no-cache")
+	c.Header("Expires", "0")
+	c.Next()
+}
+
 // setupRoutes configures all Gin routes.
 // Public routes (no auth) are registered at the top level,
 // while private routes are under the /api group with AuthRequired middleware.
@@ -33,11 +42,18 @@ func setupRoutes(r *gin.Engine, cfg *serverConfig) *gin.Engine {
 	// ── Embedded frontend SPA ──
 	// web/dist 构建产物经 gateway/spa 的 //go:embed 打入二进制；
 	// 非 /api、/ws 路径由 NoRoute 回退到 index.html（SPA 前端路由）。
+	// 缓存策略（微信 webview/浏览器强缓存导致"部署了看不到"的根因修复）：
+	//   - /assets/* 带内容 hash → 一年 immutable；
+	//   - HTML / sw.js / manifest → no-store，每次必须回源，保证发版即生效。
 	r.GET("/", handler.Index)
-	r.StaticFS("/assets", spa.AssetsFS())
+	assets := r.Group("/assets", func(c *gin.Context) {
+		c.Header("Cache-Control", "public, max-age=31536000, immutable")
+		c.Next()
+	})
+	assets.StaticFS("/", spa.AssetsFS())
 	r.GET("/favicon.svg", spa.ServeRootFile("favicon.svg"))
-	r.GET("/manifest.json", spa.ServeRootFile("manifest.json"))
-	r.GET("/sw.js", spa.ServeRootFile("sw.js"))
+	r.GET("/manifest.json", noStoreCache, spa.ServeRootFile("manifest.json"))
+	r.GET("/sw.js", noStoreCache, spa.ServeRootFile("sw.js"))
 	r.NoRoute(func(c *gin.Context) {
 		p := c.Request.URL.Path
 		if strings.HasPrefix(p, "/api/") || strings.HasPrefix(p, "/ws") ||
@@ -59,7 +75,7 @@ func setupRoutes(r *gin.Engine, cfg *serverConfig) *gin.Engine {
 			c.Status(http.StatusInternalServerError)
 			return
 		}
-		c.Header("Content-Type", "text/html; charset=utf-8")
+		c.Header("Cache-Control", "no-store")
 		c.Data(http.StatusOK, "text/html; charset=utf-8", data)
 	})
 
