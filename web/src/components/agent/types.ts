@@ -49,6 +49,7 @@ export function saveSettings(settings: AgentSettings) {
 // ── 工具调用中文标签 ──
 export const TOOL_LABELS: Record<string, string> = {
   get_market: '查询行情',
+  get_market_data: '查询行情',
   get_ticker: '查询行情',
   get_klines: '查询K线',
   get_portfolio: '查询持仓',
@@ -58,6 +59,24 @@ export const TOOL_LABELS: Record<string, string> = {
   create_grid_bot: '创建网格机器人',
   create_bot: '创建机器人',
   list_bots: '查询机器人列表',
+  // cron 插件
+  create_scheduled_job: '创建定时任务',
+  list_scheduled_jobs: '列出定时任务',
+  toggle_scheduled_job: '启停定时任务',
+  delete_scheduled_job: '删除定时任务',
+  run_scheduled_job: '立即运行任务',
+  // memory 插件
+  save_memory: '保存记忆',
+  search_memory: '检索记忆',
+  list_memories: '列出记忆',
+  delete_memory: '删除记忆',
+  // skills 插件
+  save_skill: '保存技能',
+  run_skill: '执行技能',
+  list_skills: '列出技能',
+  delete_skill: '删除技能',
+  // subagents 插件
+  delegate_task: '派发子任务',
 }
 
 export function toolLabel(name: string): string {

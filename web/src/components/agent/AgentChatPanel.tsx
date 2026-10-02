@@ -26,6 +26,7 @@ import { HistorySidebar } from './HistorySidebar'
 import { MessageItem } from './MessageItem'
 import { SettingsPopover } from './SettingsPopover'
 import { QUICK_COMMANDS, loadSettings, saveSettings, type AgentChatMsg, type AgentSettings } from './types'
+import { HermesChat } from './full/HermesChat'
 
 // ── 附件限制 ──
 const ATTACH_MAX_BYTES = 100 * 1024
@@ -59,9 +60,11 @@ export interface AgentChatPanelProps {
   onClose: () => void
   /** 面板关闭期间收到助手消息时回调（用于 FAB 未读小红点） */
   onUnread?: () => void
+  /** float=右下角悬浮小面板（默认）；full=填满外层容器（FAB 全屏展开时用） */
+  variant?: 'float' | 'full'
 }
 
-export function AgentChatPanel({ open, onClose, onUnread }: AgentChatPanelProps) {
+export function AgentChatPanel({ open, onClose, onUnread, variant = 'float' }: AgentChatPanelProps) {
   const queryClient = useQueryClient()
   const [messages, setMessages] = useState<AgentChatMsg[]>([])
   const [currentId, setCurrentId] = useState<string | null>(null)
@@ -81,6 +84,13 @@ export function AgentChatPanel({ open, onClose, onUnread }: AgentChatPanelProps)
   // 流式期间禁止用（可能滞后的）服务端会话数据覆盖本地消息
   const skipSyncRef = useRef(false)
   const streamingIndexRef = useRef(-1)
+  // 打断重定向：忙时发送的新输入，当前回合中断后在 finally 里接续
+  const steerTextRef = useRef<string | null>(null)
+  // messages 的实时镜像（供 finally 里安全读取最新历史）
+  const messagesRef = useRef<AgentChatMsg[]>(messages)
+  useEffect(() => {
+    messagesRef.current = messages
+  }, [messages])
 
   // ── 会话列表 ──
   const { data: conversations = [] } = useQuery({
@@ -246,9 +256,11 @@ export function AgentChatPanel({ open, onClose, onUnread }: AgentChatPanelProps)
         .finally(() => {
           setIsStreaming(false)
           abortRef.current = null
+          // 重定向待发：本回合的占位清理不得重置流式游标（后续 patch 还要用它）
+          const willSteer = Boolean(steerTextRef.current)
           setMessages((prev) => {
             const idx = streamingIndexRef.current
-            streamingIndexRef.current = -1
+            if (!willSteer) streamingIndexRef.current = -1
             if (idx < 0 || idx >= prev.length) return prev
             const next = [...prev]
             const m = { ...next[idx], streaming: false }
@@ -263,10 +275,36 @@ export function AgentChatPanel({ open, onClose, onUnread }: AgentChatPanelProps)
           // 后端负责落库，前端刷新列表（title/时间）
           queryClient.invalidateQueries({ queryKey: ['agent-conversations'] })
           if (!openRef.current) onUnread?.()
+
+          // 打断重定向：当前回合收尾后，立即以新输入开启新回合
+          const steerText = steerTextRef.current
+          if (steerText) {
+            steerTextRef.current = null
+            const base = messagesRef.current
+            const last = base[base.length - 1]
+            const withoutEmptyTail =
+              last && last.streaming && !last.content && !last.reasoning && !last.toolCalls?.length
+                ? base.slice(0, -1)
+                : base
+            const cleanedBase = withoutEmptyTail.map((m) => (m.streaming ? { ...m, streaming: false } : m))
+            const history: AgentChatMsg[] = [...cleanedBase, { role: 'user', content: steerText }]
+            streamingIndexRef.current = history.length
+            startStreamRef.current?.(
+              [...history, { role: 'assistant', content: '', streaming: true }],
+              toApiMsgs(history),
+              {}
+            )
+          }
         })
     },
     [currentId, settings, patchPlaceholder, upsertConversationCache, queryClient, onUnread]
   )
+
+  // startStream 自引用（finally 里做打断重定向）
+  const startStreamRef = useRef(startStream)
+  useEffect(() => {
+    startStreamRef.current = startStream
+  }, [startStream])
 
   // ── 发送（含附件拼接到消息文本前） ──
   const send = useCallback(
@@ -316,6 +354,23 @@ export function AgentChatPanel({ open, onClose, onUnread }: AgentChatPanelProps)
   )
 
   const stop = useCallback(() => abortRef.current?.(), [])
+
+  // ── 打断重定向：忙时发送 → 中断当前回合，结束后立即以新输入续聊 ──
+  const steer = useCallback(
+    (text: string) => {
+      const body = text.trim()
+      if (!body) return
+      if (!isStreaming) {
+        send(body)
+        return
+      }
+      steerTextRef.current = body
+      setInput('')
+      setAttachments([])
+      abortRef.current?.()
+    },
+    [isStreaming, send]
+  )
 
   // ── 新对话（本地重置；首个消息发出后由 conversation 事件建会话） ──
   const newChat = useCallback(() => {
@@ -394,17 +449,47 @@ export function AgentChatPanel({ open, onClose, onUnread }: AgentChatPanelProps)
     }
   }
 
+  if (variant === 'full') {
+    return (
+      <HermesChat
+        messages={messages}
+        isStreaming={isStreaming}
+        input={input}
+        setInput={setInput}
+        attachments={attachments}
+        setAttachments={setAttachments}
+        send={send}
+        steer={steer}
+        stop={stop}
+        regenerate={regenerate}
+        editMessage={editMessage}
+        newChat={newChat}
+        conversations={conversations}
+        currentId={currentId}
+        selectConversation={selectConversation}
+        renameConversation={renameConversation}
+        removeConversation={removeConversation}
+        settings={settings}
+        updateSettings={updateSettings}
+        providers={providers}
+        textareaRef={textareaRef}
+        messagesEndRef={messagesEndRef}
+        onClose={onClose}
+      />
+    )
+  }
+
   if (!open) return null
 
+  // 以下为 float 悬浮面板专属渲染（full 全屏已在上方提前返回）
   return (
     <div
       role="dialog"
       aria-label="小天助手"
       className={cn(
-        'fixed bottom-36 right-5 z-50 flex md:bottom-24 md:right-6',
-        'w-[400px] max-w-[calc(100vw-2.5rem)] h-[600px] max-h-[80vh]',
-        'rounded-2xl border border-quant-border bg-quant-card shadow-2xl overflow-hidden',
-        'text-foreground duration-200'
+        'fixed bottom-36 right-5 z-50 flex md:bottom-24 md:right-6 w-[400px] max-w-[calc(100vw-2.5rem)] h-[600px] max-h-[80vh]',
+        'rounded-2xl border border-quant-border shadow-2xl',
+        'bg-quant-card overflow-hidden text-foreground duration-200'
       )}
     >
       {sidebarOpen && (

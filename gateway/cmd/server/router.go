@@ -710,6 +710,21 @@ func registerAgentRoutes(api *gin.RouterGroup) {
 		agent.GET("/conversations/:id", handler.AgentConversationGet)
 		agent.PUT("/conversations/:id", handler.AgentConversationRename)
 		agent.DELETE("/conversations/:id", handler.AgentConversationDelete)
+		agent.GET("/plugins", handler.AgentPluginsManifest)
+		agent.GET("/cron", handler.AgentCronList)
+		agent.POST("/cron", handler.AgentCronCreate)
+		agent.POST("/cron/:id/toggle", handler.AgentCronToggle)
+		agent.DELETE("/cron/:id", handler.AgentCronDelete)
+		agent.POST("/cron/:id/run", handler.AgentCronRun)
+		agent.GET("/memory", handler.AgentMemoryList)
+		agent.POST("/memory", handler.AgentMemoryCreate)
+		agent.DELETE("/memory/:id", handler.AgentMemoryDelete)
+		agent.GET("/skills", handler.AgentSkillsList)
+		agent.POST("/skills", handler.AgentSkillCreate)
+		agent.DELETE("/skills/:id", handler.AgentSkillDelete)
+		agent.GET("/telegram/status", handler.AgentTelegramStatus)
+		agent.POST("/telegram/pair-code", handler.AgentTelegramPairCode)
+		agent.POST("/telegram/unlink", handler.AgentTelegramUnlink)
 	}
 }
 

@@ -4,7 +4,7 @@ import { TopBar } from './TopBar'
 import { BottomNav } from './BottomNav'
 import { ToastContainer } from '@/components/ToastContainer'
 import { PWAInstallPrompt } from '@/components/PWAInstallPrompt'
-import { AgentFab } from '@/components/agent/AgentFab'
+import { DesktopPet } from '@/components/agent/DesktopPet'
 
 export function Layout() {
   return (
@@ -20,8 +20,8 @@ export function Layout() {
           <Outlet />
         </main>
       </div>
-      {/* 悬浮 AI 助手（登录后可见） */}
-      <AgentFab />
+      {/* 桌宠 AI 助手（登录后可见，跨页面常驻） */}
+      <DesktopPet />
       {/* Bottom navigation — visible only on mobile (< md) */}
       <BottomNav />
       <ToastContainer />

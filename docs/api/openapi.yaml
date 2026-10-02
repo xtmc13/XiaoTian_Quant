@@ -262,7 +262,7 @@ paths:
         "403":
           description: 已认证但非管理员
       x-handler: handler.AdminMarketListingList
-      x-source: cmd/server/router.go:907
+      x-source: cmd/server/router.go:922
       x-admin-required: true
   /api/admin/market/listings/{id}/approve:
     post:
@@ -286,7 +286,7 @@ paths:
         "403":
           description: 已认证但非管理员
       x-handler: handler.AdminMarketListingApprove
-      x-source: cmd/server/router.go:908
+      x-source: cmd/server/router.go:923
       x-admin-required: true
   /api/admin/market/listings/{id}/delist:
     post:
@@ -310,7 +310,7 @@ paths:
         "403":
           description: 已认证但非管理员
       x-handler: handler.AdminMarketListingDelist
-      x-source: cmd/server/router.go:910
+      x-source: cmd/server/router.go:925
       x-admin-required: true
   /api/admin/market/listings/{id}/reject:
     post:
@@ -334,7 +334,7 @@ paths:
         "403":
           description: 已认证但非管理员
       x-handler: handler.AdminMarketListingReject
-      x-source: cmd/server/router.go:909
+      x-source: cmd/server/router.go:924
       x-admin-required: true
   /api/admin/market/rules:
     put:
@@ -352,7 +352,7 @@ paths:
         "403":
           description: 已认证但非管理员
       x-handler: handler.AdminMarketRulesPut
-      x-source: cmd/server/router.go:911
+      x-source: cmd/server/router.go:926
       x-admin-required: true
   /api/admin/referrals:
     get:
@@ -759,6 +759,258 @@ paths:
           description: 未认证或 token 失效
       x-handler: handler.AgentConversationRename
       x-source: cmd/server/router.go:711
+  /api/agent/cron:
+    get:
+      operationId: handler.AgentCronList
+      summary: handler.AgentCronList
+      tags:
+        - agent
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: 成功响应（v1 契约未细化 schema，见 x-handler 对应实现）
+        "401":
+          description: 未认证或 token 失效
+      x-handler: handler.AgentCronList
+      x-source: cmd/server/router.go:714
+    post:
+      operationId: handler.AgentCronCreate
+      summary: handler.AgentCronCreate
+      tags:
+        - agent
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: 成功响应（v1 契约未细化 schema，见 x-handler 对应实现）
+        "401":
+          description: 未认证或 token 失效
+      x-handler: handler.AgentCronCreate
+      x-source: cmd/server/router.go:715
+  /api/agent/cron/{id}:
+    delete:
+      operationId: handler.AgentCronDelete
+      summary: handler.AgentCronDelete
+      tags:
+        - agent
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 成功响应（v1 契约未细化 schema，见 x-handler 对应实现）
+        "401":
+          description: 未认证或 token 失效
+      x-handler: handler.AgentCronDelete
+      x-source: cmd/server/router.go:717
+  /api/agent/cron/{id}/run:
+    post:
+      operationId: handler.AgentCronRun
+      summary: handler.AgentCronRun
+      tags:
+        - agent
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 成功响应（v1 契约未细化 schema，见 x-handler 对应实现）
+        "401":
+          description: 未认证或 token 失效
+      x-handler: handler.AgentCronRun
+      x-source: cmd/server/router.go:718
+  /api/agent/cron/{id}/toggle:
+    post:
+      operationId: handler.AgentCronToggle
+      summary: handler.AgentCronToggle
+      tags:
+        - agent
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 成功响应（v1 契约未细化 schema，见 x-handler 对应实现）
+        "401":
+          description: 未认证或 token 失效
+      x-handler: handler.AgentCronToggle
+      x-source: cmd/server/router.go:716
+  /api/agent/memory:
+    get:
+      operationId: handler.AgentMemoryList
+      summary: handler.AgentMemoryList
+      tags:
+        - agent
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: 成功响应（v1 契约未细化 schema，见 x-handler 对应实现）
+        "401":
+          description: 未认证或 token 失效
+      x-handler: handler.AgentMemoryList
+      x-source: cmd/server/router.go:719
+    post:
+      operationId: handler.AgentMemoryCreate
+      summary: handler.AgentMemoryCreate
+      tags:
+        - agent
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: 成功响应（v1 契约未细化 schema，见 x-handler 对应实现）
+        "401":
+          description: 未认证或 token 失效
+      x-handler: handler.AgentMemoryCreate
+      x-source: cmd/server/router.go:720
+  /api/agent/memory/{id}:
+    delete:
+      operationId: handler.AgentMemoryDelete
+      summary: handler.AgentMemoryDelete
+      tags:
+        - agent
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 成功响应（v1 契约未细化 schema，见 x-handler 对应实现）
+        "401":
+          description: 未认证或 token 失效
+      x-handler: handler.AgentMemoryDelete
+      x-source: cmd/server/router.go:721
+  /api/agent/plugins:
+    get:
+      operationId: handler.AgentPluginsManifest
+      summary: handler.AgentPluginsManifest
+      tags:
+        - agent
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: 成功响应（v1 契约未细化 schema，见 x-handler 对应实现）
+        "401":
+          description: 未认证或 token 失效
+      x-handler: handler.AgentPluginsManifest
+      x-source: cmd/server/router.go:713
+  /api/agent/skills:
+    get:
+      operationId: handler.AgentSkillsList
+      summary: handler.AgentSkillsList
+      tags:
+        - agent
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: 成功响应（v1 契约未细化 schema，见 x-handler 对应实现）
+        "401":
+          description: 未认证或 token 失效
+      x-handler: handler.AgentSkillsList
+      x-source: cmd/server/router.go:722
+    post:
+      operationId: handler.AgentSkillCreate
+      summary: handler.AgentSkillCreate
+      tags:
+        - agent
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: 成功响应（v1 契约未细化 schema，见 x-handler 对应实现）
+        "401":
+          description: 未认证或 token 失效
+      x-handler: handler.AgentSkillCreate
+      x-source: cmd/server/router.go:723
+  /api/agent/skills/{id}:
+    delete:
+      operationId: handler.AgentSkillDelete
+      summary: handler.AgentSkillDelete
+      tags:
+        - agent
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 成功响应（v1 契约未细化 schema，见 x-handler 对应实现）
+        "401":
+          description: 未认证或 token 失效
+      x-handler: handler.AgentSkillDelete
+      x-source: cmd/server/router.go:724
+  /api/agent/telegram/pair-code:
+    post:
+      operationId: handler.AgentTelegramPairCode
+      summary: handler.AgentTelegramPairCode
+      tags:
+        - agent
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: 成功响应（v1 契约未细化 schema，见 x-handler 对应实现）
+        "401":
+          description: 未认证或 token 失效
+      x-handler: handler.AgentTelegramPairCode
+      x-source: cmd/server/router.go:726
+  /api/agent/telegram/status:
+    get:
+      operationId: handler.AgentTelegramStatus
+      summary: handler.AgentTelegramStatus
+      tags:
+        - agent
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: 成功响应（v1 契约未细化 schema，见 x-handler 对应实现）
+        "401":
+          description: 未认证或 token 失效
+      x-handler: handler.AgentTelegramStatus
+      x-source: cmd/server/router.go:725
+  /api/agent/telegram/unlink:
+    post:
+      operationId: handler.AgentTelegramUnlink
+      summary: handler.AgentTelegramUnlink
+      tags:
+        - agent
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: 成功响应（v1 契约未细化 schema，见 x-handler 对应实现）
+        "401":
+          description: 未认证或 token 失效
+      x-handler: handler.AgentTelegramUnlink
+      x-source: cmd/server/router.go:727
   /api/agent/tokens:
     get:
       operationId: handler.GetAgentTokens
@@ -823,7 +1075,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.AIBotCatalogList
-      x-source: cmd/server/router.go:859
+      x-source: cmd/server/router.go:874
   /api/ai-bots/catalog/{id}:
     get:
       operationId: handler.AIBotCatalogGet
@@ -844,7 +1096,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.AIBotCatalogGet
-      x-source: cmd/server/router.go:860
+      x-source: cmd/server/router.go:875
   /api/ai-bots/instances:
     get:
       operationId: handler.AIBotInstanceList
@@ -859,7 +1111,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.AIBotInstanceList
-      x-source: cmd/server/router.go:863
+      x-source: cmd/server/router.go:878
     post:
       operationId: handler.AIBotInstanceCreate
       summary: handler.AIBotInstanceCreate
@@ -873,7 +1125,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.AIBotInstanceCreate
-      x-source: cmd/server/router.go:864
+      x-source: cmd/server/router.go:879
   /api/ai-bots/instances/{id}:
     delete:
       operationId: handler.AIBotInstanceDelete
@@ -894,7 +1146,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.AIBotInstanceDelete
-      x-source: cmd/server/router.go:867
+      x-source: cmd/server/router.go:882
     get:
       operationId: handler.AIBotInstanceGet
       summary: handler.AIBotInstanceGet
@@ -914,7 +1166,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.AIBotInstanceGet
-      x-source: cmd/server/router.go:865
+      x-source: cmd/server/router.go:880
     put:
       operationId: handler.AIBotInstanceUpdate
       summary: handler.AIBotInstanceUpdate
@@ -934,7 +1186,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.AIBotInstanceUpdate
-      x-source: cmd/server/router.go:866
+      x-source: cmd/server/router.go:881
   /api/ai-bots/instances/{id}/analytics:
     get:
       operationId: handler.AIBotInstanceAnalytics
@@ -955,7 +1207,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.AIBotInstanceAnalytics
-      x-source: cmd/server/router.go:873
+      x-source: cmd/server/router.go:888
   /api/ai-bots/instances/{id}/clone:
     post:
       operationId: handler.AIBotInstanceClone
@@ -976,7 +1228,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.AIBotInstanceClone
-      x-source: cmd/server/router.go:872
+      x-source: cmd/server/router.go:887
   /api/ai-bots/instances/{id}/pause:
     post:
       operationId: handler.AIBotInstancePause
@@ -997,7 +1249,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.AIBotInstancePause
-      x-source: cmd/server/router.go:869
+      x-source: cmd/server/router.go:884
   /api/ai-bots/instances/{id}/resume:
     post:
       operationId: handler.AIBotInstanceResume
@@ -1018,7 +1270,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.AIBotInstanceResume
-      x-source: cmd/server/router.go:870
+      x-source: cmd/server/router.go:885
   /api/ai-bots/instances/{id}/start:
     post:
       operationId: handler.AIBotInstanceStart
@@ -1039,7 +1291,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.AIBotInstanceStart
-      x-source: cmd/server/router.go:868
+      x-source: cmd/server/router.go:883
   /api/ai-bots/instances/{id}/stop:
     post:
       operationId: handler.AIBotInstanceStop
@@ -1060,7 +1312,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.AIBotInstanceStop
-      x-source: cmd/server/router.go:871
+      x-source: cmd/server/router.go:886
   /api/ai-bots/instances/{id}/trades:
     get:
       operationId: handler.AIBotInstanceTrades
@@ -1081,7 +1333,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.AIBotInstanceTrades
-      x-source: cmd/server/router.go:874
+      x-source: cmd/server/router.go:889
   /api/ai-bots/instances/batch-delete:
     post:
       operationId: handler.AIBotBatchDelete
@@ -1096,7 +1348,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.AIBotBatchDelete
-      x-source: cmd/server/router.go:879
+      x-source: cmd/server/router.go:894
   /api/ai-bots/instances/batch-start:
     post:
       operationId: handler.AIBotBatchStart
@@ -1111,7 +1363,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.AIBotBatchStart
-      x-source: cmd/server/router.go:877
+      x-source: cmd/server/router.go:892
   /api/ai-bots/instances/batch-stop:
     post:
       operationId: handler.AIBotBatchStop
@@ -1126,7 +1378,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.AIBotBatchStop
-      x-source: cmd/server/router.go:878
+      x-source: cmd/server/router.go:893
   /api/ai-bots/subscriptions:
     get:
       operationId: handler.AIBotSubscriptionList
@@ -1141,7 +1393,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.AIBotSubscriptionList
-      x-source: cmd/server/router.go:882
+      x-source: cmd/server/router.go:897
     post:
       operationId: handler.AIBotSubscriptionCreate
       summary: handler.AIBotSubscriptionCreate
@@ -1155,7 +1407,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.AIBotSubscriptionCreate
-      x-source: cmd/server/router.go:883
+      x-source: cmd/server/router.go:898
   /api/ai-bots/subscriptions/{id}/cancel:
     post:
       operationId: handler.AIBotSubscriptionCancel
@@ -1176,7 +1428,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.AIBotSubscriptionCancel
-      x-source: cmd/server/router.go:884
+      x-source: cmd/server/router.go:899
   /api/ai-robot/config:
     get:
       operationId: handler.AIRobotConfigGet
@@ -1325,7 +1577,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.AIGateConfigGet
-      x-source: cmd/server/router.go:1046
+      x-source: cmd/server/router.go:1061
     put:
       operationId: handler.AIGateConfigPut
       summary: handler.AIGateConfigPut
@@ -1341,7 +1593,7 @@ paths:
         "403":
           description: 已认证但非管理员
       x-handler: handler.AIGateConfigPut
-      x-source: cmd/server/router.go:1047
+      x-source: cmd/server/router.go:1062
       x-admin-required: true
   /api/ai/gate/decisions:
     get:
@@ -1357,7 +1609,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.AIGateDecisionsList
-      x-source: cmd/server/router.go:1043
+      x-source: cmd/server/router.go:1058
   /api/ai/gate/decisions/{id}:
     get:
       operationId: handler.AIGateDecisionGet
@@ -1378,7 +1630,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.AIGateDecisionGet
-      x-source: cmd/server/router.go:1044
+      x-source: cmd/server/router.go:1059
   /api/ai/gate/stats:
     get:
       operationId: handler.AIGateStats
@@ -1393,7 +1645,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.AIGateStats
-      x-source: cmd/server/router.go:1045
+      x-source: cmd/server/router.go:1060
   /api/ai/generate:
     post:
       operationId: handler.AIGenerate
@@ -1654,7 +1906,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.IndicatorAlertList
-      x-source: cmd/server/router.go:949
+      x-source: cmd/server/router.go:964
     post:
       operationId: handler.IndicatorAlertCreate
       summary: handler.IndicatorAlertCreate
@@ -1668,7 +1920,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.IndicatorAlertCreate
-      x-source: cmd/server/router.go:950
+      x-source: cmd/server/router.go:965
   /api/alerts/{id}:
     delete:
       operationId: handler.IndicatorAlertDelete
@@ -1689,7 +1941,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.IndicatorAlertDelete
-      x-source: cmd/server/router.go:953
+      x-source: cmd/server/router.go:968
     get:
       operationId: handler.IndicatorAlertGet
       summary: handler.IndicatorAlertGet
@@ -1709,7 +1961,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.IndicatorAlertGet
-      x-source: cmd/server/router.go:951
+      x-source: cmd/server/router.go:966
     put:
       operationId: handler.IndicatorAlertUpdate
       summary: handler.IndicatorAlertUpdate
@@ -1729,7 +1981,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.IndicatorAlertUpdate
-      x-source: cmd/server/router.go:952
+      x-source: cmd/server/router.go:967
   /api/alerts/{id}/disable:
     post:
       operationId: handler.IndicatorAlertDisable
@@ -1750,7 +2002,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.IndicatorAlertDisable
-      x-source: cmd/server/router.go:955
+      x-source: cmd/server/router.go:970
   /api/alerts/{id}/enable:
     post:
       operationId: handler.IndicatorAlertEnable
@@ -1771,7 +2023,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.IndicatorAlertEnable
-      x-source: cmd/server/router.go:954
+      x-source: cmd/server/router.go:969
   /api/alerts/{id}/history:
     get:
       operationId: handler.IndicatorAlertHistory
@@ -1792,7 +2044,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.IndicatorAlertHistory
-      x-source: cmd/server/router.go:957
+      x-source: cmd/server/router.go:972
   /api/alerts/{id}/run:
     post:
       operationId: handler.IndicatorAlertRun
@@ -1813,7 +2065,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.IndicatorAlertRun
-      x-source: cmd/server/router.go:956
+      x-source: cmd/server/router.go:971
   /api/alerts/active:
     get:
       operationId: handler.AlertsActive
@@ -1874,7 +2126,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.ListAnalysisJobs
-      x-source: cmd/server/router.go:1030
+      x-source: cmd/server/router.go:1045
   /api/analysis/jobs/{id}:
     delete:
       operationId: handler.DeleteAnalysisJob
@@ -1895,7 +2147,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.DeleteAnalysisJob
-      x-source: cmd/server/router.go:1034
+      x-source: cmd/server/router.go:1049
     get:
       operationId: handler.GetAnalysisJob
       summary: handler.GetAnalysisJob
@@ -1915,7 +2167,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.GetAnalysisJob
-      x-source: cmd/server/router.go:1031
+      x-source: cmd/server/router.go:1046
   /api/analysis/jobs/{id}/cancel:
     post:
       operationId: handler.CancelAnalysisJob
@@ -1936,7 +2188,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.CancelAnalysisJob
-      x-source: cmd/server/router.go:1033
+      x-source: cmd/server/router.go:1048
   /api/analysis/lookahead:
     post:
       operationId: handler.StartLookaheadAnalysis
@@ -1951,7 +2203,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.StartLookaheadAnalysis
-      x-source: cmd/server/router.go:1028
+      x-source: cmd/server/router.go:1043
   /api/analysis/recursive:
     post:
       operationId: handler.StartRecursiveAnalysis
@@ -1966,7 +2218,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.StartRecursiveAnalysis
-      x-source: cmd/server/router.go:1029
+      x-source: cmd/server/router.go:1044
   /api/analysis/result:
     get:
       operationId: handler.AIAnalysisResult
@@ -2562,7 +2814,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.ListPortfolioBacktests
-      x-source: cmd/server/router.go:1017
+      x-source: cmd/server/router.go:1032
     post:
       operationId: handler.RunPortfolioBacktest
       summary: handler.RunPortfolioBacktest
@@ -2576,7 +2828,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.RunPortfolioBacktest
-      x-source: cmd/server/router.go:1016
+      x-source: cmd/server/router.go:1031
   /api/backtests/portfolio/{id}:
     delete:
       operationId: handler.DeletePortfolioBacktest
@@ -2597,7 +2849,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.DeletePortfolioBacktest
-      x-source: cmd/server/router.go:1019
+      x-source: cmd/server/router.go:1034
     get:
       operationId: handler.GetPortfolioBacktest
       summary: handler.GetPortfolioBacktest
@@ -2617,7 +2869,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.GetPortfolioBacktest
-      x-source: cmd/server/router.go:1018
+      x-source: cmd/server/router.go:1033
   /api/billing/chains:
     get:
       operationId: handler.BillingChains
@@ -3057,7 +3309,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: community.AuthorRevenue
-      x-source: cmd/server/router.go:810
+      x-source: cmd/server/router.go:825
   /api/community/comments/{id}:
     get:
       operationId: community.GetComments
@@ -3078,7 +3330,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: community.GetComments
-      x-source: cmd/server/router.go:804
+      x-source: cmd/server/router.go:819
     post:
       operationId: community.AddComment
       summary: community.AddComment
@@ -3098,7 +3350,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: community.AddComment
-      x-source: cmd/server/router.go:805
+      x-source: cmd/server/router.go:820
   /api/community/indicators:
     get:
       operationId: community.MarketIndicators
@@ -3113,7 +3365,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: community.MarketIndicators
-      x-source: cmd/server/router.go:801
+      x-source: cmd/server/router.go:816
   /api/community/publish:
     post:
       operationId: community.PublishIndicator
@@ -3128,7 +3380,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: community.PublishIndicator
-      x-source: cmd/server/router.go:802
+      x-source: cmd/server/router.go:817
   /api/community/purchase/{id}:
     post:
       operationId: community.PurchaseIndicator
@@ -3149,7 +3401,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: community.PurchaseIndicator
-      x-source: cmd/server/router.go:803
+      x-source: cmd/server/router.go:818
   /api/community/review/{id}:
     post:
       operationId: community.ReviewIndicator
@@ -3172,7 +3424,7 @@ paths:
         "403":
           description: 已认证但非管理员
       x-handler: community.ReviewIndicator
-      x-source: cmd/server/router.go:808
+      x-source: cmd/server/router.go:823
       x-admin-required: true
   /api/community/reviews/pending:
     get:
@@ -3190,7 +3442,7 @@ paths:
         "403":
           description: 已认证但非管理员
       x-handler: community.PendingReviews
-      x-source: cmd/server/router.go:809
+      x-source: cmd/server/router.go:824
       x-admin-required: true
   /api/community/strategies:
     get:
@@ -3206,7 +3458,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: community.MarketStrategies
-      x-source: cmd/server/router.go:811
+      x-source: cmd/server/router.go:826
   /api/community/strategies/{id}:
     get:
       operationId: community.StrategyDetail
@@ -3227,7 +3479,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: community.StrategyDetail
-      x-source: cmd/server/router.go:814
+      x-source: cmd/server/router.go:829
   /api/community/strategies/{id}/comment:
     post:
       operationId: community.AddStrategyComment
@@ -3248,7 +3500,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: community.AddStrategyComment
-      x-source: cmd/server/router.go:817
+      x-source: cmd/server/router.go:832
   /api/community/strategies/{id}/overfit:
     get:
       operationId: community.GetStrategyOverfitRisk
@@ -3269,7 +3521,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: community.GetStrategyOverfitRisk
-      x-source: cmd/server/router.go:815
+      x-source: cmd/server/router.go:830
   /api/community/strategies/{id}/rate:
     post:
       operationId: community.RateStrategy
@@ -3290,7 +3542,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: community.RateStrategy
-      x-source: cmd/server/router.go:818
+      x-source: cmd/server/router.go:833
   /api/community/strategies/leaderboard:
     get:
       operationId: community.StrategyLeaderboard
@@ -3305,7 +3557,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: community.StrategyLeaderboard
-      x-source: cmd/server/router.go:812
+      x-source: cmd/server/router.go:827
   /api/community/strategies/publish:
     post:
       operationId: community.PublishStrategy
@@ -3320,7 +3572,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: community.PublishStrategy
-      x-source: cmd/server/router.go:816
+      x-source: cmd/server/router.go:831
   /api/community/strategies/trending:
     get:
       operationId: community.TrendingStrategies
@@ -3335,7 +3587,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: community.TrendingStrategies
-      x-source: cmd/server/router.go:813
+      x-source: cmd/server/router.go:828
   /api/config:
     get:
       operationId: handler.GetConfig
@@ -3575,7 +3827,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.DashboardSummary
-      x-source: cmd/server/router.go:719
+      x-source: cmd/server/router.go:734
   /api/data/bars:
     get:
       operationId: handler.GetHistoricalBars
@@ -3806,7 +4058,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.DCABotList
-      x-source: cmd/server/router.go:934
+      x-source: cmd/server/router.go:949
     post:
       operationId: handler.DCABotCreate
       summary: handler.DCABotCreate
@@ -3820,7 +4072,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.DCABotCreate
-      x-source: cmd/server/router.go:935
+      x-source: cmd/server/router.go:950
   /api/dca-bots/{id}:
     delete:
       operationId: handler.DCABotDelete
@@ -3841,7 +4093,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.DCABotDelete
-      x-source: cmd/server/router.go:938
+      x-source: cmd/server/router.go:953
     get:
       operationId: handler.DCABotGet
       summary: handler.DCABotGet
@@ -3861,7 +4113,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.DCABotGet
-      x-source: cmd/server/router.go:936
+      x-source: cmd/server/router.go:951
     put:
       operationId: handler.DCABotUpdate
       summary: handler.DCABotUpdate
@@ -3881,7 +4133,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.DCABotUpdate
-      x-source: cmd/server/router.go:937
+      x-source: cmd/server/router.go:952
   /api/dca-bots/{id}/start:
     post:
       operationId: handler.DCABotStart
@@ -3902,7 +4154,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.DCABotStart
-      x-source: cmd/server/router.go:939
+      x-source: cmd/server/router.go:954
   /api/dca-bots/{id}/stop:
     post:
       operationId: handler.DCABotStop
@@ -3923,7 +4175,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.DCABotStop
-      x-source: cmd/server/router.go:940
+      x-source: cmd/server/router.go:955
   /api/docs:
     get:
       operationId: handler.APIDocsPage
@@ -3935,7 +4187,7 @@ paths:
         "200":
           description: 成功响应（v1 契约未细化 schema，见 x-handler 对应实现）
       x-handler: handler.APIDocsPage
-      x-source: cmd/server/router.go:744
+      x-source: cmd/server/router.go:759
       x-conditional-mount: docsEnabled()
   /api/docs/:
     get:
@@ -3948,7 +4200,7 @@ paths:
         "200":
           description: 成功响应（v1 契约未细化 schema，见 x-handler 对应实现）
       x-handler: handler.APIDocsPage
-      x-source: cmd/server/router.go:745
+      x-source: cmd/server/router.go:760
       x-conditional-mount: docsEnabled()
   /api/docs/openapi.yaml:
     get:
@@ -3961,7 +4213,7 @@ paths:
         "200":
           description: 成功响应（v1 契约未细化 schema，见 x-handler 对应实现）
       x-handler: handler.APIDocsSpec
-      x-source: cmd/server/router.go:746
+      x-source: cmd/server/router.go:761
       x-conditional-mount: docsEnabled()
   /api/exchange/default:
     post:
@@ -4067,7 +4319,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.ExchangeHealthCheckStart
-      x-source: cmd/server/router.go:1058
+      x-source: cmd/server/router.go:1073
   /api/exchanges/health-check/:
     post:
       operationId: handler.ExchangeHealthCheckStart_2
@@ -4082,7 +4334,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.ExchangeHealthCheckStart
-      x-source: cmd/server/router.go:1059
+      x-source: cmd/server/router.go:1074
   /api/exchanges/health-check/history:
     get:
       operationId: handler.ExchangeHealthCheckHistory
@@ -4097,7 +4349,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.ExchangeHealthCheckHistory
-      x-source: cmd/server/router.go:1061
+      x-source: cmd/server/router.go:1076
   /api/exchanges/health-check/jobs/{id}:
     get:
       operationId: handler.ExchangeHealthCheckJobStatus
@@ -4118,7 +4370,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.ExchangeHealthCheckJobStatus
-      x-source: cmd/server/router.go:1062
+      x-source: cmd/server/router.go:1077
   /api/exchanges/health-check/latest:
     get:
       operationId: handler.ExchangeHealthCheckLatest
@@ -4133,7 +4385,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.ExchangeHealthCheckLatest
-      x-source: cmd/server/router.go:1060
+      x-source: cmd/server/router.go:1075
   /api/executor/positions:
     get:
       operationId: handler.ExecutorPositions
@@ -4280,7 +4532,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: experiment.RunExperimentHandler
-      x-source: cmd/server/router.go:790
+      x-source: cmd/server/router.go:805
   /api/experiment/run:
     post:
       operationId: experiment.RunExperimentHandler_2
@@ -4295,7 +4547,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: experiment.RunExperimentHandler
-      x-source: cmd/server/router.go:787
+      x-source: cmd/server/router.go:802
   /api/experiment/sensitivity:
     post:
       operationId: experiment.SensitivityAnalysisHandler
@@ -4310,7 +4562,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: experiment.SensitivityAnalysisHandler
-      x-source: cmd/server/router.go:788
+      x-source: cmd/server/router.go:803
   /api/experiment/status/{id}:
     get:
       operationId: experiment.ExperimentStatusHandler
@@ -4331,7 +4583,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: experiment.ExperimentStatusHandler
-      x-source: cmd/server/router.go:792
+      x-source: cmd/server/router.go:807
   /api/experiment/structured-tune:
     post:
       operationId: experiment.RunExperimentHandler_3
@@ -4346,7 +4598,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: experiment.RunExperimentHandler
-      x-source: cmd/server/router.go:791
+      x-source: cmd/server/router.go:806
   /api/experiment/walk-forward:
     post:
       operationId: experiment.WalkForwardHandler
@@ -4361,7 +4613,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: experiment.WalkForwardHandler
-      x-source: cmd/server/router.go:789
+      x-source: cmd/server/router.go:804
   /api/experiments:
     get:
       operationId: experiment.ExperimentListHandler
@@ -4376,7 +4628,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: experiment.ExperimentListHandler
-      x-source: cmd/server/router.go:794
+      x-source: cmd/server/router.go:809
   /api/factors:
     get:
       operationId: handler.GetFactors
@@ -4391,7 +4643,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.GetFactors
-      x-source: cmd/server/router.go:1001
+      x-source: cmd/server/router.go:1016
   /api/factors/:
     get:
       operationId: handler.GetFactors_2
@@ -4406,7 +4658,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.GetFactors
-      x-source: cmd/server/router.go:1002
+      x-source: cmd/server/router.go:1017
   /api/factors/{name}/values:
     get:
       operationId: handler.GetFactorValues
@@ -4427,7 +4679,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.GetFactorValues
-      x-source: cmd/server/router.go:1006
+      x-source: cmd/server/router.go:1021
   /api/factors/evaluate:
     post:
       operationId: handler.EvaluateFactor
@@ -4442,7 +4694,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.EvaluateFactor
-      x-source: cmd/server/router.go:1004
+      x-source: cmd/server/router.go:1019
   /api/factors/evaluations:
     get:
       operationId: handler.ListFactorEvaluations
@@ -4457,7 +4709,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.ListFactorEvaluations
-      x-source: cmd/server/router.go:1003
+      x-source: cmd/server/router.go:1018
   /api/factors/layers:
     post:
       operationId: handler.FactorLayers
@@ -4472,7 +4724,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.FactorLayers
-      x-source: cmd/server/router.go:1005
+      x-source: cmd/server/router.go:1020
   /api/grid/bots:
     get:
       operationId: handler.GridBotList
@@ -4487,7 +4739,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.GridBotList
-      x-source: cmd/server/router.go:919
+      x-source: cmd/server/router.go:934
     post:
       operationId: handler.GridBotCreate
       summary: handler.GridBotCreate
@@ -4501,7 +4753,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.GridBotCreate
-      x-source: cmd/server/router.go:920
+      x-source: cmd/server/router.go:935
   /api/grid/bots/{id}:
     delete:
       operationId: handler.GridBotDelete
@@ -4522,7 +4774,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.GridBotDelete
-      x-source: cmd/server/router.go:923
+      x-source: cmd/server/router.go:938
     get:
       operationId: handler.GridBotGet
       summary: handler.GridBotGet
@@ -4542,7 +4794,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.GridBotGet
-      x-source: cmd/server/router.go:921
+      x-source: cmd/server/router.go:936
     put:
       operationId: handler.GridBotUpdate
       summary: handler.GridBotUpdate
@@ -4562,7 +4814,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.GridBotUpdate
-      x-source: cmd/server/router.go:922
+      x-source: cmd/server/router.go:937
   /api/grid/bots/{id}/start:
     post:
       operationId: handler.GridBotStart
@@ -4583,7 +4835,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.GridBotStart
-      x-source: cmd/server/router.go:924
+      x-source: cmd/server/router.go:939
   /api/grid/bots/{id}/stop:
     post:
       operationId: handler.GridBotStop
@@ -4604,7 +4856,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.GridBotStop
-      x-source: cmd/server/router.go:925
+      x-source: cmd/server/router.go:940
   /api/health:
     get:
       operationId: handler.HealthCheck
@@ -4615,7 +4867,7 @@ paths:
         "200":
           description: 成功响应（v1 契约未细化 schema，见 x-handler 对应实现）
       x-handler: handler.HealthCheck
-      x-source: cmd/server/router.go:723
+      x-source: cmd/server/router.go:738
   /api/health/components:
     get:
       operationId: handler.ComponentHealth
@@ -4626,7 +4878,7 @@ paths:
         "200":
           description: 成功响应（v1 契约未细化 schema，见 x-handler 对应实现）
       x-handler: handler.ComponentHealth
-      x-source: cmd/server/router.go:724
+      x-source: cmd/server/router.go:739
   /api/hyperopt/epochs:
     get:
       operationId: handler.ListHyperoptEpochs
@@ -4832,7 +5084,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: indicator.DeleteIndicator
-      x-source: cmd/server/router.go:769
+      x-source: cmd/server/router.go:784
     get:
       operationId: indicator.GetIndicator
       summary: indicator.GetIndicator
@@ -4852,7 +5104,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: indicator.GetIndicator
-      x-source: cmd/server/router.go:768
+      x-source: cmd/server/router.go:783
   /api/indicator/ai-generate:
     post:
       operationId: indicator.IndicatorAIGenerate
@@ -4867,7 +5119,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: indicator.IndicatorAIGenerate
-      x-source: cmd/server/router.go:773
+      x-source: cmd/server/router.go:788
   /api/indicator/analyze:
     post:
       operationId: indicator.SandboxAnalyze
@@ -4882,7 +5134,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: indicator.SandboxAnalyze
-      x-source: cmd/server/router.go:772
+      x-source: cmd/server/router.go:787
   /api/indicator/applyParamDefaults:
     post:
       operationId: indicator.ApplyParamDefaults
@@ -4897,7 +5149,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: indicator.ApplyParamDefaults
-      x-source: cmd/server/router.go:770
+      x-source: cmd/server/router.go:785
   /api/indicator/backtest:
     post:
       operationId: indicator.BacktestIndicator
@@ -4912,7 +5164,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: indicator.BacktestIndicator
-      x-source: cmd/server/router.go:774
+      x-source: cmd/server/router.go:789
   /api/indicator/execute:
     post:
       operationId: indicator.SandboxExecute
@@ -4927,7 +5179,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: indicator.SandboxExecute
-      x-source: cmd/server/router.go:771
+      x-source: cmd/server/router.go:786
   /api/indicator/getDecryptKey:
     post:
       operationId: indicator.DecryptIndicator
@@ -4942,7 +5194,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: indicator.DecryptIndicator
-      x-source: cmd/server/router.go:765
+      x-source: cmd/server/router.go:780
   /api/indicator/getIndicators:
     post:
       operationId: indicator.GetIndicators
@@ -4957,7 +5209,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: indicator.GetIndicators
-      x-source: cmd/server/router.go:764
+      x-source: cmd/server/router.go:779
   /api/indicator/internal-call:
     post:
       operationId: indicator.InternalCallIndicator
@@ -4968,7 +5220,7 @@ paths:
         "200":
           description: 成功响应（v1 契约未细化 schema，见 x-handler 对应实现）
       x-handler: indicator.InternalCallIndicator
-      x-source: cmd/server/router.go:780
+      x-source: cmd/server/router.go:795
   /api/indicator/kline:
     get:
       operationId: indicator.GetIndicatorKline
@@ -4983,7 +5235,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: indicator.GetIndicatorKline
-      x-source: cmd/server/router.go:766
+      x-source: cmd/server/router.go:781
   /api/indicator/list:
     get:
       operationId: indicator.ListIndicators
@@ -4998,7 +5250,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: indicator.ListIndicators
-      x-source: cmd/server/router.go:767
+      x-source: cmd/server/router.go:782
   /api/indicator/parse:
     post:
       operationId: indicator.ParseIndicator
@@ -5013,7 +5265,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: indicator.ParseIndicator
-      x-source: cmd/server/router.go:760
+      x-source: cmd/server/router.go:775
   /api/indicator/publish:
     post:
       operationId: indicator.PublishIndicator
@@ -5028,7 +5280,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: indicator.PublishIndicator
-      x-source: cmd/server/router.go:775
+      x-source: cmd/server/router.go:790
   /api/indicator/save:
     post:
       operationId: indicator.SaveIndicator
@@ -5043,7 +5295,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: indicator.SaveIndicator
-      x-source: cmd/server/router.go:762
+      x-source: cmd/server/router.go:777
   /api/indicator/saveIndicator:
     post:
       operationId: indicator.SaveIndicator_2
@@ -5058,7 +5310,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: indicator.SaveIndicator
-      x-source: cmd/server/router.go:763
+      x-source: cmd/server/router.go:778
   /api/indicator/validate:
     post:
       operationId: indicator.ValidateIndicator
@@ -5073,7 +5325,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: indicator.ValidateIndicator
-      x-source: cmd/server/router.go:761
+      x-source: cmd/server/router.go:776
   /api/indicators:
     get:
       operationId: indicator.ListIndicators_2
@@ -5088,7 +5340,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: indicator.ListIndicators
-      x-source: cmd/server/router.go:779
+      x-source: cmd/server/router.go:794
   /api/integrations/{name}/check:
     post:
       operationId: handler.IntegrationCheck
@@ -5111,7 +5363,7 @@ paths:
         "403":
           description: 已认证但非管理员
       x-handler: handler.IntegrationCheck
-      x-source: cmd/server/router.go:735
+      x-source: cmd/server/router.go:750
       x-admin-required: true
   /api/integrations/status:
     get:
@@ -5127,7 +5379,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.IntegrationsStatus
-      x-source: cmd/server/router.go:734
+      x-source: cmd/server/router.go:749
   /api/klines/{symbol}:
     get:
       operationId: handler.GetKlines
@@ -5159,7 +5411,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.LayeredMartinBotList
-      x-source: cmd/server/router.go:985
+      x-source: cmd/server/router.go:1000
     post:
       operationId: handler.LayeredMartinBotCreate
       summary: handler.LayeredMartinBotCreate
@@ -5173,7 +5425,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.LayeredMartinBotCreate
-      x-source: cmd/server/router.go:986
+      x-source: cmd/server/router.go:1001
   /api/layered-martin-bots/{id}:
     delete:
       operationId: handler.LayeredMartinBotDelete
@@ -5194,7 +5446,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.LayeredMartinBotDelete
-      x-source: cmd/server/router.go:989
+      x-source: cmd/server/router.go:1004
     get:
       operationId: handler.LayeredMartinBotGet
       summary: handler.LayeredMartinBotGet
@@ -5214,7 +5466,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.LayeredMartinBotGet
-      x-source: cmd/server/router.go:987
+      x-source: cmd/server/router.go:1002
     put:
       operationId: handler.LayeredMartinBotUpdate
       summary: handler.LayeredMartinBotUpdate
@@ -5234,7 +5486,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.LayeredMartinBotUpdate
-      x-source: cmd/server/router.go:988
+      x-source: cmd/server/router.go:1003
   /api/layered-martin-bots/{id}/start:
     post:
       operationId: handler.LayeredMartinBotStart
@@ -5255,7 +5507,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.LayeredMartinBotStart
-      x-source: cmd/server/router.go:990
+      x-source: cmd/server/router.go:1005
   /api/layered-martin-bots/{id}/stop:
     post:
       operationId: handler.LayeredMartinBotStop
@@ -5276,7 +5528,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.LayeredMartinBotStop
-      x-source: cmd/server/router.go:991
+      x-source: cmd/server/router.go:1006
   /api/logs:
     get:
       operationId: handler.GetLogs
@@ -5291,7 +5543,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.GetLogs
-      x-source: cmd/server/router.go:726
+      x-source: cmd/server/router.go:741
   /api/market/funding:
     get:
       operationId: handler.MarketFunding
@@ -5328,7 +5580,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.MarketListingList
-      x-source: cmd/server/router.go:900
+      x-source: cmd/server/router.go:915
     post:
       operationId: handler.MarketListingCreate
       summary: handler.MarketListingCreate
@@ -5342,7 +5594,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.MarketListingCreate
-      x-source: cmd/server/router.go:895
+      x-source: cmd/server/router.go:910
   /api/market/listings/{id}/cancel:
     post:
       operationId: handler.MarketListingCancel
@@ -5363,7 +5615,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.MarketListingCancel
-      x-source: cmd/server/router.go:898
+      x-source: cmd/server/router.go:913
   /api/market/listings/{id}/stats:
     get:
       operationId: handler.MarketListingStats
@@ -5384,7 +5636,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.MarketListingStats
-      x-source: cmd/server/router.go:901
+      x-source: cmd/server/router.go:916
   /api/market/listings/{id}/submit:
     post:
       operationId: handler.MarketListingSubmit
@@ -5405,7 +5657,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.MarketListingSubmit
-      x-source: cmd/server/router.go:897
+      x-source: cmd/server/router.go:912
   /api/market/my-listings:
     get:
       operationId: handler.MarketMyListings
@@ -5420,7 +5672,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.MarketMyListings
-      x-source: cmd/server/router.go:896
+      x-source: cmd/server/router.go:911
   /api/market/orderbook:
     get:
       operationId: handler.OrderBook
@@ -5446,7 +5698,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.MarketRulesGet
-      x-source: cmd/server/router.go:902
+      x-source: cmd/server/router.go:917
   /api/market/snapshot:
     get:
       operationId: handler.MarketSnapshot
@@ -6952,7 +7204,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.ReconcileConfigGet
-      x-source: cmd/server/router.go:971
+      x-source: cmd/server/router.go:986
     put:
       operationId: handler.ReconcileConfigPut
       summary: handler.ReconcileConfigPut
@@ -6968,7 +7220,7 @@ paths:
         "403":
           description: 已认证但非管理员
       x-handler: handler.ReconcileConfigPut
-      x-source: cmd/server/router.go:972
+      x-source: cmd/server/router.go:987
       x-admin-required: true
   /api/reconcile/deviations:
     get:
@@ -6984,7 +7236,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.ReconcileDeviationsList
-      x-source: cmd/server/router.go:969
+      x-source: cmd/server/router.go:984
   /api/reconcile/deviations/{id}/resolve:
     post:
       operationId: handler.ReconcileDeviationResolve
@@ -7005,7 +7257,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.ReconcileDeviationResolve
-      x-source: cmd/server/router.go:970
+      x-source: cmd/server/router.go:985
   /api/reconcile/diffs:
     get:
       operationId: handler.ReconcileDiffsList
@@ -7020,7 +7272,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.ReconcileDiffsList
-      x-source: cmd/server/router.go:966
+      x-source: cmd/server/router.go:981
   /api/reconcile/diffs/{id}/resolve:
     post:
       operationId: handler.ReconcileDiffResolve
@@ -7041,7 +7293,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.ReconcileDiffResolve
-      x-source: cmd/server/router.go:967
+      x-source: cmd/server/router.go:982
   /api/reconcile/reported-pnl:
     get:
       operationId: handler.ReconcileReportedPnLList
@@ -7056,7 +7308,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.ReconcileReportedPnLList
-      x-source: cmd/server/router.go:974
+      x-source: cmd/server/router.go:989
   /api/reconcile/reported-pnl/run:
     post:
       operationId: handler.ReconcileReportedPnLRun
@@ -7073,7 +7325,7 @@ paths:
         "403":
           description: 已认证但非管理员
       x-handler: handler.ReconcileReportedPnLRun
-      x-source: cmd/server/router.go:975
+      x-source: cmd/server/router.go:990
       x-admin-required: true
   /api/reconcile/status:
     get:
@@ -7089,7 +7341,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: handler.ReconcileStatus
-      x-source: cmd/server/router.go:968
+      x-source: cmd/server/router.go:983
   /api/restart:
     post:
       operationId: handler.Restart
@@ -9012,7 +9264,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: indicator.GetWatchlist
-      x-source: cmd/server/router.go:777
+      x-source: cmd/server/router.go:792
     post:
       operationId: indicator.AddWatchlist
       summary: indicator.AddWatchlist
@@ -9026,7 +9278,7 @@ paths:
         "401":
           description: 未认证或 token 失效
       x-handler: indicator.AddWatchlist
-      x-source: cmd/server/router.go:778
+      x-source: cmd/server/router.go:793
   /api/webhook/generic:
     post:
       operationId: handler.GenericWebhook

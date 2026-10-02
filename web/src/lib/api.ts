@@ -381,10 +381,8 @@ export const billingApi = {
   order: (id: string) => api.get<BillingOrder>(`/billing/orders/${id}`),
   createOrder: (data: { plan_id: string; chain: string; tx_hash?: string }) =>
     api.post<BillingOrder>('/billing/orders', data),
-  submitTx: (id: string, tx_hash: string) =>
-    api.post<BillingOrder>(`/billing/orders/${id}/tx`, { tx_hash }),
-  verification: (id: string) =>
-    api.get<BillingVerificationResponse>(`/billing/orders/${id}/verification`),
+  submitTx: (id: string, tx_hash: string) => api.post<BillingOrder>(`/billing/orders/${id}/tx`, { tx_hash }),
+  verification: (id: string) => api.get<BillingVerificationResponse>(`/billing/orders/${id}/verification`),
   stripeConfig: () => api.get<StripeConfig>('/billing/stripe/config'),
   stripeCheckout: (data: { plan_id?: string; order_id?: string; success_url: string; cancel_url: string }) =>
     api.post<{ checkout_url: string }>('/billing/stripe/checkout', data),
@@ -418,7 +416,14 @@ export const authApi = {
     api.post<AuthResult>('/auth/login-code', { email, code, turnstile_token: turnstileToken }),
 
   register: (
-    data: { username: string; password: string; email: string; code: string; nickname?: string; referral_code?: string },
+    data: {
+      username: string
+      password: string
+      email: string
+      code: string
+      nickname?: string
+      referral_code?: string
+    },
     turnstileToken?: string
   ) => api.post<AuthResult>('/auth/register', { ...data, turnstile_token: turnstileToken }),
 
@@ -444,8 +449,7 @@ export const mfaApi = {
   setup: () => api.post<{ secret: string; otpauth_uri: string }>('/auth/mfa/setup'),
   enable: (code: string) => api.post<{ detail: string; backup_codes: string[] }>('/auth/mfa/enable', { code }),
   disable: (code: string) => api.post<{ detail: string }>('/auth/mfa/disable', { code }),
-  verify: (mfaToken: string, code: string) =>
-    api.post<AuthResult>('/auth/mfa/verify', { mfa_token: mfaToken, code }),
+  verify: (mfaToken: string, code: string) => api.post<AuthResult>('/auth/mfa/verify', { mfa_token: mfaToken, code }),
 }
 
 // ── User Profile ──
@@ -503,9 +507,9 @@ export const portfolioApi = {
   summary: () => api.get<PortfolioSummary>('/portfolio/summary'),
   positions: () => api.get<{ positions: PortfolioPosition[] }>('/portfolio/positions'),
   closedPositions: (params?: { limit?: number; offset?: number }) => {
-    const qs = params ? '?' + new URLSearchParams(
-      Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)]))
-    ).toString() : ''
+    const qs = params
+      ? '?' + new URLSearchParams(Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)]))).toString()
+      : ''
     return api.get<{ positions: ClosedPosition[]; limit: number; offset: number; has_more: boolean }>(
       `/positions/closed${qs}`
     )
@@ -650,8 +654,7 @@ export const aiReviewApi = {
     api.post<{ status: string; msg?: string; report: AIReviewReport }>('/ai/review', data, { timeout: TIMEOUTS.ai }),
   listReports: (params?: { scope_type?: string; scope_id?: string; limit?: number }) =>
     api.get<{ reports: AIReviewReport[] }>('/ai/review/reports', { params }).then((d) => d?.reports ?? []),
-  getReport: (id: string) =>
-    api.get<{ report: AIReviewReport }>(`/ai/review/reports/${id}`).then((d) => d?.report),
+  getReport: (id: string) => api.get<{ report: AIReviewReport }>(`/ai/review/reports/${id}`).then((d) => d?.report),
 }
 
 // ── AI 交易决策门（对标 QuantDinger JEV 决策门） ──
@@ -799,10 +802,8 @@ export const strategyApi = {
   start: (id: string) => api.post<{ success: boolean }>(`/strategies/configs/${id}/start`),
   stop: (id: string) => api.post<{ success: boolean }>(`/strategies/configs/${id}/stop`),
   runtime: (id: string) => api.get<StrategyRuntimeResponse>(`/strategies/configs/${id}/runtime`),
-  batchStart: (ids: string[]) =>
-    api.post<StrategyBatchResult>('/strategies/configs/batch-start', { ids }),
-  batchStop: (ids: string[]) =>
-    api.post<StrategyBatchResult>('/strategies/configs/batch-stop', { ids }),
+  batchStart: (ids: string[]) => api.post<StrategyBatchResult>('/strategies/configs/batch-start', { ids }),
+  batchStop: (ids: string[]) => api.post<StrategyBatchResult>('/strategies/configs/batch-stop', { ids }),
   batchClose: (ids: string[]) =>
     api.post<{ success: boolean; closed: number }>('/strategies/configs/batch-close', { ids }),
   batchDelete: (ids: string[]) =>
@@ -931,7 +932,10 @@ export interface FactorEvaluateRequest {
 
 export const factorApi = {
   list: () => api.get<{ factors: FactorMeta[]; categories: string[]; count: number }>('/factors'),
-  values: (name: string, query: { symbol: string; tf?: string; limit?: number; from?: string; to?: string; params?: string }) =>
+  values: (
+    name: string,
+    query: { symbol: string; tf?: string; limit?: number; from?: string; to?: string; params?: string }
+  ) =>
     api.get<{
       factor: string
       version: number
@@ -945,9 +949,13 @@ export const factorApi = {
       default_params?: Record<string, unknown>
     }>(`/factors/${encodeURIComponent(name)}/values`, { params: query }),
   evaluate: (req: FactorEvaluateRequest) =>
-    api.post<{ evaluation: FactorEvaluation; bars_used: number; source: string }>('/factors/evaluate', req, { timeout: TIMEOUTS.backtest }),
+    api.post<{ evaluation: FactorEvaluation; bars_used: number; source: string }>('/factors/evaluate', req, {
+      timeout: TIMEOUTS.backtest,
+    }),
   layers: (req: FactorEvaluateRequest) =>
-    api.post<{ result: FactorLayersResult; bars_used: number; source: string }>('/factors/layers', req, { timeout: TIMEOUTS.backtest }),
+    api.post<{ result: FactorLayersResult; bars_used: number; source: string }>('/factors/layers', req, {
+      timeout: TIMEOUTS.backtest,
+    }),
   evaluations: (factor?: string, limit = 100) =>
     api.get<{ evaluations: FactorEvaluationRecord[] }>(
       `/factors/evaluations${factor ? '?factor=' + encodeURIComponent(factor) + '&' : '?'}limit=${limit}`
@@ -1667,8 +1675,7 @@ export const arbitrageApi = {
   registerExchange: (data: Partial<ArbitrageExchange>) =>
     api.post<{ status: string; exchange: string }>('/arbitrage/exchanges', data),
 
-  unregisterExchange: (name: string) =>
-    api.del<{ status: string; exchange: string }>(`/arbitrage/exchanges/${name}`),
+  unregisterExchange: (name: string) => api.del<{ status: string; exchange: string }>(`/arbitrage/exchanges/${name}`),
 
   execute: (data: {
     symbol: string
@@ -1733,9 +1740,7 @@ export const hyperoptApi = {
       })
       .then((d) => d?.spaces ?? []),
   epochs: (params?: Record<string, string>) =>
-    api
-      .get<{ epochs: HyperoptEpoch[]; count: number }>('/hyperopt/epochs', { params })
-      .then((d) => d?.epochs ?? []),
+    api.get<{ epochs: HyperoptEpoch[]; count: number }>('/hyperopt/epochs', { params }).then((d) => d?.epochs ?? []),
   epoch: (id: string) => api.get<HyperoptEpoch>(`/hyperopt/epochs/${id}`),
   applyEpoch: (id: string) => api.post<HyperoptEpochApplyResult>(`/hyperopt/epochs/${id}/apply`),
 }
@@ -2224,7 +2229,9 @@ export const marketListingApi = {
   cancel: (id: string) => api.post<MarketListing>(`/market/listings/${id}/cancel`),
   // 公开侧
   list: (params?: { sort?: string; order?: string; page?: number; page_size?: number }) =>
-    api.get<{ listings: MarketListing[]; total: number; page: number; page_size: number }>('/market/listings', { params }),
+    api.get<{ listings: MarketListing[]; total: number; page: number; page_size: number }>('/market/listings', {
+      params,
+    }),
   stats: (id: string, limit = 90) =>
     api.get<{ listing: MarketListing; series: MarketListingStats[] }>(`/market/listings/${id}/stats?limit=${limit}`),
   rules: () => api.get<MarketRules>('/market/rules'),
@@ -2233,7 +2240,9 @@ export const marketListingApi = {
 // ── Admin Market（上架审核队列）──
 export const adminMarketApi = {
   listings: (status = 'pending_review') =>
-    api.get<{ listings: MarketListing[] }>('/admin/market/listings', { params: { status } }).then((d) => d?.listings ?? []),
+    api
+      .get<{ listings: MarketListing[] }>('/admin/market/listings', { params: { status } })
+      .then((d) => d?.listings ?? []),
   approve: (id: string) => api.post<MarketListing>(`/admin/market/listings/${id}/approve`),
   reject: (id: string, reason: string) => api.post<MarketListing>(`/admin/market/listings/${id}/reject`, { reason }),
   delist: (id: string, reason: string) => api.post<MarketListing>(`/admin/market/listings/${id}/delist`, { reason }),
@@ -2250,7 +2259,9 @@ export const dataApi = {
   coverage: () =>
     api
       .get<{
-        coverage?: { symbol: string; interval: string; bar_count?: number; start_time?: number; end_time: number }[] | null
+        coverage?:
+          | { symbol: string; interval: string; bar_count?: number; start_time?: number; end_time: number }[]
+          | null
         symbols?: string[] | null
       }>('/data/coverage')
       .then((d): DataCoverageResponse => {
@@ -2382,7 +2393,7 @@ export const exchangeHealthApi = {
   latest: () => api.get<{ results: ExchangeHealthRecord[] }>('/exchanges/health-check/latest'),
   history: (exchange?: string, limit?: number) =>
     api.get<{ results: ExchangeHealthRecord[] }>(
-      `/exchanges/health-check/history?limit=${limit || 50}${exchange ? `&exchange=${exchange}` : ''}`,
+      `/exchanges/health-check/history?limit=${limit || 50}${exchange ? `&exchange=${exchange}` : ''}`
     ),
 }
 
@@ -2496,9 +2507,7 @@ export const analysisApi = {
   startRecursive: (data: Record<string, unknown>) =>
     api.post<{ job_id: string; status: string }>('/analysis/recursive', data),
   jobs: (kind?: string) =>
-    api
-      .get<{ jobs: AnalysisJob[] }>('/analysis/jobs', { params: kind ? { kind } : {} })
-      .then((d) => d?.jobs ?? []),
+    api.get<{ jobs: AnalysisJob[] }>('/analysis/jobs', { params: kind ? { kind } : {} }).then((d) => d?.jobs ?? []),
   job: (id: string) => api.get<AnalysisJobDetail>(`/analysis/jobs/${id}`),
   cancel: (id: string) => api.post<{ status: string }>(`/analysis/jobs/${id}/cancel`),
   remove: (id: string) => api.del<{ status: string }>(`/analysis/jobs/${id}`),
@@ -2831,4 +2840,103 @@ export interface ShareTradeCard extends ShareCardBase {
 export const shareApi = {
   backtestCard: (id: string) => api.get<ShareBacktestCard>(`/share/backtest/${id}/card`),
   tradeCard: (id: string) => api.get<ShareTradeCard>(`/share/trade/${id}/card`),
+}
+
+// ── Agent 定时任务（cron 插件） ──
+export interface AgentCronJob {
+  id: string
+  user_id: number
+  name: string
+  prompt: string
+  schedule: string
+  timezone: string
+  channel: string
+  enabled: boolean
+  next_run_at: number
+  last_run_at: number
+  last_status: string
+  last_result: string
+  created_at: number
+  updated_at: number
+}
+
+export const agentCronApi = {
+  list: () => api.get<{ jobs: AgentCronJob[] }>('/agent/cron'),
+  create: (body: { name: string; prompt: string; schedule: string; channel?: string; timezone?: string }) =>
+    api.post<{ job: AgentCronJob }>('/agent/cron', body),
+  toggle: (id: string, enabled: boolean) =>
+    api.post<{ id: string; enabled: boolean }>(`/agent/cron/${encodeURIComponent(id)}/toggle`, { enabled }),
+  remove: (id: string) => api.del<{ deleted: boolean }>(`/agent/cron/${encodeURIComponent(id)}`),
+  run: (id: string) => api.post<{ id: string; started: boolean }>(`/agent/cron/${encodeURIComponent(id)}/run`, {}),
+}
+
+// ── 插件清单（万物皆可插件） ──
+export interface AgentPluginManifest {
+  name: string
+  version: string
+  kind: string
+  description: string
+  builtin: boolean
+  ui: {
+    nav?: { id: string; label: string; icon: string }
+    slash?: { name: string; description: string }[]
+  }
+}
+
+export const agentPluginApi = {
+  list: () => api.get<{ plugins: AgentPluginManifest[] }>('/agent/plugins'),
+}
+
+// ── Agent 记忆（memory 插件） ──
+export interface AgentMemory {
+  id: string
+  user_id: number
+  scope: string
+  kind: string
+  content: string
+  source_conversation_id: string
+  importance: number
+  created_at: number
+  updated_at: number
+}
+
+export const agentMemoryApi = {
+  list: (kind?: string) => api.get<{ memories: AgentMemory[] }>('/agent/memory', { params: kind ? { kind } : {} }),
+  create: (body: { content: string; kind?: string; importance?: number }) =>
+    api.post<{ memory: AgentMemory }>('/agent/memory', body),
+  remove: (id: string) => api.del<{ deleted: boolean }>(`/agent/memory/${encodeURIComponent(id)}`),
+}
+
+// ── Agent 技能（skills 插件） ──
+export interface AgentSkill {
+  id: string
+  user_id: number
+  name: string
+  description: string
+  body: string
+  usage_count: number
+  source: string
+  created_at: number
+  updated_at: number
+}
+
+export const agentSkillApi = {
+  list: () => api.get<{ skills: AgentSkill[] }>('/agent/skills'),
+  create: (body: { name: string; description?: string; body: string }) =>
+    api.post<{ skill: AgentSkill }>('/agent/skills', body),
+  remove: (id: string) => api.del<{ deleted: boolean }>(`/agent/skills/${encodeURIComponent(id)}`),
+}
+
+// ── Telegram 通道（telegram 插件） ──
+export interface AgentTelegramStatus {
+  configured: boolean
+  linked: boolean
+  chat_id?: number
+  username?: string
+}
+
+export const agentTelegramApi = {
+  status: () => api.get<AgentTelegramStatus>('/agent/telegram/status'),
+  pairCode: () => api.post<{ code: string; expires_in: number }>('/agent/telegram/pair-code', {}),
+  unlink: () => api.post<{ unlinked: boolean }>('/agent/telegram/unlink', {}),
 }

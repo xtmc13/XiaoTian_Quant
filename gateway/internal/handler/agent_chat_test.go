@@ -14,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/agent"
+	"github.com/xiaotian-quant/gateway/internal/plugins/builtin"
 	"github.com/xiaotian-quant/gateway/internal/ai"
 	"github.com/xiaotian-quant/gateway/internal/middleware"
 	"github.com/xiaotian-quant/gateway/internal/model"
@@ -363,8 +364,10 @@ func TestAgentChat_DirectAnswer_NonStream(t *testing.T) {
 	if !strings.Contains(fmt.Sprint(sys["content"]), "get_balance") {
 		t.Fatalf("system prompt missing tool list")
 	}
-	// 默认路径：JWT 未注入也未带 token → 全量 16 个工具
-	assertEq(t, len(toolNamesFromRequest(t, reqs[0])), 16, "tools count")
+	// 默认路径：JWT 未注入也未带 token → 核心 16 个工具 + 插件贡献工具（cron 5 个）
+	core := len(agent.AllTools())
+	ext := len(builtin.Manager().Registry().Tools())
+	assertEq(t, len(toolNamesFromRequest(t, reqs[0])), core+ext, "tools count")
 }
 
 // 单轮工具调用：调用 get_balance → 结果回传 → 最终回答；写审计（token_id=0）。
@@ -690,7 +693,19 @@ func TestAgentChat_AgentTokenScopeFilter(t *testing.T) {
 	assertEq(t, w.Code, http.StatusOK, "status code")
 	reqs := llm.Requests()
 	names := toolNamesFromRequest(t, reqs[0])
-	assertEq(t, len(names), 8, "read-scope tool count")
+	// R scope：核心只读 8 个 + 插件只读工具（delegate_task 等）
+	wantRead := 0
+	for _, t := range agent.AllTools() {
+		if t.Scope == agent.ScopeRead {
+			wantRead++
+		}
+	}
+	for _, t := range builtin.Manager().Registry().Tools() {
+		if t.Scope == agent.ScopeRead {
+			wantRead++
+		}
+	}
+	assertEq(t, len(names), wantRead, "read-scope tool count")
 	for _, n := range names {
 		switch n {
 		case "place_paper_order", "cancel_order", "deploy_strategy", "start_strategy", "stop_strategy", "delete_strategy", "run_backtest", "list_backtests":

@@ -1,0 +1,63 @@
+/* ── 桌宠：待机浮动 / 未读弹跳 / 拖拽形变 ── */
+@keyframes xt-pet-bob {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-2deg);
+  }
+  50% {
+    transform: translateY(-8px) rotate(2deg);
+  }
+}
+
+@keyframes xt-pet-shadow {
+  0%,
+  100% {
+    transform: scaleX(1);
+    opacity: 0.35;
+  }
+  50% {
+    transform: scaleX(0.75);
+    opacity: 0.2;
+  }
+}
+
+/* 未读：更快更活泼的弹跳 */
+@keyframes xt-pet-excited {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+  30% {
+    transform: translateY(-10px) scale(1.05);
+  }
+  60% {
+    transform: translateY(0) scale(0.97);
+  }
+  80% {
+    transform: translateY(-4px) scale(1.02);
+  }
+}
+
+.xt-pet {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.xt-pet-anim {
+  animation: xt-pet-bob 3.2s ease-in-out infinite;
+}
+
+.xt-pet-anim.xt-pet-excited {
+  animation: xt-pet-excited 1.4s ease-in-out infinite;
+}
+
+.xt-pet-shadow {
+  animation: xt-pet-shadow 3.2s ease-in-out infinite;
+}
+
+.xt-pet-dragging {
+  cursor: grabbing !important;
+  animation: none;
+  transform: scale(1.08);
+}

@@ -34,6 +34,7 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/notify"
 	"github.com/xiaotian-quant/gateway/internal/order"
 	"github.com/xiaotian-quant/gateway/internal/portfolio"
+	"github.com/xiaotian-quant/gateway/internal/plugins/builtin"
 	"github.com/xiaotian-quant/gateway/internal/reconcile"
 	"github.com/xiaotian-quant/gateway/internal/social"
 	"github.com/xiaotian-quant/gateway/internal/store"
@@ -333,6 +334,17 @@ func main() {
 
 	// ── Start background tasks ──
 	go handler.StartBackgroundTasks()
+
+	// ── 内置插件：注入 cron 执行器（headless agent runner）并启动调度器 ──
+	if err := builtin.BuildError(); err != nil {
+		log.Fatalf("[plugins] 内置插件装配失败: %v", err)
+	}
+	builtin.SetCronExecutor(handler.RunAgentHeadless)
+	builtin.SetScheduleResolver(handler.ResolveScheduleNL)
+	builtin.SetSubagentExecutor(handler.RunAgentSub)
+	builtin.CronScheduler().Start()
+	builtin.SetTelegramExecutor(handler.RunAgentHeadless)
+	log.Printf("[plugins] 内置插件已装配: %d 个", len(builtin.Manager().Manifest()))
 
 	// ── Market data cache purger (every 30 seconds) ──
 	go func() {

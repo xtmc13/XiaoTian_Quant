@@ -12,7 +12,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/agent"
+	"github.com/xiaotian-quant/gateway/internal/agentmemory"
+	"github.com/xiaotian-quant/gateway/internal/agentskills"
 	"github.com/xiaotian-quant/gateway/internal/ai"
+	"github.com/xiaotian-quant/gateway/internal/plugins/builtin"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
@@ -150,7 +153,7 @@ func AgentChatStream(c *gin.Context) {
 	}
 
 	// ── 工具：agent token 按 scope 过滤；Web JWT 使用全部工具 ──
-	tools := agent.AllTools()
+	tools := mergedAgentTools()
 	if usedToken {
 		tools = agent.GetTokenManager().FilterTools(tools, scopes)
 	}
@@ -572,12 +575,21 @@ type agentChatRunner struct {
 // run 执行 tool-calling 循环，返回最终答案文本。
 func (r *agentChatRunner) run() (string, error) {
 	// 系统提示词放在这里拼装：首轮调用前工具集已确定。
-	r.history = append([]ai.ChatMessage{{Role: ai.RoleSystem, Content: buildAgentChatSystemPrompt(r.agentToolsDesc())}}, r.history...)
+	sysPrompt := buildAgentChatSystemPrompt(r.agentToolsDesc())
+	// 记忆插件：把该用户的重要记忆注入系统提示词尾部（无记忆为空串）
+	if mem := agentmemory.LoadPromptSection(int64(r.userID)); mem != "" {
+		sysPrompt += "\n\n" + mem
+	}
+	// 技能插件：技能目录注入（agent 据此用 run_skill 调用）
+	if skills := agentskills.LoadCatalogSection(int64(r.userID)); skills != "" {
+		sysPrompt += "\n\n" + skills
+	}
+	r.history = append([]ai.ChatMessage{{Role: ai.RoleSystem, Content: sysPrompt}}, r.history...)
 
 	finalContent := ""
 	completed := false
 	for i := 0; i < agentChatMaxIterations; i++ {
-		if r.c.Request.Context().Err() != nil {
+		if r.aborted() {
 			return "", errAgentChatAborted
 		}
 		fullText, reasoning, toolCalls, err := r.callModel()
@@ -593,7 +605,7 @@ func (r *agentChatRunner) run() (string, error) {
 		// 本轮 assistant 消息（工具调用）入历史，再逐个执行并回传 tool 结果。
 		r.history = append(r.history, ai.ChatMessage{Role: ai.RoleAssistant, Content: "", ToolCalls: toolCalls})
 		for _, tc := range toolCalls {
-			if r.c.Request.Context().Err() != nil {
+			if r.aborted() {
 				return "", errAgentChatAborted
 			}
 			content := r.executeTool(tc)
@@ -609,6 +621,19 @@ func (r *agentChatRunner) run() (string, error) {
 		finalContent = "任务较复杂，已达最大执行步数，请把需求拆小后重试"
 	}
 	return finalContent, nil
+}
+
+// aborted 请求是否已中断；headless（c==nil）永不为 true。
+func (r *agentChatRunner) aborted() bool {
+	return r.c != nil && r.c.Request != nil && r.c.Request.Context().Err() != nil
+}
+
+// reqContext 工具执行用的上下文；headless 退回 background。
+func (r *agentChatRunner) reqContext() context.Context {
+	if r.c != nil && r.c.Request != nil {
+		return r.c.Request.Context()
+	}
+	return context.Background()
 }
 
 // persistConversation 轮次成功后落库：自动建会话（标题=首条 user 截 20 字，
@@ -709,6 +734,10 @@ func (r *agentChatRunner) executeTool(tc ai.ToolCall) string {
 	var content string
 
 	handler, found := agentToolHandlers[tc.Name]
+	if !found {
+		// 插件贡献的工具（万物皆可插件：cron / 未来的 memory、skills…）
+		handler, found = builtin.Manager().Registry().Handler(tc.Name)
+	}
 	switch {
 	case !found:
 		statusCode = http.StatusNotImplemented
@@ -726,7 +755,7 @@ func (r *agentChatRunner) executeTool(tc ai.ToolCall) string {
 			if args == nil {
 				args = map[string]any{}
 			}
-			ctx, cancel := context.WithTimeout(r.c.Request.Context(), agentChatToolTimeout)
+			ctx, cancel := context.WithTimeout(r.reqContext(), agentChatToolTimeout)
 			defer cancel()
 			result, err := handler(r.toolCtx, ctx, args)
 			if err != nil {
@@ -755,11 +784,16 @@ func (r *agentChatRunner) executeTool(tc ai.ToolCall) string {
 	return content
 }
 
-// writeAudit 每次工具执行写 agent_audit_log（JWT 路径 tokenID=0）。
+// writeAudit 每次工具执行写 agent_audit_log（JWT 路径 tokenID=0；headless 无 IP/UA）。
 func (r *agentChatRunner) writeAudit(tool, argsSummary string, statusCode int) {
+	ip, ua := "", ""
+	if r.c != nil && r.c.Request != nil {
+		ip = r.c.ClientIP()
+		ua = r.c.Request.UserAgent()
+	}
 	agent.GetTokenManager().LogAccess(
 		r.tokenID, tool, "/agent/chat/tools/call", "TOOL",
-		argsSummary, statusCode, r.c.ClientIP(), r.c.Request.UserAgent(),
+		argsSummary, statusCode, ip, ua,
 	)
 }
 
@@ -801,4 +835,95 @@ func (r *agentChatRunner) emitEvent(event string, payload any) {
 	}
 	fmt.Fprintf(r.c.Writer, "event: %s\ndata: %s\n\n", event, data)
 	r.c.Writer.Flush()
+}
+
+// ── 插件化工具装配 + headless 执行（cron 到点任务等无 HTTP 场景复用） ──
+
+// mergedAgentTools 核心工具集 + 插件贡献工具（万物皆可插件）。
+func mergedAgentTools() []agent.Tool {
+	core := agent.AllTools()
+	ext := builtin.Manager().Registry().Tools()
+	out := make([]agent.Tool, 0, len(core)+len(ext))
+	out = append(out, core...)
+	out = append(out, ext...)
+	return out
+}
+
+// RunAgentHeadless 以指定用户身份无界面执行一轮 agent 对话（工具全开，无审计 IP/UA）。
+// cron 调度器到点执行与后端异步任务复用此入口。
+func RunAgentHeadless(userID int64, prompt string) (string, error) {
+	return runAgentHeadlessFiltered(userID, prompt, nil)
+}
+
+// RunAgentSub 子代理入口：仅放行只读 + 通知类工具（无下单/策略/回测写操作），
+// 供 subagents 插件并行派生使用。
+func RunAgentSub(userID int64, prompt string) (string, error) {
+	return runAgentHeadlessFiltered(userID, prompt, func(t agent.Tool) bool {
+		return t.Scope == agent.ScopeRead || t.Scope == agent.ScopeNotify
+	})
+}
+
+// runAgentHeadlessFiltered headless 执行；keep 非 nil 时按 scope 过滤工具。
+func runAgentHeadlessFiltered(userID int64, prompt string, keep func(agent.Tool) bool) (string, error) {
+	if builtin.BuildError() != nil {
+		return "", builtin.BuildError()
+	}
+	provider, providerName := configuredAgentAIProvider()
+	if provider == nil || provider.APIKey == "" {
+		return "", fmt.Errorf("AI provider '%s' 未配置 API Key", providerName)
+	}
+	tools := mergedAgentTools()
+	if keep != nil {
+		filtered := make([]agent.Tool, 0, len(tools))
+		for _, t := range tools {
+			if keep(t) {
+				filtered = append(filtered, t)
+			}
+		}
+		tools = filtered
+	}
+
+	// 浅拷贝全局 ToolContext：UserID 覆盖，底层依赖共享生产单例。
+	tc := *agent.GetToolContext()
+	tc.UserID = uint64(userID)
+
+	allowed := map[string]bool{}
+	for _, t := range tools {
+		allowed[t.Name] = true
+	}
+
+	r := &agentChatRunner{
+		c:         nil, // headless：无 SSE、无请求中断
+		provider:  provider,
+		stream:    false,
+		userID:    uint64(userID),
+		toolCtx:   &tc,
+		history:   []ai.ChatMessage{{Role: ai.RoleUser, Content: prompt}},
+		aiTools:   toAITools(tools),
+		allowed:   allowed,
+	}
+	return r.run()
+}
+
+// ResolveScheduleNL 用配置的 LLM 把自然语言时间描述转换为 cron 表达式（供 cron 插件的 schedule 解析）。
+func ResolveScheduleNL(text string) (string, error) {
+	provider, providerName := configuredAgentAIProvider()
+	if provider == nil || provider.APIKey == "" {
+		return "", fmt.Errorf("AI provider '%s' 未配置 API Key，无法解析自然语言时间，请直接提供 cron 表达式", providerName)
+	}
+	prompt := "把以下时间描述转换为 5 段 cron 表达式（分 时 日 月 周，只用数字和 * , - /；周一=1…周日=0 或 7；北京时间）。只输出表达式本身，不要任何解释。\n描述：" + text
+	resp, err := provider.ChatCompletion(ai.CompletionRequest{
+		Model: provider.Model,
+		Messages: []ai.ChatMessage{
+			{Role: ai.RoleSystem, Content: "你是 cron 表达式转换器，只输出 5 段 cron 表达式。"},
+			{Role: ai.RoleUser, Content: prompt},
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("模型解析失败: %w", err)
+	}
+	if resp == nil || len(resp.Choices) == 0 {
+		return "", fmt.Errorf("模型无响应")
+	}
+	return resp.Choices[0].Message.Content, nil
 }
