@@ -86,7 +86,7 @@ function ThinkingDisclosure({ reasoning, streaming }: { reasoning: string; strea
       : `思考了 ${Math.max(elapsed, 1)} 秒`
 
   return (
-    <div className="mb-1">
+    <div className="mb-1 transition-opacity [opacity:0.67] hover:[opacity:1] focus-within:[opacity:1]">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -110,7 +110,7 @@ function ToolScaffoldRow({ tool }: { tool: NonNullable<AgentChatMsg['toolCalls']
   const [open, setOpen] = useState(false)
   const expandable = Boolean(tool.args_summary || tool.result_summary)
   return (
-    <div className="mb-0.5">
+    <div className="mb-0.5 transition-opacity [opacity:0.67] hover:[opacity:1] focus-within:[opacity:1]">
       <div className="flex items-center gap-1.5 rounded-md px-1 py-0.5 text-[11px] text-[var(--ag-text3)]">
         {tool.status === 'running' ? (
           <Loader2 size={12} className="shrink-0 animate-spin text-[var(--ag-accent)]" />
@@ -212,7 +212,7 @@ function UserMessage({
 
   return (
     <div className="xt-sticky-human xt-human-clamp group relative pt-1">
-      <div className="xt-human-bubble w-full rounded-xl border border-[var(--ag-stroke3)] bg-[var(--ag-user-bubble)] px-3 py-2 transition-colors group-hover:border-[var(--ag-stroke2)]">
+      <div className="xt-human-bubble w-full rounded-xl border border-[var(--ag-stroke2)] bg-[var(--ag-user-bubble)] px-3 py-2 transition-colors group-hover:border-[var(--ag-stroke1)]">
         <div className="xt-human-bubble-text whitespace-pre-wrap break-words text-[13px] leading-relaxed text-[var(--ag-text1)]">
           {msg.content}
         </div>

@@ -381,7 +381,7 @@ export function AgentComposer({
       )}
 
       {/* Composer 本体 */}
-      <div className="xt-composer-card rounded-2xl border border-[var(--ag-stroke2)] bg-[var(--ag-card)]/90 shadow-[var(--ag-shadow-panel)] backdrop-blur-xl">
+      <div className="xt-composer-card rounded-2xl border border-[var(--ag-stroke2)] bg-[var(--ag-card)]/90 shadow-[var(--ag-shadow-panel)] backdrop-blur-xl transition-colors focus-within:border-[var(--ag-accent)]">
         <textarea
           ref={textareaRef}
           value={input}
@@ -452,7 +452,7 @@ export function AgentComposer({
               onClick={onStop}
               title="停止生成（Esc）"
               aria-label="停止生成"
-              className="flex size-[28px] items-center justify-center rounded-full bg-[var(--ag-accent)] text-white transition-opacity hover:opacity-85"
+              className="flex size-[28px] items-center justify-center rounded-full bg-[var(--ag-accent)] text-[var(--ag-accent-fg)] transition-opacity hover:opacity-85"
             >
               <SquareTerminal size={13} />
             </button>
@@ -463,7 +463,7 @@ export function AgentComposer({
               disabled={!canSubmit}
               title={isStreaming ? '发送并重定向当前回复' : '发送'}
               aria-label="发送消息"
-              className="flex size-[28px] items-center justify-center rounded-full bg-[var(--ag-accent)] text-white transition-opacity hover:opacity-85 disabled:opacity-30"
+              className="flex size-[28px] items-center justify-center rounded-full bg-[var(--ag-accent)] text-[var(--ag-accent-fg)] transition-opacity hover:opacity-85 disabled:opacity-30"
             >
               {isStreaming ? <Layers3 size={13} /> : <ArrowUp size={14} />}
             </button>

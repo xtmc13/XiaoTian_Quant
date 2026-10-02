@@ -302,3 +302,12 @@ paper 适配器只处理市价单即时成交；限价单落库后无任何撮�
 - 限价单撮合：挂单→4s 穿越成交→历史订单 FILLED→ETH 持仓 +0.06 ✓
 - 浏览器：普通点击弹卡 82784.95 ✓；长按拖动参考线 84609→松手弹卡 83614 ✓；
   合约卡开多/开空/杠杆/逐全仓齐全 ✓；持仓 tab 平仓按钮 ✓
+
+## 第八轮：agent 界面 1:1 对齐 Hermes Desktop（nous 深色）
+
+- 基准取自本机 hermes-agent 安装 `apps/shared/src/theme-presets.ts` 的 nous darkColors（DESIGN.md 为设计契约）
+- tokens.css 全量替换：聊天面 #0d1117 / 侧栏 #010409 / 浮层 #161b22 / hairline≈#30363d / 正文 #e6edf3 / 强调 #4a84fe / 用户气泡 #07162c 暗蓝实心（原为 accent 透明填充）/ 语义色 e75e78·55a583·d29922 / 选区淡金 rgba(255,210,74,.38)
+- Composer：静止 hairline 灰边，focus-within 才亮 accent 环（对标 composer-ring）；发送按钮 accent 底 + 深色前景（nous primaryForeground）
+- 用户气泡：#07162c 实心 + #30363d 级 hairline 边框
+- 思考/工具 scaffold 行：0.67 透明度，hover/focus 恢复（DESIGN「scaffolding fade」）
+- 像素级验证：侧栏 (1,4,9)=#010409、主区 (13,17,23)=#0d1117，与基准值逐位一致
