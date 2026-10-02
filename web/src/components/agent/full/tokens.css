@@ -68,30 +68,6 @@
 .xt-hermes.has-wallpaper aside[aria-label='助手侧栏'] {
   backdrop-filter: blur(18px) saturate(1.1);
 }
-
-/* ── 侧栏对标交易系统导航：深色 #0a0a0a + 品牌蓝 #3699ff，可折叠 w-14/w-40 ──
-   通过局部重定义 --ag-* 变量让侧栏内组件自动换肤；
-   --ag-active-bg/hover 供选中/hover 态替换原 bg-black/5（深色底上不可见）。 */
-.xt-hermes aside[aria-label='助手侧栏'].xt-agent-rail {
-  --ag-sidebar: #0a0a0a;
-  --ag-sidebar-edge: rgba(255, 255, 255, 0.08);
-  --ag-card: rgba(255, 255, 255, 0.06);
-  --ag-text1: rgba(255, 255, 255, 0.92);
-  --ag-text2: rgba(255, 255, 255, 0.62);
-  --ag-text3: rgba(255, 255, 255, 0.45);
-  --ag-text4: rgba(255, 255, 255, 0.32);
-  --ag-stroke2: rgba(255, 255, 255, 0.14);
-  --ag-stroke3: rgba(255, 255, 255, 0.09);
-  --ag-accent: #3699ff;
-  --ag-active-bg: rgba(54, 153, 255, 0.14);
-  --ag-active-hover: rgba(255, 255, 255, 0.07);
-  /* 深色底上提亮状态色 */
-  --ag-green: #3ecf8e;
-  --ag-amber: #f5a623;
-  --ag-red: #f2555a;
-  background: #0a0a0a;
-  transition: width 0.2s ease;
-}
 .xt-hermes.has-wallpaper .xt-composer-card {
   backdrop-filter: blur(16px) saturate(1.1);
 }

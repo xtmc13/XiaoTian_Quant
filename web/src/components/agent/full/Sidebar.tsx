@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
-  Activity,
   Brain,
   Clock,
   Download,
@@ -16,27 +15,17 @@ import {
   FolderOpen,
   Search,
   Send,
-  Settings,
   Trash2,
   Zap,
 } from 'lucide-react'
 import type { AgentConversationDetail, AgentConversationSummary } from '@/lib/api'
 import { agentConversationApi } from '@/lib/api'
 import { useAppStore } from '@/stores/appStore'
+import { DefaultPet } from '../pet/DefaultPet'
 import { cn } from '@/lib/utils'
 
 const PINNED_KEY = 'xt-agent-pinned'
 
-type GwState = 'ready' | 'connecting' | 'offline'
-
-async function pingGateway(): Promise<boolean> {
-  try {
-    const res = await fetch('/api/health', { cache: 'no-store' })
-    return res.ok
-  } catch {
-    return false
-  }
-}
 
 function loadPinned(): string[] {
   try {
@@ -118,7 +107,6 @@ export function AgentSidebar({
   onNew,
   onRename,
   onRemove,
-  onOpenSettings,
   pluginNav,
   onPluginNav,
 }: AgentSidebarProps) {
@@ -131,7 +119,6 @@ export function AgentSidebar({
   const [menuFor, setMenuFor] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)
-  const [gwState, setGwState] = useState<GwState>('connecting')
 
   // ── 折叠：与交易系统侧栏共用 appStore（hover 悬停展开 / 点击 logo 切换） ──
   const { sidebarCollapsed, setSidebarCollapsed, sidebarBehavior, toggleSidebar } = useAppStore()
@@ -145,20 +132,6 @@ export function AgentSidebar({
   const handleToggle = () => {
     if (!isHover) toggleSidebar()
   }
-
-  useEffect(() => {
-    let alive = true
-    const tick = async () => {
-      const ok = await pingGateway()
-      if (alive) setGwState(ok ? 'ready' : 'offline')
-    }
-    void tick()
-    const t = setInterval(tick, 30_000)
-    return () => {
-      alive = false
-      clearInterval(t)
-    }
-  }, [])
 
   // ── 服务端全文搜索：输入防抖 300ms ──
   useEffect(() => {
@@ -398,21 +371,24 @@ export function AgentSidebar({
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
       className={cn(
-        'xt-agent-rail flex h-full shrink-0 flex-col border-r border-[var(--ag-sidebar-edge)] bg-[var(--ag-sidebar)]',
+        'flex h-full shrink-0 flex-col border-r border-[var(--ag-sidebar-edge)] bg-[var(--ag-sidebar)] transition-[width] duration-200',
         sidebarCollapsed ? 'w-14' : 'w-40'
       )}
     >
-      {/* 品牌行（对标交易系统导航 logo 区，点击折叠/展开） */}
+      {/* 品牌行（对标 deepseek HARNESS logo 区，点击折叠/展开） */}
       <div
-        className="flex h-14 shrink-0 cursor-pointer items-center gap-2 border-b border-[var(--ag-sidebar-edge)] px-3"
+        className="flex cursor-pointer items-center gap-1.5 px-3.5 pb-2 pt-3.5"
         onClick={handleToggle}
         title={sidebarCollapsed ? '展开侧栏' : '折叠侧栏'}
       >
-        <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-[#3699ff] text-sm font-black text-white">
-          小
-        </span>
+        <DefaultPet size={22} />
         {!sidebarCollapsed && (
-          <span className="truncate text-sm font-bold tracking-tight text-[var(--ag-text1)]">小天量化</span>
+          <>
+            <span className="text-[15px] font-bold tracking-tight text-[var(--ag-text1)]">小天量化</span>
+            <span className="rounded-[4px] bg-[var(--ag-fg)] px-1 py-px text-[8px] font-semibold tracking-wider text-[var(--ag-bg)]">
+              AGENT
+            </span>
+          </>
         )}
       </div>
 
@@ -560,48 +536,6 @@ export function AgentSidebar({
       </div>
         </>
       )}
-
-      {/* 底部：设置入口 + Gateway 健康 + 用户标识（折叠态仅图标） */}
-      <div className="flex items-center gap-1 border-t border-[var(--ag-sidebar-edge)] px-2 py-1.5">
-        <button
-          type="button"
-          onClick={onOpenSettings}
-          title="设置"
-          className={cn(
-            'flex h-7 items-center gap-1.5 rounded-md px-1.5 text-[12px] text-[var(--ag-text2)] hover:bg-[var(--ag-active-hover)] hover:text-[var(--ag-text1)]',
-            sidebarCollapsed ? 'flex-1 justify-center' : 'flex-1'
-          )}
-        >
-          <Settings size={13} />
-          {!sidebarCollapsed && '设置'}
-        </button>
-        {!sidebarCollapsed && (
-          <span
-            title="后端网关健康状态"
-            aria-label="后端网关健康状态"
-            className={cn(
-              'flex shrink-0 items-center gap-1 text-[10px]',
-              gwState === 'ready'
-                ? 'text-[var(--ag-green)]'
-                : gwState === 'connecting'
-                  ? 'text-[var(--ag-amber)]'
-                  : 'text-[var(--ag-red)]'
-            )}
-          >
-            <Activity size={10} />
-            {gwState === 'ready' ? '就绪' : gwState === 'connecting' ? '连接中' : '离线'}
-          </span>
-        )}
-        {sidebarCollapsed && (
-          <span
-            title={gwState === 'ready' ? 'Gateway 就绪' : gwState === 'connecting' ? '连接中…' : 'Gateway 离线'}
-            className={cn(
-              'size-1.5 shrink-0 rounded-full',
-              gwState === 'ready' ? 'bg-[var(--ag-green)]' : gwState === 'connecting' ? 'bg-[var(--ag-amber)]' : 'bg-[var(--ag-red)]'
-            )}
-          />
-        )}
-      </div>
     </aside>
   )
 }
