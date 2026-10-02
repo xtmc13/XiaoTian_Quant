@@ -522,16 +522,6 @@ export function TradingContract() {
             onPriceDrag={handleChartPriceDrag}
           />
 
-          {/* 长按拖动改价参考线 */}
-          {dragPrice && (
-            <div className="pointer-events-none absolute inset-x-0 z-20" style={{ top: dragPrice.y }}>
-              <div className="border-t border-dashed border-quant-gold" />
-              <div className="absolute left-2 -top-5 rounded bg-quant-gold/90 px-1.5 py-0.5 text-[10px] font-mono text-black">
-                {formatLinePrice(dragPrice.price, precision.price)}
-              </div>
-            </div>
-          )}
-
           {/* ── 下单浮卡 ── */}
           {popup && (
             <ChartOrderPopup
