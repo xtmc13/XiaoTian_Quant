@@ -15,6 +15,7 @@ import {
   ThumbsDown,
   ThumbsUp,
   Sprout,
+  Undo2,
 } from 'lucide-react'
 import type { AgentChatMsg } from '../types'
 import { copyText, toolLabel } from '../types'
@@ -38,9 +39,9 @@ export function AgentEmptyState() {
     <div className="flex flex-col items-center gap-2 px-4 py-6">
       {/* 鲸鱼 + 标语（对标桌面版"探索未至之境"空态） */}
       <div className="flex items-center gap-2.5">
-        <DefaultPet size={44} />
-        <span className="text-[24px] font-bold tracking-tight text-[var(--ag-text1)]">探索未至之境</span>
-        <span className="rounded-full border border-[var(--ag-accent)]/40 px-1.5 py-0.5 text-[10px] text-[var(--ag-accent)]">
+        <DefaultPet size={40} />
+        <span className="text-[22px] font-bold tracking-tight text-[var(--ag-text1)]">探索未至之境</span>
+        <span className="rounded-full bg-[var(--ag-accent)]/10 px-1.5 py-0.5 text-[10px] font-medium text-[var(--ag-accent)]">
           预览版
         </span>
       </div>
@@ -92,7 +93,7 @@ function ThinkingDisclosure({ reasoning, streaming }: { reasoning: string; strea
       : `思考了 ${Math.max(elapsed, 1)} 秒`
 
   return (
-    <div className="mb-1 transition-opacity [opacity:0.67] hover:[opacity:1] focus-within:[opacity:1]">
+    <div className="mb-1.5 transition-opacity [opacity:0.67] hover:[opacity:1] focus-within:[opacity:1]">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -117,8 +118,8 @@ function ToolScaffoldRow({ tool }: { tool: NonNullable<AgentChatMsg['toolCalls']
   const [open, setOpen] = useState(false)
   const expandable = Boolean(tool.args_summary || tool.result_summary)
   return (
-    <div className="mb-0.5 transition-opacity [opacity:0.67] hover:[opacity:1] focus-within:[opacity:1]">
-      <div className="flex items-center gap-1.5 rounded-md px-1 py-0.5 text-[11px] text-[var(--ag-text3)]">
+    <div className="mb-1 transition-opacity [opacity:0.67] hover:[opacity:1] focus-within:[opacity:1]">
+      <div className="flex items-center gap-1.5 rounded-md px-1 py-0.5 text-[11.5px] text-[var(--ag-text3)]">
         {tool.status === 'running' ? (
           <Loader2 size={12} className="shrink-0 animate-spin text-[var(--ag-accent)]" />
         ) : (
@@ -219,7 +220,7 @@ function UserMessage({
 
   // 桌面版：用户消息为右对齐浅蓝气泡，气泡下方右侧小复制/编辑图标
   return (
-    <div className="group flex flex-col items-end pt-2">
+    <div className="group flex flex-col items-end pt-3">
       <div className="xt-human-clamp max-w-[85%]">
         <div className="xt-human-bubble rounded-xl bg-[var(--ag-user-bubble)] px-3.5 py-2 transition-colors group-hover:bg-[var(--ag-user-bubble-hover)]">
           <div className="xt-human-bubble-text whitespace-pre-wrap break-words text-[13px] leading-relaxed text-[var(--ag-text1)]">
@@ -261,11 +262,15 @@ function AssistantMessage({
   isLast,
   isStreaming,
   onRegenerate,
+  showUndo,
+  onUndo,
 }: {
   msg: AgentChatMsg
   isLast: boolean
   isStreaming: boolean
   onRegenerate: () => void
+  showUndo?: boolean
+  onUndo?: () => void
 }) {
   const [copied, setCopied] = useState(false)
   const [feedback, setFeedback] = useState<'up' | 'down' | null>(null)
@@ -282,17 +287,17 @@ function AssistantMessage({
     isLast && isStreaming && !msg.content && !msg.reasoning && !(msg.toolCalls && msg.toolCalls.length > 0)
 
   return (
-    <div className="group pt-2">
+    <div className="group pt-3">
       {thinking && <ThinkingDisclosure reasoning={thinking} streaming={Boolean(msg.streaming)} />}
       {msg.toolCalls && msg.toolCalls.length > 0 && (
-        <div className="mb-1 space-y-0.5">
+        <div className="mb-1.5 space-y-1">
           {msg.toolCalls.map((t, ti) => (
             <ToolScaffoldRow key={`${t.name}-${ti}`} tool={t} />
           ))}
         </div>
       )}
       {msg.content ? (
-        <div className="text-[13px] leading-relaxed text-[var(--ag-text1)] [&_a]:text-[var(--ag-accent)] [&_code]:rounded [&_code]:bg-[var(--ag-inline-code-bg)] [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-[12px] [&_code]:text-[var(--ag-inline-code-fg)]">
+        <div className="text-[13.5px] leading-7 text-[var(--ag-text1)] [&_a]:text-[var(--ag-accent)] [&_code]:rounded [&_code]:bg-[var(--ag-inline-code-bg)] [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-[12px] [&_code]:text-[var(--ag-inline-code-fg)]">
           <MarkdownView content={msg.content} />
         </div>
       ) : (
@@ -323,9 +328,9 @@ function AssistantMessage({
           </button>
         </div>
       )}
-      {/* hover 操作条：复制 / 👍 / 👎 / 重生成（对标桌面版消息操作） */}
+      {/* 操作条：左下常显，弱化至 hover 提亮（对标桌面版复制/👍/👎/↻） */}
       {(msg.content || msg.toolCalls?.length) && !msg.streaming && !msg.error && (
-        <div className="mt-0.5 flex justify-end gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+        <div className="mt-1 flex gap-0.5 opacity-45 transition-opacity hover:opacity-100">
           <button
             type="button"
             title={copied ? '已复制' : '复制'}
@@ -371,6 +376,18 @@ function AssistantMessage({
           >
             <RotateCcw size={12} />
           </button>
+          {showUndo && onUndo && (
+            <button
+              type="button"
+              title="撤销这一轮"
+              aria-label="撤销这一轮"
+              disabled={isStreaming}
+              onClick={onUndo}
+              className="rounded p-1 text-[var(--ag-text3)] hover:bg-black/5 hover:text-[var(--ag-text1)] disabled:opacity-40"
+            >
+              <Undo2 size={12} />
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -382,11 +399,20 @@ export interface AgentThreadProps {
   isStreaming: boolean
   onRegenerate: () => void
   onEdit: (index: number, content: string) => void
+  /** 撤销最后一轮（仅最后一条助手消息上显示入口） */
+  onUndo?: () => void
   messagesEndRef: React.RefObject<HTMLDivElement | null>
 }
 
 // ── 消息流：与 composer 同宽居中 ──
-export function AgentThread({ messages, isStreaming, onRegenerate, onEdit, messagesEndRef }: AgentThreadProps) {
+export function AgentThread({ messages, isStreaming, onRegenerate, onEdit, onUndo, messagesEndRef }: AgentThreadProps) {
+  let lastAssistantIdx = -1
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'assistant') {
+      lastAssistantIdx = i
+      break
+    }
+  }
   return (
     <div className="xt-thread-scroll min-h-0 flex-1 overflow-y-auto" aria-label="消息流">
       <div className="mx-auto flex h-full w-full max-w-[var(--ag-content-max-w)] flex-col px-6 pb-44 pt-2">
@@ -405,6 +431,8 @@ export function AgentThread({ messages, isStreaming, onRegenerate, onEdit, messa
                 isLast={i === messages.length - 1}
                 isStreaming={isStreaming}
                 onRegenerate={onRegenerate}
+                showUndo={i === lastAssistantIdx && !m.streaming && !m.error}
+                onUndo={onUndo}
               />
             )
           )

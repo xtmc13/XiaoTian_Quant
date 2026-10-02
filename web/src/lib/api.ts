@@ -1148,11 +1148,21 @@ export interface AgentConversationEvent {
   title: string
 }
 
+/** 单轮 LLM 用量（done 事件 / 非流式响应携带） */
+export interface AgentTurnUsage {
+  prompt_tokens: number
+  completion_tokens: number
+  llm_ms: number
+  first_token_ms: number
+  tok_per_s: number
+}
+
 export interface AgentChatDoneMessage {
   content: string
   tool_calls?: AgentToolCall[]
   reasoning?: string
   conversation_id?: string
+  usage?: AgentTurnUsage
 }
 
 export interface AgentChatHandlers {
@@ -1198,6 +1208,39 @@ export const agentConversationApi = {
   rename: (id: string, title: string) =>
     api.put<{ success: boolean }>(`/agent/conversations/${encodeURIComponent(id)}`, { title }),
   remove: (id: string) => api.del<{ success: boolean }>(`/agent/conversations/${encodeURIComponent(id)}`),
+  /** 全文搜索会话（返回带 snippet 的匹配结果） */
+  search: (q: string) =>
+    api.get<{
+      success: boolean
+      results: { id: string; title: string; updated_at?: number | string; snippet: string }[]
+    }>('/agent/conversations/search', { params: { q } }),
+  /** 撤销最后一轮（删除最后一条用户消息及其后的助手消息） */
+  undo: (id: string) =>
+    api.post<{ success: boolean; remaining: number }>(`/agent/conversations/${encodeURIComponent(id)}/undo`),
+}
+
+// ── Agent 用量统计 ──
+export interface AgentUsageStats {
+  prompt_tokens: number
+  completion_tokens: number
+  llm_ms: number
+  rounds: number
+}
+
+export interface AgentUsageResponse {
+  success: boolean
+  /** 指定 conversation_id 时的会话用量；无会话或未指定时为 null */
+  session: AgentUsageStats | null
+  totals: AgentUsageStats
+  by_day: { date: string; prompt_tokens: number; completion_tokens: number }[]
+  by_model: { model: string; prompt_tokens: number; completion_tokens: number }[]
+}
+
+export const agentUsageApi = {
+  get: (conversationId?: string, days = 30) =>
+    api.get<AgentUsageResponse>('/agent/usage', {
+      params: { conversation_id: conversationId || undefined, days },
+    }),
 }
 
 export const agentChatApi = {

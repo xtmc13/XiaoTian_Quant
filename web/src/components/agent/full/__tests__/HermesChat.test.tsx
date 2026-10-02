@@ -8,6 +8,8 @@ const listMock = vi.fn()
 const getMock = vi.fn()
 const renameMock = vi.fn()
 const removeMock = vi.fn()
+const searchMock = vi.fn()
+const undoMock = vi.fn()
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -21,6 +23,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
       get: (...args: unknown[]) => getMock(...args),
       rename: (...args: unknown[]) => renameMock(...args),
       remove: (...args: unknown[]) => removeMock(...args),
+      search: (...args: unknown[]) => searchMock(...args),
+      undo: (...args: unknown[]) => undoMock(...args),
     },
     configApi: {
       ...actual.configApi,
@@ -57,9 +61,11 @@ describe('Hermes 全屏助手', () => {
     getMock.mockResolvedValue({ success: true, id: 'c1', title: 'BTC 分析', messages: [] })
     renameMock.mockResolvedValue({ success: true })
     removeMock.mockResolvedValue({ success: true })
+    searchMock.mockResolvedValue({ success: true, results: [] })
+    undoMock.mockResolvedValue({ success: true, remaining: 0 })
   })
 
-  it('空态：鲸鱼标语 + 徽章 + 侧栏分组 + 状态条', async () => {
+  it('空态：鲸鱼标语 + 徽章 + 侧栏分组 + 侧栏健康指示', async () => {
     renderFull()
     // 空态（对标桌面版"探索未至之境"）
     expect(screen.getByText('探索未至之境')).toBeTruthy()
@@ -71,16 +77,28 @@ describe('Hermes 全屏助手', () => {
     expect(screen.getByText('网格机器人')).toBeTruthy()
     // 日期分组头
     expect(screen.getByText('今天')).toBeTruthy()
-    // 状态条
+    // 侧栏底部 Gateway 健康
     await waitFor(() => expect(screen.getByText('Gateway 就绪')).toBeTruthy())
-    expect(screen.getByLabelText('版本').textContent).toContain('web v')
+    // 设置窗：左侧导航 + 关于页显示版本
+    fireEvent.click(screen.getByText('设置'))
+    expect(screen.getByRole('dialog', { name: '助手设置' })).toBeTruthy()
+    fireEvent.click(screen.getByText('关于'))
+    expect(screen.getByText(/web v/)).toBeTruthy()
   })
 
-  it('搜索会话过滤', async () => {
+  it('搜索会话走服务端接口并展示摘要', async () => {
+    searchMock.mockResolvedValue({
+      success: true,
+      results: [{ id: 'c2', title: '网格机器人', updated_at: Date.now(), snippet: '…创建一个 BTC 网格机器人…' }],
+    })
     renderFull()
     await waitFor(() => expect(screen.getByText('BTC 分析')).toBeTruthy())
     fireEvent.click(screen.getByLabelText('搜索会话开关'))
     fireEvent.change(screen.getByLabelText('搜索会话'), { target: { value: '网格' } })
+    // 防抖 300ms 后调用服务端搜索
+    await waitFor(() => expect(searchMock).toHaveBeenCalledWith('网格'), { timeout: 2000 })
+    // 搜索结果（标题 + 摘要）替换分组列表
+    await waitFor(() => expect(screen.getByText('…创建一个 BTC 网格机器人…')).toBeTruthy())
     expect(screen.queryByText('BTC 分析')).toBeNull()
     expect(screen.getByText('网格机器人')).toBeTruthy()
   })
@@ -115,6 +133,46 @@ describe('Hermes 全屏助手', () => {
     // 用户气泡（xt-human-bubble）
     expect(document.querySelector('.xt-human-bubble')?.textContent).toContain('在吗')
     expect(screen.getByText('在吗')).toBeTruthy()
+  })
+
+  it('指标行：done 携带 usage 时展示真实用量', async () => {
+    chatMock.mockImplementation((_params: unknown, handlers: Record<string, (v: unknown) => void>) => {
+      handlers.onDone({
+        content: '你好，世界',
+        usage: { prompt_tokens: 1234, completion_tokens: 56, llm_ms: 2345, first_token_ms: 300, tok_per_s: 42.5 },
+      })
+      return { abort: vi.fn(), promise: Promise.resolve() }
+    })
+    renderFull()
+    const input = screen.getByLabelText('消息输入框')
+    fireEvent.change(input, { target: { value: '在吗' } })
+    fireEvent.click(screen.getByLabelText('发送消息'))
+
+    await waitFor(() => expect(screen.getByText('你好，世界')).toBeTruthy())
+    // 指标行展示真实用量而非字符粗估
+    await waitFor(() =>
+      expect(screen.getByText(/1 轮 · 0 步 \| LLM 2\.3s · 42\.5 tok\/s \| 输入 1234 tok · 输出 56 tok/)).toBeTruthy()
+    )
+  })
+
+  it('撤销这一轮：调用 undo 接口并移除最后一轮消息', async () => {
+    chatMock.mockImplementation((_params: unknown, handlers: Record<string, (v: unknown) => void>) => {
+      handlers.onConversation({ id: 'c9', title: '在吗' })
+      handlers.onDone({ content: '你好，世界', conversation_id: 'c9' })
+      return { abort: vi.fn(), promise: Promise.resolve() }
+    })
+    renderFull()
+    const input = screen.getByLabelText('消息输入框')
+    fireEvent.change(input, { target: { value: '在吗' } })
+    fireEvent.click(screen.getByLabelText('发送消息'))
+
+    await waitFor(() => expect(screen.getByText('你好，世界')).toBeTruthy())
+    // 仅最后一条助手消息上有撤销入口
+    await waitFor(() => expect(screen.getByLabelText('撤销这一轮')).toBeTruthy())
+    fireEvent.click(screen.getByLabelText('撤销这一轮'))
+    await waitFor(() => expect(undoMock).toHaveBeenCalledWith('c9'))
+    // 最后一轮（用户 + 助手）被移除
+    await waitFor(() => expect(screen.queryByText('你好，世界')).toBeNull())
   })
 
   it('打断重定向：忙时发送中断当前回合并以新输入续聊', async () => {
@@ -174,8 +232,8 @@ describe('Hermes 全屏助手', () => {
     fireEvent.change(input, { target: { value: '等很久的回复' } })
     fireEvent.keyDown(input, { key: 'Enter' })
 
-    // 忙 + 空输入 → 停止键出现（发送后布局切换，重新查询元素）
-    await waitFor(() => expect(screen.getByLabelText('停止生成')).toBeTruthy())
+    // 忙 + 空输入 → 停止键出现（composer 停止键 + 流式状态条停止键，发送后布局切换重新查询）
+    await waitFor(() => expect(screen.getAllByLabelText('停止生成').length).toBeGreaterThanOrEqual(1))
     fireEvent.keyDown(screen.getByLabelText('消息输入框'), { key: 'Escape' })
     await waitFor(() => expect(abortFn).toHaveBeenCalled())
   })

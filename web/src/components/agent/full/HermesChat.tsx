@@ -1,18 +1,17 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowLeft, ChevronDown, Shield } from 'lucide-react'
+import { ArrowLeft, ChevronDown, CircleStop, Shield } from 'lucide-react'
 import { toast } from '@/lib/useToast'
 import type { AgentConversationSummary } from '@/lib/api'
 import { agentPluginApi, agentSkillApi } from '@/lib/api'
 import type { AgentChatMsg, AgentSettings } from '../types'
-import { SettingsPopover } from '../SettingsPopover'
 import { useWallpaper } from '../pet/WallpaperContext'
 import { WallpaperMedia } from '../pet/WallpaperMedia'
 import { cn } from '@/lib/utils'
 import { AgentSidebar } from './Sidebar'
 import { AgentThread, AgentEmptyState } from './Thread'
 import { AgentComposer } from './Composer'
-import { AgentStatusBar } from './StatusBar'
+import { SettingsModal } from './SettingsModal'
 import { CronPanel } from './CronPanel'
 import { MemoryPanel } from './MemoryPanel'
 import { SkillsPanel } from './SkillsPanel'
@@ -38,6 +37,8 @@ export interface HermesChatProps {
   /** 忙时发送：打断当前回合后立刻以新输入重定向 */
   steer: (text: string) => void
   stop: () => void
+  /** 撤销最后一轮（最后一条用户消息 + 其后的助手消息） */
+  undo: () => void
   regenerate: () => void
   editMessage: (index: number, content: string) => void
   newChat: () => void
@@ -54,7 +55,7 @@ export interface HermesChatProps {
   onClose: () => void
 }
 
-// ── 全屏助手壳：侧栏 + 消息流 + composer + 状态条（Hermes 桌面版布局） ──
+// ── 全屏助手壳：侧栏 + 消息流 + composer + 指标行（Hermes 桌面版布局） ──
 export function HermesChat({
   messages,
   isStreaming,
@@ -65,6 +66,7 @@ export function HermesChat({
   send,
   steer,
   stop,
+  undo,
   regenerate,
   editMessage,
   newChat,
@@ -90,6 +92,14 @@ export function HermesChat({
   const steps = messages.reduce((a, m) => a + (m.toolCalls?.length || 0), 0)
   const inChars = messages.reduce((a, m) => (m.role === 'user' ? a + (m.content?.length || 0) : a), 0)
   const outChars = messages.reduce((a, m) => (m.role === 'assistant' ? a + (m.content?.length || 0) : a), 0)
+  // 最近一条带真实用量的助手消息（done 事件回传）；无则回退字符粗估
+  let lastUsage: AgentChatMsg['usage'] | undefined
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'assistant' && messages[i].usage) {
+      lastUsage = messages[i].usage
+      break
+    }
+  }
   const [usageOpen, setUsageOpen] = useState(false)
   const [modelSignal, setModelSignal] = useState(0)
   const fileReaderRef = useRef<FileReader | null>(null)
@@ -131,6 +141,9 @@ export function HermesChat({
         case 'retry':
           regenerate()
           break
+        case 'undo':
+          undo()
+          break
         case 'model':
           setModelSignal((n) => n + 1)
           break
@@ -151,7 +164,7 @@ export function HermesChat({
           break
       }
     },
-    [newChat, stop, regenerate]
+    [newChat, stop, regenerate, undo]
   )
 
   const onPickFile = useCallback(
@@ -202,6 +215,7 @@ export function HermesChat({
       skills={paletteSkills}
       onUseSkill={(skill) => send(skill.body)}
       onShowUsage={() => setUsageOpen(true)}
+      placeholder={hasMessages ? undefined : '描述你想要构建的内容，/ 调用指令'}
     />
   )
 
@@ -271,8 +285,8 @@ export function HermesChat({
           ) : hasMessages ? (
             <>
               {/* 标题行 + 页签（会话态，对标桌面版） */}
-              <div className="flex items-center gap-2 px-5 pb-1 pt-3">
-                <span className="min-w-0 flex-1 truncate text-[15px] font-semibold text-[var(--ag-text1)]">
+              <div className="flex items-center gap-2 px-5 pb-1 pt-3.5">
+                <span className="min-w-0 flex-1 truncate text-[14px] font-semibold text-[var(--ag-text1)]">
                   {conversations.find((c) => c.id === currentId)?.title || '新对话'}
                 </span>
                 <span className="flex shrink-0 items-center gap-1 text-[11px] text-[var(--ag-text3)]">
@@ -290,11 +304,11 @@ export function HermesChat({
                   <ChevronDown size={11} />
                 </button>
               </div>
-              <div className="flex items-center gap-4 border-b border-[var(--ag-stroke3)] px-5">
-                <span className="border-b-2 border-[var(--ag-accent)] py-1.5 text-[12px] font-medium text-[var(--ag-text1)]">
+              <div className="flex items-center gap-5 border-b border-[var(--ag-stroke3)] px-5">
+                <span className="border-b-2 border-[var(--ag-accent)] py-2 text-[13px] font-medium text-[var(--ag-text1)]">
                   对话
                 </span>
-                <span className="cursor-not-allowed py-1.5 text-[12px] text-[var(--ag-text4)]" title="敬请期待">
+                <span className="cursor-not-allowed py-2 text-[13px] text-[var(--ag-text4)]" title="敬请期待">
                   轨迹
                 </span>
               </div>
@@ -304,38 +318,63 @@ export function HermesChat({
                 isStreaming={isStreaming}
                 onRegenerate={regenerate}
                 onEdit={editMessage}
+                onUndo={undo}
                 messagesEndRef={messagesEndRef}
               />
 
-              {/* Composer 停靠底部 */}
-              <div className="pointer-events-none absolute bottom-4 left-1/2 w-[calc(100%-2.5rem)] max-w-5xl -translate-x-1/2">
+              {/* 流式状态条 + Composer + 指标行 停靠底部（对标桌面版 ConversationRoot） */}
+              <div className="pointer-events-none absolute bottom-4 left-1/2 flex w-[calc(100%-2.5rem)] max-w-[var(--ag-composer-max-w)] -translate-x-1/2 flex-col gap-1.5">
+                {isStreaming && (
+                  <div
+                    aria-label="生成状态"
+                    className="pointer-events-auto flex h-9 items-center gap-2 rounded-xl border border-[var(--ag-stroke3)] bg-[var(--ag-card)]/90 px-3 shadow-[var(--ag-shadow-panel)] backdrop-blur-xl"
+                  >
+                    <span className="xt-shimmer-text text-[12px] font-medium">正在生成…</span>
+                    <span className="text-[11px] tabular-nums text-[var(--ag-text4)]">
+                      {rounds} 轮 · {steps} 步
+                    </span>
+                    <span className="min-w-0 flex-1" />
+                    <button
+                      type="button"
+                      onClick={stop}
+                      title="停止生成（Esc）"
+                      aria-label="停止生成"
+                      className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-[var(--ag-text2)] transition-colors hover:bg-black/5 hover:text-[var(--ag-text1)]"
+                    >
+                      <CircleStop size={12} />
+                      停止
+                    </button>
+                  </div>
+                )}
                 <div className="pointer-events-auto">{composer}</div>
+                <div className="pointer-events-none text-center text-[11px] tabular-nums text-[var(--ag-text4)]">
+                  {lastUsage
+                    ? `${rounds} 轮 · ${steps} 步 | LLM ${(lastUsage.llm_ms / 1000).toFixed(1)}s · ${lastUsage.tok_per_s.toFixed(1)} tok/s | 输入 ${lastUsage.prompt_tokens} tok · 输出 ${lastUsage.completion_tokens} tok`
+                    : `${rounds} 轮 · ${steps} 步 | 输入 ${(inChars / 2000).toFixed(1)}K tok · 输出 ${(outChars / 2000).toFixed(1)}K tok`}
+                </div>
               </div>
             </>
           ) : (
             /* 空态：文案+药丸+Composer 整块垂直居中（对标桌面版预览0） */
             <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-5 px-6 pb-16">
               <AgentEmptyState />
-              <div className="w-[min(100%-2rem,46rem)]">{composer}</div>
+              <div className="w-[min(100%-2rem,var(--ag-composer-max-w))]">{composer}</div>
             </div>
           )}
 
           {settingsOpen && (
-            <SettingsPopover light settings={settings} onSave={updateSettings} onClose={() => setSettingsOpen(false)} />
+            <SettingsModal
+              settings={settings}
+              onSave={updateSettings}
+              onClose={() => setSettingsOpen(false)}
+              providers={providers}
+              version={version ? `web v${version}` : ''}
+            />
           )}
-          {usageOpen && <UsagePanel messages={messages} onClose={() => setUsageOpen(false)} />}
+          {usageOpen && (
+            <UsagePanel messages={messages} conversationId={currentId} onClose={() => setUsageOpen(false)} />
+          )}
         </div>
-      </div>
-
-      <div className="relative">
-        <AgentStatusBar
-          version={version ? `web v${version}` : ''}
-          stats={
-            messages.length > 0
-              ? `${rounds} 轮 · ${steps} 步 | 📥 输入 ${(inChars / 2000).toFixed(1)}K tok · 输出 ${(outChars / 2000).toFixed(1)}K tok`
-              : '就绪'
-          }
-        />
       </div>
     </div>
   )

@@ -14,10 +14,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/agent"
-	"github.com/xiaotian-quant/gateway/internal/plugins/builtin"
 	"github.com/xiaotian-quant/gateway/internal/ai"
 	"github.com/xiaotian-quant/gateway/internal/middleware"
 	"github.com/xiaotian-quant/gateway/internal/model"
+	"github.com/xiaotian-quant/gateway/internal/plugins/builtin"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
@@ -31,6 +31,9 @@ func init() {
 		Portfolio: chatMockPortfolio{},
 		Matcher:   &chatMockMatcher{},
 	})
+	// 关闭异步 LLM 标题升级：避免 goroutine 与用例的标题断言竞态
+	// （升级逻辑由 TestAgentChat_TitleUpgrade 同步调用单测覆盖）。
+	agentChatTitleUpgrade = false
 }
 
 // ── 测试基建：mock LLM 服务 + mock 工具依赖 ──
@@ -61,6 +64,8 @@ func newMockAgentLLM(t *testing.T, respond func(req map[string]any) (text string
 				fmt.Fprintf(w, "data: %s\n\n", chunk)
 				fl.Flush()
 			}
+			// 末尾块上报 usage（choices 为空，模拟 OpenAI 兼容协议行为）
+			fmt.Fprint(w, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":34,\"total_tokens\":46}}\n\n")
 			fmt.Fprint(w, "data: [DONE]\n\n")
 			fl.Flush()
 			return
@@ -85,6 +90,7 @@ func newMockAgentLLM(t *testing.T, respond func(req map[string]any) (text string
 			"id":      "chatcmpl-mock",
 			"model":   "mock-model",
 			"choices": []map[string]any{{"index": 0, "message": msg}},
+			"usage":   map[string]any{"prompt_tokens": 12, "completion_tokens": 34, "total_tokens": 46},
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
@@ -216,10 +222,10 @@ func reqHasToolMessage(req map[string]any) bool {
 
 type chatMockPortfolio struct{ equity, pnl float64 }
 
-func (m chatMockPortfolio) TotalEquity() float64              { return m.equity }
-func (m chatMockPortfolio) TotalPnL() float64                 { return m.pnl }
-func (m chatMockPortfolio) Balances(string) []*model.Balance  { return []*model.Balance{} }
-func (m chatMockPortfolio) Positions() []*model.PositionData  { return nil }
+func (m chatMockPortfolio) TotalEquity() float64             { return m.equity }
+func (m chatMockPortfolio) TotalPnL() float64                { return m.pnl }
+func (m chatMockPortfolio) Balances(string) []*model.Balance { return []*model.Balance{} }
+func (m chatMockPortfolio) Positions() []*model.PositionData { return nil }
 
 type chatMockMarket struct{ err error }
 
@@ -915,5 +921,137 @@ func TestAgentAITest_RealProbe(t *testing.T) {
 	body = do()
 	if body["success"] != false || !strings.Contains(fmt.Sprint(body["message"]), "not configured") {
 		t.Fatalf("body = %v", body)
+	}
+}
+
+// 用量：非流式 JSON 带 usage 对象（prompt/completion/llm_ms/first_token_ms/tok_per_s），
+// 并落库到 assistant 消息行。
+func TestAgentChat_Usage_NonStream(t *testing.T) {
+	llm := newMockAgentLLM(t, func(req map[string]any) (string, []ai.ToolCall) {
+		return "你好。", nil
+	})
+	registerMockAgentProvider(llm)
+	withAgentAIProvider(t, "agent-chat-mock")
+
+	w := doAgentChat(t, `{"messages":[{"role":"user","content":"你好"}]}`, nil, 33)
+	assertEq(t, w.Code, http.StatusOK, "status code")
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("parse body: %v", err)
+	}
+	usage, ok := body["usage"].(map[string]any)
+	if !ok {
+		t.Fatalf("usage missing: %v", body)
+	}
+	if usage["prompt_tokens"] != float64(12) || usage["completion_tokens"] != float64(34) {
+		t.Fatalf("usage = %v", usage)
+	}
+	for _, k := range []string{"llm_ms", "first_token_ms", "tok_per_s"} {
+		if _, ok := usage[k]; !ok {
+			t.Fatalf("usage missing %s: %v", k, usage)
+		}
+	}
+
+	// 落库：assistant 行带 token 用量与耗时
+	convID, _ := body["conversation_id"].(string)
+	msgs, err := store.DefaultAgentChatRepo().ListMessages(convID)
+	if err != nil || len(msgs) != 2 {
+		t.Fatalf("messages: len=%d err=%v", len(msgs), err)
+	}
+	if msgs[1].PromptTokens != 12 || msgs[1].CompletionTokens != 34 {
+		t.Fatalf("persisted usage = %+v", msgs[1])
+	}
+}
+
+// 用量：SSE done 事件带 usage 对象；流式末尾 usage 块被解析回填。
+func TestAgentChat_Usage_SSE(t *testing.T) {
+	llm := newMockAgentLLM(t, func(req map[string]any) (string, []ai.ToolCall) {
+		return "你好。", nil
+	})
+	registerMockAgentProvider(llm)
+	withAgentAIProvider(t, "agent-chat-mock")
+
+	w := doAgentChat(t, `{"messages":[{"role":"user","content":"你好"}],"stream":true}`, nil, 34)
+	assertEq(t, w.Code, http.StatusOK, "status code")
+	var donePayload map[string]any
+	for _, ev := range parseSSE(t, w.Body.String()) {
+		if ev.Event == "done" {
+			if err := json.Unmarshal([]byte(ev.Data), &donePayload); err != nil {
+				t.Fatalf("done data not JSON: %v", err)
+			}
+		}
+	}
+	if donePayload == nil {
+		t.Fatal("missing done event")
+	}
+	usage, ok := donePayload["usage"].(map[string]any)
+	if !ok {
+		t.Fatalf("done usage missing: %v", donePayload)
+	}
+	if usage["prompt_tokens"] != float64(12) || usage["completion_tokens"] != float64(34) {
+		t.Fatalf("done usage = %v", usage)
+	}
+	if usage["tok_per_s"].(float64) <= 0 {
+		t.Fatalf("tok_per_s = %v", usage["tok_per_s"])
+	}
+}
+
+// LLM 标题升级：截断自动标题被改写为模型生成标题；用户手动改名后不覆盖。
+func TestAgentChat_TitleUpgrade(t *testing.T) {
+	llm := newMockAgentLLM(t, func(req map[string]any) (string, []ai.ToolCall) {
+		return "「BTC行情分析」。", nil // 带引号标点：验证清洗
+	})
+	registerMockAgentProvider(llm)
+	withAgentAIProvider(t, "agent-chat-mock")
+
+	repo := store.DefaultAgentChatRepo()
+	provider, _ := configuredAgentAIProvider()
+	userMsg := "分析BTC走势，帮我看看多头还是空头"
+	autoTitle := truncateAgentChat(userMsg, 20)
+
+	rec := &store.AgentConversationRecord{UserID: 35, Title: autoTitle}
+	if err := repo.CreateConversation(rec); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	r := &agentChatRunner{provider: provider, convID: rec.ID, convTitle: autoTitle, userContent: userMsg}
+	r.upgradeConversationTitle(repo)
+	got, _ := repo.GetConversation(rec.ID)
+	if got.Title != "BTC行情分析" {
+		t.Fatalf("title = %q, want BTC行情分析", got.Title)
+	}
+
+	// 标题已是 LLM 标题：再次升级（convTitle 记录的还是截断标题）→ 不覆盖
+	r.upgradeConversationTitle(repo)
+	got, _ = repo.GetConversation(rec.ID)
+	if got.Title != "BTC行情分析" {
+		t.Fatalf("title 被覆盖: %q", got.Title)
+	}
+
+	// 用户手动改名后：标题与截断标题不一致 → 不覆盖
+	rec2 := &store.AgentConversationRecord{UserID: 35, Title: autoTitle}
+	if err := repo.CreateConversation(rec2); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	_ = repo.RenameConversation(rec2.ID, "我的重要会话")
+	r2 := &agentChatRunner{provider: provider, convID: rec2.ID, convTitle: autoTitle, userContent: userMsg}
+	r2.upgradeConversationTitle(repo)
+	got, _ = repo.GetConversation(rec2.ID)
+	if got.Title != "我的重要会话" {
+		t.Fatalf("用户改名被覆盖: %q", got.Title)
+	}
+}
+
+// sanitizeAgentChatTitle：去引号标点、截 12 字。
+func TestSanitizeAgentChatTitle(t *testing.T) {
+	cases := map[string]string{
+		"「BTC行情分析」。":         "BTC行情分析",
+		"\"多头趋势\"\n":         "多头趋势",
+		"  以太坊质押收益分析，长期看好  ": "以太坊质押收益分析，长期",
+		"\"。！": "",
+	}
+	for in, want := range cases {
+		if got := sanitizeAgentChatTitle(in); got != want {
+			t.Errorf("sanitize(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

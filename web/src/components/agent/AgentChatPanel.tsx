@@ -239,6 +239,7 @@ export function AgentChatPanel({ open, onClose, onUnread, variant = 'float' }: A
               content: done.content || m.content,
               toolCalls: done.tool_calls || m.toolCalls,
               reasoning: done.reasoning || m.reasoning,
+              usage: done.usage || m.usage,
             }))
           },
           onError: (msg) => {
@@ -355,6 +356,34 @@ export function AgentChatPanel({ open, onClose, onUnread, variant = 'float' }: A
 
   const stop = useCallback(() => abortRef.current?.(), [])
 
+  // ── 撤销最后一轮：删除最后一条用户消息及其后的助手消息 ──
+  const undo = useCallback(() => {
+    if (isStreaming) return
+    const trimLocal = () =>
+      setMessages((prev) => {
+        let idx = -1
+        for (let i = prev.length - 1; i >= 0; i--) {
+          if (prev[i].role === 'user') {
+            idx = i
+            break
+          }
+        }
+        return idx >= 0 ? prev.slice(0, idx) : prev
+      })
+    if (!currentId) {
+      trimLocal()
+      return
+    }
+    agentConversationApi
+      .undo(currentId)
+      .then(() => {
+        trimLocal()
+        queryClient.invalidateQueries({ queryKey: ['agent-conversation', currentId] })
+        queryClient.invalidateQueries({ queryKey: ['agent-conversations'] })
+      })
+      .catch(() => toast('error', '撤销失败'))
+  }, [currentId, isStreaming, queryClient])
+
   // ── 打断重定向：忙时发送 → 中断当前回合，结束后立即以新输入续聊 ──
   const steer = useCallback(
     (text: string) => {
@@ -461,6 +490,7 @@ export function AgentChatPanel({ open, onClose, onUnread, variant = 'float' }: A
         send={send}
         steer={steer}
         stop={stop}
+        undo={undo}
         regenerate={regenerate}
         editMessage={editMessage}
         newChat={newChat}

@@ -29,7 +29,7 @@ import (
 //	event: reasoning   data: <JSON 编码字符串（前端 JSON.parse 后追加）>
 //	event: tool_call   data: {"name","args_summary","status","result_summary"}
 //	event: conversation data: {"id","title"}（自动/指定会话，done 之前发一次）
-//	event: done        data: {"content","tool_calls":[...],"reasoning","conversation_id"}
+//	event: done        data: {"content","tool_calls":[...],"reasoning","conversation_id","usage":{"prompt_tokens","completion_tokens","llm_ms","first_token_ms","tok_per_s"}}
 //	event: error       data: {"message"}
 //	流结束            data: [DONE]
 
@@ -201,8 +201,13 @@ func AgentChatStream(c *gin.Context) {
 		return
 	}
 
-	// ── 落库：user + assistant（content / reasoning / tool_calls JSON）──
+	// ── 落库：user + assistant（content / reasoning / tool_calls JSON + 用量）──
 	r.persistConversation(repo, finalContent)
+
+	// 自动截断标题的会话：异步升级为 LLM 生成标题（不阻塞 SSE 事件流）
+	if agentChatTitleUpgrade && r.autoTitled && r.convID != "" {
+		go r.upgradeConversationTitle(repo)
+	}
 
 	if reqBody.Stream {
 		// conversation 事件在 done 之前发一次（新建会话时前端据此更新当前会话 id）。
@@ -212,6 +217,7 @@ func AgentChatStream(c *gin.Context) {
 			"tool_calls":      r.records,
 			"reasoning":       r.reasoning,
 			"conversation_id": r.convID,
+			"usage":           r.usagePayload(),
 		})
 		fmt.Fprint(c.Writer, "data: [DONE]\n\n")
 		c.Writer.Flush()
@@ -222,6 +228,7 @@ func AgentChatStream(c *gin.Context) {
 		"tool_calls":      r.records,
 		"reasoning":       r.reasoning,
 		"conversation_id": r.convID,
+		"usage":           r.usagePayload(),
 	})
 }
 
@@ -570,10 +577,16 @@ type agentChatRunner struct {
 	userContent string // 本轮 user 消息内容（空 = 不插入 user 行）
 	skipUserMsg bool   // replace_history：user 已整体入库，只补 assistant
 	reasoning   string // 聚合的推理内容（流式回调 / 非流式解析累计）
+	// 用量统计（usage 事件字段与 assistant 消息落库共用）
+	usage        ai.Usage  // 跨 tool-calling 迭代累计的 token 用量
+	llmStart     time.Time // run 开始时间
+	firstTokenAt time.Time // 首个正文/推理分片到达时间（零值 = 无分片，first_token_ms 记 0）
+	autoTitled   bool      // 标题为截断自动生成（据此异步升级为 LLM 标题）
 }
 
 // run 执行 tool-calling 循环，返回最终答案文本。
 func (r *agentChatRunner) run() (string, error) {
+	r.llmStart = time.Now()
 	// 系统提示词放在这里拼装：首轮调用前工具集已确定。
 	sysPrompt := buildAgentChatSystemPrompt(r.agentToolsDesc())
 	// 记忆插件：把该用户的重要记忆注入系统提示词尾部（无记忆为空串）
@@ -592,11 +605,15 @@ func (r *agentChatRunner) run() (string, error) {
 		if r.aborted() {
 			return "", errAgentChatAborted
 		}
-		fullText, reasoning, toolCalls, err := r.callModel()
+		fullText, reasoning, toolCalls, usage, err := r.callModel()
 		if err != nil {
 			return "", err
 		}
 		r.reasoning += reasoning
+		// 跨迭代累计 token 用量（流式协议未上报时为零值，不影响累加）
+		r.usage.PromptTokens += usage.PromptTokens
+		r.usage.CompletionTokens += usage.CompletionTokens
+		r.usage.TotalTokens += usage.TotalTokens
 		if len(toolCalls) == 0 {
 			finalContent = fullText
 			completed = true
@@ -638,7 +655,7 @@ func (r *agentChatRunner) reqContext() context.Context {
 
 // persistConversation 轮次成功后落库：自动建会话（标题=首条 user 截 20 字，
 // model 存实际使用的 "provider:model"），插 user 行（如未入库）与 assistant 行
-// （content / reasoning / tool_calls JSON）。
+// （content / reasoning / tool_calls JSON + token 用量与整轮耗时）。
 func (r *agentChatRunner) persistConversation(repo *store.AgentChatRepo, finalContent string) {
 	usedModel := r.provider.Name + ":" + r.provider.Model
 	if r.convID == "" {
@@ -650,6 +667,7 @@ func (r *agentChatRunner) persistConversation(repo *store.AgentChatRepo, finalCo
 		if err := repo.CreateConversation(rec); err == nil {
 			r.convID = rec.ID
 			r.convTitle = rec.Title
+			r.autoTitled = rec.Title != "" // 截断自动标题：标记后可异步升级为 LLM 标题
 		}
 	} else {
 		// 已有会话：补上标题（空标题的自动会话首次落库时命名为首条 user 截断）。
@@ -659,6 +677,7 @@ func (r *agentChatRunner) persistConversation(repo *store.AgentChatRepo, finalCo
 				title := truncateAgentChat(r.userContent, 20)
 				_ = repo.RenameConversation(r.convID, title)
 				r.convTitle = title
+				r.autoTitled = true
 			}
 		}
 	}
@@ -674,12 +693,86 @@ func (r *agentChatRunner) persistConversation(repo *store.AgentChatRepo, finalCo
 	}
 	toolCallsJSON, _ := json.Marshal(r.records)
 	_ = repo.InsertMessage(&store.AgentMessageRecord{
-		ConversationID: r.convID,
-		Role:           "assistant",
-		Content:        finalContent,
-		Reasoning:      r.reasoning,
-		ToolCalls:      string(toolCallsJSON),
+		ConversationID:   r.convID,
+		Role:             "assistant",
+		Content:          finalContent,
+		Reasoning:        r.reasoning,
+		ToolCalls:        string(toolCallsJSON),
+		PromptTokens:     int64(r.usage.PromptTokens),
+		CompletionTokens: int64(r.usage.CompletionTokens),
+		LLMMs:            time.Since(r.llmStart).Milliseconds(),
 	})
+}
+
+// agentChatTitleTimeout LLM 标题生成的整体超时（超时保留截断标题）。
+const agentChatTitleTimeout = 10 * time.Second
+
+// agentChatTitleUpgrade 异步 LLM 标题升级开关；测试置 false 避免与标题断言竞态。
+var agentChatTitleUpgrade = true
+
+// upgradeConversationTitle 异步把截断自动标题升级为 LLM 生成标题（≤12 字，
+// 与首条 user 消息同语言，无引号标点）。任何失败静默保留截断标题；
+// 仅当标题仍是当时的截断标题时才改写（不覆盖用户手动改名）。
+func (r *agentChatRunner) upgradeConversationTitle(repo *store.AgentChatRepo) {
+	convID, autoTitle, userMsg := r.convID, r.convTitle, r.userContent
+	if convID == "" || autoTitle == "" || userMsg == "" || r.provider == nil || r.provider.APIKey == "" {
+		return
+	}
+	rec, err := repo.GetConversation(convID)
+	if err != nil || rec == nil || rec.Title != autoTitle {
+		return
+	}
+
+	// provider.ChatCompletion 内部自带超时且不收 ctx：结果走 channel，
+	// 外层 select 兜底 10s，超时直接放弃（保留截断标题）。
+	type titleResult struct {
+		title string
+		err   error
+	}
+	ch := make(chan titleResult, 1)
+	go func() {
+		resp, err := r.provider.ChatCompletion(ai.CompletionRequest{
+			Model: r.provider.Model,
+			Messages: []ai.ChatMessage{
+				{Role: ai.RoleSystem, Content: "你是会话标题生成器，只输出标题本身。"},
+				{Role: ai.RoleUser, Content: "把以下用户消息总结为一个不超过 12 个字的会话标题（与消息同语言，不要引号、标点或任何解释）。只输出标题。\n消息：" + userMsg},
+			},
+		})
+		if err != nil || resp == nil || len(resp.Choices) == 0 {
+			ch <- titleResult{err: fmt.Errorf("title generation failed: %v", err)}
+			return
+		}
+		ch <- titleResult{title: resp.Choices[0].Message.Content}
+	}()
+
+	var title string
+	select {
+	case res := <-ch:
+		if res.err != nil {
+			return
+		}
+		title = sanitizeAgentChatTitle(res.title)
+	case <-time.After(agentChatTitleTimeout):
+		return
+	}
+	if title == "" {
+		return
+	}
+	// 生成期间用户可能已手动改名：改写前再校验一次当前标题。
+	rec, err = repo.GetConversation(convID)
+	if err != nil || rec == nil || rec.Title != autoTitle {
+		return
+	}
+	_ = repo.RenameConversation(convID, title)
+}
+
+// sanitizeAgentChatTitle 清洗 LLM 输出：去首尾空白/引号/标点，截 12 字。
+func sanitizeAgentChatTitle(s string) string {
+	s = strings.Trim(s, " \t\n\r\"'“”‘’`「」『』《》<>。，、！？!?.…")
+	if s == "" {
+		return ""
+	}
+	return truncateAgentChat(s, 12)
 }
 
 // agentToolsDesc 还原当前 aiTools 对应的 agent.Tool 描述（仅用于拼系统提示词）。
@@ -694,10 +787,10 @@ func (r *agentChatRunner) agentToolsDesc() []agent.Tool {
 	return out
 }
 
-// callModel 单轮模型调用：流式走 ChatCompletionStreamEx（回调转发 SSE delta 与
-// reasoning 分片），非流式走 ChatCompletion（解析 message.reasoning_content）。
-// 返回 (正文, 推理内容, 工具调用, err)。
-func (r *agentChatRunner) callModel() (string, string, []ai.ToolCall, error) {
+// callModel 单轮模型调用：流式走 ChatCompletionStreamUsage（回调转发 SSE delta 与
+// reasoning 分片，并回填协议上报的用量），非流式走 ChatCompletion（解析
+// message.reasoning_content）。返回 (正文, 推理内容, 工具调用, 用量, err)。
+func (r *agentChatRunner) callModel() (string, string, []ai.ToolCall, ai.Usage, error) {
 	req := ai.CompletionRequest{
 		Model:      r.provider.Model,
 		Messages:   r.history,
@@ -705,23 +798,62 @@ func (r *agentChatRunner) callModel() (string, string, []ai.ToolCall, error) {
 		ToolChoice: "auto",
 	}
 	if r.stream {
-		fullText, reasoning, toolCalls, err := r.provider.ChatCompletionStreamEx(req, func(delta, reasoningDelta string) {
+		return r.provider.ChatCompletionStreamUsage(req, func(delta, reasoningDelta string) {
+			// 首个正文/推理分片到达即记 first-token 时间（仅此一次）
+			if r.firstTokenAt.IsZero() && (delta != "" || reasoningDelta != "") {
+				r.firstTokenAt = time.Now()
+			}
 			r.emitDelta(delta)
 			r.emitReasoning(reasoningDelta)
 		})
-		return fullText, reasoning, toolCalls, err
 	}
 	resp, err := r.provider.ChatCompletion(req)
 	if err != nil {
-		return "", "", nil, err
+		return "", "", nil, ai.Usage{}, err
 	}
 	fullText := ""
 	reasoning := ""
-	if resp != nil && len(resp.Choices) > 0 {
-		fullText = resp.Choices[0].Message.Content
-		reasoning = resp.Choices[0].Message.ReasoningContent
+	usage := ai.Usage{}
+	if resp != nil {
+		usage = resp.Usage
+		if len(resp.Choices) > 0 {
+			fullText = resp.Choices[0].Message.Content
+			reasoning = resp.Choices[0].Message.ReasoningContent
+		}
 	}
-	return fullText, reasoning, ai.ExtractToolCalls(resp), nil
+	return fullText, reasoning, ai.ExtractToolCalls(resp), usage, nil
+}
+
+// agentChatUsagePayload done 事件 / 非流式 JSON 的 usage 字段（契约固定，
+// 用量不可用时各字段为零值）。
+type agentChatUsagePayload struct {
+	PromptTokens     int     `json:"prompt_tokens"`
+	CompletionTokens int     `json:"completion_tokens"`
+	LLMMs            int64   `json:"llm_ms"`
+	FirstTokenMs     int64   `json:"first_token_ms"`
+	TokPerS          float64 `json:"tok_per_s"`
+}
+
+// usagePayload 汇总整轮用量：llm_ms 为 run 总耗时，first_token_ms 为首分片耗时
+// （无分片记 0），tok_per_s = completion_tokens / 总秒数（保留 1 位小数）。
+func (r *agentChatRunner) usagePayload() agentChatUsagePayload {
+	llmMs := time.Since(r.llmStart).Milliseconds()
+	firstTokenMs := int64(0)
+	if !r.firstTokenAt.IsZero() {
+		firstTokenMs = r.firstTokenAt.Sub(r.llmStart).Milliseconds()
+	}
+	tokPerS := 0.0
+	if llmMs > 0 && r.usage.CompletionTokens > 0 {
+		tokPerS = float64(r.usage.CompletionTokens) / (float64(llmMs) / 1000)
+		tokPerS = float64(int(tokPerS*10+0.5)) / 10
+	}
+	return agentChatUsagePayload{
+		PromptTokens:     r.usage.PromptTokens,
+		CompletionTokens: r.usage.CompletionTokens,
+		LLMMs:            llmMs,
+		FirstTokenMs:     firstTokenMs,
+		TokPerS:          tokPerS,
+	}
 }
 
 // executeTool 执行单个工具调用：发 running/done 事件、回传结果文本（截断）、写审计。

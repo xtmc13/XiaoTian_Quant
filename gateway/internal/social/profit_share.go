@@ -95,6 +95,7 @@ func (e *SettlementEngine) Start() {
 	}
 	e.running = true
 	e.doneCh = make(chan struct{})
+	e.stopCh = make(chan struct{})
 	e.mu.Unlock()
 	go e.loop()
 }

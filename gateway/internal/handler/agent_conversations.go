@@ -143,3 +143,38 @@ func AgentConversationDelete(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
+
+// AgentConversationSearch 处理 GET /agent/conversations/search?q=：
+// LIKE 搜索当前用户的会话标题与消息内容，按 updated_at 倒序，最多 20 条；
+// snippet 为命中消息前后约 40 字上下文（标题命中时为空串）。
+func AgentConversationSearch(c *gin.Context) {
+	q := strings.TrimSpace(c.Query("q"))
+	if q == "" {
+		c.JSON(http.StatusOK, gin.H{"success": true, "results": []any{}})
+		return
+	}
+	results, err := store.DefaultAgentChatRepo().SearchConversations(int64(aiBotUserID(c)), q, 20)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "search conversations failed: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "results": results})
+}
+
+// AgentConversationUndo 处理 POST /agent/conversations/:id/undo：撤回一轮
+// （删除最后一条 user 消息及其后的全部 assistant 消息），返回剩余消息数。
+func AgentConversationUndo(c *gin.Context) {
+	uid := int64(aiBotUserID(c))
+	repo := store.DefaultAgentChatRepo()
+	rec, err := repo.GetConversation(c.Param("id"))
+	if err != nil || rec == nil || rec.UserID != uid {
+		c.JSON(http.StatusNotFound, gin.H{"error": "conversation not found"})
+		return
+	}
+	remaining, err := repo.UndoLastUserTurn(rec.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "undo failed: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "remaining": remaining})
+}

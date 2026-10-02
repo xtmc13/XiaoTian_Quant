@@ -1,4 +1,4 @@
-import type { AgentToolCall } from '@/lib/api'
+import type { AgentToolCall, AgentTurnUsage } from '@/lib/api'
 
 // ── 面板内消息模型（在会话消息基础上补充流式状态） ──
 export interface AgentChatMsg {
@@ -10,6 +10,8 @@ export interface AgentChatMsg {
   toolCalls?: AgentToolCall[]
   streaming?: boolean
   error?: boolean
+  /** 本轮真实 token 用量（done 事件回传） */
+  usage?: AgentTurnUsage
 }
 
 // ── 本地设置（xt-agent-settings） ──

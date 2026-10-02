@@ -22,6 +22,9 @@
   --ag-accent-fg: #ffffff; /* 主按钮前景 */
   --ag-user-bubble: #e9f1ff; /* 用户气泡浅蓝（对标桌面版右对齐气泡） */
   --ag-user-bubble-hover: #dce8fe;
+  --ag-send-bg: #e6ebff; /* 发送键浅蓝底（对标桌面版） */
+  --ag-send-bg-hover: #d8e1ff;
+  --ag-send-fg: #4d6bfe;
   --ag-red: #e5484d;
   --ag-green: #2f9e6e;
   --ag-amber: #d97706;
@@ -37,6 +40,7 @@
   --ag-conversation-text: 0.8125rem; /* 13px */
   --ag-conversation-tool: 0.6875rem; /* 11px */
   --ag-composer-max-h: 9.375rem; /* 150px 自动增高上限 */
+  --ag-composer-min-h: 4.25rem; /* 68px 输入区最小高（对标桌面版大卡片） */
   --ag-sidebar-w: 14.8125rem; /* 237px */
   --ag-content-max-w: 46.75rem; /* 748px 正文居中列（对标 --dsh-chat-content-width） */
   --ag-composer-max-w: 48.75rem; /* 780px = 748 + 32（对标 --dsh-composer-card-max-width） */

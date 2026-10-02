@@ -2,6 +2,8 @@ package store
 
 import (
 	"database/sql"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -34,7 +36,11 @@ type AgentMessageRecord struct {
 	Content        string `json:"content"`
 	Reasoning      string `json:"reasoning"`
 	ToolCalls      string `json:"tool_calls"` // JSON 字符串数组，空为 ""
-	CreatedAt      int64  `json:"created_at"` // 秒级 Unix
+	// 用量统计（仅 assistant 行落库）：跨 tool-calling 迭代累计的 token 与整轮耗时毫秒。
+	PromptTokens     int64 `json:"prompt_tokens"`
+	CompletionTokens int64 `json:"completion_tokens"`
+	LLMMs            int64 `json:"llm_ms"`
+	CreatedAt        int64 `json:"created_at"` // 秒级 Unix
 }
 
 // EnsureAgentChatSchema 幂等创建 agent 会话/消息两张表（含常用查询索引）。
@@ -65,10 +71,23 @@ func EnsureAgentChatSchema() error {
 		content TEXT NOT NULL DEFAULT '',
 		reasoning TEXT NOT NULL DEFAULT '',
 		tool_calls TEXT NOT NULL DEFAULT '',
+		prompt_tokens INTEGER NOT NULL DEFAULT 0,
+		completion_tokens INTEGER NOT NULL DEFAULT 0,
+		llm_ms INTEGER NOT NULL DEFAULT 0,
 		created_at INTEGER NOT NULL DEFAULT 0
 	)`)
 	if err != nil {
 		return err
+	}
+	// 旧库补用量列（SQLite ADD COLUMN 无 IF NOT EXISTS，重复列错误忽略）。
+	for _, ddl := range []string{
+		`ALTER TABLE xt_agent_messages ADD COLUMN prompt_tokens INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE xt_agent_messages ADD COLUMN completion_tokens INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE xt_agent_messages ADD COLUMN llm_ms INTEGER NOT NULL DEFAULT 0`,
+	} {
+		if _, err := db.Exec(ddl); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			return err
+		}
 	}
 	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_agent_messages_conv_time
 		ON xt_agent_messages (conversation_id, created_at)`)
@@ -104,7 +123,7 @@ func (r *AgentChatRepo) ensure() {
 }
 
 const agentConversationColumns = `id, user_id, title, model, created_at, updated_at`
-const agentMessageColumns = `id, conversation_id, role, content, reasoning, tool_calls, created_at`
+const agentMessageColumns = `id, conversation_id, role, content, reasoning, tool_calls, prompt_tokens, completion_tokens, llm_ms, created_at`
 
 func scanAgentConversation(s rowScanner) (*AgentConversationRecord, error) {
 	var rec AgentConversationRecord
@@ -120,7 +139,8 @@ func scanAgentConversation(s rowScanner) (*AgentConversationRecord, error) {
 
 func scanAgentMessage(s rowScanner) (*AgentMessageRecord, error) {
 	var rec AgentMessageRecord
-	err := s.Scan(&rec.ID, &rec.ConversationID, &rec.Role, &rec.Content, &rec.Reasoning, &rec.ToolCalls, &rec.CreatedAt)
+	err := s.Scan(&rec.ID, &rec.ConversationID, &rec.Role, &rec.Content, &rec.Reasoning, &rec.ToolCalls,
+		&rec.PromptTokens, &rec.CompletionTokens, &rec.LLMMs, &rec.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -248,9 +268,10 @@ func (r *AgentChatRepo) InsertMessage(rec *AgentMessageRecord) error {
 	if rec.CreatedAt == 0 {
 		rec.CreatedAt = time.Now().Unix()
 	}
-	if _, err := db.Exec(`INSERT INTO xt_agent_messages (conversation_id, role, content, reasoning, tool_calls, created_at)
-		VALUES (?,?,?,?,?,?)`,
-		rec.ConversationID, rec.Role, rec.Content, rec.Reasoning, rec.ToolCalls, rec.CreatedAt); err != nil {
+	if _, err := db.Exec(`INSERT INTO xt_agent_messages (conversation_id, role, content, reasoning, tool_calls, prompt_tokens, completion_tokens, llm_ms, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?)`,
+		rec.ConversationID, rec.Role, rec.Content, rec.Reasoning, rec.ToolCalls,
+		rec.PromptTokens, rec.CompletionTokens, rec.LLMMs, rec.CreatedAt); err != nil {
 		return err
 	}
 	_, err := db.Exec(`UPDATE xt_agent_conversations SET updated_at=? WHERE id=?`, rec.CreatedAt, rec.ConversationID)
@@ -319,9 +340,10 @@ func (r *AgentChatRepo) ReplaceMessages(conversationID string, msgs []*AgentMess
 		if m.CreatedAt == 0 {
 			m.CreatedAt = now
 		}
-		if _, err := tx.Exec(`INSERT INTO xt_agent_messages (conversation_id, role, content, reasoning, tool_calls, created_at)
-			VALUES (?,?,?,?,?,?)`,
-			conversationID, m.Role, m.Content, m.Reasoning, m.ToolCalls, m.CreatedAt); err != nil {
+		if _, err := tx.Exec(`INSERT INTO xt_agent_messages (conversation_id, role, content, reasoning, tool_calls, prompt_tokens, completion_tokens, llm_ms, created_at)
+			VALUES (?,?,?,?,?,?,?,?,?)`,
+			conversationID, m.Role, m.Content, m.Reasoning, m.ToolCalls,
+			m.PromptTokens, m.CompletionTokens, m.LLMMs, m.CreatedAt); err != nil {
 			return err
 		}
 	}
@@ -329,4 +351,250 @@ func (r *AgentChatRepo) ReplaceMessages(conversationID string, msgs []*AgentMess
 		return err
 	}
 	return tx.Commit()
+}
+
+// ── 用量统计 / 全文搜索 / 撤回一轮 ──
+
+// AgentUsageTotal 用量汇总行（session 会话维度与 totals 用户维度共用）。
+type AgentUsageTotal struct {
+	PromptTokens     int64 `json:"prompt_tokens"`
+	CompletionTokens int64 `json:"completion_tokens"`
+	LLMMs            int64 `json:"llm_ms"`
+	Rounds           int   `json:"rounds"` // completion_tokens>0 的 assistant 消息数
+}
+
+// AgentUsageDay 按日用量（date 为本地时区 YYYY-MM-DD）。
+type AgentUsageDay struct {
+	Date             string `json:"date"`
+	PromptTokens     int64  `json:"prompt_tokens"`
+	CompletionTokens int64  `json:"completion_tokens"`
+}
+
+// AgentUsageModel 按 "provider:model" 用量。
+type AgentUsageModel struct {
+	Model            string `json:"model"`
+	PromptTokens     int64  `json:"prompt_tokens"`
+	CompletionTokens int64  `json:"completion_tokens"`
+}
+
+// AgentUsageSummary 用量汇总响应体：session（指定会话，未指定为 nil）、
+// totals（用户全量）、by_day（最近 days 天，日期升序）、by_model。
+type AgentUsageSummary struct {
+	Session *AgentUsageTotal  `json:"session"`
+	Totals  AgentUsageTotal   `json:"totals"`
+	ByDay   []AgentUsageDay   `json:"by_day"`
+	ByModel []AgentUsageModel `json:"by_model"`
+}
+
+// GetUsageSummary 汇总某用户的 agent 对话用量；conversationID 非空时附会话维度 session。
+// userID 为十进制字符串（与 handler 层入参一致），解析失败按 0 处理。
+func (r *AgentChatRepo) GetUsageSummary(userID, conversationID string, days int) (*AgentUsageSummary, error) {
+	r.ensure()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if db == nil {
+		return nil, sql.ErrConnDone
+	}
+	uid, _ := strconv.ParseInt(userID, 10, 64)
+	if days <= 0 {
+		days = 30
+	}
+	out := &AgentUsageSummary{
+		ByDay:   make([]AgentUsageDay, 0, days),
+		ByModel: make([]AgentUsageModel, 0, 4),
+	}
+	scanTotal := func(row *sql.Row) (AgentUsageTotal, error) {
+		var t AgentUsageTotal
+		err := row.Scan(&t.PromptTokens, &t.CompletionTokens, &t.LLMMs, &t.Rounds)
+		return t, err
+	}
+	// rounds 只计 completion_tokens>0 的 assistant 行；token/耗时为 assistant 行全量合计。
+	const sumCols = `COALESCE(SUM(m.prompt_tokens),0), COALESCE(SUM(m.completion_tokens),0),
+		COALESCE(SUM(m.llm_ms),0), COALESCE(SUM(CASE WHEN m.completion_tokens>0 THEN 1 ELSE 0 END),0)`
+
+	if conversationID != "" {
+		t, err := scanTotal(db.QueryRow(`SELECT `+sumCols+` FROM xt_agent_messages m
+			WHERE m.conversation_id=? AND m.role='assistant'`, conversationID))
+		if err != nil {
+			return nil, err
+		}
+		out.Session = &t
+	}
+	totals, err := scanTotal(db.QueryRow(`SELECT `+sumCols+` FROM xt_agent_messages m
+		JOIN xt_agent_conversations c ON c.id=m.conversation_id
+		WHERE c.user_id=? AND m.role='assistant'`, uid))
+	if err != nil {
+		return nil, err
+	}
+	out.Totals = totals
+
+	since := time.Now().AddDate(0, 0, -days).Unix()
+	rows, err := db.Query(`SELECT date(m.created_at,'unixepoch','localtime') d,
+		COALESCE(SUM(m.prompt_tokens),0), COALESCE(SUM(m.completion_tokens),0)
+		FROM xt_agent_messages m
+		JOIN xt_agent_conversations c ON c.id=m.conversation_id
+		WHERE c.user_id=? AND m.role='assistant' AND m.created_at>=?
+		GROUP BY d ORDER BY d ASC`, uid, since)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var d AgentUsageDay
+		if err := rows.Scan(&d.Date, &d.PromptTokens, &d.CompletionTokens); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		out.ByDay = append(out.ByDay, d)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+
+	rows, err = db.Query(`SELECT c.model, COALESCE(SUM(m.prompt_tokens),0), COALESCE(SUM(m.completion_tokens),0)
+		FROM xt_agent_messages m
+		JOIN xt_agent_conversations c ON c.id=m.conversation_id
+		WHERE c.user_id=? AND m.role='assistant' AND c.model<>''
+		GROUP BY c.model ORDER BY SUM(m.prompt_tokens)+SUM(m.completion_tokens) DESC`, uid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var m AgentUsageModel
+		if err := rows.Scan(&m.Model, &m.PromptTokens, &m.CompletionTokens); err != nil {
+			return nil, err
+		}
+		out.ByModel = append(out.ByModel, m)
+	}
+	return out, rows.Err()
+}
+
+// AgentConversationSearchResult 全文搜索结果行：snippet 为命中消息前后约 40 字的
+// 上下文（命中标题时为空串）。
+type AgentConversationSearchResult struct {
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	UpdatedAt int64  `json:"updated_at"`
+	Snippet   string `json:"snippet"`
+}
+
+// escapeLikePattern 转义 LIKE 通配符（% / _ / \），配合 ESCAPE '\' 使用。
+func escapeLikePattern(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return r.Replace(s)
+}
+
+// SearchConversations 按关键字 LIKE 搜索用户会话（标题 + 消息内容），
+// 按 updated_at 倒序，limit<=0 默认 20。snippet 取最早一条命中消息的前后约 40 字上下文。
+func (r *AgentChatRepo) SearchConversations(userID int64, query string, limit int) ([]*AgentConversationSearchResult, error) {
+	r.ensure()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if db == nil {
+		return nil, sql.ErrConnDone
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	like := "%" + escapeLikePattern(query) + "%"
+	rows, err := db.Query(`SELECT DISTINCT c.id, c.title, c.updated_at
+		FROM xt_agent_conversations c
+		LEFT JOIN xt_agent_messages m ON m.conversation_id=c.id
+		WHERE c.user_id=? AND (c.title LIKE ? ESCAPE '\' OR m.content LIKE ? ESCAPE '\')
+		ORDER BY c.updated_at DESC LIMIT ?`, userID, like, like, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*AgentConversationSearchResult, 0, limit)
+	for rows.Next() {
+		res := &AgentConversationSearchResult{}
+		if err := rows.Scan(&res.ID, &res.Title, &res.UpdatedAt); err != nil {
+			rows.Close()
+			return out, err
+		}
+		out = append(out, res)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return out, err
+	}
+	rows.Close()
+
+	// 逐个会话取最早一条命中消息生成 snippet（命中标题的会话无命中消息，snippet 留空）。
+	for _, res := range out {
+		var content string
+		err := db.QueryRow(`SELECT content FROM xt_agent_messages
+			WHERE conversation_id=? AND content LIKE ? ESCAPE '\'
+			ORDER BY created_at ASC, id ASC LIMIT 1`, res.ID, like).Scan(&content)
+		if err != nil {
+			continue // 无命中消息（标题命中）或读取失败：snippet 留空
+		}
+		res.Snippet = matchSnippet(content, query, 40)
+	}
+	return out, nil
+}
+
+// matchSnippet 截取 content 中首个命中位置前后共约 n 个字符的上下文（rune 计）。
+func matchSnippet(content, query string, n int) string {
+	runes := []rune(content)
+	q := []rune(query)
+	idx := -1
+	lower := strings.ToLower(content)
+	if i := strings.Index(lower, strings.ToLower(query)); i >= 0 {
+		idx = len([]rune(lower[:i]))
+	}
+	if idx < 0 {
+		if len(runes) <= n {
+			return content
+		}
+		return string(runes[:n])
+	}
+	start := idx - (n-len(q))/2
+	if start < 0 {
+		start = 0
+	}
+	end := start + n
+	if end > len(runes) {
+		end = len(runes)
+		start = end - n
+		if start < 0 {
+			start = 0
+		}
+	}
+	snip := string(runes[start:end])
+	if start > 0 {
+		snip = "…" + snip
+	}
+	if end < len(runes) {
+		snip += "…"
+	}
+	return snip
+}
+
+// UndoLastUserTurn 撤回一轮对话：删除会话中最后一条 user 消息及其后的全部
+// assistant 消息；无 user 消息时为 no-op。返回剩余消息总数。
+func (r *AgentChatRepo) UndoLastUserTurn(conversationID string) (int, error) {
+	r.ensure()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if db == nil {
+		return 0, sql.ErrConnDone
+	}
+	var lastUserID int64
+	err := db.QueryRow(`SELECT id FROM xt_agent_messages WHERE conversation_id=? AND role='user'
+		ORDER BY created_at DESC, id DESC LIMIT 1`, conversationID).Scan(&lastUserID)
+	if err != nil && err != sql.ErrNoRows {
+		return 0, err
+	}
+	if err == nil {
+		if _, err := db.Exec(`DELETE FROM xt_agent_messages WHERE conversation_id=? AND id>=?
+			AND role IN ('user','assistant')`, conversationID, lastUserID); err != nil {
+			return 0, err
+		}
+	}
+	var remaining int
+	err = db.QueryRow(`SELECT COUNT(*) FROM xt_agent_messages WHERE conversation_id=?`, conversationID).Scan(&remaining)
+	return remaining, err
 }

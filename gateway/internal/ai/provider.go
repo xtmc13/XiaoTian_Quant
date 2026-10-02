@@ -594,7 +594,7 @@ func (p *Provider) ChatCompletionStream(req CompletionRequest, callback func(del
 		if callback != nil {
 			callback(delta)
 		}
-	})
+	}, nil)
 	return err
 }
 
@@ -602,21 +602,31 @@ func (p *Provider) ChatCompletionStream(req CompletionRequest, callback func(del
 // （第二参为 reasoning 分片），同时聚合 tool calls（含分片拼接），
 // 返回完整文本、聚合推理内容与工具调用列表。
 func (p *Provider) ChatCompletionStreamEx(req CompletionRequest, callback func(delta, reasoningDelta string)) (string, string, []ToolCall, error) {
-	return p.chatCompletionStream(req, callback)
+	text, reasoning, calls, err := p.chatCompletionStream(req, callback, nil)
+	return text, reasoning, calls, err
 }
 
-// chatCompletionStream 流式实现：按协议分发，回调正文/推理增量并聚合工具调用
-func (p *Provider) chatCompletionStream(req CompletionRequest, callback func(delta, reasoningDelta string)) (string, string, []ToolCall, error) {
+// ChatCompletionStreamUsage 同 ChatCompletionStreamEx，额外返回 token 用量
+// （流式协议上报时；未上报为零值）。
+func (p *Provider) ChatCompletionStreamUsage(req CompletionRequest, callback func(delta, reasoningDelta string)) (string, string, []ToolCall, Usage, error) {
+	var usage Usage
+	text, reasoning, calls, err := p.chatCompletionStream(req, callback, &usage)
+	return text, reasoning, calls, usage, err
+}
+
+// chatCompletionStream 流式实现：按协议分发，回调正文/推理增量并聚合工具调用；
+// usageOut 非 nil 时回填协议上报的 token 用量（未上报保持零值）。
+func (p *Provider) chatCompletionStream(req CompletionRequest, callback func(delta, reasoningDelta string), usageOut *Usage) (string, string, []ToolCall, error) {
 	if p.Name == "claude" {
-		return p.claudeChatStream(req, callback)
+		return p.claudeChatStream(req, callback, usageOut)
 	}
 	if p.Name == "gemini" {
-		return p.geminiChatStream(req, callback)
+		return p.geminiChatStream(req, callback, usageOut)
 	}
-	return p.openAICompatibleStream(req, callback)
+	return p.openAICompatibleStream(req, callback, usageOut)
 }
 
-func (p *Provider) openAICompatibleStream(req CompletionRequest, callback func(delta, reasoningDelta string)) (string, string, []ToolCall, error) {
+func (p *Provider) openAICompatibleStream(req CompletionRequest, callback func(delta, reasoningDelta string), usageOut *Usage) (string, string, []ToolCall, error) {
 	req.Stream = true
 	req.Model = p.Model
 
@@ -653,6 +663,18 @@ func (p *Provider) openAICompatibleStream(req CompletionRequest, callback func(d
 		var chunk map[string]any
 		if json.Unmarshal([]byte(data), &chunk) != nil {
 			continue
+		}
+		// 部分 OpenAI 兼容协议在末尾块上报 usage（choices 为空）
+		if u, ok := chunk["usage"].(map[string]any); ok && usageOut != nil {
+			if v, ok := u["prompt_tokens"].(float64); ok {
+				usageOut.PromptTokens = int(v)
+			}
+			if v, ok := u["completion_tokens"].(float64); ok {
+				usageOut.CompletionTokens = int(v)
+			}
+			if v, ok := u["total_tokens"].(float64); ok {
+				usageOut.TotalTokens = int(v)
+			}
 		}
 		choices, _ := chunk["choices"].([]any)
 		if len(choices) == 0 {
@@ -698,7 +720,7 @@ func (p *Provider) openAICompatibleStream(req CompletionRequest, callback func(d
 }
 
 // Anthropic streaming via SSE.
-func (p *Provider) claudeChatStream(req CompletionRequest, callback func(delta, reasoningDelta string)) (string, string, []ToolCall, error) {
+func (p *Provider) claudeChatStream(req CompletionRequest, callback func(delta, reasoningDelta string), usageOut *Usage) (string, string, []ToolCall, error) {
 	systemMsg, anthropicMsgs := buildAnthropicMessages(req.Messages)
 	payload := map[string]any{
 		"model":      p.Model,
@@ -748,6 +770,22 @@ func (p *Provider) claudeChatStream(req CompletionRequest, callback func(delta, 
 			continue
 		}
 		switch event["type"] {
+		case "message_start":
+			// 输入 token 在 message_start 的 message.usage.input_tokens 上报
+			if msg, ok := event["message"].(map[string]any); ok && usageOut != nil {
+				if u, ok := msg["usage"].(map[string]any); ok {
+					if v, ok := u["input_tokens"].(float64); ok {
+						usageOut.PromptTokens = int(v)
+					}
+				}
+			}
+		case "message_delta":
+			// 输出 token 在 message_delta 的 usage.output_tokens 累计上报
+			if u, ok := event["usage"].(map[string]any); ok && usageOut != nil {
+				if v, ok := u["output_tokens"].(float64); ok {
+					usageOut.CompletionTokens = int(v)
+				}
+			}
 		case "content_block_start":
 			// tool_use block 起始：记录 id 与 name
 			if cb, ok := event["content_block"].(map[string]any); ok && cb["type"] == "tool_use" {
@@ -788,7 +826,7 @@ func (p *Provider) claudeChatStream(req CompletionRequest, callback func(delta, 
 }
 
 // Gemini streaming.
-func (p *Provider) geminiChatStream(req CompletionRequest, callback func(delta, reasoningDelta string)) (string, string, []ToolCall, error) {
+func (p *Provider) geminiChatStream(req CompletionRequest, callback func(delta, reasoningDelta string), usageOut *Usage) (string, string, []ToolCall, error) {
 	contents := buildGeminiContents(req.Messages)
 	payload := map[string]any{"contents": contents}
 	if len(req.Tools) > 0 {
@@ -826,6 +864,18 @@ func (p *Provider) geminiChatStream(req CompletionRequest, callback func(delta, 
 		var chunk map[string]any
 		if json.Unmarshal([]byte(line), &chunk) != nil {
 			continue
+		}
+		// usageMetadata 逐块累计上报，取最后一块为准
+		if um, ok := chunk["usageMetadata"].(map[string]any); ok && usageOut != nil {
+			if v, ok := um["promptTokenCount"].(float64); ok {
+				usageOut.PromptTokens = int(v)
+			}
+			if v, ok := um["candidatesTokenCount"].(float64); ok {
+				usageOut.CompletionTokens = int(v)
+			}
+			if v, ok := um["totalTokenCount"].(float64); ok {
+				usageOut.TotalTokens = int(v)
+			}
 		}
 		if candidates, ok := chunk["candidates"].([]any); ok && len(candidates) > 0 {
 			if cand, ok := candidates[0].(map[string]any); ok {

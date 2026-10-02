@@ -234,3 +234,179 @@ func TestAgentChatRepoNoDBSafe(t *testing.T) {
 		t.Error("无 DB 应报错")
 	}
 }
+
+// 用量列：assistant 行的 prompt/completion/llm_ms 落库并可读回。
+func TestAgentChatRepoUsageColumns(t *testing.T) {
+	setupAgentChatTestDB(t)
+	repo := NewAgentChatRepo()
+	rec := &AgentConversationRecord{UserID: 5, Title: "t"}
+	repo.CreateConversation(rec)
+	repo.InsertMessage(&AgentMessageRecord{ConversationID: rec.ID, Role: "user", Content: "u"})
+	repo.InsertMessage(&AgentMessageRecord{ConversationID: rec.ID, Role: "assistant", Content: "a",
+		PromptTokens: 100, CompletionTokens: 42, LLMMs: 1500})
+
+	msgs, err := repo.ListMessages(rec.ID)
+	if err != nil || len(msgs) != 2 {
+		t.Fatalf("list: len=%d err=%v", len(msgs), err)
+	}
+	if msgs[0].PromptTokens != 0 || msgs[0].CompletionTokens != 0 {
+		t.Errorf("user 行用量应为 0: %+v", msgs[0])
+	}
+	a := msgs[1]
+	if a.PromptTokens != 100 || a.CompletionTokens != 42 || a.LLMMs != 1500 {
+		t.Errorf("assistant 用量 = %+v", a)
+	}
+}
+
+// GetUsageSummary：session / totals / by_day / by_model 四个维度。
+func TestAgentChatRepoGetUsageSummary(t *testing.T) {
+	setupAgentChatTestDB(t)
+	repo := NewAgentChatRepo()
+	now := time.Now().Unix()
+
+	c1 := &AgentConversationRecord{UserID: 6, Title: "s1", Model: "kimi:k2"}
+	repo.CreateConversation(c1)
+	c2 := &AgentConversationRecord{UserID: 6, Title: "s2", Model: "deepseek:chat"}
+	repo.CreateConversation(c2)
+	other := &AgentConversationRecord{UserID: 7, Title: "他人", Model: "kimi:k2"}
+	repo.CreateConversation(other)
+
+	insert := func(convID string, createdAt int64, prompt, completion, llmMs int64) {
+		if err := repo.InsertMessage(&AgentMessageRecord{
+			ConversationID: convID, Role: "assistant", Content: "a", CreatedAt: createdAt,
+			PromptTokens: prompt, CompletionTokens: completion, LLMMs: llmMs,
+		}); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	insert(c1.ID, now, 10, 20, 100)
+	insert(c1.ID, now-2*86400, 30, 40, 200)
+	insert(c1.ID, now-40*86400, 999, 999, 999) // 超出 days 窗口：只进 totals 不进 by_day
+	insert(c2.ID, now, 5, 0, 50)                // completion=0：计 token 不计 rounds
+	insert(other.ID, now, 77, 88, 99)           // 他人数据：全部维度隔离
+
+	s, err := repo.GetUsageSummary("6", c1.ID, 30)
+	if err != nil {
+		t.Fatalf("summary: %v", err)
+	}
+	if s.Session == nil {
+		t.Fatal("session 应非空")
+	}
+	if s.Session.PromptTokens != 10+30+999 || s.Session.CompletionTokens != 20+40+999 || s.Session.LLMMs != 100+200+999 || s.Session.Rounds != 3 {
+		t.Errorf("session = %+v", s.Session)
+	}
+	if s.Totals.PromptTokens != 10+30+999+5 || s.Totals.CompletionTokens != 20+40+999+0 || s.Totals.Rounds != 3 {
+		t.Errorf("totals = %+v", s.Totals)
+	}
+	// by_day：30 天窗口内 3 条（c1 今天、昨天前天、c2 今天），日期升序，用户隔离
+	var totalDay int64
+	for _, d := range s.ByDay {
+		totalDay += d.PromptTokens
+	}
+	if totalDay != 10+30+5 {
+		t.Errorf("by_day 合计 = %d, rows=%+v", totalDay, s.ByDay)
+	}
+	for i := 1; i < len(s.ByDay); i++ {
+		if s.ByDay[i-1].Date > s.ByDay[i].Date {
+			t.Errorf("by_day 未按日期升序: %+v", s.ByDay)
+		}
+	}
+	// by_model：按 token 合计降序，kimi 在前
+	if len(s.ByModel) != 2 || s.ByModel[0].Model != "kimi:k2" || s.ByModel[1].Model != "deepseek:chat" {
+		t.Errorf("by_model = %+v", s.ByModel)
+	}
+	if s.ByModel[0].CompletionTokens != 20+40+999 || s.ByModel[1].CompletionTokens != 0 {
+		t.Errorf("by_model tokens = %+v", s.ByModel)
+	}
+
+	// 不指定会话：session 为 nil
+	s2, err := repo.GetUsageSummary("6", "", 30)
+	if err != nil || s2.Session != nil {
+		t.Errorf("无 conversationID 时 session 应为 nil: %+v err=%v", s2, err)
+	}
+}
+
+// SearchConversations：标题命中（snippet 空）、内容命中（snippet 含上下文）、
+// LIKE 通配符转义、用户隔离、updated_at 倒序。
+func TestAgentChatRepoSearchConversations(t *testing.T) {
+	setupAgentChatTestDB(t)
+	repo := NewAgentChatRepo()
+	now := time.Now().Unix()
+
+	titleHit := &AgentConversationRecord{UserID: 8, Title: "比特币行情分析", UpdatedAt: now - 10}
+	repo.CreateConversation(titleHit)
+	contentHit := &AgentConversationRecord{UserID: 8, Title: "普通对话", UpdatedAt: now}
+	repo.CreateConversation(contentHit)
+	repo.InsertMessage(&AgentMessageRecord{ConversationID: contentHit.ID, Role: "user",
+		Content: "你好，请帮我分析一下最近比特币的走势和支撑阻力位，谢谢。"})
+	other := &AgentConversationRecord{UserID: 9, Title: "比特币他人会话", UpdatedAt: now}
+	repo.CreateConversation(other)
+	repo.InsertMessage(&AgentMessageRecord{ConversationID: other.ID, Role: "user", Content: "比特币"})
+
+	res, err := repo.SearchConversations(8, "比特币", 20)
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(res) != 2 {
+		t.Fatalf("应命中 2 个本人会话（隔离他人）: %+v", res)
+	}
+	// updated_at 倒序：contentHit 在前
+	if res[0].ID != contentHit.ID || res[1].ID != titleHit.ID {
+		t.Fatalf("排序错误: %+v", res)
+	}
+	// 内容命中：snippet 含命中词与省略号上下文
+	if !strings.Contains(res[0].Snippet, "比特币") {
+		t.Errorf("snippet = %q", res[0].Snippet)
+	}
+	// 标题命中：snippet 为空
+	if res[1].Snippet != "" {
+		t.Errorf("标题命中 snippet 应为空: %q", res[1].Snippet)
+	}
+
+	// 通配符按字面匹配（% 不作为 LIKE 通配）
+	res, _ = repo.SearchConversations(8, "100%", 20)
+	if len(res) != 0 {
+		t.Errorf("%% 未转义: %+v", res)
+	}
+	// 无命中 → 空数组
+	res, _ = repo.SearchConversations(8, "不存在的词", 20)
+	if len(res) != 0 {
+		t.Errorf("应无命中: %+v", res)
+	}
+}
+
+// UndoLastUserTurn：删除最后一条 user 及其后全部 assistant；连续撤回；无 user 时 no-op。
+func TestAgentChatRepoUndoLastUserTurn(t *testing.T) {
+	setupAgentChatTestDB(t)
+	repo := NewAgentChatRepo()
+	rec := &AgentConversationRecord{UserID: 10, Title: "t"}
+	repo.CreateConversation(rec)
+	for _, m := range []struct{ role, content string }{
+		{"user", "u1"}, {"assistant", "a1"}, {"user", "u2"}, {"assistant", "a2"}, {"assistant", "a2b"},
+	} {
+		repo.InsertMessage(&AgentMessageRecord{ConversationID: rec.ID, Role: m.role, Content: m.content})
+	}
+
+	remaining, err := repo.UndoLastUserTurn(rec.ID)
+	if err != nil {
+		t.Fatalf("undo: %v", err)
+	}
+	if remaining != 2 {
+		t.Fatalf("remaining = %d, want 2（u1,a1）", remaining)
+	}
+	msgs, _ := repo.ListMessages(rec.ID)
+	if len(msgs) != 2 || msgs[1].Content != "a1" {
+		t.Fatalf("应删除 u2/a2/a2b: %+v", msgs)
+	}
+
+	// 再撤一轮 → 空
+	remaining, _ = repo.UndoLastUserTurn(rec.ID)
+	if remaining != 0 {
+		t.Fatalf("remaining = %d, want 0", remaining)
+	}
+	// 无 user 消息 → no-op
+	remaining, err = repo.UndoLastUserTurn(rec.ID)
+	if err != nil || remaining != 0 {
+		t.Fatalf("no-op undo: remaining=%d err=%v", remaining, err)
+	}
+}

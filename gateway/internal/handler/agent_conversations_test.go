@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/middleware"
@@ -14,7 +15,7 @@ import (
 
 // ── /agent/conversations CRUD 测试 ──
 
-// registerConversationRoutes 注册 5 个会话端点 + 用户注入中间件（等价于
+// registerConversationRoutes 注册会话端点 + 用户注入中间件（等价于
 // registerAgentRoutes 的 agent 组：AuthRequired 之后 handler 读 UserIDKey）。
 func registerConversationRoutes(r *gin.Engine, uid int) {
 	h := func(c *gin.Context) {
@@ -24,9 +25,12 @@ func registerConversationRoutes(r *gin.Engine, uid int) {
 	}
 	r.POST("/agent/conversations", h, AgentConversationCreate)
 	r.GET("/agent/conversations", h, AgentConversationsList)
+	r.GET("/agent/conversations/search", h, AgentConversationSearch)
 	r.GET("/agent/conversations/:id", h, AgentConversationGet)
 	r.PUT("/agent/conversations/:id", h, AgentConversationRename)
 	r.DELETE("/agent/conversations/:id", h, AgentConversationDelete)
+	r.POST("/agent/conversations/:id/undo", h, AgentConversationUndo)
+	r.GET("/agent/usage", h, AgentUsageSummary)
 }
 
 func doConversationRequest(t *testing.T, uid int, method, path, body string) *httptest.ResponseRecorder {
@@ -184,4 +188,142 @@ func TestAgentConversationsCrossUser(t *testing.T) {
 	// 不存在的 id 也 404
 	w = doConversationRequest(t, 1, http.MethodGet, "/agent/conversations/c_ghost", "")
 	assertEq(t, w.Code, http.StatusNotFound, "ghost get")
+}
+
+// 全文搜索：标题/内容命中、snippet、用户隔离、空 q。
+func TestAgentConversationSearch(t *testing.T) {
+	w := doConversationRequest(t, 21, http.MethodPost, "/agent/conversations", `{"title":"以太坊质押收益"}`)
+	var body map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	titleHitID, _ := body["id"].(string)
+
+	w = doConversationRequest(t, 21, http.MethodPost, "/agent/conversations", `{"title":"随便聊聊"}`)
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	contentHitID, _ := body["id"].(string)
+	repo := store.DefaultAgentChatRepo()
+	// 显式给消息一个更晚的时间戳：同秒创建的两个会话 updated_at 打平时排序不确定，
+	// 借此让 contentHit 稳定排在 titleHit 前（InsertMessage 会刷新会话 updated_at）。
+	repo.InsertMessage(&store.AgentMessageRecord{ConversationID: contentHitID, Role: "user",
+		Content: "帮我把这段话翻译一下：以太坊的质押收益率最近有所下降。", CreatedAt: time.Now().Unix() + 10})
+	// 他人会话（标题同样含关键词，不应出现）
+	w = doConversationRequest(t, 22, http.MethodPost, "/agent/conversations", `{"title":"以太坊他人"}`)
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+
+	w = doConversationRequest(t, 21, http.MethodGet, "/agent/conversations/search?q=以太坊", "")
+	assertEq(t, w.Code, http.StatusOK, "search status")
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if body["success"] != true {
+		t.Fatalf("search body = %v", body)
+	}
+	results, _ := body["results"].([]any)
+	if len(results) != 2 {
+		t.Fatalf("results len = %d, want 2（隔离他人）: %v", len(results), results)
+	}
+	// updated_at 倒序：后建的 contentHit 在前；内容命中带 snippet，标题命中 snippet 空
+	r0, _ := results[0].(map[string]any)
+	r1, _ := results[1].(map[string]any)
+	if r0["id"] != contentHitID || r1["id"] != titleHitID {
+		t.Fatalf("排序/命中错误: %v", results)
+	}
+	snippet, _ := r0["snippet"].(string)
+	if !strings.Contains(snippet, "以太坊") {
+		t.Fatalf("snippet = %q", snippet)
+	}
+	if r1["snippet"] != "" {
+		t.Fatalf("标题命中 snippet 应为空: %v", r1["snippet"])
+	}
+
+	// 空 q → 空结果
+	w = doConversationRequest(t, 21, http.MethodGet, "/agent/conversations/search", "")
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if results, _ := body["results"].([]any); len(results) != 0 {
+		t.Fatalf("空 q 应空结果: %v", body)
+	}
+}
+
+// 撤回一轮：删除最后 user + 其后 assistant；越权 404。
+func TestAgentConversationUndo(t *testing.T) {
+	w := doConversationRequest(t, 23, http.MethodPost, "/agent/conversations", `{"title":"t"}`)
+	var body map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	convID, _ := body["id"].(string)
+	repo := store.DefaultAgentChatRepo()
+	for _, m := range [][2]string{{"user", "u1"}, {"assistant", "a1"}, {"user", "u2"}, {"assistant", "a2"}} {
+		repo.InsertMessage(&store.AgentMessageRecord{ConversationID: convID, Role: m[0], Content: m[1]})
+	}
+
+	w = doConversationRequest(t, 23, http.MethodPost, "/agent/conversations/"+convID+"/undo", "")
+	assertEq(t, w.Code, http.StatusOK, "undo status")
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if body["success"] != true || body["remaining"] != float64(2) {
+		t.Fatalf("undo body = %v", body)
+	}
+	msgs, _ := repo.ListMessages(convID)
+	if len(msgs) != 2 || msgs[1].Content != "a1" {
+		t.Fatalf("undo 后消息错误: %+v", msgs)
+	}
+
+	// 越权 undo → 404，且消息未被动过
+	w = doConversationRequest(t, 24, http.MethodPost, "/agent/conversations/"+convID+"/undo", "")
+	assertEq(t, w.Code, http.StatusNotFound, "cross-user undo")
+	msgs, _ = repo.ListMessages(convID)
+	if len(msgs) != 2 {
+		t.Fatalf("越权 undo 生效了: %d", len(msgs))
+	}
+}
+
+// 用量汇总：totals / session / by_day / by_model；指定会话越权 404。
+func TestAgentUsageSummary(t *testing.T) {
+	w := doConversationRequest(t, 25, http.MethodPost, "/agent/conversations", `{"title":"u"}`)
+	var body map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	convID, _ := body["id"].(string)
+	repo := store.DefaultAgentChatRepo()
+	_ = repo.SetConversationModel(convID, "kimi:k2")
+	repo.InsertMessage(&store.AgentMessageRecord{ConversationID: convID, Role: "user", Content: "hi"})
+	repo.InsertMessage(&store.AgentMessageRecord{ConversationID: convID, Role: "assistant", Content: "ok",
+		PromptTokens: 100, CompletionTokens: 50, LLMMs: 800})
+
+	w = doConversationRequest(t, 25, http.MethodGet, "/agent/usage?conversation_id="+convID+"&days=30", "")
+	assertEq(t, w.Code, http.StatusOK, "usage status")
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if body["success"] != true {
+		t.Fatalf("usage body = %v", body)
+	}
+	session, _ := body["session"].(map[string]any)
+	if session["prompt_tokens"] != float64(100) || session["completion_tokens"] != float64(50) ||
+		session["llm_ms"] != float64(800) || session["rounds"] != float64(1) {
+		t.Fatalf("session = %v", session)
+	}
+	totals, _ := body["totals"].(map[string]any)
+	if totals["rounds"] != float64(1) {
+		t.Fatalf("totals = %v", totals)
+	}
+	byDay, _ := body["by_day"].([]any)
+	if len(byDay) != 1 {
+		t.Fatalf("by_day = %v", byDay)
+	}
+	day0, _ := byDay[0].(map[string]any)
+	if day0["prompt_tokens"] != float64(100) || day0["date"] == "" {
+		t.Fatalf("by_day[0] = %v", day0)
+	}
+	byModel, _ := body["by_model"].([]any)
+	if len(byModel) != 1 {
+		t.Fatalf("by_model = %v", byModel)
+	}
+	m0, _ := byModel[0].(map[string]any)
+	if m0["model"] != "kimi:k2" || m0["completion_tokens"] != float64(50) {
+		t.Fatalf("by_model[0] = %v", m0)
+	}
+
+	// 不指定会话：session 为 null
+	w = doConversationRequest(t, 25, http.MethodGet, "/agent/usage", "")
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if body["session"] != nil {
+		t.Fatalf("session 应为 null: %v", body["session"])
+	}
+
+	// 越权指定会话 → 404
+	w = doConversationRequest(t, 26, http.MethodGet, "/agent/usage?conversation_id="+convID, "")
+	assertEq(t, w.Code, http.StatusNotFound, "cross-user usage session")
 }

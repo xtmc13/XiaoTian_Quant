@@ -4,13 +4,14 @@ export interface SlashCommand {
   /** 无参命令在 Enter 时直接执行 */
   args?: string
   description: string
-  icon: 'new' | 'stop' | 'retry' | 'model' | 'clear' | 'clock' | 'brain' | 'zap' | 'send' | 'gauge'
+  icon: 'new' | 'stop' | 'retry' | 'model' | 'clear' | 'clock' | 'brain' | 'zap' | 'send' | 'gauge' | 'undo'
 }
 
 export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'new', description: '开始新对话（清空当前会话）', icon: 'new' },
   { name: 'stop', description: '停止当前正在生成的回复', icon: 'stop' },
   { name: 'retry', description: '重新生成上一条助手回复', icon: 'retry' },
+  { name: 'undo', description: '撤销最后一轮对话', icon: 'undo' },
   { name: 'model', description: '切换模型厂商与型号', icon: 'model' },
   { name: 'usage', description: '用量与概览', icon: 'gauge' },
   { name: 'cron', description: '打开定时任务面板', icon: 'clock' },

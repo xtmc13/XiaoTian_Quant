@@ -15,6 +15,7 @@ import {
   SquareTerminal,
   SquarePen,
   RotateCcw,
+  Undo2,
   X,
   Zap,
 } from 'lucide-react'
@@ -41,6 +42,7 @@ const SLASH_ICONS: Record<SlashCommand['icon'], React.ReactNode> = {
   zap: <Zap size={13} />,
   send: <Send size={13} />,
   gauge: <Gauge size={13} />,
+  undo: <Undo2 size={13} />,
 }
 
 interface ModelProvider {
@@ -75,6 +77,8 @@ export interface AgentComposerProps {
   onUseSkill: (skill: SkillItem) => void
   /** 点击"完全权限"药丸（打开用量/权限概览） */
   onShowUsage?: () => void
+  /** 占位符（空态/会话态文案不同，对标桌面版） */
+  placeholder?: string
 }
 
 // ── 底部 Composer：多行自动增高 + 斜杠面板 + 附件 + 模型药丸 + 发送/停止/重定向 ──
@@ -98,6 +102,7 @@ export function AgentComposer({
   skills,
   onUseSkill,
   onShowUsage,
+  placeholder = '给智能体发消息，/ 调用指令',
 }: AgentComposerProps) {
   const [slashIndex, setSlashIndex] = useState(0)
   const [plusOpen, setPlusOpen] = useState(false)
@@ -380,7 +385,7 @@ export function AgentComposer({
         </>
       )}
 
-      {/* Composer 本体 */}
+      {/* Composer 本体：大卡片，占位符置顶，控制行沉底（对标桌面版） */}
       <div className="xt-composer-card rounded-2xl border border-[var(--ag-stroke2)] bg-[var(--ag-card)]/90 shadow-[var(--ag-shadow-panel)] backdrop-blur-xl transition-colors focus-within:border-[var(--ag-accent)]">
         <textarea
           ref={textareaRef}
@@ -388,12 +393,12 @@ export function AgentComposer({
           onChange={(e) => onInputChange(e.target.value)}
           onKeyDown={onKeyDown}
           rows={1}
-          placeholder="给智能体发消息，/ 调用指令"
+          placeholder={placeholder}
           aria-label="消息输入框"
-          className="min-h-[26px] max-h-[150px] w-full resize-none border-0 bg-transparent px-3 pt-2 text-[13px] leading-relaxed text-[var(--ag-text1)] placeholder:text-[var(--ag-text4)] focus:outline-none focus:ring-0"
+          className="min-h-[var(--ag-composer-min-h)] max-h-[var(--ag-composer-max-h)] w-full resize-none border-0 bg-transparent px-3.5 pt-3 text-[13.5px] leading-6 text-[var(--ag-text1)] placeholder:text-[var(--ag-text4)] focus:outline-none focus:ring-0"
         />
         {/* 控制行 */}
-        <div className="flex items-center gap-1 px-1.5 pb-1">
+        <div className="flex items-center gap-1 px-2 pb-1.5 pt-0.5">
           <input
             ref={fileInputRef}
             type="file"
@@ -445,14 +450,14 @@ export function AgentComposer({
             <ChevronDown size={11} className="shrink-0" />
           </button>
 
-          {/* 发送键状态机：忙+空 → Stop；其余可提交态 → 发送（忙时为重定向）；蓝色圆形（对标 dsh） */}
+          {/* 发送键状态机：忙+空 → Stop；其余可提交态 → 发送（忙时为重定向）；浅蓝圆形（对标 dsh） */}
           {isStreaming && !input.trim() ? (
             <button
               type="button"
               onClick={onStop}
               title="停止生成（Esc）"
               aria-label="停止生成"
-              className="flex size-[28px] items-center justify-center rounded-full bg-[var(--ag-accent)] text-[var(--ag-accent-fg)] transition-opacity hover:opacity-85"
+              className="flex size-7 items-center justify-center rounded-full bg-[var(--ag-accent)] text-[var(--ag-accent-fg)] transition-opacity hover:opacity-85"
             >
               <SquareTerminal size={13} />
             </button>
@@ -463,7 +468,7 @@ export function AgentComposer({
               disabled={!canSubmit}
               title={isStreaming ? '发送并重定向当前回复' : '发送'}
               aria-label="发送消息"
-              className="flex size-[28px] items-center justify-center rounded-full bg-[var(--ag-accent)] text-[var(--ag-accent-fg)] transition-opacity hover:opacity-85 disabled:opacity-30"
+              className="flex size-7 items-center justify-center rounded-full bg-[var(--ag-send-bg)] text-[var(--ag-send-fg)] transition-colors hover:bg-[var(--ag-send-bg-hover)] disabled:opacity-40"
             >
               {isStreaming ? <Layers3 size={13} /> : <ArrowUp size={14} />}
             </button>
