@@ -125,3 +125,7 @@ web/ios/
 # ML 训练产物
 sandbox/ml_server/trained_models/
 gateway/.tmp/
+
+# 备份文件不入库（config 备份可能含密钥）
+gateway/server.bak-*
+gateway/config.yaml.bak-*
