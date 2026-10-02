@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
+  ArrowUp,
   Brain,
   ChevronDown,
   CircleStop,
@@ -8,12 +9,12 @@ import {
   Layers3,
   Paperclip,
   Plus,
-  SendHorizonal,
+  Send,
+  Shield,
   Sparkles,
   SquareTerminal,
   SquarePen,
   RotateCcw,
-  Send,
   X,
   Zap,
 } from 'lucide-react'
@@ -72,6 +73,8 @@ export interface AgentComposerProps {
   /** 技能调色板数据（skills 插件），与命令合并展示 */
   skills?: SkillItem[]
   onUseSkill: (skill: SkillItem) => void
+  /** 点击"完全权限"药丸（打开用量/权限概览） */
+  onShowUsage?: () => void
 }
 
 // ── 底部 Composer：多行自动增高 + 斜杠面板 + 附件 + 模型药丸 + 发送/停止/重定向 ──
@@ -94,6 +97,7 @@ export function AgentComposer({
   openModelSignal,
   skills,
   onUseSkill,
+  onShowUsage,
 }: AgentComposerProps) {
   const [slashIndex, setSlashIndex] = useState(0)
   const [plusOpen, setPlusOpen] = useState(false)
@@ -384,7 +388,7 @@ export function AgentComposer({
           onChange={(e) => onInputChange(e.target.value)}
           onKeyDown={onKeyDown}
           rows={1}
-          placeholder="输入消息，/ 打开命令，Enter 发送，Shift+Enter 换行"
+          placeholder="发消息或创建任务，/ 调用指令，Enter 发送"
           aria-label="消息输入框"
           className="min-h-[26px] max-h-[150px] w-full resize-none bg-transparent px-3 pt-2 text-[13px] leading-relaxed text-[var(--ag-text1)] placeholder:text-[var(--ag-text4)] focus:outline-none"
         />
@@ -413,6 +417,19 @@ export function AgentComposer({
             <Plus size={15} />
           </button>
 
+          {/* 完全权限药丸（点击看用量概览） */}
+          <button
+            type="button"
+            title="权限与用量"
+            aria-label="权限与用量"
+            onClick={() => onShowUsage?.()}
+            className="flex h-6 items-center gap-1 rounded-full border border-transparent px-2 text-[11px] text-[var(--ag-text3)] transition-colors hover:border-[var(--ag-stroke3)] hover:text-[var(--ag-text1)]"
+          >
+            <Shield size={11} className="shrink-0" />
+            完全权限
+            <ChevronDown size={11} className="shrink-0" />
+          </button>
+
           {/* 模型药丸 */}
           <button
             type="button"
@@ -420,7 +437,7 @@ export function AgentComposer({
             aria-label="模型选择"
             aria-expanded={modelOpen}
             onClick={() => setModelOpen((v) => !v)}
-            className="flex h-6 max-w-[40%] items-center gap-1 rounded-full border border-transparent px-2 text-[11px] text-[var(--ag-text3)] transition-colors hover:border-[var(--ag-stroke3)] hover:text-[var(--ag-text1)]"
+            className="flex h-6 max-w-[35%] items-center gap-1 rounded-full border border-transparent px-2 text-[11px] text-[var(--ag-text3)] transition-colors hover:border-[var(--ag-stroke3)] hover:text-[var(--ag-text1)]"
           >
             <span className="truncate">{modelLabel}</span>
             <ChevronDown size={11} className="shrink-0" />
@@ -428,14 +445,14 @@ export function AgentComposer({
 
           <span className="min-w-0 flex-1" />
 
-          {/* 发送键状态机：忙+空 → Stop；其余可提交态 → 发送（忙时为重定向） */}
+          {/* 发送键状态机：忙+空 → Stop；其余可提交态 → 发送（忙时为重定向）；蓝色圆形（对标 dsh） */}
           {isStreaming && !input.trim() ? (
             <button
               type="button"
               onClick={onStop}
               title="停止生成（Esc）"
               aria-label="停止生成"
-              className="flex size-[26px] items-center justify-center rounded-full bg-[var(--ag-text1)] text-[var(--ag-bg)] transition-opacity hover:opacity-80"
+              className="flex size-[28px] items-center justify-center rounded-full bg-[var(--ag-accent)] text-white transition-opacity hover:opacity-85"
             >
               <SquareTerminal size={13} />
             </button>
@@ -446,9 +463,9 @@ export function AgentComposer({
               disabled={!canSubmit}
               title={isStreaming ? '发送并重定向当前回复' : '发送'}
               aria-label="发送消息"
-              className="flex size-[26px] items-center justify-center rounded-full bg-[var(--ag-text1)] text-[var(--ag-bg)] transition-opacity hover:opacity-80 disabled:opacity-30"
+              className="flex size-[28px] items-center justify-center rounded-full bg-[var(--ag-accent)] text-white transition-opacity hover:opacity-85 disabled:opacity-30"
             >
-              {isStreaming ? <Layers3 size={13} /> : <SendHorizonal size={13} />}
+              {isStreaming ? <Layers3 size={13} /> : <ArrowUp size={14} />}
             </button>
           )}
         </div>

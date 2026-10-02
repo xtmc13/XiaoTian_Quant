@@ -103,6 +103,7 @@ export interface IndicatorLayerSpec {
   price?: number
   value?: number
   level?: number
+  y?: number
   timestamp?: number
   time?: number
   color?: string
@@ -371,8 +372,9 @@ export function normalizeIndicatorOutput(output: unknown, klines: KLineLike[]): 
     const side = sideOfSignal(signal)
     const isBuy = side === 'buy'
     const defaultText = textOfSignal(signal, side)
-    const limit = Math.min(signal.data.length, klines.length)
-    const points: ParsedSignalPoint[] = Array.from({ length: limit }, (_, i) => parseSignalPoint(signal.data[i]))
+    const signalData = signal.data ?? []
+    const limit = Math.min(signalData.length, klines.length)
+    const points: ParsedSignalPoint[] = Array.from({ length: limit }, (_, i) => parseSignalPoint(signalData[i]))
     const activeCount = points.reduce((sum, p) => sum + (p.active ? 1 : 0), 0)
     const mode = renderModeOf(signal, activeCount, limit)
     for (let i = 0; i < limit; i++) {
@@ -1302,7 +1304,8 @@ export function layersToOverlaySpecs(layers: IndicatorLayerSpec[], klines: KLine
     const type = String(layer.type || '').toLowerCase()
     if (['zone', 'box', 'rect', 'area'].includes(type)) {
       const startIdx = layer.startIndex ?? layer.fromIndex ?? layer.index ?? 0
-      const endIdx = layer.endIndex ?? layer.toIndex ?? layer.end ?? lastIndex
+      const endIdxRaw = Number(layer.endIndex ?? layer.toIndex ?? layer.end)
+      const endIdx = Number.isFinite(endIdxRaw) ? endIdxRaw : lastIndex
       const startTs = resolveTime(layer.start ?? layer.from ?? layer.x1, klines, startIdx)
       const endTs = resolveTime(layer.end ?? layer.to ?? layer.x2, klines, endIdx)
       const top = firstNumber(layer.top, layer.high, layer.y1, layer.price1)
@@ -1330,7 +1333,8 @@ export function layersToOverlaySpecs(layers: IndicatorLayerSpec[], klines: KLine
     }
     if (['line', 'segment', 'level', 'ray'].includes(type)) {
       const startIdx = layer.startIndex ?? layer.fromIndex ?? layer.index ?? 0
-      const endIdx = layer.endIndex ?? layer.toIndex ?? layer.end ?? lastIndex
+      const endIdxRaw = Number(layer.endIndex ?? layer.toIndex ?? layer.end)
+      const endIdx = Number.isFinite(endIdxRaw) ? endIdxRaw : lastIndex
       const startTs = resolveTime(layer.start ?? layer.from ?? layer.x1 ?? layer.startTime, klines, startIdx)
       const endTs = resolveTime(layer.end ?? layer.to ?? layer.x2 ?? layer.endTime, klines, endIdx)
       const startPrice = firstNumber(layer.y1, layer.price1, layer.price, layer.level)

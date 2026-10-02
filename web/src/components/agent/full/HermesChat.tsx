@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { Settings, Shield } from 'lucide-react'
 import { toast } from '@/lib/useToast'
 import type { AgentConversationSummary } from '@/lib/api'
 import { agentPluginApi, agentSkillApi } from '@/lib/api'
@@ -193,6 +194,35 @@ export function HermesChat({
         />
 
         <div className="relative flex min-w-0 flex-1 flex-col">
+          {/* 标题行：会话标题 + 模式徽章 + 右侧操作（对标 dsh 标题行） */}
+          <div className="flex items-center gap-2 border-b border-[var(--ag-stroke3)] px-5 pb-2 pt-3">
+            <span className="min-w-0 flex-1 truncate text-[15px] font-semibold text-[var(--ag-text1)]">
+              {conversations.find((c) => c.id === currentId)?.title || '新对话'}
+            </span>
+            <span className="flex shrink-0 items-center gap-1 rounded-md border border-[var(--ag-stroke2)] px-1.5 py-0.5 text-[10px] text-[var(--ag-text3)]">
+              <Shield size={10} />
+              标准模式
+            </span>
+            <button
+              type="button"
+              onClick={() => setSettingsOpen(true)}
+              title="助手设置"
+              aria-label="助手设置"
+              className="shrink-0 rounded-md p-1.5 text-[var(--ag-text3)] transition-colors hover:bg-white/6 hover:text-[var(--ag-text1)]"
+            >
+              <Settings size={14} />
+            </button>
+          </div>
+          {/* 页签行：对话 | 轨迹 */}
+          <div className="flex items-center gap-4 border-b border-[var(--ag-stroke3)] px-5">
+            <span className="border-b-2 border-[var(--ag-accent)] py-1.5 text-[12px] font-medium text-[var(--ag-text1)]">
+              对话
+            </span>
+            <span className="cursor-not-allowed py-1.5 text-[12px] text-[var(--ag-text4)]" title="敬请期待">
+              轨迹
+            </span>
+          </div>
+
           <AgentThread
             messages={messages}
             isStreaming={isStreaming}
@@ -201,8 +231,8 @@ export function HermesChat({
             messagesEndRef={messagesEndRef}
           />
 
-          {/* Composer 停靠底部居中 */}
-          <div className="pointer-events-none absolute bottom-4 left-1/2 w-[calc(100%-2rem)] max-w-3xl -translate-x-1/2">
+          {/* Composer 停靠底部（近全宽深色卡片） */}
+          <div className="pointer-events-none absolute bottom-4 left-1/2 w-[calc(100%-2.5rem)] max-w-5xl -translate-x-1/2">
             <div className="pointer-events-auto">
               <AgentComposer
                 input={input}
@@ -223,6 +253,7 @@ export function HermesChat({
                 openModelSignal={modelSignal}
                 skills={paletteSkills}
                 onUseSkill={(skill) => send(skill.body)}
+                onShowUsage={() => setUsageOpen(true)}
               />
             </div>
           </div>
@@ -239,12 +270,11 @@ export function HermesChat({
       </div>
 
       <AgentStatusBar
-        model={settings.model}
         version={version ? `web v${version}` : ''}
         stats={
           messages.length > 0
-            ? `${messages.length} 条 · ≈${(messages.reduce((a, m) => a + (m.content?.length || 0) + (m.reasoning?.length || 0), 0) / 2 / 1000).toFixed(1)}k tok`
-            : ''
+            ? `${messages.length} 条消息 · ≈${(messages.reduce((a, m) => a + (m.content?.length || 0) + (m.reasoning?.length || 0), 0) / 2 / 1000).toFixed(1)}k tok`
+            : '就绪'
         }
       />
     </div>

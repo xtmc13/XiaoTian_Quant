@@ -13,12 +13,13 @@ import {
   Search,
   Send,
   Settings,
-  SquarePen,
   Trash2,
   Zap,
 } from 'lucide-react'
 import type { AgentConversationSummary } from '@/lib/api'
 import { agentConversationApi } from '@/lib/api'
+import { useAuthStore } from '@/stores/authStore'
+import { DefaultPet } from '../pet/DefaultPet'
 import { cn } from '@/lib/utils'
 
 const PINNED_KEY = 'xt-agent-pinned'
@@ -90,12 +91,14 @@ export function AgentSidebar({
   onPluginNav,
 }: AgentSidebarProps) {
   const [query, setQuery] = useState('')
+  const [searchOpen, setSearchOpen] = useState(false)
   const [pinned, setPinned] = useState<string[]>(loadPinned)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const [menuFor, setMenuFor] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)
+  const nickname = useAuthStore((s) => s.user?.nickname || s.user?.username || '')
 
   const togglePin = (id: string) => {
     setPinned((prev) => {
@@ -292,25 +295,26 @@ export function AgentSidebar({
       aria-label="助手侧栏"
       className="flex h-full w-[var(--ag-sidebar-w)] shrink-0 flex-col border-r border-[var(--ag-sidebar-edge)] bg-[var(--ag-sidebar)]"
     >
+      {/* 品牌行（对标 deepseek HARNESS logo 区） */}
+      <div className="flex items-center gap-1.5 px-3 pb-2 pt-3">
+        <DefaultPet size={20} />
+        <span className="text-[14px] font-bold tracking-tight text-[var(--ag-text1)]">小天量化</span>
+        <span className="rounded-sm border border-[var(--ag-stroke2)] px-1 py-px text-[8px] font-semibold tracking-wider text-[var(--ag-text4)]">
+          AGENT
+        </span>
+      </div>
+
       {/* 导航 */}
-      <nav className="flex flex-col gap-0.5 px-2.5 pb-1 pt-3">
+      <nav className="flex flex-col gap-0.5 px-2.5 pb-1 pt-1">
         <button
           type="button"
           onClick={onNew}
-          className="flex h-7 items-center gap-1.5 rounded-md border border-[var(--ag-stroke3)] bg-[var(--ag-card)] px-2 text-[13px] font-medium text-[var(--ag-text1)] transition-colors hover:border-[var(--ag-accent)]/40"
+          className="flex h-8 items-center justify-center gap-1.5 rounded-lg bg-white/8 px-2 text-[13px] font-medium text-[var(--ag-text1)] transition-colors hover:bg-white/12"
         >
           <Plus size={13} />
-          新对话
+          新会话
         </button>
-        <div className="mt-0.5 flex flex-col">
-          <button
-            type="button"
-            onClick={onNew}
-            className="flex h-7 items-center gap-1.5 rounded-md px-2 text-[13px] font-medium text-[var(--ag-text2)] hover:bg-[var(--ag-card)] hover:text-[var(--ag-text1)]"
-          >
-            <SquarePen size={13} />
-            清空并新开会话
-          </button>
+        <div className="mt-1 flex flex-col">
           <button
             type="button"
             onClick={onOpenSettings}
@@ -343,19 +347,36 @@ export function AgentSidebar({
         </div>
       </nav>
 
-      {/* 搜索 */}
-      <div className="px-2.5 pb-1.5 pt-1">
-        <div className="flex items-center gap-1.5 border-b border-transparent px-1 pb-0.5 focus-within:border-[var(--ag-accent)]/50">
-          <Search size={13} className="shrink-0 text-[var(--ag-text4)]" />
+      {/* 会话区头：标题 + 搜索图标（点击展开输入框，对标 dsh 工作区区头） */}
+      <div className="flex items-center px-3 pb-0.5 pt-2">
+        <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--ag-text4)]">会话</span>
+        <span className="min-w-0 flex-1" />
+        <button
+          type="button"
+          title="搜索会话"
+          aria-label="搜索会话开关"
+          aria-expanded={searchOpen}
+          onClick={() => setSearchOpen((v) => !v)}
+          className={cn(
+            'rounded p-1 transition-colors hover:bg-[var(--ag-card)]',
+            searchOpen ? 'text-[var(--ag-accent)]' : 'text-[var(--ag-text4)] hover:text-[var(--ag-text2)]'
+          )}
+        >
+          <Search size={13} />
+        </button>
+      </div>
+      {searchOpen && (
+        <div className="px-2.5 pb-1 pt-0.5">
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="搜索会话…"
             aria-label="搜索会话"
-            className="min-w-0 flex-1 bg-transparent py-1 text-[12px] text-[var(--ag-text1)] placeholder:text-[var(--ag-text4)] focus:outline-none"
+            autoFocus
+            className="w-full rounded-lg border border-[var(--ag-stroke2)] bg-[var(--ag-card)] px-2 py-1 text-[12px] text-[var(--ag-text1)] placeholder:text-[var(--ag-text4)] focus:border-[var(--ag-accent)]/50 focus:outline-none"
           />
         </div>
-      </div>
+      )}
 
       {/* 会话列表 */}
       <div className="xt-thread-scroll min-h-0 flex-1 overflow-y-auto px-2.5 pb-2" aria-label="会话列表">
@@ -386,6 +407,15 @@ export function AgentSidebar({
             {rows.map(renderRow)}
           </div>
         ))}
+      </div>
+
+      {/* 底部用户条（对标 dsh 侧栏底部） */}
+      <div className="flex items-center gap-2 border-t border-[var(--ag-sidebar-edge)] px-3 py-2">
+        <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-[var(--ag-accent)]/20 text-[11px] font-bold text-[var(--ag-accent)]">
+          {(nickname || '天')[0].toUpperCase()}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-[12px] text-[var(--ag-text2)]">{nickname || '小天用户'}</span>
+        <span className="shrink-0 font-mono text-[9px] text-[var(--ag-text4)]">AGENT</span>
       </div>
     </aside>
   )

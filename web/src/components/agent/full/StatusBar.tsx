@@ -14,15 +14,13 @@ async function ping(): Promise<boolean> {
 }
 
 export interface AgentStatusBarProps {
-  /** "provider" 或 "provider:model"，空串 = 默认 */
-  model: string
   version: string
-  /** 会话统计，如 "5 条 · ≈1.2k tok" */
+  /** 会话统计，如 "5 条 · ≈1.2k tok"（居中展示，对标 dsh 底部状态条） */
   stats?: string
 }
 
-// ── 底部状态条：左 Gateway 健康 + 会话统计，右 模型 + 版本 ──
-export function AgentStatusBar({ model, version, stats }: AgentStatusBarProps) {
+// ── 底部状态条：左 Gateway 健康，居中会话统计，右 版本 ──
+export function AgentStatusBar({ version, stats }: AgentStatusBarProps) {
   const [state, setState] = useState<GwState>('connecting')
 
   useEffect(() => {
@@ -50,25 +48,16 @@ export function AgentStatusBar({ model, version, stats }: AgentStatusBarProps) {
   return (
     <footer
       aria-label="状态条"
-      className="flex h-5 shrink-0 items-center gap-2 border-t border-[var(--ag-sidebar-edge)] bg-[var(--ag-sidebar)] px-2 text-[11px] text-[var(--ag-text3)]"
+      className="relative flex h-5 shrink-0 items-center gap-2 border-t border-[var(--ag-sidebar-edge)] bg-[var(--ag-sidebar)] px-3 text-[11px] text-[var(--ag-text3)]"
     >
       <span className={cn('flex items-center gap-1', color)} title="后端网关健康状态">
         <Activity size={10} />
         {label}
       </span>
-      {stats && (
-        <span className="truncate text-[10px] tabular-nums text-[var(--ag-text4)]" title="会话消息数与估算上下文">
-          {stats}
-        </span>
-      )}
+      <span className="pointer-events-none absolute left-1/2 max-w-[50%] -translate-x-1/2 truncate text-[10px] tabular-nums text-[var(--ag-text4)]">
+        {stats}
+      </span>
       <span className="min-w-0 flex-1" />
-      {model ? (
-        <span className="max-w-[40%] truncate font-mono text-[10px]" title="当前模型">
-          {model}
-        </span>
-      ) : (
-        <span className="text-[10px] text-[var(--ag-text4)]">默认模型</span>
-      )}
       <span aria-label="版本" className="shrink-0 font-mono text-[10px] text-[var(--ag-text4)]">
         {version}
       </span>

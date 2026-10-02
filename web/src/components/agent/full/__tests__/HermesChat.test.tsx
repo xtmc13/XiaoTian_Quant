@@ -76,6 +76,7 @@ describe('Hermes 全屏助手', () => {
   it('搜索会话过滤', async () => {
     renderFull()
     await waitFor(() => expect(screen.getByText('BTC 分析')).toBeTruthy())
+    fireEvent.click(screen.getByLabelText('搜索会话开关'))
     fireEvent.change(screen.getByLabelText('搜索会话'), { target: { value: '网格' } })
     expect(screen.queryByText('BTC 分析')).toBeNull()
     expect(screen.getByText('网格机器人')).toBeTruthy()
