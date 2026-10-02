@@ -383,7 +383,7 @@ export interface AgentThreadProps {
 export function AgentThread({ messages, isStreaming, onRegenerate, onEdit, messagesEndRef }: AgentThreadProps) {
   return (
     <div className="xt-thread-scroll min-h-0 flex-1 overflow-y-auto" aria-label="消息流">
-      <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col px-6 pb-40 pt-2">
+      <div className="mx-auto flex h-full w-full max-w-3xl flex-col px-6 pb-40 pt-2">
         {messages.length === 0 ? (
           <EmptyState />
         ) : (

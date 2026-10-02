@@ -390,7 +390,7 @@ export function AgentComposer({
           rows={1}
           placeholder="给智能体发消息，/ 调用指令"
           aria-label="消息输入框"
-          className="min-h-[26px] max-h-[150px] w-full resize-none bg-transparent px-3 pt-2 text-[13px] leading-relaxed text-[var(--ag-text1)] placeholder:text-[var(--ag-text4)] focus:outline-none"
+          className="min-h-[26px] max-h-[150px] w-full resize-none border-0 bg-transparent px-3 pt-2 text-[13px] leading-relaxed text-[var(--ag-text1)] placeholder:text-[var(--ag-text4)] focus:outline-none focus:ring-0"
         />
         {/* 控制行 */}
         <div className="flex items-center gap-1 px-1.5 pb-1">
