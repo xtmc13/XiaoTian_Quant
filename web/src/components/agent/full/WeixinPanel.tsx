@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, MessageCircle, QrCode, RefreshCw, Unlink, X } from 'lucide-react'
+import { QRCodeSVG } from 'qrcode.react'
 import { agentWeixinApi } from '@/lib/api'
 import { toast } from '@/lib/useToast'
 
@@ -155,11 +156,16 @@ export function WeixinPanel({ onClose, bare }: WeixinPanelProps) {
             <div className="flex flex-col items-center gap-2 rounded-xl border border-[var(--ag-stroke2)] px-3 py-4">
               {qrImg ? (
                 <>
-                  <img
-                    src={qrImg.startsWith('http') ? qrImg : `data:image/png;base64,${qrImg}`}
-                    alt="微信登录二维码"
-                    className="size-44 rounded-lg border border-[var(--ag-stroke2)]"
-                  />
+                  {qrImg.startsWith('http') ? (
+                    /* iLink 返回的是扫码落地页 URL，需前端渲染成二维码图案 */
+                    <QRCodeSVG value={qrImg} size={176} />
+                  ) : (
+                    <img
+                      src={`data:image/png;base64,${qrImg}`}
+                      alt="微信登录二维码"
+                      className="size-44 rounded-lg border border-[var(--ag-stroke2)]"
+                    />
+                  )}
                   <span className="text-[12px] text-[var(--ag-text2)]">{qrStatusText || '等待扫码…'}</span>
                   {(qrState === 'expired' || qrState === 'error' || qrState === 'need_verifycode' || qrState === 'verify_code_blocked') && (
                     <button
