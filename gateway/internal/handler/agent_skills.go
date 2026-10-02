@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xiaotian-quant/gateway/internal/agentprofiles"
 	"github.com/xiaotian-quant/gateway/internal/agentskills"
 )
 
@@ -39,6 +40,7 @@ func AgentSkillCreate(c *gin.Context) {
 		Description: req.Description,
 		Body:        req.Body,
 		Source:      "user",
+		ProfileID:   agentprofiles.NewRepo().ActiveProfileID(int64(aiBotUserID(c))), // 写入当前激活档案
 	}
 	if err := agentskills.NewRepo().Upsert(s); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})

@@ -34,6 +34,8 @@ func init() {
 	// 关闭异步 LLM 标题升级：避免 goroutine 与用例的标题断言竞态
 	// （升级逻辑由 TestAgentChat_TitleUpgrade 同步调用单测覆盖）。
 	agentChatTitleUpgrade = false
+	// 评测用例间隔置 0：生命周期测试不等真实限流间隔
+	agentEvalCaseInterval = 0
 }
 
 // ── 测试基建：mock LLM 服务 + mock 工具依赖 ──
@@ -370,10 +372,17 @@ func TestAgentChat_DirectAnswer_NonStream(t *testing.T) {
 	if !strings.Contains(fmt.Sprint(sys["content"]), "get_balance") {
 		t.Fatalf("system prompt missing tool list")
 	}
-	// 默认路径：JWT 未注入也未带 token → 核心 16 个工具 + 插件贡献工具（cron 5 个）
+	// 默认路径：JWT 未注入也未带 token → 核心 16 个工具 + 插件贡献工具（cron 5 个），
+	// 但无角色（非 admin）时 ScopeAdmin 文件工具被 RBAC 门控剔除。
 	core := len(agent.AllTools())
 	ext := len(builtin.Manager().Registry().Tools())
-	assertEq(t, len(toolNamesFromRequest(t, reqs[0])), core+ext, "tools count")
+	adminOnly := 0
+	for _, tool := range append(agent.AllTools(), builtin.Manager().Registry().Tools()...) {
+		if tool.Scope == agent.ScopeAdmin {
+			adminOnly++
+		}
+	}
+	assertEq(t, len(toolNamesFromRequest(t, reqs[0])), core+ext-adminOnly, "tools count")
 }
 
 // 单轮工具调用：调用 get_balance → 结果回传 → 最终回答；写审计（token_id=0）。

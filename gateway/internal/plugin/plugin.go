@@ -36,6 +36,8 @@ type NavItem struct {
 	ID    string `json:"id"`
 	Label string `json:"label"`
 	Icon  string `json:"icon"`
+	// AdminOnly 仅管理员可见（GET /api/agent/plugins 按角色过滤，普通用户清单中剔除该导航）。
+	AdminOnly bool `json:"admin_only,omitempty"`
 }
 
 // SlashItem 斜杠命令贡献（追加进前端命令面板）。

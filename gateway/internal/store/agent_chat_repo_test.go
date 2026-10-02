@@ -410,3 +410,82 @@ func TestAgentChatRepoUndoLastUserTurn(t *testing.T) {
 		t.Fatalf("no-op undo: remaining=%d err=%v", remaining, err)
 	}
 }
+
+// 压缩标记与摘要存档：compressed 标志读写往返、ApplyCompaction 事务标记 +
+// LatestCompaction 取最新、DeleteConversation 级联清理存档。
+func TestAgentChatRepoCompaction(t *testing.T) {
+	setupAgentChatTestDB(t)
+	repo := NewAgentChatRepo()
+
+	rec := &AgentConversationRecord{UserID: 1, Title: "压缩"}
+	if err := repo.CreateConversation(rec); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	ids := make([]int64, 0, 4)
+	for i, c := range []string{"u1", "a1", "u2", "a2"} {
+		role := "user"
+		if i%2 == 1 {
+			role = "assistant"
+		}
+		m := &AgentMessageRecord{ConversationID: rec.ID, Role: role, Content: c}
+		if err := repo.InsertMessage(m); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	// 先取回 id（InsertMessage 不回填自增 id）
+	msgs, err := repo.ListMessages(rec.ID)
+	if err != nil || len(msgs) != 4 {
+		t.Fatalf("list: %v / %d", err, len(msgs))
+	}
+	for _, m := range msgs {
+		if m.Compressed {
+			t.Fatal("新消息不应带压缩标记")
+		}
+		ids = append(ids, m.ID)
+	}
+
+	// 无压缩时 LatestCompaction 返回 (nil, nil)
+	if comp, err := repo.LatestCompaction(rec.ID); err != nil || comp != nil {
+		t.Fatalf("空存档应 (nil,nil), got %v/%v", comp, err)
+	}
+
+	// ApplyCompaction：标记前 2 条 + 写存档
+	comp, err := repo.ApplyCompaction(rec.ID, "前情摘要A", ids[:2])
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if comp.CompressedCount != 2 || comp.ID == 0 || comp.CreatedAt == 0 {
+		t.Fatalf("compaction = %+v", comp)
+	}
+	msgs, _ = repo.ListMessages(rec.ID)
+	if !msgs[0].Compressed || !msgs[1].Compressed {
+		t.Fatal("前 2 条应标记压缩")
+	}
+	if msgs[2].Compressed || msgs[3].Compressed {
+		t.Fatal("后 2 条不应标记压缩")
+	}
+
+	// LatestCompaction 取最新一条
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest, err := repo.LatestCompaction(rec.ID)
+	if err != nil || latest == nil || latest.Summary != "前情摘要A" || latest.CompressedCount != 2 {
+		t.Fatalf("latest = %+v / %v", latest, err)
+	}
+	if _, err := repo.ApplyCompaction(rec.ID, "前情摘要B", ids[2:]); err != nil {
+		t.Fatal(err)
+	}
+	latest, _ = repo.LatestCompaction(rec.ID)
+	if latest.Summary != "前情摘要B" {
+		t.Fatalf("latest.Summary = %q, want 前情摘要B", latest.Summary)
+	}
+
+	// 级联删除：会话删除后存档清空
+	if err := repo.DeleteConversation(rec.ID); err != nil {
+		t.Fatal(err)
+	}
+	if comp, err := repo.LatestCompaction(rec.ID); err != nil || comp != nil {
+		t.Fatalf("删除后存档应清空, got %v/%v", comp, err)
+	}
+}

@@ -269,6 +269,7 @@ func GetAIModels(c *gin.Context) {
 // aiModelsWithRuntimeStatus 在目录副本上叠加运行时状态：每个 provider 附
 // configured（注册表 APIKey 非空）与 current_model（注册表当前模型），
 // 便于设置页展示"已配置"标识与生效模型；openrouter 等未注册 provider 恒为未配置。
+// context_window 按 current_model 查静态元数据表（未知模型 131072）。
 func aiModelsWithRuntimeStatus() map[string]any {
 	out := map[string]any{}
 	for k, v := range defaultAIModels {
@@ -277,7 +278,7 @@ func aiModelsWithRuntimeStatus() map[string]any {
 	providers, _ := defaultAIModels["providers"].([]map[string]any)
 	enriched := make([]map[string]any, 0, len(providers))
 	for _, p := range providers {
-		item := make(map[string]any, len(p)+2)
+		item := make(map[string]any, len(p)+3)
 		for k, v := range p {
 			item[k] = v
 		}
@@ -289,6 +290,8 @@ func aiModelsWithRuntimeStatus() map[string]any {
 			item["configured"] = false
 			item["current_model"] = p["default"]
 		}
+		currentModel, _ := item["current_model"].(string)
+		item["context_window"] = ai.ContextWindowForModel(currentModel)
 		enriched = append(enriched, item)
 	}
 	out["providers"] = enriched

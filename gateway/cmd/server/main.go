@@ -16,6 +16,11 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/adapter"
 	"github.com/xiaotian-quant/gateway/internal/agent"
+	"github.com/xiaotian-quant/gateway/internal/agentdingtalk"
+	"github.com/xiaotian-quant/gateway/internal/agentfeishu"
+	"github.com/xiaotian-quant/gateway/internal/agentqq"
+	"github.com/xiaotian-quant/gateway/internal/agenttelegram"
+	"github.com/xiaotian-quant/gateway/internal/agentwecom"
 	"github.com/xiaotian-quant/gateway/internal/ai"
 	"github.com/xiaotian-quant/gateway/internal/alerting"
 	"github.com/xiaotian-quant/gateway/internal/alerts"
@@ -44,6 +49,13 @@ import (
 )
 
 func main() {
+	// ── MCP stdio 模式（--mcp-stdio / XT_MCP_STDIO=1）：不启动 HTTP 网关，
+	// 在 stdin/stdout 上跑 MCP JSON-RPC server 供 Claude Code / Cursor 挂载。 ──
+	if mcpStdioMode(os.Args[1:], os.Getenv) {
+		runMCPStdio()
+		return
+	}
+
 	// ── Load configuration ──
 	cfg, err := config.Load("config/config.yaml")
 	if err != nil {
@@ -346,7 +358,55 @@ func main() {
 	builtin.SetScheduleResolver(handler.ResolveScheduleNL)
 	builtin.SetSubagentExecutor(handler.RunAgentSub)
 	builtin.CronScheduler().Start()
-	builtin.SetTelegramExecutor(handler.RunAgentHeadless)
+	// TG 入站：流式执行器（/stop ctx 中断、会话绑定、模型覆盖、增量回调）+ /status 健康行
+	builtin.SetTelegramStreamExecutor(func(ctx context.Context, req *agenttelegram.RunRequest) (string, error) {
+		return handler.RunAgentHeadlessCtx(ctx, handler.HeadlessOptions{
+			UserID:         req.UserID,
+			Prompt:         req.Prompt,
+			ConversationID: req.ConversationID,
+			Model:          req.Model,
+			OnDelta:        req.OnDelta,
+		})
+	})
+	builtin.SetTelegramHealthProvider(handler.AgentGatewayHealthSummary)
+	// 飞书 / 钉钉入站：执行器（/stop ctx 中断、会话绑定、模型覆盖）+ /status 健康行
+	builtin.SetFeishuExecutor(func(ctx context.Context, req *agentfeishu.RunRequest) (string, error) {
+		return handler.RunAgentHeadlessCtx(ctx, handler.HeadlessOptions{
+			UserID:         req.UserID,
+			Prompt:         req.Prompt,
+			ConversationID: req.ConversationID,
+			Model:          req.Model,
+		})
+	})
+	builtin.SetFeishuHealthProvider(handler.AgentGatewayHealthSummary)
+	builtin.SetDingtalkExecutor(func(ctx context.Context, req *agentdingtalk.RunRequest) (string, error) {
+		return handler.RunAgentHeadlessCtx(ctx, handler.HeadlessOptions{
+			UserID:         req.UserID,
+			Prompt:         req.Prompt,
+			ConversationID: req.ConversationID,
+			Model:          req.Model,
+		})
+	})
+	builtin.SetDingtalkHealthProvider(handler.AgentGatewayHealthSummary)
+	// QQ / 企业微信入站：执行器（/stop ctx 中断、会话绑定、模型覆盖）+ /status 健康行
+	builtin.SetQqExecutor(func(ctx context.Context, req *agentqq.RunRequest) (string, error) {
+		return handler.RunAgentHeadlessCtx(ctx, handler.HeadlessOptions{
+			UserID:         req.UserID,
+			Prompt:         req.Prompt,
+			ConversationID: req.ConversationID,
+			Model:          req.Model,
+		})
+	})
+	builtin.SetQqHealthProvider(handler.AgentGatewayHealthSummary)
+	builtin.SetWecomExecutor(func(ctx context.Context, req *agentwecom.RunRequest) (string, error) {
+		return handler.RunAgentHeadlessCtx(ctx, handler.HeadlessOptions{
+			UserID:         req.UserID,
+			Prompt:         req.Prompt,
+			ConversationID: req.ConversationID,
+			Model:          req.Model,
+		})
+	})
+	builtin.SetWecomHealthProvider(handler.AgentGatewayHealthSummary)
 	log.Printf("[plugins] 内置插件已装配: %d 个", len(builtin.Manager().Manifest()))
 
 	// ── Market data cache purger (every 30 seconds) ──

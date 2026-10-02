@@ -148,3 +148,57 @@ func TestPlugin_RegisterAddsFourTools(t *testing.T) {
 		}
 	}
 }
+
+// origin 来源列：默认 manual，显式 agent/auto 透传；CountByOrigin / ExistsContent。
+func TestRepo_OriginAndDedup(t *testing.T) {
+	setupMemoryTestDB(t)
+	repo := NewRepo()
+
+	m1 := &Memory{ID: NewID(), UserID: 1, Content: "手动记忆"}
+	if err := repo.Create(m1); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if m1.Origin != "manual" {
+		t.Errorf("默认 origin = %q, want manual", m1.Origin)
+	}
+	if err := repo.Create(&Memory{ID: NewID(), UserID: 1, Content: "助手记录", Origin: "agent"}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	if err := repo.Create(&Memory{ID: NewID(), UserID: 1, Content: "自动沉淀", Origin: "auto"}); err != nil {
+		t.Fatalf("create auto: %v", err)
+	}
+
+	list, err := repo.ListByUser(1, "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origins := map[string]string{}
+	for _, m := range list {
+		origins[m.Content] = m.Origin
+	}
+	for content, want := range map[string]string{"手动记忆": "manual", "助手记录": "agent", "自动沉淀": "auto"} {
+		if origins[content] != want {
+			t.Errorf("%q origin = %q, want %q", content, origins[content], want)
+		}
+	}
+
+	if n, _ := repo.CountByOrigin(1, "auto"); n != 1 {
+		t.Errorf("CountByOrigin(auto) = %d, want 1", n)
+	}
+	if n, _ := repo.CountByOrigin(1, "agent"); n != 1 {
+		t.Errorf("CountByOrigin(agent) = %d, want 1", n)
+	}
+	if n, _ := repo.CountByOrigin(2, "auto"); n != 0 {
+		t.Errorf("他人 CountByOrigin = %d, want 0", n)
+	}
+
+	if ok, _ := repo.ExistsContent(1, "自动沉淀"); !ok {
+		t.Error("ExistsContent(自动沉淀) = false, want true")
+	}
+	if ok, _ := repo.ExistsContent(1, "不存在"); ok {
+		t.Error("ExistsContent(不存在) = true, want false")
+	}
+	if ok, _ := repo.ExistsContent(2, "自动沉淀"); ok {
+		t.Error("他人 ExistsContent = true, want false")
+	}
+}

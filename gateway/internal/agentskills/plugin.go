@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/xiaotian-quant/gateway/internal/agent"
+	"github.com/xiaotian-quant/gateway/internal/agentprofiles"
 	"github.com/xiaotian-quant/gateway/internal/plugin"
 )
 
@@ -38,7 +39,7 @@ func (p *SkillsPlugin) Register(reg *plugin.Registry, _ plugin.Deps) error {
 
 	reg.AddTool(agent.Tool{
 		Name:        "save_skill",
-		Description: "把一段可复用的流程保存为技能（用户说「把刚才的流程存成技能」「记住这个套路」时使用）。同名覆盖更新。body 写清步骤与产出要求。",
+		Description: "把一段可复用的流程保存为技能（用户说「把刚才的流程存成技能」「记住这个套路」时使用；对话中出现值得复用的操作流程时，也应主动沉淀为技能）。同名覆盖更新。body 写清步骤与产出要求。",
 		Scope:       agent.ScopeNotify,
 		Schema: map[string]any{
 			"type": "object",
@@ -94,7 +95,7 @@ func (p *SkillsPlugin) save(tc *agent.ToolContext, _ context.Context, args map[s
 	if name == "" || body == "" {
 		return nil, fmt.Errorf("name/body 均不能为空")
 	}
-	s := &Skill{ID: NewID(), UserID: int64(tc.UserID), Name: name, Description: argStr(args, "description"), Body: body, Source: "agent"}
+	s := &Skill{ID: NewID(), UserID: int64(tc.UserID), Name: name, Description: argStr(args, "description"), Body: body, Source: "agent", ProfileID: agentprofiles.NewRepo().ActiveProfileID(int64(tc.UserID))}
 	if err := p.Repo.Upsert(s); err != nil {
 		return nil, err
 	}

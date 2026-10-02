@@ -27,17 +27,19 @@ import (
 //
 //	默认事件 data: <文本分片原文（前端直接追加）>
 //	event: reasoning   data: <JSON 编码字符串（前端 JSON.parse 后追加）>
+//	event: compressed  data: {"compressed_count":int}（自动压缩触发时，delta 之前发一次）
 //	event: tool_call   data: {"name","args_summary","status","result_summary"}
+//	event: approval_request data: {"id","tool","args_summary"}（approval_mode=writes 时写工具执行前暂停，待 /agent/chat/approve 决议）
 //	event: conversation data: {"id","title"}（自动/指定会话，done 之前发一次）
 //	event: done        data: {"content","tool_calls":[...],"reasoning","conversation_id","usage":{"prompt_tokens","completion_tokens","llm_ms","first_token_ms","tok_per_s"}}
 //	event: error       data: {"message"}
 //	流结束            data: [DONE]
 
 const (
-	agentChatMaxIterations = 5                 // tool-calling 最大迭代轮数
-	agentChatToolTimeout   = 30 * time.Second  // 单次工具执行超时
-	agentChatResultLimit   = 2000              // 工具结果回传模型的截断长度
-	agentChatSummaryLimit  = 80                // args_summary / result_summary 截断长度
+	agentChatMaxIterations = 5                // tool-calling 最大迭代轮数
+	agentChatToolTimeout   = 30 * time.Second // 单次工具执行超时
+	agentChatResultLimit   = 2000             // 工具结果回传模型的截断长度
+	agentChatSummaryLimit  = 80               // args_summary / result_summary 截断长度
 )
 
 // errAgentChatAborted 客户端中途断开，循环静默终止（不发送 done/error 事件）。
@@ -71,6 +73,12 @@ type agentChatRequest struct {
 	Regenerate bool `json:"regenerate"`
 	// ReplaceHistory：用请求 messages 整体替换该会话历史（编辑消息场景），再跑最后一轮。
 	ReplaceHistory bool `json:"replace_history"`
+	// Ephemeral：临时会话（/btw 旁路提问）——正常执行与流式输出，但不落库、
+	// 不建会话、不触发标题/记忆后台任务；conversation_id 仅用于回显 conversation 事件。
+	Ephemeral bool `json:"ephemeral"`
+	// Moa：多厂商混合（Mixture of Agents）——正式循环前先把本轮提问扇出到
+	// 其它持有凭证的厂商，成功回答拼成综合参考块注入主厂商上下文（见 agent_chat_moa.go）。
+	Moa bool `json:"moa"`
 }
 
 type agentChatMessage struct {
@@ -115,27 +123,49 @@ func AgentChatStream(c *gin.Context) {
 	}
 
 	// ── 鉴权：X-Agent-Token 优先，其次 JWT 用户 ──
-	userID, tokenID, scopes, usedToken, ok := resolveAgentChatIdentity(c)
+	userID, tokenID, scopes, rateLimitRPS, usedToken, ok := resolveAgentChatIdentity(c)
 	if !ok {
 		return // 已回 401
+	}
+
+	// ── 限流：token 路径按 rate_limit_rps 滑动窗口（单进程内存实现）；JWT 路径不限 ──
+	if usedToken && !agent.AllowAgentChatRequest(tokenID, rateLimitRPS) {
+		agent.GetTokenManager().LogAccess(
+			tokenID, "chat", "/agent/chat", "POST",
+			"rate limit exceeded", http.StatusTooManyRequests, c.ClientIP(), c.Request.UserAgent(),
+		)
+		c.JSON(http.StatusTooManyRequests, gin.H{
+			"success": false,
+			"error":   gin.H{"code": "RATE_LIMITED", "message": "rate limit exceeded, please slow down"},
+		})
+		return
 	}
 
 	// ── 会话解析：历史构造 + regenerate / replace_history（先于 provider 检查，
 	// 保证请求校验 400/404 不因 provider 未配置而被掩盖）。
 	// 指定会话时按 conversation_id 加互斥锁再读历史：防止并发对话历史交错与落库乱序
-	// （自动新建会话无竞争，不加锁）。
+	// （自动新建会话无竞争，不加锁）。临时会话（ephemeral）完全绕过会话层。
 	repo := store.DefaultAgentChatRepo()
-	if reqBody.ConversationID != "" {
-		unlock := lockAgentConversation(reqBody.ConversationID)
-		defer unlock()
-	}
-	plan, history, ok := resolveAgentChatSession(c, repo, userID, &reqBody)
-	if !ok {
-		return // 已回 404 / 400
+	var plan *agentChatSessionPlan
+	var history []ai.ChatMessage
+	if reqBody.Ephemeral {
+		plan, history, ok = resolveAgentChatEphemeral(c, repo, userID, &reqBody)
+		if !ok {
+			return // 已回 400
+		}
+	} else {
+		if reqBody.ConversationID != "" {
+			unlock := lockAgentConversation(reqBody.ConversationID)
+			defer unlock()
+		}
+		plan, history, ok = resolveAgentChatSession(c, repo, userID, &reqBody)
+		if !ok {
+			return // 已回 404 / 400
+		}
 	}
 
-	// ── Provider：统一解析链（支持 "provider" / "provider:model" 覆盖）──
-	provider, providerName := configuredAgentAIProviderWithOverride(reqBody.Model)
+	// ── Provider：统一解析链（请求覆盖 > 用户级 > agent.ai > 全局链）──
+	provider, providerName := configuredAgentAIProviderForUser(int64(userID), reqBody.Model)
 	if provider == nil || provider.APIKey == "" {
 		msg := fmt.Sprintf("AI provider '%s' 未配置 API Key，请到 设置 → AI 模型 填写并保存", providerName)
 		if reqBody.Stream {
@@ -152,11 +182,13 @@ func AgentChatStream(c *gin.Context) {
 		return
 	}
 
-	// ── 工具：agent token 按 scope 过滤；Web JWT 使用全部工具 ──
+	// ── 工具：agent token 按 scope 过滤；再按角色做 RBAC 门控
+	// （ScopeAdmin 文件工具仅管理员可见，普通用户工具集不变）──
 	tools := mergedAgentTools()
 	if usedToken {
 		tools = agent.GetTokenManager().FilterTools(tools, scopes)
 	}
+	tools = agent.FilterToolsByRole(tools, agentRequestRole(c, userID, usedToken))
 
 	if reqBody.Stream {
 		c.Header("Content-Type", "text/event-stream")
@@ -168,22 +200,28 @@ func AgentChatStream(c *gin.Context) {
 	// 浅拷贝全局 ToolContext：UserID 按请求覆盖，底层依赖仍共享生产单例。
 	tc := *agent.GetToolContext()
 	tc.UserID = userID
+	tc.ConversationID = plan.convID // 文件工具检查点记录会话来源（自动建会话首轮为空）
 
 	r := &agentChatRunner{
-		c:           c,
-		provider:    provider,
-		stream:      reqBody.Stream,
-		tokenID:     tokenID,
-		userID:      userID,
-		toolCtx:     &tc,
-		history:     history,
-		aiTools:     toAITools(tools),
-		allowed:     allowedToolNames(tools),
-		records:     []agentToolCallRecord{},
-		convID:      plan.convID,
-		convTitle:   plan.convTitle,
-		userContent: plan.userContent,
-		skipUserMsg: plan.skipUserMsg,
+		c:            c,
+		provider:     provider,
+		stream:       reqBody.Stream,
+		tokenID:      tokenID,
+		userID:       userID,
+		toolCtx:      &tc,
+		history:      history,
+		aiTools:      toAITools(tools),
+		allowed:      allowedToolNames(tools),
+		writeTools:   writeToolNames(tools),
+		records:      []agentToolCallRecord{},
+		convID:       plan.convID,
+		convTitle:    plan.convTitle,
+		userContent:  plan.userContent,
+		skipUserMsg:  plan.skipUserMsg,
+		dbHistoryLen: plan.dbHistoryLen,
+		ephemeral:    reqBody.Ephemeral,
+		moa:          reqBody.Moa,
+		repo:         repo,
 	}
 
 	finalContent, err := r.run()
@@ -202,16 +240,27 @@ func AgentChatStream(c *gin.Context) {
 	}
 
 	// ── 落库：user + assistant（content / reasoning / tool_calls JSON + 用量）──
-	r.persistConversation(repo, finalContent)
+	// 临时会话跳过全部持久化与后台任务（标题升级 / 记忆抽取）。
+	if !reqBody.Ephemeral {
+		r.persistConversation(repo, finalContent)
 
-	// 自动截断标题的会话：异步升级为 LLM 生成标题（不阻塞 SSE 事件流）
-	if agentChatTitleUpgrade && r.autoTitled && r.convID != "" {
-		go r.upgradeConversationTitle(repo)
+		// 自动截断标题的会话：异步升级为 LLM 生成标题（不阻塞 SSE 事件流）
+		if agentChatTitleUpgrade && r.autoTitled && r.convID != "" {
+			go r.upgradeConversationTitle(repo)
+		}
+
+		// 自动记忆沉淀（Hermes 核心）：每 3 个助手回合异步抽取一次，不阻塞响应。
+		if agentChatMemoryExtract && r.convID != "" {
+			go r.extractConversationMemories(repo)
+		}
 	}
 
 	if reqBody.Stream {
-		// conversation 事件在 done 之前发一次（新建会话时前端据此更新当前会话 id）。
-		r.emitEvent("conversation", gin.H{"id": r.convID, "title": r.convTitle})
+		// conversation 事件在 done 之前发一次（新建会话时前端据此更新当前会话 id）；
+		// 临时会话仅在请求带了 conversation_id 时回显（不建会话）。
+		if !reqBody.Ephemeral || r.convID != "" {
+			r.emitEvent("conversation", gin.H{"id": r.convID, "title": r.convTitle})
+		}
 		r.emitEvent("done", gin.H{
 			"content":         finalContent,
 			"tool_calls":      r.records,
@@ -223,13 +272,22 @@ func AgentChatStream(c *gin.Context) {
 		c.Writer.Flush()
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
+	resp := gin.H{
 		"content":         finalContent,
 		"tool_calls":      r.records,
 		"reasoning":       r.reasoning,
 		"conversation_id": r.convID,
 		"usage":           r.usagePayload(),
-	})
+	}
+	if reqBody.Moa {
+		// 非流式路径不发 moa 事件，改为响应体带实际参与厂商列表（厂商不足为空数组）。
+		proposers := r.moaProposers
+		if proposers == nil {
+			proposers = []string{}
+		}
+		resp["moa_proposers"] = proposers
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // agentChatSessionPlan 会话解析结果：runner 落库所需的会话元信息。
@@ -238,6 +296,28 @@ type agentChatSessionPlan struct {
 	convTitle   string // 新建会话标题（首条 user 消息截 20 字）
 	userContent string // 本轮 user 消息内容（落库用）
 	skipUserMsg bool   // replace_history：user 消息已整体入库，只补 assistant
+	// dbHistoryLen 历史中来自库存的消息条数（自动压缩后用压缩后的历史原位替换该段，
+	// 保留本轮追加的 user 消息）。
+	dbHistoryLen int
+}
+
+// resolveAgentChatEphemeral 临时会话（/btw 旁路提问）：历史完全来自请求 messages，
+// 不读库、不建会话；conversation_id 仅作 conversation 事件回显（标题尽力读取，
+// 不校验属主、不存在也不报错）。
+func resolveAgentChatEphemeral(c *gin.Context, repo *store.AgentChatRepo, userID uint64, req *agentChatRequest) (*agentChatSessionPlan, []ai.ChatMessage, bool) {
+	plan := &agentChatSessionPlan{userContent: lastUserMessage(req.Messages)}
+	history, ok := buildAgentChatHistory(req.Messages)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "messages must be non-empty and include at least one user message"})
+		return nil, nil, false
+	}
+	if req.ConversationID != "" {
+		plan.convID = req.ConversationID
+		if rec, err := repo.GetConversation(req.ConversationID); err == nil && rec != nil && rec.UserID == int64(userID) {
+			plan.convTitle = rec.Title
+		}
+	}
+	return plan, history, true
 }
 
 // resolveAgentChatSession 按请求构造会话历史：
@@ -297,6 +377,7 @@ func resolveAgentChatSession(c *gin.Context, repo *store.AgentChatRepo, userID u
 	}
 
 	history := listSessionHistory(repo, rec.ID)
+	plan.dbHistoryLen = len(history)
 	if userMsg != "" {
 		// 会话历史为准，追加本轮 user；regenerate 时若库尾已有同内容 user 则不重复。
 		if !req.Regenerate || lastHistoryUser(history) != userMsg {
@@ -334,14 +415,18 @@ func lastUserMessage(messages []agentChatMessage) string {
 
 // listSessionHistory 读会话历史并转为模型输入（system 不入库故无需过滤；
 // tool 消息不落库——tool_calls 仅存摘要 JSON，无法重放为模型可用历史）。
+// 已压缩消息跳过，改在头部注入最新一条压缩摘要（user 角色的前情提要）。
 func listSessionHistory(repo *store.AgentChatRepo, convID string) []ai.ChatMessage {
 	recs, err := repo.ListMessages(convID)
 	if err != nil {
 		return nil
 	}
-	history := make([]ai.ChatMessage, 0, len(recs))
+	history := make([]ai.ChatMessage, 0, len(recs)+1)
+	if comp, err := repo.LatestCompaction(convID); err == nil && comp != nil && comp.Summary != "" {
+		history = append(history, ai.ChatMessage{Role: ai.RoleUser, Content: "（前情摘要：" + comp.Summary + "）"})
+	}
 	for _, m := range recs {
-		if m.Role == "tool" {
+		if m.Role == "tool" || m.Compressed {
 			continue
 		}
 		history = append(history, ai.ChatMessage{Role: ai.Role(m.Role), Content: m.Content})
@@ -399,6 +484,14 @@ func parseAgentModelOverride(s string) (providerName, model string) {
 // ai.{name}.api_key > env 注册表默认回落；带 ":" 时 model 一并覆盖
 // （优先于 ai.{name}.model 配置），实现方式为克隆 provider，不动注册表。
 func configuredAgentAIProviderWithOverride(modelOverride string) (*ai.Provider, string) {
+	return configuredAgentAIProviderForUser(0, modelOverride)
+}
+
+// configuredAgentAIProviderForUser 完整解析链：
+// 请求覆盖 > 用户级覆盖（xt_agent_user_ai，provider 非空生效）> agent.ai.provider >
+// ai.defaults.provider > ai.provider > default_ai_provider > deepseek。
+// 用户级 api_key 非空时覆盖该 provider 的 env/全局凭证（克隆，不动注册表）。
+func configuredAgentAIProviderForUser(userID int64, modelOverride string) (*ai.Provider, string) {
 	cfg := store.GetConfig()
 	overrideName, overrideModel := parseAgentModelOverride(modelOverride)
 	providerName := "deepseek"
@@ -420,7 +513,15 @@ func configuredAgentAIProviderWithOverride(modelOverride string) (*ai.Provider, 
 	agentCfg, _ := cfg["agent"].(map[string]any)
 	if aai, ok := agentCfg["ai"].(map[string]any); ok {
 		if p := getString(aai, "provider", ""); p != "" {
-			providerName = p // agent 专属配置最高优先级
+			providerName = p // agent 专属配置高于全局链
+		}
+	}
+	// 用户级覆盖：仅当请求未指定 provider 时插入（请求覆盖最高优先级）。
+	var userCfg *store.AgentUserAIRecord
+	if overrideName == "" && userID > 0 {
+		if rec, err := store.NewAgentUserAIRepo().Get(userID); err == nil && rec != nil && rec.Provider != "" {
+			userCfg = rec
+			providerName = rec.Provider
 		}
 	}
 	if overrideName != "" {
@@ -429,30 +530,17 @@ func configuredAgentAIProviderWithOverride(modelOverride string) (*ai.Provider, 
 	providerName = ai.NormalizeProviderName(providerName)
 
 	// 设置页保存的 per-provider 配置（key/model/base_url）。
-	var providerCfg map[string]any
-	if aiCfg != nil {
-		providerCfg, _ = aiCfg[providerName].(map[string]any)
-		if providerCfg == nil {
-			if legacy := ai.LegacyProviderName(providerName); legacy != "" {
-				providerCfg, _ = aiCfg[legacy].(map[string]any)
-			}
-		}
-		if providerCfg == nil {
-			if nested, ok := aiCfg["providers"].(map[string]any); ok {
-				providerCfg, _ = nested[providerName].(map[string]any)
-			}
-		}
-	}
+	providerCfg := agentAIProviderConfig(aiCfg, providerName)
 
 	p := ai.GetProvider(providerName)
 	if p == nil {
 		return nil, providerName
 	}
-	// 配置里有 key → 克隆覆盖（不动注册表，避免影响其他调用方）。
-	cloneForOverride := overrideModel != ""
+	// base：设置页 per-provider 配置（key/model/base_url）克隆优先，否则注册表默认
+	// （env 注入的 key/base_url）。一律克隆覆盖，不动注册表。
+	base := p
 	if providerCfg != nil {
-		key := getString(providerCfg, "api_key", "")
-		if key != "" {
+		if key := getString(providerCfg, "api_key", ""); key != "" {
 			clone := *p
 			clone.APIKey = key
 			if m := getString(providerCfg, "model", ""); m != "" {
@@ -461,33 +549,64 @@ func configuredAgentAIProviderWithOverride(modelOverride string) (*ai.Provider, 
 			if bu := getString(providerCfg, "base_url", ""); bu != "" {
 				clone.BaseURL = bu
 			}
-			if overrideModel != "" {
-				clone.Model = overrideModel // 请求级模型覆盖优先于配置模型
-			}
-			return &clone, providerName
+			base = &clone
 		}
 	}
-	if cloneForOverride {
-		// 该 provider 无设置页配置：克隆注册表默认（env 注入的 key/base_url），仅覆盖模型。
-		clone := *p
-		clone.Model = overrideModel
-		return &clone, providerName
+	// 用户级凭证覆盖：api_key / model 非空时覆盖该 provider 的全局/env 凭证。
+	if userCfg != nil && (userCfg.APIKey != "" || userCfg.Model != "") {
+		clone := *base
+		if userCfg.APIKey != "" {
+			clone.APIKey = userCfg.APIKey
+		}
+		if userCfg.Model != "" {
+			clone.Model = userCfg.Model
+		}
+		base = &clone
 	}
-	return p, providerName
+	if overrideModel != "" {
+		// 请求级模型覆盖优先于一切配置模型
+		if base == p {
+			clone := *p
+			clone.Model = overrideModel
+			return &clone, providerName
+		}
+		base.Model = overrideModel
+	}
+	return base, providerName
 }
 
 // resolveAgentChatIdentity 双路径鉴权：X-Agent-Token 优先于 JWT。
-// 返回 (userID, tokenID, scopes, usedToken, ok)；!ok 时已写入 401 响应。
-func resolveAgentChatIdentity(c *gin.Context) (uint64, int, []string, bool, bool) {
+// 返回 (userID, tokenID, scopes, rateLimitRPS, usedToken, ok)；!ok 时已写入 401 响应。
+func resolveAgentChatIdentity(c *gin.Context) (uint64, int, []string, int, bool, bool) {
 	if h := strings.TrimSpace(c.GetHeader("X-Agent-Token")); h != "" {
 		rec, err := agent.GetTokenManager().ValidateToken(h)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid agent token"})
-			return 0, 0, nil, false, false
+			return 0, 0, nil, 0, false, false
 		}
-		return uint64(rec.UserID), rec.ID, agent.ParseTokenScopes(rec.Scopes), true, true
+		return uint64(rec.UserID), rec.ID, agent.ParseTokenScopes(rec.Scopes), rec.RateLimitRPS, true, true
 	}
-	return uint64(aiBotUserID(c)), 0, nil, false, true
+	return uint64(aiBotUserID(c)), 0, nil, 0, false, true
+}
+
+// agentRequestRole 解析当前请求的用户角色（RBAC 工具门控用）：
+// Web JWT 路径取鉴权中间件写入的 claims；X-Agent-Token 路径按 token 属主查库。
+// 取不到一律按普通用户处理（fail closed，ScopeAdmin 工具不下发）。
+func agentRequestRole(c *gin.Context, userID uint64, usedToken bool) string {
+	if !usedToken {
+		return c.GetString("role")
+	}
+	return agentRoleFromStore(int64(userID))
+}
+
+// agentRoleFromStore 按 userID 查库取角色（headless / token 路径；无缓存，
+// 库不可用或用户不存在返回空串 = 普通用户）。
+func agentRoleFromStore(userID int64) string {
+	if u := store.FindUserByID(int(userID)); u != nil {
+		role, _ := u["role"].(string)
+		return role
+	}
+	return ""
 }
 
 // buildAgentChatHistory 构造模型历史：[system] + 客户端消息（角色白名单校验）。
@@ -538,6 +657,17 @@ func allowedToolNames(tools []agent.Tool) map[string]bool {
 	return out
 }
 
+// writeToolNames 构建写类工具名集合（approval_mode=writes 审批门用）。
+func writeToolNames(tools []agent.Tool) map[string]bool {
+	out := make(map[string]bool, len(tools))
+	for _, t := range tools {
+		if t.Scope == agent.ScopeWrite {
+			out[t.Name] = true
+		}
+	}
+	return out
+}
+
 // buildAgentChatSystemPrompt 拼系统提示词（工具清单按过滤后结果动态生成）。
 func buildAgentChatSystemPrompt(tools []agent.Tool) string {
 	var b strings.Builder
@@ -570,23 +700,43 @@ type agentChatRunner struct {
 	history  []ai.ChatMessage
 	aiTools  []ai.Tool
 	allowed  map[string]bool
-	records  []agentToolCallRecord
+	// writeTools 写类工具名集合（approval_mode=writes 时这些工具执行前需审批）。
+	writeTools map[string]bool
+	records    []agentToolCallRecord
 	// 会话持久化（persistConversation 在成功后落库）
 	convID      string // 会话 id（空 = 自动新建）
 	convTitle   string // 新建会话标题（首条 user 消息截 20 字）
 	userContent string // 本轮 user 消息内容（空 = 不插入 user 行）
 	skipUserMsg bool   // replace_history：user 已整体入库，只补 assistant
 	reasoning   string // 聚合的推理内容（流式回调 / 非流式解析累计）
+	// headless 扩展（TG 入站等）：ctx 支持 /stop 中断；onDelta 文本分片回调（流式回复）
+	ctx     context.Context
+	onDelta func(string)
 	// 用量统计（usage 事件字段与 assistant 消息落库共用）
 	usage        ai.Usage  // 跨 tool-calling 迭代累计的 token 用量
 	llmStart     time.Time // run 开始时间
 	firstTokenAt time.Time // 首个正文/推理分片到达时间（零值 = 无分片，first_token_ms 记 0）
 	autoTitled   bool      // 标题为截断自动生成（据此异步升级为 LLM 标题）
+	// 临时会话（ephemeral）：不落库、不触发自动压缩与后台任务。
+	ephemeral bool
+	// moa：本轮启用多厂商混合（请求 moa:true）；moaProposers 记录实际参与厂商
+	// （主厂商在前），供非流式 JSON 的 moa_proposers 字段回显。
+	moa          bool
+	moaProposers []string
+	// onToolCall 工具实际派发时回调（headless 评测用；HTTP 路径为 nil）。
+	onToolCall func(string)
+	// repo 会话存储（自动压缩用；仅 convID 非空的路径设置）。
+	repo *store.AgentChatRepo
+	// dbHistoryLen 历史前缀中来自库存的消息条数（自动压缩后原位替换该段）。
+	dbHistoryLen int
 }
 
 // run 执行 tool-calling 循环，返回最终答案文本。
 func (r *agentChatRunner) run() (string, error) {
 	r.llmStart = time.Now()
+	// 自动上下文压缩：历史估算 token 超阈值时先同步压缩（保留最近 6 条），
+	// 再继续本轮；任何失败按原样进行（绝不阻塞对话）。
+	r.maybeAutoCompress()
 	// 系统提示词放在这里拼装：首轮调用前工具集已确定。
 	sysPrompt := buildAgentChatSystemPrompt(r.agentToolsDesc())
 	// 记忆插件：把该用户的重要记忆注入系统提示词尾部（无记忆为空串）
@@ -598,6 +748,12 @@ func (r *agentChatRunner) run() (string, error) {
 		sysPrompt += "\n\n" + skills
 	}
 	r.history = append([]ai.ChatMessage{{Role: ai.RoleSystem, Content: sysPrompt}}, r.history...)
+
+	// MoA：正式循环前扇出到其它持有凭证的厂商（同一系统提示词、不带工具），
+	// 成功回答拼成综合参考块前置到最后一条 user 消息；moa 事件在任何 delta 之前发出。
+	if r.moa {
+		r.runMoaPropose(sysPrompt)
+	}
 
 	finalContent := ""
 	completed := false
@@ -640,15 +796,21 @@ func (r *agentChatRunner) run() (string, error) {
 	return finalContent, nil
 }
 
-// aborted 请求是否已中断；headless（c==nil）永不为 true。
+// aborted 请求是否已中断；headless 无 HTTP 请求时看注入的 ctx（/stop 取消）。
 func (r *agentChatRunner) aborted() bool {
-	return r.c != nil && r.c.Request != nil && r.c.Request.Context().Err() != nil
+	if r.c != nil && r.c.Request != nil && r.c.Request.Context().Err() != nil {
+		return true
+	}
+	return r.ctx != nil && r.ctx.Err() != nil
 }
 
-// reqContext 工具执行用的上下文；headless 退回 background。
+// reqContext 工具执行用的上下文：HTTP 请求 > 注入 ctx > background。
 func (r *agentChatRunner) reqContext() context.Context {
 	if r.c != nil && r.c.Request != nil {
 		return r.c.Request.Context()
+	}
+	if r.ctx != nil {
+		return r.ctx
 	}
 	return context.Background()
 }
@@ -887,6 +1049,17 @@ func (r *agentChatRunner) executeTool(tc ai.ToolCall) string {
 			if args == nil {
 				args = map[string]any{}
 			}
+			// 审批门：approval_mode=writes 时写类工具执行前需用户确认；
+			// 拒绝不终结回合——把拒绝结果回传模型继续对话。
+			if r.writeTools[tc.Name] && !r.checkApproval(tc.Name, argsSummary) {
+				statusCode = http.StatusForbidden
+				content = "用户拒绝了该操作"
+				break
+			}
+			// 工具可见性回调：评测等 headless 调用方据此统计实际使用的工具。
+			if r.onToolCall != nil {
+				r.onToolCall(tc.Name)
+			}
 			ctx, cancel := context.WithTimeout(r.reqContext(), agentChatToolTimeout)
 			defer cancel()
 			result, err := handler(r.toolCtx, ctx, args)
@@ -932,8 +1105,15 @@ func (r *agentChatRunner) writeAudit(tool, argsSummary string, statusCode int) {
 // ── SSE 写出 ──
 
 // emitDelta 默认事件：data 为文本分片原文（前端直接追加）；多行分片拆成多条 data 行。
+// headless（c==nil）时转发给 onDelta 回调（TG 流式回复）。
 func (r *agentChatRunner) emitDelta(delta string) {
 	if !r.stream {
+		return
+	}
+	if r.c == nil {
+		if r.onDelta != nil && delta != "" {
+			r.onDelta(delta)
+		}
 		return
 	}
 	for _, line := range strings.Split(delta, "\n") {
@@ -945,7 +1125,7 @@ func (r *agentChatRunner) emitDelta(delta string) {
 
 // emitReasoning 推理内容分片：data 为 JSON 编码字符串（前端 JSON.parse 后追加）。
 func (r *agentChatRunner) emitReasoning(reasoningDelta string) {
-	if !r.stream || reasoningDelta == "" {
+	if !r.stream || reasoningDelta == "" || r.c == nil {
 		return
 	}
 	data, err := json.Marshal(reasoningDelta)
@@ -958,7 +1138,7 @@ func (r *agentChatRunner) emitReasoning(reasoningDelta string) {
 
 // emitEvent 具名事件（reasoning / tool_call / conversation / done / error），payload 序列化为单行 JSON。
 func (r *agentChatRunner) emitEvent(event string, payload any) {
-	if !r.stream {
+	if !r.stream || r.c == nil {
 		return
 	}
 	data, err := json.Marshal(payload)
@@ -981,7 +1161,7 @@ func mergedAgentTools() []agent.Tool {
 	return out
 }
 
-// RunAgentHeadless 以指定用户身份无界面执行一轮 agent 对话（工具全开，无审计 IP/UA）。
+// RunAgentHeadless 以指定用户身份无界面执行一轮 agent 对话（工具按角色 RBAC 门控后全开，无审计 IP/UA）。
 // cron 调度器到点执行与后端异步任务复用此入口。
 func RunAgentHeadless(userID int64, prompt string) (string, error) {
 	return runAgentHeadlessFiltered(userID, prompt, nil)
@@ -997,14 +1177,45 @@ func RunAgentSub(userID int64, prompt string) (string, error) {
 
 // runAgentHeadlessFiltered headless 执行；keep 非 nil 时按 scope 过滤工具。
 func runAgentHeadlessFiltered(userID int64, prompt string, keep func(agent.Tool) bool) (string, error) {
+	return runAgentHeadlessCore(context.Background(), HeadlessOptions{UserID: userID, Prompt: prompt}, keep)
+}
+
+// HeadlessOptions headless 执行选项（TG 入站等平台投递场景）。
+type HeadlessOptions struct {
+	UserID int64
+	Prompt string
+	// ConversationID 绑定会话：加载其历史作为上下文，并把本轮 user+assistant 落库
+	// （与网页端 SSE 路径同一套持久化，web UI 可见）；空 = 无会话（不落库）。
+	ConversationID string
+	// Model 覆盖："provider" 或 "provider:model"；空 = 默认解析链。
+	Model string
+	// OnDelta 文本分片回调：非 nil 时走流式协议并逐片回调（TG 流式回复）。
+	OnDelta func(string)
+	// OnToolCall 工具实际派发（找到且被允许、执行前）时回调工具名（评测统计 used_tools 用）。
+	OnToolCall func(name string)
+}
+
+// RunAgentHeadlessCtx 带上下文与扩展选项的 headless 入口：ctx 取消即中断执行
+// （TG /stop）；工具按角色 RBAC 门控后全开。errAgentChatAborted 表示被 ctx 中断（本轮不落库）。
+func RunAgentHeadlessCtx(ctx context.Context, opts HeadlessOptions) (string, error) {
+	return runAgentHeadlessCore(ctx, opts, nil)
+}
+
+// runAgentHeadlessCore headless 执行核心：keep 非 nil 时按 scope 过滤工具。
+func runAgentHeadlessCore(ctx context.Context, opts HeadlessOptions, keep func(agent.Tool) bool) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if builtin.BuildError() != nil {
 		return "", builtin.BuildError()
 	}
-	provider, providerName := configuredAgentAIProvider()
+	provider, providerName := configuredAgentAIProviderForUser(opts.UserID, opts.Model)
 	if provider == nil || provider.APIKey == "" {
 		return "", fmt.Errorf("AI provider '%s' 未配置 API Key", providerName)
 	}
 	tools := mergedAgentTools()
+	// RBAC 门控：ScopeAdmin 文件工具仅管理员可见（cron/TG 等 headless 路径同样生效）。
+	tools = agent.FilterToolsByRole(tools, agentRoleFromStore(opts.UserID))
 	if keep != nil {
 		filtered := make([]agent.Tool, 0, len(tools))
 		for _, t := range tools {
@@ -1017,7 +1228,8 @@ func runAgentHeadlessFiltered(userID int64, prompt string, keep func(agent.Tool)
 
 	// 浅拷贝全局 ToolContext：UserID 覆盖，底层依赖共享生产单例。
 	tc := *agent.GetToolContext()
-	tc.UserID = uint64(userID)
+	tc.UserID = uint64(opts.UserID)
+	tc.ConversationID = opts.ConversationID // 文件工具检查点记录会话来源
 
 	allowed := map[string]bool{}
 	for _, t := range tools {
@@ -1025,16 +1237,49 @@ func runAgentHeadlessFiltered(userID int64, prompt string, keep func(agent.Tool)
 	}
 
 	r := &agentChatRunner{
-		c:         nil, // headless：无 SSE、无请求中断
-		provider:  provider,
-		stream:    false,
-		userID:    uint64(userID),
-		toolCtx:   &tc,
-		history:   []ai.ChatMessage{{Role: ai.RoleUser, Content: prompt}},
-		aiTools:   toAITools(tools),
-		allowed:   allowed,
+		c:           nil, // headless：无 SSE
+		ctx:         ctx,
+		provider:    provider,
+		stream:      opts.OnDelta != nil,
+		onDelta:     opts.OnDelta,
+		onToolCall:  opts.OnToolCall,
+		userID:      uint64(opts.UserID),
+		toolCtx:     &tc,
+		aiTools:     toAITools(tools),
+		allowed:     allowed,
+		writeTools:  writeToolNames(tools),
+		userContent: opts.Prompt,
 	}
-	return r.run()
+
+	// 会话绑定：与网页端同语义——服务端历史为准，追加本轮 user；按会话互斥防交错。
+	var repo *store.AgentChatRepo
+	if opts.ConversationID != "" {
+		repo = store.DefaultAgentChatRepo()
+		unlock := lockAgentConversation(opts.ConversationID)
+		defer unlock()
+		rec, err := repo.GetConversation(opts.ConversationID)
+		if err != nil || rec == nil || rec.UserID != opts.UserID {
+			return "", fmt.Errorf("conversation not found")
+		}
+		r.convID = rec.ID
+		r.convTitle = rec.Title
+		stored := listSessionHistory(repo, rec.ID)
+		r.dbHistoryLen = len(stored)
+		r.repo = repo
+		r.history = append(stored, ai.ChatMessage{Role: ai.RoleUser, Content: opts.Prompt})
+	} else {
+		r.history = []ai.ChatMessage{{Role: ai.RoleUser, Content: opts.Prompt}}
+	}
+
+	finalContent, err := r.run()
+	if err != nil {
+		return "", err
+	}
+	// 绑定会话时落库本轮（user + assistant，tool_calls 摘要 JSON，与 web 路径一致）。
+	if r.convID != "" {
+		r.persistConversation(repo, finalContent)
+	}
+	return finalContent, nil
 }
 
 // ResolveScheduleNL 用配置的 LLM 把自然语言时间描述转换为 cron 表达式（供 cron 插件的 schedule 解析）。

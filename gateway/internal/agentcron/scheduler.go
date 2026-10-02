@@ -3,6 +3,7 @@ package agentcron
 import (
 	"context"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -11,6 +12,13 @@ import (
 
 // Executor 到点执行任务：给定用户与指令，返回助手最终回复。
 type Executor func(userID int64, prompt string) (string, error)
+
+// TelegramSender 按任务属主投递 TG 消息（查绑定表）；返回 false 表示未送达
+// （未绑定 / 未配置），调用方回落到全局 notify 通道。
+type TelegramSender func(userID int64, text string) bool
+
+// ChannelSender 飞书 / 钉钉每用户直发投递器，语义同 TelegramSender。
+type ChannelSender func(userID int64, text string) bool
 
 // JobStore 调度器依赖的最小存储接口（*Repo 实现；测试可替换）。
 type JobStore interface {
@@ -22,12 +30,17 @@ type JobStore interface {
 
 // Scheduler 定时任务调度器：周期扫描到点任务并异步执行。
 type Scheduler struct {
-	repo     JobStore
-	exec     Executor
-	interval time.Duration
-	stopCh   chan struct{}
-	once     sync.Once
-	running  sync.Map // jobID -> struct{}（防重入）
+	repo           JobStore
+	exec           Executor
+	tgSender       TelegramSender
+	feishuSender   ChannelSender
+	dingtalkSender ChannelSender
+	qqSender       ChannelSender
+	wecomSender    ChannelSender
+	interval       time.Duration
+	stopCh         chan struct{}
+	once           sync.Once
+	running        sync.Map // jobID -> struct{}（防重入）
 }
 
 // NewScheduler 调度器；exec 可为 nil（此时到点仅标记错误，便于测试）。
@@ -38,6 +51,31 @@ func NewScheduler(repo JobStore, exec Executor) *Scheduler {
 // SetExecutor 注入/替换到点执行器（main 装配 headless runner 时调用）。
 func (s *Scheduler) SetExecutor(exec Executor) {
 	s.exec = exec
+}
+
+// SetTelegramSender 注入按用户 TG 投递器（builtin 装配 bot 时调用）。
+func (s *Scheduler) SetTelegramSender(sender TelegramSender) {
+	s.tgSender = sender
+}
+
+// SetFeishuSender 注入按用户飞书投递器（builtin 装配 bot 时调用）。
+func (s *Scheduler) SetFeishuSender(sender ChannelSender) {
+	s.feishuSender = sender
+}
+
+// SetDingtalkSender 注入按用户钉钉投递器（builtin 装配 bot 时调用）。
+func (s *Scheduler) SetDingtalkSender(sender ChannelSender) {
+	s.dingtalkSender = sender
+}
+
+// SetQqSender 注入按用户 QQ 投递器（builtin 装配 bot 时调用）。
+func (s *Scheduler) SetQqSender(sender ChannelSender) {
+	s.qqSender = sender
+}
+
+// SetWecomSender 注入按用户企业微信投递器（builtin 装配 bot 时调用）。
+func (s *Scheduler) SetWecomSender(sender ChannelSender) {
+	s.wecomSender = sender
 }
 
 // Start 启动后台轮询（幂等）。
@@ -140,12 +178,64 @@ func (s *Scheduler) run(j *Job) {
 	}
 
 	if j.Channel != "" && j.Channel != "web" {
-		notify.GetManager().Send(notify.Message{
-			Title:     "定时任务「" + j.Name + "」" + map[bool]string{true: "✅", false: "❌"}[status == "ok"],
-			Content:   result,
-			Level:     map[bool]string{true: "INFO", false: "WARN"}[status == "ok"],
-			Tags:      map[string]string{"_channels": j.Channel, "source": "agent-cron"},
-			Timestamp: time.Now().Unix(),
-		})
+		title := "定时任务「" + j.Name + "」" + map[bool]string{true: "✅", false: "❌"}[status == "ok"]
+		remaining := j.Channel
+		// 每用户直发：channel 含 telegram/feishu/dingtalk/qq/wecom 时优先直发任务属主的绑定
+		// 会话，送达则从回落通道清单中剔除（未注入 sender 或送达失败走原全局 notify 路径）。
+		if s.tgSender != nil && hasChannel(j.Channel, "telegram") {
+			if s.tgSender(j.UserID, title+"\n"+result) {
+				remaining = removeChannel(remaining, "telegram")
+			}
+		}
+		if s.feishuSender != nil && hasChannel(j.Channel, "feishu") {
+			if s.feishuSender(j.UserID, title+"\n"+result) {
+				remaining = removeChannel(remaining, "feishu")
+			}
+		}
+		if s.dingtalkSender != nil && hasChannel(j.Channel, "dingtalk") {
+			if s.dingtalkSender(j.UserID, title+"\n"+result) {
+				remaining = removeChannel(remaining, "dingtalk")
+			}
+		}
+		if s.qqSender != nil && hasChannel(j.Channel, "qq") {
+			if s.qqSender(j.UserID, title+"\n"+result) {
+				remaining = removeChannel(remaining, "qq")
+			}
+		}
+		if s.wecomSender != nil && hasChannel(j.Channel, "wecom") {
+			if s.wecomSender(j.UserID, title+"\n"+result) {
+				remaining = removeChannel(remaining, "wecom")
+			}
+		}
+		if remaining != "" && remaining != "web" {
+			notify.GetManager().Send(notify.Message{
+				Title:     title,
+				Content:   result,
+				Level:     map[bool]string{true: "INFO", false: "WARN"}[status == "ok"],
+				Tags:      map[string]string{"_channels": remaining, "source": "agent-cron"},
+				Timestamp: time.Now().Unix(),
+			})
+		}
 	}
+}
+
+// hasChannel channel 清单（逗号分隔）是否含指定通道。
+func hasChannel(list, name string) bool {
+	for _, c := range strings.Split(list, ",") {
+		if strings.TrimSpace(c) == name {
+			return true
+		}
+	}
+	return false
+}
+
+// removeChannel 从 channel 清单剔除指定通道；空结果返回 ""。
+func removeChannel(list, name string) string {
+	out := []string{}
+	for _, c := range strings.Split(list, ",") {
+		if c = strings.TrimSpace(c); c != "" && c != name {
+			out = append(out, c)
+		}
+	}
+	return strings.Join(out, ",")
 }

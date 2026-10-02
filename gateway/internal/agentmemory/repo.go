@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xiaotian-quant/gateway/internal/agentprofiles"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
@@ -19,6 +20,8 @@ type Memory struct {
 	Content              string `json:"content"`
 	SourceConversationID string `json:"source_conversation_id"`
 	Importance           int    `json:"importance"`
+	Origin               string `json:"origin"` // manual 手动 | agent 助手主动 | auto 自动沉淀
+	ProfileID            int64  `json:"profile_id"`
 	CreatedAt            int64  `json:"created_at"`
 	UpdatedAt            int64  `json:"updated_at"`
 }
@@ -44,6 +47,9 @@ func NewID() string {
 
 var validKinds = map[string]bool{"fact": true, "preference": true, "observation": true, "market_note": true}
 
+// ValidKind 判断 kind 是否为合法记忆类别（自动抽取解析等外部调用用）。
+func ValidKind(kind string) bool { return validKinds[kind] }
+
 // Create 写入记忆；kind 非法回落 fact。
 func (r *Repo) Create(m *Memory) error {
 	db, err := r.db()
@@ -62,27 +68,36 @@ func (r *Repo) Create(m *Memory) error {
 	if m.Importance > 5 {
 		m.Importance = 5
 	}
+	if m.Origin == "" {
+		m.Origin = "manual"
+	}
 	now := time.Now().Unix()
 	m.CreatedAt, m.UpdatedAt = now, now
 	_, err = db.Exec(`INSERT INTO xt_agent_memories
-		(id, user_id, scope, kind, content, source_conversation_id, importance, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?)`,
-		m.ID, m.UserID, m.Scope, m.Kind, m.Content, m.SourceConversationID, m.Importance, m.CreatedAt, m.UpdatedAt)
+		(id, user_id, scope, kind, content, source_conversation_id, importance, origin, profile_id, created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		m.ID, m.UserID, m.Scope, m.Kind, m.Content, m.SourceConversationID, m.Importance, m.Origin, m.ProfileID, m.CreatedAt, m.UpdatedAt)
 	return err
 }
 
-const memCols = "id, user_id, scope, kind, content, source_conversation_id, importance, created_at, updated_at"
+const memCols = "id, user_id, scope, kind, content, source_conversation_id, importance, origin, profile_id, created_at, updated_at"
 
 func scanMem(row interface{ Scan(...any) error }) (*Memory, error) {
 	var m Memory
-	err := row.Scan(&m.ID, &m.UserID, &m.Scope, &m.Kind, &m.Content, &m.SourceConversationID, &m.Importance, &m.CreatedAt, &m.UpdatedAt)
+	err := row.Scan(&m.ID, &m.UserID, &m.Scope, &m.Kind, &m.Content, &m.SourceConversationID, &m.Importance, &m.Origin, &m.ProfileID, &m.CreatedAt, &m.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
 	return &m, nil
 }
 
+// activeProfile 当前激活档案 id（档案隔离：读路径可见 profile_id IN (0, 激活档案)）。
+func (r *Repo) activeProfile(userID int64) int64 {
+	return agentprofiles.NewRepo().ActiveProfileID(userID)
+}
+
 // ListByUser 列出用户记忆（importance 降序、updated_at 降序），可按 kind 过滤（空 = 全部）。
+// 档案隔离：仅返回全局行（profile_id=0）与当前激活档案的行。
 func (r *Repo) ListByUser(userID int64, kind string, limit int) ([]*Memory, error) {
 	db, err := r.db()
 	if err != nil {
@@ -91,8 +106,8 @@ func (r *Repo) ListByUser(userID int64, kind string, limit int) ([]*Memory, erro
 	if limit <= 0 || limit > 200 {
 		limit = 100
 	}
-	q := `SELECT ` + memCols + ` FROM xt_agent_memories WHERE user_id = ?`
-	args := []any{userID}
+	q := `SELECT ` + memCols + ` FROM xt_agent_memories WHERE user_id = ? AND profile_id IN (0, ?)`
+	args := []any{userID, r.activeProfile(userID)}
 	if kind != "" {
 		q += ` AND kind = ?`
 		args = append(args, kind)
@@ -115,7 +130,7 @@ func (r *Repo) ListByUser(userID int64, kind string, limit int) ([]*Memory, erro
 	return out, rows.Err()
 }
 
-// Search 关键词检索（内容 LIKE，多词空格分隔取交集）。
+// Search 关键词检索（内容 LIKE，多词空格分隔取交集）。档案隔离同 ListByUser。
 func (r *Repo) Search(userID int64, query string, limit int) ([]*Memory, error) {
 	db, err := r.db()
 	if err != nil {
@@ -125,8 +140,8 @@ func (r *Repo) Search(userID int64, query string, limit int) ([]*Memory, error) 
 		limit = 10
 	}
 	words := strings.Fields(query)
-	q := `SELECT ` + memCols + ` FROM xt_agent_memories WHERE user_id = ?`
-	args := []any{userID}
+	q := `SELECT ` + memCols + ` FROM xt_agent_memories WHERE user_id = ? AND profile_id IN (0, ?)`
+	args := []any{userID, r.activeProfile(userID)}
 	for _, w := range words {
 		q += ` AND content LIKE ?`
 		args = append(args, "%"+w+"%")
@@ -179,6 +194,30 @@ func (r *Repo) RecentForPrompt(userID int64, budgetChars, limit, minImp int) ([]
 		used += len(m.Content)
 	}
 	return out, nil
+}
+
+// CountByOrigin 统计用户某来源的记忆条数（auto 自动沉淀上限控制用）。
+func (r *Repo) CountByOrigin(userID int64, origin string) (int, error) {
+	db, err := r.db()
+	if err != nil {
+		return 0, err
+	}
+	var n int
+	err = db.QueryRow(`SELECT COUNT(*) FROM xt_agent_memories WHERE user_id = ? AND origin = ?`, userID, origin).Scan(&n)
+	return n, err
+}
+
+// ExistsContent 判断用户是否已有完全同文的记忆（自动沉淀 exact 去重）。
+func (r *Repo) ExistsContent(userID int64, content string) (bool, error) {
+	db, err := r.db()
+	if err != nil {
+		return false, err
+	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM xt_agent_memories WHERE user_id = ? AND content = ?`, userID, content).Scan(&n); err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 // Delete 删除（含用户校验）。

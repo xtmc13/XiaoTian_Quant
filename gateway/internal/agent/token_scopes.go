@@ -10,9 +10,10 @@ const (
 	ScopeNotify     TokenScope = "N" // Notify: send notifications
 	ScopeCommunity  TokenScope = "C" // Community: browse/purchase indicators
 	ScopeTrade      TokenScope = "T" // Live Trading: full trading access
+	ScopeAdmin      TokenScope = "A" // Admin: 本地文件工具等管理员专属能力（另需用户角色为 admin）
 )
 
-var AllScopes = []TokenScope{ScopeRead, ScopeWrite, ScopeBacktest, ScopeNotify, ScopeCommunity, ScopeTrade}
+var AllScopes = []TokenScope{ScopeRead, ScopeWrite, ScopeBacktest, ScopeNotify, ScopeCommunity, ScopeTrade, ScopeAdmin}
 
 // ScopeDescriptions returns human-readable descriptions for each scope.
 func ScopeDescriptions() map[TokenScope]string {
@@ -23,6 +24,7 @@ func ScopeDescriptions() map[TokenScope]string {
 		ScopeNotify:    "Notify: send alerts and notifications",
 		ScopeCommunity: "Community: browse, purchase, review indicators",
 		ScopeTrade:     "Live Trading: place real orders on exchanges",
+		ScopeAdmin:     "Admin: sandboxed local file tools (requires admin role)",
 	}
 }
 
@@ -30,7 +32,7 @@ func ScopeDescriptions() map[TokenScope]string {
 func ValidateScopes(scopes []TokenScope) bool {
 	valid := map[TokenScope]bool{
 		ScopeRead: true, ScopeWrite: true, ScopeBacktest: true,
-		ScopeNotify: true, ScopeCommunity: true, ScopeTrade: true,
+		ScopeNotify: true, ScopeCommunity: true, ScopeTrade: true, ScopeAdmin: true,
 	}
 	for _, s := range scopes {
 		if !valid[s] {

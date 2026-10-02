@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/xiaotian-quant/gateway/internal/agentprofiles"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
@@ -18,6 +19,7 @@ type Skill struct {
 	Body        string `json:"body"`
 	UsageCount  int    `json:"usage_count"`
 	Source      string `json:"source"`
+	ProfileID   int64  `json:"profile_id"`
 	CreatedAt   int64  `json:"created_at"`
 	UpdatedAt   int64  `json:"updated_at"`
 }
@@ -56,27 +58,33 @@ func (r *Repo) Upsert(s *Skill) error {
 	now := time.Now().Unix()
 	s.CreatedAt, s.UpdatedAt = now, now
 	_, err = db.Exec(`INSERT INTO xt_agent_skills
-		(id, user_id, name, description, body, usage_count, source, created_at, updated_at)
-		VALUES (?,?,?,?,?,0,?,?,?)
+		(id, user_id, name, description, body, usage_count, source, profile_id, created_at, updated_at)
+		VALUES (?,?,?,?,?,0,?,?,?,?)
 		ON CONFLICT(user_id, name) DO UPDATE SET
 		description = excluded.description, body = excluded.body,
 		source = excluded.source, updated_at = excluded.updated_at`,
-		s.ID, s.UserID, s.Name, s.Description, s.Body, s.Source, s.CreatedAt, s.UpdatedAt)
+		s.ID, s.UserID, s.Name, s.Description, s.Body, s.Source, s.ProfileID, s.CreatedAt, s.UpdatedAt)
 	return err
 }
 
-const skillCols = "id, user_id, name, description, body, usage_count, source, created_at, updated_at"
+const skillCols = "id, user_id, name, description, body, usage_count, source, profile_id, created_at, updated_at"
 
 func scanSkill(row interface{ Scan(...any) error }) (*Skill, error) {
 	var s Skill
-	err := row.Scan(&s.ID, &s.UserID, &s.Name, &s.Description, &s.Body, &s.UsageCount, &s.Source, &s.CreatedAt, &s.UpdatedAt)
+	err := row.Scan(&s.ID, &s.UserID, &s.Name, &s.Description, &s.Body, &s.UsageCount, &s.Source, &s.ProfileID, &s.CreatedAt, &s.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
 	return &s, nil
 }
 
+// activeProfile 当前激活档案 id（档案隔离：读路径可见 profile_id IN (0, 激活档案)）。
+func (r *Repo) activeProfile(userID int64) int64 {
+	return agentprofiles.NewRepo().ActiveProfileID(userID)
+}
+
 // ListByUser 列出用户技能（usage_count 降序，常用在前）。
+// 档案隔离：仅返回全局行（profile_id=0）与当前激活档案的行。
 func (r *Repo) ListByUser(userID int64, limit int) ([]*Skill, error) {
 	db, err := r.db()
 	if err != nil {
@@ -85,7 +93,7 @@ func (r *Repo) ListByUser(userID int64, limit int) ([]*Skill, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 100
 	}
-	rows, err := db.Query(`SELECT `+skillCols+` FROM xt_agent_skills WHERE user_id = ? ORDER BY usage_count DESC, updated_at DESC LIMIT ?`, userID, limit)
+	rows, err := db.Query(`SELECT `+skillCols+` FROM xt_agent_skills WHERE user_id = ? AND profile_id IN (0, ?) ORDER BY usage_count DESC, updated_at DESC LIMIT ?`, userID, r.activeProfile(userID), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -101,13 +109,13 @@ func (r *Repo) ListByUser(userID int64, limit int) ([]*Skill, error) {
 	return out, rows.Err()
 }
 
-// GetByName 按名取技能（调用/执行用）。
+// GetByName 按名取技能（调用/执行用）。档案隔离同 ListByUser。
 func (r *Repo) GetByName(userID int64, name string) (*Skill, error) {
 	db, err := r.db()
 	if err != nil {
 		return nil, err
 	}
-	return scanSkill(db.QueryRow(`SELECT `+skillCols+` FROM xt_agent_skills WHERE user_id = ? AND name = ?`, userID, name))
+	return scanSkill(db.QueryRow(`SELECT `+skillCols+` FROM xt_agent_skills WHERE user_id = ? AND name = ? AND profile_id IN (0, ?)`, userID, name, r.activeProfile(userID)))
 }
 
 // TouchUsage 调用计数 +1。

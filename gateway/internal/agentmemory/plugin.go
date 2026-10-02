@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/xiaotian-quant/gateway/internal/agent"
+	"github.com/xiaotian-quant/gateway/internal/agentprofiles"
 	"github.com/xiaotian-quant/gateway/internal/plugin"
 )
 
@@ -38,13 +39,13 @@ func (p *MemoryPlugin) Register(reg *plugin.Registry, _ plugin.Deps) error {
 
 	reg.AddTool(agent.Tool{
 		Name:        "save_memory",
-		Description: "把一条值得长期记住的信息存入记忆（用户偏好、交易习惯、市场观察等）。用户说「记住」时使用。kind: fact(事实)/preference(偏好)/observation(观察)/market_note(市场笔记)",
+		Description: "把一条值得长期记住的信息存入记忆（用户偏好、交易习惯、市场观察等）。用户说「记住」时使用；当对话中出现值得长期记住的用户偏好/事实时，也应主动调用。kind: fact(事实)/preference(偏好)/observation(观察)/market_note(市场笔记)",
 		Scope:       agent.ScopeNotify,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"content": strProp("记忆内容，一句话"),
-				"kind":    strProp("fact / preference / observation / market_note，默认 fact"),
+				"content":    strProp("记忆内容，一句话"),
+				"kind":       strProp("fact / preference / observation / market_note，默认 fact"),
 				"importance": map[string]any{"type": "integer", "description": "重要度 1-5，默认 1；核心偏好/风控纪律给 4-5"},
 			},
 			"required": []string{"content"},
@@ -108,6 +109,12 @@ func (p *MemoryPlugin) save(tc *agent.ToolContext, _ context.Context, args map[s
 		Content:              content,
 		SourceConversationID: argStr(args, "conversation_id"),
 		Importance:           importance,
+		Origin:               "agent", // 助手通过 save_memory 工具主动记录
+		ProfileID:            agentprofiles.NewRepo().ActiveProfileID(int64(tc.UserID)), // 写入当前激活档案
+	}
+	// 同内容已存在时不重复落库（同一偏好多轮重复叮嘱的场景）
+	if dup, err := p.Repo.ExistsContent(m.UserID, content); err == nil && dup {
+		return map[string]any{"id": "", "kind": m.Kind, "deduped": true}, nil
 	}
 	if err := p.Repo.Create(m); err != nil {
 		return nil, err

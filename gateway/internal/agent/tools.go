@@ -74,6 +74,8 @@ type ToolContext struct {
 	Matcher   OrderMatcher     // paper 撮合下单/撤单
 	Portfolio PortfolioReader  // 余额/持仓/权益
 	Engine    StrategyRuntime  // 策略引擎启停
+	// ConversationID 当前对话会话 id（文件工具检查点记录用；自动新建会话首轮为空）。
+	ConversationID string
 }
 
 // ToolDeps 供 main.go 用真实单例覆盖默认装配；零值字段回落到包内默认实现。
@@ -1213,7 +1215,7 @@ func (tc *ToolContext) GetStats(_ context.Context, _ map[string]any) (any, error
 var scopeAliases = map[string]TokenScope{
 	"READ": ScopeRead, "WRITE": ScopeWrite, "BACKTEST": ScopeBacktest,
 	"NOTIFY": ScopeNotify, "COMMUNITY": ScopeCommunity,
-	"TRADE": ScopeTrade, "LIVE": ScopeTrade,
+	"TRADE": ScopeTrade, "LIVE": ScopeTrade, "ADMIN": ScopeAdmin,
 }
 
 // normalizeScopes 把字符串 scope 列表规范化为单字母 scope 集合。
@@ -1243,6 +1245,21 @@ func (tm *TokenManager) FilterTools(tools []Tool, scopes []string) []Tool {
 	out := make([]Tool, 0, len(tools))
 	for _, t := range tools {
 		if t.Scope == "" || owned[t.Scope] {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// FilterToolsByRole 按用户角色过滤工具：ScopeAdmin（本地文件等管理员工具）
+// 仅对 role == "admin" 的用户放行，其余角色一律剔除（RBAC 门控，与 token scope 过滤正交）。
+func FilterToolsByRole(tools []Tool, role string) []Tool {
+	if role == "admin" {
+		return tools
+	}
+	out := make([]Tool, 0, len(tools))
+	for _, t := range tools {
+		if t.Scope != ScopeAdmin {
 			out = append(out, t)
 		}
 	}

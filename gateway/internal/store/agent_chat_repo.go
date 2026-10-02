@@ -40,7 +40,18 @@ type AgentMessageRecord struct {
 	PromptTokens     int64 `json:"prompt_tokens"`
 	CompletionTokens int64 `json:"completion_tokens"`
 	LLMMs            int64 `json:"llm_ms"`
-	CreatedAt        int64 `json:"created_at"` // 秒级 Unix
+	// Compressed 标记该消息已被上下文压缩收纳（历史加载时跳过，改由最新摘要替代）。
+	Compressed bool  `json:"compressed"`
+	CreatedAt  int64 `json:"created_at"` // 秒级 Unix
+}
+
+// AgentCompactionRecord 是 xt_agent_compactions 的行记录：一次上下文压缩的摘要存档。
+type AgentCompactionRecord struct {
+	ID              int64  `json:"id"`
+	ConversationID  string `json:"conversation_id"`
+	Summary         string `json:"summary"`
+	CompressedCount int    `json:"compressed_count"` // 本次压缩收纳的消息条数
+	CreatedAt       int64  `json:"created_at"`       // 秒级 Unix
 }
 
 // EnsureAgentChatSchema 幂等创建 agent 会话/消息两张表（含常用查询索引）。
@@ -84,6 +95,7 @@ func EnsureAgentChatSchema() error {
 		`ALTER TABLE xt_agent_messages ADD COLUMN prompt_tokens INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE xt_agent_messages ADD COLUMN completion_tokens INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE xt_agent_messages ADD COLUMN llm_ms INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE xt_agent_messages ADD COLUMN compressed INTEGER NOT NULL DEFAULT 0`,
 	} {
 		if _, err := db.Exec(ddl); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return err
@@ -91,6 +103,22 @@ func EnsureAgentChatSchema() error {
 	}
 	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_agent_messages_conv_time
 		ON xt_agent_messages (conversation_id, created_at)`)
+	if err != nil {
+		return err
+	}
+	// 压缩摘要存档表：历史加载时注入最新一条摘要作为前情上下文。
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS xt_agent_compactions (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		conversation_id TEXT NOT NULL,
+		summary TEXT NOT NULL DEFAULT '',
+		compressed_count INTEGER NOT NULL DEFAULT 0,
+		created_at INTEGER NOT NULL DEFAULT 0
+	)`)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_agent_compactions_conv_time
+		ON xt_agent_compactions (conversation_id, created_at)`)
 	return err
 }
 
@@ -123,7 +151,7 @@ func (r *AgentChatRepo) ensure() {
 }
 
 const agentConversationColumns = `id, user_id, title, model, created_at, updated_at`
-const agentMessageColumns = `id, conversation_id, role, content, reasoning, tool_calls, prompt_tokens, completion_tokens, llm_ms, created_at`
+const agentMessageColumns = `id, conversation_id, role, content, reasoning, tool_calls, prompt_tokens, completion_tokens, llm_ms, compressed, created_at`
 
 func scanAgentConversation(s rowScanner) (*AgentConversationRecord, error) {
 	var rec AgentConversationRecord
@@ -139,14 +167,16 @@ func scanAgentConversation(s rowScanner) (*AgentConversationRecord, error) {
 
 func scanAgentMessage(s rowScanner) (*AgentMessageRecord, error) {
 	var rec AgentMessageRecord
+	var compressed int
 	err := s.Scan(&rec.ID, &rec.ConversationID, &rec.Role, &rec.Content, &rec.Reasoning, &rec.ToolCalls,
-		&rec.PromptTokens, &rec.CompletionTokens, &rec.LLMMs, &rec.CreatedAt)
+		&rec.PromptTokens, &rec.CompletionTokens, &rec.LLMMs, &compressed, &rec.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	rec.Compressed = compressed != 0
 	return &rec, nil
 }
 
@@ -242,7 +272,7 @@ func (r *AgentChatRepo) SetConversationModel(id, model string) error {
 	return err
 }
 
-// DeleteConversation 删除会话并级联删除其全部消息。
+// DeleteConversation 删除会话并级联删除其全部消息与压缩摘要。
 func (r *AgentChatRepo) DeleteConversation(id string) error {
 	r.ensure()
 	r.mu.Lock()
@@ -253,8 +283,76 @@ func (r *AgentChatRepo) DeleteConversation(id string) error {
 	if _, err := db.Exec(`DELETE FROM xt_agent_messages WHERE conversation_id=?`, id); err != nil {
 		return err
 	}
+	if _, err := db.Exec(`DELETE FROM xt_agent_compactions WHERE conversation_id=?`, id); err != nil {
+		return err
+	}
 	_, err := db.Exec(`DELETE FROM xt_agent_conversations WHERE id=?`, id)
 	return err
+}
+
+// ── 上下文压缩（compaction）──
+
+// ApplyCompaction 事务内写入一条压缩摘要并把指定消息标记 compressed=1；
+// 返回写入的压缩记录（compressed_count 取实际标记条数）。
+func (r *AgentChatRepo) ApplyCompaction(conversationID, summary string, messageIDs []int64) (*AgentCompactionRecord, error) {
+	r.ensure()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if db == nil {
+		return nil, sql.ErrConnDone
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	marked := 0
+	for _, id := range messageIDs {
+		res, err := tx.Exec(`UPDATE xt_agent_messages SET compressed=1 WHERE id=? AND conversation_id=?`, id, conversationID)
+		if err != nil {
+			return nil, err
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			marked++
+		}
+	}
+	rec := &AgentCompactionRecord{
+		ConversationID:  conversationID,
+		Summary:         summary,
+		CompressedCount: marked,
+		CreatedAt:       time.Now().Unix(),
+	}
+	res, err := tx.Exec(`INSERT INTO xt_agent_compactions (conversation_id, summary, compressed_count, created_at)
+		VALUES (?,?,?,?)`, rec.ConversationID, rec.Summary, rec.CompressedCount, rec.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	rec.ID, _ = res.LastInsertId()
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return rec, nil
+}
+
+// LatestCompaction 取会话最近一次压缩摘要；无则返回 (nil, nil)。
+func (r *AgentChatRepo) LatestCompaction(conversationID string) (*AgentCompactionRecord, error) {
+	r.ensure()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if db == nil {
+		return nil, sql.ErrConnDone
+	}
+	var rec AgentCompactionRecord
+	err := db.QueryRow(`SELECT id, conversation_id, summary, compressed_count, created_at
+		FROM xt_agent_compactions WHERE conversation_id=? ORDER BY created_at DESC, id DESC LIMIT 1`,
+		conversationID).Scan(&rec.ID, &rec.ConversationID, &rec.Summary, &rec.CompressedCount, &rec.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &rec, nil
 }
 
 // InsertMessage 插入一条消息；补时间戳并顺带刷新会话的 updated_at（保持列表排序准确）。
@@ -268,10 +366,10 @@ func (r *AgentChatRepo) InsertMessage(rec *AgentMessageRecord) error {
 	if rec.CreatedAt == 0 {
 		rec.CreatedAt = time.Now().Unix()
 	}
-	if _, err := db.Exec(`INSERT INTO xt_agent_messages (conversation_id, role, content, reasoning, tool_calls, prompt_tokens, completion_tokens, llm_ms, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?)`,
+	if _, err := db.Exec(`INSERT INTO xt_agent_messages (conversation_id, role, content, reasoning, tool_calls, prompt_tokens, completion_tokens, llm_ms, compressed, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?)`,
 		rec.ConversationID, rec.Role, rec.Content, rec.Reasoning, rec.ToolCalls,
-		rec.PromptTokens, rec.CompletionTokens, rec.LLMMs, rec.CreatedAt); err != nil {
+		rec.PromptTokens, rec.CompletionTokens, rec.LLMMs, boolToInt(rec.Compressed), rec.CreatedAt); err != nil {
 		return err
 	}
 	_, err := db.Exec(`UPDATE xt_agent_conversations SET updated_at=? WHERE id=?`, rec.CreatedAt, rec.ConversationID)
@@ -301,6 +399,20 @@ func (r *AgentChatRepo) ListMessages(conversationID string) ([]*AgentMessageReco
 		out = append(out, rec)
 	}
 	return out, rows.Err()
+}
+
+// CountAssistantMessages 统计会话已落库的 assistant 消息数（自动记忆抽取的回合节拍用）。
+func (r *AgentChatRepo) CountAssistantMessages(conversationID string) (int, error) {
+	r.ensure()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if db == nil {
+		return 0, sql.ErrConnDone
+	}
+	var n int
+	err := db.QueryRow(`SELECT COUNT(*) FROM xt_agent_messages
+		WHERE conversation_id=? AND role='assistant'`, conversationID).Scan(&n)
+	return n, err
 }
 
 // DeleteLastAssistantMessage 删除会话最近一条 assistant 消息（regenerate 场景：
@@ -340,10 +452,10 @@ func (r *AgentChatRepo) ReplaceMessages(conversationID string, msgs []*AgentMess
 		if m.CreatedAt == 0 {
 			m.CreatedAt = now
 		}
-		if _, err := tx.Exec(`INSERT INTO xt_agent_messages (conversation_id, role, content, reasoning, tool_calls, prompt_tokens, completion_tokens, llm_ms, created_at)
-			VALUES (?,?,?,?,?,?,?,?,?)`,
+		if _, err := tx.Exec(`INSERT INTO xt_agent_messages (conversation_id, role, content, reasoning, tool_calls, prompt_tokens, completion_tokens, llm_ms, compressed, created_at)
+			VALUES (?,?,?,?,?,?,?,?,?,?)`,
 			conversationID, m.Role, m.Content, m.Reasoning, m.ToolCalls,
-			m.PromptTokens, m.CompletionTokens, m.LLMMs, m.CreatedAt); err != nil {
+			m.PromptTokens, m.CompletionTokens, m.LLMMs, boolToInt(m.Compressed), m.CreatedAt); err != nil {
 			return err
 		}
 	}

@@ -5,6 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/agentmemory"
+	"github.com/xiaotian-quant/gateway/internal/agentprofiles"
 )
 
 // ── 记忆 REST（前端面板）：全部限定当前登录用户 ──
@@ -39,6 +40,8 @@ func AgentMemoryCreate(c *gin.Context) {
 		Kind:       req.Kind,
 		Content:    req.Content,
 		Importance: req.Importance,
+		Origin:     "manual", // 面板手动添加
+		ProfileID:  agentprofiles.NewRepo().ActiveProfileID(int64(aiBotUserID(c))), // 写入当前激活档案
 	}
 	if err := agentmemory.NewRepo().Create(m); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})

@@ -186,7 +186,7 @@ func (e *extractor) walkAssign(s *ast.AssignStmt, env map[string]*groupInfo) {
 	if !ok || env[base.Name] == nil {
 		return
 	}
-	if len(call.Args) != 1 {
+	if len(call.Args) < 1 {
 		return
 	}
 	lit, ok := stringLiteral(call.Args[0])
@@ -195,10 +195,15 @@ func (e *extractor) walkAssign(s *ast.AssignStmt, env map[string]*groupInfo) {
 		return
 	}
 	parent := env[base.Name]
+	// Group(path, middleware...)：中间件参数与 Use 同样扫描鉴权标注
+	auth, admin := parent.auth, parent.admin
+	for _, arg := range call.Args[1:] {
+		scanMiddlewareArg(arg, &auth, &admin)
+	}
 	env[lhs.Name] = &groupInfo{
 		prefix: apispec.JoinGinPath(parent.prefix, lit),
-		auth:   parent.auth,
-		admin:  parent.admin,
+		auth:   auth,
+		admin:  admin,
 	}
 }
 
@@ -222,6 +227,11 @@ func (e *extractor) walkExprStmt(s *ast.ExprStmt, env map[string]*groupInfo, imp
 					e.emitRoute(s, call, g, m, tag, conditional)
 				}
 				e.warnings = append(e.warnings, fmt.Sprintf("%s: Any() 已展开为 7 个标准方法", e.srcPos(s)))
+			case fun.Sel.Name == "StaticFS" || fun.Sel.Name == "Static":
+				// gin Static/StaticFS 注册 GET+HEAD，路径为 join(prefix, rel) + "/*filepath"
+				for _, m := range []string{"GET", "HEAD"} {
+					e.emitStaticRoute(s, call, g, m, tag, conditional)
+				}
 			case fun.Sel.Name == "Use":
 				for _, arg := range call.Args {
 					scanMiddlewareArg(arg, &g.auth, &g.admin)
@@ -291,6 +301,35 @@ func (e *extractor) emitRoute(stmt ast.Stmt, call *ast.CallExpr, g *groupInfo, m
 	}
 	route.Auth = applyWebhookOverride(route.Path, route.Handler, route.Auth)
 	e.routes = append(e.routes, route)
+}
+
+// emitStaticRoute 静态资源路由（Static/StaticFS）：GET+HEAD 挂在 rel + "/*filepath"，
+// 与 gin RouterGroup.StaticFS 运行期注册的路径保持一致。
+func (e *extractor) emitStaticRoute(stmt ast.Stmt, call *ast.CallExpr, g *groupInfo, method, tag, conditional string) {
+	if len(call.Args) < 2 {
+		e.warnings = append(e.warnings, fmt.Sprintf("%s: %s() 参数不足，跳过", e.srcPos(stmt), method))
+		return
+	}
+	lit, ok := stringLiteral(call.Args[0])
+	if !ok {
+		e.warnings = append(e.warnings, fmt.Sprintf("%s: Static 路径非字符串字面量，跳过: %s", e.srcPos(stmt), renderExpr(e.fset, call.Args[0])))
+		return
+	}
+	p := apispec.JoinGinPath(g.prefix, lit)
+	if p[len(p)-1] != '/' {
+		p += "/"
+	}
+	p += "*filepath"
+	e.routes = append(e.routes, &Route{
+		Method:       method,
+		Path:         p,
+		Handler:      "gin.StaticFS",
+		Tag:          tag,
+		RegisterFunc: tag,
+		Source:       e.srcPos(stmt),
+		Auth:         authKind(g.auth, g.admin),
+		Conditional:  conditional,
+	})
 }
 
 // scanMiddlewareArg 识别 middleware.AuthRequired()/AdminRequired() 调用并更新鉴权状态。

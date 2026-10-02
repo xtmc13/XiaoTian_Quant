@@ -113,7 +113,11 @@ func (p *SubagentsPlugin) delegate(tc *agent.ToolContext, _ context.Context, arg
 }
 
 // runOne 执行单个子任务（带超时与 panic 防护；panic 在执行 goroutine 内捕获）。
+// 每次运行登记到运行注册表（GET /agent/subagents 可见）：running → done/error。
 func (p *SubagentsPlugin) runOne(userID uint64, task string) (result string) {
+	rec := StartRun(int64(userID), task)
+	failed := false
+	defer func() { FinishRun(rec, result, failed) }()
 	type out struct {
 		reply string
 		err   error
@@ -131,10 +135,12 @@ func (p *SubagentsPlugin) runOne(userID uint64, task string) (result string) {
 	select {
 	case o := <-ch:
 		if o.err != nil {
+			failed = true
 			return "ERROR: " + truncate(o.err.Error(), 300)
 		}
 		return truncate(o.reply, 1500)
 	case <-time.After(TaskTimeout):
+		failed = true
 		return fmt.Sprintf("ERROR: 子任务超时（%d 分钟）", int(TaskTimeout.Minutes()))
 	}
 }
