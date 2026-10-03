@@ -153,13 +153,29 @@
 }
 
 /* 触屏滚动显式放行（修复安卓平板/手机无法下拉）：
-   pan-y 允许垂直平移，overscroll-contain 防止滚动链穿透到背景页 */
+   pan-y 允许垂直平移，overscroll-contain 防止滚动链穿透到背景页。
+   级联到全部子元素：消息内的横向滚动块（代码块/表格）默认抢走整段滑动手势，
+   导致手指落在这些内容时垂直滚动完全失效——子元素统一 pan-y，
+   真正需要横滑的 pre/table 放行 pan-x pan-y */
 .xt-hermes .xt-thread-scroll,
 .xt-hermes aside .xt-thread-scroll,
-.xt-hermes [role='dialog'] .overflow-y-auto {
+.xt-hermes [role='dialog'] .overflow-y-auto,
+.xt-hermes aside [role='dialog'] .overflow-y-auto {
   touch-action: pan-y;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
+}
+.xt-hermes .xt-thread-scroll *,
+.xt-hermes aside .xt-thread-scroll *,
+.xt-hermes [role='dialog'] .overflow-y-auto * {
+  touch-action: pan-y;
+}
+.xt-hermes .xt-thread-scroll pre,
+.xt-hermes .xt-thread-scroll code,
+.xt-hermes .xt-thread-scroll table,
+.xt-hermes .xt-thread-scroll [class*='overflow-x'] {
+  touch-action: pan-x pan-y;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* 打字活动点（尾条助手消息无内容时） */
