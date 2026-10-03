@@ -180,15 +180,14 @@ func (p *Plugin) Register(reg *plugin.Registry, _ plugin.Deps) error {
 
 	reg.AddTool(agent.Tool{
 		Name:        "search_files",
-		Description: "在沙箱内检索文件：按文件名关键字匹配（可选同时按内容过滤并给出 文件:行号 命中），最多 50 条",
+		Description: "在沙箱内检索文件，两种用法：①按文件名找文件：{\"pattern\":\"config\"}；②在代码/文本里找内容（全文检索）：{\"content\":\"模拟账户\"}（pattern 留空即全文件扫描）；组合：{\"pattern\":\".\", \"content\":\"api_key\"} 限定 py 文件再按内容过滤。最多 50 条命中，内容命中返回 文件:行号 与行文本",
 		Scope:       agent.ScopeAdmin,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"pattern": strProp("文件名包含的关键字"),
-				"content": strProp("可选：文件内容需包含的关键字（命中时返回行号与行文本）"),
+				"pattern": strProp("可选：文件名包含的关键字（留空则不限文件名，配合 content 做全文检索）"),
+				"content": strProp("可选：文件内容需包含的关键字（命中时返回行号与行文本）；pattern 与 content 至少填一个"),
 			},
-			"required": []string{"pattern"},
 		},
 	}, p.searchFiles)
 	return nil
@@ -201,8 +200,22 @@ func argStr(args map[string]any, key string) string {
 	return ""
 }
 
+// argPath 取文件路径参数：兼容模型爱用的别名（file/filename/file_path/filepath），
+// 主参数 path 为空时按序回退，减少"参数名猜错即硬失败"的无效回合。
+func argPath(args map[string]any) string {
+	if v := argStr(args, "path"); v != "" {
+		return v
+	}
+	for _, k := range []string{"file", "filename", "file_path", "filepath", "target"} {
+		if v := argStr(args, k); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 func (p *Plugin) readFile(_ *agent.ToolContext, _ context.Context, args map[string]any) (any, error) {
-	abs, rel, err := p.resolve(argStr(args, "path"))
+	abs, rel, err := p.resolve(argPath(args))
 	if err != nil {
 		return nil, err
 	}
@@ -235,7 +248,7 @@ func (p *Plugin) readFile(_ *agent.ToolContext, _ context.Context, args map[stri
 }
 
 func (p *Plugin) writeFile(tc *agent.ToolContext, _ context.Context, args map[string]any) (any, error) {
-	abs, rel, err := p.resolve(argStr(args, "path"))
+	abs, rel, err := p.resolve(argPath(args))
 	if err != nil {
 		return nil, err
 	}
@@ -258,7 +271,7 @@ func (p *Plugin) writeFile(tc *agent.ToolContext, _ context.Context, args map[st
 }
 
 func (p *Plugin) patch(tc *agent.ToolContext, _ context.Context, args map[string]any) (any, error) {
-	abs, rel, err := p.resolve(argStr(args, "path"))
+	abs, rel, err := p.resolve(argPath(args))
 	if err != nil {
 		return nil, err
 	}
@@ -304,10 +317,27 @@ type searchHit struct {
 
 func (p *Plugin) searchFiles(_ *agent.ToolContext, _ context.Context, args map[string]any) (any, error) {
 	pattern := strings.ToLower(strings.TrimSpace(argStr(args, "pattern")))
+	needle := strings.TrimSpace(argStr(args, "content"))
+	// 容错：模型常把搜索词写进 query/text/q/search 等别名参数，或只填其一
 	if pattern == "" {
-		return nil, fmt.Errorf("pattern 不能为空")
+		for _, k := range []string{"query", "text", "q", "search", "keyword", "filename", "name", "path"} {
+			if v := strings.TrimSpace(argStr(args, k)); v != "" {
+				pattern = strings.ToLower(v)
+				break
+			}
+		}
 	}
-	needle := argStr(args, "content")
+	if needle == "" {
+		for _, k := range []string{"grep", "contains", "body"} {
+			if v := strings.TrimSpace(argStr(args, k)); v != "" {
+				needle = v
+				break
+			}
+		}
+	}
+	if pattern == "" && needle == "" {
+		return nil, fmt.Errorf("pattern 与 content 至少填一个：按文件名找填 {\"pattern\":\"config\"}；在代码里找内容填 {\"content\":\"模拟账户\"}")
+	}
 	hits := []searchHit{}
 	err := filepath.WalkDir(p.Root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -322,7 +352,8 @@ func (p *Plugin) searchFiles(_ *agent.ToolContext, _ context.Context, args map[s
 		if len(hits) >= searchMaxResults {
 			return filepath.SkipAll
 		}
-		if !strings.Contains(strings.ToLower(d.Name()), pattern) {
+		// 文件名过滤：pattern 留空 = 不限文件名（全文检索模式）
+		if pattern != "" && !strings.Contains(strings.ToLower(d.Name()), pattern) {
 			return nil
 		}
 		rel, rerr := filepath.Rel(p.Root, path)

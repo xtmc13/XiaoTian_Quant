@@ -138,6 +138,20 @@ func TestReadWritePatchSearch(t *testing.T) {
 	if len(matches) != 1 || matches[0].Path != "notes/hello.txt" || matches[0].Line != 1 || !strings.Contains(matches[0].Text, "v3") {
 		t.Fatalf("search_files 内容命中字段: %+v", matches)
 	}
+	// search_files：仅 content 全文检索（pattern 留空，模型的常见用法）
+	out = call(t, p.searchFiles, 1, map[string]any{"content": "v3"})
+	if out["count"].(int) != 1 {
+		t.Fatalf("search_files 全文检索: %v", out)
+	}
+	// search_files：别名容错（query 当作 pattern）
+	out = call(t, p.searchFiles, 1, map[string]any{"query": "hello"})
+	if out["count"].(int) != 1 {
+		t.Fatalf("search_files query 别名: %v", out)
+	}
+	// 两者皆空应报错且附用法提示
+	if _, err := p.searchFiles(tc(1), context.Background(), map[string]any{}); err == nil {
+		t.Error("空参数应报错")
+	}
 	// 检查点备份目录不参与检索
 	out = call(t, p.searchFiles, 1, map[string]any{"pattern": "cp_"})
 	if out["count"].(int) != 0 {
