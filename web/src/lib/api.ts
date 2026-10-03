@@ -522,6 +522,13 @@ export const portfolioApi = {
     ),
 }
 
+// ── Paper Account ──
+export const paperAccountApi = {
+  account: () => api.get<{ enabled: boolean; balance: number; initial_balance: number }>('/paper/account'),
+  setAccount: (body: { enabled?: boolean; balance?: number; reset?: boolean }) =>
+    api.post<{ enabled: boolean; balance: number; initial_balance: number }>('/paper/account', body),
+}
+
 // ── Market ──
 export const marketApi = {
   klines: (symbol: string, interval = '1h', limit = 200, from?: number, to?: number) =>

@@ -18,6 +18,7 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/metrics"
 	"github.com/xiaotian-quant/gateway/internal/model"
 	"github.com/xiaotian-quant/gateway/internal/order"
+	"github.com/xiaotian-quant/gateway/internal/paper"
 	"github.com/xiaotian-quant/gateway/internal/portfolio"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
@@ -101,6 +102,10 @@ func InitOMSPipeline() {
 	om.SubmitToExchange = func(ord *model.OrderData) (map[string]any, error) {
 		exName := strings.ToLower(ord.Exchange)
 		if exName == "paper" || exName == "" {
+			// 模拟盘账户开关：停用即拒绝所有 paper 单（手动/机器人/网格共用本管道）
+			if !paper.GetPaperExchange().IsEnabled() {
+				return nil, fmt.Errorf("模拟盘账户已停用，请在资产页开启后再下单")
+			}
 			// Paper trading: simulate instant fill
 			ord.Status = model.StatusFilled
 			ord.Filled = ord.Quantity

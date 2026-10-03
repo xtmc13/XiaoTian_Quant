@@ -87,6 +87,7 @@ func main() {
 	store.LoadStrategyConfigs()
 	// P1：恢复 DB 持久化的 pairlist 配置（须在 store.InitDB() 之后）
 	handler.RestorePairlistConfig()
+	handler.RestorePaperAccount()
 	handler.StartPaperMatcher()
 
 	// ── 凭证安全（P0-4）：启动期主密钥检查（production 未设 → fatal，与

@@ -167,6 +167,7 @@ type PaperExchange struct {
 	orders    map[string]*PaperOrder
 	equity    []model.PortfolioSnapshot
 	rng       *rand.Rand
+	enabled   bool // 模拟盘账户开关：false 时拒绝新下单
 	mu        sync.RWMutex
 
 	// Price provider for market data
@@ -199,6 +200,7 @@ func NewPaperExchange(cfg PaperConfig) *PaperExchange {
 		balances:  make(map[string]*model.Balance),
 		orders:    make(map[string]*PaperOrder),
 		rng:       rand.New(rand.NewSource(time.Now().UnixNano())),
+		enabled:   true,
 	}
 	pe.balances["USDT"] = &model.Balance{
 		Currency: "USDT",
@@ -210,6 +212,53 @@ func NewPaperExchange(cfg PaperConfig) *PaperExchange {
 }
 
 func (pe *PaperExchange) Name() string { return "paper" }
+
+// IsEnabled 返回模拟盘账户开关状态。
+func (pe *PaperExchange) IsEnabled() bool {
+	pe.mu.RLock()
+	defer pe.mu.RUnlock()
+	return pe.enabled
+}
+
+// SetEnabled 设置模拟盘账户开关；停用后 PlaceOrder 拒绝新单。
+func (pe *PaperExchange) SetEnabled(v bool) {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+	pe.enabled = v
+}
+
+// GetAccount 返回模拟盘账户状态（开关 + USDT 余额 + 初始余额）。
+func (pe *PaperExchange) GetAccount() map[string]any {
+	pe.mu.RLock()
+	defer pe.mu.RUnlock()
+	bal := 0.0
+	if b := pe.balances["USDT"]; b != nil {
+		bal = b.Total
+	}
+	return map[string]any{
+		"enabled":         pe.enabled,
+		"balance":         bal,
+		"initial_balance": pe.config.InitialBalance,
+	}
+}
+
+// SetBalance 重置 USDT 余额，并清空全部持仓/挂单/订单簿（全新起点）。
+func (pe *PaperExchange) SetBalance(usdt float64) {
+	if usdt < 0 {
+		usdt = 0
+	}
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+	pe.balances = map[string]*model.Balance{
+		"USDT": {Currency: "USDT", Total: usdt, Free: usdt, Used: 0},
+	}
+	pe.positions = make(map[string]map[string]*PaperPosition)
+	pe.orders = make(map[string]*PaperOrder)
+	pe.books = make(map[string]*goOrderBook)
+	pe.config.InitialBalance = usdt
+	log.Printf("[Paper] 账户余额已重置为 $%.2f，持仓/挂单已清空", usdt)
+}
+
 func (pe *PaperExchange) Start() error {
 	log.Printf("[Paper] Paper trading exchange started with initial balance: $%.2f", pe.config.InitialBalance)
 	return nil
@@ -244,6 +293,14 @@ func (pe *PaperExchange) getOrCreateBook(symbol string) *goOrderBook {
 //   - 市价买入：成本无法预判，撮合时按可用 quote 截断（部分成交），永不负余额
 //   - 成交即结算：锁定部分按实际成交额多退少补，撤单释放剩余锁定
 func (pe *PaperExchange) PlaceOrder(symbol, side, orderType string, price, quantity float64) (map[string]any, error) {
+	// 模拟盘账户开关：停用即拒绝新下单（撤单/查询不受影响）
+	pe.mu.RLock()
+	enabled := pe.enabled
+	pe.mu.RUnlock()
+	if !enabled {
+		return nil, fmt.Errorf("模拟盘账户已停用，请在资产页开启后再下单")
+	}
+
 	// Simulate latency
 	pe.simulateLatency()
 

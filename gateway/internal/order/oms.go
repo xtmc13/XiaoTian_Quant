@@ -2,10 +2,12 @@ package order
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/xiaotian-quant/gateway/internal/model"
+	"github.com/xiaotian-quant/gateway/internal/paper"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
@@ -136,6 +138,12 @@ func GetOrderManager() *OrderManager {
 func (om *OrderManager) PlaceOrder(req *Request) (*model.OrderData, error) {
 	if err := req.Validate(); err != nil {
 		return nil, fmt.Errorf("validation: %w", err)
+	}
+
+	// 模拟盘账户开关：paper 单在此统一拦截（手动下单/机器人/网格/条件单
+	// 全部经本入口，停用后一律拒绝；撤单与查询不受影响）
+	if (req.Exchange == "" || strings.EqualFold(req.Exchange, "paper")) && !paper.GetPaperExchange().IsEnabled() {
+		return nil, fmt.Errorf("模拟盘账户已停用，请在资产页开启后再下单")
 	}
 
 	// Rate check

@@ -1,12 +1,15 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { portfolioApi, accountApi, shareApi, type ClosedPosition, type ShareTradeCard } from '@/lib/api'
+import { portfolioApi, accountApi, shareApi, paperAccountApi, type ClosedPosition, type ShareTradeCard } from '@/lib/api'
 import { cn, formatCurrency } from '@/lib/utils'
 import { useI18n } from '@/i18n'
 import { getEcharts } from '@/lib/echarts'
 import { DataTable } from '@/components/DataTable'
 import { KPICard } from '@/components/ui/KPICard'
 import { SectionCard } from '@/components/ui/SectionCard'
+import { Switch } from '@/components/ui/Switch'
+import { Input } from '@/components/ui/Input'
+import { Button } from '@/components/ui/Button'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ShareCardModal } from '@/components/ShareCardModal'
@@ -311,6 +314,89 @@ function ProfitCalendar({ months, isLoading }: { months?: CalendarMonth[]; isLoa
 
 const CLOSED_PAGE_SIZE = 10
 
+/** 模拟盘账户管理：启用/停用开关 + 余额修改（余额修改会连带清空持仓与挂单） */
+function PaperAccountCard() {
+  const [account, setAccount] = useState<{ enabled: boolean; balance: number; initial_balance: number } | null>(null)
+  const [balanceInput, setBalanceInput] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState('')
+
+  const refresh = () => {
+    paperAccountApi
+      .account()
+      .then((acc) => {
+        setAccount(acc)
+        setBalanceInput(String(acc.balance))
+      })
+      .catch(() => setAccount((prev) => prev))
+  }
+
+  useEffect(refresh, [])
+
+  const toggle = (enabled: boolean) => {
+    setBusy(true)
+    setMsg('')
+    paperAccountApi
+      .setAccount({ enabled })
+      .then((acc) => {
+        setAccount(acc)
+        setMsg(enabled ? '模拟盘已启用' : '模拟盘已停用，新下单将被拒绝')
+      })
+      .catch((e) => setMsg('操作失败：' + (e?.message || e)))
+      .finally(() => setBusy(false))
+  }
+
+  const saveBalance = () => {
+    const v = parseFloat(balanceInput)
+    if (Number.isNaN(v) || v < 0) {
+      setMsg('请输入不小于 0 的数字')
+      return
+    }
+    setBusy(true)
+    setMsg('')
+    paperAccountApi
+      .setAccount({ balance: v })
+      .then((acc) => {
+        setAccount(acc)
+        setMsg(`余额已重置为 $${formatCurrency(v)}，持仓/挂单已清空`)
+      })
+      .catch((e) => setMsg('操作失败：' + (e?.message || e)))
+      .finally(() => setBusy(false))
+  }
+
+  return (
+    <SectionCard title="模拟盘账户">
+      {account === null ? (
+        <p className="text-xs text-muted-foreground">加载中…</p>
+      ) : (
+        <div className="flex flex-wrap items-center gap-x-8 gap-y-4">
+          <div className="flex items-center gap-3">
+            <Switch checked={account.enabled} onCheckedChange={toggle} disabled={busy} label="账户开关" />
+            <span className={cn('text-xs', account.enabled ? 'text-emerald-400' : 'text-red-400')}>
+              {account.enabled ? '已启用' : '已停用'}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-foreground">USDT 余额</span>
+            <Input
+              type="number"
+              min={0}
+              value={balanceInput}
+              onChange={(e) => setBalanceInput(e.target.value)}
+              className="w-36"
+              disabled={busy}
+            />
+            <Button size="sm" onClick={saveBalance} disabled={busy}>
+              保存并重置
+            </Button>
+          </div>
+          {msg && <p className="w-full text-xs text-muted-foreground">{msg}</p>}
+        </div>
+      )}
+    </SectionCard>
+  )
+}
+
 export function Portfolio() {
   const { t } = useI18n()
   const { data: portfolio, isLoading: portfolioLoading } = useQuery({
@@ -472,6 +558,9 @@ export function Portfolio() {
             </>
           )}
         </div>
+
+        {/* 模拟盘账户：开关 + 余额重置 */}
+        <PaperAccountCard />
 
         {/* Charts Row */}
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">

@@ -296,6 +296,8 @@ func registerConfigRoutes(api *gin.RouterGroup) {
 	private := api.Group("")
 	private.Use(middleware.AuthRequired())
 	private.GET("/config", handler.GetConfig)
+	private.GET("/paper/account", handler.PaperAccountGet)
+	private.POST("/paper/account", handler.PaperAccountSet)
 	private.POST("/config/ai-provider-models", handler.ListAIProviderModels)
 	// M5: 全局配置写操作收敛为 admin-only（含重启级配置、AI provider 设置）；
 	// 凭证写入同属敏感操作（C2 缓解，保险库按用户隔离留待第二波）。
