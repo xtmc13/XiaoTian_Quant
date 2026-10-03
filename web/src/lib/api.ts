@@ -1132,6 +1132,8 @@ export interface AgentChatMessage {
 export interface AgentToolCall {
   name: string
   args_summary?: string
+  /** patch/write_file 等写工具的完整参数（后端限量截断），前端 diff/内容视图用 */
+  args_full?: string
   status: 'running' | 'done'
   result_summary?: string
 }

@@ -93,8 +93,45 @@ type agentChatMessage struct {
 type agentToolCallRecord struct {
 	Name          string `json:"name"`
 	ArgsSummary   string `json:"args_summary,omitempty"`
-	Status        string `json:"status"` // running | done
+	ArgsFull      string `json:"args_full,omitempty"` // patch/write_file 等写工具的完整参数（限量），前端 diff/内容视图用
+	Status        string `json:"status"`              // running | done
 	ResultSummary string `json:"result_summary,omitempty"`
+}
+
+// agentChatArgsFullLimit 写工具 args_full 单字段截断上限（约 4KB，余量给整体 16KB 限流）。
+const agentChatArgsFullLimit = 4096
+
+// toolArgsFull 为写类工具提取完整参数 JSON（限量截断），其余工具返回空串。
+// patch 的 find/replace 与 write_file 的 content 是用户最想核对的内容，80 字摘要不够看。
+func toolArgsFull(name string, arguments string) string {
+	if name != "patch" && name != "write_file" {
+		return ""
+	}
+	var args map[string]any
+	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
+		return ""
+	}
+	full := map[string]any{"path": argStrOf(args, "path")}
+	switch name {
+	case "patch":
+		full["find"] = truncateAgentChat(argStrOf(args, "find"), agentChatArgsFullLimit)
+		full["replace"] = truncateAgentChat(argStrOf(args, "replace"), agentChatArgsFullLimit)
+	case "write_file":
+		full["content"] = truncateAgentChat(argStrOf(args, "content"), agentChatArgsFullLimit*2)
+	}
+	b, err := json.Marshal(full)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// argStrOf 从工具参数 map 取字符串值（与 agentfiles 的 argStr 等价，避免跨包依赖）。
+func argStrOf(args map[string]any, key string) string {
+	if v, ok := args[key].(string); ok {
+		return v
+	}
+	return ""
 }
 
 // agentToolHandlers 工具名 → ToolContext 方法映射（与 agent.MCPServer 注册表保持一致）。
@@ -1024,7 +1061,7 @@ func (r *agentChatRunner) usagePayload() agentChatUsagePayload {
 // executeTool 执行单个工具调用：发 running/done 事件、回传结果文本（截断）、写审计。
 func (r *agentChatRunner) executeTool(tc ai.ToolCall) string {
 	argsSummary := truncateAgentChat(tc.Arguments, agentChatSummaryLimit)
-	rec := agentToolCallRecord{Name: tc.Name, ArgsSummary: argsSummary, Status: "running"}
+	rec := agentToolCallRecord{Name: tc.Name, ArgsSummary: argsSummary, ArgsFull: toolArgsFull(tc.Name, tc.Arguments), Status: "running"}
 	r.emitEvent("tool_call", rec)
 
 	statusCode := http.StatusOK

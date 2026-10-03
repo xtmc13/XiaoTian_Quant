@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import {
   Check,
   ChevronDown,
@@ -122,7 +122,7 @@ function ThinkingDisclosure({ reasoning, streaming }: { reasoning: string; strea
 // ── 工具调用（scaffold 行）：运行中 spinner + shimmer，成功静默，可展开 ──
 function ToolScaffoldRow({ tool }: { tool: NonNullable<AgentChatMsg['toolCalls']>[number] }) {
   const [open, setOpen] = useState(false)
-  const expandable = Boolean(tool.args_summary || tool.result_summary)
+  const expandable = Boolean(tool.args_summary || tool.result_summary || tool.args_full)
   return (
     <div className="mb-1 transition-opacity [opacity:0.67] hover:[opacity:1] focus-within:[opacity:1]">
       <div className="flex items-center gap-1.5 rounded-md px-1 py-0.5 text-[11.5px] text-[var(--ag-text3)]">
@@ -153,20 +153,85 @@ function ToolScaffoldRow({ tool }: { tool: NonNullable<AgentChatMsg['toolCalls']
           </button>
         )}
       </div>
-      {open && (
-        <div className="ml-5 mt-0.5 max-h-32 space-y-1 overflow-y-auto rounded-md border border-[var(--ag-stroke3)] bg-[var(--ag-card)] p-2 font-mono text-[10.5px] leading-relaxed">
-          {tool.args_summary && (
-            <div>
-              <span className="text-[var(--ag-text4)]">参数：</span>
-              <span className="text-[var(--ag-text2)]">{tool.args_summary}</span>
-            </div>
-          )}
-          {tool.result_summary && (
-            <div>
-              <span className="text-[var(--ag-text4)]">结果：</span>
-              <span className="text-[var(--ag-text2)]">{tool.result_summary}</span>
-            </div>
-          )}
+      {open && <ToolCallDetail tool={tool} />}
+    </div>
+  )
+}
+
+// ── 工具调用详情：写工具（patch/write_file）用结构化视图展示完整参数 ──
+function ToolCallDetail({ tool }: { tool: NonNullable<AgentChatMsg['toolCalls']>[number] }) {
+  const full = useMemo(() => {
+    if (!tool.args_full) return null
+    try {
+      return JSON.parse(tool.args_full) as { path?: string; find?: string; replace?: string; content?: string }
+    } catch {
+      return null
+    }
+  }, [tool.args_full])
+
+  if (full && tool.name === 'patch') {
+    return (
+      <div className="ml-5 mt-0.5 max-h-72 space-y-1.5 overflow-y-auto rounded-md border border-[var(--ag-stroke3)] bg-[var(--ag-card)] p-2 font-mono text-[11px] leading-relaxed">
+        {full.path && (
+          <div className="flex items-center gap-1 text-[var(--ag-text2)]">
+            <Folder size={11} className="shrink-0 text-[var(--ag-text4)]" />
+            <span className="truncate">{full.path}</span>
+          </div>
+        )}
+        <div>
+          <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--ag-red)]">查找</div>
+          <pre className="whitespace-pre-wrap break-words rounded bg-[var(--ag-red)]/8 px-2 py-1 text-[var(--ag-text1)]">
+            {full.find || '（空）'}
+          </pre>
+        </div>
+        <div>
+          <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--ag-green)]">替换为</div>
+          <pre className="whitespace-pre-wrap break-words rounded bg-[var(--ag-green)]/8 px-2 py-1 text-[var(--ag-text1)]">
+            {full.replace || '（空）'}
+          </pre>
+        </div>
+        {tool.result_summary && (
+          <div>
+            <span className="text-[var(--ag-text4)]">结果：</span>
+            <span className="text-[var(--ag-text2)]">{tool.result_summary}</span>
+          </div>
+        )}
+      </div>
+    )
+  }
+  if (full && tool.name === 'write_file') {
+    return (
+      <div className="ml-5 mt-0.5 max-h-72 space-y-1.5 overflow-y-auto rounded-md border border-[var(--ag-stroke3)] bg-[var(--ag-card)] p-2 font-mono text-[11px] leading-relaxed">
+        {full.path && (
+          <div className="flex items-center gap-1 text-[var(--ag-text2)]">
+            <Folder size={11} className="shrink-0 text-[var(--ag-text4)]" />
+            <span className="truncate">{full.path}</span>
+          </div>
+        )}
+        <pre className="whitespace-pre-wrap break-words rounded bg-black/4 px-2 py-1 text-[var(--ag-text1)]">
+          {full.content || '（空文件）'}
+        </pre>
+        {tool.result_summary && (
+          <div>
+            <span className="text-[var(--ag-text4)]">结果：</span>
+            <span className="text-[var(--ag-text2)]">{tool.result_summary}</span>
+          </div>
+        )}
+      </div>
+    )
+  }
+  return (
+    <div className="ml-5 mt-0.5 max-h-32 space-y-1 overflow-y-auto rounded-md border border-[var(--ag-stroke3)] bg-[var(--ag-card)] p-2 font-mono text-[10.5px] leading-relaxed">
+      {tool.args_summary && (
+        <div>
+          <span className="text-[var(--ag-text4)]">参数：</span>
+          <span className="text-[var(--ag-text2)]">{tool.args_summary}</span>
+        </div>
+      )}
+      {tool.result_summary && (
+        <div>
+          <span className="text-[var(--ag-text4)]">结果：</span>
+          <span className="text-[var(--ag-text2)]">{tool.result_summary}</span>
         </div>
       )}
     </div>
