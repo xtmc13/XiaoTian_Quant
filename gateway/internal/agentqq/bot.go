@@ -115,6 +115,13 @@ func SetConnectorCredentials(appID, appSecret string) {
 	connectorCreds = map[string]string{appID: appSecret}
 }
 
+// ClearConnectorCredentials 清空扫码连接器凭据（重新扫码换绑时调用，env 凭据不受影响）。
+func ClearConnectorCredentials() {
+	connectorCredsMu.Lock()
+	defer connectorCredsMu.Unlock()
+	connectorCreds = map[string]string{}
+}
+
 // ConnectorQRStart 通知连接器开始/复用扫码会话，返回二维码落地页 URL。
 func ConnectorQRStart(restart bool) (string, error) {
 	client := &http.Client{Timeout: 10 * time.Second}

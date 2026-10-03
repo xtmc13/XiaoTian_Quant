@@ -94,7 +94,15 @@ app.post('/qr/start', (_req, res) => {
 })
 
 app.post('/qr/restart', (_req, res) => {
+  // 重新绑定：清掉旧凭据（内存 + 落盘），全新扫码会话
+  if (session.stop) { try { session.stop() } catch {} }
   session.state = 'idle'
+  session.qr_url = ''
+  session.app_id = ''
+  session.app_secret = ''
+  session.error = ''
+  session.stop = null
+  try { fs.rmSync(CRED_FILE, { force: true }) } catch {}
   startQrSession()
   res.json({ state: 'waiting', qr_url: session.qr_url })
 })

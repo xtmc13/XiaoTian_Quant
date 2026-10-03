@@ -34,8 +34,9 @@ export function QqPanel({ onClose, bare }: PlatformLinkPanelProps) {
               无需手动申请 AppID/AppSecret、无需配置 IP 白名单。
             </>
           ),
-          waitingHint: '等待手机 QQ 扫码确认…',
+          waitingHint: '等待手机 QQ 扫码确认…（如需新机器人请选「创建新机器人」）',
           successHint: '扫码绑定成功，凭据已自动注入网关，可以继续下面的配对绑定。',
+          allowRebind: true,
         },
         qrLink: {
           fetchUrl: () => agentQqApi.urlLink(),

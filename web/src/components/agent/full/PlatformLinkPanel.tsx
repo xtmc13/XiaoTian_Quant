@@ -39,6 +39,8 @@ export interface PlatformLinkConfig<S> {
     description: React.ReactNode
     waitingHint: string
     successHint: string
+    /** 已配置后仍允许重新扫码换绑（清旧凭据 + 全新扫码会话） */
+    allowRebind?: boolean
   }
 }
 
@@ -243,8 +245,9 @@ export function PlatformLinkPanel<S>({
             </div>
           )}
 
-          {/* 扫码连接（官方连接器，未配置时替代 env 提示） */}
-          {!configured && config.connectorQr && (
+          {/* 扫码连接（官方连接器，未配置时替代 env 提示；已配置可按 allowRebind 重新换绑） */}
+          {config.connectorQr &&
+            (connState === 'waiting' || connState === 'error' || (!configured && connState !== 'success')) && (
             <div className="flex flex-col items-center gap-2 rounded-xl border border-[var(--ag-stroke3)] bg-[var(--ag-sidebar)]/60 px-3 py-3">
               <p className="self-start text-[12px] leading-relaxed text-[var(--ag-text2)]">
                 {config.connectorQr.description}
@@ -254,11 +257,6 @@ export function PlatformLinkPanel<S>({
                   <QRCodeSVG value={connQr} size={160} />
                   <p className="text-[11px] text-[var(--ag-text3)]">{config.connectorQr.waitingHint}</p>
                 </>
-              ) : connState === 'success' ? (
-                <div className="flex items-center gap-1.5 self-start rounded-lg border border-[var(--ag-green)]/30 bg-[var(--ag-green)]/8 px-2.5 py-1.5 text-[12px] text-[var(--ag-green)]">
-                  <Check size={13} />
-                  {config.connectorQr.successHint}
-                </div>
               ) : (
                 <>
                   {connState === 'error' && (
@@ -277,6 +275,14 @@ export function PlatformLinkPanel<S>({
                   </button>
                 </>
               )}
+            </div>
+          )}
+
+          {/* 扫码连接成功待配置生效（success 提示，refetch 后进入配对流程） */}
+          {config.connectorQr && connState === 'success' && !configured && (
+            <div className="flex items-center gap-1.5 self-start rounded-lg border border-[var(--ag-green)]/30 bg-[var(--ag-green)]/8 px-2.5 py-1.5 text-[12px] text-[var(--ag-green)]">
+              <Check size={13} />
+              {config.connectorQr.successHint}
             </div>
           )}
 
@@ -320,6 +326,16 @@ export function PlatformLinkPanel<S>({
           {/* 未绑定 → 配对 */}
           {configured && !linked && (
             <>
+              {config.connectorQr?.allowRebind && connState !== 'waiting' && (
+                <button
+                  type="button"
+                  onClick={() => startConnector(true)}
+                  className="flex items-center gap-1 self-start rounded-md border border-[var(--ag-stroke2)] px-2 py-1 text-[11px] text-[var(--ag-text3)] hover:text-[var(--ag-text1)]"
+                >
+                  <QrCode size={11} />
+                  重新扫码换绑（换一个机器人）
+                </button>
+              )}
               {config.qrLink && (
                 <div className="flex flex-col items-center gap-2 rounded-xl border border-[var(--ag-stroke3)] bg-[var(--ag-sidebar)]/60 px-3 py-3">
                   {qrUrl ? (

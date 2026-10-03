@@ -73,6 +73,10 @@ func AgentQqConnectorQr(c *gin.Context) {
 		Restart bool `json:"restart"`
 	}
 	_ = c.ShouldBindJSON(&body)
+	if body.Restart {
+		// 换绑：先清掉网关内存里的旧凭据，configured 归位，扫码成功后注入新凭据
+		agentqq.ClearConnectorCredentials()
+	}
 	url, err := agentqq.ConnectorQRStart(body.Restart)
 	if err != nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"detail": "扫码连接器不可用：" + err.Error()})
