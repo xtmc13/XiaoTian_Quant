@@ -23,7 +23,6 @@ function lazyPage(factory: () => Promise<unknown>, name: string) {
 const Dashboard = lazyPage(() => import('./pages/Dashboard'), 'Dashboard')
 const Strategy = lazyPage(() => import('./pages/Strategy'), 'Strategy')
 const AI = lazyPage(() => import('./pages/AI'), 'AI')
-const AgentPage = lazyPage(() => import('./pages/AgentPage'), 'default')
 const Backtest = lazyPage(() => import('./pages/Backtest'), 'Backtest')
 const PortfolioBacktest = lazyPage(() => import('./pages/PortfolioBacktest'), 'PortfolioBacktest')
 const FactorResearch = lazyPage(() => import('./pages/FactorResearch'), 'FactorResearch')
@@ -120,7 +119,6 @@ function DocumentTitle() {
     '/trading': '交易 - 小天量化',
     '/strategy': '策略管理 - 小天量化',
     '/ai': 'AI分析 - 小天量化',
-    '/agent': 'AI 助手 - 小天量化',
     '/backtest': '回测 - 小天量化',
     '/backtest/portfolio': '组合回测 - 小天量化',
     '/factor-research': '因子研究 - 小天量化',
@@ -388,14 +386,6 @@ export default function App() {
                     element={
                       <PageShell>
                         <AI />
-                      </PageShell>
-                    }
-                  />
-                  <Route
-                    path="/agent"
-                    element={
-                      <PageShell>
-                        <AgentPage />
                       </PageShell>
                     }
                   />

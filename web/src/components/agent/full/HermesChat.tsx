@@ -643,6 +643,7 @@ export function HermesChat({
                 </span>
               </div>
 
+              {/* 消息流：flex-1 占满标题与停靠区之间的剩余空间，overflow-y-auto 滚动 */}
               <AgentThread
                 messages={messages}
                 isStreaming={isStreaming}
@@ -659,41 +660,45 @@ export function HermesChat({
                 }}
               />
 
-              {/* 流式状态条 + Composer + 指标行 停靠底部（对标桌面版 ConversationRoot） */}
-              <div className="pointer-events-none absolute bottom-4 left-1/2 flex w-[calc(100%-2.5rem)] max-w-[var(--ag-composer-max-w)] -translate-x-1/2 flex-col gap-1.5">
-                {btwCard}
-                {queueChips}
-                {moaChip}
-                {isStreaming && (
-                  <div
-                    aria-label="生成状态"
-                    className="pointer-events-auto flex h-9 items-center gap-2 rounded-xl border border-[var(--ag-stroke3)] bg-[var(--ag-card)]/90 px-3 shadow-[var(--ag-shadow-panel)] backdrop-blur-xl"
-                  >
-                    <span className="xt-shimmer-text text-[12px] font-medium">正在生成…</span>
-                    {moaNotice && (
-                      <span className="min-w-0 truncate text-[11px] text-[var(--ag-accent)]">{moaNotice}</span>
-                    )}
-                    <span className="text-[11px] tabular-nums text-[var(--ag-text4)]">
-                      {rounds} 轮 · {steps} 步
-                    </span>
-                    <span className="min-w-0 flex-1" />
-                    <button
-                      type="button"
-                      onClick={stop}
-                      title="停止生成（Esc）"
-                      aria-label="停止生成"
-                      className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-[var(--ag-text2)] transition-colors hover:bg-black/5 hover:text-[var(--ag-text1)]"
+              {/* 流式状态条 + Composer + 指标行：文档流停靠底部（与交易系统页面
+                  同一布局模式——输入框跟在内容后面占真实布局空间，不悬浮压消息流，
+                  从结构上杜绝"输入框压住文字"这一类问题） */}
+              <div className="shrink-0 px-5 pb-4">
+                <div className="pointer-events-none mx-auto flex w-full max-w-[var(--ag-composer-max-w)] flex-col gap-1.5">
+                  {btwCard}
+                  {queueChips}
+                  {moaChip}
+                  {isStreaming && (
+                    <div
+                      aria-label="生成状态"
+                      className="pointer-events-auto flex h-9 items-center gap-2 rounded-xl border border-[var(--ag-stroke3)] bg-[var(--ag-card)]/90 px-3 shadow-[var(--ag-shadow-panel)] backdrop-blur-xl"
                     >
-                      <CircleStop size={12} />
-                      停止
-                    </button>
+                      <span className="xt-shimmer-text text-[12px] font-medium">正在生成…</span>
+                      {moaNotice && (
+                        <span className="min-w-0 truncate text-[11px] text-[var(--ag-accent)]">{moaNotice}</span>
+                      )}
+                      <span className="text-[11px] tabular-nums text-[var(--ag-text4)]">
+                        {rounds} 轮 · {steps} 步
+                      </span>
+                      <span className="min-w-0 flex-1" />
+                      <button
+                        type="button"
+                        onClick={stop}
+                        title="停止生成（Esc）"
+                        aria-label="停止生成"
+                        className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-[var(--ag-text2)] transition-colors hover:bg-black/5 hover:text-[var(--ag-text1)]"
+                      >
+                        <CircleStop size={12} />
+                        停止
+                      </button>
+                    </div>
+                  )}
+                  <div className="pointer-events-auto">{composer}</div>
+                  <div className="pointer-events-none text-center text-[11px] tabular-nums text-[var(--ag-text4)]">
+                    {lastUsage
+                      ? `${rounds} 轮 · ${steps} 步 | LLM ${(lastUsage.llm_ms / 1000).toFixed(1)}s · ${lastUsage.tok_per_s.toFixed(1)} tok/s | 输入 ${lastUsage.prompt_tokens} tok · 输出 ${lastUsage.completion_tokens} tok`
+                      : `${rounds} 轮 · ${steps} 步 | 输入 ${(inChars / 2000).toFixed(1)}K tok · 输出 ${(outChars / 2000).toFixed(1)}K tok`}
                   </div>
-                )}
-                <div className="pointer-events-auto">{composer}</div>
-                <div className="pointer-events-none text-center text-[11px] tabular-nums text-[var(--ag-text4)]">
-                  {lastUsage
-                    ? `${rounds} 轮 · ${steps} 步 | LLM ${(lastUsage.llm_ms / 1000).toFixed(1)}s · ${lastUsage.tok_per_s.toFixed(1)} tok/s | 输入 ${lastUsage.prompt_tokens} tok · 输出 ${lastUsage.completion_tokens} tok`
-                    : `${rounds} 轮 · ${steps} 步 | 输入 ${(inChars / 2000).toFixed(1)}K tok · 输出 ${(outChars / 2000).toFixed(1)}K tok`}
                 </div>
               </div>
             </>

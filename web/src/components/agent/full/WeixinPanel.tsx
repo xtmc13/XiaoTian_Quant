@@ -118,7 +118,7 @@ export function WeixinPanel({ onClose, bare }: WeixinPanelProps) {
           </button>
         </div>
 
-        <div className="space-y-3 overflow-y-auto px-4 py-4" style={{ touchAction: 'pan-y', overscrollBehavior: 'contain' }}>
+        <div className="space-y-3 overflow-y-auto px-4 py-4">
           {/* 已登录状态卡 */}
           {loggedIn && (
             <div className="flex items-center gap-2 rounded-xl border border-[var(--ag-green)]/30 bg-[var(--ag-green)]/6 px-3 py-2.5">

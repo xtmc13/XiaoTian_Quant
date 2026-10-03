@@ -544,7 +544,7 @@ export function AgentThread({
   }
   return (
     <div className="xt-thread-scroll min-h-0 flex-1 overflow-y-auto" aria-label="消息流">
-      <div className="mx-auto flex h-full w-full max-w-[var(--ag-content-max-w)] flex-col px-6 pb-44 pt-2">
+      <div className="mx-auto flex h-full w-full max-w-[var(--ag-content-max-w)] flex-col px-6 pb-6 pt-2">
         {messages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center">
             <AgentEmptyState />
@@ -580,8 +580,8 @@ export function AgentThread({
           </>
         )}
         <div ref={messagesEndRef} />
+        </div>
       </div>
-    </div>
   )
 }
 
