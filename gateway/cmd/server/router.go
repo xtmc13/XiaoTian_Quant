@@ -799,6 +799,7 @@ func registerAgentRoutes(api *gin.RouterGroup) {
 		agent.DELETE("/profiles/:id", handler.AgentProfileDelete)
 		agent.GET("/files/checkpoints", handler.AgentFileCheckpoints)
 		agent.POST("/files/rollback", handler.AgentFileRollback)
+		agent.GET("/files/content", handler.AgentFileContent)
 		agent.GET("/telegram/status", handler.AgentTelegramStatus)
 		agent.POST("/telegram/pair-code", handler.AgentTelegramPairCode)
 		agent.POST("/telegram/unlink", handler.AgentTelegramUnlink)

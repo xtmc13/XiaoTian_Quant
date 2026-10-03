@@ -26,6 +26,7 @@ import type { AgentChatMsg } from '../types'
 import { copyText, toolLabel } from '../types'
 import { speakText, stopSpeak, ttsSupported } from '../useTts'
 import { MarkdownView } from '../MarkdownView'
+import { ArtifactsCard } from './Artifacts'
 import { DefaultPet } from '../pet/DefaultPet'
 import { cn } from '@/lib/utils'
 
@@ -429,6 +430,20 @@ function AssistantMessage({
   const thinking = msg.streaming ? msg.reasoning || '' : msg.reasoning || ''
   const bareActivity =
     isLast && isStreaming && !msg.content && !msg.reasoning && !(msg.toolCalls && msg.toolCalls.length > 0)
+  // Artifacts：本条消息里 write_file 写出的沙箱文件（args_full → path）
+  const artifactPaths = useMemo(() => {
+    const out: string[] = []
+    for (const t of msg.toolCalls || []) {
+      if (t.name !== 'write_file' || !t.args_full) continue
+      try {
+        const p = (JSON.parse(t.args_full) as { path?: string }).path
+        if (p) out.push(p)
+      } catch {
+        // 忽略解析失败
+      }
+    }
+    return out
+  }, [msg.toolCalls])
 
   return (
     <div className="group pt-3">
@@ -457,6 +472,7 @@ function AssistantMessage({
           </div>
         )
       )}
+      <ArtifactsCard paths={artifactPaths} />
       {msg.error && (
         <div className="mt-1 flex items-center gap-1.5 rounded-md border border-[var(--ag-red)]/25 bg-[var(--ag-red)]/6 px-2 py-1.5 text-[11px] text-[var(--ag-red)]">
           <CircleAlert size={12} />

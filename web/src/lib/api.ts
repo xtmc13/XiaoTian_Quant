@@ -3166,6 +3166,9 @@ export const agentFilesApi = {
   checkpoints: () => api.get<{ success: boolean; checkpoints: AgentFileCheckpoint[] }>('/agent/files/checkpoints'),
   rollback: (checkpoint_id: string | number) =>
     api.post<{ success: boolean; restored: string }>('/agent/files/rollback', { checkpoint_id }),
+  /** 沙箱文件读取（Artifacts 预览/下载）的直链地址（iframe/img/<a> 用） */
+  contentUrl: (path: string, download = false) =>
+    `${API_BASE_URL}/agent/files/content?path=${encodeURIComponent(path)}${download ? '&download=1' : ''}`,
 }
 
 // ── 飞书通道（feishu 插件） ──

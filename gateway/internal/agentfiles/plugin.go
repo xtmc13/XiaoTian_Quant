@@ -78,6 +78,11 @@ func CanonicalRoot(root string) (string, error) {
 // 拒绝 .. 逃逸（不是钳制），已存在路径解引用符号链接后同样不得越界。
 // 返回 (绝对路径, 根内相对路径, error)。
 func (p *Plugin) resolve(path string) (string, string, error) {
+	return Resolve(p.Root, path)
+}
+
+// Resolve 包级路径解析（HTTP 文件读取端点与插件工具共用同一套安全校验）。
+func Resolve(root, path string) (string, string, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return "", "", fmt.Errorf("path 不能为空")
@@ -89,21 +94,21 @@ func (p *Plugin) resolve(path string) (string, string, error) {
 		return "", "", fmt.Errorf("路径越出沙箱根目录: %s", path)
 	}
 	rel := filepath.FromSlash(cleaned)
-	abs := filepath.Join(p.Root, rel)
-	if abs != p.Root && !strings.HasPrefix(abs, p.Root+string(filepath.Separator)) {
+	abs := filepath.Join(root, rel)
+	if abs != root && !strings.HasPrefix(abs, root+string(filepath.Separator)) {
 		return "", "", fmt.Errorf("路径越出沙箱根目录: %s", path)
 	}
 	// 符号链接防逃逸：目标存在时校验真实路径；不存在时校验最近存在的祖先目录。
 	target := abs
 	for {
 		if real, err := filepath.EvalSymlinks(target); err == nil {
-			if real != p.Root && !strings.HasPrefix(real, p.Root+string(filepath.Separator)) {
+			if real != root && !strings.HasPrefix(real, root+string(filepath.Separator)) {
 				return "", "", fmt.Errorf("路径经符号链接越出沙箱根目录: %s", path)
 			}
 			break
 		}
 		parent := filepath.Dir(target)
-		if parent == target || !strings.HasPrefix(parent, p.Root) {
+		if parent == target || !strings.HasPrefix(parent, root) {
 			break
 		}
 		target = parent

@@ -3,10 +3,14 @@ package handler
 import (
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/agentfiles"
 	"github.com/xiaotian-quant/gateway/internal/plugins/builtin"
+	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
 // ── 文件检查点 REST（文件回滚面板）：管理员专属（普通用户 403）──
@@ -69,4 +73,72 @@ func AgentFileRollback(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "restored": restored})
+}
+
+// ── 沙箱文件读取（Artifacts 预览/下载）：登录用户可读，与文件工具同一套路径安全校验 ──
+
+// agentFileContentMaxBytes 单文件读取上限（预览场景，8MB 足够覆盖 HTML/图表/文本产物）。
+const agentFileContentMaxBytes = 8 << 20
+
+// AgentFileContent GET /api/agent/files/content?path=...&download=1
+// 契约：200 直接回文件流（inline 预览或 attachment 下载）；404/400/403 回 JSON 错误。
+func AgentFileContent(c *gin.Context) {
+	root, err := agentfiles.DefaultRoot(store.GetConfig())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "detail": err.Error()})
+		return
+	}
+	abs, _, err := agentfiles.Resolve(root, c.Query("path"))
+	if err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "detail": err.Error()})
+		return
+	}
+	info, err := os.Stat(abs)
+	if err != nil || info.IsDir() {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "detail": "file not found"})
+		return
+	}
+	if info.Size() > agentFileContentMaxBytes {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"success": false, "detail": "file too large for preview (max 8MB)"})
+		return
+	}
+	// 显式设置 Content-Type（ServeFile 不会覆盖已设置的值），download=1 强制附件下载
+	c.Header("Content-Type", agentFileContentType(abs))
+	c.Header("X-Content-Type-Options", "nosniff")
+	if c.Query("download") == "1" {
+		c.Header("Content-Disposition", "attachment; filename=\""+filepath.Base(abs)+"\"")
+	}
+	c.File(abs)
+}
+
+// agentFileContentType 按扩展名映射预览 Content-Type；未知类型一律 octet-stream。
+func agentFileContentType(name string) string {
+	switch strings.ToLower(strings.TrimPrefix(filepath.Ext(name), ".")) {
+	case "html", "htm":
+		return "text/html; charset=utf-8"
+	case "svg":
+		return "image/svg+xml"
+	case "png":
+		return "image/png"
+	case "jpg", "jpeg":
+		return "image/jpeg"
+	case "gif":
+		return "image/gif"
+	case "webp":
+		return "image/webp"
+	case "ico":
+		return "image/x-icon"
+	case "pdf":
+		return "application/pdf"
+	case "txt", "log":
+		return "text/plain; charset=utf-8"
+	case "md", "markdown":
+		return "text/plain; charset=utf-8"
+	case "csv":
+		return "text/csv; charset=utf-8"
+	case "json":
+		return "application/json; charset=utf-8"
+	default:
+		return "application/octet-stream"
+	}
 }
