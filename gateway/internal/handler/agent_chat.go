@@ -93,13 +93,17 @@ type agentChatMessage struct {
 type agentToolCallRecord struct {
 	Name          string `json:"name"`
 	ArgsSummary   string `json:"args_summary,omitempty"`
-	ArgsFull      string `json:"args_full,omitempty"` // patch/write_file 等写工具的完整参数（限量），前端 diff/内容视图用
-	Status        string `json:"status"`              // running | done
+	ArgsFull      string `json:"args_full,omitempty"`   // patch/write_file 等写工具的完整参数（限量），前端 diff/内容视图用
+	ResultFull    string `json:"result_full,omitempty"` // run_python 等工具的完整结果（限量），前端产物卡片取文件清单
+	Status        string `json:"status"`                // running | done
 	ResultSummary string `json:"result_summary,omitempty"`
 }
 
 // agentChatArgsFullLimit 写工具 args_full 单字段截断上限（约 4KB，余量给整体 16KB 限流）。
 const agentChatArgsFullLimit = 4096
+
+// agentChatResultFullLimit run_python 结果截断上限（stdout/stderr/files 合计约 8KB）。
+const agentChatResultFullLimit = 8192
 
 // toolArgsFull 为写类工具提取完整参数 JSON（限量截断），其余工具返回空串。
 // patch 的 find/replace 与 write_file 的 content 是用户最想核对的内容，80 字摘要不够看。
@@ -1123,6 +1127,10 @@ func (r *agentChatRunner) executeTool(tc ai.ToolCall) string {
 
 	rec.Status = "done"
 	rec.ResultSummary = truncateAgentChat(content, agentChatSummaryLimit)
+	if tc.Name == "run_python" {
+		// 完整结果（含沙箱 files.created/modified）限量透传，前端产物卡片用
+		rec.ResultFull = truncateAgentChat(content, agentChatResultFullLimit)
+	}
 	r.emitEvent("tool_call", rec)
 	r.records = append(r.records, rec)
 	r.writeAudit(tc.Name, argsSummary, statusCode)

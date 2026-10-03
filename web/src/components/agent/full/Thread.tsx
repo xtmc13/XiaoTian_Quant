@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import {
   Check,
   ChevronDown,
@@ -21,7 +22,7 @@ import {
   Volume2,
   VolumeX,
 } from 'lucide-react'
-import type { AgentApprovalRequest } from '@/lib/api'
+import { agentSubagentsApi, type AgentApprovalRequest } from '@/lib/api'
 import type { AgentChatMsg } from '../types'
 import { copyText, toolLabel } from '../types'
 import { speakText, stopSpeak, ttsSupported } from '../useTts'
@@ -121,9 +122,22 @@ function ThinkingDisclosure({ reasoning, streaming }: { reasoning: string; strea
 }
 
 // ── 工具调用（scaffold 行）：运行中 spinner + shimmer，成功静默，可展开 ──
+const SUBAGENT_TOOLS = ['subagents', 'delegate_task']
+
 function ToolScaffoldRow({ tool }: { tool: NonNullable<AgentChatMsg['toolCalls']>[number] }) {
   const [open, setOpen] = useState(false)
   const expandable = Boolean(tool.args_summary || tool.result_summary || tool.args_full)
+  const isSubagentTool = SUBAGENT_TOOLS.includes(tool.name)
+  // 子代理工具执行期间轮询运行状态，行内呈现实时进度（最多展示 5 条）
+  const { data: subData } = useQuery({
+    queryKey: ['agent-subagents-inline'],
+    queryFn: () => agentSubagentsApi.list(),
+    enabled: isSubagentTool && tool.status === 'running',
+    refetchInterval: 3000,
+    staleTime: 0,
+    retry: false,
+  })
+  const subRuns = isSubagentTool && tool.status === 'running' ? (subData?.runs ?? []).slice(0, 5) : []
   return (
     <div className="mb-1 transition-opacity [opacity:0.67] hover:[opacity:1] focus-within:[opacity:1]">
       <div className="flex items-center gap-1.5 rounded-md px-1 py-0.5 text-[11.5px] text-[var(--ag-text3)]">
@@ -136,7 +150,9 @@ function ToolScaffoldRow({ tool }: { tool: NonNullable<AgentChatMsg['toolCalls']
         {tool.args_summary && <span className="truncate text-[var(--ag-text4)]">{tool.args_summary}</span>}
         <span className="ml-auto shrink-0 tabular-nums">
           {tool.status === 'running' ? (
-            <span className="xt-shimmer-text">执行中…</span>
+            <span className="xt-shimmer-text">
+              {subRuns.length > 0 ? `${subRuns.filter((r) => r.status === 'running').length}/${subRuns.length} 个子任务` : '执行中…'}
+            </span>
           ) : (
             tool.result_summary && <span>{tool.result_summary}</span>
           )}
@@ -154,6 +170,31 @@ function ToolScaffoldRow({ tool }: { tool: NonNullable<AgentChatMsg['toolCalls']
           </button>
         )}
       </div>
+      {subRuns.length > 0 && (
+        <div className="ml-5 mt-0.5 space-y-0.5 rounded-md border border-[var(--ag-stroke3)] bg-[var(--ag-card)] px-2 py-1">
+          {subRuns.map((r) => (
+            <div key={r.id} className="flex items-center gap-1.5 text-[11px]">
+              {r.status === 'running' ? (
+                <Loader2 size={10} className="shrink-0 animate-spin text-[var(--ag-accent)]" />
+              ) : r.status === 'done' ? (
+                <Check size={10} className="shrink-0 text-[var(--ag-green)]" />
+              ) : (
+                <CircleAlert size={10} className="shrink-0 text-[var(--ag-red)]" />
+              )}
+              <span className="min-w-0 flex-1 truncate text-[var(--ag-text2)]" title={r.task}>
+                {r.task}
+              </span>
+              <span className="shrink-0 tabular-nums text-[var(--ag-text4)]">
+                {r.status === 'running'
+                  ? `${Math.max(0, Math.round((Date.now() - r.started_at * 1000) / 1000))}s`
+                  : r.status === 'done'
+                    ? `${(r.finished_ms / 1000).toFixed(1)}s`
+                    : '失败'}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
       {open && <ToolCallDetail tool={tool} />}
     </div>
   )
@@ -430,16 +471,28 @@ function AssistantMessage({
   const thinking = msg.streaming ? msg.reasoning || '' : msg.reasoning || ''
   const bareActivity =
     isLast && isStreaming && !msg.content && !msg.reasoning && !(msg.toolCalls && msg.toolCalls.length > 0)
-  // Artifacts：本条消息里 write_file 写出的沙箱文件（args_full → path）
+  // Artifacts：本条消息里 write_file 写出的文件 + run_python 跑出的文件（args_full/result_full → path）
   const artifactPaths = useMemo(() => {
     const out: string[] = []
+    const push = (p?: string) => {
+      if (p && !out.includes(p)) out.push(p)
+    }
     for (const t of msg.toolCalls || []) {
-      if (t.name !== 'write_file' || !t.args_full) continue
-      try {
-        const p = (JSON.parse(t.args_full) as { path?: string }).path
-        if (p) out.push(p)
-      } catch {
-        // 忽略解析失败
+      if (t.name === 'write_file' && t.args_full) {
+        try {
+          push((JSON.parse(t.args_full) as { path?: string }).path)
+        } catch {
+          // 忽略解析失败
+        }
+      }
+      if (t.name === 'run_python' && t.result_full) {
+        try {
+          const r = JSON.parse(t.result_full) as { files?: { created?: string[]; modified?: string[] } }
+          r.files?.created?.forEach(push)
+          r.files?.modified?.forEach(push)
+        } catch {
+          // 忽略解析失败
+        }
       }
     }
     return out

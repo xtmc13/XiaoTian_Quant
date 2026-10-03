@@ -1134,6 +1134,8 @@ export interface AgentToolCall {
   args_summary?: string
   /** patch/write_file 等写工具的完整参数（后端限量截断），前端 diff/内容视图用 */
   args_full?: string
+  /** run_python 等工具的完整结果（后端限量截断），前端产物卡片取文件清单 */
+  result_full?: string
   status: 'running' | 'done'
   result_summary?: string
 }

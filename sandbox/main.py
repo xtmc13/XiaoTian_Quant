@@ -100,13 +100,30 @@ if _HAS_FASTAPI:
     def run(req: RunRequest):
         """通用代码执行（agent run_python 工具）：工作目录为共享文件沙箱
         /data/agent_files（与网关文件工具同一目录），可 import pandas/numpy/ccxt
-        等沙箱预装库。不做 AST 限制——容器即边界。输出截断防撑爆响应。"""
+        等沙箱预装库。不做 AST 限制——容器即边界。输出截断防撑爆响应。
+        附带执行前后文件快照 diff（files.created/modified），前端据此生成产物卡片。"""
         import os
         import subprocess
         import tempfile
 
         ws = "/data/agent_files"
         os.makedirs(ws, exist_ok=True)
+
+        def _snapshot():
+            out = {}
+            for root, _dirs, files in os.walk(ws):
+                for f in files:
+                    if f.startswith("."):
+                        continue
+                    p = os.path.join(root, f)
+                    rel = os.path.relpath(p, ws)
+                    try:
+                        out[rel] = os.path.getmtime(p)
+                    except OSError:
+                        pass
+            return out
+
+        before = _snapshot()
         timeout = max(1, min(req.timeout or 30, 120))
         fd, path = tempfile.mkstemp(suffix=".py", dir=ws)
         try:
@@ -120,14 +137,21 @@ if _HAS_FASTAPI:
                     text=True,
                     timeout=timeout,
                 )
-                return {
+                result = {
                     "success": proc.returncode == 0,
                     "exit_code": proc.returncode,
                     "stdout": proc.stdout[-8000:],
                     "stderr": proc.stderr[-4000:],
                 }
             except subprocess.TimeoutExpired:
-                return {"success": False, "exit_code": None, "stdout": "", "stderr": f"执行超时（>{timeout}s）"}
+                result = {"success": False, "exit_code": None, "stdout": "", "stderr": f"执行超时（>{timeout}s）"}
+            # 执行后快照 diff（排除临时脚本本身；此时 finally 尚未 unlink）
+            after = _snapshot()
+            temp_rel = os.path.relpath(path, ws)
+            created = [k for k in after if k not in before and k != temp_rel]
+            modified = [k for k in after if k in before and after[k] != before[k] and k != temp_rel]
+            result["files"] = {"created": created, "modified": modified}
+            return result
         finally:
             try:
                 os.unlink(path)
