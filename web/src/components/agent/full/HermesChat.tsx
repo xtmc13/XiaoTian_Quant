@@ -170,6 +170,17 @@ export function HermesChat({
       break
     }
   }
+  // 上下文占用：最近一轮 prompt_tokens（含全部历史）+ 本轮输出；上限按模型名推断
+  const ctxUsed = lastUsage ? lastUsage.prompt_tokens + lastUsage.completion_tokens : 0
+  const ctxLimit = (() => {
+    const m = (settings.model || '').toLowerCase()
+    if (m.includes('256k')) return 256_000
+    if (m.includes('1m') || m.includes('k3') || m.includes('kimi-for-coding')) return 1_000_000
+    return 256_000
+  })()
+  const ctxRatio = ctxLimit > 0 ? Math.min(ctxUsed / ctxLimit, 1) : 0
+  const fmtTok = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n))
+  const ctxTone = ctxRatio > 0.9 ? 'var(--ag-red)' : ctxRatio > 0.7 ? 'var(--ag-amber)' : 'var(--ag-accent)'
   const [usageOpen, setUsageOpen] = useState(false)
   const [modelSignal, setModelSignal] = useState(0)
   const fileReaderRef = useRef<FileReader | null>(null)
@@ -694,6 +705,24 @@ export function HermesChat({
                     </div>
                   )}
                   <div className="pointer-events-auto">{composer}</div>
+                {/* 上下文用量条：最近一轮 prompt_tokens ≈ 当前上下文占用，>70% 变黄、>90% 变红 */}
+                {hasMessages && ctxUsed > 0 && (
+                  <div
+                    className="pointer-events-auto flex items-center gap-1.5 px-1"
+                    title={`本轮请求携带 ${lastUsage?.prompt_tokens} tok + 输出 ${lastUsage?.completion_tokens} tok；模型上下文上限约 ${fmtTok(ctxLimit)}`}
+                    aria-label="上下文用量"
+                  >
+                    <div className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-black/8">
+                      <div
+                        className="h-full rounded-full transition-[width] duration-300"
+                        style={{ width: `${Math.max(ctxRatio * 100, 1.5)}%`, background: ctxTone }}
+                      />
+                    </div>
+                    <span className="shrink-0 text-[10px] tabular-nums" style={{ color: ctxTone }}>
+                      上下文 {fmtTok(ctxUsed)}/{fmtTok(ctxLimit)}
+                    </span>
+                  </div>
+                )}
                   <div className="pointer-events-none text-center text-[11px] tabular-nums text-[var(--ag-text4)]">
                     {lastUsage
                       ? `${rounds} 轮 · ${steps} 步 | LLM ${(lastUsage.llm_ms / 1000).toFixed(1)}s · ${lastUsage.tok_per_s.toFixed(1)} tok/s | 输入 ${lastUsage.prompt_tokens} tok · 输出 ${lastUsage.completion_tokens} tok`
