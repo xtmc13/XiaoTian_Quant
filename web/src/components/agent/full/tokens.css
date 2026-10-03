@@ -169,3 +169,17 @@
 .xt-hermes .xt-activity-dot {
   animation: xt-pulse-dot 1.2s ease-in-out infinite;
 }
+
+/* 会话内搜索跳转命中时的高亮闪烁 */
+@keyframes xt-search-flash {
+  0% {
+    background-color: rgba(46, 91, 255, 0.22);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+.xt-hermes .xt-search-flash {
+  animation: xt-search-flash 1.4s ease-out forwards;
+  border-radius: 0.5rem;
+}

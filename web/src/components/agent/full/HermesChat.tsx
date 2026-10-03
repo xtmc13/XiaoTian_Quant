@@ -1,6 +1,6 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowLeft, ChevronDown, CircleStop, Layers3, Loader2, MessageCircleQuestion, Shield, X } from 'lucide-react'
+import { ArrowLeft, ChevronDown, ChevronUp, CircleStop, FileDown, Layers3, Loader2, MessageCircleQuestion, Search, Shield, X } from 'lucide-react'
 import { toast } from '@/lib/useToast'
 import type { AgentApprovalRequest, AgentConversationSummary } from '@/lib/api'
 import { agentFilesApi, agentPluginApi, agentSkillApi } from '@/lib/api'
@@ -181,6 +181,72 @@ export function HermesChat({
   const ctxRatio = ctxLimit > 0 ? Math.min(ctxUsed / ctxLimit, 1) : 0
   const fmtTok = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n))
   const ctxTone = ctxRatio > 0.9 ? 'var(--ag-red)' : ctxRatio > 0.7 ? 'var(--ag-amber)' : 'var(--ag-accent)'
+
+  // ── 会话导出 Markdown：标题行下载按钮 ──
+  const exportMarkdown = () => {
+    const title = conversations.find((c) => c.id === currentId)?.title || '新对话'
+    const lines: string[] = [
+      `# ${title}`,
+      '',
+      `> 导出时间：${new Date().toLocaleString()}${settings.model ? ` · 模型：${settings.model}` : ''}`,
+      '',
+    ]
+    for (const m of messages) {
+      if (m.role === 'user') {
+        lines.push('## 👤 用户', '', m.content, '')
+      } else if (m.role === 'assistant') {
+        lines.push('## 🤖 助手', '')
+        if (m.reasoning) lines.push('<details><summary>思考过程</summary>', '', m.reasoning, '', '</details>', '')
+        if (m.content) lines.push(m.content, '')
+        if (m.toolCalls && m.toolCalls.length > 0) {
+          lines.push('**工具调用：**', '')
+          for (const t of m.toolCalls) {
+            lines.push(`- \`${t.name}\`${t.status === 'done' ? ' ✅' : ''} ${t.result_summary ?? ''}`)
+          }
+          lines.push('')
+        }
+      }
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${title.replace(/[\\/:*?"<>|]/g, '_').slice(0, 60) || 'conversation'}.md`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  // ── 会话内搜索：标题行 🔍 打开浮层，匹配当前会话消息内容，上/下跳转 + 高亮 ──
+  const [inSearchOpen, setInSearchOpen] = useState(false)
+  const [inQuery, setInQuery] = useState('')
+  const [matchPtr, setMatchPtr] = useState(0)
+  const jumpedRef = useRef(false)
+  useEffect(() => {
+    setMatchPtr(0)
+    jumpedRef.current = false
+  }, [inQuery])
+  const inMatches = useMemo(() => {
+    const q = inQuery.trim().toLowerCase()
+    if (!q) return []
+    const idxs: number[] = []
+    messages.forEach((m, i) => {
+      if ((m.content || '').toLowerCase().includes(q) || (m.reasoning || '').toLowerCase().includes(q)) idxs.push(i)
+    })
+    return idxs
+  }, [messages, inQuery])
+  const jumpToMatch = (ptr: number) => {
+    if (inMatches.length === 0) return
+    const next = ((ptr % inMatches.length) + inMatches.length) % inMatches.length
+    setMatchPtr(next)
+    const el = document.getElementById(`xt-msg-${inMatches[next]}`)
+    if (!el) return
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    el.classList.remove('xt-search-flash')
+    // 强制重排以重触发动画
+    void el.offsetWidth
+    el.classList.add('xt-search-flash')
+    window.setTimeout(() => el.classList.remove('xt-search-flash'), 1600)
+  }
   const [usageOpen, setUsageOpen] = useState(false)
   const [modelSignal, setModelSignal] = useState(0)
   const fileReaderRef = useRef<FileReader | null>(null)
@@ -636,6 +702,29 @@ export function HermesChat({
                 </span>
                 <button
                   type="button"
+                  onClick={() => setInSearchOpen((v) => !v)}
+                  title="搜索本对话"
+                  aria-label="搜索本对话"
+                  aria-expanded={inSearchOpen}
+                  className={cn(
+                    'shrink-0 rounded-md p-1 transition-colors hover:bg-black/5',
+                    inSearchOpen ? 'text-[var(--ag-accent)]' : 'text-[var(--ag-text3)] hover:text-[var(--ag-text1)]'
+                  )}
+                >
+                  <Search size={14} />
+                </button>
+                <button
+                  type="button"
+                  onClick={exportMarkdown}
+                  disabled={!hasMessages}
+                  title="导出为 Markdown"
+                  aria-label="导出为 Markdown"
+                  className="shrink-0 rounded-md p-1 text-[var(--ag-text3)] transition-colors hover:bg-black/5 hover:text-[var(--ag-text1)] disabled:opacity-30"
+                >
+                  <FileDown size={14} />
+                </button>
+                <button
+                  type="button"
                   onClick={() => setUsageOpen(true)}
                   title="会话日志与用量"
                   aria-label="会话日志"
@@ -649,10 +738,84 @@ export function HermesChat({
                 <span className="border-b-2 border-[var(--ag-accent)] py-2 text-[13px] font-medium text-[var(--ag-text1)]">
                   对话
                 </span>
-                <span className="cursor-not-allowed py-2 text-[13px] text-[var(--ag-text4)]" title="敬请期待">
+                <button
+                  type="button"
+                  onClick={() => setMainView('journey')}
+                  title="打开学习轨迹面板"
+                  className="py-2 text-[13px] text-[var(--ag-text2)] transition-colors hover:text-[var(--ag-accent)]"
+                >
                   轨迹
-                </span>
+                </button>
               </div>
+
+              {/* 会话内搜索浮层：匹配当前会话内容，Enter 下一个 / Shift+Enter 上一个 / Esc 关闭 */}
+              {inSearchOpen && (
+                <div className="absolute right-5 top-[5.6rem] z-20 flex items-center gap-1 rounded-xl border border-[var(--ag-stroke3)] bg-[var(--ag-card)]/95 px-2 py-1.5 shadow-[var(--ag-shadow-panel)] backdrop-blur-xl">
+                  <Search size={13} className="shrink-0 text-[var(--ag-text4)]" />
+                  <input
+                    value={inQuery}
+                    onChange={(e) => setInQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        if (!jumpedRef.current) {
+                          jumpedRef.current = true
+                          jumpToMatch(matchPtr)
+                        } else {
+                          jumpToMatch(matchPtr + (e.shiftKey ? -1 : 1))
+                        }
+                      }
+                      if (e.key === 'Escape') {
+                        setInSearchOpen(false)
+                        setInQuery('')
+                      }
+                    }}
+                    placeholder="搜索本对话…"
+                    aria-label="搜索本对话内容"
+                    autoFocus
+                    className="w-36 bg-transparent text-[12px] text-[var(--ag-text1)] placeholder:text-[var(--ag-text4)] focus:outline-none"
+                  />
+                  <span className="shrink-0 text-[10px] tabular-nums text-[var(--ag-text4)]">
+                    {inQuery.trim() ? (inMatches.length ? `${matchPtr + 1}/${inMatches.length}` : '无匹配') : ''}
+                  </span>
+                  <button
+                    type="button"
+                    title="上一个匹配"
+                    aria-label="上一个匹配"
+                    onClick={() => {
+                      jumpedRef.current = true
+                      jumpToMatch(matchPtr - 1)
+                    }}
+                    className="shrink-0 rounded p-0.5 text-[var(--ag-text3)] hover:bg-black/5 hover:text-[var(--ag-text1)]"
+                  >
+                    <ChevronUp size={12} />
+                  </button>
+                  <button
+                    type="button"
+                    title="下一个匹配"
+                    aria-label="下一个匹配"
+                    onClick={() => {
+                      jumpedRef.current = true
+                      jumpToMatch(matchPtr + 1)
+                    }}
+                    className="shrink-0 rounded p-0.5 text-[var(--ag-text3)] hover:bg-black/5 hover:text-[var(--ag-text1)]"
+                  >
+                    <ChevronDown size={12} />
+                  </button>
+                  <button
+                    type="button"
+                    title="关闭搜索"
+                    aria-label="关闭搜索"
+                    onClick={() => {
+                      setInSearchOpen(false)
+                      setInQuery('')
+                    }}
+                    className="shrink-0 rounded p-0.5 text-[var(--ag-text3)] hover:bg-black/5 hover:text-[var(--ag-text1)]"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              )}
 
               {/* 消息流：flex-1 占满标题与停靠区之间的剩余空间，overflow-y-auto 滚动 */}
               <AgentThread

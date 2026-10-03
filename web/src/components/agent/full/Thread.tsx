@@ -617,7 +617,7 @@ export function AgentThread({
         ) : (
           <>
             {messages.map((m, i) => (
-              <React.Fragment key={m.id || i}>
+              <div key={m.id || i} id={`xt-msg-${i}`}>
                 {notice && i === noticeIdx && notice}
                 {m.role === 'user' ? (
                   <UserMessage
@@ -636,7 +636,7 @@ export function AgentThread({
                     onUndo={onUndo}
                   />
                 )}
-              </React.Fragment>
+              </div>
             ))}
             {notice && noticeIdx >= messages.length && notice}
             {pendingApproval && onResolveApproval && (
