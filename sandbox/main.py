@@ -96,6 +96,30 @@ if _HAS_FASTAPI:
         code: str
         timeout: int = 30
 
+    class RunShellRequest(BaseModel):
+        command: str
+        timeout: int = 30
+
+    class FetchRequest(BaseModel):
+        url: str
+        timeout: int = 15
+
+    def _ws_snapshot(ws: str):
+        """沙箱工作区文件快照 {相对路径: mtime}（跳过隐藏文件），供执行前后 diff。"""
+        import os
+        out = {}
+        for root, _dirs, files in os.walk(ws):
+            for f in files:
+                if f.startswith("."):
+                    continue
+                p = os.path.join(root, f)
+                rel = os.path.relpath(p, ws)
+                try:
+                    out[rel] = os.path.getmtime(p)
+                except OSError:
+                    pass
+        return out
+
     @app.post("/run")
     def run(req: RunRequest):
         """通用代码执行（agent run_python 工具）：工作目录为共享文件沙箱
@@ -108,22 +132,7 @@ if _HAS_FASTAPI:
 
         ws = "/data/agent_files"
         os.makedirs(ws, exist_ok=True)
-
-        def _snapshot():
-            out = {}
-            for root, _dirs, files in os.walk(ws):
-                for f in files:
-                    if f.startswith("."):
-                        continue
-                    p = os.path.join(root, f)
-                    rel = os.path.relpath(p, ws)
-                    try:
-                        out[rel] = os.path.getmtime(p)
-                    except OSError:
-                        pass
-            return out
-
-        before = _snapshot()
+        before = _ws_snapshot(ws)
         timeout = max(1, min(req.timeout or 30, 120))
         fd, path = tempfile.mkstemp(suffix=".py", dir=ws)
         try:
@@ -146,7 +155,7 @@ if _HAS_FASTAPI:
             except subprocess.TimeoutExpired:
                 result = {"success": False, "exit_code": None, "stdout": "", "stderr": f"执行超时（>{timeout}s）"}
             # 执行后快照 diff（排除临时脚本本身；此时 finally 尚未 unlink）
-            after = _snapshot()
+            after = _ws_snapshot(ws)
             temp_rel = os.path.relpath(path, ws)
             created = [k for k in after if k not in before and k != temp_rel]
             modified = [k for k in after if k in before and after[k] != before[k] and k != temp_rel]
@@ -157,6 +166,76 @@ if _HAS_FASTAPI:
                 os.unlink(path)
             except OSError:
                 pass
+
+    @app.post("/run-shell")
+    def run_shell(req: RunShellRequest):
+        """通用 shell 执行（agent run_shell 工具，对标 Kimi Code Bash）：
+        bash -lc 在共享沙箱工作区运行，容器即边界。输出截断，附带文件快照 diff。"""
+        import os
+        import subprocess
+
+        ws = "/data/agent_files"
+        os.makedirs(ws, exist_ok=True)
+        before = _ws_snapshot(ws)
+        timeout = max(1, min(req.timeout or 30, 300))
+        command = (req.command or "").strip()
+        if not command:
+            return {"success": False, "exit_code": None, "stdout": "", "stderr": "command 不能为空"}
+        try:
+            proc = subprocess.run(
+                ["bash", "-lc", command],
+                cwd=ws,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            result = {
+                "success": proc.returncode == 0,
+                "exit_code": proc.returncode,
+                "stdout": proc.stdout[-8000:],
+                "stderr": proc.stderr[-4000:],
+            }
+        except subprocess.TimeoutExpired:
+            result = {"success": False, "exit_code": None, "stdout": "", "stderr": f"执行超时（>{timeout}s）"}
+        after = _ws_snapshot(ws)
+        created = [k for k in after if k not in before]
+        modified = [k for k in after if k in before and after[k] != before[k]]
+        result["files"] = {"created": created, "modified": modified}
+        return result
+
+    @app.post("/fetch")
+    def fetch(req: FetchRequest):
+        """网页抓取（agent fetch_url 工具，对标 Kimi Code FetchURL）：
+        仅 http/https，2MB 上限；HTML 粗略提取正文文本，其余文本类型原样截断。"""
+        import re
+        import urllib.request
+
+        url = (req.url or "").strip()
+        if not url.startswith(("http://", "https://")):
+            return {"success": False, "error": "仅支持 http/https URL"}
+        timeout = max(1, min(req.timeout or 15, 60))
+        try:
+            req_obj = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (XiaoTianQuant-Agent)"})
+            with urllib.request.urlopen(req_obj, timeout=timeout) as resp:
+                ctype = (resp.headers.get("Content-Type") or "").lower()
+                data = resp.read(2 << 20)
+        except Exception as e:  # noqa: BLE001 - 统一回传错误信息给模型
+            return {"success": False, "error": f"抓取失败: {e}"}
+        if "text/html" in ctype or "application/xhtml" in ctype:
+            text = data.decode("utf-8", errors="replace")
+            # 粗略正文提取：去脚本/样式/标签
+            text = re.sub(r"(?is)<(script|style|noscript)[^>]*>.*?</\1>", " ", text)
+            text = re.sub(r"(?s)<[^>]+>", " ", text)
+            text = re.sub(r"\s+", " ", text).strip()
+            return {"success": True, "url": url, "content_type": ctype, "text": text[:20000]}
+        if ctype.startswith("text/") or "json" in ctype or "xml" in ctype or ctype == "":
+            return {
+                "success": True,
+                "url": url,
+                "content_type": ctype,
+                "text": data.decode("utf-8", errors="replace")[:20000],
+            }
+        return {"success": False, "error": f"非文本内容（{ctype or 'unknown'}），不支持提取"}
 
     @app.get("/health")
     def health():

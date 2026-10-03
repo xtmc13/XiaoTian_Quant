@@ -91,9 +91,9 @@ func TestReadWritePatchSearch(t *testing.T) {
 		t.Error("新建文件不应产生检查点")
 	}
 
-	// read_file
+	// read_file（带行号格式 %6d\t）
 	out = call(t, p.readFile, 1, map[string]any{"path": "notes/hello.txt"})
-	if out["content"] != "hello world" || out["truncated"] != false {
+	if out["content"] != "     1\thello world\n" || out["truncated"] != false || out["total_lines"] != 1 {
 		t.Fatalf("read_file 返回: %v", out)
 	}
 
@@ -110,7 +110,7 @@ func TestReadWritePatchSearch(t *testing.T) {
 		t.Fatalf("patch 返回: %v", out)
 	}
 	out = call(t, p.readFile, 1, map[string]any{"path": "notes/hello.txt"})
-	if out["content"] != "hello v3" {
+	if out["content"] != "     1\thello v3\n" {
 		t.Fatalf("patch 后内容: %v", out["content"])
 	}
 
@@ -151,6 +151,20 @@ func TestReadWritePatchSearch(t *testing.T) {
 	// 两者皆空应报错且附用法提示
 	if _, err := p.searchFiles(tc(1), context.Background(), map[string]any{}); err == nil {
 		t.Error("空参数应报错")
+	}
+	// list_files：列根目录（至少 notes/ 与 dup.txt）
+	out = call(t, p.listFiles, 1, map[string]any{})
+	if out["count"].(int) < 2 {
+		t.Fatalf("list_files 根目录: %v", out)
+	}
+	// write_file append 模式 + read_file 负 offset（读最后一行）
+	out = call(t, p.writeFile, 1, map[string]any{"path": "notes/hello.txt", "content": "-tail", "mode": "append"})
+	if out["append"] != true {
+		t.Fatalf("append 模式: %v", out)
+	}
+	out = call(t, p.readFile, 1, map[string]any{"path": "notes/hello.txt", "offset": -1})
+	if out["content"] != "     1\thello v3-tail\n" {
+		t.Fatalf("append 后负 offset 读: %v", out["content"])
 	}
 	// 检查点备份目录不参与检索
 	out = call(t, p.searchFiles, 1, map[string]any{"pattern": "cp_"})

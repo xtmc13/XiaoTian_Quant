@@ -485,7 +485,7 @@ function AssistantMessage({
           // 忽略解析失败
         }
       }
-      if (t.name === 'run_python' && t.result_full) {
+      if ((t.name === 'run_python' || t.name === 'run_shell') && t.result_full) {
         try {
           const r = JSON.parse(t.result_full) as { files?: { created?: string[]; modified?: string[] } }
           r.files?.created?.forEach(push)

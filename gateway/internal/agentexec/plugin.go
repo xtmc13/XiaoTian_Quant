@@ -45,7 +45,7 @@ func (p *Plugin) Info() plugin.Info {
 // UI 无独立面板（工具随会话暴露）。
 func (p *Plugin) UI() plugin.UIContribution { return plugin.UIContribution{} }
 
-// Register 注册 run_python 工具（ScopeAdmin）。
+// Register 注册 run_python / run_shell / fetch_url 工具（沙箱执行三件套，对标 Kimi Code Bash/FetchURL）。
 func (p *Plugin) Register(reg *plugin.Registry, _ plugin.Deps) error {
 	reg.AddTool(agent.Tool{
 		Name: "run_python",
@@ -68,6 +68,47 @@ func (p *Plugin) Register(reg *plugin.Registry, _ plugin.Deps) error {
 			"required": []string{"code"},
 		},
 	}, p.runPython)
+	reg.AddTool(agent.Tool{
+		Name: "run_shell",
+		Description: "在沙箱中执行 shell 命令并返回输出（对标 Kimi Code 的 Bash）。工作目录为文件沙箱根目录，" +
+			"支持 ls/grep/curl/pip/git 等任意命令；默认 30s 超时（最多 300s），stdout/stderr 限量回传；" +
+			"执行期间新建/修改的文件会列入返回的 files 清单。",
+		Scope: agent.ScopeWrite, // 写类审批门：approval_mode=writes 时需用户确认（同 Kimi Bash 需批准）
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"command": map[string]any{
+					"type":        "string",
+					"description": "要执行的 shell 命令（bash -lc 执行）",
+				},
+				"timeout": map[string]any{
+					"type":        "integer",
+					"description": "超时秒数（1-300，默认 30）",
+				},
+			},
+			"required": []string{"command"},
+		},
+	}, p.runShell)
+	reg.AddTool(agent.Tool{
+		Name: "fetch_url",
+		Description: "抓取网页/文本资源并返回正文（对标 Kimi Code 的 FetchURL）。仅支持 http/https；" +
+			"HTML 会提取正文文本（去脚本样式标签），文本/JSON/XML 原样返回，上限 2MB。",
+		Scope: agent.ScopeRead,
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"url": map[string]any{
+					"type":        "string",
+					"description": "要抓取的 http/https URL",
+				},
+				"timeout": map[string]any{
+					"type":        "integer",
+					"description": "超时秒数（1-60，默认 15）",
+				},
+			},
+			"required": []string{"url"},
+		},
+	}, p.fetchURL)
 	return nil
 }
 
@@ -95,25 +136,62 @@ type runResponse struct {
 	Stderr   string `json:"stderr"`
 }
 
+// postSandbox 向沙箱指定端点发 JSON 请求并解码响应。
+func (p *Plugin) postSandbox(endpoint string, payload map[string]any, out any) error {
+	body, _ := json.Marshal(payload)
+	client := &http.Client{Timeout: 320 * time.Second}
+	resp, err := client.Post(p.url()+endpoint, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("沙箱不可达：%v", err)
+	}
+	defer resp.Body.Close()
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("沙箱响应解析失败：%v", err)
+	}
+	return nil
+}
+
 func (p *Plugin) runPython(_ *agent.ToolContext, _ context.Context, args map[string]any) (any, error) {
 	code := argStr(args, "code")
 	if code == "" {
 		return nil, fmt.Errorf("code 不能为空")
 	}
-	payload, _ := json.Marshal(map[string]any{
+	var rr runResponse
+	if err := p.postSandbox("/run", map[string]any{
 		"code":    code,
 		"timeout": argInt(args, "timeout", 30),
-	})
-	client := &http.Client{Timeout: 150 * time.Second}
-	resp, err := client.Post(p.url()+"/run", "application/json", bytes.NewReader(payload))
-	if err != nil {
-		return nil, fmt.Errorf("沙箱不可达：%v", err)
+	}, &rr); err != nil {
+		return nil, err
 	}
-	defer resp.Body.Close()
+	return runOutput(rr), nil
+}
+
+func (p *Plugin) runShell(_ *agent.ToolContext, _ context.Context, args map[string]any) (any, error) {
+	command := argStr(args, "command")
+	// 容错：模型常用 cmd/shell/script 等别名
+	if command == "" {
+		for _, k := range []string{"cmd", "shell", "script", "input"} {
+			if v := argStr(args, k); v != "" {
+				command = v
+				break
+			}
+		}
+	}
+	if command == "" {
+		return nil, fmt.Errorf("command 不能为空")
+	}
 	var rr runResponse
-	if err := json.NewDecoder(resp.Body).Decode(&rr); err != nil {
-		return nil, fmt.Errorf("沙箱响应解析失败：%v", err)
+	if err := p.postSandbox("/run-shell", map[string]any{
+		"command": command,
+		"timeout": argInt(args, "timeout", 30),
+	}, &rr); err != nil {
+		return nil, err
 	}
+	return runOutput(rr), nil
+}
+
+// runOutput 统一构造执行类工具输出（含失败提示）。
+func runOutput(rr runResponse) map[string]any {
 	out := map[string]any{
 		"success": rr.Success,
 		"stdout":  rr.Stdout,
@@ -127,5 +205,42 @@ func (p *Plugin) runPython(_ *agent.ToolContext, _ context.Context, args map[str
 	if !rr.Success {
 		out["hint"] = "执行失败：先读 stderr 定位错误，修复后用 write_file/patch 改文件再重跑"
 	}
-	return out, nil
+	return out
+}
+
+// fetchURL 抓取网页正文（沙箱 /fetch，仅 http/https）。
+func (p *Plugin) fetchURL(_ *agent.ToolContext, _ context.Context, args map[string]any) (any, error) {
+	url := argStr(args, "url")
+	if url == "" {
+		for _, k := range []string{"link", "href", "address"} {
+			if v := argStr(args, k); v != "" {
+				url = v
+				break
+			}
+		}
+	}
+	if url == "" {
+		return nil, fmt.Errorf("url 不能为空")
+	}
+	var fr struct {
+		Success     bool   `json:"success"`
+		URL         string `json:"url"`
+		ContentType string `json:"content_type"`
+		Text        string `json:"text"`
+		Error       string `json:"error"`
+	}
+	if err := p.postSandbox("/fetch", map[string]any{
+		"url":     url,
+		"timeout": argInt(args, "timeout", 15),
+	}, &fr); err != nil {
+		return nil, err
+	}
+	if !fr.Success {
+		return nil, fmt.Errorf("%s", fr.Error)
+	}
+	return map[string]any{
+		"url":          fr.URL,
+		"content_type": fr.ContentType,
+		"text":         fr.Text,
+	}, nil
 }

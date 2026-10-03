@@ -79,6 +79,16 @@ export const TOOL_LABELS: Record<string, string> = {
   delete_skill: '删除技能',
   // subagents 插件
   delegate_task: '派发子任务',
+  subagents: '子代理并行',
+  // 文件与执行工具（files / code-exec 插件）
+  read_file: '读取文件',
+  write_file: '写入文件',
+  patch: '修改代码',
+  search_files: '搜索文件',
+  list_files: '列出文件',
+  run_python: '运行 Python',
+  run_shell: '运行命令',
+  fetch_url: '抓取网页',
 }
 
 export function toolLabel(name: string): string {

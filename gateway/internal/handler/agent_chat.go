@@ -1127,7 +1127,7 @@ func (r *agentChatRunner) executeTool(tc ai.ToolCall) string {
 
 	rec.Status = "done"
 	rec.ResultSummary = truncateAgentChat(content, agentChatSummaryLimit)
-	if tc.Name == "run_python" {
+	if tc.Name == "run_python" || tc.Name == "run_shell" {
 		// 完整结果（含沙箱 files.created/modified）限量透传，前端产物卡片用
 		rec.ResultFull = truncateAgentChat(content, agentChatResultFullLimit)
 	}

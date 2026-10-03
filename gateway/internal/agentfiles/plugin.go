@@ -8,6 +8,7 @@ import (
 	"os"
 	pathpkg "path"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/xiaotian-quant/gateway/internal/agent"
@@ -134,34 +135,56 @@ func (p *Plugin) UI() plugin.UIContribution {
 	}
 }
 
-// Register 注册 4 个文件工具（全部 ScopeAdmin，仅管理员角色可见可用）。
+// Register 注册 5 个文件工具（全部 ScopeAdmin，仅管理员角色可见可用）。
 func (p *Plugin) Register(reg *plugin.Registry, _ plugin.Deps) error {
 	strProp := func(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
+	intProp := func(desc string) map[string]any { return map[string]any{"type": "integer", "description": desc} }
 
 	reg.AddTool(agent.Tool{
-		Name:        "read_file",
-		Description: "读取沙箱内文件内容（路径相对于文件根目录，超过 200KB 截断）",
-		Scope:       agent.ScopeAdmin,
+		Name: "read_file",
+		Description: "读取沙箱内文件内容（路径相对于文件根目录）。大文件用 offset/limit 分段读：" +
+			"offset 为起始行号（1 起，负数从尾部数，如 -50 读最后 50 行），limit 为行数（默认 2000 行）；" +
+			"返回带行号，并附总行数与 next_offset 提示续读位置",
+		Scope: agent.ScopeAdmin,
 		Schema: map[string]any{
-			"type":       "object",
-			"properties": map[string]any{"path": strProp("文件路径（相对文件根目录）")},
-			"required":   []string{"path"},
+			"type": "object",
+			"properties": map[string]any{
+				"path":   strProp("文件路径（相对文件根目录）"),
+				"offset": intProp("起始行号（1 起；负数=从尾部数，默认 1）"),
+				"limit":  intProp("读取行数（默认 2000，单次最多 2000）"),
+			},
+			"required": []string{"path"},
 		},
 	}, p.readFile)
 
 	reg.AddTool(agent.Tool{
 		Name:        "write_file",
-		Description: "写入沙箱内文件（自动创建父目录；覆盖已有文件前自动备份，可用检查点回滚）",
+		Description: "写入沙箱内文件（自动创建父目录；覆盖已有文件前自动备份，可用检查点回滚）。mode=append 为追加模式",
 		Scope:       agent.ScopeAdmin,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path":    strProp("文件路径（相对文件根目录）"),
 				"content": strProp("要写入的完整内容"),
+				"mode":    strProp("overwrite（默认，覆盖整文件）或 append（追加到文件末尾，不自动加换行）"),
 			},
 			"required": []string{"path", "content"},
 		},
 	}, p.writeFile)
+
+	reg.AddTool(agent.Tool{
+		Name:        "list_files",
+		Description: "列出沙箱目录内容（对标 Kimi Code 的 Glob）：path 留空列根目录；recursive=true 递归子目录（最多 200 条）；返回相对路径、类型（file/dir）、大小，按修改时间倒序",
+		Scope:       agent.ScopeAdmin,
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path":      strProp("目录路径（相对文件根目录，留空=根目录）"),
+				"recursive": map[string]any{"type": "boolean", "description": "是否递归子目录（默认 false，最多 200 条）"},
+				"limit":     intProp("返回条数上限（默认 100，最多 200）"),
+			},
+		},
+	}, p.listFiles)
 
 	reg.AddTool(agent.Tool{
 		Name:        "patch",
@@ -214,6 +237,28 @@ func argPath(args map[string]any) string {
 	return ""
 }
 
+func argInt(args map[string]any, key string, def int) int {
+	switch v := args[key].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	}
+	return def
+}
+
+func argBool(args map[string]any, key string) bool {
+	switch v := args[key].(type) {
+	case bool:
+		return v
+	case string:
+		return v == "true" || v == "1"
+	}
+	return false
+}
+
+// readFile 支持行分页（对标 Kimi Code Read）：offset 1 起、负数从尾部数；
+// 返回带行号内容与 total_lines/next_offset，大文件可循环续读。
 func (p *Plugin) readFile(_ *agent.ToolContext, _ context.Context, args map[string]any) (any, error) {
 	abs, rel, err := p.resolve(argPath(args))
 	if err != nil {
@@ -235,16 +280,44 @@ func (p *Plugin) readFile(_ *agent.ToolContext, _ context.Context, args map[stri
 		data = data[:readFileMaxBytes]
 		truncated = true
 	}
-	content := string(data)
-	if truncated {
-		content += "\n…[内容超过 200KB，已截断]"
+	lines := strings.Split(string(data), "\n")
+	total := len(lines)
+	offset := argInt(args, "offset", 1)
+	if offset < 0 {
+		offset = total + offset + 1 // -N = 最后 N 行
 	}
-	return map[string]any{
-		"path":      rel,
-		"size":      info.Size(),
-		"truncated": truncated,
-		"content":   content,
-	}, nil
+	if offset < 1 {
+		offset = 1
+	}
+	limit := argInt(args, "limit", 2000)
+	if limit < 1 {
+		limit = 2000
+	}
+	if limit > 2000 {
+		limit = 2000
+	}
+	end := offset + limit - 1
+	if end > total {
+		end = total
+	}
+	var sb strings.Builder
+	for i := offset - 1; i < end; i++ {
+		fmt.Fprintf(&sb, "%6d\t%s\n", i+1, lines[i])
+	}
+	if truncated {
+		sb.WriteString("\n…[内容超过 200KB，已截断；分页基于截断后的内容]\n")
+	}
+	out := map[string]any{
+		"path":        rel,
+		"size":        info.Size(),
+		"total_lines": total,
+		"truncated":   truncated,
+		"content":     sb.String(),
+	}
+	if end < total {
+		out["next_offset"] = end + 1
+	}
+	return out, nil
 }
 
 func (p *Plugin) writeFile(tc *agent.ToolContext, _ context.Context, args map[string]any) (any, error) {
@@ -260,14 +333,100 @@ func (p *Plugin) writeFile(tc *agent.ToolContext, _ context.Context, args map[st
 	if err := os.MkdirAll(filepath.Dir(abs), 0755); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(abs, []byte(content), 0644); err != nil {
+	appendMode := strings.ToLower(strings.TrimSpace(argStr(args, "mode"))) == "append"
+	if appendMode {
+		f, err := os.OpenFile(abs, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := f.WriteString(content); err != nil {
+			f.Close()
+			return nil, err
+		}
+		if err := f.Close(); err != nil {
+			return nil, err
+		}
+	} else if err := os.WriteFile(abs, []byte(content), 0644); err != nil {
 		return nil, err
 	}
-	out := map[string]any{"path": rel, "size": len(content), "written": true}
+	out := map[string]any{"path": rel, "size": len(content), "written": true, "append": appendMode}
 	if cp != nil {
 		out["checkpoint_id"] = cp.ID
 	}
 	return out, nil
+}
+
+// listFiles 列目录（对标 Kimi Code Glob）：非递归或递归（上限 200 条），按修改时间倒序。
+func (p *Plugin) listFiles(_ *agent.ToolContext, _ context.Context, args map[string]any) (any, error) {
+	dirArg := strings.TrimSpace(argPath(args))
+	abs, rel, err := p.resolve(func() string {
+		if dirArg == "" {
+			return "."
+		}
+		return dirArg
+	}())
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Stat(abs)
+	if err != nil || !info.IsDir() {
+		return nil, fmt.Errorf("目录不存在: %s", rel)
+	}
+	recursive := argBool(args, "recursive")
+	limit := argInt(args, "limit", 100)
+	if limit < 1 {
+		limit = 100
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	type entry struct {
+		Path string `json:"path"`
+		Type string `json:"type"`
+		Size int64  `json:"size"`
+		Mtime int64 `json:"mtime"`
+	}
+	entries := []entry{}
+	walkErr := filepath.WalkDir(abs, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if d.Name() == checkpointsDir {
+				return filepath.SkipDir // 备份目录不参与检索
+			}
+			if path != abs {
+				if len(entries) < limit {
+					if rel, rerr := filepath.Rel(p.Root, path); rerr == nil {
+						entries = append(entries, entry{Path: filepath.ToSlash(rel) + "/", Type: "dir"})
+					}
+				}
+				if !recursive {
+					return filepath.SkipDir
+				}
+			}
+			return nil
+		}
+		if len(entries) >= limit {
+			return filepath.SkipAll
+		}
+		rel, rerr := filepath.Rel(p.Root, path)
+		if rerr != nil {
+			return nil
+		}
+		e := entry{Path: filepath.ToSlash(rel), Type: "file"}
+		if fi, ferr := d.Info(); ferr == nil {
+			e.Size = fi.Size()
+			e.Mtime = fi.ModTime().Unix()
+		}
+		entries = append(entries, e)
+		return nil
+	})
+	if walkErr != nil && walkErr != filepath.SkipAll {
+		return nil, walkErr
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Mtime > entries[j].Mtime })
+	return map[string]any{"count": len(entries), "entries": entries}, nil
 }
 
 func (p *Plugin) patch(tc *agent.ToolContext, _ context.Context, args map[string]any) (any, error) {
