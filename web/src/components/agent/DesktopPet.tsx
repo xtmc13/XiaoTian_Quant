@@ -19,6 +19,10 @@ import './pet/pets.css'
 
 /** 展开/收起动画时长（ms），与 clip-path 过渡配套 */
 const EXPAND_MS = 450
+
+// 触屏主导设备（平板/手机）：悬浮窗直渲染，不用 clip-path 动画包装
+const isCoarsePointer =
+  typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches === true
 const DRAG_THRESHOLD = 6
 
 // ── 桌宠：默认右下角；可自由拖动；点击开/关全屏助手；形象/尺寸可自定义 ──
@@ -211,30 +215,43 @@ function DesktopPetInner() {
         )}
       </div>
 
-      {/* 全屏助手层（圆形扩散动画，桌宠始终在其上方可点击收起） */}
-      {rendered && (
-        <div
-          aria-hidden={!expanded}
-          className="fixed inset-0 z-[80]"
-          style={{
-            clipPath: expanded
-              ? `circle(150% at ${origin.x}px ${origin.y}px)`
-              : `circle(0px at ${origin.x}px ${origin.y}px)`,
-            transition: `clip-path ${EXPAND_MS}ms cubic-bezier(0.22, 1, 0.36, 1)`,
-            pointerEvents: expanded ? 'auto' : 'none',
-          }}
-        >
-          <AgentChatPanel
-            variant="full"
-            open
-            onClose={() => setExpanded(false)}
-            onUnread={() => {
-              // 收起状态下完成的生成计未读（全屏展开时由界面本身呈现）
-              if (!expanded) setUnread((n) => Math.min(n + 1, 99))
+      {/* 全屏助手层：桌面用圆形扩散动画；触屏设备平铺直渲染——clip-path 动画包装
+          在部分安卓内核上会拦截嵌套触屏滚动，触屏上与 /agent 整页同一结构 */}
+      {rendered &&
+        (isCoarsePointer ? (
+          expanded && (
+            <div className="fixed inset-0 z-[80]">
+              <AgentChatPanel
+                variant="full"
+                open
+                onClose={() => setExpanded(false)}
+                onUnread={() => setUnread((n) => Math.min(n + 1, 99))}
+              />
+            </div>
+          )
+        ) : (
+          <div
+            aria-hidden={!expanded}
+            className="fixed inset-0 z-[80]"
+            style={{
+              clipPath: expanded
+                ? `circle(150% at ${origin.x}px ${origin.y}px)`
+                : `circle(0px at ${origin.x}px ${origin.y}px)`,
+              transition: `clip-path ${EXPAND_MS}ms cubic-bezier(0.22, 1, 0.36, 1)`,
+              pointerEvents: expanded ? 'auto' : 'none',
             }}
-          />
-        </div>
-      )}
+          >
+            <AgentChatPanel
+              variant="full"
+              open
+              onClose={() => setExpanded(false)}
+              onUnread={() => {
+                // 收起状态下完成的生成计未读（全屏展开时由界面本身呈现）
+                if (!expanded) setUnread((n) => Math.min(n + 1, 99))
+              }}
+            />
+          </div>
+        ))}
     </>
   )
 }
