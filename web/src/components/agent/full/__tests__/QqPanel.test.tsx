@@ -37,10 +37,13 @@ describe('QqPanel QQ 接入面板', () => {
     vi.clearAllMocks()
   })
 
-  it('未配置：提示环境变量，状态卡显示未配置/未绑定', async () => {
+  it('未配置：展示扫码登录区块（替代 env 提示），状态卡显示未配置/未绑定', async () => {
     statusMock.mockResolvedValue({ success: true, configured: false, linked: false, open_id: '' })
     renderPanel()
-    await waitFor(() => expect(screen.getByText(/QQ_APP_ID/)).toBeTruthy())
+    // 有 connectorQr 时未配置态展示扫码登录区块，不再提示手动配置环境变量
+    await waitFor(() => expect(screen.getByText(/还没配置 QQ 机器人/)).toBeTruthy())
+    expect(screen.getByRole('button', { name: /QQ 扫码登录/ })).toBeTruthy()
+    expect(screen.queryByText(/QQ_APP_ID/)).toBeNull()
     expect(screen.getByLabelText('QQ 配置状态').textContent).toBe('未配置')
     expect(screen.getByLabelText('QQ 绑定状态').textContent).toBe('未绑定')
     expect(screen.queryByRole('button', { name: /生成配对码/ })).toBeNull()
@@ -51,7 +54,7 @@ describe('QqPanel QQ 接入面板', () => {
     pairCodeMock.mockResolvedValue({ success: true, code: '888999', expires_in: 600 })
     renderPanel()
 
-    await waitFor(() => expect(screen.getByText(/在 QQ 私聊中把配对码发送给机器人/)).toBeTruthy())
+    await waitFor(() => expect(screen.getByText(/在 QQ 私聊中把配对码发送给/)).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: /生成配对码/ }))
 
     await waitFor(() => expect(screen.getByText('888999')).toBeTruthy())
