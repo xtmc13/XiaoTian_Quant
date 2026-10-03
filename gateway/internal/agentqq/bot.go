@@ -855,7 +855,7 @@ func (b *Bot) accessToken() (string, error) {
 	if appID == "" || appSecret == "" {
 		return "", fmt.Errorf("QQ 应用凭据未配置")
 	}
-	payload, _ := json.Marshal(map[string]string{"appID": appID, "clientSecret": appSecret})
+	payload, _ := json.Marshal(map[string]string{"appId": appID, "clientSecret": appSecret})
 	resp, err := b.client.Post(b.appTokenURL(), "application/json", strings.NewReader(string(payload)))
 	if err != nil {
 		return "", err
