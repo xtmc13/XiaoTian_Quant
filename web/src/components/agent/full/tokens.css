@@ -1,13 +1,12 @@
-/* ── 小天助手全屏模式（1:1 对齐 dsh-tauri 桌面端浅色主题） ──
-   基准值取自 deepseek-harness-desktop PREVIEW 截图实测：
-   侧栏 #f9fafb / 聊天面 #ffffff / 选中项 ≈black/5(#f2f2f2) / hairline 8% 黑
-   用户气泡 #eceef7 淡薰衣草（右对齐 18px 大圆角） / 发送键 #b3c8f5(渐变 #a5b4fc→#8b9cf9)
-   强调 #4d6bfe(仅 Tab/链接) / 扁平、hairline 分隔、壁纸模式转白色液态玻璃。 */
+/* ── 小天助手全屏模式（对标 Kimi 网页版：浅色极简 + 品牌蓝点缀） ──
+   聊天面纯白 / 侧栏浅灰 #f7f8fa / hairline 8% 黑
+   用户气泡浅灰 #f1f2f4（右对齐 18px 大圆角） / 发送键实心品牌蓝圆钮
+   强调 #2e5bff(Kimi 蓝，仅链接/选中/主按钮) / 扁平、hairline 分隔、壁纸模式转白色液态玻璃。 */
 
 .xt-hermes {
   --ag-fg: #1f232c;
   --ag-bg: #ffffff; /* 聊天面 */
-  --ag-sidebar: #f9fafb; /* 侧栏 / 状态条 */
+  --ag-sidebar: #f7f8fa; /* 侧栏 / 状态条 */
   --ag-card: #ffffff; /* 浮层 / composer 填充 */
   --ag-muted: #eceef0; /* muted 填充（选中态对标 #eceef0） */
   --ag-text1: rgba(31, 35, 44, 0.96); /* 94% */
@@ -18,12 +17,13 @@
   --ag-stroke2: rgba(31, 35, 44, 0.11); /* 默认 hairline */
   --ag-stroke3: rgba(31, 35, 44, 0.07);
   --ag-sidebar-edge: rgba(31, 35, 44, 0.08);
-  --ag-accent: #4d6bfe;
+  --ag-accent: #2e5bff; /* Kimi 品牌蓝 */
+  --ag-accent-strong: #1f49e0; /* 品牌蓝 hover/按下 */
   --ag-accent-fg: #ffffff; /* 主按钮前景 */
-  --ag-user-bubble: #eceef7; /* 淡薰衣草气泡（dsh 实测） */
-  --ag-user-bubble-hover: #e2e6f5;
-  --ag-send-bg: #b3c8f5; /* 发送键（dsh 实测，组件内用渐变） */
-  --ag-send-bg-hover: #a5b4fc;
+  --ag-user-bubble: #f1f2f4; /* Kimi 浅灰气泡 */
+  --ag-user-bubble-hover: #e7e8eb;
+  --ag-send-bg: #2e5bff; /* 发送键（实心品牌蓝圆钮） */
+  --ag-send-bg-hover: #1f49e0;
   --ag-send-fg: #ffffff;
   --ag-red: #e5484d;
   --ag-green: #2f9e6e;
@@ -52,6 +52,7 @@
   inset: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   background: var(--ag-bg);
   color: var(--ag-text1);
   color-scheme: light;
@@ -151,8 +152,9 @@
 .xt-hermes .xt-thread-scroll {
   scroll-padding-top: 0.5rem;
 }
-/* 滚动样式与交易系统页面完全一致（裸 overflow-y-auto，不加 touch-action /
-   overscroll-behavior 等额外属性——部分安卓内核上这些属性反而会拦截触屏滚动） */
+/* 注意：勿在此加 touch-action / overscroll-behavior / -webkit-overflow-scrolling
+   等滚动相关属性——实测部分安卓内核（荣耀平板浏览器）上它们会导致滚动区
+   内容画出裁剪边界（文字压到浮层下面）并拦截触屏滚动。保持裸 overflow-y-auto。 */
 
 /* 打字活动点（尾条助手消息无内容时） */
 @keyframes xt-pulse-dot {

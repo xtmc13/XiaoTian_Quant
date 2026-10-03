@@ -479,8 +479,8 @@ export function AgentComposer({
         </>
       )}
 
-      {/* Composer 本体：大卡片，占位符置顶，控制行沉底（对标桌面版） */}
-      <div className="xt-composer-card rounded-2xl border border-[var(--ag-stroke2)] bg-[var(--ag-card)]/90 shadow-[var(--ag-shadow-panel)] backdrop-blur-xl transition-colors focus-within:border-[var(--ag-accent)]">
+      {/* Composer 本体：大卡片，占位符置顶，控制行沉底（对标 Kimi 网页版输入卡片） */}
+      <div className="xt-composer-card rounded-[22px] border border-[var(--ag-stroke2)] bg-[var(--ag-card)]/90 shadow-[var(--ag-shadow-panel)] backdrop-blur-xl transition-colors focus-within:border-[var(--ag-accent)]/60">
         <textarea
           ref={textareaRef}
           value={input}
@@ -562,16 +562,16 @@ export function AgentComposer({
             <ChevronDown size={11} className="shrink-0" />
           </button>
 
-          {/* 发送键状态机：忙+空 → Stop；忙+有输入点击 → 打断重定向；Enter（onSubmit）忙时由面板排队；浅蓝圆形（对标 dsh） */}
+          {/* 发送键状态机：忙+空 → Stop；忙+有输入点击 → 打断重定向；实心品牌蓝圆钮（对标 Kimi） */}
           {isStreaming && !input.trim() ? (
             <button
               type="button"
               onClick={onStop}
               title="停止生成（Esc）"
               aria-label="停止生成"
-               className="flex size-[32px] items-center justify-center rounded-full bg-[linear-gradient(135deg,#a5b4fc,#8b9cf9)] text-white transition-opacity hover:opacity-85"
-             >
-               <SquareTerminal size={13} />
+              className="flex size-[32px] items-center justify-center rounded-full bg-[var(--ag-send-bg)] text-white transition-colors hover:bg-[var(--ag-send-bg-hover)]"
+            >
+              <SquareTerminal size={13} />
             </button>
           ) : (
             <button
@@ -587,7 +587,7 @@ export function AgentComposer({
               disabled={!canSubmit}
               title={isStreaming ? '发送并打断当前回复' : '发送'}
               aria-label="发送消息"
-               className="flex size-[32px] items-center justify-center rounded-full bg-[linear-gradient(135deg,#a5b4fc,#8b9cf9)] text-white transition-opacity hover:opacity-85 disabled:opacity-30"
+              className="flex size-[32px] items-center justify-center rounded-full bg-[var(--ag-send-bg)] text-white transition-colors hover:bg-[var(--ag-send-bg-hover)] disabled:opacity-30"
             >
               {isStreaming ? <Layers3 size={13} /> : <ArrowUp size={14} />}
             </button>

@@ -452,12 +452,13 @@ export function AgentSidebar({
 
       {/* 导航 */}
       <nav className="flex flex-col gap-0.5 px-2.5 pb-1 pt-1">
+        {/* 新会话主按钮（对标 Kimi 侧栏：白底描边、品牌蓝 hover） */}
         <button
           type="button"
           onClick={onNew}
           title="新会话"
           className={cn(
-            'flex h-9 items-center gap-1.5 rounded-lg border border-[var(--ag-stroke2)] bg-[var(--ag-card)] px-2 text-[13px] font-medium text-[var(--ag-text1)] transition-colors hover:border-[var(--ag-accent)]/50',
+            'flex h-9 items-center gap-1.5 rounded-xl border border-[var(--ag-stroke2)] bg-[var(--ag-card)] px-2.5 text-[13px] font-medium text-[var(--ag-text1)] shadow-sm transition-colors hover:border-[var(--ag-accent)]/60 hover:text-[var(--ag-accent)]',
             sidebarCollapsed && 'justify-center'
           )}
         >
