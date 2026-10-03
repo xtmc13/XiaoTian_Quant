@@ -92,6 +92,48 @@ if _HAS_FASTAPI:
     class AnalyzeRequest(BaseModel):
         code: str
 
+    class RunRequest(BaseModel):
+        code: str
+        timeout: int = 30
+
+    @app.post("/run")
+    def run(req: RunRequest):
+        """通用代码执行（agent run_python 工具）：工作目录为共享文件沙箱
+        /data/agent_files（与网关文件工具同一目录），可 import pandas/numpy/ccxt
+        等沙箱预装库。不做 AST 限制——容器即边界。输出截断防撑爆响应。"""
+        import os
+        import subprocess
+        import tempfile
+
+        ws = "/data/agent_files"
+        os.makedirs(ws, exist_ok=True)
+        timeout = max(1, min(req.timeout or 30, 120))
+        fd, path = tempfile.mkstemp(suffix=".py", dir=ws)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(req.code)
+            try:
+                proc = subprocess.run(
+                    [sys.executable, path],
+                    cwd=ws,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                )
+                return {
+                    "success": proc.returncode == 0,
+                    "exit_code": proc.returncode,
+                    "stdout": proc.stdout[-8000:],
+                    "stderr": proc.stderr[-4000:],
+                }
+            except subprocess.TimeoutExpired:
+                return {"success": False, "exit_code": None, "stdout": "", "stderr": f"执行超时（>{timeout}s）"}
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
     @app.get("/health")
     def health():
         return {"status": "ok"}

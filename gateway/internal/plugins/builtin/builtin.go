@@ -8,6 +8,7 @@ import (
 
 	"github.com/xiaotian-quant/gateway/internal/agentcron"
 	"github.com/xiaotian-quant/gateway/internal/agentdingtalk"
+	"github.com/xiaotian-quant/gateway/internal/agentexec"
 	"github.com/xiaotian-quant/gateway/internal/agentfeishu"
 	"github.com/xiaotian-quant/gateway/internal/agentfiles"
 	"github.com/xiaotian-quant/gateway/internal/agentkanban"
@@ -132,6 +133,8 @@ func build() {
 		&agentskills.SkillsPlugin{Repo: agentskills.NewRepo()},
 		&agentkanban.KanbanPlugin{Repo: agentkanban.NewRepo()},
 		filesPlugin,
+		// 代码执行：写码（文件工具）→跑码（沙箱 /run）闭环，管理员专属
+		&agentexec.Plugin{},
 		&agenttelegram.TelegramPlugin{Repo: agenttelegram.NewRepo(), Bot: tgBot},
 		&agentfeishu.FeishuPlugin{Repo: agentfeishu.NewRepo(), Bot: feishuBot},
 		&agentdingtalk.DingtalkPlugin{Repo: agentdingtalk.NewRepo(), Bot: dingtalkBot},

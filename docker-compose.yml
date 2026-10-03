@@ -89,6 +89,9 @@ services:
       - SANDBOX_PORT=9000
       - PYTHONDONTWRITEBYTECODE=1
       - PYTHONUNBUFFERED=1
+    volumes:
+      # 与网关共享文件沙箱：agent 文件工具写入的代码可在沙箱容器内直接执行
+      - gateway_data:/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:9000/health"]
