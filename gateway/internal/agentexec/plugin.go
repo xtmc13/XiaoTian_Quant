@@ -19,6 +19,7 @@ import (
 // Plugin 代码执行工具插件。
 type Plugin struct {
 	SandboxURL string // 沙箱服务地址，默认 http://sandbox:9000
+	AdminRoot  string // 管理员开放根（沙箱内路径，如 /workspace）；管理员请求的 cwd 落到此目录
 }
 
 func (p *Plugin) url() string {
@@ -151,22 +152,35 @@ func (p *Plugin) postSandbox(endpoint string, payload map[string]any, out any) e
 	return nil
 }
 
-func (p *Plugin) runPython(_ *agent.ToolContext, _ context.Context, args map[string]any) (any, error) {
+// cwdFor 按请求角色定沙箱工作目录：管理员→开放根，其余→空串（沙箱默认 /data/agent_files）。
+// 返回沙箱容器内路径（B 方案：/workspace 由 compose 同时挂进网关与沙箱）。
+func (p *Plugin) cwdFor(tc *agent.ToolContext) string {
+	if tc != nil && tc.Role == "admin" && p.AdminRoot != "" {
+		return p.AdminRoot
+	}
+	return ""
+}
+
+func (p *Plugin) runPython(tc *agent.ToolContext, _ context.Context, args map[string]any) (any, error) {
 	code := argStr(args, "code")
 	if code == "" {
 		return nil, fmt.Errorf("code 不能为空")
 	}
-	var rr runResponse
-	if err := p.postSandbox("/run", map[string]any{
+	payload := map[string]any{
 		"code":    code,
 		"timeout": argInt(args, "timeout", 30),
-	}, &rr); err != nil {
+	}
+	if cwd := p.cwdFor(tc); cwd != "" {
+		payload["cwd"] = cwd
+	}
+	var rr runResponse
+	if err := p.postSandbox("/run", payload, &rr); err != nil {
 		return nil, err
 	}
 	return runOutput(rr), nil
 }
 
-func (p *Plugin) runShell(_ *agent.ToolContext, _ context.Context, args map[string]any) (any, error) {
+func (p *Plugin) runShell(tc *agent.ToolContext, _ context.Context, args map[string]any) (any, error) {
 	command := argStr(args, "command")
 	// 容错：模型常用 cmd/shell/script 等别名
 	if command == "" {
@@ -180,11 +194,15 @@ func (p *Plugin) runShell(_ *agent.ToolContext, _ context.Context, args map[stri
 	if command == "" {
 		return nil, fmt.Errorf("command 不能为空")
 	}
-	var rr runResponse
-	if err := p.postSandbox("/run-shell", map[string]any{
+	payload := map[string]any{
 		"command": command,
 		"timeout": argInt(args, "timeout", 30),
-	}, &rr); err != nil {
+	}
+	if cwd := p.cwdFor(tc); cwd != "" {
+		payload["cwd"] = cwd
+	}
+	var rr runResponse
+	if err := p.postSandbox("/run-shell", payload, &rr); err != nil {
 		return nil, err
 	}
 	return runOutput(rr), nil

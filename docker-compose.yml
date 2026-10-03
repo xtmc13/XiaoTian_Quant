@@ -63,6 +63,9 @@ services:
       - DISCORD_PUBLIC_KEY=${DISCORD_PUBLIC_KEY:-}
     volumes:
       - gateway_data:/app/data
+      # B 方案管理员开放工作区：agent.ai.file_root_admin（默认 /workspace）指向这里，
+      # 仅角色=admin 的 agent 请求可读写；普通用户始终隔离在沙箱根
+      - /home/ubuntu/XiaoTian_Quant:/workspace
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8080/api/health"]
@@ -92,6 +95,9 @@ services:
     volumes:
       # 与网关共享文件沙箱：agent 文件工具写入的代码可在沙箱容器内直接执行
       - gateway_data:/data
+      # B 方案管理员开放工作区：与网关挂同一宿主目录，run_shell/run_python 的
+      # cwd 白名单（/workspace）指向这里；普通用户请求不带 cwd，仍在沙箱根
+      - /home/ubuntu/XiaoTian_Quant:/workspace
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:9000/health"]

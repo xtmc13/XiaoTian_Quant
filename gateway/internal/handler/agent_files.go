@@ -10,7 +10,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/agentfiles"
 	"github.com/xiaotian-quant/gateway/internal/plugins/builtin"
-	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
 // ── 文件检查点 REST（文件回滚面板）：管理员专属（普通用户 403）──
@@ -82,11 +81,12 @@ const agentFileContentMaxBytes = 8 << 20
 
 // AgentFileContent GET /api/agent/files/content?path=...&download=1
 // 契约：200 直接回文件流（inline 预览或 attachment 下载）；404/400/403 回 JSON 错误。
+// 根目录按请求角色选：管理员→开放根（真实项目工作区），普通用户→沙箱根（B 方案隔离）。
 func AgentFileContent(c *gin.Context) {
-	root, err := agentfiles.DefaultRoot(store.GetConfig())
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "detail": err.Error()})
-		return
+	fp := builtin.FilesPlugin()
+	root := fp.Root
+	if c.GetString("role") == "admin" && fp.AdminRoot != "" {
+		root = fp.AdminRoot
 	}
 	abs, _, err := agentfiles.Resolve(root, c.Query("path"))
 	if err != nil {

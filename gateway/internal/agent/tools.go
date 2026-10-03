@@ -70,6 +70,7 @@ type StrategyRuntime interface {
 // ToolContext 工具依赖容器，main.go 启动时注入一次。
 type ToolContext struct {
 	UserID    uint64           // 当前请求用户（Web JWT 或 agent token 解析出）
+	Role      string           // 当前请求用户角色（admin/空）；文件与执行工具据此切换沙箱/开放根目录
 	Market    MarketDataSource // 行情
 	Matcher   OrderMatcher     // paper 撮合下单/撤单
 	Portfolio PortfolioReader  // 余额/持仓/权益

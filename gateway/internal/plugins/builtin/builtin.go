@@ -71,12 +71,14 @@ func build() {
 	cronSched.SetWecomSender(wecomBot.SendToUser)
 	subPlugin = &agentsub.SubagentsPlugin{}
 	// 本地文件工具（管理员专属）：沙箱根 agent.ai.file_root，默认 <cwd>/runtime/agent_files。
+	// B 方案用户隔离：管理员另有开放根 agent.ai.file_root_admin（默认 /workspace，
+	// 与 compose 挂进网关/沙箱两容器的工作区卷对应），普通用户始终隔离在沙箱根。
 	filesRoot, err := agentfiles.DefaultRoot(store.GetConfig())
 	if err != nil {
 		buildErr = err
 		return
 	}
-	filesPlugin = &agentfiles.Plugin{Root: filesRoot, Repo: agentfiles.NewRepo()}
+	filesPlugin = &agentfiles.Plugin{Root: filesRoot, AdminRoot: agentfiles.AdminRootFromConfig(store.GetConfig()), Repo: agentfiles.NewRepo()}
 	mgr, buildErr = plugin.NewManager(plugin.Deps{},
 		descriptor{
 			info: plugin.Info{
@@ -133,8 +135,9 @@ func build() {
 		&agentskills.SkillsPlugin{Repo: agentskills.NewRepo()},
 		&agentkanban.KanbanPlugin{Repo: agentkanban.NewRepo()},
 		filesPlugin,
-		// 代码执行：写码（文件工具）→跑码（沙箱 /run）闭环，管理员专属
-		&agentexec.Plugin{},
+		// 代码执行：写码（文件工具）→跑码（沙箱 /run 等）闭环，管理员专属。
+		// 沙箱 cwd 按请求角色切换：管理员→开放工作区，普通用户→沙箱根（B 方案隔离）。
+		&agentexec.Plugin{AdminRoot: agentfiles.AdminRootFromConfig(store.GetConfig())},
 		&agenttelegram.TelegramPlugin{Repo: agenttelegram.NewRepo(), Bot: tgBot},
 		&agentfeishu.FeishuPlugin{Repo: agentfeishu.NewRepo(), Bot: feishuBot},
 		&agentdingtalk.DingtalkPlugin{Repo: agentdingtalk.NewRepo(), Bot: dingtalkBot},

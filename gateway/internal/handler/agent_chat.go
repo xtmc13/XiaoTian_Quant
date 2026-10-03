@@ -232,7 +232,8 @@ func AgentChatStream(c *gin.Context) {
 	if usedToken {
 		tools = agent.GetTokenManager().FilterTools(tools, scopes)
 	}
-	tools = agent.FilterToolsByRole(tools, agentRequestRole(c, userID, usedToken))
+	requestRole := agentRequestRole(c, userID, usedToken)
+	tools = agent.FilterToolsByRole(tools, requestRole)
 
 	if reqBody.Stream {
 		c.Header("Content-Type", "text/event-stream")
@@ -241,9 +242,11 @@ func AgentChatStream(c *gin.Context) {
 		c.Header("X-Accel-Buffering", "no")
 	}
 
-	// 浅拷贝全局 ToolContext：UserID 按请求覆盖，底层依赖仍共享生产单例。
+	// 浅拷贝全局 ToolContext：UserID/Role 按请求覆盖，底层依赖仍共享生产单例。
+	// Role 供文件与执行工具切换沙箱/开放根目录（B 方案：管理员完全开放、普通用户沙箱隔离）。
 	tc := *agent.GetToolContext()
 	tc.UserID = userID
+	tc.Role = requestRole
 	tc.ConversationID = plan.convID // 文件工具检查点记录会话来源（自动建会话首轮为空）
 
 	r := &agentChatRunner{

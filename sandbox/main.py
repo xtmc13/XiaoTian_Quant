@@ -95,10 +95,24 @@ if _HAS_FASTAPI:
     class RunRequest(BaseModel):
         code: str
         timeout: int = 30
+        cwd: str = ""  # 允许列表内的工作目录（B 方案：管理员 /workspace，缺省沙箱根）
 
     class RunShellRequest(BaseModel):
         command: str
         timeout: int = 30
+        cwd: str = ""
+
+    ALLOWED_CWDS = ("/data/agent_files", "/workspace")
+
+    def _effective_ws(cwd: str) -> str:
+        """校验并返回有效工作目录：仅允许白名单内的绝对路径（沙箱根/开放工作区）。"""
+        cwd = (cwd or "").strip()
+        if not cwd:
+            return "/data/agent_files"
+        for base in ALLOWED_CWDS:
+            if cwd == base or cwd.startswith(base + "/"):
+                return cwd
+        raise ValueError(f"cwd 不在允许列表内: {cwd}")
 
     class FetchRequest(BaseModel):
         url: str
@@ -130,7 +144,10 @@ if _HAS_FASTAPI:
         import subprocess
         import tempfile
 
-        ws = "/data/agent_files"
+        try:
+            ws = _effective_ws(getattr(req, "cwd", ""))
+        except ValueError as e:
+            return {"success": False, "exit_code": None, "stdout": "", "stderr": str(e)}
         os.makedirs(ws, exist_ok=True)
         before = _ws_snapshot(ws)
         timeout = max(1, min(req.timeout or 30, 120))
@@ -174,7 +191,10 @@ if _HAS_FASTAPI:
         import os
         import subprocess
 
-        ws = "/data/agent_files"
+        try:
+            ws = _effective_ws(getattr(req, "cwd", ""))
+        except ValueError as e:
+            return {"success": False, "exit_code": None, "stdout": "", "stderr": str(e)}
         os.makedirs(ws, exist_ok=True)
         before = _ws_snapshot(ws)
         timeout = max(1, min(req.timeout or 30, 300))

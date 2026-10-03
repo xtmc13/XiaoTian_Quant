@@ -26,8 +26,51 @@ const searchMaxResults = 50
 
 // Plugin 本地文件工具插件。
 type Plugin struct {
-	Root string // 沙箱根（已 Abs+EvalSymlinks 规范化，构造时 MkdirAll）
-	Repo *Repo
+	Root      string // 沙箱根（已 Abs+EvalSymlinks 规范化，构造时 MkdirAll）——普通用户/默认根
+	AdminRoot string // 管理员开放根（B 方案：file_root_admin，默认 /workspace；仅角色=admin 的请求使用）
+	Repo      *Repo
+}
+
+// DefaultAdminRootFallback 未配置 file_root_admin 时的默认开放根：
+// 与 docker-compose 里挂进网关/沙箱两容器的工作区挂载点保持一致。
+const DefaultAdminRootFallback = "/workspace"
+
+// AdminRootFromConfig 解析管理员开放根：config agent.ai.file_root_admin，缺省 /workspace。
+// 与 DefaultRoot 不同：目录不存在时不强行创建（工作区卷由 compose 负责挂载），
+// 但存在时仍做 Abs+EvalSymlinks 规范化供前缀校验。
+func AdminRootFromConfig(cfg map[string]any) string {
+	root := ""
+	if agentCfg, ok := cfg["agent"].(map[string]any); ok {
+		if aai, ok := agentCfg["ai"].(map[string]any); ok {
+			root, _ = aai["file_root_admin"].(string)
+		}
+	}
+	if root == "" {
+		root = DefaultAdminRootFallback
+	}
+	if abs, err := filepath.Abs(root); err == nil {
+		root = abs
+	}
+	if real, err := filepath.EvalSymlinks(root); err == nil {
+		root = real
+	}
+	return root
+}
+
+// rootFor 按请求角色选根：管理员→开放根，其余→沙箱根（用户隔离的 B 方案核心）。
+func (p *Plugin) rootFor(tc *agent.ToolContext) string {
+	if tc != nil && tc.Role == "admin" && p.AdminRoot != "" {
+		return p.AdminRoot
+	}
+	return p.Root
+}
+
+// rootForRole AgentFileContent（HTTP 直读，只有 gin role 字符串）同款选根。
+func (p *Plugin) rootForRole(role string) string {
+	if role == "admin" && p.AdminRoot != "" {
+		return p.AdminRoot
+	}
+	return p.Root
 }
 
 // DefaultRoot 解析沙箱根：config agent.ai.file_root 优先，默认 <cwd>/runtime/agent_files；
@@ -75,14 +118,20 @@ func CanonicalRoot(root string) (string, error) {
 	return abs, nil
 }
 
-// resolve 把用户给的相对路径解析为沙箱内绝对路径：
-// 拒绝 .. 逃逸（不是钳制），已存在路径解引用符号链接后同样不得越界。
-// 返回 (绝对路径, 根内相对路径, error)。
+// resolve 把用户给的相对路径解析为沙箱内绝对路径（默认根；测试兼容入口）。
 func (p *Plugin) resolve(path string) (string, string, error) {
 	return Resolve(p.Root, path)
 }
 
-// Resolve 包级路径解析（HTTP 文件读取端点与插件工具共用同一套安全校验）。
+// resolveRoot 按指定根解析相对路径（生产工具按请求角色选根后走这里）。
+func (p *Plugin) resolveRoot(root, path string) (string, string, error) {
+	return Resolve(root, path)
+}
+
+// Resolve 包级路径解析（HTTP 文件读取端点与插件工具共用同一套安全校验）：
+// 拒绝 .. 逃逸（不是钳制），已存在路径解引用符号链接后同样不得越界；
+// 符号链接防逃逸覆盖"目标不存在时校验最近存在的祖先目录"的情形。
+// 返回 (绝对路径, 根内相对路径, error)。
 func Resolve(root, path string) (string, string, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -259,8 +308,8 @@ func argBool(args map[string]any, key string) bool {
 
 // readFile 支持行分页（对标 Kimi Code Read）：offset 1 起、负数从尾部数；
 // 返回带行号内容与 total_lines/next_offset，大文件可循环续读。
-func (p *Plugin) readFile(_ *agent.ToolContext, _ context.Context, args map[string]any) (any, error) {
-	abs, rel, err := p.resolve(argPath(args))
+func (p *Plugin) readFile(tc *agent.ToolContext, _ context.Context, args map[string]any) (any, error) {
+	abs, rel, err := p.resolveRoot(p.rootFor(tc), argPath(args))
 	if err != nil {
 		return nil, err
 	}
@@ -321,7 +370,7 @@ func (p *Plugin) readFile(_ *agent.ToolContext, _ context.Context, args map[stri
 }
 
 func (p *Plugin) writeFile(tc *agent.ToolContext, _ context.Context, args map[string]any) (any, error) {
-	abs, rel, err := p.resolve(argPath(args))
+	abs, rel, err := p.resolveRoot(p.rootFor(tc), argPath(args))
 	if err != nil {
 		return nil, err
 	}
@@ -357,9 +406,10 @@ func (p *Plugin) writeFile(tc *agent.ToolContext, _ context.Context, args map[st
 }
 
 // listFiles 列目录（对标 Kimi Code Glob）：非递归或递归（上限 200 条），按修改时间倒序。
-func (p *Plugin) listFiles(_ *agent.ToolContext, _ context.Context, args map[string]any) (any, error) {
+func (p *Plugin) listFiles(tc *agent.ToolContext, _ context.Context, args map[string]any) (any, error) {
 	dirArg := strings.TrimSpace(argPath(args))
-	abs, rel, err := p.resolve(func() string {
+	root := p.rootFor(tc)
+	abs, rel, err := p.resolveRoot(root, func() string {
 		if dirArg == "" {
 			return "."
 		}
@@ -397,7 +447,7 @@ func (p *Plugin) listFiles(_ *agent.ToolContext, _ context.Context, args map[str
 			}
 			if path != abs {
 				if len(entries) < limit {
-					if rel, rerr := filepath.Rel(p.Root, path); rerr == nil {
+					if rel, rerr := filepath.Rel(root, path); rerr == nil {
 						entries = append(entries, entry{Path: filepath.ToSlash(rel) + "/", Type: "dir"})
 					}
 				}
@@ -410,7 +460,7 @@ func (p *Plugin) listFiles(_ *agent.ToolContext, _ context.Context, args map[str
 		if len(entries) >= limit {
 			return filepath.SkipAll
 		}
-		rel, rerr := filepath.Rel(p.Root, path)
+		rel, rerr := filepath.Rel(root, path)
 		if rerr != nil {
 			return nil
 		}
@@ -430,7 +480,7 @@ func (p *Plugin) listFiles(_ *agent.ToolContext, _ context.Context, args map[str
 }
 
 func (p *Plugin) patch(tc *agent.ToolContext, _ context.Context, args map[string]any) (any, error) {
-	abs, rel, err := p.resolve(argPath(args))
+	abs, rel, err := p.resolveRoot(p.rootFor(tc), argPath(args))
 	if err != nil {
 		return nil, err
 	}
@@ -474,7 +524,7 @@ type searchHit struct {
 	Size int64  `json:"size"`
 }
 
-func (p *Plugin) searchFiles(_ *agent.ToolContext, _ context.Context, args map[string]any) (any, error) {
+func (p *Plugin) searchFiles(tc *agent.ToolContext, _ context.Context, args map[string]any) (any, error) {
 	pattern := strings.ToLower(strings.TrimSpace(argStr(args, "pattern")))
 	needle := strings.TrimSpace(argStr(args, "content"))
 	// 容错：模型常把搜索词写进 query/text/q/search 等别名参数，或只填其一
@@ -497,8 +547,9 @@ func (p *Plugin) searchFiles(_ *agent.ToolContext, _ context.Context, args map[s
 	if pattern == "" && needle == "" {
 		return nil, fmt.Errorf("pattern 与 content 至少填一个：按文件名找填 {\"pattern\":\"config\"}；在代码里找内容填 {\"content\":\"模拟账户\"}")
 	}
+	root := p.rootFor(tc)
 	hits := []searchHit{}
-	err := filepath.WalkDir(p.Root, func(path string, d os.DirEntry, err error) error {
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil // 跳过不可读条目
 		}
@@ -515,7 +566,7 @@ func (p *Plugin) searchFiles(_ *agent.ToolContext, _ context.Context, args map[s
 		if pattern != "" && !strings.Contains(strings.ToLower(d.Name()), pattern) {
 			return nil
 		}
-		rel, rerr := filepath.Rel(p.Root, path)
+		rel, rerr := filepath.Rel(root, path)
 		if rerr != nil {
 			return nil
 		}
