@@ -31,6 +31,7 @@ import {
   SquareTerminal,
   SquarePen,
   RotateCcw,
+  Trash2,
   Undo2,
   X,
   Zap,
@@ -38,15 +39,9 @@ import {
 import type { AgentSettings } from '../types'
 import { QUICK_COMMANDS } from '../types'
 import { completePalette, exactMatch, type PaletteItem, type SkillItem, type SlashCommand } from './slash'
+import { loadPromptLib, savePromptLib, type PromptItem } from './promptlib'
 import { toast } from '@/lib/useToast'
 import { cn } from '@/lib/utils'
-
-// ── 提示词片段（+ 菜单 → Prompt snippets） ──
-const PROMPT_SNIPPETS = [
-  { label: '复盘今日交易', text: '帮我复盘今天的交易情况，找出问题和改进点。' },
-  { label: '分析行情走势', text: '分析一下当前大盘走势，给出关键位和操作建议。' },
-  { label: '检查机器人状态', text: '检查一下我所有运行中机器人的状态和盈亏。' },
-]
 
 const SLASH_ICONS: Record<SlashCommand['icon'], React.ReactNode> = {
   new: <SquarePen size={13} />,
@@ -144,6 +139,11 @@ export function AgentComposer({
   const [slashIndex, setSlashIndex] = useState(0)
   const [plusOpen, setPlusOpen] = useState(false)
   const [modelOpen, setModelOpen] = useState(false)
+  // 提示词指令库（localStorage 持久化，+ 菜单里增删/一键发送）
+  const [promptLib, setPromptLib] = useState<PromptItem[]>(loadPromptLib)
+  const [promptAdding, setPromptAdding] = useState(false)
+  const [promptLabel, setPromptLabel] = useState('')
+  const [promptText, setPromptText] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
 
@@ -252,6 +252,39 @@ export function AgentComposer({
       onUseSkill(item.skill)
     }
     onInputChange('')
+  }
+
+  // ── 提示词指令库：插入 / 一键发送 / 增删（localStorage 持久化） ──
+  const insertPrompt = (text: string) => {
+    setPlusOpen(false)
+    onInputChange(input ? `${input}\n${text}` : text)
+    textareaRef.current?.focus()
+  }
+  const sendPrompt = (text: string) => {
+    setPlusOpen(false)
+    const body = text.trim()
+    if (!body) return
+    onInputChange('')
+    onSubmit(body)
+  }
+  const removePrompt = (id: string) => {
+    const next = promptLib.filter((p) => p.id !== id)
+    setPromptLib(next)
+    savePromptLib(next)
+  }
+  const addPrompt = () => {
+    const label = promptLabel.trim()
+    const text = promptText.trim()
+    if (!label || !text) {
+      toast('warning', '名称和内容都不能为空')
+      return
+    }
+    const next = [...promptLib, { id: `${Date.now()}`, label, text }]
+    setPromptLib(next)
+    savePromptLib(next)
+    setPromptLabel('')
+    setPromptText('')
+    setPromptAdding(false)
   }
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -402,24 +435,90 @@ export function AgentComposer({
               <Paperclip size={13} />
               添加文件（.txt/.md/.csv/.json ≤100KB）
             </button>
-            <div className="mt-1 px-2.5 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--ag-text4)]">
-              提示词片段
-            </div>
-            {PROMPT_SNIPPETS.map((s) => (
+            <div className="mt-1 flex items-center px-2.5 pb-0.5 pt-1">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--ag-text4)]">
+                指令库
+              </span>
+              <span className="min-w-0 flex-1" />
               <button
-                key={s.label}
                 type="button"
-                role="menuitem"
-                onClick={() => {
-                  setPlusOpen(false)
-                  onInputChange(input ? `${input}\n${s.text}` : s.text)
-                  textareaRef.current?.focus()
-                }}
-                className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-[var(--ag-text2)] hover:bg-black/5"
+                title={promptAdding ? '收起新增表单' : '新增指令'}
+                aria-label={promptAdding ? '收起新增表单' : '新增指令'}
+                onClick={() => setPromptAdding((v) => !v)}
+                className="rounded p-0.5 text-[var(--ag-text4)] transition-colors hover:bg-black/5 hover:text-[var(--ag-accent)]"
               >
-                <Sparkles size={13} />
-                {s.label}
+                <Plus size={12} />
               </button>
+            </div>
+            {promptAdding && (
+              <div className="mx-2 mb-1 space-y-1 rounded-lg border border-[var(--ag-stroke3)] bg-[var(--ag-card)]/60 p-1.5">
+                <input
+                  value={promptLabel}
+                  onChange={(e) => setPromptLabel(e.target.value)}
+                  placeholder="指令名称（如：每日复盘）"
+                  aria-label="指令名称"
+                  className="w-full rounded border border-[var(--ag-stroke3)] bg-transparent px-1.5 py-0.5 text-[11px] text-[var(--ag-text1)] placeholder:text-[var(--ag-text4)] focus:border-[var(--ag-accent)]/50 focus:outline-none"
+                />
+                <textarea
+                  value={promptText}
+                  onChange={(e) => setPromptText(e.target.value)}
+                  placeholder="指令内容…"
+                  aria-label="指令内容"
+                  rows={2}
+                  className="w-full resize-none rounded border border-[var(--ag-stroke3)] bg-transparent px-1.5 py-0.5 text-[11px] text-[var(--ag-text1)] placeholder:text-[var(--ag-text4)] focus:border-[var(--ag-accent)]/50 focus:outline-none"
+                />
+                <div className="flex justify-end gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setPromptAdding(false)}
+                    className="rounded px-1.5 py-0.5 text-[10px] text-[var(--ag-text3)] hover:bg-black/5"
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    onClick={addPrompt}
+                    className="rounded bg-[var(--ag-accent)] px-1.5 py-0.5 text-[10px] font-medium text-white hover:opacity-85"
+                  >
+                    保存
+                  </button>
+                </div>
+              </div>
+            )}
+            {promptLib.length === 0 && !promptAdding && (
+              <p className="px-2.5 py-1 text-[11px] text-[var(--ag-text4)]">还没有指令，点右上角 + 新增</p>
+            )}
+            {promptLib.map((s) => (
+              <div key={s.id} className="group/item flex w-full items-center gap-1 px-1.5 py-0.5 hover:bg-black/5">
+                <button
+                  type="button"
+                  role="menuitem"
+                  title={`插入：${s.text}`}
+                  onClick={() => insertPrompt(s.text)}
+                  className="flex min-w-0 flex-1 items-center gap-2 px-1 py-1 text-left text-[12px] text-[var(--ag-text2)]"
+                >
+                  <Sparkles size={13} className="shrink-0 text-[var(--ag-text4)]" />
+                  <span className="truncate">{s.label}</span>
+                </button>
+                <button
+                  type="button"
+                  title="一键发送"
+                  aria-label={`发送指令 ${s.label}`}
+                  onClick={() => sendPrompt(s.text)}
+                  className="shrink-0 rounded p-1 text-[var(--ag-text4)] opacity-0 transition-opacity hover:text-[var(--ag-accent)] group-hover/item:opacity-100"
+                >
+                  <Send size={12} />
+                </button>
+                <button
+                  type="button"
+                  title="删除指令"
+                  aria-label={`删除指令 ${s.label}`}
+                  onClick={() => removePrompt(s.id)}
+                  className="shrink-0 rounded p-1 text-[var(--ag-text4)] opacity-0 transition-opacity hover:text-[var(--ag-red)] group-hover/item:opacity-100"
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
             ))}
             <div className="border-t border-[var(--ag-stroke3)] px-2.5 py-1.5 text-[10px] text-[var(--ag-text4)]">
               输入 / 打开命令面板
