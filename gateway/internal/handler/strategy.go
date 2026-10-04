@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/app"
 	"github.com/xiaotian-quant/gateway/internal/market"
+	"github.com/xiaotian-quant/gateway/internal/paper"
 	"github.com/xiaotian-quant/gateway/internal/store"
 	"github.com/xiaotian-quant/gateway/internal/strategy"
 	"github.com/xiaotian-quant/gateway/internal/strategy/cra"
@@ -264,6 +265,22 @@ func GetStrategyRuntime(c *gin.Context) {
 		}
 		if sym != "" {
 			price = appCtx.BinanceWS.GetPrice(sym)
+		}
+	}
+
+	// 持仓数量补真值：经典策略（MACD 等）的 RuntimeStatus 不发 position_qty
+	// （曾把 500U 本金当数量展示——2026-10-04 实证），paper 实例按成交账本
+	// 净持仓补，面板不再误显示本金。
+	if status != nil {
+		if _, ok := status["position_qty"]; !ok {
+			if mode := strings.ToLower(getString(item, "execution_mode", getString(item, "mode", ""))); mode == "paper" {
+				sym := getString(item, "symbol", "")
+				if sym != "" {
+					if net, _, err := store.NetFilledByStrategy(id, sym); err == nil && net > 1e-12 {
+						status["position_qty"] = net
+					}
+				}
+			}
 		}
 	}
 
@@ -1757,6 +1774,8 @@ func GetStrategyParamDefs(c *gin.Context) {
 	case "dual_thrust":
 		s := strategies.NewDualThrustStrategy()
 		defs = s.ParamDefs()
+	case "smart_money":
+		defs = SmartMoneyParamDefs()
 	case "renko":
 		s := strategies.NewRenkoStrategy()
 		defs = s.ParamDefs()
@@ -1872,6 +1891,39 @@ func normalizeStrategyConfig(it map[string]any) map[string]any {
 	if v, ok := it["pnl"].(float64); ok {
 		if _, hasTotalPnl := result["total_pnl"]; !hasTotalPnl {
 			result["total_pnl"] = v
+		}
+	}
+
+	// 模拟盘实例：资金三件套按成交账本实时计算绩效（2026-10-03）。运行期
+	// capital 同步是"名义投入"口径（入场覆盖/平仓归零），收益率与累计盈亏
+	// 因此恒为 0；paper 有 sig: 打标完整账本，按平均成本法补真值——初始资金=
+	// 模拟盘初始本金，当前权益=本金+总盈亏，累计盈亏=已实现+浮动。实盘保持
+	// 9-16 定的名义投入口径不动。
+	if mode := strings.ToLower(getString(it, "execution_mode", getString(it, "mode", ""))); mode == "paper" {
+		if sym := getString(it, "symbol", ""); sym != "" {
+			mark := 0.0
+			if appCtx := app.Get(); appCtx != nil && appCtx.BinanceWS != nil {
+				mark = appCtx.BinanceWS.GetPrice(sym)
+			}
+			// 合约（swap/futures）策略允许双向：空单盈亏按 (开空价−现价) 计。
+			_mt := strings.ToLower(getString(it, "market_type", ""))
+			_cat := strings.ToLower(getString(it, "category", ""))
+			allowShort := _mt == "swap" || _mt == "futures" || _mt == "margin" || _cat == "contract" || _cat == "futures"
+			if _, _, _, _, total, hasTrades := store.StrategyPaperPnL(
+				getString(it, "id", ""), sym, mark, paper.GetPaperExchange().FeeRate(),
+				allowShort); hasTrades {
+				benchmark := 0.0
+				if acc := paper.GetPaperExchange().GetAccount(); acc != nil {
+					benchmark, _ = acc["initial_balance"].(float64)
+				}
+				if benchmark <= 0 {
+					benchmark = 100000
+				}
+				result["initial_capital"] = benchmark
+				result["current_equity"] = benchmark + total
+				result["total_pnl"] = total
+				result["total_pnl_percent"] = total / benchmark * 100
+			}
 		}
 	}
 

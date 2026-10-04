@@ -1033,10 +1033,13 @@ func GetTradeHistory(c *gin.Context) {
 
 	apiKey, secret, _ := adapter.GetCredential("binance")
 	if apiKey == "" || secret == "" {
+		// 本地成交回退（2026-10-03）：币安未配置时成交记录页不再留白——
+		// 模拟盘/本地账本已成交单（xt_orders FILLED）同样是真实成交记录。
+		trades := localTradeHistory(c.Query("symbol"), limit, c.Query("strategy_id"))
 		c.JSON(http.StatusOK, gin.H{
-			"trades":  []map[string]any{},
-			"source":  "unconfigured",
-			"message": "请在「设置 → 交易所」中配置 Binance API Key 以获取成交记录",
+			"trades":  trades,
+			"source":  "local",
+			"message": "币安未配置，展示本地/模拟盘成交记录",
 		})
 		return
 	}
@@ -1068,6 +1071,143 @@ func GetTradeHistory(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"trades": trades, "source": "binance"})
+}
+
+// localTradeHistory 本地/模拟盘成交回退：xt_orders 中 FILLED 的订单按成交记录
+// 形态输出（币安未配置时 /api/trades 的数据源）。直接查 DB 而非内存单缓存——
+// 重启后内存清空，DB 的成交仍在（2026-10-03 实证）。按创建时间倒序截断。
+// strategyID 非空时按 sig:<id>:% 打标过滤（机器人详情页的成交记录）；
+// SELL 行带 average-cost 口径的该单实现盈亏。
+func localTradeHistory(symbol string, limit int, strategyID string) []map[string]any {
+	var records []*store.OrderRecord
+	var err error
+	if strategyID != "" {
+		records, err = store.NewOrderRepo().ListFilledByClientOIDPrefix("sig:"+strategyID+":", symbol, limit)
+	} else {
+		filter := map[string]any{"status": "FILLED"}
+		if symbol != "" {
+			filter["symbol"] = strings.ToUpper(strings.TrimSpace(symbol))
+		}
+		records, err = store.NewOrderRepo().List(filter, limit)
+	}
+	if err != nil {
+		return []map[string]any{}
+	}
+
+	// 正序走一遍平均成本，给每笔 SELL 算实现盈亏（展示用，不改账本）。
+	// records 是倒序的，从尾部往回走即时间正序。pnl 扣当笔手续费，commission
+	// 列同口径输出（fee=price×qty×feeRate，与 paper 账户结算及
+	// store.StrategyPaperPnL 双边扣费同公式，2026-10-04——xt_orders 无手续费
+	// 列，此前 commission 恒 0）。合约实例（allowShort）支持双向：SELL 开
+	// 空、BUY 平空按对应口径计；现货保持净多口径、超持仓 SELL 保护性忽略。
+	feeRate := paper.GetPaperExchange().FeeRate()
+	allowShort := false
+	if strategyID != "" {
+		if cfg := store.GetStrategyConfig(strategyID); cfg != nil {
+			mt := strings.ToLower(getString(cfg, "market_type", ""))
+			cat := strings.ToLower(getString(cfg, "category", ""))
+			allowShort = mt == "swap" || mt == "futures" || mt == "margin" || cat == "contract" || cat == "futures"
+		}
+	}
+	netQty, avgCost := 0.0, 0.0
+	realizedOf := make(map[string]float64, len(records))
+	feeOf := make(map[string]float64, len(records))
+	for i := len(records) - 1; i >= 0; i-- {
+		o := records[i]
+		qty, price := o.Filled, o.AvgFillPrice
+		fee := price * qty * feeRate
+		switch strings.ToUpper(o.Side) {
+		case "BUY":
+			if netQty < 0 && allowShort {
+				closeQty := qty
+				if closeQty > -netQty {
+					closeQty = -netQty
+				}
+				realizedOf[o.ID] += (avgCost - price) * closeQty
+				netQty += closeQty
+				if rest := qty - closeQty; rest > 0 {
+					newQty := netQty + rest
+					avgCost = (avgCost*netQty + price*rest) / newQty
+					netQty = newQty
+				}
+				realizedOf[o.ID] -= fee
+				feeOf[o.ID] += fee
+			} else {
+				// 开多/加多：手续费计入当笔（StrategyPaperPnL 对所有 BUY 收
+				// totalFee——此前这里漏扣，行盈亏之和高于账户实际）。
+				newQty := netQty + qty
+				if newQty > 0 {
+					avgCost = (avgCost*netQty + price*qty) / newQty
+				}
+				netQty = newQty
+				realizedOf[o.ID] -= fee
+				feeOf[o.ID] += fee
+			}
+		case "SELL":
+			if netQty > 0 {
+				sellQty := qty
+				if !allowShort && sellQty > netQty {
+					sellQty = netQty
+				}
+				if sellQty > 0 {
+					realizedOf[o.ID] += (price - avgCost) * sellQty
+					realizedOf[o.ID] -= price * sellQty * feeRate
+					feeOf[o.ID] += price * sellQty * feeRate
+					netQty -= sellQty
+				}
+				if allowShort {
+					if rest := qty - sellQty; rest > 0 {
+						realizedOf[o.ID] -= price * rest * feeRate
+						feeOf[o.ID] += price * rest * feeRate
+						newShort := -netQty + rest
+						avgCost = (avgCost*(-netQty) + price*rest) / newShort
+						netQty = -newShort
+					}
+				}
+			} else if allowShort {
+				realizedOf[o.ID] -= fee
+				feeOf[o.ID] += fee
+				newShort := -netQty + qty
+				avgCost = (avgCost*(-netQty) + price*qty) / newShort
+				netQty = -newShort
+			}
+			// 现货且无多仓：SELL 整笔忽略（无费、无仓位变化，同 StrategyPaperPnL）。
+		}
+	}
+
+	trades := make([]map[string]any, 0, len(records))
+	for _, o := range records {
+		qty := o.Filled
+		if qty <= 0 {
+			qty = o.Quantity
+		}
+		ts := float64(o.UpdatedAt)
+		if ts <= 0 {
+			ts = float64(o.CreatedAt)
+		}
+		t := map[string]any{
+			"symbol":           o.Symbol,
+			"side":             o.Side,
+			"price":            o.AvgFillPrice,
+			"qty":              qty,
+			"quantity":         qty,
+			"notional":         o.AvgFillPrice * qty,
+			"pnl":              realizedOf[o.ID],
+			"time":             ts,
+			"timestamp":        ts,
+			"id":               o.ID,
+			"order_id":         o.ID,
+			"commission":       feeOf[o.ID],
+			"commission_asset": "USDT", // paper 手续费按 USDT 计（paper.settleSimulatedFill）
+			"exchange":         o.Exchange,
+		}
+		// sig:<配置id>: 前缀回溯来源策略，成交记录页能认出是哪只机器人。
+		if strings.HasPrefix(o.ClientOID, "sig:") {
+			t["strategy_id"] = strings.Split(o.ClientOID, ":")[1]
+		}
+		trades = append(trades, t)
+	}
+	return trades
 }
 
 func fmtScan(s string, v *int) {

@@ -140,3 +140,90 @@ func TestNetFilledByStrategy(t *testing.T) {
 		t.Fatalf("empty strategy: net=%v err=%v", net, err)
 	}
 }
+
+// TestStrategyPaperPnL 平均成本法绩效：已实现 + 浮动，超卖保护，账本归属隔离。
+func TestStrategyPaperPnL(t *testing.T) {
+	cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewOrderRepo()
+	nowMs := time.Now().UnixMilli()
+	mk := func(id, side, oid string, qty, avg float64) *OrderRecord {
+		return &OrderRecord{
+			ID: id, Symbol: "BTCUSDT", Side: side, OrderType: "MARKET",
+			Quantity: qty, Filled: qty, Status: "FILLED", Exchange: "paper",
+			ClientOID: oid, AvgFillPrice: avg, CreatedAt: nowMs, UpdatedAt: nowMs,
+		}
+	}
+	// 买 0.1@50000 + 买 0.2@51000 → 成本 50666.67；卖 0.1@52000 已实现 +133.33；
+	// 余 0.2，现价 53000 → 浮动 +466.67；合计 +600。
+	for _, r := range []*OrderRecord{
+		mk("ord-p1", "BUY", "sig:cfgP:1", 0.1, 50000),
+		mk("ord-p2", "BUY", "sig:cfgP:2", 0.2, 51000),
+		mk("ord-p3", "SELL", "sig:cfgP:3", 0.1, 52000),
+		mk("ord-p4", "BUY", "sig:other:1", 9.9, 1), // 其他策略不混入
+		mk("ord-p5", "SELL", "sig:cfgQ:1", 9.9, 1), // 无持仓对账卖单（超卖保护）
+	} {
+		if err := repo.Create(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	net, avg, realized, unrealized, total, ok := StrategyPaperPnL("cfgP", "BTCUSDT", 53000, 0.001, false)
+	if !ok {
+		t.Fatal("expected trades")
+	}
+	if net < 0.1999 || net > 0.2001 {
+		t.Fatalf("net = %v, want 0.2", net)
+	}
+	wantAvg := (0.1*50000 + 0.2*51000) / 0.3
+	if avg < wantAvg-0.01 || avg > wantAvg+0.01 {
+		t.Fatalf("avgCost = %v, want %v", avg, wantAvg)
+	}
+	if realized < 133.33-0.01 || realized > 133.33+0.01 {
+		t.Fatalf("realized = %v, want 133.33", realized)
+	}
+	if unrealized < 466.67-0.01 || unrealized > 466.67+0.01 {
+		t.Fatalf("unrealized = %v, want 466.67", unrealized)
+	}
+	if total < 579.59 || total > 579.61 {
+		t.Fatalf("total = %v, want 579.6 (gross 600 − fee 20.4)", total)
+	}
+
+	// 无持仓时的对账/重建卖单：不得卖穿、不得虚增已实现盈亏。
+	netQ, _, realizedQ, _, totalQ, okQ := StrategyPaperPnL("cfgQ", "BTCUSDT", 53000, 0.001, false)
+	if !okQ || netQ != 0 || realizedQ != 0 || totalQ != 0 {
+		t.Fatalf("oversell guard: net=%v realized=%v total=%v", netQ, realizedQ, totalQ)
+	}
+
+	// 双向合约（cfgS）：SELL 开空 0.5@50000 → BUY 平空 0.4@49000。
+	// realized=(50000−49000)×0.4=400；fee=(25000+19600)×0.001=44.6；
+	// mark=53000 → 余空 0.1 的浮亏=(50000−53000)×0.1=−300 → total=55.4。
+	if err := repo.Create(mk("ord-s1", "SELL", "sig:cfgS:1", 0.5, 50000)); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Create(mk("ord-s2", "BUY", "sig:cfgS:2", 0.4, 49000)); err != nil {
+		t.Fatal(err)
+	}
+	netS, _, realizedS, unrealizedS, totalS, okS := StrategyPaperPnL("cfgS", "BTCUSDT", 53000, 0.001, true)
+	if !okS {
+		t.Fatal("short: expected trades")
+	}
+	if netS > -0.0999 || netS < -0.1001 {
+		t.Fatalf("short net = %v, want -0.1", netS)
+	}
+	if realizedS < 399.99 || realizedS > 400.01 {
+		t.Fatalf("short realized = %v, want 400", realizedS)
+	}
+	if unrealizedS < -300.01 || unrealizedS > -299.99 {
+		t.Fatalf("short unrealized = %v, want -300", unrealizedS)
+	}
+	if totalS < 55.39 || totalS > 55.41 {
+		t.Fatalf("short total = %v, want 55.4", totalS)
+	}
+
+	// 无成交记录 → ok=false
+	if _, _, _, _, _, has := StrategyPaperPnL("nope", "BTCUSDT", 53000, 0.001, false); has {
+		t.Fatal("no-record strategy must return ok=false")
+	}
+}

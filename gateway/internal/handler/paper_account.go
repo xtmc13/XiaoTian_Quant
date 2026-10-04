@@ -43,28 +43,29 @@ func PaperAccountSet(c *gin.Context) {
 		}
 	}
 	acc := pe.GetAccount()
-	if b, err := json.Marshal(acc); err == nil {
+	if b, err := json.Marshal(pe.SnapshotAccount()); err == nil {
 		store.SavePaperAccountJSON(string(b))
 	}
 	c.JSON(http.StatusOK, acc)
 }
 
 // RestorePaperAccount 启动时恢复模拟盘账户状态（须在 store.InitDB 之后调用）。
+// 2026-10-03 起快照含持仓列表（旧快照只有余额，按无持仓恢复）；并在此注册
+// 状态变更 → 快照落盘，成交/重置/开关变化即持久化，重启后仓位不丢。
 func RestorePaperAccount() {
+	pe := paper.GetPaperExchange()
+	pe.OnStateChange(func() {
+		if b, err := json.Marshal(pe.SnapshotAccount()); err == nil {
+			store.SavePaperAccountJSON(string(b))
+		}
+	})
 	s := store.GetPaperAccountJSON()
 	if s == "" {
 		return
 	}
-	var acc struct {
-		Enabled bool    `json:"enabled"`
-		Balance float64 `json:"balance"`
-	}
-	if json.Unmarshal([]byte(s), &acc) != nil {
+	var snap paper.AccountSnapshot
+	if json.Unmarshal([]byte(s), &snap) != nil {
 		return
 	}
-	pe := paper.GetPaperExchange()
-	pe.SetEnabled(acc.Enabled)
-	if acc.Balance > 0 {
-		pe.SetBalance(acc.Balance)
-	}
+	pe.RestoreAccount(snap)
 }

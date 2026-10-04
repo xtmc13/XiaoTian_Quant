@@ -105,22 +105,32 @@ export function RuntimePanel({ strategy }: { strategy: StrategyItem }) {
   const isShort = st.direction === 'short' || st.direction === 'SHORT'
   const isContract = strategy.market_type !== 'spot' && strategy.category !== 'spot'
 
-  // 浮盈%：现价 vs 均价；合约仓位盈亏按杠杆放大。
+  // 浮盈：现价 vs 均价。小仓位下百分比两位小数会吞掉数值（0.0029 BTC ×
+  // $1 价差 = $0.003 = 0.0004%），主显美元金额（自适应精度），百分比挪角标。
   let pnlPct: number | null = null
+  let pnlAmt: number | null = null
   if (inPos && price && avg && avg > 0) {
     pnlPct = ((price - avg) / avg) * 100
-    if (isShort) pnlPct = -pnlPct
+    pnlAmt = (price - avg) * (st.position_qty ?? 0)
+    if (isShort) {
+      pnlPct = -pnlPct
+      pnlAmt = -pnlAmt
+    }
   }
 
   const totalTiers = st.total_add_tiers ?? 0
   const triggered = st.add_positions_triggered ?? 0
   const ladderPct = totalTiers > 0 ? Math.min(100, (triggered / totalTiers) * 100) : 0
 
-  const dirLabel = !inPos
-    ? '空仓'
-    : isShort
-      ? '做空'
-      : '做多'
+  // 现货只有买入持仓（无杠杆做空语义），方向标签用"买入"；"做多/做空"是合约口径。
+  const dirLabel = !inPos ? '空仓' : isContract ? (isShort ? '做空' : '做多') : '买入'
+
+  // 美元金额自适应精度：大额 2 位小数，小额放到 6 位，避免 "$0.00" 假零。
+  const fmtUsdSigned = (v: number): string => {
+    const a = Math.abs(v)
+    const digits = a >= 100 ? 2 : a >= 1 ? 3 : 6
+    return `${v < 0 ? '-' : '+'}$${a.toFixed(digits)}`
+  }
 
   return (
     <div className="space-y-3">
@@ -143,9 +153,9 @@ export function RuntimePanel({ strategy }: { strategy: StrategyItem }) {
         <PanelStat label="现价" value={price ? fmtPrice(price) : '获取中...'} valueColor="text-quant-gold" />
         <PanelStat
           label="浮动盈亏"
-          value={pnlPct != null ? fmtPct(pnlPct) : '-'}
-          valueColor={pnlPct == null ? undefined : pnlPct >= 0 ? 'text-quant-green' : 'text-quant-red'}
-          hint={isContract && pnlPct != null ? '按杠杆放大' : undefined}
+          value={pnlAmt != null && pnlAmt !== 0 ? fmtUsdSigned(pnlAmt) : pnlPct != null ? fmtPct(pnlPct) : '-'}
+          valueColor={pnlAmt == null || pnlAmt === 0 ? (pnlPct == null ? undefined : pnlPct >= 0 ? 'text-quant-green' : 'text-quant-red') : pnlAmt >= 0 ? 'text-quant-green' : 'text-quant-red'}
+          hint={pnlPct != null ? `${fmtPct(pnlPct)}${isContract ? ' · 按杠杆放大' : ''}` : undefined}
         />
         <PanelStat label="在仓时长" value={inPos ? holdingDuration(strategy.updated_at) : '-'} />
       </div>

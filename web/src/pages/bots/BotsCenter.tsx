@@ -18,6 +18,7 @@ import { gridApi, strategyApi, strategyConfigApi } from '@/lib/api'
 import type { GridBot, GridBotDetail, GridBotPayload, GridLegView } from '@/lib/api'
 import type { StrategyItem } from '@/types'
 import { RuntimePanel } from '@/components/strategy/RuntimePanel'
+import { StrategyTradeHistory } from '@/components/strategy/StrategyTradeHistory'
 import { STRAT_TYPES } from '@/components/strategy/StrategyFormFields'
 import type { BotItem } from '@/hooks/useBotData'
 import { SectionCard } from '@/components/ui/SectionCard'
@@ -1033,6 +1034,7 @@ export function BotsCenter() {
           <div className="space-y-4">
             <StrategyRuntimeSummary strategy={detailBot.strategy} />
             <RuntimePanel strategy={detailBot.strategy} />
+            <StrategyTradeHistory strategy={detailBot.strategy} />
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-quant-border">
               <button
                 className="px-4 py-2 rounded-lg border border-quant-border text-xs text-muted-foreground hover:text-foreground transition-colors"
@@ -1077,7 +1079,18 @@ function StrategyRuntimeSummary({ strategy }: { strategy: StrategyItem }) {
   const initial = strategy.initial_capital ?? 0
   const equity = strategy.current_equity
   const returnPct = initial > 0 && equity != null ? ((equity - initial) / initial) * 100 : null
+  // 小仓位对大基准时收益率只有万分位，两位小数恒显 0.00%——自适应加精度。
+  const returnTxt =
+    returnPct == null
+      ? '—'
+      : `${returnPct >= 0 ? '+' : ''}${
+          Math.abs(returnPct) > 0 && Math.abs(returnPct) < 0.01 ? returnPct.toFixed(4) : returnPct.toFixed(2)
+        }%`
   const pnl = strategy.total_pnl ?? 0
+  // 累计盈亏小额自适应精度（0.01 以下不再显示成 $0.00）。
+  const pnlAbs = Math.abs(pnl)
+  const pnlDigits = pnlAbs >= 100 ? 2 : pnlAbs >= 1 ? 3 : 6
+  const pnlTxt = pnl !== 0 ? `${pnl >= 0 ? '+' : '-'}$${pnlAbs.toFixed(pnlDigits)}` : '-'
   return (
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
       {[
@@ -1085,12 +1098,12 @@ function StrategyRuntimeSummary({ strategy }: { strategy: StrategyItem }) {
         { label: '当前权益', value: equity != null ? `$${formatCurrency(equity)}` : '-' },
         {
           label: '收益率',
-          value: returnPct != null ? `${returnPct >= 0 ? '+' : ''}${returnPct.toFixed(2)}%` : '—',
+          value: returnTxt,
           color: returnPct == null ? undefined : returnPct >= 0 ? 'text-quant-green' : 'text-quant-red',
         },
         {
           label: '累计盈亏',
-          value: pnl !== 0 ? `${pnl >= 0 ? '+' : ''}$${formatCurrency(pnl)}` : '-',
+          value: pnlTxt,
           color: pnl >= 0 ? 'text-quant-green' : 'text-quant-red',
         },
       ].map((k) => (

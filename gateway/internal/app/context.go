@@ -29,6 +29,7 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/model"
 	"github.com/xiaotian-quant/gateway/internal/notify"
 	"github.com/xiaotian-quant/gateway/internal/order"
+	"github.com/xiaotian-quant/gateway/internal/paper"
 	"github.com/xiaotian-quant/gateway/internal/portfolio"
 	"github.com/xiaotian-quant/gateway/internal/protection"
 	"github.com/xiaotian-quant/gateway/internal/risk"
@@ -656,6 +657,19 @@ func (ctx *Context) wireOrderManager() {
 
 	// ── On Order Update ──
 	om.OnOrderUpdate = func(ord *model.OrderData) {
+		if ord.Filled > 0 && ord.AvgFillPrice > 0 && ord.Exchange == "paper" {
+			// paper 账户入账（持仓+资金）：策略/手动 paper 单不经 PlaceOrder
+			// 撮合（simulatePaperFill/撮合引擎两条路径），从这里统一入账，
+			// 账户/快照/资产页才反映真实成交（2026-10-03）。累计回报取增量，幂等。
+			paper.GetPaperExchange().ApplySimulatedFill(ord.ID, model.TradeData{
+				Symbol:    ord.Symbol,
+				ID:        ord.ID,
+				Price:     ord.AvgFillPrice,
+				Quantity:  ord.Filled,
+				Side:      strings.ToUpper(string(ord.Side)),
+				Timestamp: ord.UpdatedAt,
+			})
+		}
 		if ord.Status == model.StatusFilled {
 			ctx.updatePortfolioFromFill(ord)
 			// Record DCA entry if applicable
@@ -1708,6 +1722,15 @@ func (ctx *Context) resolveSignalQuantity(signal model.Signal) float64 {
 					return v
 				}
 				if v, ok := parsed["first_order_amount"].(float64); ok && v > 0 {
+					return v
+				}
+				// 经典 CTA 策略的 USDT 本金键（MACD/EMA/RSI 等的 position_size）：
+				// 此前不在识别列 → 兜底"余额 10%"，SOL 实例一单开出 $1 万
+				// 名义（2026-10-04 实证），按现价折成基础币数量。
+				if v, ok := parsed["position_size"].(float64); ok && v > 0 {
+					if px := getLastPrice(signal.Symbol); px > 0 {
+						return v / px
+					}
 					return v
 				}
 			}

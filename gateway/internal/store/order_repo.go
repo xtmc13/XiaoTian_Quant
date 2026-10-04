@@ -10,24 +10,24 @@ import (
 // ── Order Repository ──
 
 type OrderRecord struct {
-	ID           string  `json:"id"`
-	Symbol       string  `json:"symbol"`
-	Side         string  `json:"side"`
-	OrderType    string  `json:"order_type"`
-	Price        float64 `json:"price"`
-	StopPrice    float64 `json:"stop_price"`
-	Quantity     float64 `json:"quantity"`
-	Filled       float64 `json:"filled"`
-	Status       string  `json:"status"`
-	Exchange     string  `json:"exchange"`
-	UserID       uint64  `json:"user_id"`
-	ClientOID    string  `json:"client_oid"`
+	ID        string  `json:"id"`
+	Symbol    string  `json:"symbol"`
+	Side      string  `json:"side"`
+	OrderType string  `json:"order_type"`
+	Price     float64 `json:"price"`
+	StopPrice float64 `json:"stop_price"`
+	Quantity  float64 `json:"quantity"`
+	Filled    float64 `json:"filled"`
+	Status    string  `json:"status"`
+	Exchange  string  `json:"exchange"`
+	UserID    uint64  `json:"user_id"`
+	ClientOID string  `json:"client_oid"`
 	// ExchangeOrderID 交易所侧订单号（如币安数字 orderId），下单ACK后回填，
 	// 成交恢复(reconcile)按它查询交易所最新状态/成交明细。
-	ExchangeOrderID string `json:"exchange_order_id"`
-	AvgFillPrice float64 `json:"avg_fill_price"`
-	CreatedAt    int64   `json:"created_at"`
-	UpdatedAt    int64   `json:"updated_at"`
+	ExchangeOrderID string  `json:"exchange_order_id"`
+	AvgFillPrice    float64 `json:"avg_fill_price"`
+	CreatedAt       int64   `json:"created_at"`
+	UpdatedAt       int64   `json:"updated_at"`
 
 	// Contract fields
 	MarketType    string  `json:"market_type,omitempty"`
@@ -232,6 +232,39 @@ func (r *OrderRepo) ListRecent(sinceMs int64, limit int) ([]*OrderRecord, error)
 	return result, nil
 }
 
+// ListFilledByClientOIDPrefix 返回 client_oid 带指定前缀的已成交订单（新→旧），
+// 成交记录页按策略过滤用（sig:<策略id>:% 打标归属）。
+func (r *OrderRepo) ListFilledByClientOIDPrefix(prefix, symbol string, limit int) ([]*OrderRecord, error) {
+	q := `SELECT id, symbol, side, order_type, price, stop_price, quantity, filled, status, exchange, user_id, client_oid, exchange_order_id, avg_fill_price, created_at, updated_at, market_type, position_side, leverage, margin_mode, tp_price, sl_price, close_position
+		FROM xt_orders WHERE client_oid LIKE ? AND status='FILLED' AND filled>0 AND avg_fill_price>0`
+	args := []any{prefix + "%"}
+	if symbol != "" {
+		q += " AND UPPER(symbol)=UPPER(?)"
+		args = append(args, symbol)
+	}
+	q += " ORDER BY updated_at DESC LIMIT ?"
+	args = append(args, limit)
+	rows, err := db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []*OrderRecord
+	for rows.Next() {
+		var o OrderRecord
+		var createdF, updatedF float64
+		if err := rows.Scan(&o.ID, &o.Symbol, &o.Side, &o.OrderType, &o.Price, &o.StopPrice, &o.Quantity, &o.Filled, &o.Status, &o.Exchange,
+			&o.UserID, &o.ClientOID, &o.ExchangeOrderID, &o.AvgFillPrice, &createdF, &updatedF,
+			&o.MarketType, &o.PositionSide, &o.Leverage, &o.MarginMode, &o.TPPrice, &o.SLPrice, &o.ClosePosition); err != nil {
+			return nil, err
+		}
+		o.CreatedAt = int64(createdF)
+		o.UpdatedAt = int64(updatedF)
+		result = append(result, &o)
+	}
+	return result, nil
+}
+
 // NetFilledByStrategy 汇总某策略的已成交净买量与买入 VWAP：
 // signal 下单链路给订单打标 client_oid "sig:<策略配置id>:<nonce>"，
 // 据此把成交归属到策略（orders 表无 strategy 列，Source 不落库）。
@@ -270,4 +303,93 @@ func NetFilledByStrategy(strategyID, symbol string) (netQty, buyVWAP float64, er
 		netQty = 0 // 净卖出/无持仓不恢复
 	}
 	return netQty, buyVWAP, nil
+}
+
+// StrategyPaperPnL 按成交账本（client_oid "sig:<id>:" 打标）用平均成本法逐笔
+// 匹配，计算策略实例的模拟盘绩效：已实现盈亏 + 现价×净持仓的浮动盈亏 −
+// 双边手续费（feeRate，与 paper 账户结算同口径，2026-10-04 补扣——此前
+// 显示盈亏高于账户实际，交易越多偏差越大）。
+// allowShort=true（合约）时支持双向：SELL 开/加空、BUY 平空，盈亏按
+// (开空价−价)×量计；现货策略保持净多口径，超出持仓的 SELL 被保护性忽略
+// （对账/重建行防卖穿）。
+// ok=false 表示无任何成交记录（调用方不应覆盖既有展示值）。
+func StrategyPaperPnL(strategyID, symbol string, markPrice, feeRate float64, allowShort bool) (netQty, avgCost, realized, unrealized, totalPnl float64, ok bool) {
+	prefix := "sig:" + strategyID + ":%"
+	rows, err := db.Query(`SELECT side, filled, avg_fill_price FROM xt_orders
+		WHERE client_oid LIKE ? AND UPPER(symbol)=UPPER(?) AND status='FILLED' AND filled>0 AND avg_fill_price>0
+		ORDER BY updated_at ASC, created_at ASC, rowid ASC`, prefix, symbol)
+	if err != nil {
+		return 0, 0, 0, 0, 0, false
+	}
+	defer rows.Close()
+	totalFee := 0.0
+	for rows.Next() {
+		var side string
+		var qty, price float64
+		if rows.Scan(&side, &qty, &price) != nil {
+			return 0, 0, 0, 0, 0, false
+		}
+		ok = true
+		switch strings.ToUpper(side) {
+		case "BUY":
+			totalFee += price * qty * feeRate
+			if netQty < 0 && allowShort {
+				// 平空：低价买回盈利。
+				closeQty := qty
+				if closeQty > -netQty {
+					closeQty = -netQty
+				}
+				realized += (avgCost - price) * closeQty
+				netQty += closeQty
+				if rest := qty - closeQty; rest > 0 {
+					// 超出部分转为开多。
+					newQty := netQty + rest
+					avgCost = (avgCost*netQty + price*rest) / newQty
+					netQty = newQty
+				}
+			} else {
+				newQty := netQty + qty
+				if newQty > 0 {
+					avgCost = (avgCost*netQty + price*qty) / newQty
+				}
+				netQty = newQty
+			}
+		case "SELL":
+			if netQty > 0 {
+				sellQty := qty
+				if !allowShort && sellQty > netQty {
+					sellQty = netQty // 现货超卖保护（对账/重建行不卖穿）
+				}
+				if sellQty > 0 {
+					totalFee += price * sellQty * feeRate
+					realized += (price - avgCost) * sellQty
+					netQty -= sellQty
+				}
+				if allowShort {
+					if rest := qty - sellQty; rest > 0 {
+						// 多余部分开空。
+						totalFee += price * rest * feeRate
+						newShort := -netQty + rest
+						avgCost = (avgCost*(-netQty) + price*rest) / newShort
+						netQty = -newShort
+					}
+				}
+			} else if allowShort {
+				// 开空/加空。
+				totalFee += price * qty * feeRate
+				newShort := -netQty + qty
+				avgCost = (avgCost*(-netQty) + price*qty) / newShort
+				netQty = -newShort
+			}
+			// 现货且无多仓：SELL 整笔忽略（无费、无仓位变化）。
+		}
+	}
+	switch {
+	case netQty > 1e-12 && markPrice > 0:
+		unrealized = (markPrice - avgCost) * netQty
+	case netQty < -1e-12 && markPrice > 0:
+		unrealized = (avgCost - markPrice) * (-netQty) // 空单：价跌盈利
+	}
+	totalPnl = realized + unrealized - totalFee
+	return netQty, avgCost, realized, unrealized, totalPnl, ok
 }

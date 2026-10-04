@@ -28,6 +28,7 @@ const PASSTHROUGH = [
   'convertFromPixel',
   'convertToPixel',
   'scrollToRealTime',
+  'scrollToTimestamp',
   'setBarSpace',
   'updateData',
   'subscribeCrosshairChange',

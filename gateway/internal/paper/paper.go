@@ -168,7 +168,10 @@ type PaperExchange struct {
 	equity    []model.PortfolioSnapshot
 	rng       *rand.Rand
 	enabled   bool // 模拟盘账户开关：false 时拒绝新下单
-	mu        sync.RWMutex
+	// filledApplied 记录各订单已入账成交量：OMS 成交回报是累计语义（RecordFill/
+	// OnOrderUpdate 可能多次触发），入账只取增量，天然幂等防重复记账。
+	filledApplied map[string]float64
+	mu            sync.RWMutex
 
 	// Price provider for market data
 	priceProvider func(symbol string) (price float64, ok bool)
@@ -177,6 +180,7 @@ type PaperExchange struct {
 	onOrderUpdate func(order model.OrderData)
 	onTrade       func(trade model.TradeData)
 	onPosition    func(pos model.PositionData)
+	onStateChange func() // 账户状态变更（成交/重置/开关），锁外触发持久化
 }
 
 var (
@@ -194,13 +198,14 @@ func GetPaperExchange() *PaperExchange {
 
 func NewPaperExchange(cfg PaperConfig) *PaperExchange {
 	pe := &PaperExchange{
-		config:    cfg,
-		books:     make(map[string]*goOrderBook),
-		positions: make(map[string]map[string]*PaperPosition),
-		balances:  make(map[string]*model.Balance),
-		orders:    make(map[string]*PaperOrder),
-		rng:       rand.New(rand.NewSource(time.Now().UnixNano())),
-		enabled:   true,
+		config:        cfg,
+		books:         make(map[string]*goOrderBook),
+		positions:     make(map[string]map[string]*PaperPosition),
+		balances:      make(map[string]*model.Balance),
+		orders:        make(map[string]*PaperOrder),
+		filledApplied: make(map[string]float64),
+		rng:           rand.New(rand.NewSource(time.Now().UnixNano())),
+		enabled:       true,
 	}
 	pe.balances["USDT"] = &model.Balance{
 		Currency: "USDT",
@@ -223,8 +228,9 @@ func (pe *PaperExchange) IsEnabled() bool {
 // SetEnabled 设置模拟盘账户开关；停用后 PlaceOrder 拒绝新单。
 func (pe *PaperExchange) SetEnabled(v bool) {
 	pe.mu.Lock()
-	defer pe.mu.Unlock()
 	pe.enabled = v
+	pe.mu.Unlock()
+	pe.notifyStateChange()
 }
 
 // GetAccount 返回模拟盘账户状态（开关 + USDT 余额 + 初始余额）。
@@ -248,27 +254,200 @@ func (pe *PaperExchange) SetBalance(usdt float64) {
 		usdt = 0
 	}
 	pe.mu.Lock()
-	defer pe.mu.Unlock()
 	pe.balances = map[string]*model.Balance{
 		"USDT": {Currency: "USDT", Total: usdt, Free: usdt, Used: 0},
 	}
 	pe.positions = make(map[string]map[string]*PaperPosition)
 	pe.orders = make(map[string]*PaperOrder)
 	pe.books = make(map[string]*goOrderBook)
+	pe.filledApplied = make(map[string]float64)
 	pe.config.InitialBalance = usdt
+	pe.mu.Unlock()
+	pe.notifyStateChange()
 	log.Printf("[Paper] 账户余额已重置为 $%.2f，持仓/挂单已清空", usdt)
+}
+
+// PositionSnapshot 单个持仓 + 成交历史（重建均价/成本用）。
+type PositionSnapshot struct {
+	Data   model.PositionData `json:"data"`
+	Trades []model.TradeData  `json:"trades"`
+}
+
+// AccountSnapshot 模拟盘账户持久化快照（重启恢复用：余额/持仓随重启存活）。
+// 2026-10-03 前只持久化 {enabled,balance}，重启经 SetBalance 清空持仓——
+// 策略账本（xt_orders sig: 净持仓）失去镜像，每次重启触发一次
+// "Close from strategy ledger" 失败 WARN，且观察仓位重启即丢。
+type AccountSnapshot struct {
+	Enabled        bool                      `json:"enabled"`
+	Balance        float64                   `json:"balance"` // USDT 总余额（冗余+旧格式兼容）
+	InitialBalance float64                   `json:"initial_balance"`
+	Balances       map[string]*model.Balance `json:"balances,omitempty"`
+	Positions      []PositionSnapshot        `json:"positions,omitempty"`
+}
+
+// SnapshotAccount 导出账户全量快照（持锁拷贝）。零数量持仓不导出（已平仓残留）。
+func (pe *PaperExchange) SnapshotAccount() AccountSnapshot {
+	pe.mu.RLock()
+	defer pe.mu.RUnlock()
+	snap := AccountSnapshot{
+		Enabled:        pe.enabled,
+		InitialBalance: pe.config.InitialBalance,
+		Balances:       make(map[string]*model.Balance, len(pe.balances)),
+	}
+	for k, v := range pe.balances {
+		cp := *v
+		snap.Balances[k] = &cp
+	}
+	if b, ok := pe.balances["USDT"]; ok {
+		snap.Balance = b.Total
+	}
+	for _, byID := range pe.positions {
+		for _, pos := range byID {
+			if pos.Quantity == 0 {
+				continue
+			}
+			snap.Positions = append(snap.Positions, PositionSnapshot{
+				Data:   pos.PositionData,
+				Trades: append([]model.TradeData(nil), pos.trades...),
+			})
+		}
+	}
+	return snap
+}
+
+// RestoreAccount 无清空恢复（与 SetBalance 的"全新起点"语义相反）：余额/持仓/
+// 开关直接落位，用于重启恢复。Balances 为空且 Balance>0 时按旧格式兼容
+// （只有 USDT 余额、无持仓）。
+func (pe *PaperExchange) RestoreAccount(snap AccountSnapshot) {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+	pe.enabled = snap.Enabled
+	if snap.InitialBalance > 0 {
+		pe.config.InitialBalance = snap.InitialBalance
+	}
+	if len(snap.Balances) > 0 {
+		pe.balances = snap.Balances
+	} else if snap.Balance > 0 {
+		pe.balances = map[string]*model.Balance{
+			"USDT": {Currency: "USDT", Total: snap.Balance, Free: snap.Balance, Used: 0},
+		}
+	}
+	pe.positions = make(map[string]map[string]*PaperPosition)
+	for _, ps := range snap.Positions {
+		if ps.Data.Quantity == 0 {
+			continue
+		}
+		pos := &PaperPosition{
+			PositionData: ps.Data,
+			trades:       append([]model.TradeData(nil), ps.Trades...),
+		}
+		if pe.positions[pos.Symbol] == nil {
+			pe.positions[pos.Symbol] = make(map[string]*PaperPosition)
+		}
+		pe.positions[pos.Symbol][pos.ID] = pos
+	}
+	pe.filledApplied = make(map[string]float64) // 重启后 OMS 从累计值重放，重新取增量
+	log.Printf("[Paper] 账户状态已恢复: USDT=%.2f 初始=%.2f 持仓=%d 只 enabled=%v",
+		snap.Balance, snap.InitialBalance, len(snap.Positions), snap.Enabled)
+}
+
+// OnStateChange 注册账户状态变更回调（成交结算/余额重置/开关切换后、锁外
+// 触发），由上层把 SnapshotAccount 落盘。
+func (pe *PaperExchange) OnStateChange(fn func()) { pe.onStateChange = fn }
+
+// notifyStateChange 触发持久化回调。须在锁外调用（回调内会回取快照，持锁
+// 调用会自死锁）。
+func (pe *PaperExchange) notifyStateChange() {
+	if pe.onStateChange != nil {
+		pe.onStateChange()
+	}
+}
+
+// FeeRate 返回当前账户的手续费率（绩效核算扣费用）。
+func (pe *PaperExchange) FeeRate() float64 {
+	pe.mu.RLock()
+	defer pe.mu.RUnlock()
+	return pe.config.FeeRate
+}
+
+// ApplySimulatedFill 把一笔 OMS 模拟成交记入账户：持仓（AddTrade）+ 资金
+// 结算 + 状态变更通知。策略/手动 paper 单不经 PlaceOrder 撮合——
+// app.simulatePaperFill 对市价单直接成交、限价单走撮合引擎后经 OMS
+// RecordFill 回报——两条路径都从这里入账，账户才是真实状态（此前资产页
+// 余额恒为初始值、快照无持仓、重启恢复后镜像对不上，2026-10-03 实证）。
+// orderID 为 OMS 订单号（去重键）；trade.Quantity 为累计成交量，入账只取
+// 增量，重复/乱序回报天然幂等。
+func (pe *PaperExchange) ApplySimulatedFill(orderID string, trade model.TradeData) {
+	if orderID == "" || trade.Quantity <= 0 || trade.Price <= 0 {
+		return
+	}
+	pe.mu.Lock()
+	applied := pe.filledApplied[orderID]
+	if trade.Quantity <= applied {
+		pe.mu.Unlock()
+		return // 重复/旧回报
+	}
+	trade.Quantity -= applied
+	pe.filledApplied[orderID] = applied + trade.Quantity
+	fee := trade.Price * trade.Quantity * pe.config.FeeRate
+	pe.updatePosition(trade)
+	pe.settleSimulatedFill(trade, fee)
+	pe.mu.Unlock()
+
+	pe.snapshotEquity()
+	pe.notifyStateChange()
+}
+
+// settleSimulatedFill OMS 模拟成交的资金结算（锁仓语义在 OMS/组合层，这里
+// 只动 Free）：买 = quote 减少(含费) + base 增加；卖 = base 减少 + quote
+// 增加(扣费)。防御性截断，任何路径不得把余额记成负。
+func (pe *PaperExchange) settleSimulatedFill(trade model.TradeData, fee float64) {
+	baseCur := pe.getBaseCurrency(trade.Symbol)
+	quote, ok := pe.balances["USDT"]
+	if !ok {
+		quote = &model.Balance{Currency: "USDT"}
+		pe.balances["USDT"] = quote
+	}
+	base, baseOK := pe.balances[baseCur]
+	if trade.Side == "BUY" {
+		cost := trade.Price*trade.Quantity + fee
+		if quote.Free < cost {
+			cost = quote.Free // 防御截断（OMS 风控已 gate，正常到不了这里）
+		}
+		quote.Free -= cost
+		if !baseOK {
+			base = &model.Balance{Currency: baseCur}
+			pe.balances[baseCur] = base
+		}
+		base.Free += trade.Quantity
+	} else {
+		// 卖出：base 无条件扣减（合约开空时允许为负 = 空头负债，买平回补）。
+		if !baseOK {
+			base = &model.Balance{Currency: baseCur}
+			pe.balances[baseCur] = base
+		}
+		base.Free -= trade.Quantity
+		proceeds := trade.Price*trade.Quantity - fee
+		if proceeds > 0 {
+			quote.Free += proceeds
+		}
+	}
+	quote.Total = quote.Free + quote.Used
+	if base != nil {
+		base.Total = base.Free + base.Used
+	}
 }
 
 func (pe *PaperExchange) Start() error {
 	log.Printf("[Paper] Paper trading exchange started with initial balance: $%.2f", pe.config.InitialBalance)
 	return nil
 }
-func (pe *PaperExchange) Stop() error { return nil }
+func (pe *PaperExchange) Stop() error       { return nil }
 func (pe *PaperExchange) IsConnected() bool { return true }
 
 // Callback setters
 func (pe *PaperExchange) OnOrderUpdate(fn func(order model.OrderData)) { pe.onOrderUpdate = fn }
-func (pe *PaperExchange) OnTrade(fn func(trade model.TradeData))      { pe.onTrade = fn }
+func (pe *PaperExchange) OnTrade(fn func(trade model.TradeData))       { pe.onTrade = fn }
 func (pe *PaperExchange) OnPosition(fn func(pos model.PositionData))   { pe.onPosition = fn }
 
 // getOrCreateBook returns the order book for a symbol.
@@ -781,6 +960,7 @@ func (pe *PaperExchange) applyFills(fills []paperFill) {
 	pe.mu.Unlock()
 
 	pe.snapshotEquity()
+	pe.notifyStateChange()
 }
 
 // availableQuote 当前可用 quote（USDT）余额。

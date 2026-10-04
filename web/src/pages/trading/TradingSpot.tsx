@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { NavLink } from 'react-router-dom'
+import { NavLink, useSearchParams } from 'react-router-dom'
 import { marketApi, orderApi, portfolioApi, accountApi, tradesApi } from '@/lib/api'
 import {
   createBackendDatafeed,
@@ -86,8 +86,15 @@ interface OrderPopupState {
 export function TradingSpot() {
   const initialUI = useMemo(loadUIState, [])
   const savedChart = useMemo(() => loadChartState('spot'), [])
-  const [symbol, setSymbol] = useState(initialUI.symbol || 'BTCUSDT')
-  const [interval, setInterval] = useState(initialUI.interval || '1h')
+  // 成交记录"跳转K线"参数（/?symbol=BTCUSDT&interval=15m&t=<毫秒时间戳>）：
+  // 仅首渲染消费一次， symbol/interval 之后由 localStorage 持久化接管；
+  // t 在图表定位完成后从 URL 清除，避免重建图表时反复跳回历史位置。
+  const [searchParams] = useSearchParams()
+  const urlSymbol = searchParams.get('symbol')
+  const urlInterval = searchParams.get('interval')
+  const pendingJumpTs = useRef<number>(Number(searchParams.get('t')) || 0)
+  const [symbol, setSymbol] = useState(urlSymbol || initialUI.symbol || 'BTCUSDT')
+  const [interval, setInterval] = useState(urlInterval || initialUI.interval || '1h')
   const [popup, setPopup] = useState<OrderPopupState | null>(null)
   const [sideTab, setSideTab] = useState<SideTab>((initialUI.sideTab as SideTab) || 'book')
   const [panelOpen, setPanelOpen] = useState(initialUI.panelOpen ?? true)
@@ -272,6 +279,32 @@ export function TradingSpot() {
           ;(window as unknown as Record<string, unknown>).__chartApi = chartApi
           try { chartApi.scrollToRealTime() } catch { /* ignore */ }
           try { chartApi.setBarSpace(4) } catch { /* ignore */ }
+          /* 成交记录"跳转K线"：等数据加载到位后定位到成交时刻，然后清掉 URL 参数 */
+          if (pendingJumpTs.current > 0) {
+            const tryJump = () => {
+              const ts = pendingJumpTs.current
+              if (ts <= 0) return
+              try {
+                const list = typeof chartApi.getDataList === 'function' ? (chartApi.getDataList() as unknown[]) : []
+                if (list && list.length > 0) {
+                  chartApi.scrollToTimestamp(ts, 0)
+                  pendingJumpTs.current = 0
+                  try {
+                    const url = new URL(window.location.href)
+                    url.searchParams.delete('t')
+                    url.searchParams.delete('symbol')
+                    url.searchParams.delete('interval')
+                    window.history.replaceState(null, '', url.toString())
+                  } catch { /* ignore */ }
+                } else {
+                  window.setTimeout(tryJump, 300)
+                }
+              } catch {
+                pendingJumpTs.current = 0
+              }
+            }
+            tryJump()
+          }
           /* 恢复用户画线(指标已在上方配置里恢复) */
           try {
             applyChartOverlays(chartApi, loadChartState('spot'))
