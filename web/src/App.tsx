@@ -62,6 +62,7 @@ const BotsCenter = lazyPage(() => import('./pages/bots/BotsCenter'), 'BotsCenter
 const SmartMoneyPage = lazyPage(() => import('./pages/SmartMoneyPage'), 'SmartMoneyPage')
 const DCABots = lazyPage(() => import('./pages/DCABots'), 'DCABots')
 const LayeredMartinBots = lazyPage(() => import('./pages/LayeredMartinBots'), 'LayeredMartinBots')
+const BotsCombo = lazyPage(() => import('./pages/bots/BotsCombo'), 'BotsCombo')
 const CreateStrategyPage = lazyPage(() => import('./pages/CreateStrategyPage'), 'CreateStrategyPage')
 const TradingSpot = lazyPage(() => import('./pages/trading/TradingSpot'), 'TradingSpot')
 const TradingContract = lazyPage(() => import('./pages/trading/TradingContract'), 'TradingContract')
@@ -127,6 +128,7 @@ function DocumentTitle() {
     '/bots': '机器人中心 - 小天量化',
     '/bots/dca': 'DCA 定投机器人 - 小天量化',
     '/bots/layered-martin': '分层马丁格尔机器人 - 小天量化',
+    '/bots/combo': '组合策略 - 小天量化',
     '/create': '创建策略 - 小天量化',
     '/strategies': '机器人中心 - 小天量化',
     '/ai-bots': 'AI Bots - 小天量化',
@@ -524,6 +526,15 @@ export default function App() {
                     element={
                       <PageShell>
                         <LayeredMartinBots />
+                      </PageShell>
+                    }
+                  />
+                  {/* 组合策略（/combos 后端 8 端点） */}
+                  <Route
+                    path="/bots/combo"
+                    element={
+                      <PageShell>
+                        <BotsCombo />
                       </PageShell>
                     }
                   />

@@ -543,3 +543,41 @@ export interface PairlistConfig {
   filters: { name: string; params: Record<string, unknown> }[]
   [key: string]: unknown
 }
+
+/* ── 组合策略（/combos）—— 逐字段对齐 gateway ComboConfig/ComboMember/Signal ── */
+
+export type ComboAggregationMode = 'vote' | 'weighted' | 'unanimous'
+
+export interface ComboMember {
+  strategy_name: string
+  weight: number
+  enabled: boolean
+}
+
+export interface ComboConfig {
+  id: string
+  user_id: number
+  name: string
+  symbol: string
+  members: ComboMember[]
+  aggregation_mode: ComboAggregationMode
+  status: string
+  created_at: number
+  updated_at: number
+}
+
+export interface ComboSignal {
+  symbol: string
+  direction: string
+  strength: number
+  strategy: string
+  reason: string
+  timestamp: number
+}
+
+export interface ComboPayload {
+  name: string
+  symbol: string
+  members: ComboMember[]
+  aggregation_mode: ComboAggregationMode
+}

@@ -48,6 +48,7 @@ const navItems: NavItem[] = [
       { path: '/bots/signal', labelKey: 'nav.signal-bots' },
       { path: '/bots/dca', labelKey: 'nav.dca-bots' },
       { path: '/bots/layered-martin', labelKey: 'nav.layered-martin' },
+      { path: '/bots/combo', labelKey: 'nav.combo-bots' },
     ],
   },
 

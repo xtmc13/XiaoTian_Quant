@@ -40,6 +40,9 @@ import {
   type StrategyRuntimeResponse,
   type StrategyBatchResult,
   type StrategyGlobalConfig,
+  type ComboConfig,
+  type ComboPayload,
+  type ComboSignal,
   type BacktestRequest,
   type AISnapshot,
   type AIGenerateRequest,
@@ -839,6 +842,18 @@ export const strategyApi = {
   // 服务端默认参数（GET /strategies/defaults、/strategies/contract-defaults）：创建表单兜底默认值
   defaults: () => api.get<StrategyDefaultsResponse>('/strategies/defaults'),
   contractDefaults: () => api.get<ContractDefaults>('/strategies/contract-defaults'),
+}
+
+// ── 组合策略（/combos）：CRUD + 启停 + 聚合信号 ──
+export const combosApi = {
+  list: () => api.get<ComboConfig[]>('/combos'),
+  get: (id: string) => api.get<ComboConfig>(`/combos/${id}`),
+  create: (data: ComboPayload) => api.post<{ status: string; id: string }>('/combos', data),
+  update: (id: string, data: ComboPayload) => api.put<{ status: string }>(`/combos/${id}`, data),
+  delete: (id: string) => api.del<{ status: string }>(`/combos/${id}`),
+  start: (id: string) => api.post<{ status: string }>(`/combos/${id}/start`),
+  stop: (id: string) => api.post<{ status: string }>(`/combos/${id}/stop`),
+  signals: (id: string, limit = 50) => api.get<ComboSignal[]>(`/combos/${id}/signals?limit=${limit}`),
 }
 
 export interface StrategyDefaultEntry {
