@@ -179,8 +179,20 @@ func TestFredFetch(t *testing.T) {
 
 // ── 4. CryptoCompare News ──
 
+func TestNewsNotConfigured(t *testing.T) {
+	src := newCryptoCompareNewsSource(Config{}, testClient())
+	if !src.RequiresKey() {
+		t.Fatal("news should require key (min-api 匿名访问一律 401)")
+	}
+	if src.Configured() {
+		t.Fatal("news without key should be unconfigured")
+	}
+}
+
 func TestNewsFetchAndSymbolFilter(t *testing.T) {
+	var gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("authorization")
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"Type":100,"Data":[
 			{"id":"1","title":"BTC hits new high","url":"https://ex.com/1","source":"coindesk","published_on":1758700000,"categories":"BTC|Market","body":"bitcoin rally body"},
@@ -190,9 +202,12 @@ func TestNewsFetchAndSymbolFilter(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	src := newCryptoCompareNewsSource(Config{BaseURLs: map[string]string{"news": srv.URL}}, testClient())
-	if src.RequiresKey() || !src.Configured() {
-		t.Fatal("news should be keyless")
+	src := newCryptoCompareNewsSource(Config{
+		CryptoCompareAPIKey: "cc-test-key",
+		BaseURLs:            map[string]string{"news": srv.URL},
+	}, testClient())
+	if !src.Configured() {
+		t.Fatal("news with key should be configured")
 	}
 	data, err := src.Fetch(context.Background())
 	if err != nil {
@@ -201,6 +216,9 @@ func TestNewsFetchAndSymbolFilter(t *testing.T) {
 	nd := data.(*NewsData)
 	if len(nd.Items) != 3 {
 		t.Fatalf("expected 3 items, got %d", len(nd.Items))
+	}
+	if gotAuth != "Apikey cc-test-key" {
+		t.Fatalf("authorization header wrong: %q", gotAuth)
 	}
 
 	btc := FilterNewsBySymbol(nd.Items, "BTC")
@@ -330,6 +348,46 @@ func TestCalendarFetch(t *testing.T) {
 	}
 	if cd.Events[2].Impact != "holiday" {
 		t.Fatalf("holiday impact lowercase: %+v", cd.Events[2])
+	}
+}
+
+// TestCalendarFetchWindows1252 上游 ff_calendar_thisweek.xml 实际声明
+// encoding="windows-1252" 且含非 ASCII 字节（如 é），修复前 Decoder 报
+// "CharsetReader is nil"，修复后必须正常解析且按声明编码转换。
+func TestCalendarFetchWindows1252(t *testing.T) {
+	// "Zürich" 中 ü 按 windows-1252 编码为 0xFC（非合法 UTF-8 两字节序列）
+	payload := []byte(`<?xml version="1.0" encoding="windows-1252"?>
+<weeklyevents>
+	<event>
+		<title>Z` + string([]byte{0xFC}) + `rich PMI</title>
+		<country>EUR</country>
+		<date>09-26-2026</date>
+		<time>3:30am</time>
+		<impact>Medium</impact>
+		<forecast>50.1</forecast>
+		<previous>49.8</previous>
+	</event>
+</weeklyevents>`)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		_, _ = w.Write(payload)
+	}))
+	defer srv.Close()
+
+	src := newCalendarSource(Config{BaseURLs: map[string]string{"calendar": srv.URL}}, testClient())
+	data, err := src.Fetch(context.Background())
+	if err != nil {
+		t.Fatalf("windows-1252 xml should parse: %v", err)
+	}
+	cd := data.(*CalendarData)
+	if len(cd.Events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(cd.Events))
+	}
+	if cd.Events[0].Name != "Zürich PMI" {
+		t.Fatalf("charset decode wrong: %q", cd.Events[0].Name)
+	}
+	if cd.Events[0].Date != "2026-09-26" || cd.Events[0].Impact != "medium" {
+		t.Fatalf("bad event: %+v", cd.Events[0])
 	}
 }
 

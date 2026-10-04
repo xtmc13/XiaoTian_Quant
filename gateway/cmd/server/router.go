@@ -324,6 +324,8 @@ func registerConfigRoutes(api *gin.RouterGroup) {
 	private.GET("/executor/positions", handler.ExecutorPositions)
 	private.GET("/executor/records", handler.ExecutionRecords)
 	private.GET("/executor/signal-sources", handler.ExecutorSignalSources)
+	private.PUT("/executor/signal-sources/:id", handler.ExecutorUpdateSignalSource)
+	private.DELETE("/executor/signal-sources/:id", handler.ExecutorDeleteSignalSource)
 	private.GET("/executor/stats", handler.ExecutorStats)
 	private.POST("/executor/sources", handler.ExecutorCreateSignalSource)
 	private.POST("/executor/sources/:id/subscribe", handler.ExecutorSubscribeSignalSource)

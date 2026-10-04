@@ -104,6 +104,11 @@ func NewService(srcs []Source, store CacheStore, secrets []string) *Service {
 			breaker: newCircuitBreaker(3, 5*time.Minute, now),
 		}
 		s.order = append(s.order, src.Name())
+		// 一次性 WARN：需 key 而未配置的源不再每轮刷新型报错，
+		// 状态接口如实上报 not_configured。
+		if src.RequiresKey() && !src.Configured() {
+			s.logger.Printf("%s: API key not configured, source disabled (state=not_configured)", src.Name())
+		}
 	}
 	return s
 }

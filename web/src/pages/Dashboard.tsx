@@ -1256,53 +1256,45 @@ export function Dashboard() {
               title={t('dashboard.ai.title')}
               headerAction={<span className="text-[10px] text-[#8a8a8a]">XiaoTianQuant v3.0</span>}
             >
-              <div className="mb-3 grid grid-cols-3 gap-3">
-                {(
-                  dash?.ai_agents || [
-                    {
-                      name: t('dashboard.ai.agent-market'),
-                      status: 'running',
-                      detail: t('dashboard.ai.detail-signals').replace('{n}', '--'),
-                    },
-                    {
-                      name: t('dashboard.ai.agent-strategy'),
-                      status: 'running',
-                      detail: t('dashboard.ai.detail-pending').replace('{n}', '--'),
-                    },
-                    { name: t('dashboard.ai.agent-risk'), status: 'normal', detail: t('dashboard.ai.detail-safe') },
-                  ]
-                ).map((agent: { name: string; status: string; detail: string }) => (
-                  <div
-                    key={agent.name}
-                    className="rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-3 text-center transition-colors hover:border-[#2a2a2a]"
-                  >
-                    <div className="flex justify-center">
-                      {agent.name === t('dashboard.ai.agent-market') || agent.name === '市场情报' ? (
-                        <Search className="h-5 w-5 text-quant-gold" />
-                      ) : agent.name === t('dashboard.ai.agent-strategy') || agent.name === '策略生成' ? (
-                        <Zap className="h-5 w-5 text-quant-orange" />
-                      ) : (
-                        <Shield className="h-5 w-5 text-quant-green" />
-                      )}
-                    </div>
-                    <div className="mt-2 text-xs font-medium text-foreground">{agent.name}</div>
-                    <div className="mt-1 flex items-center justify-center gap-1 text-[10px] text-[#8a8a8a]">
-                      <span
-                        className={cn(
-                          'h-1.5 w-1.5 rounded-full',
-                          agent.status === 'running' || agent.status === 'normal' ? 'bg-quant-green' : 'bg-quant-red'
+              {dash?.ai_agents && dash.ai_agents.length > 0 ? (
+                <div className="mb-3 grid grid-cols-3 gap-3">
+                  {dash.ai_agents.map((agent: { name: string; status: string; detail: string }) => (
+                    <div
+                      key={agent.name}
+                      className="rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-3 text-center transition-colors hover:border-[#2a2a2a]"
+                    >
+                      <div className="flex justify-center">
+                        {agent.name === t('dashboard.ai.agent-market') || agent.name === '市场情报' ? (
+                          <Search className="h-5 w-5 text-quant-gold" />
+                        ) : agent.name === t('dashboard.ai.agent-strategy') || agent.name === '策略生成' ? (
+                          <Zap className="h-5 w-5 text-quant-orange" />
+                        ) : (
+                          <Shield className="h-5 w-5 text-quant-green" />
                         )}
-                      />
-                      {agent.status === 'running'
-                        ? t('dashboard.status.running')
-                        : agent.status === 'normal'
-                          ? t('dashboard.status.normal')
-                          : t('dashboard.status.error')}
+                      </div>
+                      <div className="mt-2 text-xs font-medium text-foreground">{agent.name}</div>
+                      <div className="mt-1 flex items-center justify-center gap-1 text-[10px] text-[#8a8a8a]">
+                        <span
+                          className={cn(
+                            'h-1.5 w-1.5 rounded-full',
+                            agent.status === 'running' || agent.status === 'normal' ? 'bg-quant-green' : 'bg-quant-red'
+                          )}
+                        />
+                        {agent.status === 'running'
+                          ? t('dashboard.status.running')
+                          : agent.status === 'normal'
+                            ? t('dashboard.status.normal')
+                            : t('dashboard.status.error')}
+                      </div>
+                      <div className="mt-0.5 truncate text-[10px] text-[#8a8a8a]">{agent.detail}</div>
                     </div>
-                    <div className="mt-0.5 truncate text-[10px] text-[#8a8a8a]">{agent.detail}</div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="mb-3 rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] py-6 text-center text-[11px] text-[#8a8a8a]">
+                  {t('dashboard.ai.waiting-data')}
+                </div>
+              )}
               <div className="max-h-24 space-y-1 overflow-y-auto rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-2">
                 {(dash?.ai_logs || []).slice(0, 10).map((log: { time: string; message: string }, i: number) => (
                   <div key={i} className="font-mono text-[11px]">

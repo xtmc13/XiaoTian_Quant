@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -18,6 +19,21 @@ import (
 
 var startTime = time.Now()
 
+// buildVersion 由 cmd/server 经 SetVersion 注入（Dockerfile
+// -ldflags "-X main.version=${VERSION}" → main.version → 这里）。
+// 默认 "dev" 与 Dockerfile ARG VERSION=dev 对齐。
+var buildVersion = "dev"
+
+// SetVersion 注入构建版本号（main.go 启动时调用）。空值忽略，保留默认。
+func SetVersion(v string) {
+	if v = strings.TrimSpace(v); v != "" {
+		buildVersion = v
+	}
+}
+
+// Version 返回当前生效的构建版本号。
+func Version() string { return buildVersion }
+
 // HealthCheck returns basic service health.
 func HealthCheck(c *gin.Context) {
 	appCtx := app.Get()
@@ -28,7 +44,7 @@ func HealthCheck(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"status":    "healthy",
 		"uptime":    int(time.Since(startTime).Seconds()),
-		"version":   "3.0.0",
+		"version":   buildVersion,
 		"log_level": logLevel,
 	})
 }

@@ -74,7 +74,25 @@ func TestHealthCheck(t *testing.T) {
 	err := json.Unmarshal(w.Body.Bytes(), &body)
 	assertTrue(t, err == nil, "should parse JSON")
 	assertTrue(t, body["status"] == "healthy", "status should be healthy")
-	assertTrue(t, body["version"] == "3.0.0", "version should be 3.0.0")
+	assertTrue(t, body["version"] == Version(), "version should match injected build version")
+	assertTrue(t, body["version"] != "", "version should never be empty")
+}
+
+func TestSetVersion(t *testing.T) {
+	defer SetVersion("dev") // 还原默认，避免影响其它用例
+	SetVersion("3.1.4-test")
+	assertTrue(t, Version() == "3.1.4-test", "SetVersion should take effect")
+	SetVersion("") // 空值忽略，保留现值
+	assertTrue(t, Version() == "3.1.4-test", "empty version should be ignored")
+
+	r := setupRouter()
+	r.GET("/health", HealthCheck)
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/health", nil)
+	r.ServeHTTP(w, req)
+	var body map[string]any
+	assertTrue(t, json.Unmarshal(w.Body.Bytes(), &body) == nil, "should parse JSON")
+	assertTrue(t, body["version"] == "3.1.4-test", "health endpoint should report injected version")
 }
 
 /* ── Auth Request Validation Tests ───────────────────────────── */

@@ -230,6 +230,19 @@ func (r *SignalSourceRepo) UpdateSubscription(s *SignalSourceSubscription) error
 	return err
 }
 
+// CancelActiveSubscriptions 把某信号源全部活跃订阅置为 cancelled（删除信号源
+// 时的级联语义；账单流水保留作审计）。返回受影响行数。
+func (r *SignalSourceRepo) CancelActiveSubscriptions(sourceID string) (int64, error) {
+	res, err := db.Exec(
+		`UPDATE xt_signal_source_subscriptions SET status='cancelled' WHERE source_id=? AND status='active'`, sourceID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // AddPendingShare 给某信号源全部活跃 profit_share 订阅累计待结算分成
 // （信号执行平仓落库时调用）。
 func (r *SignalSourceRepo) AddPendingShare(sourceID string, profit float64) error {

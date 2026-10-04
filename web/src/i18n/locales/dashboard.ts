@@ -78,9 +78,6 @@ const zhCN: Record<string, string> = {
   'dashboard.ai.agent-market': '市场情报',
   'dashboard.ai.agent-strategy': '策略生成',
   'dashboard.ai.agent-risk': '风控AI',
-  'dashboard.ai.detail-signals': '{n} 条新信号',
-  'dashboard.ai.detail-pending': '{n} 个策略待审',
-  'dashboard.ai.detail-safe': '所有指标安全',
   'dashboard.ai.waiting-data': '等待AI智能体数据...',
 
   // ── 运行中策略 / 策略行 ──
@@ -227,9 +224,6 @@ const enUS: Record<string, string> = {
   'dashboard.ai.agent-market': 'Market Intelligence',
   'dashboard.ai.agent-strategy': 'Strategy Generation',
   'dashboard.ai.agent-risk': 'Risk Control AI',
-  'dashboard.ai.detail-signals': '{n} new signals',
-  'dashboard.ai.detail-pending': '{n} strategies pending review',
-  'dashboard.ai.detail-safe': 'All indicators safe',
   'dashboard.ai.waiting-data': 'Waiting for AI agent data...',
 
   // ── Running strategies / strategy row ──
@@ -377,9 +371,6 @@ const ja: Record<string, string> = {
   'dashboard.ai.agent-market': '市場情報',
   'dashboard.ai.agent-strategy': '戦略生成',
   'dashboard.ai.agent-risk': 'リスク管理AI',
-  'dashboard.ai.detail-signals': '新規シグナル {n} 件',
-  'dashboard.ai.detail-pending': '承認待ち戦略 {n} 件',
-  'dashboard.ai.detail-safe': '全指標は正常です',
   'dashboard.ai.waiting-data': 'AI エージェントのデータを待機中...',
 
   // ── 実行中戦略 / 戦略行 ──

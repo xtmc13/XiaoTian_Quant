@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xiaotian-quant/gateway/internal/app"
 	"github.com/xiaotian-quant/gateway/internal/portfolio"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
@@ -253,11 +254,43 @@ func DashboardSummary(c *gin.Context) {
 	strategyPnlPie := make([]map[string]any, 0)
 
 	// ── AI Agents status ──
-	// Real-time AI agent status based on system state
-	aiAgents := []map[string]any{
-		{"name": "市场情报", "status": "running", "detail": "实时监控中"},
-		{"name": "策略生成", "status": "running", "detail": "待处理 0 个请求"},
-		{"name": "风控AI", "status": "normal", "detail": "所有指标安全"},
+	// 只上报有真实运行信号的子系统状态：行情 WS 连接、策略引擎运行实例数、
+	// 风控熔断器/连亏。子系统未初始化时对应卡片缺席，前端不渲染假状态。
+	aiAgents := make([]map[string]any, 0, 3)
+	if appCtx := app.Get(); appCtx != nil {
+		if wsStream := appCtx.BinanceWS; wsStream != nil {
+			agent := map[string]any{"name": "市场情报", "status": "error", "detail": "行情 WebSocket 未运行"}
+			if wsStream.IsRunning() {
+				agent["status"] = "running"
+				agent["detail"] = fmt.Sprintf("WS 已连接 · %d 个行情流", wsStream.SymbolCount())
+			}
+			aiAgents = append(aiAgents, agent)
+		}
+		if eng := appCtx.StrategyEngine; eng != nil {
+			running := 0
+			for _, name := range eng.List() {
+				if s := eng.Get(name); s != nil && s.IsRunning() {
+					running++
+				}
+			}
+			aiAgents = append(aiAgents, map[string]any{
+				"name":   "策略生成",
+				"status": "running",
+				"detail": fmt.Sprintf("运行中 %d 个策略实例", running),
+			})
+		}
+		if rm := appCtx.RiskManager; rm != nil {
+			_, losses, breaker := rm.StateSnapshot()
+			status := "normal"
+			if breaker != "CLOSED" {
+				status = "error"
+			}
+			aiAgents = append(aiAgents, map[string]any{
+				"name":   "风控AI",
+				"status": status,
+				"detail": fmt.Sprintf("熔断器 %s · 连亏 %d", breaker, losses),
+			})
+		}
 	}
 
 	// ── AI Logs ──

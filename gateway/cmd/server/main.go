@@ -49,6 +49,13 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/strategy/strategies"
 )
 
+// 构建注入（Dockerfile: -ldflags "-X main.version=${VERSION} -X main.buildTime=${BUILD_TIME}"）。
+// 不通过 -X 注入时保持默认 "dev"。
+var (
+	version   = "dev"
+	buildTime = ""
+)
+
 func main() {
 	// ── MCP stdio 模式（--mcp-stdio / XT_MCP_STDIO=1）：不启动 HTTP 网关，
 	// 在 stdin/stdout 上跑 MCP JSON-RPC server 供 Claude Code / Cursor 挂载。 ──
@@ -56,6 +63,10 @@ func main() {
 		runMCPStdio()
 		return
 	}
+
+	// 构建版本注入 handler 包，/api/health 如实上报（不再硬编码）。
+	handler.SetVersion(version)
+	log.Printf("XiaoTian Quant gateway version=%s buildTime=%s", version, buildTime)
 
 	// ── Load configuration ──
 	cfg, err := config.Load("config/config.yaml")

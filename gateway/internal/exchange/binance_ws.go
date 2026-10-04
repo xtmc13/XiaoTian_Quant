@@ -448,6 +448,13 @@ func (s *BinanceWSStream) IsRunning() bool {
 	return s.running
 }
 
+// SymbolCount 返回订阅的行情流数量（供健康/仪表盘如实展示）。
+func (s *BinanceWSStream) SymbolCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.symbols)
+}
+
 func parseFloat(s string) float64 {
 	var f float64
 	fmt.Sscanf(s, "%f", &f)

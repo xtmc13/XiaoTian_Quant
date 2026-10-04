@@ -87,6 +87,21 @@ func TestGetNotConfigured(t *testing.T) {
 	}
 }
 
+// 未配置的源调度循环直接跳过（杜绝 news 401 每轮刷屏类回归）。
+func TestRefreshAllSkipsUnconfigured(t *testing.T) {
+	src := &fakeSource{name: "news", ttl: time.Hour, configured: false}
+	svc := newTestService([]Source{src}, nil)
+	svc.refreshAll()
+	if src.calls.Load() != 0 {
+		t.Fatalf("unconfigured source must never hit upstream, got %d calls", src.calls.Load())
+	}
+	for _, h := range svc.Health() {
+		if h.Name == "news" && h.State != "not_configured" {
+			t.Fatalf("health should report not_configured, got %s", h.State)
+		}
+	}
+}
+
 func TestGetUnknownSource(t *testing.T) {
 	svc := newTestService(nil, nil)
 	if res := svc.Get(context.Background(), "nope"); res.Status != "unknown_source" {

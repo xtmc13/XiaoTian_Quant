@@ -191,3 +191,128 @@ func ExecutorSourceSubscribers(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "subscribers": subs})
 }
+
+// signalSourceWriteAllowed 与 subscribers 端点同一套属主语义：
+// 属主或 admin 可改/删；OwnerUserID==0（系统/匿名创建）放宽给已登录上下文。
+func signalSourceWriteAllowed(c *gin.Context, src *store.SignalSource) bool {
+	uid, injected := ctxUserID(c)
+	if injected && ctxUserRole(c) != "admin" && src.OwnerUserID != 0 && src.OwnerUserID != uid {
+		return false
+	}
+	return true
+}
+
+// ExecutorUpdateSignalSource godoc
+// PUT /executor/signal-sources/:id
+// 局部更新信号源配置（name/type/enabled/fee_model/fee_percent/monthly_fee/tp_sl）。
+func ExecutorUpdateSignalSource(c *gin.Context) {
+	id := c.Param("id")
+	repo := store.NewSignalSourceRepo()
+	src, err := repo.GetByID(id)
+	if err != nil || src == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "signal source not found"})
+		return
+	}
+	if !signalSourceWriteAllowed(c, src) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "owner only"})
+		return
+	}
+
+	var body struct {
+		Name       *string     `json:"name"`
+		Type       *string     `json:"type"`
+		Enabled    *bool       `json:"enabled"`
+		FeeModel   *string     `json:"fee_model"`
+		FeePercent *float64    `json:"fee_percent"`
+		MonthlyFee *float64    `json:"monthly_fee"`
+		TPSL       *tpslConfig `json:"tp_sl"`
+		TPSLConfig *tpslConfig `json:"tp_sl_config"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+
+	if body.Name != nil {
+		if *body.Name == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "name must not be empty"})
+			return
+		}
+		src.Name = *body.Name
+	}
+	if body.Type != nil && *body.Type != "" {
+		src.Type = *body.Type
+	}
+	if body.Enabled != nil {
+		src.Enabled = *body.Enabled
+	}
+	if body.FeeModel != nil {
+		if !validFeeModel(*body.FeeModel) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "fee_model must be free|fixed_monthly|profit_share"})
+			return
+		}
+		src.FeeModel = *body.FeeModel
+	}
+	if body.FeePercent != nil {
+		src.FeePercent = *body.FeePercent
+	}
+	if body.MonthlyFee != nil {
+		src.MonthlyFee = *body.MonthlyFee
+	}
+	tpsl := body.TPSL
+	if tpsl == nil {
+		tpsl = body.TPSLConfig // 前端 SignalSource 类型字段名
+	}
+	if tpsl != nil {
+		b, _ := json.Marshal(tpsl)
+		src.TPSLJSON = string(b)
+	}
+
+	// 按合并后的最终值校验定价约束（与创建端点同一规则）
+	if src.FeeModel == "profit_share" && src.FeePercent <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "profit_share requires fee_percent > 0"})
+		return
+	}
+	if src.FeeModel == "fixed_monthly" && src.MonthlyFee <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "fixed_monthly requires monthly_fee > 0"})
+		return
+	}
+
+	if err := repo.Update(src); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "update source failed: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "source": src})
+}
+
+// ExecutorDeleteSignalSource godoc
+// DELETE /executor/signal-sources/:id
+// 删除信号源。级联语义：活跃订阅先置 cancelled（保留账单审计流水，
+// 账单 xt_signal_source_bills 不删），随后删除源行。内置 default 源禁删。
+func ExecutorDeleteSignalSource(c *gin.Context) {
+	id := c.Param("id")
+	if id == "default" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "default signal source cannot be deleted"})
+		return
+	}
+	repo := store.NewSignalSourceRepo()
+	src, err := repo.GetByID(id)
+	if err != nil || src == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "signal source not found"})
+		return
+	}
+	if !signalSourceWriteAllowed(c, src) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "owner only"})
+		return
+	}
+	cancelled, err := repo.CancelActiveSubscriptions(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "cancel subscriptions failed: " + err.Error()})
+		return
+	}
+	if err := repo.Delete(id); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "delete source failed: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "cancelled_subscriptions": cancelled})
+}

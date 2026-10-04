@@ -1,6 +1,7 @@
 package dataprovider
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"encoding/xml"
@@ -14,24 +15,28 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/net/html/charset"
 )
 
 // ── 配置 ───────────────────────────────────────────────────────
 
 // Config 数据源密钥与端点。密钥只来自环境变量；BaseURLs 供测试指向 httptest。
 type Config struct {
-	CoinglassAPIKey string // COINGLASS_API_KEY
-	FredAPIKey      string // FRED_API_KEY
-	HTTPTimeout     time.Duration
-	BaseURLs        map[string]string // source name → base URL 覆盖（测试）
+	CoinglassAPIKey     string // COINGLASS_API_KEY
+	FredAPIKey          string // FRED_API_KEY
+	CryptoCompareAPIKey string // CRYPTOCOMPARE_API_KEY
+	HTTPTimeout         time.Duration
+	BaseURLs            map[string]string // source name → base URL 覆盖（测试）
 }
 
 // LoadEnvConfig 从环境变量装配配置（绝不记录密钥值）。
 func LoadEnvConfig() Config {
 	return Config{
-		CoinglassAPIKey: strings.TrimSpace(os.Getenv("COINGLASS_API_KEY")),
-		FredAPIKey:      strings.TrimSpace(os.Getenv("FRED_API_KEY")),
-		HTTPTimeout:     15 * time.Second,
+		CoinglassAPIKey:     strings.TrimSpace(os.Getenv("COINGLASS_API_KEY")),
+		FredAPIKey:          strings.TrimSpace(os.Getenv("FRED_API_KEY")),
+		CryptoCompareAPIKey: strings.TrimSpace(os.Getenv("CRYPTOCOMPARE_API_KEY")),
+		HTTPTimeout:         15 * time.Second,
 	}
 }
 
@@ -43,6 +48,9 @@ func (c Config) Secrets() []string {
 	}
 	if c.FredAPIKey != "" {
 		out = append(out, c.FredAPIKey)
+	}
+	if c.CryptoCompareAPIKey != "" {
+		out = append(out, c.CryptoCompareAPIKey)
 	}
 	return out
 }
@@ -413,16 +421,23 @@ func (s *fredSource) Fetch(ctx context.Context) (any, error) {
 }
 
 // ══════════════════════════════════════════════════════════════
-// 4. 新闻：CryptoCompare News（免 key）
+// 4. 新闻：CryptoCompare News（CRYPTOCOMPARE_API_KEY）
+//    min-api 已收紧匿名访问（无 key 一律 HTTP 401），因此与
+//    coinglass/fred 同一语义：未配置 key → not_configured，跳过刷新。
 // ══════════════════════════════════════════════════════════════
 
 type cryptoCompareNewsSource struct {
 	base   string
+	apiKey string
 	client *http.Client
 }
 
 func newCryptoCompareNewsSource(cfg Config, client *http.Client) *cryptoCompareNewsSource {
-	return &cryptoCompareNewsSource{base: cfg.baseURL("news", "https://min-api.cryptocompare.com"), client: client}
+	return &cryptoCompareNewsSource{
+		base:   cfg.baseURL("news", "https://min-api.cryptocompare.com"),
+		apiKey: cfg.CryptoCompareAPIKey,
+		client: client,
+	}
 }
 
 func (s *cryptoCompareNewsSource) Name() string { return "news" }
@@ -431,8 +446,8 @@ func (s *cryptoCompareNewsSource) Description() string {
 }
 func (s *cryptoCompareNewsSource) TTL() time.Duration         { return 10 * time.Minute }
 func (s *cryptoCompareNewsSource) MinInterval() time.Duration { return 3 * time.Second }
-func (s *cryptoCompareNewsSource) RequiresKey() bool          { return false }
-func (s *cryptoCompareNewsSource) Configured() bool           { return true }
+func (s *cryptoCompareNewsSource) RequiresKey() bool          { return true }
+func (s *cryptoCompareNewsSource) Configured() bool           { return s.apiKey != "" }
 
 type NewsData struct {
 	Items     []NewsItem `json:"items"`
@@ -461,7 +476,9 @@ func (s *cryptoCompareNewsSource) Fetch(ctx context.Context) (any, error) {
 			Body        string `json:"body"`
 		} `json:"data"`
 	}
-	if err := httpGetJSON(ctx, s.client, s.base+"/data/v2/news/?lang=EN", nil, &raw); err != nil {
+	// CryptoCompare 官方鉴权方式：authorization: Apikey <key>
+	headers := map[string]string{"authorization": "Apikey " + s.apiKey}
+	if err := httpGetJSON(ctx, s.client, s.base+"/data/v2/news/?lang=EN", headers, &raw); err != nil {
 		return nil, err
 	}
 	items := make([]NewsItem, 0, len(raw.Data))
@@ -676,7 +693,11 @@ func (s *calendarSource) Fetch(ctx context.Context) (any, error) {
 		return nil, err
 	}
 	var raw ffWeeklyEvents
-	if err := xml.Unmarshal(body, &raw); err != nil {
+	// 上游声明 encoding="windows-1252"，encoding/xml 默认只认 UTF-8/16，
+	// 必须设 CharsetReader 才能解码（生产报错 "Decoder.CharsetReader is nil"）。
+	dec := xml.NewDecoder(bytes.NewReader(body))
+	dec.CharsetReader = charset.NewReaderLabel
+	if err := dec.Decode(&raw); err != nil {
 		return nil, fmt.Errorf("parse calendar xml: %w", err)
 	}
 	events := make([]CalendarEvent, 0, len(raw.Events))

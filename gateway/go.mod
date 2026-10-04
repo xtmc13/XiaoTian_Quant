@@ -10,6 +10,7 @@ require (
 	github.com/redis/go-redis/v9 v9.20.0
 	github.com/stretchr/testify v1.9.0
 	golang.org/x/crypto v0.23.0
+	golang.org/x/net v0.25.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.51.0
 )
@@ -42,7 +43,6 @@ require (
 	github.com/ugorji/go/codec v1.2.12 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	golang.org/x/arch v0.8.0 // indirect
-	golang.org/x/net v0.25.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.15.0 // indirect
 	google.golang.org/protobuf v1.34.1 // indirect
