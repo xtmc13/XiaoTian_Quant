@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -724,6 +724,19 @@ export function BotsCenter() {
     }
     return list
   }, [unified, typeFilter, botStatusFilter, botSort, search])
+
+  // /bots?bot=<id> 深链：策略管理页状态徽标直达详情弹层；消费后清参（刷新不再弹）。
+  // unified 每 5-8s 轮询重建，清参后本 effect 即变 no-op。
+  useEffect(() => {
+    const target = new URLSearchParams(location.search).get('bot')
+    if (!target || unified.length === 0) return
+    const bot = unified.find((b) => b.id === target)
+    if (bot) {
+      if (bot.kind === 'grid') setGridDetailBot(bot)
+      else setDetailBot(bot)
+    }
+    navigate('/bots', { replace: true })
+  }, [location.search, unified, navigate])
 
   const running = unified.filter((b) => b.running).length
   const totalEquity = unified.reduce((sum, b) => sum + (b.equity || 0), 0)

@@ -10,6 +10,7 @@ import { toast } from '@/lib/useToast'
 import type { StrategyItem } from '@/types'
 import {
   Pause,
+  Pencil,
   Plus,
   Activity,
   TrendingUp,
@@ -310,8 +311,25 @@ function StrategyManager() {
                           </div>
                         )}
                       </div>
-                      <StatusBadge status={s.status} />
+                      {/* 状态徽标可点：直达机器人中心对应卡片详情（运行面板+成交历史） */}
+                      <button
+                        onClick={() => navigate(`/bots?bot=${s.id}`)}
+                        title="在机器人中心查看运行"
+                        aria-label={`在机器人中心查看 ${s.name}`}
+                        className="shrink-0 rounded transition-opacity hover:opacity-75"
+                      >
+                        <StatusBadge status={s.status} />
+                      </button>
                       <div className="flex items-center gap-0.5">
+                        <button
+                          onClick={() => navigate(`/create?market=${s.market_type === 'spot' ? 'spot' : 'contract'}&id=${s.id}`)}
+                          disabled={busy}
+                          title="编辑参数"
+                          aria-label={`编辑 ${s.name}`}
+                          className="p-1.5 rounded text-muted-foreground hover:text-quant-gold hover:bg-white/5 disabled:opacity-40 transition-colors"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
                         {s.status === 'running' ? (
                           <button
                             onClick={() => handleToggle(s)}
