@@ -223,10 +223,10 @@ describe('现货策略类型 → CRA 参数档案联动', () => {
     // CRA 参数跟随档案：首单额度 20、补仓次数 7
     expect((screen.getByDisplayValue('20') as HTMLInputElement).value).toBe('20')
     expect((screen.getByDisplayValue('7') as HTMLInputElement).value).toBe('7')
-    // 已下线入口不再渲染：杠杆 / 初始资金 / 实盘选项
+    // 已下线入口不再渲染：杠杆 / 初始资金（实盘选项 2026-10-03 已恢复，见"执行设置"区块）
     expect(screen.queryByText('杠杆（全仓）')).toBeFalsy()
     expect(screen.queryByText('初始资金 (USDT)')).toBeFalsy()
-    expect(screen.queryByText('实盘（真实资金）')).toBeFalsy()
+    expect(screen.getByText('实盘（真实资金）')).toBeTruthy()
     // 消息通知区块渲染
     expect(screen.getByText('消息通知')).toBeTruthy()
     expect(screen.getByText('通知渠道')).toBeTruthy()
@@ -330,7 +330,7 @@ describe('现货网格模式（cra_spot → 网格参数组）', () => {
   })
 })
 
-describe('表单精简（初始资金/杠杆/实盘入口下线）', () => {
+describe('表单精简 + 执行设置（模拟盘/实盘选择器回归）', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(useStrategyDataModule.useStrategyData).mockReturnValue({
@@ -339,18 +339,18 @@ describe('表单精简（初始资金/杠杆/实盘入口下线）', () => {
     vi.mocked(configApi.exchangesConfigured).mockResolvedValue(mockConfigured)
   })
 
-  it('合约场景：无杠杆格/初始资金格/K线周期格，消息通知区块在，无模拟盘/实盘选择器', () => {
+  it('合约场景：无杠杆格/初始资金格/K线周期格，执行设置（模拟盘/实盘）与消息通知区块都在', () => {
     render(<StrategyCreatePanel market="contract" onClose={vi.fn()} onSaved={vi.fn()} />, { wrapper })
     expect(screen.queryByText('杠杆（全仓）')).toBeFalsy()
     expect(screen.queryByText('杠杆倍数')).toBeTruthy() // CRAParamForm 开仓设置内的杠杆仍在（未动）
     expect(screen.queryByText('初始资金 (USDT)')).toBeFalsy()
     expect(screen.queryByText('K线周期')).toBeFalsy()
-    expect(screen.queryByText('模拟盘（默认）')).toBeFalsy()
-    expect(screen.queryByText('实盘（真实资金）')).toBeFalsy() // 创建即实盘：不再提供手动选择
+    expect(screen.getByText('模拟盘（默认）')).toBeTruthy()
+    expect(screen.getByText('实盘（真实资金）')).toBeTruthy()
     expect(screen.getByText('消息通知')).toBeTruthy()
   })
 
-  it('提交 payload：execution_mode 创建即实盘（live 总闸已开）、initial_capital 为 0', async () => {
+  it('提交 payload：默认模拟盘；确认后选实盘则 live', async () => {
     render(<StrategyCreatePanel market="spot" onClose={vi.fn()} onSaved={vi.fn()} />, { wrapper })
     fireEvent.change(screen.getByPlaceholderText('输入策略名称'), { target: { value: '精简表单' } })
     fireEvent.change(screen.getByPlaceholderText('40000'), { target: { value: '40000' } })
@@ -359,13 +359,23 @@ describe('表单精简（初始资金/杠杆/实盘入口下线）', () => {
     await waitFor(() => expect(screen.getByText('Binance')).toBeTruthy())
     fireEvent.click(screen.getByText('Binance'))
     fireEvent.click(screen.getByText('确认选择'))
+
+    // 默认模拟盘直接提交。
     fireEvent.click(screen.getByText('保存策略'))
     const create = vi.mocked(useStrategyDataModule.useStrategyData).mock.results[0].value.create as ReturnType<
       typeof vi.fn
     >
     await waitFor(() => expect(create).toHaveBeenCalled())
     const payload = create.mock.calls[0][0] as Record<string, unknown>
-    expect(payload.execution_mode).toBe('live')
+    expect(payload.execution_mode).toBe('paper')
     expect(payload.initial_capital).toBe(0)
+
+    // 选择实盘（confirm 确认）→ payload 变 live。
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    fireEvent.click(screen.getByText('实盘（真实资金）'))
+    fireEvent.click(screen.getByText('保存策略'))
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(2))
+    const livePayload = create.mock.calls[1][0] as Record<string, unknown>
+    expect(livePayload.execution_mode).toBe('live')
   })
 })

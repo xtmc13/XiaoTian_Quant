@@ -22,6 +22,7 @@ export const STRAT_TYPES: Record<string, { value: string; label: string }[]> = {
     { value: 'cra_spot', label: '现货网格' },
     { value: 'support_rebound', label: '支撑回踩反弹' },
     { value: 'liquidity_heat', label: '流动性热力扫反' },
+    { value: 'smart_money', label: '主力行为' },
     { value: 'martin_trend', label: '马丁趋势' },
     { value: 'wallstreet', label: '华尔街' },
     { value: 'aggressive', label: '激进' },
@@ -36,6 +37,7 @@ export const STRAT_TYPES: Record<string, { value: string; label: string }[]> = {
     { value: 'counter_safe', label: '逆势保守' },
     { value: 'high_frequency', label: '高频策略' },
     { value: 'head_tail_arbitrage', label: '首尾套利' },
+    { value: 'smart_money', label: '主力行为' },
   ],
 }
 

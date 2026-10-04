@@ -39,8 +39,8 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/ml"
 	"github.com/xiaotian-quant/gateway/internal/notify"
 	"github.com/xiaotian-quant/gateway/internal/order"
-	"github.com/xiaotian-quant/gateway/internal/portfolio"
 	"github.com/xiaotian-quant/gateway/internal/plugins/builtin"
+	"github.com/xiaotian-quant/gateway/internal/portfolio"
 	"github.com/xiaotian-quant/gateway/internal/reconcile"
 	"github.com/xiaotian-quant/gateway/internal/social"
 	"github.com/xiaotian-quant/gateway/internal/store"
@@ -507,6 +507,7 @@ func registerStrategyFactories() {
 	strategy.RegisterStrategyFactory("trend_short_mt", func() strategy.Strategy { return strategies.NewTrendShortStrategy() })
 	strategy.RegisterStrategyFactory("support_rebound", func() strategy.Strategy { return strategies.NewSupportReboundStrategy() })
 	strategy.RegisterStrategyFactory("liquidity_heat", func() strategy.Strategy { return strategies.NewLiquidityHeatStrategy() })
+	strategy.RegisterStrategyFactory("smart_money", func() strategy.Strategy { return strategies.NewSmartMoneyStrategy() })
 	strategy.RegisterStrategyFactory("wallstreet", func() strategy.Strategy { return strategies.NewWallstreetStrategy() })
 	strategy.RegisterStrategyFactory("wallstreet_v2", func() strategy.Strategy { return strategy.NewWallStreetStrategy() })
 

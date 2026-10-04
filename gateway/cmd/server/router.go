@@ -537,6 +537,7 @@ func registerStrategyRoutes(api *gin.RouterGroup) {
 	private.GET("/strategies/logs", handler.GetStrategyLogs)
 	private.DELETE("/strategies/logs", handler.ClearStrategyLogs)
 	private.GET("/strategies/templates", handler.GetTemplates)
+	private.GET("/analysis/smart-money", handler.SmartMoneyAnalysis)
 	private.POST("/strategies/templates", handler.CreateTemplate)
 	private.DELETE("/strategies/templates/:id", handler.DeleteTemplate)
 	private.GET("/strategies/spot", handler.GetStrategiesSpot)

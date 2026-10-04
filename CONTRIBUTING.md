@@ -205,7 +205,7 @@ test(rust): add matching engine unit tests
 ## Documentation
 
 - **Architecture**: See `ARCHITECTURE.md` in the root
-- **API**: `gateway/docs/openapi.yaml` + `docs/api/rest-api.md`
+- **API**: `docs/api/openapi.yaml` + `docs/api/rest-api.md`
 - **Strategy guide**: `docs/strategy-guide.md`
 - **Deployment**: `DEPLOYMENT.md`
 

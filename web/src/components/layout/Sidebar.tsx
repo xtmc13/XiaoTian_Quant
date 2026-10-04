@@ -59,6 +59,7 @@ const navItems: NavItem[] = [
       { path: '/backtest', labelKey: 'nav.backtest' },
       { path: '/backtest/portfolio', labelKey: 'nav.portfolio-backtest' },
       { path: '/analysis', labelKey: 'nav.bias-analysis' },
+      { path: '/smart-money', labelKey: 'nav.smart-money' },
       { path: '/factor-research', labelKey: 'nav.factor-research' },
       { path: '/indicator-ide', labelKey: 'nav.indicator-ide' },
       { path: '/indicator-community', labelKey: 'nav.indicator-community' },

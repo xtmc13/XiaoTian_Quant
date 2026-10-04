@@ -11,7 +11,7 @@ import { DynamicParamField, STRAT_TYPES, TIMEFRAMES } from './StrategyFormFields
 import { STRATEGY_PRESETS, type Preset } from './StrategyPresets'
 import { createDefaultCRAParams, isCRAStrategyType, CRA_FEATURE_KEYS } from '@/lib/strategyUtils'
 import type { StrategyParamDefs, ExchangeConfiguredStatus, AddPositionItem } from '@/types'
-import { CheckCircle2, Globe } from 'lucide-react'
+import { CheckCircle2, Globe, Activity, AlertTriangle } from 'lucide-react'
 
 /**
  * 策略创建表单复用层：hook 承载全部状态/校验/提交逻辑，
@@ -154,6 +154,9 @@ export interface StrategyCreateFormState {
   configuredExchanges: Record<string, ExchangeConfiguredStatus> | undefined
   notifyChannels: string[]
   setNotifyChannels: Dispatch<SetStateAction<string[]>>
+  /** 执行方式：模拟盘/实盘（实盘需服务端 trading.live_enabled 总闸）。 */
+  executionMode: 'paper' | 'live'
+  setExecutionMode: Dispatch<SetStateAction<'paper' | 'live'>>
   saveAsDefault: boolean
   setSaveAsDefault: Dispatch<SetStateAction<boolean>>
   craParams: CRAParams
@@ -243,6 +246,10 @@ export function useStrategyCreateForm(
   const [selectedExchanges, setSelectedExchanges] = useState<string[]>([])
   const [showExchangeModal, setShowExchangeModal] = useState(false)
   const [notifyChannels, setNotifyChannels] = useState<string[]>(['browser'])
+  // 执行方式默认模拟盘；实盘卡片需确认且过服务端 live_enabled 总闸（后端
+  // 拒绝时回退并提示 forced_paper）。c6b9940 曾下线该入口，2026-10-03 按用户
+  // 要求恢复（与 SpotStrategyForm 的选择器同构）。
+  const [executionMode, setExecutionMode] = useState<'paper' | 'live'>('paper')
   const [saveAsDefault, setSaveAsDefault] = useState(false)
 
   // CRA params
@@ -485,7 +492,7 @@ export function useStrategyCreateForm(
         leverage: market === 'spot' ? 1 : craParams.leverage,
         trade_direction: market === 'spot' ? 'long' : craParams.direction,
         market_type: market === 'spot' ? 'spot' : 'swap',
-        execution_mode: 'live', // 创建即实盘（用户明确要求）；后端 live_enabled 总闸已在配置开启
+        execution_mode: executionMode, // 模拟盘默认；实盘需服务端 trading.live_enabled 开启
         notification_config: { channels: notifyChannels },
         strategy_type: strategyType,
         status: 'stopped',
@@ -532,6 +539,8 @@ export function useStrategyCreateForm(
     configuredExchanges,
     notifyChannels,
     setNotifyChannels,
+    executionMode,
+    setExecutionMode,
     saveAsDefault,
     setSaveAsDefault,
     craParams,
@@ -583,6 +592,8 @@ export function StrategyCreateFormSections({
     configuredExchanges,
     notifyChannels,
     setNotifyChannels,
+    executionMode,
+    setExecutionMode,
     craParams,
     setCraParams,
     presetKey,
@@ -841,9 +852,77 @@ export function StrategyCreateFormSections({
         )}
       </div>
 
-      {/* 4 消息通知（实盘入口已下线：payload 恒 paper，后端 live_enabled 总闸保留） */}
+      {/* 4 执行设置：模拟盘/实盘（实盘入口 2026-10-03 按用户要求恢复，同 SpotStrategyForm） */}
+      <SectionCard title="执行设置">
+        <div id="create-sec-exec" className="space-y-3 scroll-mt-20 -m-1 p-1">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={() => setExecutionMode('paper')}
+              className={cn(
+                'flex items-start gap-3 p-4 rounded-xl border transition-all text-left',
+                executionMode === 'paper'
+                  ? 'border-quant-gold bg-quant-gold/5'
+                  : 'border-quant-border hover:border-quant-gold/30'
+              )}
+            >
+              <div
+                className={cn(
+                  'w-10 h-10 rounded-lg flex items-center justify-center shrink-0',
+                  executionMode === 'paper' ? 'bg-quant-gold/10 text-quant-gold' : 'bg-quant-bg text-muted-foreground'
+                )}
+              >
+                <Activity className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="text-xs font-semibold">模拟盘（默认）</div>
+                <div className="text-[10px] text-muted-foreground mt-1">
+                  撮合引擎模拟成交（paper），不产生真实交易所下单
+                </div>
+              </div>
+              {executionMode === 'paper' && <CheckCircle2 className="w-4 h-4 text-quant-gold ml-auto shrink-0" />}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (executionMode !== 'live' && !confirm('实盘将使用真实资金下单，确认开启？')) return
+                setExecutionMode('live')
+              }}
+              className={cn(
+                'flex items-start gap-3 p-4 rounded-xl border transition-all text-left',
+                executionMode === 'live'
+                  ? 'border-quant-red bg-quant-red/10'
+                  : 'border-quant-red/30 hover:border-quant-red/60 hover:bg-quant-red/5'
+              )}
+            >
+              <div
+                className={cn(
+                  'w-10 h-10 rounded-lg flex items-center justify-center shrink-0',
+                  executionMode === 'live' ? 'bg-quant-red/15 text-quant-red' : 'bg-quant-bg text-quant-red/70'
+                )}
+              >
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="text-xs font-semibold text-quant-red">实盘（真实资金）</div>
+                <div className="text-[10px] text-quant-red/80 mt-1">
+                  信号直连真实交易所下单；需服务端开启 trading.live_enabled，可能造成本金损失
+                </div>
+              </div>
+              {executionMode === 'live' && <CheckCircle2 className="w-4 h-4 text-quant-red ml-auto shrink-0" />}
+            </button>
+          </div>
+          {executionMode === 'live' && (
+            <div className="px-3 py-2 rounded-lg bg-quant-red/10 border border-quant-red/30 text-[11px] text-quant-red leading-relaxed">
+              实盘模式将使用真实资金下单。保存时若服务端未开启实盘开关（trading.live_enabled），请求将被拒绝并回退为模拟盘。
+            </div>
+          )}
+        </div>
+      </SectionCard>
+
+      {/* 5 消息通知 */}
       <SectionCard title="消息通知">
-        <div id="create-sec-exec" className="space-y-4 scroll-mt-20 -m-1 p-1">
+        <div className="space-y-4 -m-1 p-1">
           <div>
             <div className="text-xs font-semibold mb-3">通知渠道</div>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">

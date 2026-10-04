@@ -59,6 +59,7 @@ const AlertManagerPage = lazyPage(() => import('./components/alerts/AlertManager
 const BotsSignal = lazyPage(() => import('./pages/bots/BotsSignal'), 'BotsSignal')
 const BotsAI = lazyPage(() => import('./pages/bots/BotsAI'), 'BotsAI')
 const BotsCenter = lazyPage(() => import('./pages/bots/BotsCenter'), 'BotsCenter')
+const SmartMoneyPage = lazyPage(() => import('./pages/SmartMoneyPage'), 'SmartMoneyPage')
 const DCABots = lazyPage(() => import('./pages/DCABots'), 'DCABots')
 const LayeredMartinBots = lazyPage(() => import('./pages/LayeredMartinBots'), 'LayeredMartinBots')
 const CreateStrategyPage = lazyPage(() => import('./pages/CreateStrategyPage'), 'CreateStrategyPage')
@@ -141,6 +142,7 @@ function DocumentTitle() {
     '/arbitrage': '套利监控 - 小天量化',
     '/hyperopt': '参数优化 - 小天量化',
     '/analysis': '偏差检测 - 小天量化',
+    '/smart-money': '主力行为 - 小天量化',
     '/social-trading': '社交交易 - 小天量化',
     '/onchain': '链上数据 - 小天量化',
     '/market-data': '市场数据 - 小天量化',
@@ -376,6 +378,16 @@ export default function App() {
                     element={
                       <PageShell>
                         <AnalysisPage />
+                      </PageShell>
+                    }
+                  />
+
+                  {/* 主力行为全解（Wyckoff 五段状态机） */}
+                  <Route
+                    path="/smart-money"
+                    element={
+                      <PageShell>
+                        <SmartMoneyPage />
                       </PageShell>
                     }
                   />
