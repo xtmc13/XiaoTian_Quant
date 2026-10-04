@@ -250,6 +250,8 @@ func (s *BaseCRAStrategy) Timeframes() []string {
 	add(p.OpenTrendEmaEnabled, p.OpenTrendEmaPeriod)
 	add(p.AddMacdEnabled, p.AddMacdPeriod)
 	add(p.AddEmaEnabled, p.AddEmaPeriod)
+	// C 片：反向信号判定周期（反向止盈/止损共用）也要订阅副周期供给。
+	add(s.reversePeriodArmed(), p.ReverseTakeProfitPeriod)
 	return out
 }
 
@@ -330,18 +332,36 @@ func (s *BaseCRAStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Sign
 
 	st.UpdateExtremes(bar.Close)
 
-	// 部分平仓单在途（尾单/首尾止盈信号已发出待成交终态）：不再发任何新
-	// 信号——防重复出场超卖、防与在途平仓单竞争（成交确认/拒单撤单后
-	// OnOrderUpdate 清除在途标记，下一根 K 线恢复评估）。
+	// 部分平仓/反向出场单在途（尾单/首尾止盈、反向止盈/止损信号已发出待成交
+	// 终态）：不再发任何新信号——防重复出场超卖、防与在途平仓单竞争（成交
+	// 确认/拒单撤单后 OnOrderUpdate 清除在途标记，下一根 K 线恢复评估）。
 	if st.PendingCloseKind != "" {
 		return nil, nil
 	}
 
+	// 出场优先级（币富语义，自上而下）：常规止损线 > 反向止损/反向止盈 >
+	// 常规止盈（evaluateTakeProfit）。反向出场的浮亏/浮盈门槛互斥，两者同
+	// 级；止损线触及（ratio/amount/price）优先于一切信号类出场。
+	//
 	// Stop-loss (contract only by default, but kept generic).
 	if s.isContract && st.CheckStopLoss(bar.Close, p) {
 		s.logger.Info("cra stop loss", "symbol", s.symbol, "price", bar.Close)
 		st.ExitPosition()
 		return s.signal("CLOSE", 0, "cra stop loss"), nil
+	}
+
+	// 反向止损/反向止盈（仅合约，币富名词解释 #35/#36）：判定通过即全平。
+	// 出场走 B 片同一 PendingClose 在途机制——不乐观 ExitPosition，记在途
+	// 标记；成交确认（OnOrderUpdate 减仓方向终态）才收尾，拒单/撤单清除
+	// 标记后下一根 K 线条件仍满足可重新触发。CLOSE 不带数量=全平（与止损/
+	// 全仓止盈的历史出场形态一致）。
+	if s.isContract {
+		if ok, kind := s.evaluateReverseExit(bar.Close); ok {
+			st.PendingCloseKind = kind
+			st.PendingCloseQty = st.TotalQty
+			s.logger.Info("cra reverse exit", "symbol", s.symbol, "price", bar.Close, "kind", kind)
+			return s.signal("CLOSE", 0, "cra "+reverseExitReason(kind)), nil
+		}
 	}
 
 	// Take profit（三态分支见 evaluateTakeProfit）。
@@ -390,12 +410,13 @@ func (s *BaseCRAStrategy) OnOrderUpdate(order model.OrderData, bus *event.EventB
 	}
 
 	if order.Status == model.StatusFilled {
-		// 在途部分平仓（尾单/首尾止盈）的成交确认：合约平仓单带 ClosePosition
-		// 标记；现货平仓走账本兜底路径是裸反向单（无标记，2026-10-01 修复的
-		// 出场链路）——以在途标记+减仓方向联合认定（liquidity_heat 同口径：
-		// ClosePosition || 反向单皆视为平仓）。按形态核销对应档位，仓位续存
-		// （剩余档成本/均价重算，见 CRAState.ApplyCloseFill）；核销后总量≈0
-		// （浮点尘埃/镜像漂移全平）按全平收尾。
+		// 在途平仓（尾单/首尾止盈、反向止盈/止损）的成交确认：合约平仓单带
+		// ClosePosition 标记；现货平仓走账本兜底路径是裸反向单（无标记，
+		// 2026-10-01 修复的出场链路）——以在途标记+减仓方向联合认定
+		// （liquidity_heat 同口径：ClosePosition || 反向单皆视为平仓）。
+		// 成交量<总量按形态核销对应档位，仓位续存（剩余档成本/均价重算，见
+		// CRAState.ApplyCloseFill，未知形态 FIFO 兜底）；全量成交（含反向
+		// 出场的全平单）或核销后总量≈0（浮点尘埃/镜像漂移全平）按全平收尾。
 		if kind := s.state.PendingCloseKind; kind != "" && s.isReduceSide(order.Side) {
 			filled := order.Filled
 			if filled <= 0 {
@@ -428,12 +449,13 @@ func (s *BaseCRAStrategy) OnOrderUpdate(order model.OrderData, bus *event.EventB
 		return nil, nil
 	}
 
-	// 在途部分平仓的拒单/撤单/过期：状态从未乐观变更，只需清除在途标记，
-	// 下一根 K 线止盈条件仍满足会重新发信号（与 PendingAddCount 回补同口径）。
-	// 同样按减仓方向认定（覆盖现货无 ClosePosition 标记的裸反向单）。
+	// 在途平仓的拒单/撤单/过期：状态从未乐观变更，只需清除在途标记，下一
+	// 根 K 线出场条件（止盈/反向止盈/反向止损）仍满足会重新发信号（与
+	// PendingAddCount 回补同口径）。同样按减仓方向认定（覆盖现货无
+	// ClosePosition 标记的裸反向单）。
 	if s.state.PendingCloseKind != "" && s.isReduceSide(order.Side) &&
 		(order.Status == model.StatusRejected || order.Status == model.StatusCancelled || order.Status == model.StatusExpired) {
-		s.logger.Warn("cra partial close order ended without fill, re-arm take profit",
+		s.logger.Warn("cra close order ended without fill, re-arm exit",
 			"symbol", s.symbol, "kind", s.state.PendingCloseKind, "status", order.Status)
 		s.state.PendingCloseKind = ""
 		s.state.PendingCloseQty = 0
@@ -631,6 +653,88 @@ func (s *BaseCRAStrategy) evaluateTakeProfit(price float64) (bool, float64, stri
 	default:
 		return st.CheckStaticTakeProfit(price, p.TakeProfitMethod, p.TakeProfitRatio, p.ProfitCallback), 0, "full"
 	}
+}
+
+// ── C 片：反向止盈/反向止损（币富名词解释 #35/#36，仅合约）──
+//
+// 反向信号 = 与持仓方向相反的 MACD 交叉事件：金叉开多 → 死叉为反向；死叉开空
+// → 金叉为反向。判定周期 = reverse_take_profit_period（5m/15m，经 A2 多周期
+// 供给取数；等于工作周期或未接线时 indicatorBars 如实降级为工作周期 bar）。
+// MACD 参数沿用 A3 tunables（indicator_params.macd，缺省 12/26/9）。
+// 判定点沿用 OnBar 节奏：每根工作 K 线闭合时对判定周期序列末根做交叉检测
+// （与开仓 MACD 门槛同口径，只有新鲜交叉事件才算"出现反向信号"）。
+//
+// 触发条件（严格按币富）：
+//   - 反向止盈（#35）：未补仓（PositionCount<=1，档数同源对齐）且浮盈>0 且
+//     反向信号 → 全平。已补仓或触发点浮亏时不生效，自动回落原有止盈方式；
+//     浮盈=0 不算浮盈。
+//   - 反向止损（#36）：反向信号且浮亏<0 → 全平。#36 未限制补仓，按字面实现
+//     ——有浮亏+反向信号即止损（与补仓档数无关）。
+//
+// period=close（"关闭"）：反向止盈关闭；反向止损是独立开关，无专属周期配置，
+// 此时降级为工作周期 MACD 判定（indicatorBars 对 close 的天然语义）。两者都
+// 只在止损线未触及的区间有意义——OnBar 里常规止损分支在前，优先级
+// 止损 > 反向止损/反向止盈 > 常规止盈。
+
+// reversePeriodArmed 报告反向信号判定周期是否配置了有效副周期档位
+// （reverse_take_profit_period ≠ close/空）。供 Timeframes 订阅与反向止盈
+// 开关判定共用。
+func (s *BaseCRAStrategy) reversePeriodArmed() bool {
+	p := s.params
+	if p == nil {
+		return false
+	}
+	norm := strings.ToLower(strings.TrimSpace(p.ReverseTakeProfitPeriod))
+	return norm != "" && norm != "close"
+}
+
+// evaluateReverseExit 反向止盈/止损判定，返回 (触发, 出场形态
+// reverse_tp|reverse_sl)。浮盈/浮亏口径与止盈/止损一致（均价基准
+// ProfitPct）。全平出场，qty 由调用方按全平形态处理（不带数量的 CLOSE）。
+func (s *BaseCRAStrategy) evaluateReverseExit(price float64) (bool, string) {
+	p := s.params
+	st := s.state
+	tpArmed := s.reversePeriodArmed()
+	if !tpArmed && !p.ReverseStopLoss {
+		return false, ""
+	}
+	profit := st.ProfitPct(price)
+	// 反向止盈（#35）：未补仓+浮盈+反向信号。PendingAddCount 不计入——
+	// 在途补仓信号尚未成交，仓位仍是首单单档。
+	wantTP := tpArmed && st.PositionCount <= 1 && profit > 0
+	// 反向止损（#36）：浮亏+反向信号，不限制补仓。
+	wantSL := p.ReverseStopLoss && profit < 0
+	if !wantTP && !wantSL {
+		return false, ""
+	}
+	if !s.reverseMacdSignal() {
+		return false, ""
+	}
+	if wantSL {
+		return true, "reverse_sl"
+	}
+	return true, "reverse_tp"
+}
+
+// reverseMacdSignal 在判定周期序列末根检测反向 MACD 交叉（死叉对多仓、金叉
+// 对空仓）。序列不足 minBars 时 indicatorBars 降级工作周期并 WARN（每周期
+// 一次，A2 既有语义）；交叉检测器对不足窗口的序列返回 false，不误触发。
+func (s *BaseCRAStrategy) reverseMacdSignal() bool {
+	p := s.params
+	macd := MACDTunables{Fast: p.MacdFast, Slow: p.MacdSlow, Signal: p.MacdSignal}
+	bars := s.indicatorBars(p.ReverseTakeProfitPeriod, p.MacdSlow+p.MacdSignal+2)
+	if s.state.Side == SideShort {
+		return MACDBullishWithTunables(bars, macd)
+	}
+	return MACDBearishWithTunables(bars, macd)
+}
+
+// reverseExitReason 出场形态到信号原因的映射（RuntimeStatus/日志同源）。
+func reverseExitReason(kind string) string {
+	if kind == "reverse_sl" {
+		return "reverse stop loss"
+	}
+	return "reverse take profit"
 }
 
 func (s *BaseCRAStrategy) openIndicatorsConfirmed(side PositionSide) bool {

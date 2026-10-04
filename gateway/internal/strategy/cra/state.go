@@ -47,10 +47,11 @@ type CRAState struct {
 	// （新成交/部分平仓核销）即重置重记。与 HighestProfitPct（全仓/移动止盈
 	// 口径）相互独立。
 	TailPeakProfitPct float64
-	// PendingCloseKind/PendingCloseQty 在途部分平仓（尾单/首尾止盈信号已发出、
-	// 待成交确认）："" | "tail" | "head_tail"。在途期间阻挡一切新信号
-	// （防重复出场超卖），成交/拒单/撤单终态后清除。full 全平直接
-	// ExitPosition，不经在途标记。
+	// PendingCloseKind/PendingCloseQty 在途平仓（尾单/首尾止盈、反向止盈/止损
+	// 信号已发出、待成交确认）："" | "tail" | "head_tail" | "reverse_tp" |
+	// "reverse_sl"。在途期间阻挡一切新信号（防重复出场超卖），成交/拒单/
+	// 撤单终态后清除。full 全平（常规止盈/移动止盈/止损）直接 ExitPosition，
+	// 不经在途标记；反向出场虽是全平，也走在途标记以便拒单后重新触发（C 片）。
 	PendingCloseKind string
 	PendingCloseQty  float64
 }

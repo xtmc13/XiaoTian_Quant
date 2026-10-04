@@ -699,6 +699,10 @@ export function CRAParamForm({ value, onChange, market, className, openFields = 
               />
               反向止损
             </label>
+            <div className="text-[10px] text-muted-foreground">
+              反向止盈：未补仓且浮盈时，所选周期 MACD 出现反向交叉（多单死叉/空单金叉）即清仓；已补仓或浮亏时自动回到原止盈方式。
+              反向止损：浮亏时出现反向信号直接清仓（不限补仓，反向止盈关闭时按工作周期判定）。
+            </div>
           </div>
         )}
       </Section>
