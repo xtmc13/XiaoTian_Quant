@@ -72,6 +72,8 @@ export interface SignalSource {
   type: 'webhook' | 'api' | 'internal'
   webhook_url?: string
   enabled: boolean
+  /** 属主用户 ID；0 = 系统/匿名创建（后端语义：任何登录上下文可编辑） */
+  owner_user_id?: number
   signal_count_today: number
   signal_count_total: number
   last_signal_at?: string
@@ -80,13 +82,46 @@ export interface SignalSource {
   fee_model?: string
   /** 费率百分比（profit_share 时有效） */
   fee_percent?: number
+  /** 月费（fixed_monthly 时有效，单位 credits） */
+  monthly_fee?: number
   tp_sl_config?: {
     tp1_pct: number
     tp2_pct: number
     tp3_pct: number
     sl_pct: number
-    position_size_pct: number
+    position_size_pct?: number
   }
+}
+
+/** POST /executor/sources 创建信号源的请求体（对齐 handler.ExecutorCreateSignalSource）。 */
+export interface SignalSourceCreatePayload {
+  name: string
+  type?: string
+  fee_model?: string
+  fee_percent?: number
+  monthly_fee?: number
+  enabled?: boolean
+  tp_sl?: {
+    tp1_pct: number
+    tp2_pct: number
+    tp3_pct: number
+    sl_pct: number
+  }
+}
+
+/** GET /executor/sources/:id/subscribers 的订阅者记录（对齐 store.SignalSourceSubscription）。 */
+export interface SignalSourceSubscriber {
+  id: number
+  source_id: string
+  user_id: number
+  fee_model: string
+  fee_percent: number
+  monthly_fee: number
+  next_billing_at: number
+  pending_share: number
+  settled_share: number
+  status: string
+  created_at: number
 }
 
 /** GET /executor/stats 统计数据（与后端契约对齐）。 */

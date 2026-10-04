@@ -5,6 +5,7 @@ import { useAppStore } from '@/stores/appStore'
 import { useI18n } from '@/i18n'
 import { useAuthStore } from '@/stores/authStore'
 import {
+  Activity,
   BarChart3,
   LineChart,
   Brain,
@@ -44,6 +45,7 @@ const navItems: NavItem[] = [
     icon: LayoutGrid,
     children: [
       { path: '/bots', labelKey: 'nav.bots-center' },
+      { path: '/bots/signal', labelKey: 'nav.signal-bots' },
       { path: '/bots/dca', labelKey: 'nav.dca-bots' },
       { path: '/bots/layered-martin', labelKey: 'nav.layered-martin' },
     ],
@@ -78,7 +80,15 @@ const navItems: NavItem[] = [
   },
 
   // AI 分析
-  { path: '/ai', labelKey: 'nav.ai', icon: Brain },
+  {
+    labelKey: 'nav.ai',
+    icon: Brain,
+    children: [
+      { path: '/ai', labelKey: 'nav.ai-overview' },
+      { path: '/ai/rl', labelKey: 'nav.rl-training' },
+      { path: '/ai/tensorboard', labelKey: 'nav.tensorboard' },
+    ],
+  },
 
 
   // 套利
@@ -118,7 +128,19 @@ const navItems: NavItem[] = [
       { path: '/hyperopt', labelKey: 'nav.hyperopt' },
       { path: '/onchain', labelKey: 'nav.onchain' },
       { path: '/market-data', labelKey: 'nav.market-data' },
+      { path: '/data', labelKey: 'nav.data-download' },
+      { path: '/alerts', labelKey: 'nav.alerts' },
       { path: '/author-dashboard', labelKey: 'nav.author-dashboard' },
+    ],
+  },
+
+  // 系统
+  {
+    labelKey: 'nav.system',
+    icon: Activity,
+    children: [
+      { path: '/status', labelKey: 'nav.system-status' },
+      { path: '/logs', labelKey: 'nav.system-logs' },
     ],
   },
 

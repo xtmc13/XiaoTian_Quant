@@ -115,6 +115,8 @@ import {
   type ExecutorPosition,
   type ExecutionRecord,
   type SignalSource,
+  type SignalSourceCreatePayload,
+  type SignalSourceSubscriber,
   type ExecutorStats,
   type AIRobotConfig,
   type AISignal,
@@ -2235,8 +2237,18 @@ export const executorApi = {
   getExecutionRecords: (params?: { bot_id?: string; limit?: number }) =>
     axiosInstance.get<{ records: ExecutionRecord[] }>('/executor/records', { params }),
   getSignalSources: () => axiosInstance.get<{ sources: SignalSource[] }>('/executor/signal-sources'),
+  createSignalSource: (data: SignalSourceCreatePayload) =>
+    axiosInstance.post<{ success: boolean; source_id: string }>('/executor/sources', data),
   updateSignalSource: (id: string, data: Partial<SignalSource>) =>
     axiosInstance.put<{ success: boolean }>(`/executor/signal-sources/${id}`, data),
+  deleteSignalSource: (id: string) =>
+    axiosInstance.delete<{ success: boolean; cancelled_subscriptions: number }>(`/executor/signal-sources/${id}`),
+  subscribeSignalSource: (id: string) =>
+    axiosInstance.post<{ success: boolean; subscription_id: number; fee_model: string; next_billing_at: number }>(
+      `/executor/sources/${id}/subscribe`
+    ),
+  getSignalSourceSubscribers: (id: string) =>
+    axiosInstance.get<{ success: boolean; subscribers: SignalSourceSubscriber[] }>(`/executor/sources/${id}/subscribers`),
   // GET /executor/stats — 信号统计：KPI、近 30 日盈亏曲线、按交易对汇总
   getStats: () =>
     axiosInstance

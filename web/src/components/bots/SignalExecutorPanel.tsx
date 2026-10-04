@@ -26,7 +26,7 @@ import { AsyncDataWrapper } from '@/components/ui/AsyncDataWrapper'
 import { TradeRow, TradeRowList, type TradeRowItem } from '@/components/ui/TradeRow'
 import { executorApi } from '@/lib/api'
 import type { ExecutorStatus, ExecutionRecord, ExecutorPosition } from '@/types'
-import { toast } from '@/lib/useToast'
+import { SignalSourceManager } from './SignalSourceManager'
 
 /* ── KPI Data Builder ── */
 const buildKPIItems = (status: ExecutorStatus): KPICardItem[] => [
@@ -313,6 +313,8 @@ const ActivePositionsView: React.FC<{
 
 /* ── Main Panel ── */
 export const SignalExecutorPanel: React.FC = () => {
+  const [sourceManagerOpen, setSourceManagerOpen] = React.useState(false)
+
   const { data: status, isLoading: statusLoading } = useQuery({
     queryKey: ['executor', 'status'],
     queryFn: () => executorApi.getStatus().then((r) => r.data),
@@ -405,7 +407,14 @@ export const SignalExecutorPanel: React.FC = () => {
       </SectionCard>
 
       {/* Signal Sources — 使用通用组件 */}
-      <SectionCard title="信号来源">
+      <SectionCard
+        title="信号来源"
+        headerAction={
+          <Button variant="outline" size="sm" onClick={() => setSourceManagerOpen(true)}>
+            管理信号源
+          </Button>
+        }
+      >
         <AsyncDataWrapper
           isLoading={sourcesLoading}
           data={sourcesData}
@@ -418,7 +427,7 @@ export const SignalExecutorPanel: React.FC = () => {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => toast('info', '请前往设置页配置信号源')}
+                  onClick={() => setSourceManagerOpen(true)}
                 >
                   配置信号源
                 </Button>
@@ -458,6 +467,9 @@ export const SignalExecutorPanel: React.FC = () => {
           )}
         </AsyncDataWrapper>
       </SectionCard>
+
+      {/* 信号源管理（列表/新建/编辑/删除/订阅者） */}
+      <SignalSourceManager open={sourceManagerOpen} onClose={() => setSourceManagerOpen(false)} />
     </div>
   )
 }
