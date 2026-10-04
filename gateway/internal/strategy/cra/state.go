@@ -54,6 +54,17 @@ type CRAState struct {
 	// 不经在途标记；反向出场虽是全平，也走在途标记以便拒单后重新触发（C 片）。
 	PendingCloseKind string
 	PendingCloseQty  float64
+
+	// PeakAddCount 当前循环的峰值已成交补仓次数（= 循环内 PositionCount 峰值
+	// −1）。尾单/首尾止盈部分平仓会削减 PositionCount，但"被套档数"以峰值计
+	// （币富 #13 顺势语义的锚点是被套仓补了几单，而非平仓收尾时剩几档）。
+	PeakAddCount int
+	// PrevLoopSide/PrevLoopTrappedAdds 顺势而为（E 片）换向锚点：最近一次完整
+	// 结束循环的方向与其峰值补仓次数。每次循环结束（ExitPosition）重写——
+	// 干净结束（0 次补仓）即清零锚点，此后换向新开不再放大。属跨循环记忆，
+	// ResetForNextLoop 刻意保留，Reset（Stop）才清空。
+	PrevLoopSide        PositionSide
+	PrevLoopTrappedAdds int
 }
 
 // Reset clears all runtime state.
@@ -62,6 +73,8 @@ func (s *CRAState) Reset() {
 }
 
 // ResetForNextLoop prepares state for the next cycle after a full close.
+// 跨循环记忆（PrevLoopSide/PrevLoopTrappedAdds 顺势锚点）不在此清除——
+// 清零语义由 ExitPosition 的重写承载（干净循环写 0 即清零）。
 func (s *CRAState) ResetForNextLoop() {
 	s.InPosition = false
 	s.PositionCount = 0
@@ -80,6 +93,7 @@ func (s *CRAState) ResetForNextLoop() {
 	s.TailPeakProfitPct = 0
 	s.PendingCloseKind = ""
 	s.PendingCloseQty = 0
+	s.PeakAddCount = 0
 }
 
 // UpdateExtremes updates highest/lowest prices seen while in position.
@@ -387,8 +401,24 @@ type FillRecord struct {
 // 出场形态核销——≈剩余总量=全平清空、≈尾档=尾单止盈平尾档、≈首+尾档=
 // 首尾止盈平首尾、其它=FIFO 从首档消耗（手工/未知减仓兜底）。
 func RebuildLotsFromFills(fills []FillRecord) ([]EntryLot, PositionSide) {
-	var lots []EntryLot
-	side := PositionSide("")
+	lots, side, _, _ := replayFills(fills)
+	return lots, side
+}
+
+// RebuildLoopMemoryFromFills 重放成交明细重建顺势而为换向锚点（E 片重启存续）：
+// 返回最近一次完整结束（全平）循环的方向与峰值补仓次数；账本里没有完整结束
+// 的循环时返回 "" 与 0（锚点为空，重启后首轮不放大）。
+func RebuildLoopMemoryFromFills(fills []FillRecord) (PositionSide, int) {
+	_, _, prevSide, prevAdds := replayFills(fills)
+	return prevSide, prevAdds
+}
+
+// replayFills 成交明细重放的共享实现：返回当前未平仓循环的分档/方向，以及
+// 最近一个全平循环的 {方向, 峰值补仓次数}（顺势锚点重建，与运行时
+// ExitPosition 的重写语义镜像——干净循环 0 补仓会覆盖掉更早的被套记录）。
+func replayFills(fills []FillRecord) (lots []EntryLot, side PositionSide, prevSide PositionSide, prevAdds int) {
+	side = PositionSide("")
+	peakLots := 0
 	for _, f := range fills {
 		if f.Qty <= 0 || f.Price <= 0 {
 			continue
@@ -401,16 +431,29 @@ func RebuildLotsFromFills(fills []FillRecord) ([]EntryLot, PositionSide) {
 				side = SideShort
 			}
 			lots = []EntryLot{{Price: f.Price, Qty: f.Qty}}
+			peakLots = 1
 			continue
 		}
 		isEntry := (side == SideLong && isBuy) || (side == SideShort && !isBuy)
 		if isEntry {
 			lots = append(lots, EntryLot{Price: f.Price, Qty: f.Qty})
+			if len(lots) > peakLots {
+				peakLots = len(lots)
+			}
 			continue
 		}
 		lots = consumeLotsReplay(lots, f.Qty)
+		if len(lots) == 0 {
+			// 本循环全平结束：锚点重写为本循环（峰值档数−1=补仓次数）。
+			prevSide = side
+			prevAdds = peakLots - 1
+			if prevAdds < 0 {
+				prevAdds = 0
+			}
+			peakLots = 0
+		}
 	}
-	return lots, side
+	return lots, side, prevSide, prevAdds
 }
 
 // consumeLotsReplay 重放期的平仓核销：按数量匹配运行时出场形态（全平/尾单/
@@ -528,9 +571,21 @@ func (s *CRAState) EnterPosition(price float64, side PositionSide) {
 }
 
 // ExitPosition finalizes state on close signal.
+// 循环结束即重写顺势换向锚点（币富 #13 可达语义）：本循环方向+峰值补仓次数
+// 传给下一循环判定；干净结束（0 补仓）写入 0 即清零，对侧新开不再放大。
 func (s *CRAState) ExitPosition() {
 	s.LoopExecuted++
+	s.PrevLoopSide = s.Side
+	s.PrevLoopTrappedAdds = s.PeakAddCount
 	s.ResetForNextLoop()
+}
+
+// noteEntryFilled 入场成交（首单/补仓）后维护峰值补仓次数。PositionCount 由
+// 调用方先行递增；部分平仓（ApplyCloseFill）削档不回退峰值。
+func (s *CRAState) noteEntryFilled() {
+	if adds := s.PositionCount - 1; adds > s.PeakAddCount {
+		s.PeakAddCount = adds
+	}
 }
 
 // SignalDirection returns the model signal direction for the configured side.

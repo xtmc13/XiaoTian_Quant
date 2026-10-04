@@ -58,6 +58,37 @@ describe('CRAParamForm', () => {
     expect(hasOpenDouble).toBe(true)
   })
 
+  // ── E 片：顺势而为口径说明（合约区，dual 生效语义如实标注）──
+
+  it('shows follow trend caption only when enabled on contract', () => {
+    const { unmount } = render(
+      <CRAParamForm {...baseProps} market="contract" value={{ ...DEFAULT_CRA_PARAMS, followTrend: true }} />,
+      { wrapper }
+    )
+    expect(screen.getByText(/仅双向（dual）模式生效/)).toBeTruthy()
+    expect(screen.getByText(/min\(N\+1, 5\) 倍/)).toBeTruthy()
+    unmount()
+
+    // 未开启时不渲染说明。
+    render(<CRAParamForm {...baseProps} market="contract" />, { wrapper })
+    expect(screen.queryByText(/仅双向（dual）模式生效/)).toBeNull()
+  })
+
+  it('hides follow trend caption on spot (币富该功能在合约页)', () => {
+    render(<CRAParamForm {...baseProps} value={{ ...DEFAULT_CRA_PARAMS, followTrend: true }} />, { wrapper })
+    expect(screen.queryByLabelText('顺势而为')).toBeNull()
+    expect(screen.queryByText(/仅双向（dual）模式生效/)).toBeNull()
+  })
+
+  it('round-trips followTrend as follow_trend in the api payload', () => {
+    const payload = craParamsToApiPayload({ ...DEFAULT_CRA_PARAMS, followTrend: true })
+    expect(payload.follow_trend).toBe(true)
+    const restored = apiPayloadToCraParams({ follow_trend: true })
+    expect(restored.followTrend).toBe(true)
+    // 缺省回填默认 false（与后端 ParseCRAParams 一致）。
+    expect(apiPayloadToCraParams({}).followTrend).toBe(false)
+  })
+
   // ── D2：在线单量限制输入框（合约区，币富 #32 跨实例总量闸口径）──
 
   it('renders online order limit input with default 10 (contract only)', () => {

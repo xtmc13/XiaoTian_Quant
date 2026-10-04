@@ -451,6 +451,12 @@ export function CRAParamForm({ value, onChange, market, className, openFields = 
             开仓加倍：首单成交金额×2（如 10U×5 倍杠杆由买 50U 变为买 100U）；补仓阶梯基数不变，仍按首单原始金额×倍数计算。
           </div>
         )}
+        {isContract && value.followTrend && (
+          <div className="text-[10px] text-muted-foreground -mt-1">
+            顺势而为：仅双向（dual）模式生效——上一循环以被套状态结束（补仓 N 次）且新一轮换向开仓时，首单金额放大 min(N+1, 5) 倍（上限 5 倍）；
+            同向新开或上轮无补仓不放大，补仓阶梯基数不变。单向（做多/做空）模式下该开关不影响下单量。
+          </div>
+        )}
         {isContract && (
           <div>
             <label className="text-[11px] text-muted-foreground mb-1.5 block">在线单量限制</label>

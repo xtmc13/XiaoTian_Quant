@@ -137,8 +137,13 @@ func (s *BaseCRAStrategy) Start(params map[string]any) error {
 	// 修复注入时序）。逐笔明细 restored_fills 重放优先——各档成本精确
 	// （尾单/首尾止盈依赖档级成本）；聚合 restored_position_qty/vwap 兜底
 	// ——净持仓合成单档，tail/head_tail 退化为均价判定的单档。
-	if lots, side := parseRestoredLots(params); len(lots) > 0 {
+	if lots, side, prevSide, prevAdds := parseRestoredLots(params); len(lots) > 0 {
 		s.restoreLotsLocked(lots, side)
+		// 顺势换向锚点随逐笔重放一并重建（E 片重启存续）：最近一个全平
+		// 循环的 {方向, 峰值补仓次数}。聚合兜底路径（restored_position_qty
+		// 无逐笔明细）无法反推历史循环，锚点降级为 0——重启后首轮不放大。
+		s.state.PrevLoopSide = prevSide
+		s.state.PrevLoopTrappedAdds = prevAdds
 	} else if q, ok := params["restored_position_qty"].(float64); ok && q > 0 {
 		v, _ := params["restored_position_vwap"].(float64)
 		s.restorePositionLocked(q, v)
@@ -329,12 +334,17 @@ func (s *BaseCRAStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Sign
 		// ×2），不改变 add_positions 阶梯的基数——补仓第 N 档仍按首单原始金额
 		// ×multiplier 计（见下方 Add positions 分支，entryQty 的 multiplier 实参
 		// 是 cfg.Multiplier，不经过此处的 doubling）。
+		// 顺势而为（币富名词解释 #13/#40，follow_trend）同理只放大首单名义：
+		// 与 open_double 叠加时 首单 = 首单金额 ×首单倍数 ×(open_double?2:1)
+		// ×顺势倍数，补仓阶梯基数一律不随任何首单放大变化（同 D 片口径纪律）。
 		mult := p.FirstOrderMultiplier
 		if p.OpenDouble {
 			mult *= 2
 		}
+		trendMult := s.followTrendMultiplier(st.Side)
+		mult *= trendMult
 		qty := RoundQty(s.entryQty(bar.Close, mult))
-		s.logger.Info("cra first order", "symbol", s.symbol, "price", bar.Close, "qty", qty, "side", st.Side, "open_double", p.OpenDouble)
+		s.logger.Info("cra first order", "symbol", s.symbol, "price", bar.Close, "qty", qty, "side", st.Side, "open_double", p.OpenDouble, "follow_trend_mult", trendMult)
 		return s.signal(st.SignalDirection(), qty, "cra first order"), nil
 	}
 
@@ -452,6 +462,7 @@ func (s *BaseCRAStrategy) OnOrderUpdate(order model.OrderData, bus *event.EventB
 				s.state.PendingAddCount--
 			}
 			s.state.PositionCount++
+			s.state.noteEntryFilled()
 			s.state.RecordFill(order.AvgFillPrice, order.Filled, SideBuy)
 		}
 		return nil, nil
@@ -520,13 +531,20 @@ func (s *BaseCRAStrategy) restoreLotsLocked(lots []EntryLot, side PositionSide) 
 	st.HighestPrice = st.AvgEntryPrice
 	st.LowestPrice = st.AvgEntryPrice
 	st.PositionCount = len(lots)
+	// 重建的当前循环至少已有 len(lots)-1 次补仓：峰值补仓次数以此为下限
+	// （重启前更高的峰值已不可考，取可见下限，与 ExitPosition 锚点口径一致）。
+	if adds := len(lots) - 1; adds > st.PeakAddCount {
+		st.PeakAddCount = adds
+	}
 	s.logger.Info("cra position restored", "symbol", s.symbol, "lots", len(lots),
 		"qty", qty, "vwap", st.AvgEntryPrice, "side", side)
 }
 
 // restorePositionLocked 聚合重建兜底（无逐笔明细）：净持仓合成单档，
 // tail/head_tail 退化为以均价判定的该档。方向取参数 direction（dual 无法
-// 从聚合量反推，按多处理——聚合注入本身只在净多账本时发生）。
+// 从聚合量反推，按多处理——聚合注入本身只在净多账本时发生）。聚合量同样
+// 无法反推历史循环，顺势换向锚点（PrevLoopSide/PrevLoopTrappedAdds）在此
+// 路径保持 0——重启后首轮不放大，待本循环结束后按运行时口径重写。
 func (s *BaseCRAStrategy) restorePositionLocked(qty, vwap float64) {
 	if qty <= 0 || vwap <= 0 {
 		return
@@ -541,16 +559,17 @@ func (s *BaseCRAStrategy) restorePositionLocked(qty, vwap float64) {
 // parseRestoredLots 解析 handler 注入的 restored_fills（[]any of
 // {"side","qty","price"}，成交时间升序）并重放重建分档持仓；分档总量与聚合
 // 净持仓对不上（账本残缺/越权改单）时返回空，调用方退化聚合单档。
-func parseRestoredLots(params map[string]any) ([]EntryLot, PositionSide) {
+// 顺带重建顺势换向锚点（E 片）：最近一个全平循环的 {方向, 峰值补仓次数}。
+func parseRestoredLots(params map[string]any) ([]EntryLot, PositionSide, PositionSide, int) {
 	raw, ok := params["restored_fills"].([]any)
 	if !ok || len(raw) == 0 {
-		return nil, ""
+		return nil, "", "", 0
 	}
 	fills := make([]FillRecord, 0, len(raw))
 	for _, item := range raw {
 		m, ok := item.(map[string]any)
 		if !ok {
-			return nil, ""
+			return nil, "", "", 0
 		}
 		fills = append(fills, FillRecord{
 			Side:  strVal(m, "side", ""),
@@ -558,9 +577,9 @@ func parseRestoredLots(params map[string]any) ([]EntryLot, PositionSide) {
 			Price: numFloat(m, "price", 0),
 		})
 	}
-	lots, side := RebuildLotsFromFills(fills)
+	lots, side, prevSide, prevAdds := replayFills(fills)
 	if len(lots) == 0 {
-		return nil, ""
+		return nil, "", "", 0
 	}
 	if q, ok := params["restored_position_qty"].(float64); ok && q > 0 {
 		total := 0.0
@@ -568,10 +587,10 @@ func parseRestoredLots(params map[string]any) ([]EntryLot, PositionSide) {
 			total += l.Qty
 		}
 		if !approxQty(total, q) {
-			return nil, ""
+			return nil, "", "", 0
 		}
 	}
-	return lots, side
+	return lots, side, prevSide, prevAdds
 }
 
 func (s *BaseCRAStrategy) signal(direction string, qty float64, reason string) *model.Signal {
@@ -600,6 +619,33 @@ func (s *BaseCRAStrategy) entryQty(price, multiplier float64) float64 {
 		return (notional * s.params.Leverage) / price
 	}
 	return notional / price
+}
+
+// followTrendMaxMultiplier 顺势而为首单放大倍数硬上限（币富名词解释 #13：
+// 逆势补仓 4-7 次时顺势首单都只能开 5 倍——cap=5）。
+const followTrendMaxMultiplier = 5
+
+// followTrendMultiplier 顺势而为（E 片）首单放大倍数。币富原语义（#13/#40，
+// 马丁趋势/华尔街双向策略）是多空同时持仓时以被套对侧补仓次数+1 放大顺势
+// 侧再开仓；本引擎为每循环单侧模型（resolveContractSide 循环起点 EMA20
+// 选边，多空不同时持仓），"同时开仓"前提不成立，按可达语义实现：dual 模式
+// 下上一循环以被套状态结束（峰值补仓 N 次）、新一轮换向开仓时，首单名义
+// 放大 min(N+1, 5)。同向新开、上轮无补仓（干净结束已清零锚点）、非 dual、
+// 非合约、开关关闭，一律返回 1（零行为变化）。
+func (s *BaseCRAStrategy) followTrendMultiplier(newSide PositionSide) float64 {
+	p := s.params
+	st := s.state
+	if !s.isContract || p.Direction != "dual" || !p.FollowTrend {
+		return 1
+	}
+	if st.PrevLoopTrappedAdds <= 0 || st.PrevLoopSide == "" || st.PrevLoopSide == newSide {
+		return 1
+	}
+	m := st.PrevLoopTrappedAdds + 1
+	if m > followTrendMaxMultiplier {
+		m = followTrendMaxMultiplier
+	}
+	return float64(m)
 }
 
 func (s *BaseCRAStrategy) isLongPreferred() bool {
