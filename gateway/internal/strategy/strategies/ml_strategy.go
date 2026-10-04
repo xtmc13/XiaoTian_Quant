@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"strings"
 	"sync"
 	"time"
 
@@ -99,7 +100,7 @@ func (s *MLStrategy) Start(params map[string]any) error {
 	defer s.mu.Unlock()
 
 	if v, ok := params["symbol"].(string); ok && v != "" {
-		s.symbol = v
+		s.symbol = strings.ToUpper(strings.TrimSpace(v))
 	}
 	if v, ok := params["model_id"].(string); ok && v != "" {
 		s.modelID = v
@@ -158,6 +159,9 @@ func (s *MLStrategy) ApplyParams(m map[string]any) error {
 	}
 	if err := s.params.FromMap(m); err != nil {
 		return err
+	}
+	if sym := getString(m, "symbol", ""); sym != "" {
+		s.symbol = strings.ToUpper(strings.TrimSpace(sym))
 	}
 	if p := s.params.Get("predict_bars"); p != nil {
 		s.predictBars = p.GetInt()

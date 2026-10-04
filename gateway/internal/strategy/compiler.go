@@ -10,44 +10,44 @@ import (
 
 // Indicator types supported by the compiler.
 const (
-	IndEMA   = "EMA"
-	IndSMA   = "SMA"
-	IndRSI   = "RSI"
-	IndMACD  = "MACD"
-	IndBoll  = "BOLL"
-	IndATR   = "ATR"
-	IndKDJ   = "KDJ"
-	IndVWAP  = "VWAP"
-	IndOBV   = "OBV"
+	IndEMA  = "EMA"
+	IndSMA  = "SMA"
+	IndRSI  = "RSI"
+	IndMACD = "MACD"
+	IndBoll = "BOLL"
+	IndATR  = "ATR"
+	IndKDJ  = "KDJ"
+	IndVWAP = "VWAP"
+	IndOBV  = "OBV"
 )
 
 // Operator types for condition matching.
 const (
-	OpCrossUp     = "cross_up"      // fast crosses above slow
-	OpCrossDown   = "cross_down"    // fast crosses below slow
-	OpAbove       = "above"         // value > threshold
-	OpBelow       = "below"         // value < threshold
-	OpGoldenCross = "golden_cross"  // MA golden cross
-	OpDeathCross  = "death_cross"   // MA death cross
-	OpRSIOversold = "rsi_oversold"  // RSI < 30
+	OpCrossUp       = "cross_up"       // fast crosses above slow
+	OpCrossDown     = "cross_down"     // fast crosses below slow
+	OpAbove         = "above"          // value > threshold
+	OpBelow         = "below"          // value < threshold
+	OpGoldenCross   = "golden_cross"   // MA golden cross
+	OpDeathCross    = "death_cross"    // MA death cross
+	OpRSIOversold   = "rsi_oversold"   // RSI < 30
 	OpRSIOverbought = "rsi_overbought" // RSI > 70
-	OpBollLower   = "boll_lower"    // price touches lower band
-	OpBollUpper   = "boll_upper"    // price touches upper band
-	OpMACDBullish = "macd_bullish"  // MACD > signal
-	OpMACDBearish = "macd_bearish"  // MACD < signal
+	OpBollLower     = "boll_lower"     // price touches lower band
+	OpBollUpper     = "boll_upper"     // price touches upper band
+	OpMACDBullish   = "macd_bullish"   // MACD > signal
+	OpMACDBearish   = "macd_bearish"   // MACD < signal
 )
 
 // StrategyConfig is the JSON-serializable strategy definition.
 type StrategyConfig struct {
-	Name        string            `json:"name"`
-	Symbol      string            `json:"symbol"`
-	Interval    string            `json:"interval"`
-	Indicators  []IndicatorDef    `json:"indicators"`
-	EntryRules  []RuleDef         `json:"entry_rules"`
-	ExitRules   []RuleDef         `json:"exit_rules"`
-	RiskMgmt    RiskMgmtDef       `json:"risk_mgmt"`
-	MaxPositions int              `json:"max_positions"`
-	Enabled     bool              `json:"enabled"`
+	Name         string         `json:"name"`
+	Symbol       string         `json:"symbol"`
+	Interval     string         `json:"interval"`
+	Indicators   []IndicatorDef `json:"indicators"`
+	EntryRules   []RuleDef      `json:"entry_rules"`
+	ExitRules    []RuleDef      `json:"exit_rules"`
+	RiskMgmt     RiskMgmtDef    `json:"risk_mgmt"`
+	MaxPositions int            `json:"max_positions"`
+	Enabled      bool           `json:"enabled"`
 }
 
 type IndicatorDef struct {

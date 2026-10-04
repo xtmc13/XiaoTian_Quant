@@ -2,7 +2,9 @@ package strategies
 
 import (
 	"fmt"
+	"log"
 	"math"
+	"strings"
 	"sync"
 	"time"
 
@@ -80,9 +82,6 @@ func (s *EMACrossStrategy) Start(params map[string]any) error {
 	if err := s.ApplyParams(params); err != nil {
 		return fmt.Errorf("ema_cross apply params: %w", err)
 	}
-	if sym, ok := params["symbol"].(string); ok && sym != "" {
-		s.symbol = sym
-	}
 	if s.fastPeriod >= s.slowPeriod {
 		s.fastPeriod = 12
 		s.slowPeriod = 26
@@ -104,6 +103,9 @@ func (s *EMACrossStrategy) ApplyParams(m map[string]any) error {
 	}
 	if err := s.params.FromMap(m); err != nil {
 		return err
+	}
+	if sym := getString(m, "symbol", ""); sym != "" {
+		s.symbol = strings.ToUpper(strings.TrimSpace(sym))
 	}
 	if p := s.params.Get("fast_period"); p != nil {
 		s.fastPeriod = p.GetInt()
@@ -289,7 +291,36 @@ func (s *MACDStrategy) Start(params map[string]any) error {
 	if err := s.ApplyParams(params); err != nil {
 		return fmt.Errorf("macd apply params: %w", err)
 	}
+	// 重启仓位重建（同 liquidity_heat 的 PositionRestorer 语义，2026-10-04）：
+	// 经典策略此前没有该机制——每次重启都白纸一张，暖机重放里金叉条件仍在
+	// 就再开一单（MACD SOL 实例三次重启三次"加仓"实证，持仓 12.5 SOL =
+	// 3×4.17）。handler 按账本净持仓注入 restored_position_*，此处认领后
+	// inPosition=true，暖机重放只会管理已有仓（SL/TP），不再重复入场。
+	if q, ok := params["restored_position_qty"].(float64); ok && q > 0 {
+		v, _ := params["restored_position_vwap"].(float64)
+		s.restorePositionLocked(q, v)
+	}
 	s.running = true
+	return nil
+}
+
+// restorePositionLocked 重启仓位重建实现。须持锁。方向按净多处理（合约空
+// 单的账本净值为 0，空仓位重建暂不支持——出场管理落空但不会再加仓）。
+func (s *MACDStrategy) restorePositionLocked(qty, avgPrice float64) {
+	s.inPosition = true
+	s.entryPrice = avgPrice
+	s.direction = "LONG"
+	if s.entryPrice <= 0 {
+		s.entryPrice = 0.01 // 无均价时的占位（checkExit 需要非零基准）
+	}
+	log.Printf("[macd] %s 重启仓位重建: qty=%.6f vwap=%.2f", s.name, qty, avgPrice)
+}
+
+// RestorePosition PositionRestorer 接口（引擎/工具链直调路径）。
+func (s *MACDStrategy) RestorePosition(qty, avgPrice float64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.restorePositionLocked(qty, avgPrice)
 	return nil
 }
 
@@ -306,6 +337,9 @@ func (s *MACDStrategy) ApplyParams(m map[string]any) error {
 	}
 	if err := s.params.FromMap(m); err != nil {
 		return err
+	}
+	if sym := getString(m, "symbol", ""); sym != "" {
+		s.symbol = strings.ToUpper(strings.TrimSpace(sym))
 	}
 	if p := s.params.Get("fast_period"); p != nil {
 		s.fastPeriod = p.GetInt()
@@ -355,7 +389,6 @@ func (s *MACDStrategy) RuntimeStatus() map[string]any {
 	if s.inPosition {
 		m["direction"] = s.direction
 		m["entry_price"] = s.entryPrice
-		m["quantity"] = s.positionSize
 	}
 	if s.lastSignalTime > 0 {
 		m["last_signal_time"] = s.lastSignalTime
@@ -536,6 +569,9 @@ func (s *RSIStrategy) ApplyParams(m map[string]any) error {
 	}
 	if err := s.params.FromMap(m); err != nil {
 		return err
+	}
+	if sym := getString(m, "symbol", ""); sym != "" {
+		s.symbol = strings.ToUpper(strings.TrimSpace(sym))
 	}
 	if p := s.params.Get("period"); p != nil {
 		s.period = p.GetInt()
@@ -731,6 +767,9 @@ func (s *BollingerBandsStrategy) ApplyParams(m map[string]any) error {
 	}
 	if err := s.params.FromMap(m); err != nil {
 		return err
+	}
+	if sym := getString(m, "symbol", ""); sym != "" {
+		s.symbol = strings.ToUpper(strings.TrimSpace(sym))
 	}
 	if p := s.params.Get("period"); p != nil {
 		s.period = p.GetInt()

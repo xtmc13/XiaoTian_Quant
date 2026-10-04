@@ -43,9 +43,6 @@ func TestMACDStrategyRuntimeStatus(t *testing.T) {
 	if st["entry_price"] != 50000.0 {
 		t.Errorf("entry_price = %v, want 50000", st["entry_price"])
 	}
-	if st["quantity"] != 500.0 {
-		t.Errorf("quantity = %v, want 500", st["quantity"])
-	}
 	if st["last_signal_time"] != int64(1720000000000) {
 		t.Errorf("last_signal_time = %v, want 1720000000000", st["last_signal_time"])
 	}

@@ -719,14 +719,25 @@ func LoadStrategyConfigs() {
 	// If DB is available, migrate once and use DB as the source of truth.
 	if db != nil {
 		strategyConfigsMigrated.Do(func() {
-			_ = strategyConfigRepo.MigrateFromJSON(strategyConfigsPath, 0)
+			if mErr := strategyConfigRepo.MigrateFromJSON(strategyConfigsPath, 0); mErr != nil {
+				log.Printf("[WARN] strategy configs 迁移到 DB 失败（继续用 JSON/内存）: %v", mErr)
+			}
 		})
 		items, err := strategyConfigRepo.List(nil, 0)
-		if err == nil {
-			strategyConfigs = make(map[string]map[string]any, len(items))
-			for _, rec := range items {
-				strategyConfigs[rec.ID] = rec.ToMap()
-			}
+		if err != nil {
+			log.Printf("[WARN] strategy configs DB 读取失败（继续用 JSON/内存）: %v", err)
+			return
+		}
+		if len(items) == 0 {
+			// DB 空 ≠ 无配置：写库失败/迁移缺口都会留下空 DB，而 JSON/内存
+			// 可能仍有有效配置——此时清空内存会让下一次 Persist 把 JSON 也
+			// 覆盖成空，整份配置无声丢失（2026-10-03 实例配置丢失实证）。
+			// 空 DB 一律保留现有内存态，绝不在这里做减法。
+			return
+		}
+		strategyConfigs = make(map[string]map[string]any, len(items))
+		for _, rec := range items {
+			strategyConfigs[rec.ID] = rec.ToMap()
 		}
 	}
 }
@@ -780,9 +791,13 @@ func SetStrategyConfig(id string, item map[string]any) {
 	if db != nil {
 		rec := StrategyConfigRecordFromMap(item)
 		if existing, _ := strategyConfigRepo.GetByID(id); existing != nil {
-			_ = strategyConfigRepo.Update(rec)
+			if err := strategyConfigRepo.Update(rec); err != nil {
+				log.Printf("[WARN] strategy config 更新 DB 失败(id=%s): %v", id, err)
+			}
 		} else {
-			_ = strategyConfigRepo.Create(rec)
+			if err := strategyConfigRepo.Create(rec); err != nil {
+				log.Printf("[WARN] strategy config 写入 DB 失败(id=%s): %v", id, err)
+			}
 		}
 	}
 	strategyMu.Lock()
@@ -815,7 +830,9 @@ func PersistStrategyConfigs() {
 			items = append(items, StrategyConfigRecordFromMap(m))
 		}
 		strategyMu.RUnlock()
-		_ = strategyConfigRepo.UpsertAll(items)
+		if err := strategyConfigRepo.UpsertAll(items); err != nil {
+			log.Printf("[WARN] strategy configs 批量写 DB 失败: %v", err)
+		}
 	}
 	saveStrategyConfigs()
 }

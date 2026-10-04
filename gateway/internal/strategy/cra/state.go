@@ -10,27 +10,27 @@ const (
 
 // CRAState holds the runtime position/loop state for a CRA strategy instance.
 type CRAState struct {
-	InPosition        bool
-	PositionCount     int       // number of filled entry orders (0 = first not filled yet)
-	PendingAddCount   int       // entry signals sent but not yet filled
-	LoopExecuted      int
-	Side              PositionSide
-	EntryPrice        float64   // first order trigger/reference price
-	AvgEntryPrice     float64   // weighted average filled price
-	TotalQty          float64   // total filled quantity (notional for contract)
-	TotalCost         float64   // total amount spent (used for spot qty averaging)
-	HighestPrice      float64   // highest price since entry
-	LowestPrice       float64   // lowest price since entry
-	PendingAdd        bool
-	TriggerLowPrice   float64
-	TriggerHighPrice  float64
-	WaterfallPaused   bool
-	HighestProfitPct  float64   // tracked for moving take-profit
+	InPosition       bool
+	PositionCount    int // number of filled entry orders (0 = first not filled yet)
+	PendingAddCount  int // entry signals sent but not yet filled
+	LoopExecuted     int
+	Side             PositionSide
+	EntryPrice       float64 // first order trigger/reference price
+	AvgEntryPrice    float64 // weighted average filled price
+	TotalQty         float64 // total filled quantity (notional for contract)
+	TotalCost        float64 // total amount spent (used for spot qty averaging)
+	HighestPrice     float64 // highest price since entry
+	LowestPrice      float64 // lowest price since entry
+	PendingAdd       bool
+	TriggerLowPrice  float64
+	TriggerHighPrice float64
+	WaterfallPaused  bool
+	HighestProfitPct float64 // tracked for moving take-profit
 }
 
 // Reset clears all runtime state.
 func (s *CRAState) Reset() {
-	* s = CRAState{}
+	*s = CRAState{}
 }
 
 // ResetForNextLoop prepares state for the next cycle after a full close.

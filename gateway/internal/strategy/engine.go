@@ -125,6 +125,7 @@ type Engine struct {
 	strategies map[string]Strategy             // name -> strategy
 	symbolMap  map[string][]string             // symbol -> strategy names
 	subIDs     map[string]event.SubscriptionID // strategy name -> bus subscription
+	subSym     map[string]string               // strategy name -> 注册时订阅的 symbol（Start 应用参数后校正用）
 	bus        *event.EventBus
 	mu         sync.RWMutex
 
@@ -183,6 +184,7 @@ func GetEngine(bus *event.EventBus) *Engine {
 			strategies:          make(map[string]Strategy),
 			symbolMap:           make(map[string][]string),
 			subIDs:              make(map[string]event.SubscriptionID),
+			subSym:              make(map[string]string),
 			bus:                 bus,
 			feedHolds:           make(map[string][]feedHold),
 			universes:           make(map[string]*universeState),
@@ -229,32 +231,96 @@ func (e *Engine) StrategyProtectionCount(name string) int {
 
 // Register adds a strategy to the engine and subscribes it to events.
 func (e *Engine) Register(s Strategy) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
 	name := s.Name()
+	e.mu.Lock()
 	if _, exists := e.strategies[name]; exists {
+		e.mu.Unlock()
 		return fmt.Errorf("strategy %s already registered", name)
 	}
-
 	e.strategies[name] = s
 	e.symbolMap[s.Symbol()] = append(e.symbolMap[s.Symbol()], name)
+	subSym := s.Symbol()
+	e.mu.Unlock()
 
-	// Subscribe to all relevant event types for this strategy's symbol.
-	// 订阅回调带 recover：单个策略/信号处理 panic 不得拖垮整个事件总线
-	// 与网关进程（真实崩溃案例：信号下单 nil deref 在回补重放时炸掉主进程）。
-	// 订阅 id 必须登记，Unregister 时退订——否则停止的策略会变成僵尸订阅，
-	// 继续白收事件（每次重启策略累积一个）。
-	e.subIDs[name] = e.bus.Subscribe(s.Symbol(), event.PrioNormal, func(evt event.Event) {
+	// bus.Subscribe 可能在 PublishSync 持锁分发时被阻塞，而分发回调又要拿
+	// e.mu——持 e.mu 调 Subscribe 是 ABBA 死锁（2026-10-04 smart_money 启动
+	// 时全引擎冻结实证）。订阅放在锁外做；事件恰好落在窗口内的损失由下一根
+	// K 线/暖机回补，无害。
+	subID := e.bus.Subscribe(subSym, event.PrioNormal, func(evt event.Event) {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("[StrategyEngine] panic in strategy %s dispatch (recovered): %v", s.Name(), r)
+				log.Printf("[StrategyEngine] panic in strategy %s dispatch (recovered): %v", name, r)
 			}
 		}()
 		e.dispatch(s, evt)
 	}, event.TypeTick, event.TypeOrderBook, event.TypeBar, event.TypeOrderUpdate)
 
+	e.mu.Lock()
+	e.subIDs[name] = subID
+	if e.subSym == nil {
+		e.subSym = make(map[string]string)
+	}
+	e.subSym[name] = subSym
+	e.mu.Unlock()
 	return nil
+}
+
+// resubscribeIfSymbolChanged 在 Start 应用参数后校正事件订阅：经典策略出厂
+// symbol 是硬编码默认（BTCUSDT），真实交易对要到 Start 才从 params 应用——
+// 注册时按默认 symbol 订阅的 topic 是错的（2026-10-04 MACD SOLUSDT 实例
+// 订阅在 BTC topic 上、SOL K 线永远送不进策略实证）。symbol 变化时退订旧
+// topic、按新 symbol 重订阅，并同步校正 symbolMap。bus 调用同样在 e.mu 外
+// （同 Register 的 ABBA 死锁约束）。
+func (e *Engine) resubscribeIfSymbolChanged(name string, s Strategy) {
+	e.mu.Lock()
+	old := e.subSym[name]
+	newSym := s.Symbol()
+	if old == "" {
+		if e.subSym == nil {
+			e.subSym = make(map[string]string)
+		}
+		e.subSym[name] = newSym
+		e.mu.Unlock()
+		return
+	}
+	if strings.EqualFold(old, newSym) {
+		e.mu.Unlock()
+		return
+	}
+	oldID, hadOld := e.subIDs[name]
+	e.mu.Unlock()
+
+	if hadOld {
+		e.bus.Unsubscribe(oldID)
+	}
+	newID := e.bus.Subscribe(newSym, event.PrioNormal, func(evt event.Event) {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[StrategyEngine] panic in strategy %s dispatch (recovered): %v", name, r)
+			}
+		}()
+		e.dispatch(s, evt)
+	}, event.TypeTick, event.TypeOrderBook, event.TypeBar, event.TypeOrderUpdate)
+
+	e.mu.Lock()
+	if names, ok := e.symbolMap[old]; ok {
+		kept := names[:0]
+		for _, n := range names {
+			if n != name {
+				kept = append(kept, n)
+			}
+		}
+		if len(kept) == 0 {
+			delete(e.symbolMap, old)
+		} else {
+			e.symbolMap[old] = kept
+		}
+	}
+	e.symbolMap[newSym] = append(e.symbolMap[newSym], name)
+	e.subIDs[name] = newID
+	e.subSym[name] = newSym
+	e.mu.Unlock()
+	log.Printf("[StrategyEngine] %s resubscribed %s → %s（Start 应用参数后校正）", name, old, newSym)
 }
 
 // Unregister removes a strategy and its subscriptions.
@@ -287,6 +353,7 @@ func (e *Engine) Unregister(name string) error {
 		e.bus.Unsubscribe(subID)
 		delete(e.subIDs, name)
 	}
+	delete(e.subSym, name)
 	delete(e.strategies, name)
 	delete(e.strategyProtections, name) // 策略级 protection 随注销释放
 	e.mu.Unlock()
@@ -306,6 +373,8 @@ func (e *Engine) Start(name string, params map[string]any) error {
 	if err := s.Start(params); err != nil {
 		return err
 	}
+	// 参数应用后 symbol 可能与注册时的默认不同：校正事件订阅 topic。
+	e.resubscribeIfSymbolChanged(name, s)
 	// 多周期供给 / 计划调度 / 动态 universe 的启用与资源记账
 	e.setupExtensions(name, s)
 	return nil
@@ -421,6 +490,16 @@ func (e *Engine) dispatch(s Strategy, evt event.Event) {
 			if p, ok2 := core.(PrimaryTimeframer); ok2 {
 				if tf := strings.ToLower(strings.TrimSpace(p.PrimaryTimeframe())); tf != "" &&
 					bar.Interval != "" && !strings.EqualFold(bar.Interval, tf) {
+					break
+				}
+			}
+			// 单标的策略只消费自己 symbol 的 K 线：K 线总线按供给广播全部
+			// 标的，而多数经典策略 OnBar 不做 symbol 过滤——MACD SOLUSDT
+			// 实例吃到 BTCUSDT 的 K 线并据此下单（2026-10-04 实证）。多标的
+			// 动态 universe 策略（UniverseProvider）豁免。
+			if _, multi := core.(UniverseProvider); !multi && evt.Symbol != "" {
+				if sym := strings.ToUpper(strings.TrimSpace(s.Symbol())); sym != "" &&
+					!strings.EqualFold(evt.Symbol, sym) {
 					break
 				}
 			}

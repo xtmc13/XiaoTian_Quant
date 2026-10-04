@@ -3,6 +3,7 @@ package strategies
 import (
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 
 	"github.com/xiaotian-quant/gateway/internal/event"
@@ -108,6 +109,9 @@ func (s *BreakoutStrategy) ApplyParams(m map[string]any) error {
 	}
 	if err := s.params.FromMap(m); err != nil {
 		return err
+	}
+	if sym := getString(m, "symbol", ""); sym != "" {
+		s.symbol = strings.ToUpper(strings.TrimSpace(sym))
 	}
 	// Sync local fields from registry
 	if p := s.params.Get("lookback"); p != nil {
@@ -374,6 +378,9 @@ func (s *ArbitrageStrategy) ApplyParams(m map[string]any) error {
 	}
 	if err := s.params.FromMap(m); err != nil {
 		return err
+	}
+	if sym := getString(m, "symbol", ""); sym != "" {
+		s.symbol = strings.ToUpper(strings.TrimSpace(sym))
 	}
 	if p := s.params.Get("min_spread_pct"); p != nil {
 		s.minSpreadPct = p.GetFloat()

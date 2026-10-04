@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"strings"
 	"sync"
 
 	"github.com/xiaotian-quant/gateway/internal/event"
@@ -81,7 +82,7 @@ func (s *AIBotStrategy) Start(params map[string]any) error {
 	defer s.mu.Unlock()
 
 	if v, ok := params["symbol"].(string); ok && v != "" {
-		s.symbol = v
+		s.symbol = strings.ToUpper(strings.TrimSpace(v))
 		if p := s.params.Get("symbol"); p != nil {
 			// symbol 不在预置可选项时动态加入，保证 FromMap 校验通过
 			found := false
@@ -136,6 +137,9 @@ func (s *AIBotStrategy) ApplyParams(m map[string]any) error {
 	}
 	if err := s.params.FromMap(m); err != nil {
 		return err
+	}
+	if sym := getString(m, "symbol", ""); sym != "" {
+		s.symbol = strings.ToUpper(strings.TrimSpace(sym))
 	}
 	if p := s.params.Get("confidence_threshold"); p != nil {
 		s.confidenceThreshold = p.GetFloat()

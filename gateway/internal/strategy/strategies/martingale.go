@@ -162,6 +162,9 @@ func (s *MartingaleStrategy) ApplyParams(m map[string]any) error {
 	if err := s.params.FromMap(m); err != nil {
 		return err
 	}
+	if sym := getString(m, "symbol", ""); sym != "" {
+		s.symbol = strings.ToUpper(strings.TrimSpace(sym))
+	}
 	if p := s.params.Get("first_order_amount"); p != nil {
 		s.firstOrderAmount = p.GetFloat()
 	}

@@ -11,7 +11,7 @@ import (
 type ParamType int
 
 const (
-	ParamInt         ParamType = iota
+	ParamInt ParamType = iota
 	ParamFloat
 	ParamBool
 	ParamCategorical
@@ -34,17 +34,17 @@ func (p ParamType) String() string {
 
 // Parameter defines a single hyperparameter with constraints.
 type Parameter struct {
-	Name        string      `json:"name"`
-	Type        ParamType   `json:"type"`
-	Default     any         `json:"default"`
-	Min         float64     `json:"min,omitempty"`
-	Max         float64     `json:"max,omitempty"`
-	Step        float64     `json:"step,omitempty"`
-	Options     []string    `json:"options,omitempty"` // for Categorical
-	Description string      `json:"description"`
-	Space       string      `json:"space"` // "buy", "sell", "roi", "stoploss", "trailing", "protection"
-	Optimize    bool        `json:"optimize"` // whether to include in hyperopt
-	value       any         // current value
+	Name        string    `json:"name"`
+	Type        ParamType `json:"type"`
+	Default     any       `json:"default"`
+	Min         float64   `json:"min,omitempty"`
+	Max         float64   `json:"max,omitempty"`
+	Step        float64   `json:"step,omitempty"`
+	Options     []string  `json:"options,omitempty"` // for Categorical
+	Description string    `json:"description"`
+	Space       string    `json:"space"`    // "buy", "sell", "roi", "stoploss", "trailing", "protection"
+	Optimize    bool      `json:"optimize"` // whether to include in hyperopt
+	value       any       // current value
 }
 
 // GetInt returns the parameter value as an int.
@@ -160,15 +160,15 @@ func (p *Parameter) CurrentValue() any {
 // IntParameter creates an integer parameter for hyperopt.
 func IntParameter(name string, defaultVal int, min, max float64, space string) *Parameter {
 	return &Parameter{
-		Name:    name,
-		Type:    ParamInt,
-		Default: defaultVal,
-		Min:     min,
-		Max:     max,
-		Step:    1,
-		Space:   space,
+		Name:     name,
+		Type:     ParamInt,
+		Default:  defaultVal,
+		Min:      min,
+		Max:      max,
+		Step:     1,
+		Space:    space,
 		Optimize: true,
-		value:   defaultVal,
+		value:    defaultVal,
 	}
 }
 
@@ -178,40 +178,40 @@ func FloatParameter(name string, defaultVal, min, max, step float64, space strin
 		step = (max - min) / 10
 	}
 	return &Parameter{
-		Name:    name,
-		Type:    ParamFloat,
-		Default: defaultVal,
-		Min:     min,
-		Max:     max,
-		Step:    step,
-		Space:   space,
+		Name:     name,
+		Type:     ParamFloat,
+		Default:  defaultVal,
+		Min:      min,
+		Max:      max,
+		Step:     step,
+		Space:    space,
 		Optimize: true,
-		value:   defaultVal,
+		value:    defaultVal,
 	}
 }
 
 // BoolParameter creates a boolean parameter.
 func BoolParameter(name string, defaultVal bool, space string) *Parameter {
 	return &Parameter{
-		Name:    name,
-		Type:    ParamBool,
-		Default: defaultVal,
-		Space:   space,
+		Name:     name,
+		Type:     ParamBool,
+		Default:  defaultVal,
+		Space:    space,
 		Optimize: true,
-		value:   defaultVal,
+		value:    defaultVal,
 	}
 }
 
 // CategoricalParameter creates a categorical parameter.
 func CategoricalParameter(name string, defaultVal string, options []string, space string) *Parameter {
 	return &Parameter{
-		Name:    name,
-		Type:    ParamCategorical,
-		Default: defaultVal,
-		Options: options,
-		Space:   space,
+		Name:     name,
+		Type:     ParamCategorical,
+		Default:  defaultVal,
+		Options:  options,
+		Space:    space,
 		Optimize: true,
-		value:   defaultVal,
+		value:    defaultVal,
 	}
 }
 

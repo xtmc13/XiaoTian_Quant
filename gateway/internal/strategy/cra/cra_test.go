@@ -25,12 +25,12 @@ func TestParseCRAParamsDefaults(t *testing.T) {
 
 func TestParseCRAParamsFull(t *testing.T) {
 	raw := map[string]any{
-		"first_order_amount":      50.0,
-		"first_order_multiplier":  2.0,
-		"trade_count_mode":        "single",
-		"loop_count":              10.0,
-		"enable_add_position":     true,
-		"order_count":             3.0,
+		"first_order_amount":     50.0,
+		"first_order_multiplier": 2.0,
+		"trade_count_mode":       "single",
+		"loop_count":             10.0,
+		"enable_add_position":    true,
+		"order_count":            3.0,
 		"add_positions": []map[string]any{
 			{"order": 1, "multiplier": 1, "spread": 0.05, "callback": 0.005},
 			{"order": 2, "multiplier": 2, "spread": 0.08, "callback": 0.01},
@@ -193,9 +193,9 @@ func TestBaseCRAStrategyFirstOrder(t *testing.T) {
 	params := DefaultSpot("martin_trend")
 	b, _ := json.Marshal(params)
 	if err := s.Start(map[string]any{
-		"symbol":       "BTCUSDT",
+		"symbol":        "BTCUSDT",
 		"strategy_type": "martin_trend",
-		"config_json":  string(b),
+		"config_json":   string(b),
 	}); err != nil {
 		t.Fatalf("start: %v", err)
 	}

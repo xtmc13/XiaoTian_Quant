@@ -365,6 +365,78 @@ func TestLiquidityHeatCRANoStopLoss(t *testing.T) {
 	}
 }
 
+// TestLiquidityHeatCRAAddSkipsWeakPool CRA 补仓与入场同判定（2026-10-03 对齐
+// 策略头注释"同入场判定"）：跌破均价下方的弱池（强度 <30% POC）并收回，不得
+// 触发补仓；同区域强度达标的池被扫反包才放行 #2。
+func TestLiquidityHeatCRAAddSkipsWeakPool(t *testing.T) {
+	s := startLHCRA(t)
+	next := feedBaseline(s, 0, 30)
+	s.OnBar(mkLHBar(next, 100, 100.5, 99.3, 100, 300), nil) // 强买方池
+	next++
+	pool := strongBuyPool(s)
+	sig, _ := s.OnBar(mkLHBar(next, 100, 100.2, pool.price-0.5, 99.9, 2), nil)
+	if sig == nil || sig.Direction != "LONG" {
+		t.Fatalf("entry failed: %v", sig)
+	}
+	fillBuy(s, 99.9, 1.0)
+	avg := s.craState.AvgEntryPrice
+
+	// 上方锚一个存活强卖池（放量 pivot 高 101.5，价格到不了）：入场强池被
+	// 消耗后存活池全是弱池，POC 会缩到弱池量级导致强度门槛失效，必须锚住。
+	s.OnBar(mkLHBar(next+1, 100, 101.5, 100.2, 101.0, 300), nil)
+
+	// 下方弱池：等放量滚出 volume_len=3 窗口后，低量 pivot 低 99.3 出生
+	// （池权 6，远低于 POC×30% 门槛；前两根低量 K 线的池权沾了放量余温）。
+	s.OnBar(mkLHBar(next+2, 99.6, 100.0, 99.5, 99.8, 2), nil)
+	s.OnBar(mkLHBar(next+3, 99.6, 100.0, 99.5, 99.8, 2), nil)
+	s.OnBar(mkLHBar(next+4, 99.5, 99.8, 99.3, 99.6, 2), nil)
+	next += 5
+
+	s.mu.RLock()
+	var weak *lhPool
+	_, pocVol := s.profilePOCLocked()
+	for _, p := range s.pools {
+		if p.isBuy && p.price < avg && p.vol < pocVol*0.30 {
+			weak = p
+			break
+		}
+	}
+	s.mu.RUnlock()
+	if weak == nil {
+		t.Skip("no weak buy pool below entry in fixture")
+	}
+
+	// 跌破弱池并收回（close 回到池上方、均价下方）→ 强度过滤：不得补仓。
+	sig, _ = s.OnBar(mkLHBar(next, 99.0, 99.7, weak.price-0.2, weak.price+0.3, 2), nil)
+	if sig != nil && sig.Direction == "LONG" {
+		t.Fatalf("weak pool must not trigger CRA add: %s", sig.Reason)
+	}
+	if s.craState.PendingAddCount != 0 {
+		t.Fatalf("no add should be pending, got %d", s.craState.PendingAddCount)
+	}
+
+	// 同区域强池（放量 pivot 低 97.5）→ 扫反包 → 补仓 #2 放行。
+	s.OnBar(mkLHBar(next+1, 97.8, 98.2, 97.5, 97.9, 300), nil)
+	s.mu.RLock()
+	var strong *lhPool
+	_, pocVol = s.profilePOCLocked()
+	for _, p := range s.pools {
+		if p.isBuy && p.price < avg && p.vol >= pocVol*0.30 {
+			strong = p
+			break
+		}
+	}
+	s.mu.RUnlock()
+	if strong == nil {
+		t.Fatal("need a strong pool below entry")
+	}
+	sig, _ = s.OnBar(mkLHBar(next+2, strong.price-1, strong.price+0.2,
+		strong.price-0.3, strong.price+0.4, 2), nil)
+	if sig == nil || sig.Direction != "LONG" || !strings.Contains(sig.Reason, "补仓 #2") {
+		t.Fatalf("strong pool sweep-reclaim must add #2, got %v", sig)
+	}
+}
+
 /* ── 虚持仓回滚 / 重启仓位重建（2026-10-01 666 实盘实证修复）── */
 
 // TestLiquidityHeatRejectedEntryRollsBack 入场单终态未成交（交易所拒单）必须

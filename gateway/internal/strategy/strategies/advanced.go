@@ -3,6 +3,7 @@ package strategies
 import (
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 
 	"github.com/xiaotian-quant/gateway/internal/event"
@@ -96,6 +97,9 @@ func (s *ATRTrailingStopStrategy) ApplyParams(m map[string]any) error {
 	}
 	if err := s.params.FromMap(m); err != nil {
 		return err
+	}
+	if sym := getString(m, "symbol", ""); sym != "" {
+		s.symbol = strings.ToUpper(strings.TrimSpace(sym))
 	}
 	if p := s.params.Get("atr_period"); p != nil {
 		s.atrPeriod = p.GetInt()
@@ -287,6 +291,9 @@ func (s *DualThrustStrategy) ApplyParams(m map[string]any) error {
 	}
 	if err := s.params.FromMap(m); err != nil {
 		return err
+	}
+	if sym := getString(m, "symbol", ""); sym != "" {
+		s.symbol = strings.ToUpper(strings.TrimSpace(sym))
 	}
 	if p := s.params.Get("lookback_period"); p != nil {
 		s.lookbackPeriod = p.GetInt()
@@ -510,6 +517,9 @@ func (s *RenkoStrategy) ApplyParams(m map[string]any) error {
 	}
 	if err := s.params.FromMap(m); err != nil {
 		return err
+	}
+	if sym := getString(m, "symbol", ""); sym != "" {
+		s.symbol = strings.ToUpper(strings.TrimSpace(sym))
 	}
 	if p := s.params.Get("brick_size"); p != nil {
 		s.brickSize = p.GetFloat()

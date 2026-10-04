@@ -3,6 +3,7 @@ package strategies
 import (
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 
 	"github.com/xiaotian-quant/gateway/internal/event"
@@ -113,6 +114,9 @@ func (s *GridTradingStrategy) ApplyParams(m map[string]any) error {
 	}
 	if err := s.params.FromMap(m); err != nil {
 		return err
+	}
+	if sym := getString(m, "symbol", ""); sym != "" {
+		s.symbol = strings.ToUpper(strings.TrimSpace(sym))
 	}
 	if p := s.params.Get("upper_price"); p != nil {
 		s.upperPrice = p.GetFloat()
@@ -337,6 +341,9 @@ func (s *MarketMakingStrategy) ApplyParams(m map[string]any) error {
 	}
 	if err := s.params.FromMap(m); err != nil {
 		return err
+	}
+	if sym := getString(m, "symbol", ""); sym != "" {
+		s.symbol = strings.ToUpper(strings.TrimSpace(sym))
 	}
 	if p := s.params.Get("spread_bps"); p != nil {
 		s.spreadBps = p.GetFloat()
