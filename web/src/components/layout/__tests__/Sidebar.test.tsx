@@ -40,11 +40,12 @@ describe('Sidebar 导航接入', () => {
     expect(screen.getByRole('link', { name: 'TensorBoard' }).getAttribute('href')).toBe('/ai/tensorboard')
   })
 
-  it('系统组包含系统状态 / 系统日志', () => {
+  it('系统组包含系统状态 / 系统日志 / 对账中心', () => {
     renderAt('/status')
     expect(screen.getByRole('button', { name: '系统' })).toBeTruthy()
     expect(screen.getByRole('link', { name: '系统状态' }).getAttribute('href')).toBe('/status')
     expect(screen.getByRole('link', { name: '系统日志' }).getAttribute('href')).toBe('/logs')
+    expect(screen.getByRole('link', { name: '对账中心' }).getAttribute('href')).toBe('/reconcile')
   })
 
   it('高级组包含数据下载 / 指标告警', () => {

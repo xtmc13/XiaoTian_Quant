@@ -141,6 +141,7 @@ const navItems: NavItem[] = [
     children: [
       { path: '/status', labelKey: 'nav.system-status' },
       { path: '/logs', labelKey: 'nav.system-logs' },
+      { path: '/reconcile', labelKey: 'nav.reconcile' },
     ],
   },
 

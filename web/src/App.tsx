@@ -72,6 +72,7 @@ const ArbitrageTriangular = lazyPage(() => import('./pages/arbitrage/ArbitrageTr
 const SystemStatus = lazyPage(() => import('./pages/SystemStatus'), 'SystemStatus')
 const DataManager = lazyPage(() => import('./pages/DataManager'), 'DataManager')
 const Logs = lazyPage(() => import('./pages/Logs'), 'Logs')
+const Reconcile = lazyPage(() => import('./pages/Reconcile'), 'Reconcile')
 
 // ── Route-level error boundary with retry ──
 function RouteErrorBoundary({ children }: { children: React.ReactNode }) {
@@ -151,6 +152,7 @@ function DocumentTitle() {
     '/agent-tokens': 'Agent令牌 - 小天量化',
     '/billing': '会员 - 小天量化',
     '/strategy-leaderboard': '策略排行榜 - 小天量化',
+    '/reconcile': '对账中心 - 小天量化',
 
     // Flat navigation titles
     '/market': 'AI分析 - 小天量化',
@@ -720,6 +722,14 @@ export default function App() {
                     element={
                       <PageShell>
                         <Logs />
+                      </PageShell>
+                    }
+                  />
+                  <Route
+                    path="/reconcile"
+                    element={
+                      <PageShell>
+                        <Reconcile />
                       </PageShell>
                     }
                   />

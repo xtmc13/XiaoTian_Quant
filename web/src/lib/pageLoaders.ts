@@ -39,6 +39,7 @@ export const pageLoaders: Record<string, () => Promise<unknown>> = {
   '/status': () => import('@/pages/SystemStatus'),
   '/data': () => import('@/pages/DataManager'),
   '/logs': () => import('@/pages/Logs'),
+  '/reconcile': () => import('@/pages/Reconcile'),
 }
 
 export function prefetchRoute(path: string) {

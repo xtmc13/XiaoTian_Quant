@@ -23,6 +23,7 @@ import '@/i18n/locales/tick'
 import '@/i18n/locales/aiasync'
 import '@/i18n/locales/ide'
 import '@/i18n/locales/orderkit'
+import '@/i18n/locales/reconcile'
 
 // 渲染前应用持久化的主题/缩放，避免刷新后外观回跳
 bootstrapAppearance()

@@ -3673,3 +3673,159 @@ export const agentEvalsApi = {
   getRun: (id: string) =>
     api.get<{ success: boolean } & AgentEvalRunDetail>(`/agent/evals/runs/${encodeURIComponent(id)}`),
 }
+
+// ── A8 对账体系（/reconcile/*；字段与 gateway/internal/handler/reconcile.go 逐字段对齐） ──
+
+/** 一条对账差异（store.ReconcileDiff）。时间字段为 unix 毫秒。 */
+export interface ReconcileDiff {
+  id: number
+  user_id: number
+  exchange: string
+  symbol: string
+  /** position_quantity | position_missing_local | position_missing_exchange | funding */
+  diff_type: string
+  local_qty: number
+  exchange_qty: number
+  local_entry_price: number
+  exchange_entry_price: number
+  asset: string
+  amount: number
+  detail: string
+  /** open | resolved */
+  status: string
+  /** accept_exchange | accept_local | ignore（resolved 后写入） */
+  resolution: string
+  resolved_by: string
+  created_at: number
+  resolved_at: number
+}
+
+/** 一条实盘偏差（store.ReconcileDeviation）。 */
+export interface ReconcileDeviation {
+  id: number
+  order_id: string
+  user_id: number
+  symbol: string
+  exchange: string
+  /** slippage | stuck */
+  kind: string
+  expected_price: number
+  avg_price: number
+  slippage_pct: number
+  detail: string
+  /** open | resolved */
+  status: string
+  resolved_by: string
+  created_at: number
+  resolved_at: number
+}
+
+/** 自动修正审计日志行（store.ReconcileAuditRecord）。 */
+export interface ReconcileAuditRecord {
+  id: number
+  action: string
+  exchange: string
+  symbol: string
+  user_id: number
+  detail: string
+  created_at: number
+}
+
+/** 交易所回报 PnL 对账记录（store.ReportedPnLCheckRecord）。symbol 空串=全账户。 */
+export interface ReportedPnLCheck {
+  id: number
+  user_id: number
+  credential_id: string
+  exchange: string
+  symbol: string
+  window_start: number
+  window_end: number
+  local_pnl: number
+  reported_pnl: number
+  diff: number
+  diff_pct: number
+  /** ok | mismatch | error */
+  status: string
+  detail: string
+  checked_at: number
+}
+
+/** 当前生效配置快照（Config.ConfigSnapshot）。 */
+export interface ReconcileConfig {
+  interval_sec: number
+  slippage_pct: number
+  stuck_timeout_sec: number
+  auto_fix: boolean
+  min_drift: number
+  funding_lookback_h: number
+  fill_recovery_max: number
+  reported_pnl_window_h: number
+  reported_pnl_pct: number
+  enabled: boolean
+}
+
+/** PUT /reconcile/config 白名单键（funding_lookback_h / fill_recovery_max 只读不可写）。 */
+export type ReconcileConfigUpdate = Partial<
+  Pick<
+    ReconcileConfig,
+    | 'interval_sec'
+    | 'slippage_pct'
+    | 'stuck_timeout_sec'
+    | 'auto_fix'
+    | 'enabled'
+    | 'min_drift'
+    | 'reported_pnl_window_h'
+    | 'reported_pnl_pct'
+  >
+>
+
+/** 一次任务执行结果（reconcile.TaskRun）。 */
+export interface ReconcileTaskRun {
+  name: string
+  ok: boolean
+  message?: string
+  timestamp: number
+}
+
+/** GET /reconcile/status 响应：服务未注入时只有 open_diffs/audit/config。 */
+export interface ReconcileStatusResponse {
+  running?: boolean
+  last_runs?: Record<string, ReconcileTaskRun>
+  open_diffs: number
+  open_deviations?: number
+  config?: ReconcileConfig
+  audit?: ReconcileAuditRecord[] | null
+}
+
+export interface ReconcileListParams {
+  status?: string
+  type?: string
+  kind?: string
+  exchange?: string
+  days?: number
+  limit?: number
+  offset?: number
+}
+
+export type ReconcileDiffAction = 'accept_exchange' | 'accept_local' | 'ignore'
+
+export const reconcileApi = {
+  diffs: (params: ReconcileListParams = {}) =>
+    api.get<{ diffs: ReconcileDiff[] }>('/reconcile/diffs', { params }).then((d) => d?.diffs ?? []),
+  /** 人工解决差异；accept_exchange 对持仓类差异会把本地持仓拉平到交易所值 */
+  resolveDiff: (id: number, action: ReconcileDiffAction) =>
+    api.post<ReconcileDiff>(`/reconcile/diffs/${id}/resolve`, { action }),
+  deviations: (params: ReconcileListParams = {}) =>
+    api.get<{ deviations: ReconcileDeviation[] }>('/reconcile/deviations', { params }).then((d) => d?.deviations ?? []),
+  /** 人工确认偏差（无动作参数，open → resolved） */
+  resolveDeviation: (id: number) => api.post<ReconcileDeviation>(`/reconcile/deviations/${id}/resolve`, {}),
+  status: () => api.get<ReconcileStatusResponse>('/reconcile/status'),
+  getConfig: () => api.get<ReconcileConfig>('/reconcile/config'),
+  /** admin-only；键必须在后端白名单内，数值必须为正数 */
+  putConfig: (body: ReconcileConfigUpdate) => api.put<ReconcileConfig>('/reconcile/config', body),
+  reportedPnl: (params: ReconcileListParams = {}) =>
+    api.get<{ checks: ReportedPnLCheck[] }>('/reconcile/reported-pnl', { params }).then((d) => d?.checks ?? []),
+  /** admin-only；days>0 覆盖默认窗口（reported_pnl_window_h 小时） */
+  runReportedPnl: (days?: number) =>
+    api.post<{ ok: boolean; message: string }>('/reconcile/reported-pnl/run', {}, { params: days ? { days } : {} }),
+}
