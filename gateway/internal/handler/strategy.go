@@ -1253,6 +1253,18 @@ func startStrategyInEngine(id string, item map[string]any) error {
 			} else if net > 0 {
 				params["restored_position_qty"] = net
 				params["restored_position_vwap"] = vwap
+				// 分档重建（CRA 尾单/首尾止盈的各档成本）：逐笔成交明细一并
+				// 注入，策略支持分档时按成交时间重放（cra RebuildLotsFromFills）；
+				// 不消费该键的策略走聚合 qty/vwap 兜底，行为不变。
+				if fills, ferr := store.FilledOrdersByStrategy(id, sym); ferr != nil {
+					log.Printf("[strategy] %s 逐笔成交查询失败（分档重建降级为聚合）: %v", id, ferr)
+				} else if len(fills) > 0 {
+					list := make([]any, 0, len(fills))
+					for _, f := range fills {
+						list = append(list, map[string]any{"side": f.Side, "qty": f.Filled, "price": f.AvgFillPrice})
+					}
+					params["restored_fills"] = list
+				}
 			}
 		}
 	}

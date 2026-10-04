@@ -227,3 +227,59 @@ func TestStrategyPaperPnL(t *testing.T) {
 		t.Fatal("no-record strategy must return ok=false")
 	}
 }
+
+// FilledOrdersByStrategy：重启分档重建的逐笔数据源——按成交时间升序、
+// sig:<id>: 前缀归因、只收 FILLED 且 filled/avg_fill_price>0，其他策略与
+// 未打标单不混入（口径与 NetFilledByStrategy 一致）。
+func TestFilledOrdersByStrategy(t *testing.T) {
+	cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewOrderRepo()
+	nowMs := time.Now().UnixMilli()
+	mk := func(id, side, oid, status string, qty, avg float64, ts int64) *OrderRecord {
+		return &OrderRecord{
+			ID: id, Symbol: "BTCUSDT", Side: side, OrderType: "MARKET",
+			Quantity: qty, Filled: qty, Status: status, Exchange: "paper",
+			ClientOID: oid, AvgFillPrice: avg, CreatedAt: ts, UpdatedAt: ts,
+		}
+	}
+	for _, r := range []*OrderRecord{
+		mk("ord-f3", "BUY", "sig:cfgF:3", "FILLED", 4, 80, nowMs+2),
+		mk("ord-f1", "BUY", "sig:cfgF:1", "FILLED", 1, 100, nowMs),
+		mk("ord-f2", "BUY", "sig:cfgF:2", "FILLED", 2, 90, nowMs+1),
+		mk("ord-f4", "SELL", "sig:cfgF:4", "FILLED", 4, 96, nowMs+3),
+		mk("ord-f5", "BUY", "sig:other:1", "FILLED", 9.9, 1, nowMs+4), // 其他策略
+		mk("ord-f6", "BUY", "", "FILLED", 9.9, 1, nowMs+5),            // 未打标
+		mk("ord-f7", "BUY", "sig:cfgF:7", "NEW", 1, 1, nowMs+6),       // 未成交
+	} {
+		if err := repo.Create(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	fills, err := FilledOrdersByStrategy("cfgF", "BTCUSDT")
+	if err != nil {
+		t.Fatalf("fills: %v", err)
+	}
+	if len(fills) != 4 {
+		t.Fatalf("fills len = %d, want 4: %+v", len(fills), fills)
+	}
+	// 升序：100@1 → 90@2 → 80@4 → SELL 4@96。
+	want := []OrderFill{
+		{Side: "BUY", Filled: 1, AvgFillPrice: 100},
+		{Side: "BUY", Filled: 2, AvgFillPrice: 90},
+		{Side: "BUY", Filled: 4, AvgFillPrice: 80},
+		{Side: "SELL", Filled: 4, AvgFillPrice: 96},
+	}
+	for i, w := range want {
+		if fills[i] != w {
+			t.Fatalf("fills[%d] = %+v, want %+v", i, fills[i], w)
+		}
+	}
+
+	// 无记录策略 → 空。
+	if fills, err := FilledOrdersByStrategy("nope", "BTCUSDT"); err != nil || len(fills) != 0 {
+		t.Fatalf("empty strategy: fills=%v err=%v", fills, err)
+	}
+}

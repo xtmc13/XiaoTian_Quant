@@ -1784,15 +1784,22 @@ func (ctx *Context) closePositionFromSignal(signal model.Signal) {
 	// 两条键空间永不相遇），但策略成交账本有净持仓 → 按账本净额市价出场。
 	// 没有这一步 CLOSE 信号会空转：引擎发出即复位为空仓，下一次入场形态
 	// 又真买——无限买入直到余额耗尽（2026-10-01 用户质疑的正是这条路径）。
+	// 部分平仓（CRA 尾单/首尾止盈、position_reduce 减仓）：0 < signal.Qty <
+	// 净持仓时只平 signal.Qty，剩余仓位续存；否则全平（历史行为）。
 	if qty, _, err := store.NetFilledByStrategy(signal.Strategy, signal.Symbol); err == nil && qty > 0 {
+		closeQty := qty
+		partial := signal.Qty > 0 && signal.Qty < qty
+		if partial {
+			closeQty = signal.Qty
+		}
 		ctx.Logger.Info("Close from strategy ledger (no mirrored position)",
-			"strategy", signal.Strategy, "symbol", signal.Symbol, "qty", qty)
+			"strategy", signal.Strategy, "symbol", signal.Symbol, "qty", closeQty, "partial", partial)
 		req := &order.Request{
 			Symbol:    signal.Symbol,
 			Side:      model.SideSell,
 			OrderType: model.TypeMarket,
 			Price:     0,
-			Quantity:  qty,
+			Quantity:  closeQty,
 			Exchange:  ctx.resolveExchange(signal.Symbol),
 			ClientOID: fmt.Sprintf("sig:%s:%d", signal.Strategy, time.Now().UnixNano()),
 			Source:    "signal:" + signal.Strategy,
@@ -1801,7 +1808,7 @@ func (ctx *Context) closePositionFromSignal(signal model.Signal) {
 			ctx.Logger.Warn("Ledger close order failed",
 				"strategy", signal.Strategy, "symbol", signal.Symbol, "error", err.Error())
 		} else {
-			ctx.Logger.Info("Ledger close order placed", "order_id", ord.ID, "qty", qty)
+			ctx.Logger.Info("Ledger close order placed", "order_id", ord.ID, "qty", closeQty, "partial", partial)
 		}
 	}
 }

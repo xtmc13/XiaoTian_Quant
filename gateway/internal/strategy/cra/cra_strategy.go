@@ -131,6 +131,19 @@ func (s *BaseCRAStrategy) Start(params map[string]any) error {
 	} else {
 		s.flashDetector = nil
 	}
+
+	// 重启仓位重建（handler 按本地成交账本注入 Start 参数）：在清态之后、
+	// 暖机重放之前恢复持仓（与 liquidity_heat Start 收尾同模式，2026-10-01
+	// 修复注入时序）。逐笔明细 restored_fills 重放优先——各档成本精确
+	// （尾单/首尾止盈依赖档级成本）；聚合 restored_position_qty/vwap 兜底
+	// ——净持仓合成单档，tail/head_tail 退化为均价判定的单档。
+	if lots, side := parseRestoredLots(params); len(lots) > 0 {
+		s.restoreLotsLocked(lots, side)
+	} else if q, ok := params["restored_position_qty"].(float64); ok && q > 0 {
+		v, _ := params["restored_position_vwap"].(float64)
+		s.restorePositionLocked(q, v)
+	}
+
 	s.running = true
 	s.logger.Info("cra strategy started", "symbol", s.symbol, "type", s.name, "market", p.MarketType)
 	return nil
@@ -183,6 +196,8 @@ func (s *BaseCRAStrategy) RuntimeStatus() map[string]any {
 			m["avg_entry_price"] = st.AvgEntryPrice
 			m["position_qty"] = st.TotalQty
 			m["position_cost"] = st.TotalCost
+			// open_lots = 分档记账的当前档数（0=聚合/旧态未分档）。
+			m["open_lots"] = len(st.Lots)
 		}
 	}
 	if s.lastSignalTime > 0 {
@@ -315,6 +330,13 @@ func (s *BaseCRAStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Sign
 
 	st.UpdateExtremes(bar.Close)
 
+	// 部分平仓单在途（尾单/首尾止盈信号已发出待成交终态）：不再发任何新
+	// 信号——防重复出场超卖、防与在途平仓单竞争（成交确认/拒单撤单后
+	// OnOrderUpdate 清除在途标记，下一根 K 线恢复评估）。
+	if st.PendingCloseKind != "" {
+		return nil, nil
+	}
+
 	// Stop-loss (contract only by default, but kept generic).
 	if s.isContract && st.CheckStopLoss(bar.Close, p) {
 		s.logger.Info("cra stop loss", "symbol", s.symbol, "price", bar.Close)
@@ -322,11 +344,21 @@ func (s *BaseCRAStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Sign
 		return s.signal("CLOSE", 0, "cra stop loss"), nil
 	}
 
-	// Take profit.
-	if s.checkTakeProfit(bar.Close) {
-		s.logger.Info("cra take profit", "symbol", s.symbol, "price", bar.Close, "loops", st.LoopExecuted+1)
-		st.ExitPosition()
-		return s.signal("CLOSE", 0, "cra take profit"), nil
+	// Take profit（三态分支见 evaluateTakeProfit）。
+	if ok, qty, kind := s.evaluateTakeProfit(bar.Close); ok {
+		if qty <= 0 || qty >= st.TotalQty {
+			// 全平（full/移动止盈/止损及 tail/head_tail 仅剩一档的退化形态）：
+			// 历史行为不变——不带数量的 CLOSE 信号，下游平掉全部持仓。
+			s.logger.Info("cra take profit", "symbol", s.symbol, "price", bar.Close, "loops", st.LoopExecuted+1)
+			st.ExitPosition()
+			return s.signal("CLOSE", 0, "cra take profit"), nil
+		}
+		// 部分平仓（tail 只平尾档 / head_tail 平首+尾档）：状态不在信号时
+		// 乐观变更，记在途标记，成交确认（OnOrderUpdate）才核销档位。
+		st.PendingCloseKind = kind
+		st.PendingCloseQty = qty
+		s.logger.Info("cra partial take profit", "symbol", s.symbol, "price", bar.Close, "kind", kind, "qty", qty)
+		return s.signal("CLOSE", RoundQty(qty), "cra take profit ("+kind+")"), nil
 	}
 
 	// Add positions.
@@ -358,6 +390,28 @@ func (s *BaseCRAStrategy) OnOrderUpdate(order model.OrderData, bus *event.EventB
 	}
 
 	if order.Status == model.StatusFilled {
+		// 在途部分平仓（尾单/首尾止盈）的成交确认：合约平仓单带 ClosePosition
+		// 标记；现货平仓走账本兜底路径是裸反向单（无标记，2026-10-01 修复的
+		// 出场链路）——以在途标记+减仓方向联合认定（liquidity_heat 同口径：
+		// ClosePosition || 反向单皆视为平仓）。按形态核销对应档位，仓位续存
+		// （剩余档成本/均价重算，见 CRAState.ApplyCloseFill）；核销后总量≈0
+		// （浮点尘埃/镜像漂移全平）按全平收尾。
+		if kind := s.state.PendingCloseKind; kind != "" && s.isReduceSide(order.Side) {
+			filled := order.Filled
+			if filled <= 0 {
+				filled = order.Quantity
+			}
+			s.state.PendingCloseKind = ""
+			s.state.PendingCloseQty = 0
+			if filled > 0 && filled < s.state.TotalQty && !approxQty(filled, s.state.TotalQty) {
+				s.state.ApplyCloseFill(filled, kind)
+				if s.state.TotalQty > 1e-9 {
+					return nil, nil
+				}
+			}
+			s.state.ExitPosition()
+			return nil, nil
+		}
 		if order.ClosePosition {
 			s.state.ExitPosition()
 			return nil, nil
@@ -371,11 +425,124 @@ func (s *BaseCRAStrategy) OnOrderUpdate(order model.OrderData, bus *event.EventB
 			s.state.PositionCount++
 			s.state.RecordFill(order.AvgFillPrice, order.Filled, SideBuy)
 		}
+		return nil, nil
+	}
+
+	// 在途部分平仓的拒单/撤单/过期：状态从未乐观变更，只需清除在途标记，
+	// 下一根 K 线止盈条件仍满足会重新发信号（与 PendingAddCount 回补同口径）。
+	// 同样按减仓方向认定（覆盖现货无 ClosePosition 标记的裸反向单）。
+	if s.state.PendingCloseKind != "" && s.isReduceSide(order.Side) &&
+		(order.Status == model.StatusRejected || order.Status == model.StatusCancelled || order.Status == model.StatusExpired) {
+		s.logger.Warn("cra partial close order ended without fill, re-arm take profit",
+			"symbol", s.symbol, "kind", s.state.PendingCloseKind, "status", order.Status)
+		s.state.PendingCloseKind = ""
+		s.state.PendingCloseQty = 0
 	}
 	return nil, nil
 }
 
+// isReduceSide 判断订单方向是否为当前持仓的减仓方向（多仓=SELL，空仓=BUY）。
+func (s *BaseCRAStrategy) isReduceSide(side model.OrderSide) bool {
+	if s.state.Side == SideShort {
+		return side == model.SideBuy
+	}
+	return side == model.SideSell
+}
+
 // ── helpers ──
+
+// RestorePosition PositionRestorer 接口（引擎/工具链直调路径）：只有聚合净
+// 持仓时合成单档重建；生产路径走 Start 的 restored_fills 逐笔重放（各档
+// 成本精确）。
+func (s *BaseCRAStrategy) RestorePosition(qty, avgPrice float64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.restorePositionLocked(qty, avgPrice)
+	return nil
+}
+
+// restoreLotsLocked 分档重建持仓（重启恢复）。须持锁。EntryPrice=首档成本，
+// 均价按分档加权，档位数=分档数（补仓阶梯据此续档）；极值/盈利峰值留待
+// 下一根 K 线重记。
+func (s *BaseCRAStrategy) restoreLotsLocked(lots []EntryLot, side PositionSide) {
+	if len(lots) == 0 {
+		return
+	}
+	if side != SideShort {
+		side = SideLong
+	}
+	st := s.state
+	st.ResetForNextLoop()
+	st.InPosition = true
+	st.Side = side
+	st.Lots = append([]EntryLot(nil), lots...)
+	var qty, cost float64
+	for _, l := range lots {
+		qty += l.Qty
+		cost += l.Price * l.Qty
+	}
+	st.TotalQty = qty
+	st.TotalCost = cost
+	st.EntryPrice = lots[0].Price
+	if qty > 0 {
+		st.AvgEntryPrice = cost / qty
+	}
+	st.HighestPrice = st.AvgEntryPrice
+	st.LowestPrice = st.AvgEntryPrice
+	st.PositionCount = len(lots)
+	s.logger.Info("cra position restored", "symbol", s.symbol, "lots", len(lots),
+		"qty", qty, "vwap", st.AvgEntryPrice, "side", side)
+}
+
+// restorePositionLocked 聚合重建兜底（无逐笔明细）：净持仓合成单档，
+// tail/head_tail 退化为以均价判定的该档。方向取参数 direction（dual 无法
+// 从聚合量反推，按多处理——聚合注入本身只在净多账本时发生）。
+func (s *BaseCRAStrategy) restorePositionLocked(qty, vwap float64) {
+	if qty <= 0 || vwap <= 0 {
+		return
+	}
+	side := SideLong
+	if s.params != nil && s.params.Direction == "short" {
+		side = SideShort
+	}
+	s.restoreLotsLocked([]EntryLot{{Price: vwap, Qty: qty}}, side)
+}
+
+// parseRestoredLots 解析 handler 注入的 restored_fills（[]any of
+// {"side","qty","price"}，成交时间升序）并重放重建分档持仓；分档总量与聚合
+// 净持仓对不上（账本残缺/越权改单）时返回空，调用方退化聚合单档。
+func parseRestoredLots(params map[string]any) ([]EntryLot, PositionSide) {
+	raw, ok := params["restored_fills"].([]any)
+	if !ok || len(raw) == 0 {
+		return nil, ""
+	}
+	fills := make([]FillRecord, 0, len(raw))
+	for _, item := range raw {
+		m, ok := item.(map[string]any)
+		if !ok {
+			return nil, ""
+		}
+		fills = append(fills, FillRecord{
+			Side:  strVal(m, "side", ""),
+			Qty:   numFloat(m, "qty", 0),
+			Price: numFloat(m, "price", 0),
+		})
+	}
+	lots, side := RebuildLotsFromFills(fills)
+	if len(lots) == 0 {
+		return nil, ""
+	}
+	if q, ok := params["restored_position_qty"].(float64); ok && q > 0 {
+		total := 0.0
+		for _, l := range lots {
+			total += l.Qty
+		}
+		if !approxQty(total, q) {
+			return nil, ""
+		}
+	}
+	return lots, side
+}
 
 func (s *BaseCRAStrategy) signal(direction string, qty float64, reason string) *model.Signal {
 	s.lastSignalTime = time.Now().UnixMilli()
@@ -437,13 +604,33 @@ func (s *BaseCRAStrategy) resolveContractSide() PositionSide {
 	return SideLong
 }
 
-func (s *BaseCRAStrategy) checkTakeProfit(price float64) bool {
+// evaluateTakeProfit 止盈判定，返回 (触发, 平仓数量, 出场形态 full|tail|head_tail)。
+//
+// tp_mode=moving（移动止盈）时止盈方式失效——币富名词解释 #29："移动止盈开启
+// 后分仓止盈/首尾止盈失效，按固定止盈执行"：一律全仓移动止盈（保持现状）。
+//
+// 静态止盈按 take_profit_method 真实分支：
+//   - full（及未知值）：全仓均价达线+回调 → 全平（qty=0 表示全平，历史行为不变）；
+//   - tail：尾档自身盈利达线+回调 → 只平尾档（qty=尾档量）；
+//   - head_tail：首档与尾档同时达线+回调 → 平首+尾两档（qty=两档量）。
+//
+// qty>0 的部分平仓由调用方记在途标记，成交确认后才演进持仓状态。
+func (s *BaseCRAStrategy) evaluateTakeProfit(price float64) (bool, float64, string) {
 	p := s.params
 	st := s.state
 	if p.TPMode == "moving" {
-		return st.CheckMovingTakeProfit(price, p.MovingTakeProfitTiers)
+		return st.CheckMovingTakeProfit(price, p.MovingTakeProfitTiers), 0, "full"
 	}
-	return st.CheckStaticTakeProfit(price, p.TakeProfitMethod, p.TakeProfitRatio, p.ProfitCallback)
+	switch p.TakeProfitMethod {
+	case "tail":
+		ok, qty := st.CheckTailTakeProfit(price, p.TakeProfitRatio, p.ProfitCallback)
+		return ok, qty, "tail"
+	case "head_tail":
+		ok, qty := st.CheckHeadTailTakeProfit(price, p.TakeProfitRatio, p.ProfitCallback)
+		return ok, qty, "head_tail"
+	default:
+		return st.CheckStaticTakeProfit(price, p.TakeProfitMethod, p.TakeProfitRatio, p.ProfitCallback), 0, "full"
+	}
 }
 
 func (s *BaseCRAStrategy) openIndicatorsConfirmed(side PositionSide) bool {

@@ -584,6 +584,22 @@ export function CRAParamForm({ value, onChange, market, className, openFields = 
               </button>
             ))}
           </div>
+          {/* 与引擎语义对齐（cra state.go 三态分支）：
+              full=全仓均价达线全平；tail=仅尾档自身达线平尾档减仓；
+              head_tail=首+尾档同达线平两档、中间档继续。 */}
+          <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+            {value.tpMethod === 'full' && '全仓盈利达止盈比例+回调后，卖出全部仓位。'}
+            {value.tpMethod === 'tail' &&
+              '最后一档补仓自身盈利达止盈比例+回调后，只卖出最后一档减仓，其余档位继续持仓。'}
+            {value.tpMethod === 'head_tail' &&
+              '首档与尾档同时盈利达止盈比例+回调后，卖出首档+尾档（如补满7仓时卖第1、7仓），中间档位继续持仓。'}
+          </p>
+          {/* 币富名词解释 #29：移动止盈开启后分仓止盈/首尾止盈失效，按全仓移动止盈执行。 */}
+          {value.tpMode === 'moving' && value.tpMethod !== 'full' && (
+            <p className="mt-1 text-[11px] text-quant-gold/80">
+              移动止盈模式下{value.tpMethod === 'tail' ? '尾单止盈' : '首尾止盈'}不生效：开启移动止盈后按全仓移动止盈执行。
+            </p>
+          )}
         </div>
 
         <div>

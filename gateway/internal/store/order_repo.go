@@ -305,6 +305,40 @@ func NetFilledByStrategy(strategyID, symbol string) (netQty, buyVWAP float64, er
 	return netQty, buyVWAP, nil
 }
 
+// OrderFill 一笔已成交订单的重建视图（重启分档重建输入）。
+type OrderFill struct {
+	Side         string  `json:"side"` // BUY | SELL
+	Filled       float64 `json:"filled"`
+	AvgFillPrice float64 `json:"avg_fill_price"`
+}
+
+// FilledOrdersByStrategy 按成交时间升序返回策略的已成交明细（归属口径同
+// NetFilledByStrategy：client_oid "sig:<id>:" 打标 + FILLED + filled>0 +
+// avg_fill_price>0）。CRA 分档持仓重启重建（尾单/首尾止盈的各档成本）用，
+// 由策略侧重放（cra.RebuildLotsFromFills）。
+func FilledOrdersByStrategy(strategyID, symbol string) ([]OrderFill, error) {
+	prefix := "sig:" + strategyID + ":%"
+	rows, err := db.Query(
+		`SELECT side, filled, avg_fill_price FROM xt_orders
+		 WHERE client_oid LIKE ? AND UPPER(symbol)=UPPER(?)
+		 AND status='FILLED' AND filled>0 AND avg_fill_price>0
+		 ORDER BY updated_at ASC, created_at ASC, rowid ASC`,
+		prefix, symbol)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []OrderFill
+	for rows.Next() {
+		var f OrderFill
+		if err := rows.Scan(&f.Side, &f.Filled, &f.AvgFillPrice); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
 // StrategyPaperPnL 按成交账本（client_oid "sig:<id>:" 打标）用平均成本法逐笔
 // 匹配，计算策略实例的模拟盘绩效：已实现盈亏 + 现价×净持仓的浮动盈亏 −
 // 双边手续费（feeRate，与 paper 账户结算同口径，2026-10-04 补扣——此前

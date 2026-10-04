@@ -119,4 +119,53 @@ describe('CRAParamForm', () => {
     const restored = apiPayloadToCraParams({ open_macd_enabled: true, open_macd_period: '4h' })
     expect(restored.openMacdPeriod).toBe('4h')
   })
+
+  // ── B 片：止盈方式三态说明文案 + 移动止盈不生效提示（币富名词解释 #29）──
+
+  it('shows per-method description matching engine semantics', () => {
+    const { unmount } = render(
+      <CRAParamForm {...baseProps} value={{ ...DEFAULT_CRA_PARAMS, tpMethod: 'full' }} />,
+      { wrapper }
+    )
+    expect(screen.getByText(/卖出全部仓位/)).toBeTruthy()
+    unmount()
+
+    render(<CRAParamForm {...baseProps} value={{ ...DEFAULT_CRA_PARAMS, tpMethod: 'tail' }} />, { wrapper })
+    expect(screen.getByText(/只卖出最后一档减仓/)).toBeTruthy()
+    unmount()
+
+    render(<CRAParamForm {...baseProps} value={{ ...DEFAULT_CRA_PARAMS, tpMethod: 'head_tail' }} />, { wrapper })
+    expect(screen.getByText(/卖出首档\+尾档/)).toBeTruthy()
+  })
+
+  it('warns that tail/head_tail take profit is inert under moving mode', () => {
+    // 移动止盈 + 尾单：提示不生效。
+    const { unmount } = render(
+      <CRAParamForm {...baseProps} value={{ ...DEFAULT_CRA_PARAMS, tpMethod: 'tail', tpMode: 'moving' }} />,
+      { wrapper }
+    )
+    expect(screen.getByText(/尾单止盈不生效/)).toBeTruthy()
+    unmount()
+
+    // 移动止盈 + 首尾：提示不生效。
+    render(
+      <CRAParamForm {...baseProps} value={{ ...DEFAULT_CRA_PARAMS, tpMethod: 'head_tail', tpMode: 'moving' }} />,
+      { wrapper }
+    )
+    expect(screen.getByText(/首尾止盈不生效/)).toBeTruthy()
+  })
+
+  it('does not show the inert hint for full method or static mode', () => {
+    const { unmount } = render(
+      <CRAParamForm {...baseProps} value={{ ...DEFAULT_CRA_PARAMS, tpMethod: 'full', tpMode: 'moving' }} />,
+      { wrapper }
+    )
+    expect(screen.queryByText(/不生效/)).toBeNull()
+    unmount()
+
+    render(<CRAParamForm {...baseProps} value={{ ...DEFAULT_CRA_PARAMS, tpMethod: 'tail', tpMode: 'static' }} />, {
+      wrapper,
+    })
+    expect(screen.queryByText(/不生效/)).toBeNull()
+  })
 })
