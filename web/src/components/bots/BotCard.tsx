@@ -23,6 +23,7 @@ import { KPICard } from '@/components/ui/KPICard'
 import { SectionCard } from '@/components/ui/SectionCard'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { PerformanceChart } from '@/components/charts/PerformanceChart'
+import { AIBotTradesCard } from '@/components/bots/AIBotTradesCard'
 import { aiBotApi, strategyApi } from '@/lib/api'
 import type { BotItem } from '@/hooks/useBotData'
 import { STATUS_META } from '@/hooks/useBotData'
@@ -397,6 +398,9 @@ export function BotDetailView({
           </div>
         )}
       </SectionCard>
+
+      {/* 成交记录（/ai-bots/instances/:id/trades） */}
+      <AIBotTradesCard botId={bot.id} />
 
       {/* Logs */}
       <SectionCard title="运行日志">

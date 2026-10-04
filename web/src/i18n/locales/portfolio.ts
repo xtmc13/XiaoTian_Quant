@@ -24,6 +24,12 @@ const zh = flatten({
       next: '下一页',
       page: '第 {page} 页',
     },
+    rate: {
+      usdcny: 'USD/CNY 汇率',
+      updatedAt: '更新于 {time}',
+      totalCny: '总资产约合 ¥{value}',
+      unavailable: '汇率不可用',
+    },
   },
 })
 
@@ -49,6 +55,12 @@ const en = flatten({
       next: 'Next',
       page: 'Page {page}',
     },
+    rate: {
+      usdcny: 'USD/CNY Rate',
+      updatedAt: 'Updated {time}',
+      totalCny: 'Total ≈ ¥{value}',
+      unavailable: 'Rate unavailable',
+    },
   },
 })
 
@@ -73,6 +85,12 @@ const ja = flatten({
       prev: '前へ',
       next: '次へ',
       page: '{page} ページ目',
+    },
+    rate: {
+      usdcny: 'USD/CNY レート',
+      updatedAt: '更新: {time}',
+      totalCny: '総資産 約 ¥{value}',
+      unavailable: 'レート取得不可',
     },
   },
 })

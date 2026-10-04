@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react'
+import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { toast } from '@/lib/useToast'
@@ -9,7 +9,7 @@ import { CRAParamForm, craParamsToApiPayload, type CRAParams } from './CRAParamF
 import { ExchangeSelectModal } from './ExchangeSelectModal'
 import { DynamicParamField, STRAT_TYPES, TIMEFRAMES } from './StrategyFormFields'
 import { STRATEGY_PRESETS, type Preset } from './StrategyPresets'
-import { createDefaultCRAParams, isCRAStrategyType, CRA_FEATURE_KEYS } from '@/lib/strategyUtils'
+import { createDefaultCRAParams, isCRAStrategyType, CRA_FEATURE_KEYS, applyServerStrategyDefaults } from '@/lib/strategyUtils'
 import type { StrategyParamDefs, ExchangeConfiguredStatus, AddPositionItem } from '@/types'
 import { CheckCircle2, Globe, Activity, AlertTriangle } from 'lucide-react'
 
@@ -362,6 +362,25 @@ export function useStrategyCreateForm(
     }
     setPresetKey(null)
   }, [strategyType, market])
+
+  // 服务端默认参数兜底（/strategies/defaults + /strategies/contract-defaults）：
+  // 创建场景每个 (market, strategyType) 组合一次性叠加；失败/缺档案时保持本地默认。
+  // 编辑模式（editId）不叠加——回填值优先。
+  const { data: serverDefaults } = useQuery({
+    queryKey: ['strategy-server-defaults'],
+    queryFn: () => strategyApi.defaults(),
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+    enabled: !editId,
+  })
+  const serverDefaultsAppliedFor = useRef<string | null>(null)
+  useEffect(() => {
+    if (editId || !serverDefaults) return
+    const combo = `${market}:${strategyType}`
+    if (serverDefaultsAppliedFor.current === combo) return
+    serverDefaultsAppliedFor.current = combo
+    setCraParams((prev) => applyServerStrategyDefaults(prev, { market, strategyType, defaults: serverDefaults }))
+  }, [serverDefaults, strategyType, market, editId])
 
   // Keep the main timeframe in sync with active indicator periods (no hardcoding)。
   // 支撑回踩反弹例外：工作K线是策略语义的一部分（默认 4h，创建时锁定），

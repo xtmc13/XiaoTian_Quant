@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Zap, History, Search, Users } from 'lucide-react'
+import { Zap, History, Search, Users, BrainCircuit } from 'lucide-react'
 import { aiApi, marketApi } from '@/lib/api'
 import { toast } from '@/lib/useToast'
+import { useI18n } from '@/i18n'
 import type { AIAnalysisResult, AIModelAnalysis, TickerSnapshot } from '@/types'
 
 import { TopIndexBar } from './components/TopIndexBar'
@@ -10,6 +11,7 @@ import { HeatmapSection } from './components/HeatmapSection'
 import { EconomicCalendar } from './components/EconomicCalendar'
 import { AnalysisPlaceholder, AnalysisResultView } from './components/AnalysisPanel'
 import { WatchlistPanel } from './components/WatchlistPanel'
+import { MultiModelAnalysis } from './components/MultiModelAnalysis'
 import { AIReviewPanel } from '@/components/ai/AIReviewPanel'
 import { AIGatePanel } from '@/components/ai/AIGatePanel'
 import { AddStockModal, HistoryModal } from './components/Modals'
@@ -27,6 +29,7 @@ import type {
 
 export function AI() {
   const navigate = useNavigate()
+  const { t } = useI18n()
 
   /* -- Market data states -- */
   const [loadingMarket, setLoadingMarket] = useState(false)
@@ -85,6 +88,7 @@ export function AI() {
   const [analysisResult, setAnalysisResult] = useState<AIAnalysisResult | null>(null)
   const [analysisError, setAnalysisError] = useState<string | null>(null)
   const [showHistoryModal, setShowHistoryModal] = useState(false)
+  const [showMultiModel, setShowMultiModel] = useState(false)
   const [analysisHistory, setAnalysisHistory] = useState<{ symbol: string; result: AIAnalysisResult; time: number }[]>(
     () => {
       try {
@@ -392,6 +396,19 @@ export function AI() {
     setAnalysisError(null)
   }, [])
 
+  const applyAnalysisResult = useCallback((result: AIAnalysisResult) => {
+    setAnalysisResult(result)
+    setAnalysisHistory((prev) => {
+      const next = [{ symbol: result.symbol, result, time: Date.now() }, ...prev.slice(0, 49)]
+      try {
+        localStorage.setItem('ai-analysis-history', JSON.stringify(next))
+      } catch {
+        /* ignore */
+      }
+      return next
+    })
+  }, [])
+
   const startFastAnalysis = useCallback(async () => {
     if (!selectedSymbol) return
     setAnalyzing(true)
@@ -411,23 +428,14 @@ export function AI() {
           content: a.content || '',
         })),
       }
-      setAnalysisResult(result)
-      setAnalysisHistory((prev) => {
-        const next = [{ symbol: result.symbol, result, time: Date.now() }, ...prev.slice(0, 49)]
-        try {
-          localStorage.setItem('ai-analysis-history', JSON.stringify(next))
-        } catch {
-          /* ignore */
-        }
-        return next
-      })
+      applyAnalysisResult(result)
     } catch (e: unknown) {
       const err = e instanceof Error ? e : new Error(String(e))
       setAnalysisError(err.message || '分析失败')
     } finally {
       setAnalyzing(false)
     }
-  }, [selectedSymbol])
+  }, [selectedSymbol, applyAnalysisResult])
 
   const handleRetry = useCallback(() => {
     startFastAnalysis()
@@ -578,6 +586,13 @@ export function AI() {
               <Zap className="w-3.5 h-3.5" /> AI 分析
             </button>
             <button
+              onClick={() => setShowMultiModel(true)}
+              disabled={!selectedSymbol}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-quant-card border border-quant-gold/40 text-quant-gold text-xs font-medium hover:bg-quant-gold/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <BrainCircuit className="w-3.5 h-3.5" /> {t('ai.async.button')}
+            </button>
+            <button
               onClick={() => setShowHistoryModal(true)}
               className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-quant-card border border-quant-border text-foreground text-xs font-medium hover:border-quant-gold/40 transition-colors"
             >
@@ -642,6 +657,16 @@ export function AI() {
       <AIReviewPanel />
 
       <AIGatePanel />
+
+      <MultiModelAnalysis
+        open={showMultiModel}
+        symbol={(selectedSymbol || 'BTCUSDT').split(':').pop() || 'BTCUSDT'}
+        onClose={() => setShowMultiModel(false)}
+        onResult={(result) => {
+          applyAnalysisResult(result)
+          setAnalysisError(null)
+        }}
+      />
       </div>
     </div>
   )

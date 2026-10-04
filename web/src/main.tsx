@@ -19,6 +19,10 @@ import '@/i18n/locales/community'
 import '@/i18n/locales/social'
 import '@/i18n/locales/portfolio'
 import '@/i18n/locales/trading'
+import '@/i18n/locales/tick'
+import '@/i18n/locales/aiasync'
+import '@/i18n/locales/ide'
+import '@/i18n/locales/orderkit'
 
 // 渲染前应用持久化的主题/缩放，避免刷新后外观回跳
 bootstrapAppearance()

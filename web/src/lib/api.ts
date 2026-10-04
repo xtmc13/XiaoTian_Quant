@@ -522,6 +522,11 @@ export const portfolioApi = {
     api.get<{ months: CalendarMonth[] }>(
       `/portfolio/calendar?year=${year || new Date().getFullYear()}&month=${month || new Date().getMonth() + 1}`
     ),
+  // USD/CNY 及全部展示汇率（GET /exchange/usdcny）
+  usdCny: () =>
+    api.get<{ rate: number; rates: Record<string, number>; updated_at: string; preferred: string }>(
+      '/exchange/usdcny'
+    ),
 }
 
 // ── Paper Account ──
@@ -831,6 +836,31 @@ export const strategyApi = {
   contract: () => api.get<StrategyItem[]>('/strategies/contract'),
   ranking: () => api.get<StrategyRanking[]>('/strategies/ranking'),
   paramDefs: (type: string) => api.get<StrategyParamDefs>(`/strategies/param-defs?type=${type}`),
+  // 服务端默认参数（GET /strategies/defaults、/strategies/contract-defaults）：创建表单兜底默认值
+  defaults: () => api.get<StrategyDefaultsResponse>('/strategies/defaults'),
+  contractDefaults: () => api.get<ContractDefaults>('/strategies/contract-defaults'),
+}
+
+export interface StrategyDefaultEntry {
+  key: string
+  label: string
+  description?: string
+  category?: string
+  parameters: Record<string, unknown>
+}
+
+export interface StrategyDefaultsResponse {
+  strategies: StrategyDefaultEntry[]
+  contract_defaults?: ContractDefaults
+  risk_defaults?: Record<string, unknown>
+}
+
+export interface ContractDefaults {
+  leverage?: number
+  direction?: string
+  margin_mode?: string
+  max_positions?: number
+  maintenance_margin_rate?: number
 }
 
 // ── Backtest ──
@@ -838,6 +868,45 @@ export const backtestApi = {
   run: (config: BacktestRequest) => api.post<BacktestResult>('/backtest/run', config, { timeout: TIMEOUTS.backtest }),
   native: (config: BacktestRequest) =>
     api.post<BacktestResult>('/native/backtest', config, { timeout: TIMEOUTS.backtest }),
+}
+
+// ── Tick 级回测（POST /backtest/tick 异步任务 + jobs 轮询）──
+export interface TickBacktestResult {
+  total_return: number
+  total_return_pct: number
+  max_drawdown: number
+  max_drawdown_pct: number
+  sharpe_ratio: number
+  sortino_ratio: number
+  calmar_ratio: number
+  win_rate: number
+  profit_factor: number
+  total_trades: number
+  winning_trades: number
+  losing_trades: number
+  avg_win: number
+  avg_loss: number
+  best_trade: number
+  worst_trade: number
+  duration_ms: number
+  ticks_processed: number
+}
+
+export interface TickBacktestJob {
+  id: string
+  user_id: number
+  status: 'running' | 'done' | 'failed' | string
+  result?: TickBacktestResult
+  error?: string
+  started_at: number
+  ended_at?: number
+}
+
+export const tickBacktestApi = {
+  run: (config: { strategy: string; symbol: string; start: number; end: number; params?: Record<string, unknown> }) =>
+    api.post<{ status: string; job_id: string }>('/backtest/tick', config),
+  jobs: () => api.get<{ jobs: TickBacktestJob[] | null }>('/backtest/tick/jobs').then((d) => d?.jobs ?? []),
+  job: (id: string) => api.get<TickBacktestJob>(`/backtest/tick/jobs/${id}`),
 }
 
 // ── 因子研究（A6.1） ──
@@ -1100,11 +1169,42 @@ export const aiApi = {
   deploy: (data: Record<string, unknown>) => api.post<{ success: boolean; strategy_id: string }>('/ai/deploy', data),
   analyze: (data: Record<string, unknown>) =>
     api.post<AIAnalysisResult>('/ai/analyze', data, { timeout: TIMEOUTS.analysis }),
+  // ── 异步多模型共识分析（POST /analysis/start → GET /analysis/result 轮询）──
+  analysisStart: (data: { symbol: string; interval?: string; enabled_models?: string[] }) =>
+    api.post<{ status: string; task_id: string }>('/analysis/start', data),
+  analysisResult: (taskId: string) =>
+    api.get<AIAsyncAnalysisResult>(`/analysis/result?task_id=${encodeURIComponent(taskId)}`),
   quickScan: () => api.get<AIQuickScan>('/ai/quickscan'),
   chat: (message: string) => api.post<AIChatResponse>('/ai/chat', { message }),
   models: () => api.get<AIModel[]>('/ai/models'),
   autoTradeGet: () => api.get<AIAutoTradeConfig>('/auto-trade/config'),
   autoTradeSave: (config: AIAutoTradeConfig) => api.put<AIAutoTradeConfig>('/auto-trade/config', config),
+}
+
+// ── AI 异步多模型分析结果（/analysis/result 契约）──
+export interface AIAsyncModelResult {
+  model: string
+  signal: 'bullish' | 'bearish' | 'neutral' | string
+  confidence: number
+  reasoning: string
+  timestamp: number
+}
+
+export interface AIAsyncConsensus {
+  signal: 'bullish' | 'bearish' | 'neutral' | string
+  bullish: number
+  bearish: number
+  neutral: number
+  total: number
+  agreement: number
+}
+
+export interface AIAsyncAnalysisResult {
+  status: 'processing' | 'completed' | string
+  results?: AIAsyncModelResult[]
+  consensus?: AIAsyncConsensus
+  symbol: string
+  interval: string
 }
 
 // ── Chat ──
@@ -1766,9 +1866,54 @@ export const pairlistApi = {
     api.get<PairlistWhitelist>('/pairlist/refresh', { params: { exchange, quote_asset: quoteAsset } }),
   config: () => api.get<PairlistConfig>('/pairlist/config'),
   configure: (data: PairlistConfig) => api.post<PairlistConfig>('/pairlist/config', data),
+  // 组件规格（producer/filter 元数据，驱动表单动态渲染，避免前后端能力漂移）
+  specs: () => api.get<PairlistSpecs>('/pairlist/specs'),
+}
+
+export interface PairlistParamSpec {
+  key: string
+  label: string
+  type: 'number' | 'text' | 'select' | 'tags' | 'bool' | string
+  default?: unknown
+  min?: number
+  max?: number
+  step?: number
+  options?: string[]
+}
+
+export interface PairlistComponentSpec {
+  name: string
+  label: string
+  description: string
+  params: PairlistParamSpec[]
+}
+
+export interface PairlistSpecs {
+  producers: PairlistComponentSpec[]
+  filters: PairlistComponentSpec[]
 }
 
 // ── Advanced Orders ──
+export interface BracketCalculateRequest {
+  entry_price: number
+  side: 'buy' | 'sell' | string
+  /** 小数口径：0.02 = 2% */
+  stop_loss_pct: number
+  take_profit_pct: number
+  balance: number
+  risk_pct: number
+}
+
+export interface BracketCalculateResult {
+  entry_price: number
+  take_profit: number
+  stop_loss: number
+  position_size: number
+  risk_amount: number
+  reward_amount: number
+  risk_reward: number
+}
+
 export const advancedOrderApi = {
   oco: {
     place: (data: Partial<OCOOrder>) => api.post<OCOOrder>('/orders/oco', data),
@@ -1779,6 +1924,9 @@ export const advancedOrderApi = {
     place: (data: Partial<BracketOrder>) => api.post<BracketOrder>('/orders/bracket', data),
     list: () => api.get<BracketOrder[]>('/orders/bracket'),
     cancel: (id: string) => api.del<{ success: boolean }>(`/orders/bracket/${id}`),
+    // 试算（百分比为小数口径：0.02 = 2%）
+    calculate: (data: BracketCalculateRequest) =>
+      api.post<BracketCalculateResult>('/orders/bracket/calculate', data),
   },
   iceberg: {
     place: (data: Partial<IcebergOrder>) => api.post<IcebergOrder>('/orders/iceberg', data),
@@ -1912,6 +2060,17 @@ export const hyperoptApi = {
     api.get<{ epochs: HyperoptEpoch[]; count: number }>('/hyperopt/epochs', { params }).then((d) => d?.epochs ?? []),
   epoch: (id: string) => api.get<HyperoptEpoch>(`/hyperopt/epochs/${id}`),
   applyEpoch: (id: string) => api.post<HyperoptEpochApplyResult>(`/hyperopt/epochs/${id}/apply`),
+  // 最优参数一键回写策略配置（POST /hyperopt/jobs/:id/export）
+  exportParams: (id: string, data: { strategy_id?: string; strategy_name?: string; param_map: Record<string, string> }) =>
+    api.post<HyperoptExportResult>(`/hyperopt/jobs/${encodeURIComponent(id)}/export`, data),
+}
+
+export interface HyperoptExportResult {
+  status: string
+  job_id: string
+  strategy_type: string
+  mapped_params: Record<string, unknown>
+  config_path: string
 }
 
 // ── Notifications ──
@@ -1933,6 +2092,13 @@ export const notifyRouteApi = {
   delete: (id: string) => api.del<{ success: boolean }>(`/notify/routes/${id}`),
   test: (channel: string, message?: string) =>
     api.post<{ success: boolean }>('/notify/test', { channel, message: message || '测试消息' }),
+  // 渠道状态（GET /notify/channels）与自定义通知发送（POST /notify/send）
+  channels: () =>
+    api
+      .get<{ channels: { name: string; enabled: boolean; configured: boolean }[] }>('/notify/channels')
+      .then((d) => d?.channels ?? []),
+  send: (data: { title: string; content: string; level?: string; channels?: string[] }) =>
+    api.post<{ status: 'sent' | 'partial'; errors?: string[] }>('/notify/send', data),
 }
 
 // ── Indicators ──
@@ -2108,7 +2274,51 @@ export const indicatorApi = {
       api.post<IndicatorRunResult>('/experiment/ai-optimize', data, { timeout: TIMEOUTS.backtest }),
     structuredTune: (data: Record<string, unknown>) =>
       api.post<IndicatorRunResult>('/experiment/structured-tune', data, { timeout: TIMEOUTS.backtest }),
+    // 实验列表/状态（GET /experiments、GET /experiment/status/:id）
+    list: () => api.get<{ items: ExperimentListItem[]; total: number }>('/experiments').then((d) => d?.items ?? []),
+    status: (id: string) =>
+      api
+        .get<{ success: boolean; result: Record<string, unknown> }>(`/experiment/status/${encodeURIComponent(id)}`)
+        .then((d) => d?.result ?? null),
   },
+  // Python 策略沙箱运行（POST /strategies-python/run → pythonstrategy 引擎，mode=indicator|script）
+  runPython: (data: PythonRunRequest) =>
+    api.post<{ count: number; signals: PythonRunSignal[] }>('/strategies-python/run', data, {
+      timeout: TIMEOUTS.backtest,
+    }),
+}
+
+export interface PythonRunRequest {
+  mode?: 'indicator' | 'script'
+  code: string
+  symbol?: string
+  interval?: string
+  params?: Record<string, unknown>
+  bars?: { time: number; open: number; high: number; low: number; close: number; volume: number }[]
+}
+
+export interface PythonRunSignal {
+  time: number
+  bar_index: number
+  action: string
+  price: number
+  reason: string
+  size?: number
+}
+
+export interface ExperimentListItem {
+  id: string
+  experiment_id: string
+  name?: string
+  status: string
+  best_score?: number
+  duration_ms?: number
+  /** 后端 time.Time 序列化为 RFC3339 字符串 */
+  created_at?: string
+  is_return_pct?: number
+  is_max_drawdown_pct?: number
+  oos_return_pct?: number
+  oos_max_drawdown_pct?: number
 }
 
 // ── Social Trading ──
@@ -2594,6 +2804,40 @@ export const dataApi = {
   jobStatus: (id: string) => api.get<DownloadJobStatus>(`/data/download/${id}`),
   bars: (symbol: string, interval: string, from: number, to: number) =>
     api.get<BarDataResponse>(`/data/bars?symbol=${symbol}&interval=${interval}&from=${from}&to=${to}`),
+  // ── Tick 数据（/data/ticks/*；注意后端网络下载已下线，下载接口会返回说明性错误）──
+  tickDownload: (config: { symbol: string; start_date?: string; end_date?: string }) =>
+    api.post<{ status: string; job_id: string }>('/data/ticks/download', config),
+  ticks: (symbol: string, opts?: { start?: number; end?: number; limit?: number }) => {
+    const qs = new URLSearchParams({ symbol })
+    if (opts?.start) qs.set('start', String(opts.start))
+    if (opts?.end) qs.set('end', String(opts.end))
+    if (opts?.limit) qs.set('limit', String(opts.limit))
+    return api.get<{ symbol: string; start: number; end: number; count: number; ticks: TickItem[] | null }>(
+      `/data/ticks?${qs.toString()}`
+    )
+  },
+  tickInfo: (symbol: string) => api.get<TickDataInfo>(`/data/ticks/info?symbol=${encodeURIComponent(symbol)}`),
+}
+
+export interface TickItem {
+  symbol: string
+  exchange: string
+  bid: number
+  ask: number
+  bid_size: number
+  ask_size: number
+  last: number
+  volume: number
+  timestamp: number
+}
+
+export interface TickDataInfo {
+  symbol: string
+  count: number
+  earliest: number
+  latest: number
+  earliest_time: string
+  latest_time: string
 }
 
 // ── Health / Status ──

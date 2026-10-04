@@ -54,6 +54,7 @@ import { SectionCard } from '@/components/ui/SectionCard'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { BacktestAssumptions } from '@/components/BacktestAssumptions'
+import { TickBacktestPanel } from '@/components/backtest/TickBacktestPanel'
 
 /* ── Types ───────────────────────────────────────────────────────── */
 interface BacktestParams {
@@ -1827,6 +1828,9 @@ export function Backtest() {
             />
           </div>
         )}
+
+        {/* ── Tick 级回测（/backtest/tick 异步任务）── */}
+        <TickBacktestPanel />
       </div>
     </div>
   )

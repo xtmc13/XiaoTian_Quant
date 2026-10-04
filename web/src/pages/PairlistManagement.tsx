@@ -1,7 +1,9 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { pairlistApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { useI18n } from '@/i18n'
+import { mergeTemplatesWithSpecs } from '@/lib/pairlistSpecs'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { SectionCard } from '@/components/ui/SectionCard'
 import { PageHeader } from '@/components/ui/PageHeader'
@@ -378,6 +380,7 @@ const FILTER_TEMPLATES: FilterTemplate[] = [
 /* ── Page ── */
 export function PairlistManagement() {
   const queryClient = useQueryClient()
+  const { t: i18nT } = useI18n()
   const [producers, setProducers] = useState<PairlistConfig['producers']>([])
   const [filters, setFilters] = useState<PairlistConfig['filters']>([])
   const [showProducerForm, setShowProducerForm] = useState(false)
@@ -395,6 +398,21 @@ export function PairlistManagement() {
     queryFn: () => pairlistApi.config(),
   })
 
+  // 后端组件规格（/pairlist/specs）：与本地内置模板合并驱动添加清单，失败回退本地
+  const { data: specs } = useQuery({
+    queryKey: ['pairlist-specs'],
+    queryFn: () => pairlistApi.specs(),
+    retry: false,
+  })
+  const { templates: producerTemplates, backendNames: backendProducers } = useMemo(
+    () => mergeTemplatesWithSpecs(PRODUCER_TEMPLATES, specs?.producers),
+    [specs]
+  )
+  const { templates: filterTemplates, backendNames: backendFilters } = useMemo(
+    () => mergeTemplatesWithSpecs(FILTER_TEMPLATES, specs?.filters),
+    [specs]
+  )
+
   // Mutations
   const refreshMutation = useMutation({
     mutationFn: () => pairlistApi.refresh(),
@@ -409,18 +427,18 @@ export function PairlistManagement() {
   })
 
   const handleAddProducer = useCallback((templateName: string) => {
-    const template = PRODUCER_TEMPLATES.find((t) => t.name === templateName)
+    const template = producerTemplates.find((t) => t.name === templateName)
     if (!template) return
     setProducers((prev) => [...prev, { name: template.name, params: { ...template.defaultParams } }])
     setShowProducerForm(false)
-  }, [])
+  }, [producerTemplates])
 
   const handleAddFilter = useCallback((templateName: string) => {
-    const template = FILTER_TEMPLATES.find((t) => t.name === templateName)
+    const template = filterTemplates.find((t) => t.name === templateName)
     if (!template) return
     setFilters((prev) => [...prev, { name: template.name, params: { ...template.defaultParams } }])
     setShowFilterForm(false)
-  }, [])
+  }, [filterTemplates])
 
   const handleUpdateParam = useCallback((
     type: 'producer' | 'filter',
@@ -541,6 +559,9 @@ export function PairlistManagement() {
           subtitle="配置交易对来源和过滤规则"
           actions={<ListFilter className="w-6 h-6 text-quant-gold" />}
         />
+        <p className="text-[11px] text-muted-foreground -mt-3">
+          {specs ? i18nT('pairlist.spec.sourceNote') : i18nT('pairlist.spec.sourceFallback')}
+        </p>
 
         {/* KPI Cards */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -651,7 +672,7 @@ export function PairlistManagement() {
             <div className="space-y-3">
               {showProducerForm && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2 p-3 rounded-md bg-quant-bg-secondary">
-                  {PRODUCER_TEMPLATES.map((t) => (
+                  {producerTemplates.map((t) => (
                     <button
                       key={t.name}
                       onClick={() => handleAddProducer(t.name)}
@@ -659,7 +680,12 @@ export function PairlistManagement() {
                     >
                       <Plus className="w-4 h-4 text-quant-gold shrink-0 mt-0.5" />
                       <div>
-                        <div className="text-sm font-medium">{t.label}</div>
+                        <div className="text-sm font-medium">
+                          {t.label}
+                          <span className="ml-1.5 px-1 py-0.5 rounded text-[9px] font-normal bg-quant-gold/10 text-quant-gold align-middle">
+                            {backendProducers.has(t.name) ? i18nT('pairlist.spec.backendBadge') : i18nT('pairlist.spec.localBadge')}
+                          </span>
+                        </div>
                         <div className="text-xs text-muted-foreground">{t.description}</div>
                       </div>
                     </button>
@@ -670,7 +696,7 @@ export function PairlistManagement() {
                 <div className="text-sm text-muted-foreground text-center py-4">未配置生产器</div>
               ) : (
                 producers.map((p, i) => {
-                  const template = PRODUCER_TEMPLATES.find((t) => t.name === p.name)
+                  const template = producerTemplates.find((t) => t.name === p.name)
                   return (
                     <div key={i} className="p-3 rounded-md bg-quant-bg-secondary">
                       <div className="flex items-center justify-between mb-2">
@@ -723,7 +749,7 @@ export function PairlistManagement() {
             <div className="space-y-3">
               {showFilterForm && (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 p-3 rounded-md bg-quant-bg-secondary">
-                  {FILTER_TEMPLATES.map((t) => (
+                  {filterTemplates.map((t) => (
                     <button
                       key={t.name}
                       onClick={() => handleAddFilter(t.name)}
@@ -731,7 +757,12 @@ export function PairlistManagement() {
                     >
                       <Plus className="w-4 h-4 text-quant-gold shrink-0 mt-0.5" />
                       <div>
-                        <div className="text-sm font-medium">{t.label}</div>
+                        <div className="text-sm font-medium">
+                          {t.label}
+                          <span className="ml-1.5 px-1 py-0.5 rounded text-[9px] font-normal bg-quant-gold/10 text-quant-gold align-middle">
+                            {backendFilters.has(t.name) ? i18nT('pairlist.spec.backendBadge') : i18nT('pairlist.spec.localBadge')}
+                          </span>
+                        </div>
                         <div className="text-xs text-muted-foreground">{t.description}</div>
                       </div>
                     </button>
@@ -742,7 +773,7 @@ export function PairlistManagement() {
                 <div className="text-sm text-muted-foreground text-center py-4">未配置过滤器</div>
               ) : (
                 filters.map((f, i) => {
-                  const template = FILTER_TEMPLATES.find((t) => t.name === f.name)
+                  const template = filterTemplates.find((t) => t.name === f.name)
                   return (
                     <div key={i} className="p-3 rounded-md bg-quant-bg-secondary">
                       <div className="flex items-center justify-between mb-2">

@@ -518,6 +518,46 @@ export function Settings() {
     mutationFn: ({ channel, message }: { channel: string; message?: string }) => notifyRouteApi.test(channel, message),
   })
 
+  /* ── 渠道状态 + 测试通知（/notify/channels、/notify/send）── */
+  const { data: notifyChannels } = useQuery({
+    queryKey: ['notify-channels'],
+    queryFn: () => notifyRouteApi.channels(),
+    retry: false,
+  })
+  const [testNotify, setTestNotify] = useState<{ title: string; content: string; level: string; channels: string[] }>({
+    title: '',
+    content: '',
+    level: 'INFO',
+    channels: [],
+  })
+  const testSendMut = useMutation({
+    mutationFn: () =>
+      notifyRouteApi.send({
+        title: testNotify.title.trim(),
+        content: testNotify.content.trim(),
+        level: testNotify.level,
+        channels: testNotify.channels.length > 0 ? testNotify.channels : undefined,
+      }),
+    onSuccess: (d) => {
+      if (d?.status === 'partial') {
+        toast('warning', `${t('settings.testSend.partial')}: ${(d.errors ?? []).join('; ')}`)
+      } else {
+        toast('success', t('settings.testSend.sent'))
+        setTestNotify((p) => ({ ...p, title: '', content: '' }))
+      }
+    },
+    onError: (err: unknown) => {
+      toast('error', err instanceof Error ? err.message : t('settings.testSend.failed'))
+    },
+  })
+  const handleTestSend = () => {
+    if (!testNotify.title.trim() || !testNotify.content.trim()) {
+      toast('warning', t('settings.testSend.needContent'))
+      return
+    }
+    testSendMut.mutate()
+  }
+
   const notifyRoutes: RouteRule[] = useMemo(() => {
     if (!Array.isArray(notifyRoutesData)) return []
     return notifyRoutesData.map((r: unknown) => {
@@ -1288,6 +1328,105 @@ export function Settings() {
                     <span className="font-medium">{t('settings.notify.tvActionLabel')}</span> {t('settings.notify.tvActionValues')}
                   </div>
                 </div>
+              </SectionCard>
+
+              {/* ── 渠道状态（/notify/channels）── */}
+              <SectionCard title={t('settings.channels.title')} bodyClassName="space-y-3">
+                <p className="text-xs text-muted-foreground">{t('settings.channels.desc')}</p>
+                <div className="flex flex-wrap gap-2">
+                  {(notifyChannels ?? []).map((ch) => (
+                    <span
+                      key={ch.name}
+                      className={cn(
+                        'inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium',
+                        ch.configured
+                          ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400'
+                          : 'border-quant-border text-muted-foreground'
+                      )}
+                    >
+                      {ch.name}
+                      <span className="text-[10px] opacity-70">
+                        {ch.configured ? t('settings.channels.configured') : t('settings.channels.notConfigured')}
+                      </span>
+                    </span>
+                  ))}
+                  {notifyChannels && notifyChannels.length === 0 && (
+                    <span className="text-xs text-muted-foreground">—</span>
+                  )}
+                </div>
+              </SectionCard>
+
+              {/* ── 发送测试通知（/notify/send）── */}
+              <SectionCard title={t('settings.testSend.title')} bodyClassName="space-y-4">
+                <p className="text-xs text-muted-foreground">{t('settings.testSend.desc')}</p>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className="mb-1.5 block text-xs text-muted-foreground">{t('settings.testSend.titleLabel')}</label>
+                    <TextInput
+                      value={testNotify.title}
+                      onChange={(v) => setTestNotify((p) => ({ ...p, title: v }))}
+                      placeholder={t('settings.testSend.titlePlaceholder')}
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-xs text-muted-foreground">{t('settings.testSend.level')}</label>
+                    <SelectField
+                      value={testNotify.level}
+                      onChange={(v) => setTestNotify((p) => ({ ...p, level: v }))}
+                      options={[
+                        { value: 'INFO', label: 'INFO' },
+                        { value: 'WARNING', label: 'WARNING' },
+                        { value: 'ERROR', label: 'ERROR' },
+                        { value: 'CRITICAL', label: 'CRITICAL' },
+                      ]}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-xs text-muted-foreground">{t('settings.testSend.contentLabel')}</label>
+                  <TextInput
+                    value={testNotify.content}
+                    onChange={(v) => setTestNotify((p) => ({ ...p, content: v }))}
+                    placeholder={t('settings.testSend.contentPlaceholder')}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-xs text-muted-foreground">{t('settings.testSend.channelsLabel')}</label>
+                  <div className="flex flex-wrap gap-2">
+                    {(notifyChannels ?? [])
+                      .filter((ch) => ch.configured)
+                      .map((ch) => (
+                        <button
+                          key={ch.name}
+                          type="button"
+                          onClick={() =>
+                            setTestNotify((p) => ({
+                              ...p,
+                              channels: p.channels.includes(ch.name)
+                                ? p.channels.filter((c) => c !== ch.name)
+                                : [...p.channels, ch.name],
+                            }))
+                          }
+                          className={cn(
+                            'rounded-md border px-2.5 py-1 text-xs font-medium transition-colors',
+                            testNotify.channels.includes(ch.name)
+                              ? 'border-quant-gold/50 bg-quant-gold/10 text-quant-gold'
+                              : 'border-quant-border text-muted-foreground hover:text-foreground'
+                          )}
+                        >
+                          {ch.name}
+                        </button>
+                      ))}
+                  </div>
+                </div>
+                <button
+                  onClick={handleTestSend}
+                  disabled={testSendMut.isPending}
+                  className="flex items-center gap-1.5 rounded-md bg-quant-gold px-4 py-2 text-xs font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-50"
+                >
+                  {testSendMut.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bell className="h-3.5 w-3.5" />}
+                  {testSendMut.isPending ? t('settings.testSend.sending') : t('settings.testSend.submit')}
+                </button>
               </SectionCard>
             </>
           )}

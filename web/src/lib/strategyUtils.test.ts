@@ -203,3 +203,67 @@ describe('P0-4 类型-参数防呆', () => {
     expect(stripped).toMatchObject({ symbol: 'BTCUSDT', leverage: 10, margin_mode: 'cross', timeframe: '15m' })
   })
 })
+
+describe('applyServerStrategyDefaults（服务端默认参数兜底）', () => {
+  it('现货 martin_trend 映射 martin_trend_v2 档案（小数→百分数口径换算）', async () => {
+    const { applyServerStrategyDefaults, createDefaultCRAParams } = await import('./strategyUtils')
+    const base = {
+      ...createDefaultCRAParams('spot'),
+      addPositions: [
+        { order: 1, multiplier: 2, spread: 3, callback: 0.5 },
+        { order: 2, multiplier: 4, spread: 6, callback: 0.5 },
+      ],
+    }
+    const next = applyServerStrategyDefaults(base, {
+      market: 'spot',
+      strategyType: 'martin_trend',
+      defaults: {
+        strategies: [
+          {
+            key: 'martin_trend_v2',
+            parameters: {
+              first_order_amount: 100,
+              take_profit_ratio: 0.013,
+              profit_callback: 0.003,
+              flash_crash_protection: 0.02,
+              double_first_order: true,
+              add_position_spread: 0.03,
+              add_position_callback: 0.003,
+            },
+          },
+        ],
+      },
+    })
+    expect(next.firstOrderAmount).toBe(100)
+    expect(next.tpRatio).toBeCloseTo(1.3)
+    expect(next.profitCallback).toBeCloseTo(0.3)
+    expect(next.waterfall).toBeCloseTo(2)
+    expect(next.waterfallEnabled).toBe(true)
+    expect(next.firstOrderMultiplier).toBe(2)
+    // ladder 档数/multiplier 不变，spread 等差重算、callback 统一
+    expect(next.addPositions.map((p) => p.multiplier)).toEqual([2, 4])
+    expect(next.addPositions[0].spread).toBeCloseTo(3)
+    expect(next.addPositions[1].spread).toBeCloseTo(6)
+    expect(next.addPositions[0].callback).toBeCloseTo(0.3)
+  })
+
+  it('合约应用 contract_defaults（杠杆 + both→dual）', async () => {
+    const { applyServerStrategyDefaults, createDefaultCRAParams } = await import('./strategyUtils')
+    const next = applyServerStrategyDefaults(createDefaultCRAParams('contract'), {
+      market: 'contract',
+      strategyType: 'cra_contract',
+      defaults: { contract_defaults: { leverage: 20, direction: 'both' } },
+    })
+    expect(next.leverage).toBe(20)
+    expect(next.direction).toBe('dual')
+  })
+
+  it('无匹配档案/空 defaults 时原样返回', async () => {
+    const { applyServerStrategyDefaults, createDefaultCRAParams } = await import('./strategyUtils')
+    const base = createDefaultCRAParams('spot')
+    expect(
+      applyServerStrategyDefaults(base, { market: 'spot', strategyType: 'cra_spot', defaults: { strategies: [] } })
+    ).toBe(base)
+    expect(applyServerStrategyDefaults(base, { market: 'spot', strategyType: 'martin_trend', defaults: null })).toBe(base)
+  })
+})

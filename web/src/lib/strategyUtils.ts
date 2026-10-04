@@ -310,3 +310,83 @@ export function migrateLegacyConfigToCRAParams(
     addPositions,
   }
 }
+
+/* ── 服务端默认参数兜底（GET /strategies/defaults + /strategies/contract-defaults）── */
+
+/** 服务端 defaults 响应的最小结构（与 lib/api StrategyDefaultsResponse 同构，避免运行时依赖）。 */
+export interface ServerStrategyDefaults {
+  strategies?: { key: string; parameters?: Record<string, unknown> }[]
+  contract_defaults?: {
+    leverage?: number
+    direction?: string
+    margin_mode?: string
+    max_positions?: number
+    maintenance_margin_rate?: number
+  } | null
+}
+
+/** 前端现货类型 → 服务端 defaults key（服务端只有 martin/wallstreet 两档案）。 */
+const SERVER_DEFAULT_KEY: Record<string, string> = {
+  martin_trend: 'martin_trend_v2',
+  wallstreet: 'wallstreet_v2',
+}
+
+function numOr(v: unknown): number | undefined {
+  const n = typeof v === 'string' ? parseFloat(v) : (v as number)
+  return typeof n === 'number' && isFinite(n) ? n : undefined
+}
+
+/**
+ * 把服务端默认参数叠加到表单 CRAParams（创建场景一次性兜底；失败时保持本地默认）。
+ * 口径换算：服务端小数为分数（0.013 = 1.3%），表单 UI 为百分数（1.3）。
+ * - 现货档案类型（martin_trend/wallstreet）：首单金额/止盈/回调/防瀑布/首单双倍/
+ *   补仓差价与回调（按现有 ladder 档数等差重算 spread，multiplier 不动）。
+ * - 合约：杠杆与方向（both→dual）。
+ */
+export function applyServerStrategyDefaults(
+  base: CRAParams,
+  args: { market: 'spot' | 'contract'; strategyType: string; defaults?: ServerStrategyDefaults | null }
+): CRAParams {
+  const { market, strategyType, defaults } = args
+  if (!defaults) return base
+
+  if (market === 'contract') {
+    const cd = defaults.contract_defaults
+    if (!cd) return base
+    const next = { ...base }
+    const leverage = numOr(cd.leverage)
+    if (leverage && leverage > 0) next.leverage = leverage
+    if (cd.direction === 'both') next.direction = 'dual'
+    else if (cd.direction === 'long' || cd.direction === 'short') next.direction = cd.direction
+    return next
+  }
+
+  const key = SERVER_DEFAULT_KEY[strategyType] ?? strategyType
+  const entry = (defaults.strategies ?? []).find((s) => s.key === key)
+  const p = entry?.parameters
+  if (!p) return base
+
+  const next = { ...base }
+  const firstOrderAmount = numOr(p.first_order_amount)
+  if (firstOrderAmount && firstOrderAmount > 0) next.firstOrderAmount = firstOrderAmount
+  const tpRatio = numOr(p.take_profit_ratio)
+  if (tpRatio && tpRatio > 0) next.tpRatio = tpRatio * 100
+  const profitCallback = numOr(p.profit_callback)
+  if (profitCallback && profitCallback > 0) next.profitCallback = profitCallback * 100
+  const flashCrash = numOr(p.flash_crash_protection)
+  if (flashCrash && flashCrash > 0) {
+    next.waterfall = flashCrash * 100
+    next.waterfallEnabled = true
+  }
+  if (p.double_first_order === true) next.firstOrderMultiplier = 2
+  const spreadPct = numOr(p.add_position_spread)
+  const callbackPct = numOr(p.add_position_callback)
+  if ((spreadPct && spreadPct > 0) || (callbackPct && callbackPct > 0)) {
+    next.addPositions = base.addPositions.map((row, i) => ({
+      ...row,
+      spread: spreadPct && spreadPct > 0 ? spreadPct * 100 * (i + 1) : row.spread,
+      callback: callbackPct && callbackPct > 0 ? callbackPct * 100 : row.callback,
+    }))
+  }
+  return next
+}

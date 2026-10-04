@@ -428,6 +428,14 @@ export function Portfolio() {
     refetchInterval: 10000,
   })
 
+  // USD/CNY 汇率（/exchange/usdcny）：总资产 CNY 约合展示
+  const { data: usdCny } = useQuery({
+    queryKey: ['usd-cny-rate'],
+    queryFn: () => portfolioApi.usdCny(),
+    refetchInterval: 3600_000,
+    retry: false,
+  })
+
   /* ── 已平仓持仓（分页）+ 交易分享卡 ── */
   const [closedPage, setClosedPage] = useState(0)
   const { data: closedData, isLoading: closedLoading } = useQuery({
@@ -558,6 +566,28 @@ export function Portfolio() {
             </>
           )}
         </div>
+
+        {/* 汇率条：USD/CNY + 总资产 CNY 约合（/exchange/usdcny） */}
+        {usdCny && usdCny.rate > 0 && !isLoading && (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-quant-border bg-quant-card px-4 py-2 text-xs text-muted-foreground">
+            <span>
+              {t('portfolio.rate.usdcny', 'USD/CNY 汇率')}{' '}
+              <span className="font-mono text-foreground">{usdCny.rate.toFixed(4)}</span>
+            </span>
+            <span>
+              {t('portfolio.rate.totalCny', '总资产约合 ¥{value}').replace(
+                '{value}',
+                (totalEquity * usdCny.rate).toLocaleString('en-US', { maximumFractionDigits: 0 })
+              )}
+            </span>
+            <span className="ml-auto">
+              {t('portfolio.rate.updatedAt', '更新于 {time}').replace(
+                '{time}',
+                usdCny.updated_at ? new Date(usdCny.updated_at).toLocaleTimeString() : '-'
+              )}
+            </span>
+          </div>
+        )}
 
         {/* 模拟盘账户：开关 + 余额重置 */}
         <PaperAccountCard />

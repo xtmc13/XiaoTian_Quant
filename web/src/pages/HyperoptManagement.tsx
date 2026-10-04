@@ -7,6 +7,7 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { SectionCard } from '@/components/ui/SectionCard'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { EpochExplorer } from '@/components/hyperopt/EpochExplorer'
+import { HyperoptExportModal } from '@/components/hyperopt/HyperoptExportModal'
 import { KPICard } from '@/components/ui/KPICard'
 import {
   FlaskConical,
@@ -97,6 +98,7 @@ export function HyperoptManagement() {
   const [showNewJob, setShowNewJob] = useState(false)
   const [showSpaces, setShowSpaces] = useState(false)
   const [selectedJob, setSelectedJob] = useState<string | null>(null)
+  const [exportTarget, setExportTarget] = useState<{ jobId: string; bestParams: Record<string, unknown> } | null>(null)
 
   const [jobConfig, setJobConfig] = useState({
     strategy_type: 'breakout',
@@ -542,6 +544,17 @@ export function HyperoptManagement() {
                           </div>
                         </div>
                       )}
+                      {jobDetail.status === 'completed' && jobDetail.best_params && (
+                        <div className="mt-3">
+                          <button
+                            onClick={() => setExportTarget({ jobId: job.id, bestParams: jobDetail.best_params! })}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-quant-gold/10 text-quant-gold text-xs font-medium hover:bg-quant-gold/20 transition-colors"
+                          >
+                            <Zap className="w-3.5 h-3.5" />
+                            导出到策略
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
                 </SectionCard>
@@ -550,6 +563,13 @@ export function HyperoptManagement() {
           </div>
         )}
         <EpochExplorer />
+        {exportTarget && (
+          <HyperoptExportModal
+            jobId={exportTarget.jobId}
+            bestParams={exportTarget.bestParams}
+            onClose={() => setExportTarget(null)}
+          />
+        )}
       </div>
     </div>
   )

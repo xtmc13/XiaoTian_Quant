@@ -11,6 +11,7 @@ import { Skeleton } from '@/components/ui/Skeleton'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { dataApi } from '@/lib/api'
 import { toast } from '@/lib/useToast'
+import { TickDataPanel, LocalBarsPanel } from '@/components/data/TickPanels'
 import { Database, Download, Loader2 } from 'lucide-react'
 
 const INTERVAL_OPTIONS = [
@@ -138,6 +139,10 @@ export function DataManager() {
             <EmptyState title="暂无覆盖数据" description="尚未下载任何历史数据" />
           )}
         </SectionCard>
+
+        {/* 本地 K 线预览（/data/bars）与 Tick 数据（/data/ticks/*） */}
+        <LocalBarsPanel />
+        <TickDataPanel />
       </div>
     </div>
   )

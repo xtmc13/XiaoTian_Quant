@@ -22,6 +22,7 @@ import type { IndicatorOutput } from '@/components/charts/indicatorRuntime'
 import { CodeEditor } from '@/components/ide/CodeEditor'
 import { ParamPanel } from '@/components/ide/ParamPanel'
 import { ValidationBanner } from '@/components/ide/ValidationBanner'
+import { PythonSandboxPanel, ExperimentsPanel } from '@/components/ide/IdeExtraPanels'
 import type { KLineBar } from '@/lib/technicalIndicators'
 import {
   Play,
@@ -928,6 +929,23 @@ export function IndicatorIDE() {
                 )}
               </div>
             )}
+
+            {/* Python 沙箱运行（/strategies-python/run）与实验记录（/experiments） */}
+            <PythonSandboxPanel
+              code={code}
+              symbol={symbol}
+              interval={interval}
+              params={paramValues}
+              bars={klines.map((k) => ({
+                time: k.timestamp ?? 0,
+                open: k.open,
+                high: k.high,
+                low: k.low,
+                close: k.close,
+                volume: k.volume ?? 0,
+              }))}
+            />
+            <ExperimentsPanel />
           </div>
 
           {/* ── Resizer ── */}

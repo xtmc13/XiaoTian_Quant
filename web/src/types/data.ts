@@ -1,5 +1,3 @@
-import type { KlineBar } from './market'
-
 export interface DataCoverageSymbol {
   symbol: string
   intervals: string[]
@@ -45,5 +43,9 @@ export interface DownloadJobStatus {
 export interface BarDataResponse {
   symbol: string
   interval: string
-  bars: KlineBar[]
+  from?: number
+  to?: number
+  count?: number
+  /** 后端 model.Bar 口径：time(ms)/open/high/low/close/volume */
+  bars: { time: number; open: number; high: number; low: number; close: number; volume: number }[]
 }

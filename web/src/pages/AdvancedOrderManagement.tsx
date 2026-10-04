@@ -6,6 +6,7 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { SectionCard } from '@/components/ui/SectionCard'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { KPICard } from '@/components/ui/KPICard'
+import { BracketCalculator } from '@/components/trading/BracketCalculator'
 import {
   Layers,
   Target,
@@ -375,6 +376,23 @@ export function AdvancedOrderManagement() {
                   {bracketPlace.isPending ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
                   提交 Bracket
                 </button>
+              </div>
+
+              {/* Bracket 试算器（/orders/bracket/calculate）：结果可回填上方表单 */}
+              <div className="mt-4">
+                <BracketCalculator
+                  symbol={orderSymbol}
+                  side={bracketForm.side}
+                  entryPrice={bracketForm.entryPrice}
+                  onApply={(v) =>
+                    setBracketForm((prev) => ({
+                      ...prev,
+                      takeProfitPrice: v.takeProfitPrice,
+                      stopLossPrice: v.stopLossPrice,
+                      quantity: v.quantity,
+                    }))
+                  }
+                />
               </div>
             </SectionCard>
 
