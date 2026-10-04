@@ -30,6 +30,17 @@ const zhCN: Record<string, string> = {
   'admin.activity.type.notification': '通知',
 
   'admin.tabs.communityReview': '指标审核',
+  'admin.tabs.referrals': '推荐返佣',
+
+  'admin.referrals.empty': '暂无推荐数据',
+  'admin.referrals.code': '推荐码',
+  'admin.referrals.count': '推荐人数',
+  'admin.referrals.commission': '佣金比例',
+  'admin.referrals.credits': '累计积分',
+  'admin.referrals.status': '状态',
+  'admin.referrals.createdAt': '创建时间',
+  'admin.referrals.active': '启用中',
+  'admin.referrals.inactive': '已停用',
 }
 
 const enUS: Record<string, string> = {
@@ -57,6 +68,17 @@ const enUS: Record<string, string> = {
   'admin.activity.type.notification': 'Notice',
 
   'admin.tabs.communityReview': 'Indicator Review',
+  'admin.tabs.referrals': 'Referrals',
+
+  'admin.referrals.empty': 'No referral data',
+  'admin.referrals.code': 'Code',
+  'admin.referrals.count': 'Referrals',
+  'admin.referrals.commission': 'Commission',
+  'admin.referrals.credits': 'Total credits',
+  'admin.referrals.status': 'Status',
+  'admin.referrals.createdAt': 'Created',
+  'admin.referrals.active': 'Active',
+  'admin.referrals.inactive': 'Inactive',
 }
 
 const ja: Record<string, string> = {
@@ -84,6 +106,17 @@ const ja: Record<string, string> = {
   'admin.activity.type.notification': '通知',
 
   'admin.tabs.communityReview': '指標レビュー',
+  'admin.tabs.referrals': '紹介報酬',
+
+  'admin.referrals.empty': '紹介データはありません',
+  'admin.referrals.code': '紹介コード',
+  'admin.referrals.count': '紹介人数',
+  'admin.referrals.commission': 'コミッション率',
+  'admin.referrals.credits': '累計クレジット',
+  'admin.referrals.status': 'ステータス',
+  'admin.referrals.createdAt': '作成日時',
+  'admin.referrals.active': '有効',
+  'admin.referrals.inactive': '無効',
 }
 
 registerLocale('zh-CN', zhCN)

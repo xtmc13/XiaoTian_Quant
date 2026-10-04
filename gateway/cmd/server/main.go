@@ -96,6 +96,9 @@ func main() {
 		ai.ApplyConfig(aiCfg)
 	}
 	store.LoadStrategyConfigs()
+	// 组合策略配置持久化（0056）：启动时从库重建内存 registry，
+	// 须在 store.InitDB() 之后；status 如实保留，不自动拉起运行态。
+	handler.LoadComboConfigsFromStore()
 	// P1：恢复 DB 持久化的 pairlist 配置（须在 store.InitDB() 之后）
 	handler.RestorePairlistConfig()
 	handler.RestorePaperAccount()

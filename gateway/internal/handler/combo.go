@@ -1,14 +1,92 @@
 package handler
 
 import (
+	"encoding/json"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/app"
+	"github.com/xiaotian-quant/gateway/internal/store"
 	"github.com/xiaotian-quant/gateway/internal/strategy"
 )
+
+// ── 组合配置持久化（xt_combo_configs，migration 0056）──
+// 内存 registry（strategy 包）仍是运行期读取路径；创建/更新/删除/启停在
+// 改内存的同时落库，启动时 LoadComboConfigsFromStore 从库重建 registry。
+
+func comboRecordFromConfig(cfg *strategy.ComboConfig) (*store.ComboConfigRecord, error) {
+	members, err := json.Marshal(cfg.Members)
+	if err != nil {
+		return nil, err
+	}
+	return &store.ComboConfigRecord{
+		ID:              cfg.ID,
+		UserID:          cfg.UserID,
+		Name:            cfg.Name,
+		Symbol:          cfg.Symbol,
+		MembersJSON:     string(members),
+		AggregationMode: cfg.AggregationMode,
+		Status:          cfg.Status,
+		CreatedAt:       cfg.CreatedAt,
+		UpdatedAt:       cfg.UpdatedAt,
+	}, nil
+}
+
+func comboConfigFromRecord(rec *store.ComboConfigRecord) (*strategy.ComboConfig, error) {
+	cfg := &strategy.ComboConfig{
+		ID:              rec.ID,
+		UserID:          rec.UserID,
+		Name:            rec.Name,
+		Symbol:          rec.Symbol,
+		AggregationMode: rec.AggregationMode,
+		Status:          rec.Status,
+		CreatedAt:       rec.CreatedAt,
+		UpdatedAt:       rec.UpdatedAt,
+	}
+	if rec.MembersJSON != "" {
+		if err := json.Unmarshal([]byte(rec.MembersJSON), &cfg.Members); err != nil {
+			return nil, err
+		}
+	}
+	return cfg, nil
+}
+
+// persistCombo 落库；失败仅记日志（运行态变更已成功时不阻断请求，由
+// 调用方决定硬失败场景——创建/更新/删除走硬失败）。
+func persistCombo(cfg *strategy.ComboConfig) error {
+	rec, err := comboRecordFromConfig(cfg)
+	if err != nil {
+		return err
+	}
+	return store.NewComboConfigRepo().Update(rec)
+}
+
+// LoadComboConfigsFromStore 启动挂载点：从库把组合配置重建进内存 registry。
+// 库中 status 如实保留（运行态在引擎内存，重启后不自动拉起）。
+func LoadComboConfigsFromStore() {
+	if store.GetDB() == nil {
+		return
+	}
+	recs, err := store.NewComboConfigRepo().List()
+	if err != nil {
+		log.Printf("[WARN] combo configs DB 读取失败（内存 registry 为空）: %v", err)
+		return
+	}
+	for _, rec := range recs {
+		cfg, err := comboConfigFromRecord(rec)
+		if err != nil {
+			log.Printf("[WARN] combo config %s members JSON 损坏，跳过: %v", rec.ID, err)
+			continue
+		}
+		strategy.RegisterComboConfig(cfg)
+	}
+	if len(recs) > 0 {
+		log.Printf("[combo] 从 DB 恢复 %d 个组合配置", len(recs))
+	}
+}
 
 // GetCombos lists strategy combos visible to the current user
 // （本人的 + 历史无属主；admin/未注入用户看全部）。
@@ -81,6 +159,16 @@ func CreateCombo(c *gin.Context) {
 		return
 	}
 
+	rec, err := comboRecordFromConfig(cfg)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
+		return
+	}
+	if err := store.NewComboConfigRepo().Create(rec); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
+		return
+	}
+
 	strategy.RegisterComboConfig(cfg)
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "id": cfg.ID})
 }
@@ -122,6 +210,11 @@ func UpdateCombo(c *gin.Context) {
 		return
 	}
 
+	if err := persistCombo(cfg); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
@@ -138,6 +231,13 @@ func DeleteCombo(c *gin.Context) {
 			_ = eng.Stop(cfg.ID)
 			_ = eng.Unregister(cfg.ID)
 		}
+	}
+
+	// 先删库再删内存：库删除失败时保留内存态并报错，
+	// 避免"内存没了但重启后复活"的分裂状态。
+	if err := store.NewComboConfigRepo().Delete(cfg.ID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
+		return
 	}
 
 	strategy.DeleteComboConfig(cfg.ID)
@@ -163,6 +263,9 @@ func StartCombo(c *gin.Context) {
 			return
 		}
 		cfg.Status = "running"
+		if err := persistCombo(cfg); err != nil {
+			log.Printf("[WARN] combo %s 状态落库失败: %v", cfg.ID, err)
+		}
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 		return
 	}
@@ -185,6 +288,9 @@ func StartCombo(c *gin.Context) {
 	}
 
 	cfg.Status = "running"
+	if err := persistCombo(cfg); err != nil {
+		log.Printf("[WARN] combo %s 状态落库失败: %v", cfg.ID, err)
+	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
@@ -207,6 +313,9 @@ func StopCombo(c *gin.Context) {
 	}
 
 	cfg.Status = "stopped"
+	if err := persistCombo(cfg); err != nil {
+		log.Printf("[WARN] combo %s 状态落库失败: %v", cfg.ID, err)
+	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 

@@ -191,6 +191,14 @@ const zhCN: Record<string, string> = {
   'settings.system.logsUnavailable': '无法获取日志',
   'settings.system.logsDisabled': '后端未启用日志接口',
   'settings.system.noLogs': '暂无日志或后端未启用日志接口',
+  'settings.system.reloadTitle': '配置重载',
+  'settings.system.reloadDesc': '从磁盘热重载 gateway 配置（config.yaml），日志级别等立即生效；不重启进程。',
+  'settings.system.reloadAction': '重载配置',
+  'settings.system.reloading': '重载中...',
+  'settings.system.reloadConfirmTitle': '重载配置',
+  'settings.system.reloadConfirmMsg': '确认从磁盘重载 gateway 配置？将按 config.yaml 当前内容刷新运行配置（日志级别立即应用）。',
+  'settings.system.reloadOk': '配置已重载，日志级别：{level}',
+  'settings.system.reloadFail': '配置重载失败',
 
   // ── 显示币种 ──
   'settings.currency.title': '显示币种',
@@ -382,6 +390,14 @@ const enUS: Record<string, string> = {
   'settings.system.logsUnavailable': 'Failed to load logs',
   'settings.system.logsDisabled': 'Log API not enabled on backend',
   'settings.system.noLogs': 'No logs, or log API not enabled on backend',
+  'settings.system.reloadTitle': 'Config Reload',
+  'settings.system.reloadDesc': 'Hot-reload the gateway config (config.yaml) from disk. Log level etc. apply immediately; the process is not restarted.',
+  'settings.system.reloadAction': 'Reload Config',
+  'settings.system.reloading': 'Reloading...',
+  'settings.system.reloadConfirmTitle': 'Reload config',
+  'settings.system.reloadConfirmMsg': 'Reload gateway config from disk? Runtime config will be refreshed from the current config.yaml (log level applies immediately).',
+  'settings.system.reloadOk': 'Config reloaded, log level: {level}',
+  'settings.system.reloadFail': 'Config reload failed',
 
   // ── Currency ──
   'settings.currency.title': 'Display Currency',
@@ -573,6 +589,14 @@ const ja: Record<string, string> = {
   'settings.system.logsUnavailable': 'ログを取得できません',
   'settings.system.logsDisabled': 'バックエンドでログ API が有効ではありません',
   'settings.system.noLogs': 'ログがないか、バックエンドでログ API が有効ではありません',
+  'settings.system.reloadTitle': '設定リロード',
+  'settings.system.reloadDesc': 'gateway 設定（config.yaml）をディスクからホットリロードします。ログレベルなどは即時反映され、プロセスは再起動しません。',
+  'settings.system.reloadAction': '設定をリロード',
+  'settings.system.reloading': 'リロード中...',
+  'settings.system.reloadConfirmTitle': '設定をリロード',
+  'settings.system.reloadConfirmMsg': 'gateway 設定をディスクからリロードしますか？現在の config.yaml の内容で実行中の設定が更新されます（ログレベルは即時適用）。',
+  'settings.system.reloadOk': '設定をリロードしました。ログレベル: {level}',
+  'settings.system.reloadFail': '設定のリロードに失敗しました',
 
   // ── 表示通貨 ──
   'settings.currency.title': '表示通貨',

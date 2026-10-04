@@ -1,12 +1,14 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { configApi, notifyRouteApi, riskApi } from '@/lib/api'
+import { configApi, notifyRouteApi, riskApi, adminApi } from '@/lib/api'
 import { useAppStore } from '@/stores/appStore'
+import { useAuthStore } from '@/stores/authStore'
 import { cn } from '@/lib/utils'
 import type { ExchangeTestResult } from '@/types'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { SectionCard } from '@/components/ui/SectionCard'
 import { Badge } from '@/components/ui/Badge'
+import { useConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { DataDownloadSection } from './settings/DataDownloadSection'
 import { MfaSection } from './settings/MfaSection'
 import { useI18n, LANGS } from '@/i18n'
@@ -750,6 +752,30 @@ export function Settings() {
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }, [])
+
+  /* ── 配置热重载（POST /admin/config/reload，admin 可见 + 二次确认）── */
+  const isAdmin = useAuthStore((s) => s.user?.role === 'admin')
+  const { confirm: confirmReload, Dialog: ReloadDialog } = useConfirmDialog()
+  const [reloading, setReloading] = useState(false)
+  const handleReloadConfig = useCallback(async () => {
+    const ok = await confirmReload({
+      title: t('settings.system.reloadConfirmTitle'),
+      message: t('settings.system.reloadConfirmMsg'),
+      confirmText: t('settings.system.reloadAction'),
+      variant: 'danger',
+    })
+    if (!ok) return
+    setReloading(true)
+    try {
+      const res = await adminApi.reloadConfig()
+      toast('success', t('settings.system.reloadOk').replace('{level}', res?.log_level || '-'))
+    } catch (e: unknown) {
+      const err = e instanceof Error ? e : new Error(String(e))
+      toast('error', err.message || t('settings.system.reloadFail'))
+    } finally {
+      setReloading(false)
+    }
+  }, [confirmReload, t])
 
   /* ── System info ── */
   const [systemInfo, setSystemInfo] = useState<{ version?: string; status?: string; buildTime?: string }>({})
@@ -1854,6 +1880,23 @@ export function Settings() {
                 )}
               </SectionCard>
 
+              {/* 配置热重载（admin 可见；POST /admin/config/reload）*/}
+              {isAdmin && (
+                <SectionCard title={t('settings.system.reloadTitle')} bodyClassName="space-y-4">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="text-xs text-muted-foreground">{t('settings.system.reloadDesc')}</div>
+                    <button
+                      onClick={handleReloadConfig}
+                      disabled={reloading}
+                      className="flex shrink-0 items-center gap-1.5 rounded-md border border-quant-border bg-quant-card px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-quant-gold/30 hover:text-foreground disabled:opacity-50"
+                    >
+                      {reloading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                      {reloading ? t('settings.system.reloading') : t('settings.system.reloadAction')}
+                    </button>
+                  </div>
+                </SectionCard>
+              )}
+
               <SectionCard title={t('settings.system.logsTitle')} bodyClassName="space-y-4">
                 <div className="flex items-center justify-between">
                   <div className="text-xs text-muted-foreground">{t('settings.system.logsDesc')}</div>
@@ -1877,6 +1920,8 @@ export function Settings() {
           )}
         </div>
       </div>
+      {/* 配置重载二次确认（危险操作） */}
+      <ReloadDialog />
     </div>
   )
 }

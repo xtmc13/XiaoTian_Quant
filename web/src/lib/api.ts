@@ -2542,6 +2542,24 @@ export interface AdminActivityItem {
   level?: string
   timestamp?: number | string
 }
+// GET /admin/referrals 全员推荐关系+收益汇总（handler.AdminListReferrals）。
+// total_credits 为积分（1 积分=$0.01）；created_at 秒级（referral_repo 用 Unix 秒），渲染侧防御。
+export interface AdminReferralRow {
+  user_id: number
+  username: string
+  code: string
+  commission_pct: number
+  active: boolean
+  referral_count: number
+  total_credits: number
+  created_at: number
+}
+// POST /admin/config/reload 热重载 gateway config.yaml（handler.ReloadConfig）
+export interface AdminReloadResult {
+  status: string
+  log_level?: string
+  timestamp?: number
+}
 export const adminApi = {
   users: () => api.get<AdminUser[]>('/admin/users').then((d) => d ?? []),
   user: (id: string) => api.get<AdminUser>(`/admin/users/${id}`),
@@ -2557,6 +2575,9 @@ export const adminApi = {
       .then((d) => d?.activities ?? []),
   auditLog: (params?: { limit?: number; offset?: number }) =>
     api.get<{ logs: AdminAuditLog[]; total: number }>('/admin/audit-log', { params }),
+  referrals: () =>
+    api.get<{ referrals: AdminReferralRow[] }>('/admin/referrals').then((d) => d?.referrals ?? []),
+  reloadConfig: () => api.post<AdminReloadResult>('/admin/config/reload'),
 }
 
 // ── Agent (admin) ──

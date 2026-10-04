@@ -3,14 +3,14 @@ import { DataTable } from '@/components/DataTable'
 import { AdminMarketReview } from '@/components/market/AdminMarketReview'
 import { AdminIndicatorReview } from '@/components/community/AdminIndicatorReview'
 import { useConfirmDialog } from '@/components/ui/ConfirmDialog'
-import { adminApi, type AdminSummary, type AdminActivityItem } from '@/lib/api'
+import { adminApi, type AdminSummary, type AdminActivityItem, type AdminReferralRow } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/i18n'
 import type { AdminUser, AdminStats, AdminAuditLog } from '@/types'
 import {
   Users, UserCheck, Shield, Loader2, AlertCircle, CheckCircle,
   Edit3, X, RefreshCw, UserX, UserCog, FileText, Cpu, Activity,
-  Database, Zap, Clock, HardDrive
+  Database, Zap, Clock, HardDrive, Gift
 } from 'lucide-react'
 
 // activity 时间戳单位混用（秒/毫秒/字符串），防御性渲染
@@ -47,11 +47,13 @@ export function UserManage() {
   const [editActive, setEditActive] = useState(1)
   const [saving, setSaving] = useState(false)
   const [togglingId, setTogglingId] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<'users' | 'audit' | 'system' | 'market' | 'community'>('users')
+  const [activeTab, setActiveTab] = useState<'users' | 'audit' | 'system' | 'market' | 'community' | 'referrals'>('users')
   // Enhanced stats
   const [sysStats, setSysStats] = useState<AdminStats | null>(null)
   const [auditLog, setAuditLog] = useState<AdminAuditLog[]>([])
   const [auditTotal, setAuditTotal] = useState(0)
+  // 推荐返佣（GET /admin/referrals，切到该 tab 才拉取）
+  const [referrals, setReferrals] = useState<AdminReferralRow[]>([])
 
   const fetchData = useCallback(async () => {
     setLoading(true)
@@ -90,6 +92,11 @@ export function UserManage() {
   useEffect(() => {
     if (activeTab === 'system' || activeTab === 'audit') fetchEnhanced()
   }, [activeTab, fetchEnhanced])
+
+  useEffect(() => {
+    if (activeTab !== 'referrals') return
+    adminApi.referrals().then(setReferrals).catch(() => setReferrals([]))
+  }, [activeTab])
 
   const showMsg = (msg: string) => { setSuccess(msg); setTimeout(() => setSuccess(''), 3000) }
 
@@ -234,6 +241,7 @@ export function UserManage() {
           { k: 'system' as const, label: '系统监控', icon: Cpu },
           { k: 'market' as const, label: '上架审核', icon: Shield },
           { k: 'community' as const, label: t('admin.tabs.communityReview'), icon: CheckCircle },
+          { k: 'referrals' as const, label: t('admin.tabs.referrals'), icon: Gift },
         ].map(t => (
           <button key={t.k} onClick={() => setActiveTab(t.k)}
             className={cn('flex items-center gap-1.5 px-4 py-2 rounded-md text-xs font-medium transition-colors',
@@ -297,6 +305,35 @@ export function UserManage() {
             ]}
             keyExtractor={(e) => String(e.id)}
             emptyText="暂无操作记录"
+          />
+        </div>
+      )}
+
+      {/* ── Referrals Tab（GET /admin/referrals）── */}
+      {activeTab === 'referrals' && (
+        <div className="rounded-xl border border-quant-border bg-quant-bg-secondary overflow-hidden">
+          <div className="px-4 py-3 border-b border-quant-border flex items-center justify-between">
+            <span className="text-sm font-medium">{t('admin.tabs.referrals')}</span>
+            <span className="text-xs text-muted-foreground">{referrals.length}</span>
+          </div>
+          <DataTable<AdminReferralRow>
+            data={referrals}
+            columns={[
+              { key: 'username', title: '用户名', render: (r) => <span className="font-medium">{r.username || `#${r.user_id}`}</span> },
+              { key: 'code', title: t('admin.referrals.code'), render: (r) => <span className="font-mono text-xs">{r.code}</span> },
+              { key: 'commission_pct', title: t('admin.referrals.commission'), render: (r) => `${r.commission_pct}%` },
+              { key: 'referral_count', title: t('admin.referrals.count'), render: (r) => r.referral_count },
+              { key: 'total_credits', title: t('admin.referrals.credits'), render: (r) => r.total_credits },
+              { key: 'active', title: t('admin.referrals.status'), render: (r) => (
+                <span className={cn('px-2 py-0.5 rounded text-[10px] font-medium',
+                  r.active ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400')}>
+                  {r.active ? t('admin.referrals.active') : t('admin.referrals.inactive')}
+                </span>
+              )},
+              { key: 'created_at', title: t('admin.referrals.createdAt'), render: (r) => <span className="text-muted-foreground text-xs">{fmtActivityTs(r.created_at)}</span> },
+            ]}
+            keyExtractor={(r) => String(r.user_id)}
+            emptyText={t('admin.referrals.empty')}
           />
         </div>
       )}

@@ -39,6 +39,11 @@ vi.mock('@/lib/api', () => ({
         { type: 'risk', message: 'drawdown exceeded', level: 'WARN', timestamp: 1759000100 },
       ]),
     auditLog: () => Promise.resolve({ logs: [], total: 0 }),
+    referrals: () =>
+      Promise.resolve([
+        { user_id: 11, username: 'carol', code: 'XTABCDEFGH', commission_pct: 10, active: true, referral_count: 3, total_credits: 12800, created_at: 1759000000 },
+        { user_id: 12, username: 'dave', code: 'XT12345678', commission_pct: 20, active: false, referral_count: 0, total_credits: 0, created_at: 1759000100 },
+      ]),
     updateUser: () => Promise.resolve({ success: true }),
     disableUser: (id: string) => disableUser(id),
     enableUser: (id: string) => enableUser(id),
@@ -117,5 +122,18 @@ describe('UserManage（用户禁用/启用 + 概览区块）', () => {
     fireEvent.click(screen.getByTitle('启用'))
     await waitFor(() => expect(enableUser).toHaveBeenCalledWith('2'))
     expect(disableUser).not.toHaveBeenCalled()
+  })
+
+  it('renders referrals tab with code/count/credits rows (GET /admin/referrals)', async () => {
+    render(<UserManage />, { wrapper: Wrapper })
+    await waitFor(() => expect(screen.getByText('alice')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /推荐返佣/ }))
+    await waitFor(() => expect(screen.getByText('XTABCDEFGH')).toBeTruthy())
+    // 行内容：推荐人、佣金比例、推荐人数、累计积分、状态
+    expect(screen.getByText('carol')).toBeTruthy()
+    expect(screen.getByText('10%')).toBeTruthy()
+    expect(screen.getByText('12800')).toBeTruthy()
+    expect(screen.getByText('启用中')).toBeTruthy()
+    expect(screen.getByText('已停用')).toBeTruthy()
   })
 })
