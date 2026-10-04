@@ -423,15 +423,17 @@ export function CRAParamForm({ value, onChange, market, className, openFields = 
         {showOpenFields && (
           <>
         <div className="flex flex-wrap gap-3">
-          <label className="flex items-center gap-2 text-xs text-muted-foreground">
-            <input
-              type="checkbox"
-              checked={value.openDouble}
-              onChange={(e) => update('openDouble', e.target.checked)}
-              className="rounded"
-            />
-            开仓加倍
-          </label>
+          {isContract && (
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={value.openDouble}
+                onChange={(e) => update('openDouble', e.target.checked)}
+                className="rounded"
+              />
+              开仓加倍
+            </label>
+          )}
           {isContract && (
             <label className="flex items-center gap-2 text-xs text-muted-foreground">
               <input
@@ -444,6 +446,28 @@ export function CRAParamForm({ value, onChange, market, className, openFields = 
             </label>
           )}
         </div>
+        {isContract && value.openDouble && (
+          <div className="text-[10px] text-muted-foreground -mt-1">
+            开仓加倍：首单成交金额×2（如 10U×5 倍杠杆由买 50U 变为买 100U）；补仓阶梯基数不变，仍按首单原始金额×倍数计算。
+          </div>
+        )}
+        {isContract && (
+          <div>
+            <label className="text-[11px] text-muted-foreground mb-1.5 block">在线单量限制</label>
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={value.onlineOrderLimit}
+              onChange={(e) => update('onlineOrderLimit', Math.max(1, Math.floor(Number(e.target.value) || 1)))}
+              className={inputCls}
+            />
+            <div className="text-[10px] text-muted-foreground mt-1">
+              同一账户下允许同时运行的 CRA 合约实例数上限（跨交易对总闸）：达到上限后启动新实例会被拒绝，需先停止部分实例或调大该值。
+              单个实例持仓期间本就不会再开新首单，该参数不改变实例内部的补仓/止盈行为。
+            </div>
+          </div>
+        )}
           </>
         )}
       </Section>

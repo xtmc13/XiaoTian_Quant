@@ -325,8 +325,16 @@ func (s *BaseCRAStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Sign
 		} else {
 			st.EnterPosition(bar.Close, SideLong)
 		}
-		qty := RoundQty(s.entryQty(bar.Close, p.FirstOrderMultiplier))
-		s.logger.Info("cra first order", "symbol", s.symbol, "price", bar.Close, "qty", qty, "side", st.Side)
+		// 开仓加倍（币富名词解释 #15，open_double）：只放大首单名义（首单金额
+		// ×2），不改变 add_positions 阶梯的基数——补仓第 N 档仍按首单原始金额
+		// ×multiplier 计（见下方 Add positions 分支，entryQty 的 multiplier 实参
+		// 是 cfg.Multiplier，不经过此处的 doubling）。
+		mult := p.FirstOrderMultiplier
+		if p.OpenDouble {
+			mult *= 2
+		}
+		qty := RoundQty(s.entryQty(bar.Close, mult))
+		s.logger.Info("cra first order", "symbol", s.symbol, "price", bar.Close, "qty", qty, "side", st.Side, "open_double", p.OpenDouble)
 		return s.signal(st.SignalDirection(), qty, "cra first order"), nil
 	}
 

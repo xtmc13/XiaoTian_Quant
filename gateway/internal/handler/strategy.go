@@ -988,6 +988,12 @@ func BatchStartConfigs(c *gin.Context) {
 			results = append(results, batchItemResult{ID: sid, OK: false, Error: "无权操作该策略"})
 			continue
 		}
+		// D2 在线单量限制：与单条 Start 同口径，超限记失败不阻断其他条目。
+		if err := enforceOnlineOrderLimit(sid, item); err != nil {
+			failed++
+			results = append(results, batchItemResult{ID: sid, Name: getString(item, "name", ""), OK: false, Error: err.Error()})
+			continue
+		}
 		if err := startStrategyInEngine(sid, item); err != nil {
 			failed++
 			results = append(results, batchItemResult{ID: sid, Name: getString(item, "name", ""), OK: false, Error: err.Error()})
@@ -1123,6 +1129,12 @@ func StartStrategyConfig(c *gin.Context) {
 		return
 	}
 	if !requireOwner(c, getInt64Of(item, "user_id")) {
+		return
+	}
+	// D2 在线单量限制（online_order_limit，币富 #32）：CRA 合约实例的
+	// 跨交易对总量闸，按同一用户名下 running 的 CRA 合约实例数校验。
+	if err := enforceOnlineOrderLimit(id, item); err != nil {
+		c.JSON(http.StatusConflict, gin.H{"detail": err.Error()})
 		return
 	}
 	if err := startStrategyInEngine(id, item); err != nil {

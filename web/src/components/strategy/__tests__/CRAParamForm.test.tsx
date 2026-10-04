@@ -38,19 +38,61 @@ describe('CRAParamForm', () => {
     expect(lastCall.tpMode).toBe('moving')
   })
 
-  it('renders open double checkbox', () => {
-    render(<CRAParamForm {...baseProps} />, { wrapper })
+  it('renders open double checkbox (contract only)', () => {
+    render(<CRAParamForm {...baseProps} market="contract" />, { wrapper })
     expect(screen.getByLabelText('开仓加倍')).toBeTruthy()
+  })
+
+  it('hides open double checkbox on spot (币富该功能在合约页)', () => {
+    render(<CRAParamForm {...baseProps} />, { wrapper })
+    expect(screen.queryByLabelText('开仓加倍')).toBeNull()
   })
 
   it('toggles open double checkbox', () => {
     const onChange = vi.fn()
-    render(<CRAParamForm {...baseProps} onChange={onChange} />, { wrapper })
+    render(<CRAParamForm {...baseProps} market="contract" onChange={onChange} />, { wrapper })
     const checkbox = screen.getByLabelText('开仓加倍') as HTMLInputElement
     fireEvent.click(checkbox)
     expect(onChange).toHaveBeenCalled()
     const hasOpenDouble = onChange.mock.calls.some((call) => (call[0] as CRAParams).openDouble === true)
     expect(hasOpenDouble).toBe(true)
+  })
+
+  // ── D2：在线单量限制输入框（合约区，币富 #32 跨实例总量闸口径）──
+
+  it('renders online order limit input with default 10 (contract only)', () => {
+    const { unmount } = render(<CRAParamForm {...baseProps} market="contract" />, { wrapper })
+    expect(screen.getByText('在线单量限制')).toBeTruthy()
+    const input = screen.getByText('在线单量限制').parentElement!.querySelector('input') as HTMLInputElement
+    expect(input).toBeTruthy()
+    expect(input.value).toBe('10')
+    unmount()
+
+    // 现货不渲染（币富该功能在合约页）。
+    render(<CRAParamForm {...baseProps} />, { wrapper })
+    expect(screen.queryByText('在线单量限制')).toBeNull()
+  })
+
+  it('updates onlineOrderLimit via the input, clamped to min 1', () => {
+    const onChange = vi.fn()
+    render(<CRAParamForm {...baseProps} market="contract" onChange={onChange} />, { wrapper })
+    const input = screen.getByText('在线单量限制').parentElement!.querySelector('input') as HTMLInputElement
+    fireEvent.change(input, { target: { value: '3' } })
+    let lastCall = onChange.mock.calls[onChange.mock.calls.length - 1][0] as CRAParams
+    expect(lastCall.onlineOrderLimit).toBe(3)
+    // 0/空输入钳制为 1（与后端 craOnlineOrderLimit 的最严口径一致）。
+    fireEvent.change(input, { target: { value: '0' } })
+    lastCall = onChange.mock.calls[onChange.mock.calls.length - 1][0] as CRAParams
+    expect(lastCall.onlineOrderLimit).toBe(1)
+  })
+
+  it('round-trips onlineOrderLimit as online_order_limit in the api payload', () => {
+    const payload = craParamsToApiPayload({ ...DEFAULT_CRA_PARAMS, onlineOrderLimit: 3 })
+    expect(payload.online_order_limit).toBe(3)
+    const restored = apiPayloadToCraParams({ online_order_limit: 5 })
+    expect(restored.onlineOrderLimit).toBe(5)
+    // 缺省回填默认 10（与后端 ParseCRAParams 一致）。
+    expect(apiPayloadToCraParams({}).onlineOrderLimit).toBe(10)
   })
 
   // ── A1：首单挂单价格输入框 ──
