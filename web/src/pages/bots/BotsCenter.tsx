@@ -297,7 +297,7 @@ const LEVEL1_TEMPLATES: {
   icon: React.ReactNode
 }[] = [
   { key: 'spot', title: '现货策略', desc: '现货网格 / 马丁 / 华尔街 / 支撑回踩 / 流动性热力 等', icon: <TrendingUp className="w-5 h-5" /> },
-  { key: 'contract', title: '合约策略', desc: '合约网格 / 顺势多空 / 逆势 / 高频 / 首尾套利', icon: <BarChart3 className="w-5 h-5" /> },
+  { key: 'contract', title: '合约策略', desc: '合约网格 / 逆势 / 高频 / 首尾套利 等', icon: <BarChart3 className="w-5 h-5" /> },
   { key: 'ai', title: 'AI 机器人', desc: 'AI 生成的策略机器人实例库', icon: <BrainCircuit className="w-5 h-5" /> },
   { key: 'custom', title: 'AI 自定义机器人', desc: '用自然语言描述策略，AI 生成参数', icon: <Bot className="w-5 h-5" /> },
 ]

@@ -31,8 +31,6 @@ export const STRAT_TYPES: Record<string, { value: string; label: string }[]> = {
   ],
   contract: [
     { value: 'cra_contract', label: '合约网格' },
-    { value: 'trend_long', label: '顺势多' },
-    { value: 'trend_short', label: '顺势空' },
     { value: 'counter_stable', label: '逆势稳健' },
     { value: 'counter_safe', label: '逆势保守' },
     { value: 'high_frequency', label: '高频策略' },
