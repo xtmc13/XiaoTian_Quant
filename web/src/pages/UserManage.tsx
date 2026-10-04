@@ -1,8 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
 import { DataTable } from '@/components/DataTable'
 import { AdminMarketReview } from '@/components/market/AdminMarketReview'
-import { adminApi } from '@/lib/api'
+import { AdminIndicatorReview } from '@/components/community/AdminIndicatorReview'
+import { useConfirmDialog } from '@/components/ui/ConfirmDialog'
+import { adminApi, type AdminSummary, type AdminActivityItem } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { useI18n } from '@/i18n'
 import type { AdminUser, AdminStats, AdminAuditLog } from '@/types'
 import {
   Users, UserCheck, Shield, Loader2, AlertCircle, CheckCircle,
@@ -10,9 +13,28 @@ import {
   Database, Zap, Clock, HardDrive
 } from 'lucide-react'
 
+// activity 时间戳单位混用（秒/毫秒/字符串），防御性渲染
+function fmtActivityTs(ts?: number | string): string {
+  if (ts == null || ts === '') return '-'
+  if (typeof ts === 'string') return ts.replace('T', ' ').slice(0, 19)
+  const ms = ts > 1e12 ? ts : ts * 1000
+  return new Date(ms).toLocaleString('zh-CN')
+}
+
+const ACTIVITY_TYPE_COLOR: Record<string, string> = {
+  trade: 'bg-green-500/10 text-green-400',
+  risk: 'bg-red-500/10 text-red-400',
+  audit: 'bg-blue-500/10 text-blue-400',
+  notification: 'bg-amber-500/10 text-amber-400',
+}
+
 export function UserManage() {
+  const { t } = useI18n()
+  const { confirm, Dialog } = useConfirmDialog()
   const [users, setUsers] = useState<AdminUser[]>([])
   const [stats, setStats] = useState<AdminStats | null>(null)
+  const [summary, setSummary] = useState<AdminSummary | null>(null)
+  const [activities, setActivities] = useState<AdminActivityItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
@@ -24,7 +46,8 @@ export function UserManage() {
   const [editRole, setEditRole] = useState('')
   const [editActive, setEditActive] = useState(1)
   const [saving, setSaving] = useState(false)
-  const [activeTab, setActiveTab] = useState<'users' | 'audit' | 'system' | 'market'>('users')
+  const [togglingId, setTogglingId] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState<'users' | 'audit' | 'system' | 'market' | 'community'>('users')
   // Enhanced stats
   const [sysStats, setSysStats] = useState<AdminStats | null>(null)
   const [auditLog, setAuditLog] = useState<AdminAuditLog[]>([])
@@ -33,9 +56,16 @@ export function UserManage() {
   const fetchData = useCallback(async () => {
     setLoading(true)
     try {
-      const [u, s] = await Promise.all([adminApi.users(), adminApi.stats()])
+      const [u, s, sum, act] = await Promise.all([
+        adminApi.users(),
+        adminApi.stats(),
+        adminApi.summary().catch(() => null),
+        adminApi.activity(12).catch(() => [] as AdminActivityItem[]),
+      ])
       setUsers(u)
       setStats(s)
+      if (sum) setSummary(sum)
+      setActivities(act)
     } catch (e: unknown) {
       const err = e instanceof Error ? e : new Error(String(e))
       setError(err.message || '加载失败')
@@ -89,6 +119,34 @@ export function UserManage() {
     finally { setSaving(false) }
   }
 
+  // 禁用/启用（POST /admin/users/:id/disable|enable；禁用为危险操作，二次确认）
+  const handleToggleActive = async (u: AdminUser) => {
+    const isActive = u.is_active === 1
+    if (isActive) {
+      const ok = await confirm({
+        title: t('admin.users.disableConfirmTitle'),
+        message: t('admin.users.disableConfirmMsg').replace('{name}', u.username),
+        confirmText: t('admin.users.disable'),
+        variant: 'danger',
+      })
+      if (!ok) return
+    }
+    setTogglingId(u.id); setError('')
+    try {
+      if (isActive) {
+        await adminApi.disableUser(u.id)
+        showMsg(t('admin.users.disabledOk'))
+      } else {
+        await adminApi.enableUser(u.id)
+        showMsg(t('admin.users.enabledOk'))
+      }
+      fetchData()
+    } catch (e: unknown) {
+      const err = e instanceof Error ? e : new Error(String(e))
+      setError(err.message || t('admin.users.actionFail'))
+    } finally { setTogglingId(null) }
+  }
+
   const roleLabel = (r: string) => r === 'admin' ? '管理员' : r === 'manager' ? '经理' : '用户'
 
   if (loading) {
@@ -124,6 +182,50 @@ export function UserManage() {
         ))}
       </div>
 
+      {/* ── 运营概览 + 最近活动（GET /admin/summary、/admin/activity）── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="rounded-xl border border-quant-border bg-quant-bg-secondary p-4">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground mb-3">
+            <Activity className="h-4 w-4 text-quant-gold" />{t('admin.summary.title')}
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            {[
+              { label: t('admin.summary.pendingOrders'), value: summary?.pending_orders },
+              { label: t('admin.summary.totalTrades'), value: summary?.total_trades },
+              { label: t('admin.summary.activeStrategies'), value: summary?.active_strategies },
+              { label: t('admin.summary.unreadAlerts'), value: summary?.unread_alerts },
+              { label: t('admin.summary.uptimeHours'), value: summary?.uptime_hours },
+              { label: t('admin.summary.memoryMb'), value: summary?.memory_mb != null ? summary.memory_mb.toFixed(1) : undefined },
+            ].map(c => (
+              <div key={c.label}>
+                <div className="text-[10px] text-muted-foreground">{c.label}</div>
+                <p className="text-lg font-bold text-foreground">{c.value ?? '-'}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="rounded-xl border border-quant-border bg-quant-bg-secondary p-4">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground mb-3">
+            <Clock className="h-4 w-4 text-quant-gold" />{t('admin.activity.title')}
+          </div>
+          {activities.length === 0 ? (
+            <div className="text-xs text-muted-foreground py-4 text-center">{t('admin.activity.empty')}</div>
+          ) : (
+            <ul className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+              {activities.map((a, i) => (
+                <li key={i} className="flex items-center gap-2 text-xs">
+                  <span className={cn('shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium', ACTIVITY_TYPE_COLOR[a.type] || 'bg-white/5 text-muted-foreground')}>
+                    {t(`admin.activity.type.${a.type}`, a.type)}
+                  </span>
+                  <span className="flex-1 min-w-0 truncate text-foreground">{a.message}</span>
+                  <span className="shrink-0 text-[10px] text-muted-foreground">{fmtActivityTs(a.timestamp)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+
       {/* ── Tabs ── */}
       <div className="flex gap-1 bg-quant-bg-secondary rounded-lg p-0.5 w-fit">
         {[
@@ -131,6 +233,7 @@ export function UserManage() {
           { k: 'audit' as const, label: '审计日志', icon: FileText },
           { k: 'system' as const, label: '系统监控', icon: Cpu },
           { k: 'market' as const, label: '上架审核', icon: Shield },
+          { k: 'community' as const, label: t('admin.tabs.communityReview'), icon: CheckCircle },
         ].map(t => (
           <button key={t.k} onClick={() => setActiveTab(t.k)}
             className={cn('flex items-center gap-1.5 px-4 py-2 rounded-md text-xs font-medium transition-colors',
@@ -142,6 +245,7 @@ export function UserManage() {
 
       {/* ── System Monitor Tab ── */}
       {activeTab === 'market' && <AdminMarketReview />}
+      {activeTab === 'community' && <AdminIndicatorReview />}
       {activeTab === 'system' && sysStats?.system && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {[
@@ -204,7 +308,11 @@ export function UserManage() {
             data={users}
             columns={[
               { key: 'id', title: 'ID', render: (u) => <span className="text-muted-foreground">{u.id}</span> },
-              { key: 'username', title: '用户名', render: (u) => <span className="text-foreground font-medium">{u.username}</span> },
+              { key: 'username', title: '用户名', render: (u) => (
+                <span className={cn('font-medium', u.is_active === 1 ? 'text-foreground' : 'text-muted-foreground line-through opacity-60')}>
+                  {u.username}
+                </span>
+              )},
               { key: 'email', title: '邮箱', render: (u) => <span className="text-muted-foreground">{u.email || '-'}</span> },
               { key: 'role', title: '角色', render: (u) => (
                 <span className={cn('px-2 py-0.5 rounded text-[10px] font-medium',
@@ -220,10 +328,22 @@ export function UserManage() {
               )},
               { key: 'created', title: '注册时间', render: (u) => <span className="text-muted-foreground text-xs">{u.created_at?.slice(0, 10)}</span> },
               { key: 'action', title: '操作', render: (u) => (
-                <button onClick={() => openEdit(u)}
-                  className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/10">
-                  <Edit3 className="h-3.5 w-3.5" />
-                </button>
+                <div className="flex items-center gap-1">
+                  <button onClick={() => openEdit(u)} title="编辑"
+                    className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/10">
+                    <Edit3 className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    onClick={() => handleToggleActive(u)}
+                    disabled={togglingId === u.id}
+                    title={u.is_active === 1 ? t('admin.users.disable') : t('admin.users.enable')}
+                    className={cn('p-1.5 rounded hover:bg-white/10 disabled:opacity-50',
+                      u.is_active === 1 ? 'text-muted-foreground hover:text-red-400' : 'text-muted-foreground hover:text-green-400')}>
+                    {togglingId === u.id
+                      ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      : u.is_active === 1 ? <UserX className="h-3.5 w-3.5" /> : <UserCheck className="h-3.5 w-3.5" />}
+                  </button>
+                </div>
               )},
             ]}
             keyExtractor={(u) => String(u.id)}
@@ -281,6 +401,8 @@ export function UserManage() {
           </div>
         </div>
       )}
+      {/* 危险操作二次确认（禁用用户） */}
+      <Dialog />
     </div>
   )
 }

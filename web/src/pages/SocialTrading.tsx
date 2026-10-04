@@ -9,6 +9,7 @@ import { socialApi } from '@/lib/api'
 import { useToastStore } from '@/stores/toastStore'
 import { useAuthStore } from '@/stores/authStore'
 import ProfitSharePanel from '@/components/social/ProfitSharePanel'
+import { MarketProviders, AdminProviderReview } from '@/components/social/MarketProviders'
 
 interface Provider {
   provider_id: number
@@ -257,21 +258,27 @@ export function SocialTrading() {
 
       {/* Providers Tab */}
       {activeTab === 'providers' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-          {providers.length === 0 ? (
-            <div className="col-span-full text-center py-12 text-muted-foreground text-sm">
-              <Users className="w-10 h-10 mx-auto mb-3 opacity-30" />
-              暂无公开信号源
-            </div>
-          ) : providers.map(p => (
-            <ProviderCard
-              key={p.provider_id}
-              provider={p}
-              isFollowing={following.has(p.provider_id)}
-              onToggleFollow={handleToggleFollow}
-              isPending={isFollowPending}
-            />
-          ))}
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {providers.length === 0 ? (
+              <div className="col-span-full text-center py-12 text-muted-foreground text-sm">
+                <Users className="w-10 h-10 mx-auto mb-3 opacity-30" />
+                暂无公开信号源
+              </div>
+            ) : providers.map(p => (
+              <ProviderCard
+                key={p.provider_id}
+                provider={p}
+                isFollowing={following.has(p.provider_id)}
+                onToggleFollow={handleToggleFollow}
+                isPending={isFollowPending}
+              />
+            ))}
+          </div>
+          {/* 开放信号市场已上架 provider（双轨订阅：月费/分成） */}
+          <MarketProviders />
+          {/* 管理员：provider 入驻审核（按申请 ID 单条操作） */}
+          <AdminProviderReview />
         </div>
       )}
 

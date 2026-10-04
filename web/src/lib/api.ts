@@ -2112,8 +2112,54 @@ export const indicatorApi = {
 }
 
 // ── Social Trading ──
+// 市场 provider（GET /social/providers 的 market_providers 数组，已上架条目）；
+// subscribe/switch_track/subscription/approve/reject 的 :id 均为 db_id（库内 id），
+// 与 follow/unfollow 用的引擎 offset id 不同。
+export interface SocialMarketProvider {
+  id: number // 引擎 offset id（follow 用）
+  db_id: number // 库内 id（订阅/审核端点用）
+  name: string
+  description: string
+  monthly_fee: number
+  fee_mode: string
+  pricing_model: string
+  available_tracks: string[] // subscription | profit_share
+  profit_share_pct?: number | null
+  follower_count: number
+}
+// subscriptionView 统一输出（api_market.go）
+export interface SocialTrackSubscription {
+  provider_id: number
+  provider_name?: string
+  track: string // subscription | profit_share
+  status: string // active | cancelled
+  track_expires_at: number // 订阅轨到期毫秒时间戳（0=无到期）
+  created_at: number
+  available_tracks?: string[]
+}
+// 订阅轨计费订单（store.BillingOrder；amount_usdt 为微 USDT，1e6=1 USDT）
+export interface SocialSubscriptionOrder {
+  order_id: string
+  chain: string
+  address: string
+  amount_usdt: number
+  status: string
+  created_at: number
+}
+export interface SocialSubscribeResult {
+  subscription?: SocialTrackSubscription
+  already?: boolean
+  order?: SocialSubscriptionOrder
+  expires_at?: number // 订单过期（秒）
+  period_days?: number
+  provider_id?: number
+  track?: string
+  available_tracks?: string[]
+}
 export const socialApi = {
   providers: () => api.get<{ providers: any[] }>('/social/providers').then((d) => d?.providers ?? []),
+  marketProviders: () =>
+    api.get<{ market_providers?: SocialMarketProvider[] }>('/social/providers').then((d) => d?.market_providers ?? []),
   follow: (providerId: number, followerId: number) =>
     api.post<{ success: boolean }>(`/social/providers/${providerId}/follow`, undefined, {
       params: { follower_id: followerId },
@@ -2122,6 +2168,20 @@ export const socialApi = {
     api.post<{ success: boolean }>(`/social/providers/${providerId}/unfollow`, undefined, {
       params: { follower_id: followerId },
     }),
+  // 双轨订阅（迁移 0028）：track=subscription 创建计费订单，track=profit_share 免费立即开通
+  subscribe: (dbId: number, data: { track: string; chain?: string }) =>
+    api.post<SocialSubscribeResult>(`/social/providers/${dbId}/subscribe`, data),
+  switchTrack: (dbId: number, data: { track: string; chain?: string }) =>
+    api.post<SocialSubscribeResult>(`/social/providers/${dbId}/switch_track`, data),
+  mySubscription: (dbId: number) =>
+    api.get<{ subscription: SocialTrackSubscription | null; available_tracks?: string[] }>(
+      `/social/providers/${dbId}/subscription`
+    ),
+  // 入驻审核（admin only；无待审列表端点，只能按 id 单条操作）
+  approveProvider: (dbId: number) =>
+    api.post<{ provider: SocialProviderApply }>(`/social/providers/${dbId}/approve`),
+  rejectProvider: (dbId: number, note = '') =>
+    api.post<{ provider: SocialProviderApply }>(`/social/providers/${dbId}/reject`, { note }),
   signals: (providerId?: number, limit?: number) =>
     api
       .get<{ signals: any[] }>('/social/signals', { params: { provider_id: providerId, limit } })
@@ -2193,15 +2253,83 @@ export const communityApi = {
       .then((d) => d?.comments ?? []),
   addComment: (id: number, data: { rating: number; content: string }) =>
     api.post<{ success: boolean; comment_id?: number }>(`/community/comments/${id}`, data),
+  // 作者收益汇总 + 分指标明细（handler.AuthorRevenue，{code,msg,data} 信封 → 取 data）
+  authorRevenue: () =>
+    api
+      .get<{ code: number; msg: string; data: AuthorRevenueData }>('/community/author/revenue')
+      .then((d) => d?.data ?? { total_sales: 0, total_revenue: 0, details: [] }),
+}
+
+// 社区指标收益/审核返回结构（gateway community handler）
+export interface AuthorRevenueData {
+  total_sales: number
+  total_revenue: number
+  details: { indicator_id: number; sales: number; revenue: number }[]
+}
+export interface PendingReviewItem {
+  id: number
+  name: string
+  description: string
+  pricing_type: string
+  price: number
+  purchase_count: number
+  avg_rating: number
+  view_count: number
+  author_id: number
+  author_name?: string
+  created_at: number
+}
+export interface PendingReviewsData {
+  items: PendingReviewItem[]
+  total: number
+  page: number
+  page_size: number
+  total_pages: number
+}
+// 社区指标上架审核（admin only，与 market/listings 审核是两套）
+export const communityAdminApi = {
+  pendingReviews: (page = 1, pageSize = 20) =>
+    api
+      .get<{ code: number; msg: string; data: PendingReviewsData }>('/community/reviews/pending', {
+        params: { page, page_size: pageSize },
+      })
+      .then((d) => d?.data ?? { items: [], total: 0, page, page_size: pageSize, total_pages: 0 }),
+  review: (id: number, approve: boolean, reason = '') =>
+    api.post<{ code: number; msg: string }>(`/community/review/${id}`, { approve, reason }),
 }
 
 // ── Admin ──
+// GET /admin/summary 扁平统计卡（gateway handler.AdminDashboardSummary）
+export interface AdminSummary {
+  total_users: number
+  active_users: number
+  pending_orders: number
+  total_trades: number
+  active_strategies: number
+  unread_alerts: number
+  uptime_hours: number
+  memory_mb: number
+}
+// GET /admin/activity 跨模块最近动态（handler.AdminRecentActivity；timestamp 单位混用，前端防御性渲染）
+export interface AdminActivityItem {
+  type: 'trade' | 'risk' | 'audit' | 'notification' | string
+  message: string
+  level?: string
+  timestamp?: number | string
+}
 export const adminApi = {
   users: () => api.get<AdminUser[]>('/admin/users').then((d) => d ?? []),
   user: (id: string) => api.get<AdminUser>(`/admin/users/${id}`),
   updateUser: (id: string, data: Partial<AdminUser>) => api.put<{ success: boolean }>(`/admin/users/${id}`, data),
+  disableUser: (id: string) => api.post<{ status: string }>(`/admin/users/${id}/disable`),
+  enableUser: (id: string) => api.post<{ status: string }>(`/admin/users/${id}/enable`),
   stats: () => api.get<AdminStats>('/admin/stats'),
   enhancedStats: () => api.get<AdminStats>('/admin/stats'),
+  summary: () => api.get<AdminSummary>('/admin/summary'),
+  activity: (limit = 12) =>
+    api
+      .get<{ activities: AdminActivityItem[] }>('/admin/activity', { params: { limit } })
+      .then((d) => d?.activities ?? []),
   auditLog: (params?: { limit?: number; offset?: number }) =>
     api.get<{ logs: AdminAuditLog[]; total: number }>('/admin/audit-log', { params }),
 }

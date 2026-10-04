@@ -2,6 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import React from 'react'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+// 页面内的 MarketProviders/AdminProviderReview 走 i18n，需 Provider + 词条注册
+import '@/i18n/locales/zh-CN'
+import '@/i18n/locales/social'
+import { I18nProvider } from '@/i18n'
 import { SocialTrading } from '../../pages/SocialTrading'
 
 // Mock must be self-contained (vitest hoists vi.mock above module-level vars)
@@ -57,6 +61,13 @@ vi.mock('@/lib/api', () => ({
     follow: () => Promise.resolve({ success: true }),
     unfollow: () => Promise.resolve({ success: true }),
     publishSignal: () => Promise.resolve({ signal: { id: 'new-sig' } }),
+    // 双轨订阅（MarketProviders 组件）：默认无市场 provider / 无订阅
+    marketProviders: () => Promise.resolve([]),
+    mySubscription: () => Promise.resolve({ subscription: null }),
+    subscribe: () => Promise.resolve({}),
+    switchTrack: () => Promise.resolve({}),
+    approveProvider: () => Promise.resolve({}),
+    rejectProvider: () => Promise.resolve({}),
   },
 }))
 
@@ -79,7 +90,7 @@ function createTestQueryClient() {
 function Wrapper({ children }: { children: React.ReactNode }) {
   return (
     <QueryClientProvider client={createTestQueryClient()}>
-      {children}
+      <I18nProvider>{children}</I18nProvider>
     </QueryClientProvider>
   )
 }

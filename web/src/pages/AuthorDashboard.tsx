@@ -6,7 +6,8 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { SectionCard } from '@/components/ui/SectionCard'
 import { KPICard } from '@/components/ui/KPICard'
 import { OverfitRiskGauge } from '@/components/community/OverfitRiskGauge'
-import { communityApi, indicatorApi } from '@/lib/api'
+import { communityApi, indicatorApi, type AuthorRevenueData } from '@/lib/api'
+import { useI18n } from '@/i18n'
 import { toast } from '@/lib/useToast'
 import type { IndicatorItem } from '@/types'
 import {
@@ -208,9 +209,12 @@ function IndicatorRow({
 
 export function AuthorDashboard() {
   const navigate = useNavigate()
+  const { t } = useI18n()
   const [indicators, setIndicators] = useState<AuthorIndicator[]>([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<'all' | 'draft' | 'published'>('all')
+  // GET /community/author/revenue：后端 indicator_revenue 实账（与本地估算的 stats.totalRevenue 口径不同）
+  const [revenue, setRevenue] = useState<AuthorRevenueData | null>(null)
 
   useEffect(() => {
     setLoading(true)
@@ -226,6 +230,16 @@ export function AuthorDashboard() {
       setIndicators([])
     }).finally(() => setLoading(false))
   }, [])
+
+  useEffect(() => {
+    communityApi.authorRevenue().then(setRevenue).catch(() => setRevenue(null))
+  }, [])
+
+  const indicatorName = useMemo(() => {
+    const m = new Map<number, string>()
+    for (const i of indicators) m.set(i.id, i.name)
+    return (id: number) => m.get(id) || `#${id}`
+  }, [indicators])
 
   const filtered = useMemo(() => {
     if (filter === 'all') return indicators
@@ -320,6 +334,67 @@ export function AuthorDashboard() {
             trend="neutral"
           />
         </div>
+
+        {/* 作者收益（GET /community/author/revenue 实账） */}
+        {revenue && (
+          <SectionCard title={t('author.revenue.title')}>
+            <div className="grid grid-cols-2 gap-3 mb-3"
+            >
+              <div className="rounded-lg border border-quant-border bg-quant-bg-secondary p-3"
+              >
+                <div className="text-[10px] text-muted-foreground"
+                >{t('author.revenue.total')}</div
+                >
+                <div className="text-lg font-bold text-quant-gold font-mono"
+                >{revenue.total_revenue.toFixed(2)}</div
+                >
+              </div>
+              <div className="rounded-lg border border-quant-border bg-quant-bg-secondary p-3"
+              >
+                <div className="text-[10px] text-muted-foreground"
+                >{t('author.revenue.sales')}</div
+                >
+                <div className="text-lg font-bold font-mono"
+                >{revenue.total_sales}</div
+                >
+              </div>
+            </div>
+            <div className="text-[10px] text-muted-foreground mb-1.5"
+            >{t('author.revenue.detailTitle')}</div
+            >
+            {revenue.details.length === 0 ? (
+              <div className="text-xs text-muted-foreground py-2"
+              >{t('author.revenue.empty')}</div
+              >
+            ) : (
+              <div className="space-y-1"
+              >
+                <div className="flex items-center text-[10px] text-muted-foreground px-2"
+                >
+                  <span className="flex-1">{t('author.revenue.indicatorCol')}</span>
+                  <span className="w-16 text-right">{t('author.revenue.salesCol')}</span>
+                  <span className="w-24 text-right">{t('author.revenue.revenueCol')}</span>
+                </div>
+                {revenue.details.map((d) => (
+                  <div
+                    key={d.indicator_id}
+                    className="flex items-center rounded-lg border border-quant-border bg-quant-card px-2 py-1.5 text-xs"
+                  >
+                    <span className="flex-1 min-w-0 truncate font-medium"
+                    >{indicatorName(d.indicator_id)}</span
+                    >
+                    <span className="w-16 text-right font-mono text-muted-foreground"
+                    >{d.sales}</span
+                    >
+                    <span className="w-24 text-right font-mono text-quant-gold"
+                    >{d.revenue.toFixed(2)}</span
+                    >
+                  </div>
+                ))}
+              </div>
+            )}
+          </SectionCard>
+        )}
 
         {/* Filters */}
         <div className="flex items-center gap-2"
