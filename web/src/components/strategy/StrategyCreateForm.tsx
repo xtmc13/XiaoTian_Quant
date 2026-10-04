@@ -109,7 +109,8 @@ const PERIOD_ORDER: Record<string, number> = {
   '30m': 4,
   '1h': 5,
   '4h': 6,
-  '1d': 7,
+  '8h': 7,
+  '1d': 8,
   close: 99,
 }
 function deriveTimeframeFromCRA(params: CRAParams): string {

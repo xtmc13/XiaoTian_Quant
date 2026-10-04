@@ -1,6 +1,8 @@
 package cra
 
 import (
+	"strings"
+
 	"github.com/xiaotian-quant/gateway/internal/model"
 )
 
@@ -79,8 +81,58 @@ func EMACrossDetect(bars []model.Bar, fast, slow int) bool {
 
 // MACDBullish returns true if the MACD histogram turned positive at the last bar.
 func MACDBullish(bars []model.Bar) bool {
+	return MACDBullishWithTunables(bars, MACDTunables{})
+}
+
+// MACDBearish returns true if the MACD histogram turned negative at the last bar.
+func MACDBearish(bars []model.Bar) bool {
+	return MACDBearishWithTunables(bars, MACDTunables{})
+}
+
+// MACDTunables carries user-configured MACD periods (A3); zero fields fall
+// back to the engine's historical hardcoded defaults (12/26/9).
+type MACDTunables struct {
+	Fast   int
+	Slow   int
+	Signal int
+}
+
+func (t MACDTunables) withDefaults() MACDTunables {
+	if t.Fast < 1 {
+		t.Fast = 12
+	}
+	if t.Slow < 1 {
+		t.Slow = 26
+	}
+	if t.Signal < 1 {
+		t.Signal = 9
+	}
+	return t
+}
+
+// EMATunables carries user-configured dual-EMA periods (A3); zero fields fall
+// back to the engine's historical hardcoded defaults (5/15).
+type EMATunables struct {
+	Fast int
+	Slow int
+}
+
+func (t EMATunables) withDefaults() EMATunables {
+	if t.Fast < 1 {
+		t.Fast = 5
+	}
+	if t.Slow < 1 {
+		t.Slow = 15
+	}
+	return t
+}
+
+// MACDBullishWithTunables 是 MACDBullish 的参数化版本（金叉=柱值由负变正，
+// 币富语义不变，仅周期可配）。
+func MACDBullishWithTunables(bars []model.Bar, t MACDTunables) bool {
+	t = t.withDefaults()
 	closes := BarsToCloses(bars)
-	_, _, hist := MACD(closes, 12, 26, 9)
+	_, _, hist := MACD(closes, t.Fast, t.Slow, t.Signal)
 	if len(hist) < 2 {
 		return false
 	}
@@ -88,10 +140,11 @@ func MACDBullish(bars []model.Bar) bool {
 	return hist[last-1] <= 0 && hist[last] > 0
 }
 
-// MACDBearish returns true if the MACD histogram turned negative at the last bar.
-func MACDBearish(bars []model.Bar) bool {
+// MACDBearishWithTunables 是 MACDBearish 的参数化版本（死叉=柱值由正变负）。
+func MACDBearishWithTunables(bars []model.Bar, t MACDTunables) bool {
+	t = t.withDefaults()
 	closes := BarsToCloses(bars)
-	_, _, hist := MACD(closes, 12, 26, 9)
+	_, _, hist := MACD(closes, t.Fast, t.Slow, t.Signal)
 	if len(hist) < 2 {
 		return false
 	}
@@ -99,28 +152,117 @@ func MACDBearish(bars []model.Bar) bool {
 	return hist[last-1] >= 0 && hist[last] < 0
 }
 
+// InflectionUp detects an upward turning point on closes: the latest close
+// rebounds while the previous one was still falling or flat
+// (close[-1] > close[-2] && close[-2] <= close[-3]).
+func InflectionUp(closes []float64) bool {
+	n := len(closes)
+	if n < 3 {
+		return false
+	}
+	return closes[n-1] > closes[n-2] && closes[n-2] <= closes[n-3]
+}
+
+// InflectionDown detects a downward turning point (mirror of InflectionUp).
+func InflectionDown(closes []float64) bool {
+	n := len(closes)
+	if n < 3 {
+		return false
+	}
+	return closes[n-1] < closes[n-2] && closes[n-2] >= closes[n-3]
+}
+
+// TrendEmaConfirmed 顺势 EMA 门槛（A4，顺向确认；币富"均线以上+快线拐点"
+// 语义的确定性实现）：做多要求快线 > 慢线且收盘价站稳慢线之上；做空镜像。
+func TrendEmaConfirmed(bars []model.Bar, t EMATunables, side PositionSide) bool {
+	t = t.withDefaults()
+	closes := BarsToCloses(bars)
+	if len(closes) == 0 {
+		return false
+	}
+	emaFast := EMA(closes, t.Fast)
+	emaSlow := EMA(closes, t.Slow)
+	last := len(closes) - 1
+	if side == SideShort {
+		return emaFast[last] < emaSlow[last] && closes[last] < emaSlow[last]
+	}
+	return emaFast[last] > emaSlow[last] && closes[last] > emaSlow[last]
+}
+
+// CounterEmaConfirmed 逆势 EMA 门槛（A4，反转确认；币富"EMA 标准线以上做空/
+// 以下做多、振幅决定时机"语义）：逆势做多要求收盘价低于慢线（偏离）且出现
+// 向上拐点（回归）；逆势做空镜像（高于慢线 + 向下拐点）。
+func CounterEmaConfirmed(bars []model.Bar, t EMATunables, side PositionSide) bool {
+	t = t.withDefaults()
+	closes := BarsToCloses(bars)
+	if len(closes) < 3 {
+		return false
+	}
+	emaSlow := EMA(closes, t.Slow)
+	last := len(closes) - 1
+	if side == SideShort {
+		return closes[last] > emaSlow[last] && InflectionDown(closes)
+	}
+	return closes[last] < emaSlow[last] && InflectionUp(closes)
+}
+
+// legacyEmaConfirmed 是旧版共享 EMA 门槛（add_ema 补仓门槛沿用，行为不变）：
+// 做多=金叉(快/慢)或收盘价站上慢线；做空=无金叉且收于慢线之下。
+func legacyEmaConfirmed(bars []model.Bar, t EMATunables, side PositionSide) bool {
+	t = t.withDefaults()
+	if len(bars) == 0 {
+		return false
+	}
+	closes := BarsToCloses(bars)
+	emaSlow := EMA(closes, t.Slow)
+	last := len(bars) - 1
+	if side == SideShort {
+		return !EMACrossDetect(bars, t.Fast, t.Slow) && bars[last].Close < emaSlow[last]
+	}
+	return EMACrossDetect(bars, t.Fast, t.Slow) || bars[last].Close > emaSlow[last]
+}
+
 // IndicatorConfirmed decides whether an entry/add-position is allowed by the configured indicator switch.
 func IndicatorConfirmed(bars []model.Bar, enabled bool, period string, indicatorType string, side PositionSide) bool {
+	return IndicatorConfirmedWithTunables(bars, enabled, period, indicatorType, side, MACDTunables{}, EMATunables{})
+}
+
+// IndicatorConfirmedWithTunables 是 IndicatorConfirmed 的参数化版本（A3/A4）：
+// macd/ema 周期缺省维持历史硬编码；indicatorType 额外支持 "ema_trend"
+// （顺势 EMA，A4 顺向确认）与 "ema_counter"（逆势 EMA，A4 反转确认），
+// 旧 "ema" 共享语义保留给补仓门槛。
+func IndicatorConfirmedWithTunables(bars []model.Bar, enabled bool, period string, indicatorType string, side PositionSide, macd MACDTunables, ema EMATunables) bool {
 	if !enabled || period == "close" {
 		return true
 	}
-	// Map frontend periods to approximate bar counts. The gateway bar feed resolution
-	// is assumed to match the configured timeframe; here we simply run the indicator
-	// on the available bar history with standard lookback windows.
+	// The gateway bar feed resolution is matched to the configured timeframe by
+	// the strategy (A2 multi-timeframe feed); the indicator runs on the bar
+	// history supplied by the caller with standard lookback windows.
 	switch indicatorType {
 	case "ema":
-		// Trend EMA: bullish for long, bearish for short.
-		if side == SideShort {
-			return EMACrossDetect(bars, 5, 15) == false && len(bars) > 0 && bars[len(bars)-1].Close < EMA(BarsToCloses(bars), 15)[len(bars)-1]
-		}
-		return EMACrossDetect(bars, 5, 15) || (len(bars) > 0 && bars[len(bars)-1].Close > EMA(BarsToCloses(bars), 15)[len(bars)-1])
+		return legacyEmaConfirmed(bars, ema, side)
+	case "ema_trend":
+		return TrendEmaConfirmed(bars, ema, side)
+	case "ema_counter":
+		return CounterEmaConfirmed(bars, ema, side)
 	case "macd":
 		if side == SideShort {
-			return MACDBearish(bars)
+			return MACDBearishWithTunables(bars, macd)
 		}
-		return MACDBullish(bars)
+		return MACDBullishWithTunables(bars, macd)
 	}
 	return true
+}
+
+// IsFeedablePeriod 报告 period 是否为可经 kline_feeder 订阅的指标周期档位
+// （币富 5m/15m/30m/1h/4h/8h，均为 Binance 支持的 interval）。"close"/空串/
+// 未知值不可订阅，由调用方降级为工作周期。
+func IsFeedablePeriod(period string) bool {
+	switch strings.ToLower(strings.TrimSpace(period)) {
+	case "5m", "15m", "30m", "1h", "4h", "8h":
+		return true
+	}
+	return false
 }
 
 // PeriodToBars maps a frontend period string to a recommended number of bars for indicator lookback.

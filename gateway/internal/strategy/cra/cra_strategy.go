@@ -33,6 +33,12 @@ type BaseCRAStrategy struct {
 	lastSignalTime      int64 // Unix 毫秒
 	lastSignalDirection string
 
+	// A2 多周期指标 bar 供给：引擎 Start 后经 SetBarProvider 注入
+	//（BarProvider/MarketData）；nil = 未接线，指标周期一律用工作周期 bar。
+	barProvider strategy.BarProvider
+	// warnedFeeds 按指标周期去重"降级到工作周期"的 WARN 日志（Start 重置）。
+	warnedFeeds map[string]bool
+
 	flashDetector *strategy.FlashCrashDetector
 	logger        *logging.Logger
 }
@@ -40,22 +46,24 @@ type BaseCRAStrategy struct {
 // NewCRASpotStrategy creates a spot CRA strategy instance.
 func NewCRASpotStrategy(name, symbol string) *BaseCRAStrategy {
 	return &BaseCRAStrategy{
-		name:       name,
-		symbol:     symbol,
-		isContract: false,
-		state:      &CRAState{},
-		logger:     logging.New("cra_spot"),
+		name:        name,
+		symbol:      symbol,
+		isContract:  false,
+		state:       &CRAState{},
+		warnedFeeds: map[string]bool{},
+		logger:      logging.New("cra_spot"),
 	}
 }
 
 // NewCRAContractStrategy creates a contract CRA strategy instance.
 func NewCRAContractStrategy(name, symbol string) *BaseCRAStrategy {
 	return &BaseCRAStrategy{
-		name:       name,
-		symbol:     symbol,
-		isContract: true,
-		state:      &CRAState{},
-		logger:     logging.New("cra_contract"),
+		name:        name,
+		symbol:      symbol,
+		isContract:  true,
+		state:       &CRAState{},
+		warnedFeeds: map[string]bool{},
+		logger:      logging.New("cra_contract"),
 	}
 }
 
@@ -117,6 +125,7 @@ func (s *BaseCRAStrategy) Start(params map[string]any) error {
 	s.params = p
 	s.state = &CRAState{}
 	s.bars = nil
+	s.warnedFeeds = map[string]bool{}
 	if p.WaterfallEnabled {
 		s.flashDetector = strategy.NewFlashCrashDetectorWithParams(time.Minute, p.WaterfallProtection)
 	} else {
@@ -181,6 +190,59 @@ func (s *BaseCRAStrategy) RuntimeStatus() map[string]any {
 		m["last_signal_direction"] = s.lastSignalDirection
 	}
 	return m
+}
+
+// ── A2 多周期指标供给（引擎可选接口：PrimaryTimeframer/Timeframer/BarProviderSetter）──
+
+// PrimaryTimeframe 声明策略工作周期：引擎只把该周期 K 线分发进 OnBar，
+// 指标副周期供给（或同 symbol 其他策略的异周期供给）不会污染交易状态。
+// 未配置 timeframe（旧配置）时返回 ""：不过滤，行为与旧版完全一致。
+func (s *BaseCRAStrategy) PrimaryTimeframe() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.params == nil {
+		return ""
+	}
+	return s.params.Timeframe
+}
+
+// Timeframes 声明指标副周期供给需求：启用指标的周期 ≠ 工作周期时，引擎经
+// kline_feeder 订阅对应周期（引用计数，Unregister 释放），策略经
+// BarProvider 读取。工作周期未知时不声明副周期——没有主周期过滤，副周期
+// bar 会混进 OnBar 污染交易状态；此时指标周期降级为工作周期并 WARN。
+func (s *BaseCRAStrategy) Timeframes() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	p := s.params
+	if p == nil || p.Timeframe == "" {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	add := func(enabled bool, period string) {
+		if !enabled || !IsFeedablePeriod(period) {
+			return
+		}
+		norm := strings.ToLower(strings.TrimSpace(period))
+		if norm == p.Timeframe || seen[norm] {
+			return
+		}
+		seen[norm] = true
+		out = append(out, norm)
+	}
+	add(p.OpenMacdEnabled, p.OpenMacdPeriod)
+	add(p.OpenCounterEmaEnabled, p.OpenCounterEmaPeriod)
+	add(p.OpenTrendEmaEnabled, p.OpenTrendEmaPeriod)
+	add(p.AddMacdEnabled, p.AddMacdPeriod)
+	add(p.AddEmaEnabled, p.AddEmaPeriod)
+	return out
+}
+
+// SetBarProvider 注入多周期数据访问器（引擎在 Start 成功后调用）。
+func (s *BaseCRAStrategy) SetBarProvider(bp strategy.BarProvider) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.barProvider = bp
 }
 
 func (s *BaseCRAStrategy) OnTick(tick model.Tick, bus *event.EventBus) (*model.Signal, error) {
@@ -406,14 +468,18 @@ func (s *BaseCRAStrategy) openIndicatorsConfirmed(side PositionSide) bool {
 		}
 		return confirmed
 	}
-	bars := s.indicatorBars()
-	if p.OpenMacdEnabled && !IndicatorConfirmed(bars, true, p.OpenMacdPeriod, "macd", side) {
+	macd := MACDTunables{Fast: p.MacdFast, Slow: p.MacdSlow, Signal: p.MacdSignal}
+	ema := EMATunables{Fast: p.EmaFast, Slow: p.EmaSlow}
+	macdMin := p.MacdSlow + p.MacdSignal + 2
+	emaMin := p.EmaSlow + 2
+	if p.OpenMacdEnabled && !IndicatorConfirmedWithTunables(s.indicatorBars(p.OpenMacdPeriod, macdMin), true, p.OpenMacdPeriod, "macd", side, macd, ema) {
 		return false
 	}
-	if p.OpenCounterEmaEnabled && !IndicatorConfirmed(bars, true, p.OpenCounterEmaPeriod, "ema", side) {
+	// A4：逆势 EMA=反转确认、顺势 EMA=顺向确认（旧版两者共用同一 "ema" 门槛）。
+	if p.OpenCounterEmaEnabled && !IndicatorConfirmedWithTunables(s.indicatorBars(p.OpenCounterEmaPeriod, emaMin), true, p.OpenCounterEmaPeriod, "ema_counter", side, macd, ema) {
 		return false
 	}
-	if p.OpenTrendEmaEnabled && !IndicatorConfirmed(bars, true, p.OpenTrendEmaPeriod, "ema", side) {
+	if p.OpenTrendEmaEnabled && !IndicatorConfirmedWithTunables(s.indicatorBars(p.OpenTrendEmaPeriod, emaMin), true, p.OpenTrendEmaPeriod, "ema_trend", side, macd, ema) {
 		return false
 	}
 	return true
@@ -421,23 +487,53 @@ func (s *BaseCRAStrategy) openIndicatorsConfirmed(side PositionSide) bool {
 
 func (s *BaseCRAStrategy) addPositionConfirmed(cfg *AddPositionItem) bool {
 	p := s.params
-	bars := s.indicatorBars()
+	macd := MACDTunables{Fast: p.MacdFast, Slow: p.MacdSlow, Signal: p.MacdSignal}
+	ema := EMATunables{Fast: p.EmaFast, Slow: p.EmaSlow}
+	macdMin := p.MacdSlow + p.MacdSignal + 2
+	emaMin := p.EmaSlow + 2
 	if cfg.EmaEnabled {
-		if p.AddEmaEnabled && !IndicatorConfirmed(bars, true, p.AddEmaPeriod, "ema", s.state.Side) {
+		// 补仓 EMA 沿用旧版共享语义（"ema"），不引入 A4 顺/逆区分。
+		if p.AddEmaEnabled && !IndicatorConfirmedWithTunables(s.indicatorBars(p.AddEmaPeriod, emaMin), true, p.AddEmaPeriod, "ema", s.state.Side, macd, ema) {
 			return false
 		}
 	}
-	if p.AddMacdEnabled && !IndicatorConfirmed(bars, true, p.AddMacdPeriod, "macd", s.state.Side) {
+	if p.AddMacdEnabled && !IndicatorConfirmedWithTunables(s.indicatorBars(p.AddMacdPeriod, macdMin), true, p.AddMacdPeriod, "macd", s.state.Side, macd, ema) {
 		return false
 	}
 	return true
 }
 
-func (s *BaseCRAStrategy) indicatorBars() []model.Bar {
-	if len(s.bars) > 50 {
-		return s.bars[len(s.bars)-50:]
+// indicatorBars 取指标计算用的 bar 序列（A2）：period 为空/"close"/等于工作
+// 周期时用工作周期 bar（最近 50 根，历史行为不变）；其余周期读多周期供给
+// （引擎经 kline_feeder 订阅、MarketData 注入），序列不足 minBars 时如实
+// WARN（每周期一次）并降级为工作周期 bar。
+func (s *BaseCRAStrategy) indicatorBars(period string, minBars int) []model.Bar {
+	work := s.bars
+	if len(work) > 50 {
+		work = work[len(work)-50:]
 	}
-	return s.bars
+	norm := strings.ToLower(strings.TrimSpace(period))
+	if norm == "" || norm == "close" || (s.params != nil && norm == s.params.Timeframe) {
+		return work
+	}
+	if s.barProvider != nil {
+		if series := s.barProvider.GetSeries(s.symbol, norm); len(series) >= minBars {
+			if len(series) > 50 {
+				series = series[len(series)-50:]
+			}
+			return series
+		}
+	}
+	if !s.warnedFeeds[norm] {
+		s.warnedFeeds[norm] = true
+		workingTF := ""
+		if s.params != nil {
+			workingTF = s.params.Timeframe
+		}
+		s.logger.Warn("indicator period feed unavailable, degrade to working timeframe bars",
+			"symbol", s.symbol, "period", norm, "working_timeframe", workingTF, "min_bars", minBars)
+	}
+	return work
 }
 
 // RoundQty rounds quantity to a reasonable precision for order placement.

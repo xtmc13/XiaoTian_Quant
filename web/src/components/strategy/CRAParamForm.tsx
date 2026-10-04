@@ -16,6 +16,19 @@ import {
 
 export type MarketType = 'spot' | 'contract'
 
+/** 开仓/补仓指标的监测周期档位（币富 5m~8h；close=跟随策略工作周期）。 */
+export type CRAIndicatorPeriod = 'close' | '5m' | '15m' | '30m' | '1h' | '4h' | '8h'
+
+export const CRA_INDICATOR_PERIOD_OPTIONS: { value: CRAIndicatorPeriod; label: string }[] = [
+  { value: 'close', label: '关闭' },
+  { value: '5m', label: '5 分钟' },
+  { value: '15m', label: '15 分钟' },
+  { value: '30m', label: '30 分钟' },
+  { value: '1h', label: '1 小时' },
+  { value: '4h', label: '4 小时' },
+  { value: '8h', label: '8 小时' },
+]
+
 export interface CRAParams {
   // ── 开仓设置 ──
   firstOrderPrice: number
@@ -38,11 +51,11 @@ export interface CRAParams {
 
   // ── 合约开仓指标 ──
   openMacdEnabled: boolean
-  openMacdPeriod: 'close' | '5m' | '15m'
+  openMacdPeriod: CRAIndicatorPeriod
   openCounterEmaEnabled: boolean
-  openCounterEmaPeriod: 'close' | '5m' | '15m'
+  openCounterEmaPeriod: CRAIndicatorPeriod
   openTrendEmaEnabled: boolean
-  openTrendEmaPeriod: 'close' | '5m' | '15m'
+  openTrendEmaPeriod: CRAIndicatorPeriod
 
   // ── 开仓指标选择器（IndicatorPicker）──
   openIndicator: OpenIndicatorKey
@@ -51,9 +64,9 @@ export interface CRAParams {
 
   // ── 合约补仓指标 ──
   addMacdEnabled: boolean
-  addMacdPeriod: 'close' | '5m' | '15m'
+  addMacdPeriod: CRAIndicatorPeriod
   addEmaEnabled: boolean
-  addEmaPeriod: 'close' | '5m' | '15m'
+  addEmaPeriod: CRAIndicatorPeriod
 
   // ── 风控 ──
   waterfallEnabled: boolean
@@ -177,9 +190,9 @@ function Section({ title, children }: SectionProps) {
 interface PeriodSelectProps {
   label: string
   enabled: boolean
-  period: 'close' | '5m' | '15m'
+  period: CRAIndicatorPeriod
   onToggle: (v: boolean) => void
-  onPeriodChange: (v: 'close' | '5m' | '15m') => void
+  onPeriodChange: (v: CRAIndicatorPeriod) => void
 }
 
 function PeriodSelect({ label, enabled, period, onToggle, onPeriodChange }: PeriodSelectProps) {
@@ -192,12 +205,14 @@ function PeriodSelect({ label, enabled, period, onToggle, onPeriodChange }: Peri
       {enabled && (
         <select
           value={period}
-          onChange={(e) => onPeriodChange(e.target.value as 'close' | '5m' | '15m')}
+          onChange={(e) => onPeriodChange(e.target.value as CRAIndicatorPeriod)}
           className="bg-quant-bg border border-quant-border rounded px-2 py-1 text-xs focus:outline-none focus:border-quant-gold"
         >
-          <option value="close">关闭</option>
-          <option value="5m">5 分钟</option>
-          <option value="15m">15 分钟</option>
+          {CRA_INDICATOR_PERIOD_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
         </select>
       )}
     </div>
@@ -298,6 +313,19 @@ export function CRAParamForm({ value, onChange, market, className, openFields = 
             </div>
           </div>
         )}
+
+        <div>
+          <label className="text-[11px] text-muted-foreground mb-1.5 block">首单挂单价格 (USDT)</label>
+          <input
+            type="number"
+            min={0}
+            step="any"
+            value={value.firstOrderPrice}
+            onChange={(e) => update('firstOrderPrice', Math.max(0, Number(e.target.value) || 0))}
+            className={inputCls}
+          />
+          <div className="text-[10px] text-muted-foreground mt-1">0 或留空 = 市价开仓；大于 0 时价格到位才开首单</div>
+        </div>
 
         <div className="grid grid-cols-2 gap-4">
           <div>
@@ -831,17 +859,17 @@ interface ApiPayload {
   profit_callback: number
   moving_take_profit_tiers: ApiMovingTPTier[]
   open_macd_enabled: boolean
-  open_macd_period: 'close' | '5m' | '15m'
+  open_macd_period: CRAIndicatorPeriod
   open_indicator?: string
   indicator_params?: Record<string, unknown>
   open_counter_ema_enabled: boolean
-  open_counter_ema_period: 'close' | '5m' | '15m'
+  open_counter_ema_period: CRAIndicatorPeriod
   open_trend_ema_enabled: boolean
-  open_trend_ema_period: 'close' | '5m' | '15m'
+  open_trend_ema_period: CRAIndicatorPeriod
   add_macd_enabled: boolean
-  add_macd_period: 'close' | '5m' | '15m'
+  add_macd_period: CRAIndicatorPeriod
   add_ema_enabled: boolean
-  add_ema_period: 'close' | '5m' | '15m'
+  add_ema_period: CRAIndicatorPeriod
   waterfall_enabled: boolean
   waterfall_protection: number
   stop_loss_enabled: boolean

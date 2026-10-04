@@ -37,10 +37,15 @@ export interface IndicatorDef {
   fields: IndicatorFieldDef[]
 }
 
+// 币富 K 线周期档位：close=跟随策略工作周期（不额外监测），其余对齐币富 5m~8h。
 export const PERIOD_OPTIONS = [
   { value: 'close', label: '不额外监测（跟随主周期）' },
   { value: '5m', label: '5 分钟' },
   { value: '15m', label: '15 分钟' },
+  { value: '30m', label: '30 分钟' },
+  { value: '1h', label: '1 小时' },
+  { value: '4h', label: '4 小时' },
+  { value: '8h', label: '8 小时' },
 ]
 
 export const OPEN_INDICATORS: IndicatorDef[] = [

@@ -62,6 +62,19 @@ type CRAParams struct {
 	OpenIndicator   string         `json:"open_indicator"`
 	IndicatorParams map[string]any `json:"indicator_params"`
 
+	// 引擎级键：策略工作周期（handler 从 config 顶层 timeframe 透传，如
+	// "15m"）。空 = 未知：多周期指标供给关闭、主周期不过滤，行为与旧版一致。
+	Timeframe string `json:"-"`
+
+	// A3 指标自定义周期（从 indicator_params.macd / ema_cross 解析；存量
+	// trend_long/trend_short 回退）。缺省保持引擎历史硬编码：
+	// MACD 12/26/9、EMA 5/15。仅在参数存在且为正数时覆盖。
+	MacdFast   int `json:"-"`
+	MacdSlow   int `json:"-"`
+	MacdSignal int `json:"-"`
+	EmaFast    int `json:"-"`
+	EmaSlow    int `json:"-"`
+
 	// Contract add indicators
 	AddMacdEnabled bool   `json:"add_macd_enabled"`
 	AddMacdPeriod  string `json:"add_macd_period"`
@@ -206,6 +219,36 @@ func ParseCRAParams(configJSON string) (*CRAParams, error) {
 		}
 	}
 
+	// 引擎级键：工作周期（timeframe 顶层透传，小写归一）。
+	p.Timeframe = strings.ToLower(strings.TrimSpace(strVal(raw, "timeframe", "")))
+
+	// A3：指标 fast/slow/signal 落库参数接进引擎。缺省维持历史硬编码
+	// MACD 12/26/9、EMA 5/15；存在且为正数（posInt 兜底）才覆盖。
+	p.MacdFast, p.MacdSlow, p.MacdSignal = 12, 26, 9
+	p.EmaFast, p.EmaSlow = 5, 15
+	if p.IndicatorParams != nil {
+		if sub, _ := p.IndicatorParams["macd"].(map[string]any); sub != nil {
+			p.MacdFast = posInt(sub, "fast", p.MacdFast)
+			p.MacdSlow = posInt(sub, "slow", p.MacdSlow)
+			p.MacdSignal = posInt(sub, "signal", p.MacdSignal)
+		}
+		// EMA 双均线：ema_cross 优先，存量 trend_long/trend_short 记录回退。
+		for _, ik := range []string{"ema_cross", "trend_long", "trend_short"} {
+			sub, _ := p.IndicatorParams[ik].(map[string]any)
+			if sub == nil {
+				continue
+			}
+			if _, hasFast := sub["fast"]; !hasFast {
+				if _, hasSlow := sub["slow"]; !hasSlow {
+					continue
+				}
+			}
+			p.EmaFast = posInt(sub, "fast", p.EmaFast)
+			p.EmaSlow = posInt(sub, "slow", p.EmaSlow)
+			break
+		}
+	}
+
 	p.AddMacdEnabled = boolVal(raw, "add_macd_enabled", false)
 	p.AddMacdPeriod = strVal(raw, "add_macd_period", "close")
 	p.AddEmaEnabled = boolVal(raw, "add_ema_enabled", false)
@@ -314,6 +357,19 @@ func toFloat(v any) (float64, bool) {
 		return f, err == nil
 	}
 	return 0, false
+}
+
+// posInt 取正整数参数：缺失/非数值/<1 时回退 def（A3 缺省保持现状语义）。
+func posInt(m map[string]any, key string, def int) int {
+	v, ok := m[key]
+	if !ok || v == nil {
+		return def
+	}
+	f, ok := toFloat(v)
+	if !ok || f < 1 {
+		return def
+	}
+	return int(f)
 }
 
 // Validate checks CRA params against frontend/CRA constraints.
