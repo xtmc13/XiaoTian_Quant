@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { BotsCenter } from '../bots/BotsCenter'
@@ -72,5 +72,25 @@ describe('机器人中心 ?bot= 深链', () => {
     await screen.findAllByText('主力行为-paper观察')
     await waitFor(() => expect(screen.getByTestId('loc').textContent).toBe('/bots'))
     expect(screen.queryByTestId('runtime-panel')).toBeNull()
+  })
+})
+
+describe('新建机器人向导（合约类型已精简）', () => {
+  it('合约策略只剩四个真实类型，点击直达创建表单', async () => {
+    renderBots('/bots')
+    fireEvent.click(screen.getByRole('button', { name: /新建机器人/ }))
+    // 第 1 级：点合约策略卡（名称含描述文案以区别筛选 chips）
+    fireEvent.click(await screen.findByRole('button', { name: /合约策略 合约网格/ }))
+    // 第 2 级：只剩 合约网格/高频策略/首尾套利/主力行为
+    await screen.findByText('第 2 步：选择策略类型')
+    for (const v of ['cra_contract', 'high_frequency', 'head_tail_arbitrage', 'smart_money']) {
+      expect(screen.getByText(v)).toBeTruthy()
+    }
+    for (const gone of ['trend_long', 'trend_short', 'counter_stable', 'counter_safe']) {
+      expect(screen.queryByText(gone)).toBeNull()
+    }
+    // 点合约网格 → 直达创建表单对应类型
+    fireEvent.click(screen.getByRole('button', { name: /合约网格 cra_contract/ }))
+    expect(screen.getByTestId('loc').textContent).toBe('/create?market=contract&type=cra_contract')
   })
 })
