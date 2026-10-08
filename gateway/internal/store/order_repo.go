@@ -306,10 +306,13 @@ func NetFilledByStrategy(strategyID, symbol string) (netQty, buyVWAP float64, er
 }
 
 // OrderFill 一笔已成交订单的重建视图（重启分档重建输入）。
+// ClientOID 保留归属打标：G1 手动补仓单带 ":manual:" 中缀，策略侧重放时
+// 据此恢复 Manual 档（手动补仓重启后依然不推自动阶梯）。
 type OrderFill struct {
 	Side         string  `json:"side"` // BUY | SELL
 	Filled       float64 `json:"filled"`
 	AvgFillPrice float64 `json:"avg_fill_price"`
+	ClientOID    string  `json:"client_oid"`
 }
 
 // FilledOrdersByStrategy 按成交时间升序返回策略的已成交明细（归属口径同
@@ -319,7 +322,7 @@ type OrderFill struct {
 func FilledOrdersByStrategy(strategyID, symbol string) ([]OrderFill, error) {
 	prefix := "sig:" + strategyID + ":%"
 	rows, err := db.Query(
-		`SELECT side, filled, avg_fill_price FROM xt_orders
+		`SELECT side, filled, avg_fill_price, COALESCE(client_oid,'') FROM xt_orders
 		 WHERE client_oid LIKE ? AND UPPER(symbol)=UPPER(?)
 		 AND status='FILLED' AND filled>0 AND avg_fill_price>0
 		 ORDER BY updated_at ASC, created_at ASC, rowid ASC`,
@@ -331,7 +334,7 @@ func FilledOrdersByStrategy(strategyID, symbol string) ([]OrderFill, error) {
 	var out []OrderFill
 	for rows.Next() {
 		var f OrderFill
-		if err := rows.Scan(&f.Side, &f.Filled, &f.AvgFillPrice); err != nil {
+		if err := rows.Scan(&f.Side, &f.Filled, &f.AvgFillPrice, &f.ClientOID); err != nil {
 			return nil, err
 		}
 		out = append(out, f)

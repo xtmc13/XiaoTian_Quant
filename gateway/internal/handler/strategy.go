@@ -1295,7 +1295,12 @@ func startStrategyInEngine(id string, item map[string]any) error {
 					} else if len(fills) > 0 && injectQty >= net {
 						list := make([]any, 0, len(fills))
 						for _, f := range fills {
-							list = append(list, map[string]any{"side": f.Side, "qty": f.Filled, "price": f.AvgFillPrice})
+							// G1：client_oid ":manual:" 中缀透传手动补仓标记，
+							// 重放恢复 Manual 档（重启后手动单依然不推自动阶梯）。
+							list = append(list, map[string]any{
+								"side": f.Side, "qty": f.Filled, "price": f.AvgFillPrice,
+								"manual": strings.Contains(f.ClientOID, ":manual:"),
+							})
 						}
 						params["restored_fills"] = list
 					}

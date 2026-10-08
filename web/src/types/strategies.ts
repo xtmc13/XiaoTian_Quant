@@ -267,6 +267,12 @@ export interface StrategyRuntimeStatus {
   tp_mode?: string
   last_signal_time?: number
   last_signal_direction?: string
+  /** G1 手动操控（CRA 引擎才透出，键存在性=支持手动操控的识别口径）。 */
+  add_position_enabled?: boolean
+  /** close_all 后暂停新开仓（重启策略恢复）。 */
+  entry_paused?: boolean
+  /** 本循环已成交的手动补仓笔数（不计自动阶梯）。 */
+  manual_add_count?: number
 }
 
 /** GET /strategies/configs/:id/runtime 响应体。 */
@@ -278,6 +284,26 @@ export interface StrategyRuntimeResponse {
   next_add_distance_pct?: number
   /** 静态止盈目标价距离百分比（moving 模式不返回）。 */
   take_profit_distance_pct?: number
+}
+
+/** G1 手动操控请求体（POST /strategies/configs/:id/manual-action）。 */
+export interface StrategyManualActionRequest {
+  action: 'close_all' | 'add_position' | 'toggle_add_position' | 'reduce_position'
+  /** add_position：补仓保证金金额（USDT）。 */
+  amount?: number
+  /** reduce_position：减仓数量（与 ratio 二选一）。 */
+  qty?: number
+  /** reduce_position：减仓比例 0<r<1（与 qty 二选一）。 */
+  ratio?: number
+  /** toggle_add_position：显式目标态（缺省=翻转）。 */
+  enabled?: boolean
+}
+
+/** G1 手动操控响应：detail 为后端人类可读口径（toast 透出）。 */
+export interface StrategyManualActionResponse {
+  status: string
+  detail?: string
+  result?: Record<string, unknown>
 }
 
 export interface StrategyBatchItemResult {

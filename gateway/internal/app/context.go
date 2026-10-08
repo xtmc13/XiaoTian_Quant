@@ -1598,8 +1598,9 @@ func (ctx *Context) wireStrategyEngine() {
 			Quantity:  qty,
 			Exchange:  ctx.resolveExchange(signal.Symbol),
 			// 归属打标：引擎 wrapper 按 "sig:<配置id>:" 前缀把订单更新精确
-			// 路由回本策略（拒单回滚/成交确认的前提），重启仓位重建也靠它归因。
-			ClientOID: fmt.Sprintf("sig:%s:%d", signal.Strategy, time.Now().UnixNano()),
+			// 路由回本策略（拒单回滚/成交确认的前提），重启仓位重建也靠它归因；
+			// G1 手动操控信号带 ":manual:" 中缀（见 clientOIDForSignal）。
+			ClientOID: clientOIDForSignal(signal),
 			// AI 决策门来源标记（不动 ClientOID，避免干扰 A8.2 成交恢复路由）。
 			Source: "signal:" + signal.Strategy,
 		}
@@ -1671,6 +1672,18 @@ func (ctx *Context) wireStrategyEngine() {
 	}
 
 	ctx.Logger.Info("StrategyEngine wired")
+}
+
+// clientOIDForSignal 信号下单的归属打标：自动信号 "sig:<配置id>:<nonce>"；
+// G1 手动操控信号（Tag=manual）打 "sig:<配置id>:manual:<nonce>"——保持
+// "sig:<id>:" 前缀（wrapper 路由/成交账本归属口径不变），":manual:" 中缀
+// 让策略 OnOrderUpdate 精确区分手动补仓成交（入档不推自动阶梯），重启
+// 分档重建也凭它恢复 Manual 档标记。
+func clientOIDForSignal(signal model.Signal) string {
+	if signal.Tag == model.SignalTagManual {
+		return fmt.Sprintf("sig:%s:manual:%d", signal.Strategy, time.Now().UnixNano())
+	}
+	return fmt.Sprintf("sig:%s:%d", signal.Strategy, time.Now().UnixNano())
 }
 
 // findStrategyConfigForSignal resolves the strategy config for a signal.
@@ -1844,7 +1857,7 @@ func (ctx *Context) closePositionFromSignal(signal model.Signal) {
 			Price:     0,
 			Quantity:  closeQty,
 			Exchange:  ctx.resolveExchange(signal.Symbol),
-			ClientOID: fmt.Sprintf("sig:%s:%d", signal.Strategy, time.Now().UnixNano()),
+			ClientOID: clientOIDForSignal(signal),
 			Source:    "signal:" + signal.Strategy,
 		}
 		// 与入场单同一配置语义：execution_mode 非 live 强制 paper；swap 策略
@@ -1921,8 +1934,9 @@ func (ctx *Context) closeMirroredPositions(signal model.Signal, acct *model.Acco
 			MarginMode:    pos.MarginMode,
 			ClosePosition: true,
 			// 归属打标（同 handleStrategySignal）：出场单被拒/成交要路由回本策略
-			//（closeEmitted 重试、重启仓位重建的净卖出轧差都靠它）。
-			ClientOID: fmt.Sprintf("sig:%s:%d", signal.Strategy, time.Now().UnixNano()),
+			//（closeEmitted 重试、重启仓位重建的净卖出轧差都靠它）；G1 手动
+			// 操控信号带 ":manual:" 中缀（见 clientOIDForSignal）。
+			ClientOID: clientOIDForSignal(signal),
 		}
 		ord, err := order.GetOrderManager().PlaceOrder(req)
 		if err != nil {

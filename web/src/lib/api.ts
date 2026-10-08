@@ -39,6 +39,8 @@ import {
   type StrategyRanking,
   type StrategyRuntimeResponse,
   type StrategyBatchResult,
+  type StrategyManualActionRequest,
+  type StrategyManualActionResponse,
   type StrategyGlobalConfig,
   type ComboConfig,
   type ComboPayload,
@@ -819,6 +821,9 @@ export const strategyApi = {
   start: (id: string) => api.post<{ success: boolean }>(`/strategies/configs/${id}/start`),
   stop: (id: string) => api.post<{ success: boolean }>(`/strategies/configs/${id}/stop`),
   runtime: (id: string) => api.get<StrategyRuntimeResponse>(`/strategies/configs/${id}/runtime`),
+  // G1：CRA 运行时手动操控（清仓卖出/一键补仓/关闭补仓/自定义减仓，币富 #23/#24/#25/#28）
+  manualAction: (id: string, data: StrategyManualActionRequest) =>
+    api.post<StrategyManualActionResponse>(`/strategies/configs/${id}/manual-action`, data),
   batchStart: (ids: string[]) => api.post<StrategyBatchResult>('/strategies/configs/batch-start', { ids }),
   batchStop: (ids: string[]) => api.post<StrategyBatchResult>('/strategies/configs/batch-stop', { ids }),
   batchClose: (ids: string[]) =>

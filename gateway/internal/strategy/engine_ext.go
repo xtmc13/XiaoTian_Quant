@@ -1,6 +1,7 @@
 package strategy
 
 import (
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -448,10 +449,49 @@ func (e *Engine) fireSchedule(name string, now time.Time) {
 	}
 }
 
+// ── G1 运行时手动操控（币富 CRA #23/#24/#25/#28）──
+
+// ManualActioner 可选接口：策略实现它以支持运行时手动操控（CRA 四件套：
+// 清仓卖出/一键补仓/关闭补仓/自定义减仓）。req 为端点请求体的原样映射
+// （action/amount/qty/ratio/enabled）；返回的 signal 非 nil 时由引擎经
+// emitSignal 走与自动信号完全相同的下单链路（execution_mode 防线/风控/
+// 余额锁/成交回报路由），detail 为端点透出的结构化结果（含 "message"）。
+type ManualActioner interface {
+	ManualAction(req map[string]any) (signal *model.Signal, detail map[string]any, err error)
+}
+
+// ManualAction 运行中策略手动操控入口（handler 端点 → 引擎）：定位策略实例、
+// 断言 ManualActioner（未实现=类型不支持），动作产出的信号复用 emitSignal
+// 出口——策略名覆盖、策略级/全局 protection、OnSignal 下单，与自动信号零
+// 通道差异。
+func (e *Engine) ManualAction(name string, req map[string]any) (map[string]any, error) {
+	e.mu.RLock()
+	s, ok := e.strategies[name]
+	e.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("策略未在引擎中运行（可能已停止或重启中）")
+	}
+	core := UnwrapStrategy(s)
+	ma, ok := core.(ManualActioner)
+	if !ok {
+		return nil, fmt.Errorf("该策略类型不支持运行时手动操控")
+	}
+	if !s.IsRunning() {
+		return nil, fmt.Errorf("策略未在运行")
+	}
+	sig, detail, err := ma.ManualAction(req)
+	if err != nil {
+		return nil, err
+	}
+	if sig != nil {
+		e.emitSignal(s, sig, nil)
+	}
+	return detail, nil
+}
+
 // emitSignal 是 dispatch 信号出口的复用：策略名覆盖、风控检查、
 // OnSignal / 广播通知。dispatch 与调度回调共用。
-func (e *Engine) emitSignal(s Strategy, signal *model.Signal, err error) {
-	if err != nil || signal == nil {
+func (e *Engine) emitSignal(s Strategy, signal *model.Signal, err error) {	if err != nil || signal == nil {
 		return
 	}
 	// 用包装后的策略名（=配置 id，如 7bb9a9a6）覆盖策略内部名（如

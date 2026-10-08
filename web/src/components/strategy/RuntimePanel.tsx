@@ -4,6 +4,7 @@ import { strategyApi } from '@/lib/api'
 import type { StrategyItem, StrategyRuntimeResponse, StrategyRuntimeStatus } from '@/types'
 import { cn } from '@/lib/utils'
 import { EmptyState } from '@/components/ui/EmptyState'
+import { ManualActionPanel } from '@/components/strategy/ManualActionPanel'
 
 const POLL_MS = 5000
 
@@ -197,6 +198,12 @@ export function RuntimePanel({ strategy }: { strategy: StrategyItem }) {
           <div className="text-[10px] text-muted-foreground">移动止盈模式无固定目标价，按回撤档位触发</div>
         )}
       </div>
+
+      {/* G1 手动操控区（币富 #23/#24/#25/#28）：后端 RuntimeStatus 透出
+          add_position_enabled = CRA 引擎实例才挂载（经典指标策略无此能力）。 */}
+      {st.add_position_enabled !== undefined && (
+        <ManualActionPanel strategy={strategy} status={st} price={price} />
+      )}
 
       {/* 底部信息行：最近信号 + 已收 K 线 */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-muted-foreground">

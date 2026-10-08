@@ -531,6 +531,8 @@ func registerStrategyRoutes(api *gin.RouterGroup) {
 	private.POST("/strategies/configs/batch-delete", handler.BatchDeleteConfigs)
 	private.POST("/strategies/configs/:id/start", handler.StartStrategyConfig)
 	private.POST("/strategies/configs/:id/stop", handler.StopStrategyConfig)
+	// G1：CRA 运行时手动操控（清仓/补仓/关闭补仓/自定义减仓，币富 #23/#24/#25/#28）
+	private.POST("/strategies/configs/:id/manual-action", handler.ManualStrategyAction)
 	// ── 策略版本快照（更新前自动快照 + 手动快照/查看/恢复） ──
 	private.POST("/strategies/configs/:id/versions", handler.CreateStrategyVersion)
 	private.GET("/strategies/configs/:id/versions", handler.ListStrategyVersions)

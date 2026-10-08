@@ -192,6 +192,13 @@ func (s *BaseCRAStrategy) RuntimeStatus() map[string]any {
 		m["in_position"] = st.InPosition
 		m["loops_executed"] = st.LoopExecuted
 		m["waterfall_paused"] = st.WaterfallPaused
+		// G1 手动操控状态如实透出（前端操控区按 add_position_enabled 键的
+		// 存在性识别 CRA 引擎实例）：关闭补仓开关（#25）、清仓后暂停新开仓
+		// （#23）、本循环已成交手动补仓笔数（#24，0 也透出——手动操控能力是
+		// 本键集合的存在性语义）。
+		m["add_position_enabled"] = !st.AddPositionDisabled
+		m["entry_paused"] = st.EntryPaused
+		m["manual_add_count"] = st.ManualAddCount
 		// filled_orders = 已成交入场订单数（含首单）；当前档位同义。
 		m["filled_orders"] = st.PositionCount
 		m["current_tier"] = st.PositionCount
@@ -323,6 +330,12 @@ func (s *BaseCRAStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Sign
 	st := s.state
 
 	if !st.InPosition {
+		// G1 清仓卖出（币富 #23"先暂停订单方可清仓"语义落地）：close_all 后
+		// EntryPaused 置位，策略保持 running 空仓等待、不再自动开新循环——
+		// 用户恐慌全平后立即重新入场是最大的二次伤害源。恢复交易=重启策略。
+		if st.EntryPaused {
+			return nil, nil
+		}
 		if !st.CanStartNewLoop(p.TradeCountMode, p.LoopCount) {
 			return nil, nil
 		}
@@ -433,8 +446,9 @@ func (s *BaseCRAStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Sign
 		}
 	}
 
-	// Add positions.
-	if p.EnableAddPosition && st.PositionCount+st.PendingAddCount < p.OrderCount && !st.WaterfallPaused {
+	// Add positions（G1 #25：AddPositionDisabled 关闭补仓时跳过本分支——只挡
+	// 自动补仓评估，上方止盈/止损/反向出场/燃烧各独立分支不受影响，照常评估）。
+	if p.EnableAddPosition && !st.AddPositionDisabled && st.PositionCount+st.PendingAddCount < p.OrderCount && !st.WaterfallPaused {
 		nextOrder := st.PositionCount + st.PendingAddCount + 1
 		cfg := p.AddPositionForOrder(nextOrder)
 		if cfg != nil {
@@ -492,6 +506,14 @@ func (s *BaseCRAStrategy) OnOrderUpdate(order model.OrderData, bus *event.EventB
 		isEntry := (s.state.Side == SideLong && order.Side == model.SideBuy) ||
 			(s.state.Side == SideShort && order.Side == model.SideSell)
 		if isEntry {
+			// G1 手动补仓成交（app 下单链路按信号 Tag 打 ":manual:" client_oid
+			// 标记，与自动补仓的 "sig:<id>:<nonce>" 精确区分）：入档不推阶梯
+			// （PositionCount/PeakAddCount/PendingAddCount 均不动，口径见
+			// RecordManualFill）。
+			if strings.Contains(order.ClientOID, ":manual:") {
+				s.state.RecordManualFill(order.AvgFillPrice, order.Filled)
+				return nil, nil
+			}
 			if s.state.PendingAddCount > 0 {
 				s.state.PendingAddCount--
 			}
@@ -572,10 +594,12 @@ func (s *BaseCRAStrategy) restoreLotsLocked(lots []EntryLot, side PositionSide) 
 	}
 	st.HighestPrice = st.AvgEntryPrice
 	st.LowestPrice = st.AvgEntryPrice
-	st.PositionCount = len(lots)
-	// 重建的当前循环至少已有 len(lots)-1 次补仓：峰值补仓次数以此为下限
+	// G1：重启重放保留 Manual 档标记（FillRecord.Manual 来自账本 client_oid
+	// ":manual:"），自动阶梯档数只数非手动档——手动补仓重启后依然不推阶梯。
+	st.PositionCount = countAutoLots(lots)
+	// 重建的当前循环至少已有 自动档数-1 次补仓：峰值补仓次数以此为下限
 	// （重启前更高的峰值已不可考，取可见下限，与 ExitPosition 锚点口径一致）。
-	if adds := len(lots) - 1; adds > st.PeakAddCount {
+	if adds := st.PositionCount - 1; adds > st.PeakAddCount {
 		st.PeakAddCount = adds
 	}
 	s.logger.Info("cra position restored", "symbol", s.symbol, "lots", len(lots),
@@ -617,9 +641,10 @@ func parseRestoredLots(params map[string]any, p *CRAParams) ([]EntryLot, Positio
 			return nil, "", "", 0, false, false
 		}
 		fills = append(fills, FillRecord{
-			Side:  strVal(m, "side", ""),
-			Qty:   numFloat(m, "qty", 0),
-			Price: numFloat(m, "price", 0),
+			Side:   strVal(m, "side", ""),
+			Qty:    numFloat(m, "qty", 0),
+			Price:  numFloat(m, "price", 0),
+			Manual: boolVal(m, "manual", false),
 		})
 	}
 	lots, side, prevSide, prevAdds := replayFills(fills)

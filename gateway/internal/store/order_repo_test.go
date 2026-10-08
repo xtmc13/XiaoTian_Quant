@@ -265,12 +265,13 @@ func TestFilledOrdersByStrategy(t *testing.T) {
 	if len(fills) != 4 {
 		t.Fatalf("fills len = %d, want 4: %+v", len(fills), fills)
 	}
-	// 升序：100@1 → 90@2 → 80@4 → SELL 4@96。
+	// 升序：100@1 → 90@2 → 80@4 → SELL 4@96。ClientOID 随查询透出
+	// （G1 手动档重建靠 ":manual:" 中缀识别）。
 	want := []OrderFill{
-		{Side: "BUY", Filled: 1, AvgFillPrice: 100},
-		{Side: "BUY", Filled: 2, AvgFillPrice: 90},
-		{Side: "BUY", Filled: 4, AvgFillPrice: 80},
-		{Side: "SELL", Filled: 4, AvgFillPrice: 96},
+		{Side: "BUY", Filled: 1, AvgFillPrice: 100, ClientOID: "sig:cfgF:1"},
+		{Side: "BUY", Filled: 2, AvgFillPrice: 90, ClientOID: "sig:cfgF:2"},
+		{Side: "BUY", Filled: 4, AvgFillPrice: 80, ClientOID: "sig:cfgF:3"},
+		{Side: "SELL", Filled: 4, AvgFillPrice: 96, ClientOID: "sig:cfgF:4"},
 	}
 	for i, w := range want {
 		if fills[i] != w {

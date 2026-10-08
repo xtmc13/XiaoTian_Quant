@@ -16,9 +16,13 @@ const (
 // EntryLot 单档持仓（分档记账）：每笔入场成交追加一档，Price 为该档成交均价、
 // Qty 为该档剩余数量。尾单/首尾止盈按各档成本独立判定盈利；与
 // TotalQty/TotalCost/AvgEntryPrice 同源维护（lots 是真值，聚合量由它重算）。
+// Manual=true 为 G1 手动补仓（一键补仓）成交档：真实成本参与总量/均价/档级
+// 止盈判定，但不计入自动补仓阶梯（PositionCount/PeakAddCount 只数自动档，
+// 币富语义：一键补仓是自动阶梯之外的额外手动单）。
 type EntryLot struct {
-	Price float64 `json:"price"`
-	Qty   float64 `json:"qty"`
+	Price  float64 `json:"price"`
+	Qty    float64 `json:"qty"`
+	Manual bool    `json:"manual,omitempty"`
 }
 
 // CRAState holds the runtime position/loop state for a CRA strategy instance.
@@ -76,6 +80,24 @@ type CRAState struct {
 	// 明细，标记保持 false——重启后达档会重新评估触发一次，退回推断前行为）。
 	BurnDualFired   bool
 	BurnGlobalFired bool
+
+	// ── G1：运行时手动操控（币富名词解释 #23/#24/#25/#28）──
+	//
+	// AddPositionDisabled 关闭补仓（#25）运行时开关：置位后 OnBar 跳过自动
+	// 补仓评估分支，止盈/止损/反向出场/燃烧（各自独立分支）照常。选 CRAState
+	// 运行时字段而非配置字段（不改 config_json）：重启/Stop 即恢复配置默认
+	// （按 enable_add_position 执行）——与"重启=清运行时态"的引擎语义一致，
+	// 也无持久化迁移路径；极端行情的临时手动干预不应静默改写策略配置。
+	// 跨循环存续（ResetForNextLoop 刻意保留），Reset（Stop/重启）才清零。
+	AddPositionDisabled bool
+	// EntryPaused 清仓卖出（#23）的"先暂停订单"语义落地：close_all 信号发出
+	// 时置位，此后 OnBar 首单分支不再开新循环——清仓后策略保持 running 空仓
+	// 等待，不会在用户恐慌全平后立即重新入场。恢复交易=重启策略（Start 清态
+	// 即用户明确恢复意图）。跨循环存续，Reset 才清零，不落库。
+	EntryPaused bool
+	// ManualAddCount 本循环已成交的手动补仓笔数（RuntimeStatus 如实透出）。
+	// 随 ResetForNextLoop 清零（与 Lots/PositionCount 同生命周期）。
+	ManualAddCount int
 }
 
 // Reset clears all runtime state.
@@ -107,6 +129,10 @@ func (s *CRAState) ResetForNextLoop() {
 	s.PeakAddCount = 0
 	s.BurnDualFired = false
 	s.BurnGlobalFired = false
+	s.ManualAddCount = 0
+	// AddPositionDisabled/EntryPaused（G1 手动操控开关）刻意不清：币富 #25
+	// "关闭补仓"与 #23"清仓后暂停订单"是跨循环的运行时干预，只随
+	// Reset（Stop/重启）恢复默认。
 }
 
 // UpdateExtremes updates highest/lowest prices seen while in position.
@@ -145,6 +171,40 @@ func (s *CRAState) RecordFill(price, qty float64, side SideBuySell) {
 			s.AvgEntryPrice = s.TotalCost / s.TotalQty
 		}
 	}
+}
+
+// RecordManualFill 手动补仓（G1 一键补仓，币富 #24）成交记账：追加 Manual 档
+// ——真实成本计入 TotalQty/TotalCost/AvgEntryPrice，尾单/首尾止盈对该档按真实
+// 成本判定；但不推进自动补仓阶梯：PositionCount（order_count 梯档/倍投基数）
+// 与 PeakAddCount（燃烧触发档数/顺势换向锚点）都不计手动单（币富语义：一键
+// 补仓是自动阶梯之外的额外手动单，"补到第几仓"的自动节奏不被手动操作打乱）。
+// 与自动成交的竞态（补仓在途时仓位被全平，成交后到）：TotalQty==0 时按新开
+// 一档如实记账——成交真实发生（账户有持仓），账本/引擎保持一致，重启重建
+// 会把它恢复为可见持仓（与自动链路同哲学：成交账本是真值）。
+func (s *CRAState) RecordManualFill(price, qty float64) {
+	if price <= 0 || qty <= 0 {
+		return
+	}
+	s.Lots = append(s.Lots, EntryLot{Price: price, Qty: qty, Manual: true})
+	s.TailPeakProfitPct = 0
+	s.TotalCost += price * qty
+	s.TotalQty += qty
+	if s.TotalQty > 0 {
+		s.AvgEntryPrice = s.TotalCost / s.TotalQty
+	}
+	s.ManualAddCount++
+}
+
+// countAutoLots 自动阶梯档数（非手动档）：PositionCount/PeakAddCount/燃烧阈值
+// 的档位口径。无手动档的旧状态恒等于 len(lots)，零行为变化。
+func countAutoLots(lots []EntryLot) int {
+	n := 0
+	for _, l := range lots {
+		if !l.Manual {
+			n++
+		}
+	}
+	return n
 }
 
 // Type aliases to avoid importing model here.
@@ -327,11 +387,12 @@ func (s *CRAState) CheckHeadTailTakeProfit(price, tpRatio, callback float64) (bo
 }
 
 // ApplyCloseFill 部分平仓成交确认：按出场形态从分档持仓核销 filled 数量，
-// 由剩余档重算 TotalQty/TotalCost/AvgEntryPrice，PositionCount 对齐剩余档数。
+// 由剩余档重算 TotalQty/TotalCost/AvgEntryPrice，PositionCount 对齐剩余自动
+// 阶梯档数（G1 手动档不计）。
 // kind: "tail"=从尾档向内核销；"head_tail"=先首档后尾档；""/其它=FIFO 从首档
-// （手工减仓等未知形态兜底；"burn_dual"/"burn_global" 燃烧斩仓也走此分支——
-// 斩的正是浮亏最深的首起各档，与 FIFO 顺序天然一致）。档集合变更后档级盈利
-// 峰值重置。调用方在核销后 TotalQty≈0 时按全平（ExitPosition）收尾。
+// （"manual_reduce" 自定义减仓等未知形态兜底；"burn_dual"/"burn_global" 燃烧
+// 斩仓也走此分支——斩的正是浮亏最深的首起各档，与 FIFO 顺序天然一致）。档集合
+// 变更后档级盈利峰值重置。调用方在核销后 TotalQty≈0 时按全平（ExitPosition）收尾。
 func (s *CRAState) ApplyCloseFill(filled float64, kind string) {
 	if filled <= 0 {
 		return
@@ -386,7 +447,9 @@ func (s *CRAState) ApplyCloseFill(filled float64, kind string) {
 		}
 	}
 	s.Lots = lots
-	s.PositionCount = len(lots)
+	// PositionCount 只数自动阶梯档（手动补仓档不计入，G1 口径与 RecordManualFill
+	// 一致）；无手动档时恒等于 len(lots)，历史行为不变。
+	s.PositionCount = countAutoLots(lots)
 	var qty, cost float64
 	for _, l := range lots {
 		qty += l.Qty
@@ -403,10 +466,14 @@ func (s *CRAState) ApplyCloseFill(filled float64, kind string) {
 // ── 重启分档重建（按成交账本逐笔重放）──
 
 // FillRecord 一笔已成交订单的重建视图（重启分档重建输入，按成交时间升序）。
+// Manual 标记 G1 手动补仓成交（账本 client_oid 含 ":manual:" 标记）：重放时
+// 照常入档（成本真实），但不计入自动阶梯档数（与运行时 RecordManualFill 口径
+// 一致——重启后手动单依然不推阶梯）。
 type FillRecord struct {
-	Side  string  // BUY | SELL（订单方向）
-	Qty   float64 // 成交量
-	Price float64 // 成交均价
+	Side   string  // BUY | SELL（订单方向）
+	Qty    float64 // 成交量
+	Price  float64 // 成交均价
+	Manual bool    // G1 手动补仓成交
 }
 
 // RebuildLotsFromFills 按时间重放成交明细，重建当前未平仓循环的分档持仓与
@@ -434,7 +501,7 @@ func RebuildLoopMemoryFromFills(fills []FillRecord) (PositionSide, int) {
 //
 // 形态口径（与运行时 evaluateBurn/ApplyCloseFill 镜像，核销走同一
 // consumeLotsReplay 保证档位演进一致）：
-//   - 对向燃烧：当前档数≥2、已成交补仓数≥dualThreshold、减仓成交量≈首档量，
+//   - 对向燃烧：当前自动档数≥2、已成交补仓数≥dualThreshold、减仓成交量≈首档量，
 //     且不同时≈尾档量（≈尾档是尾单止盈形态，重合即歧义）；
 //   - 全局燃烧：已成交补仓数≥globalThreshold、减仓成交量≈globalRatio×当时总量，
 //     且不同时≈全平/首档/尾档/首+尾档（全平、对向燃烧、尾单/首尾止盈形态，重合
@@ -442,6 +509,8 @@ func RebuildLoopMemoryFromFills(fills []FillRecord) (PositionSide, int) {
 //   - 全平（循环结束）后标记清零，只报告最后一个未平仓循环的标记（与运行时
 //     ResetForNextLoop 语义一致）；拒单重武装不进账本（账本只有 FILLED），被拒
 //     的燃烧信号天然无标记——与运行时拒单清 fired 一致。
+//   - G1 手动补仓档照常入档（成本/总量真实），但触发阈值的补仓次数只数自动
+//     阶梯档（与运行时 evaluateBurn 的 PositionCount−1 口径一致）。
 //
 // 保守原则：形态歧义一律不标记——宁可重启后多评估一次（退回推断前的重复斩仓
 // 行为），也不因误判压掉本循环该触发的燃烧（风险释放静默缺失比重复斩一档更
@@ -463,26 +532,38 @@ func RebuildBurnMarksFromFills(fills []FillRecord, dualThreshold, globalThreshol
 			} else {
 				side = SideShort
 			}
-			lots = []EntryLot{{Price: f.Price, Qty: f.Qty}}
+			lots = []EntryLot{{Price: f.Price, Qty: f.Qty, Manual: f.Manual}}
 			continue
 		}
 		isEntry := (side == SideLong && isBuy) || (side == SideShort && !isBuy)
 		if isEntry {
-			lots = append(lots, EntryLot{Price: f.Price, Qty: f.Qty})
+			lots = append(lots, EntryLot{Price: f.Price, Qty: f.Qty, Manual: f.Manual})
 			continue
 		}
 		// 减仓成交：核销前先按当前档位形态分类（分类用的是核销前的档集，
-		// 与运行时信号发出时刻的 PositionCount/Lots 同源）。
+		// 与运行时信号发出时刻的 PositionCount/Lots 同源）。n/adds 只数自动
+		// 阶梯档（G1 手动档不推进阶梯）；形态匹配（首/尾档量、总量）用全量档。
+		// G1 带 ":manual:" 标记的减仓成交是用户手动操作不是燃烧——跳过燃烧
+		// 形态分类（避免手动减仓量恰≈首档/比例量被误记为已燃烧），核销按
+		// 运行时 manual_reduce 同口径 FIFO。
+		if f.Manual {
+			lots = consumeLotsFIFO(lots, f.Qty)
+			if len(lots) == 0 {
+				dualFired = false
+				globalFired = false
+			}
+			continue
+		}
 		total := 0.0
 		for _, l := range lots {
 			total += l.Qty
 		}
-		n := len(lots)
+		n := countAutoLots(lots)
 		adds := n - 1
 		isFull := approxQty(f.Qty, total)
-		isTail := n >= 1 && approxQty(f.Qty, lots[n-1].Qty)
-		isHead := n >= 1 && approxQty(f.Qty, lots[0].Qty)
-		isHeadTail := n >= 2 && approxQty(f.Qty, lots[0].Qty+lots[n-1].Qty)
+		isTail := len(lots) >= 1 && approxQty(f.Qty, lots[len(lots)-1].Qty)
+		isHead := len(lots) >= 1 && approxQty(f.Qty, lots[0].Qty)
+		isHeadTail := len(lots) >= 2 && approxQty(f.Qty, lots[0].Qty+lots[len(lots)-1].Qty)
 		if !dualFired && dualThreshold >= 1 && n >= 2 && adds >= dualThreshold &&
 			isHead && !isTail && !isFull {
 			dualFired = true
@@ -504,9 +585,10 @@ func RebuildBurnMarksFromFills(fills []FillRecord, dualThreshold, globalThreshol
 // replayFills 成交明细重放的共享实现：返回当前未平仓循环的分档/方向，以及
 // 最近一个全平循环的 {方向, 峰值补仓次数}（顺势锚点重建，与运行时
 // ExitPosition 的重写语义镜像——干净循环 0 补仓会覆盖掉更早的被套记录）。
+// 峰值档数只数自动阶梯档（G1 手动档不计，与运行时 noteEntryFilled 口径一致）。
 func replayFills(fills []FillRecord) (lots []EntryLot, side PositionSide, prevSide PositionSide, prevAdds int) {
 	side = PositionSide("")
-	peakLots := 0
+	peakAutoLots := 0
 	for _, f := range fills {
 		if f.Qty <= 0 || f.Price <= 0 {
 			continue
@@ -518,27 +600,37 @@ func replayFills(fills []FillRecord) (lots []EntryLot, side PositionSide, prevSi
 			} else {
 				side = SideShort
 			}
-			lots = []EntryLot{{Price: f.Price, Qty: f.Qty}}
-			peakLots = 1
+			lots = []EntryLot{{Price: f.Price, Qty: f.Qty, Manual: f.Manual}}
+			if !f.Manual {
+				peakAutoLots = 1
+			}
 			continue
 		}
 		isEntry := (side == SideLong && isBuy) || (side == SideShort && !isBuy)
 		if isEntry {
-			lots = append(lots, EntryLot{Price: f.Price, Qty: f.Qty})
-			if len(lots) > peakLots {
-				peakLots = len(lots)
+			lots = append(lots, EntryLot{Price: f.Price, Qty: f.Qty, Manual: f.Manual})
+			if n := countAutoLots(lots); n > peakAutoLots {
+				peakAutoLots = n
 			}
 			continue
 		}
-		lots = consumeLotsReplay(lots, f.Qty)
+		// G1：带 ":manual:" 标记的减仓成交（自定义减仓/清仓）与运行时
+		// ApplyCloseFill 的 manual_reduce/manual_close 口径一致——FIFO 从首档
+		// 消耗，不做尾单/首尾形态猜测（形态推断只对无标记的自动出场成交，
+		// 避免手动减仓量恰≈尾档/首+尾档时被重建错读为止盈形态）。
+		if f.Manual {
+			lots = consumeLotsFIFO(lots, f.Qty)
+		} else {
+			lots = consumeLotsReplay(lots, f.Qty)
+		}
 		if len(lots) == 0 {
-			// 本循环全平结束：锚点重写为本循环（峰值档数−1=补仓次数）。
+			// 本循环全平结束：锚点重写为本循环（峰值自动档数−1=补仓次数）。
 			prevSide = side
-			prevAdds = peakLots - 1
+			prevAdds = peakAutoLots - 1
 			if prevAdds < 0 {
 				prevAdds = 0
 			}
-			peakLots = 0
+			peakAutoLots = 0
 		}
 	}
 	return lots, side, prevSide, prevAdds
@@ -560,6 +652,13 @@ func consumeLotsReplay(lots []EntryLot, qty float64) []EntryLot {
 	if n := len(lots); n >= 2 && approxQty(qty, lots[0].Qty+lots[n-1].Qty) {
 		return lots[1 : n-1]
 	}
+	return consumeLotsFIFO(lots, qty)
+}
+
+// consumeLotsFIFO 重放期的 FIFO 核销（从首档起）：consumeLotsReplay 形态兜底
+// 与 G1 手动减仓成交（账本 ":manual:" 标记，与运行时 ApplyCloseFill 默认分支
+// 同序）共用。剩余档保留 Manual 标记。
+func consumeLotsFIFO(lots []EntryLot, qty float64) []EntryLot {
 	rest := qty
 	out := make([]EntryLot, 0, len(lots))
 	for _, l := range lots {
@@ -568,7 +667,7 @@ func consumeLotsReplay(lots []EntryLot, qty float64) []EntryLot {
 			continue
 		}
 		if l.Qty > rest {
-			out = append(out, EntryLot{Price: l.Price, Qty: l.Qty - rest})
+			out = append(out, EntryLot{Price: l.Price, Qty: l.Qty - rest, Manual: l.Manual})
 			rest = 0
 		} else {
 			rest -= l.Qty
