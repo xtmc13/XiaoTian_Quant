@@ -203,6 +203,14 @@ func (s *BaseCRAStrategy) RuntimeStatus() map[string]any {
 			m["position_cost"] = st.TotalCost
 			// open_lots = 分档记账的当前档数（0=聚合/旧态未分档）。
 			m["open_lots"] = len(st.Lots)
+			// F 片燃烧斩仓触发状态：只在对应开关启用时透出（默认双关不新增
+			// 键，严格零行为变化）。
+			if s.params.BurnDualEnabled {
+				m["burn_dual_fired"] = st.BurnDualFired
+			}
+			if s.params.BurnGlobalEnabled {
+				m["burn_global_fired"] = st.BurnGlobalFired
+			}
 		}
 	}
 	if s.lastSignalTime > 0 {
@@ -399,6 +407,24 @@ func (s *BaseCRAStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Sign
 		return s.signal("CLOSE", RoundQty(qty), "cra take profit ("+kind+")"), nil
 	}
 
+	// 燃烧斩仓（F 片，仅合约，优先级：止损 > 反向出场 > 止盈 > 燃烧 > 补仓）：
+	// 补仓达各自触发档数时市价斩仓减压，每循环每种至多一次，成交确认才核销
+	// 档位（在途标记与部分止盈同机制），拒单/撤单清除 fired 重新武装。
+	if s.isContract {
+		if ok, qty, kind := s.evaluateBurn(); ok {
+			st.PendingCloseKind = kind
+			st.PendingCloseQty = qty
+			if kind == "burn_global" {
+				st.BurnGlobalFired = true
+			} else {
+				st.BurnDualFired = true
+			}
+			s.logger.Info("cra burn", "symbol", s.symbol, "price", bar.Close, "kind", kind,
+				"qty", qty, "adds", st.PositionCount-1, "remaining_qty", st.TotalQty-qty)
+			return s.signal("CLOSE", RoundQty(qty), "cra "+burnReason(kind)), nil
+		}
+	}
+
 	// Add positions.
 	if p.EnableAddPosition && st.PositionCount+st.PendingAddCount < p.OrderCount && !st.WaterfallPaused {
 		nextOrder := st.PositionCount + st.PendingAddCount + 1
@@ -469,13 +495,21 @@ func (s *BaseCRAStrategy) OnOrderUpdate(order model.OrderData, bus *event.EventB
 	}
 
 	// 在途平仓的拒单/撤单/过期：状态从未乐观变更，只需清除在途标记，下一
-	// 根 K 线出场条件（止盈/反向止盈/反向止损）仍满足会重新发信号（与
-	// PendingAddCount 回补同口径）。同样按减仓方向认定（覆盖现货无
-	// ClosePosition 标记的裸反向单）。
+	// 根 K 线出场条件（止盈/反向止盈/反向止损/燃烧斩仓）仍满足会重新发信号
+	// （与 PendingAddCount 回补同口径）。同样按减仓方向认定（覆盖现货无
+	// ClosePosition 标记的裸反向单）。燃烧斩仓（F 片）还要同步清除 fired
+	// 标记——fired 在信号发出时置位防同循环重复，拒单不清掉就永远不会重试，
+	// 变成静默失败的假燃烧（币富备注：卖出被拒必须可重试/如实记日志）。
 	if s.state.PendingCloseKind != "" && s.isReduceSide(order.Side) &&
 		(order.Status == model.StatusRejected || order.Status == model.StatusCancelled || order.Status == model.StatusExpired) {
 		s.logger.Warn("cra close order ended without fill, re-arm exit",
 			"symbol", s.symbol, "kind", s.state.PendingCloseKind, "status", order.Status)
+		switch s.state.PendingCloseKind {
+		case "burn_dual":
+			s.state.BurnDualFired = false
+		case "burn_global":
+			s.state.BurnGlobalFired = false
+		}
 		s.state.PendingCloseKind = ""
 		s.state.PendingCloseQty = 0
 	}
@@ -789,6 +823,69 @@ func reverseExitReason(kind string) string {
 		return "reverse stop loss"
 	}
 	return "reverse take profit"
+}
+
+// ── F 片：燃烧斩仓（币富名词解释 #41，仅合约）──
+//
+// 币富原语义与本引擎可达语义（差异如实标注）：
+//   - 对向燃烧（#41-1）：币富是逆势单补到第 N 仓时自动并行开顺势对向单，用顺势
+//     单盈利抵消逆势首单的浮亏，顺势单不占在线单数。本引擎为每循环单侧持仓模型，
+//     并行对向仓不可行——执行层（app/context.go handleStrategySignal）对向信号在
+//     单向持仓账户=净减仓、CLOSE 信号会无差别平掉两侧镜像仓（closeMirroredPositions），
+//     重启账本重建（replayFills/NetFilledByStrategy）把反向成交一律当减仓，分档记账
+//     会被污染。故按任务授权的备选诚实语义实现：补仓成交达 N 次时，本循环触发一次
+//     "斩首单档"——市价卖出浮亏最深的首档，实现其浮亏、下移剩余仓位均价、释放保证金。
+//     差异：币富用顺势单盈利覆盖这笔亏损（净零成本解压），本实现亏损真实实现，
+//     收益是仓位解压（均价下移→解套门槛降低、保证金释放）。
+//   - 全局燃烧（#41-2）：币富是补到第 M 次时用所有盈利币兑的盈利跨币种消耗该逆势
+//     单浮亏。本引擎实例间无 PnL 通道（策略引擎拿不到其它实例盈利数据，D 片的跨实例
+//     数据仅在 handler 启停闸层），保守实现为本实例内更大力度斩仓：补仓达 M 次时
+//     市价斩掉当前持仓的 burnGlobalCloseRatio（FIFO 从首档起核销）。
+//
+// 共用纪律：各自独立开关、各自每循环至多一次（fired 标记）；threshold<1 视为关闭
+// （防 enabled+0 在首单后即触发）；仅合约消费（OnBar 调用点已 gate）；出场走 B 片
+// PendingClose 在途机制——成交确认才核销档位，拒单/撤单/过期清除 fired 重新武装
+// （OnOrderUpdate），不做静默假成功。
+
+// burnGlobalCloseRatio 全局燃烧斩仓比例（当前持仓的 1/2，FIFO 从首档起）。对向燃烧
+// 只斩首档，全局燃烧是对整体浮亏的升级解压，比例须明显大于首档占比。
+const burnGlobalCloseRatio = 0.5
+
+// evaluateBurn 燃烧斩仓判定，返回 (触发, 平仓数量, 出场形态 burn_dual|burn_global)。
+// 触发锚点 = 当前已成交补仓次数（PositionCount−1；不用 PeakAddCount——部分止盈削档
+// 后剩余仓位的实际被套深度才是燃烧要解的压力）。全局阈值更深、斩仓更重，两者同根
+// K 线同时达标时全局优先；两者独立 fired，同循环可先后各触发一次（币富两机制本就
+// 独立）。qty 必须严格小于 TotalQty（部分平仓形态；边界=全平时返回不触发，全平由
+// 止损/止盈/反向出场承载）。
+func (s *BaseCRAStrategy) evaluateBurn() (bool, float64, string) {
+	p := s.params
+	st := s.state
+	adds := st.PositionCount - 1
+	if adds < 1 || st.TotalQty <= 0 {
+		return false, 0, ""
+	}
+	if p.BurnGlobalEnabled && p.BurnGlobalThreshold >= 1 && !st.BurnGlobalFired && adds >= p.BurnGlobalThreshold {
+		if qty := RoundQty(st.TotalQty * burnGlobalCloseRatio); qty > 0 && qty < st.TotalQty {
+			return true, qty, "burn_global"
+		}
+	}
+	if p.BurnDualEnabled && p.BurnDualThreshold >= 1 && !st.BurnDualFired && adds >= p.BurnDualThreshold {
+		lots := st.currentLots()
+		if len(lots) >= 2 {
+			if qty := RoundQty(lots[0].Qty); qty > 0 && qty < st.TotalQty {
+				return true, qty, "burn_dual"
+			}
+		}
+	}
+	return false, 0, ""
+}
+
+// burnReason 出场形态到信号原因的映射（与 reverseExitReason 同模式）。
+func burnReason(kind string) string {
+	if kind == "burn_global" {
+		return "global burn"
+	}
+	return "dual burn"
 }
 
 func (s *BaseCRAStrategy) openIndicatorsConfirmed(side PositionSide) bool {

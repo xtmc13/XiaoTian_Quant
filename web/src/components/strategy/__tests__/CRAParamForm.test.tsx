@@ -241,4 +241,55 @@ describe('CRAParamForm', () => {
     })
     expect(screen.queryByText(/不生效/)).toBeNull()
   })
+
+  // ── F 片：燃烧斩仓口径说明（合约区，实现语义与币富差异如实标注）──
+
+  it('shows burn mechanism captions on contract (real semantics, not 币富 original)', () => {
+    render(<CRAParamForm {...baseProps} market="contract" />, { wrapper })
+    // 对向燃烧：斩首单档 + 单侧模型无法并行对向仓的差异标注。
+    expect(screen.getByText(/市价斩掉首单档/)).toBeTruthy()
+    expect(screen.getByText(/无法并行持有对向仓/)).toBeTruthy()
+    // 全局燃烧：斩 50% + 无跨实例盈利数据源的保守版标注。
+    expect(screen.getByText(/斩掉当前持仓的 50%/)).toBeTruthy()
+    expect(screen.getByText(/拿不到其它实例的盈利数据/)).toBeTruthy()
+    // 拒单重试不静默假成功的备注。
+    expect(screen.getByText(/自动重试并如实记日志/)).toBeTruthy()
+  })
+
+  it('hides burn section on spot (币富该功能在合约页)', () => {
+    render(<CRAParamForm {...baseProps} />, { wrapper })
+    expect(screen.queryByLabelText('对向燃烧')).toBeNull()
+    expect(screen.queryByLabelText('全局燃烧')).toBeNull()
+    expect(screen.queryByText(/市价斩掉首单档/)).toBeNull()
+  })
+
+  it('round-trips burn params in the api payload', () => {
+    const payload = craParamsToApiPayload({
+      ...DEFAULT_CRA_PARAMS,
+      burnDualEnabled: true,
+      burnDualThreshold: 2,
+      burnGlobalEnabled: true,
+      burnGlobalThreshold: 4,
+    })
+    expect(payload.burn_dual_enabled).toBe(true)
+    expect(payload.burn_dual_threshold).toBe(2)
+    expect(payload.burn_global_enabled).toBe(true)
+    expect(payload.burn_global_threshold).toBe(4)
+    const restored = apiPayloadToCraParams({
+      burn_dual_enabled: true,
+      burn_dual_threshold: 2,
+      burn_global_enabled: true,
+      burn_global_threshold: 4,
+    })
+    expect(restored.burnDualEnabled).toBe(true)
+    expect(restored.burnDualThreshold).toBe(2)
+    expect(restored.burnGlobalEnabled).toBe(true)
+    expect(restored.burnGlobalThreshold).toBe(4)
+    // 缺省回填默认 false/3/5（与后端 ParseCRAParams 一致）。
+    const def = apiPayloadToCraParams({})
+    expect(def.burnDualEnabled).toBe(false)
+    expect(def.burnDualThreshold).toBe(3)
+    expect(def.burnGlobalEnabled).toBe(false)
+    expect(def.burnGlobalThreshold).toBe(5)
+  })
 })

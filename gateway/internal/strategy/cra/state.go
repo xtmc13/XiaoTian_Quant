@@ -47,11 +47,12 @@ type CRAState struct {
 	// （新成交/部分平仓核销）即重置重记。与 HighestProfitPct（全仓/移动止盈
 	// 口径）相互独立。
 	TailPeakProfitPct float64
-	// PendingCloseKind/PendingCloseQty 在途平仓（尾单/首尾止盈、反向止盈/止损
-	// 信号已发出、待成交确认）："" | "tail" | "head_tail" | "reverse_tp" |
-	// "reverse_sl"。在途期间阻挡一切新信号（防重复出场超卖），成交/拒单/
-	// 撤单终态后清除。full 全平（常规止盈/移动止盈/止损）直接 ExitPosition，
-	// 不经在途标记；反向出场虽是全平，也走在途标记以便拒单后重新触发（C 片）。
+	// PendingCloseKind/PendingCloseQty 在途平仓（尾单/首尾止盈、反向止盈/止损、
+	// 燃烧斩仓信号已发出、待成交确认）："" | "tail" | "head_tail" | "reverse_tp" |
+	// "reverse_sl" | "burn_dual" | "burn_global"。在途期间阻挡一切新信号（防重复
+	// 出场超卖），成交/拒单/撤单终态后清除。full 全平（常规止盈/移动止盈/止损）
+	// 直接 ExitPosition，不经在途标记；反向出场与燃烧斩仓虽可能演变为全平，也走
+	// 在途标记以便拒单后重新触发（C/F 片）。
 	PendingCloseKind string
 	PendingCloseQty  float64
 
@@ -65,6 +66,15 @@ type CRAState struct {
 	// ResetForNextLoop 刻意保留，Reset（Stop）才清空。
 	PrevLoopSide        PositionSide
 	PrevLoopTrappedAdds int
+
+	// BurnDualFired/BurnGlobalFired 燃烧斩仓（F 片，仅合约）每循环一次性触发
+	// 标记：信号发出即置位（防同循环重复触发），平仓单被拒/撤/过期终态时清除
+	// 重新武装（拒单可重试，OnOrderUpdate），成交确认后保持置位（本循环不再
+	// 燃烧）。循环结束随 ResetForNextLoop 清零，下一循环达档可再触发。标记
+	// 不持久化——重启恢复持仓仍达触发档数时会重新评估触发一次（燃烧是减仓
+	// 方向的风险释放动作，重复触发最坏情况是再斩一档，如实接受）。
+	BurnDualFired   bool
+	BurnGlobalFired bool
 }
 
 // Reset clears all runtime state.
@@ -94,6 +104,8 @@ func (s *CRAState) ResetForNextLoop() {
 	s.PendingCloseKind = ""
 	s.PendingCloseQty = 0
 	s.PeakAddCount = 0
+	s.BurnDualFired = false
+	s.BurnGlobalFired = false
 }
 
 // UpdateExtremes updates highest/lowest prices seen while in position.
@@ -316,8 +328,9 @@ func (s *CRAState) CheckHeadTailTakeProfit(price, tpRatio, callback float64) (bo
 // ApplyCloseFill 部分平仓成交确认：按出场形态从分档持仓核销 filled 数量，
 // 由剩余档重算 TotalQty/TotalCost/AvgEntryPrice，PositionCount 对齐剩余档数。
 // kind: "tail"=从尾档向内核销；"head_tail"=先首档后尾档；""/其它=FIFO 从首档
-// （手工减仓等未知形态兜底）。档集合变更后档级盈利峰值重置。调用方在核销后
-// TotalQty≈0 时按全平（ExitPosition）收尾。
+// （手工减仓等未知形态兜底；"burn_dual"/"burn_global" 燃烧斩仓也走此分支——
+// 斩的正是浮亏最深的首起各档，与 FIFO 顺序天然一致）。档集合变更后档级盈利
+// 峰值重置。调用方在核销后 TotalQty≈0 时按全平（ExitPosition）收尾。
 func (s *CRAState) ApplyCloseFill(filled float64, kind string) {
 	if filled <= 0 {
 		return

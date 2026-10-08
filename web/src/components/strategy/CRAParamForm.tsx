@@ -848,6 +848,11 @@ export function CRAParamForm({ value, onChange, market, className, openFields = 
                 />
               </div>
             </div>
+            <div className="text-[10px] text-muted-foreground -mt-2">
+              全局燃烧：补仓达设定次数时本循环触发一次——市价斩掉当前持仓的 50%（从浮亏最深的首档起核销），大幅下移均价、释放保证金。
+              币富原版是用其它盈利币兑的盈利来抵消这笔亏损（跨币种燃烧）；本系统单实例单币种运行，引擎拿不到其它实例的盈利数据，
+              故为保守实现：斩仓亏损真实实现，收益是仓位解压（均价下移、解套门槛降低）。
+            </div>
 
             <div className="flex items-center gap-4">
               <label className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -871,6 +876,12 @@ export function CRAParamForm({ value, onChange, market, className, openFields = 
                   className={cn(inputCls, !value.burnDualEnabled && 'opacity-40')}
                 />
               </div>
+            </div>
+            <div className="text-[10px] text-muted-foreground -mt-2">
+              对向燃烧：补仓达设定次数时本循环触发一次——市价斩掉首单档（浮亏最深的一档），下移均价、释放保证金。
+              币富原版是自动开一笔顺势对向单、用其盈利抵消首单浮亏（顺势单不占在线单数）；本系统为每循环单侧持仓模型，
+              无法并行持有对向仓，故斩仓亏损真实实现。两种燃烧各自每循环至多触发一次，优先级低于止损/反向出场/止盈；
+              斩仓卖出被交易所或风控拒绝（如低于最小卖出限额）时会自动重试并如实记日志，不会静默假成功。仅合约生效。
             </div>
           </div>
         </Section>
