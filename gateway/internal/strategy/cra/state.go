@@ -71,8 +71,9 @@ type CRAState struct {
 	// 标记：信号发出即置位（防同循环重复触发），平仓单被拒/撤/过期终态时清除
 	// 重新武装（拒单可重试，OnOrderUpdate），成交确认后保持置位（本循环不再
 	// 燃烧）。循环结束随 ResetForNextLoop 清零，下一循环达档可再触发。标记
-	// 不持久化——重启恢复持仓仍达触发档数时会重新评估触发一次（燃烧是减仓
-	// 方向的风险释放动作，重复触发最坏情况是再斩一档，如实接受）。
+	// 本身不落库，重启经 G2 的 RebuildBurnMarksFromFills 从成交账本数量形态
+	// 重放推断本循环是否已燃烧过（推断局限见该函数注释；聚合兜底路径无逐笔
+	// 明细，标记保持 false——重启后达档会重新评估触发一次，退回推断前行为）。
 	BurnDualFired   bool
 	BurnGlobalFired bool
 }
@@ -424,6 +425,80 @@ func RebuildLotsFromFills(fills []FillRecord) ([]EntryLot, PositionSide) {
 func RebuildLoopMemoryFromFills(fills []FillRecord) (PositionSide, int) {
 	_, _, prevSide, prevAdds := replayFills(fills)
 	return prevSide, prevAdds
+}
+
+// RebuildBurnMarksFromFills 重放成交明细推断当前未平仓循环内燃烧斩仓是否已触发
+// 过（G2 重启存续：燃烧 fired 标记不落库——xt_orders 无 reason 列、client_oid
+// 只打 "sig:<id>:" 归属前缀，"cra dual burn"/"cra global burn" 信号原因不进账本，
+// 故按数量形态推断）。返回当前循环的 {对向已燃烧, 全局已燃烧}。
+//
+// 形态口径（与运行时 evaluateBurn/ApplyCloseFill 镜像，核销走同一
+// consumeLotsReplay 保证档位演进一致）：
+//   - 对向燃烧：当前档数≥2、已成交补仓数≥dualThreshold、减仓成交量≈首档量，
+//     且不同时≈尾档量（≈尾档是尾单止盈形态，重合即歧义）；
+//   - 全局燃烧：已成交补仓数≥globalThreshold、减仓成交量≈globalRatio×当时总量，
+//     且不同时≈全平/首档/尾档/首+尾档（全平、对向燃烧、尾单/首尾止盈形态，重合
+//     即歧义）；
+//   - 全平（循环结束）后标记清零，只报告最后一个未平仓循环的标记（与运行时
+//     ResetForNextLoop 语义一致）；拒单重武装不进账本（账本只有 FILLED），被拒
+//     的燃烧信号天然无标记——与运行时拒单清 fired 一致。
+//
+// 保守原则：形态歧义一律不标记——宁可重启后多评估一次（退回推断前的重复斩仓
+// 行为），也不因误判压掉本循环该触发的燃烧（风险释放静默缺失比重复斩一档更
+// 危险）。已知局限（如实接受）：①燃烧平仓单部分成交（filled<信号量）形态对不上
+// 不标记；②推断用的是重启时的当前阈值/比例配置，燃烧触发后用户改大阈值会使
+// 历史形态不再达标而不标记；③首档量≈尾档量（等数量阶梯）时该循环的对向燃烧
+// 永远无法识别。
+func RebuildBurnMarksFromFills(fills []FillRecord, dualThreshold, globalThreshold int, globalRatio float64) (dualFired, globalFired bool) {
+	var lots []EntryLot
+	var side PositionSide
+	for _, f := range fills {
+		if f.Qty <= 0 || f.Price <= 0 {
+			continue
+		}
+		isBuy := !strings.EqualFold(f.Side, "SELL")
+		if len(lots) == 0 {
+			if isBuy {
+				side = SideLong
+			} else {
+				side = SideShort
+			}
+			lots = []EntryLot{{Price: f.Price, Qty: f.Qty}}
+			continue
+		}
+		isEntry := (side == SideLong && isBuy) || (side == SideShort && !isBuy)
+		if isEntry {
+			lots = append(lots, EntryLot{Price: f.Price, Qty: f.Qty})
+			continue
+		}
+		// 减仓成交：核销前先按当前档位形态分类（分类用的是核销前的档集，
+		// 与运行时信号发出时刻的 PositionCount/Lots 同源）。
+		total := 0.0
+		for _, l := range lots {
+			total += l.Qty
+		}
+		n := len(lots)
+		adds := n - 1
+		isFull := approxQty(f.Qty, total)
+		isTail := n >= 1 && approxQty(f.Qty, lots[n-1].Qty)
+		isHead := n >= 1 && approxQty(f.Qty, lots[0].Qty)
+		isHeadTail := n >= 2 && approxQty(f.Qty, lots[0].Qty+lots[n-1].Qty)
+		if !dualFired && dualThreshold >= 1 && n >= 2 && adds >= dualThreshold &&
+			isHead && !isTail && !isFull {
+			dualFired = true
+		}
+		if !globalFired && globalThreshold >= 1 && globalRatio > 0 && adds >= globalThreshold &&
+			approxQty(f.Qty, globalRatio*total) && !isFull && !isHead && !isTail && !isHeadTail {
+			globalFired = true
+		}
+		lots = consumeLotsReplay(lots, f.Qty)
+		if len(lots) == 0 {
+			// 本循环全平结束：燃烧标记随循环清零（运行时 ResetForNextLoop）。
+			dualFired = false
+			globalFired = false
+		}
+	}
+	return dualFired, globalFired
 }
 
 // replayFills 成交明细重放的共享实现：返回当前未平仓循环的分档/方向，以及

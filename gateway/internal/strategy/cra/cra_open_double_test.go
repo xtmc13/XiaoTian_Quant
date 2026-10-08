@@ -134,3 +134,37 @@ func TestCRAOpenDoubleAddLadderBaseUnchanged(t *testing.T) {
 		t.Fatalf("open_double add qty %v != baseline %v (ladder base must not scale with doubling)", doubled, plain)
 	}
 }
+
+// 现货开仓加倍不生效（G2-4）：D 片表单已把 open_double 改为仅合约显示，引擎层
+// 同步收紧——现货存量配置即使残留 open_double=true，首单也不×2（与 follow_trend
+// 门控同款 isContract 门）。
+func TestCRAOpenDoubleSpotIgnored(t *testing.T) {
+	spotQty := func(openDouble bool) float64 {
+		t.Helper()
+		s := NewCRASpotStrategy("martin_trend", "BTCUSDT")
+		if err := s.Start(map[string]any{
+			"symbol":              "BTCUSDT",
+			"first_order_amount":  10,
+			"tp_mode":             "static",
+			"take_profit_ratio":   0.5,
+			"enable_add_position": false,
+			"open_double":         openDouble,
+		}); err != nil {
+			t.Fatalf("start: %v", err)
+		}
+		sig, err := s.OnBar(model.Bar{Symbol: "BTCUSDT", Close: 100, High: 100, Low: 100}, nil)
+		if err != nil || sig == nil {
+			t.Fatalf("first order: sig=%v err=%v", sig, err)
+		}
+		return sig.Qty
+	}
+	plain := spotQty(false)
+	doubled := spotQty(true)
+	// 现货首单：10U×1 @100 → 0.1；open_double 残留 true 不得放大。
+	if plain != 0.1 {
+		t.Fatalf("spot baseline qty = %v, want 0.1", plain)
+	}
+	if doubled != plain {
+		t.Fatalf("spot open_double must be ignored: qty %v != baseline %v", doubled, plain)
+	}
+}

@@ -14,7 +14,8 @@ import (
 // 见 cra_strategy.go F 片注释），按任务授权的诚实语义实现并在此锁定：
 //   对向燃烧 = 补仓达 N 次，本循环一次：市价斩首单档（浮亏最深档），亏损真实
 //              实现，换均价下移+保证金释放；
-//   全局燃烧 = 补仓达 M 次，本循环一次：市价斩持仓 50%（FIFO 从首档），无跨
+//   全局燃烧 = 补仓达 M 次，本循环一次：市价斩持仓 burn_global_close_ratio
+//              （G2-2 起参数化，缺省 0.5；FIFO 从首档），无跨
 //              实例盈利资金源的保守版升级斩仓。
 
 // burnAddLadder 构造 order 1..7 的补仓阶梯（小差价/零回调/等倍，便于价格剧本）。
@@ -190,9 +191,9 @@ func TestCRABurnOncePerLoopAndResetNextLoop(t *testing.T) {
 // 全局成交后若对向阈值仍达标且未 fired，同循环对向可再触发一次（两机制独立）。
 func TestCRABurnGlobalTriggersAtThreshold(t *testing.T) {
 	s := startBurnContract(t, map[string]any{
-		"burn_dual_enabled":    true,
-		"burn_dual_threshold":  2,
-		"burn_global_enabled":  true,
+		"burn_dual_enabled":     true,
+		"burn_dual_threshold":   2,
+		"burn_global_enabled":   true,
 		"burn_global_threshold": 2,
 	})
 	enterLong(t, s, 100)
@@ -349,9 +350,9 @@ func TestCRABurnThresholdGuards(t *testing.T) {
 
 	// fired 标记单元级锁定：达阈值但已 fired → evaluateBurn 不触发（两机制）。
 	s := startBurnContract(t, map[string]any{
-		"burn_dual_enabled":    true,
-		"burn_dual_threshold":  1,
-		"burn_global_enabled":  true,
+		"burn_dual_enabled":     true,
+		"burn_dual_threshold":   1,
+		"burn_global_enabled":   true,
 		"burn_global_threshold": 1,
 	})
 	seedLongPosition(s, 100, 0.1)
@@ -396,9 +397,9 @@ func TestCRABurnDisabledByDefault(t *testing.T) {
 	})
 	t.Run("合约显式关闭", func(t *testing.T) {
 		trap(t, startBurnContract(t, map[string]any{
-			"burn_dual_enabled":    false,
-			"burn_dual_threshold":  1,
-			"burn_global_enabled":  false,
+			"burn_dual_enabled":     false,
+			"burn_dual_threshold":   1,
+			"burn_global_enabled":   false,
 			"burn_global_threshold": 1,
 		}))
 	})
@@ -451,5 +452,268 @@ func TestCRABurnRuntimeStatus(t *testing.T) {
 	}
 	if v := s.RuntimeStatus()["burn_dual_fired"].(bool); !v {
 		t.Fatal("burn_dual_fired must be true after trigger")
+	}
+}
+
+// ── G2-2：全局燃烧斩仓比例参数化（burn_global_close_ratio）──
+
+// 解析与校验：缺省 0.5（与 F 片硬编码常量行为一致）、显式值生效、0.1-0.9 范围
+// 外拒绝；引擎按配置比例斩仓（不再恒 50%）。
+func TestCRABurnGlobalCloseRatioParam(t *testing.T) {
+	def, err := ParseCRAParams("{}")
+	if err != nil {
+		t.Fatalf("parse empty: %v", err)
+	}
+	if def.BurnGlobalCloseRatio != defaultBurnGlobalCloseRatio {
+		t.Fatalf("default ratio = %v, want %v（缺省行为不变）", def.BurnGlobalCloseRatio, defaultBurnGlobalCloseRatio)
+	}
+	exp, err := ParseCRAParams(`{"burn_global_close_ratio":0.3,"tp_mode":"static"}`)
+	if err != nil {
+		t.Fatalf("parse explicit: %v", err)
+	}
+	if exp.BurnGlobalCloseRatio != 0.3 {
+		t.Fatalf("explicit ratio = %v, want 0.3", exp.BurnGlobalCloseRatio)
+	}
+	if err := exp.Validate(); err != nil {
+		t.Fatalf("0.3 must validate: %v", err)
+	}
+	for _, tc := range []struct {
+		raw     string
+		wantErr bool
+	}{
+		{`{"burn_global_close_ratio":0.1,"tp_mode":"static"}`, false},
+		{`{"burn_global_close_ratio":0.9,"tp_mode":"static"}`, false},
+		{`{"burn_global_close_ratio":0.09,"tp_mode":"static"}`, true},
+		{`{"burn_global_close_ratio":0.91,"tp_mode":"static"}`, true},
+		{`{"burn_global_close_ratio":0,"tp_mode":"static"}`, true},
+	} {
+		p, err := ParseCRAParams(tc.raw)
+		if err != nil {
+			t.Fatalf("%s: parse: %v", tc.raw, err)
+		}
+		if err := p.Validate(); (err != nil) != tc.wantErr {
+			t.Fatalf("%s: validate err = %v, wantErr=%v", tc.raw, err, tc.wantErr)
+		}
+	}
+
+	// 引擎：ratio=0.25 时斩持仓 25%（0.306208×0.25=0.076552），FIFO 从首档核销。
+	s := startBurnContract(t, map[string]any{
+		"burn_global_enabled":     true,
+		"burn_global_threshold":   2,
+		"burn_global_close_ratio": 0.25,
+	})
+	enterLong(t, s, 100)
+	burnAddOnce(t, s, 98)
+	burnAddOnce(t, s, 96) // 补仓 2 次达标，总量 0.306208
+	sig, _ := s.OnBar(bar(95), nil)
+	if sig == nil || sig.Direction != "CLOSE" || !almostEq(sig.Qty, 0.076552) {
+		t.Fatalf("global burn 25%% = %+v, want CLOSE qty 0.076552", sig)
+	}
+	if !strings.Contains(sig.Reason, "global burn") {
+		t.Fatalf("reason = %q, want global burn tag", sig.Reason)
+	}
+	// 缺省路径回归：不配 ratio 同剧本仍斩 50%（与 F 片常量行为一致，既有测试
+	// TestCRABurnGlobalTriggersAtThreshold 已锁定 0.153104，此处锁解析→引擎贯通）。
+	s2 := startBurnContract(t, map[string]any{
+		"burn_global_enabled":   true,
+		"burn_global_threshold": 2,
+	})
+	enterLong(t, s2, 100)
+	burnAddOnce(t, s2, 98)
+	burnAddOnce(t, s2, 96)
+	sig, _ = s2.OnBar(bar(95), nil)
+	if sig == nil || !almostEq(sig.Qty, 0.153104) {
+		t.Fatalf("default ratio burn = %+v, want CLOSE qty 0.153104（缺省 50%%）", sig)
+	}
+}
+
+// ── G2-3：燃烧 fired 标记重启重建（成交账本数量形态推断）──
+
+// RebuildBurnMarksFromFills 形态判定矩阵：对向=≈首档量、全局=≈比例×总量，歧义
+// 形态（≈尾档/≈全平/首尾重合）保守不标记，全平循环结束后标记清零。
+func TestRebuildBurnMarksFromFills(t *testing.T) {
+	entry3 := []FillRecord{
+		{Side: "BUY", Qty: 0.1, Price: 100},
+		{Side: "BUY", Qty: 0.102041, Price: 98},
+		{Side: "BUY", Qty: 0.104167, Price: 96},
+	}
+	cases := []struct {
+		name                           string
+		fills                          []FillRecord
+		dualThreshold, globalThreshold int
+		globalRatio                    float64
+		wantDual, wantGlobal           bool
+	}{
+		{
+			name: "对向燃烧形态（≈首档量）标记",
+			fills: append(append([]FillRecord{}, entry3...),
+				FillRecord{Side: "SELL", Qty: 0.1, Price: 95}),
+			dualThreshold: 2, globalThreshold: 5, globalRatio: 0.5,
+			wantDual: true, wantGlobal: false,
+		},
+		{
+			name: "全局燃烧形态（≈0.5×总量）标记",
+			fills: append(append([]FillRecord{}, entry3...),
+				FillRecord{Side: "SELL", Qty: 0.153104, Price: 95}),
+			dualThreshold: 2, globalThreshold: 2, globalRatio: 0.5,
+			wantDual: false, wantGlobal: true,
+		},
+		{
+			name: "全局后再对向（两机制独立）均标记",
+			fills: append(append([]FillRecord{}, entry3...),
+				FillRecord{Side: "SELL", Qty: 0.153104, Price: 95},  // 全局：余 0.048937+0.104167
+				FillRecord{Side: "BUY", Qty: 0.1, Price: 94},        // 补仓：3 档，首档 0.048937
+				FillRecord{Side: "SELL", Qty: 0.048937, Price: 93}), // 对向：斩首档
+			dualThreshold: 2, globalThreshold: 2, globalRatio: 0.5,
+			wantDual: true, wantGlobal: true,
+		},
+		{
+			name: "尾单止盈形态（≈尾档量）不误判对向",
+			fills: []FillRecord{
+				{Side: "BUY", Qty: 0.1, Price: 100},
+				{Side: "BUY", Qty: 0.102041, Price: 98},
+				{Side: "SELL", Qty: 0.102041, Price: 99},
+			},
+			dualThreshold: 1, globalThreshold: 1, globalRatio: 0.5,
+			wantDual: false, wantGlobal: false,
+		},
+		{
+			name: "首档≈尾档歧义保守不标记（等量阶梯）",
+			fills: []FillRecord{
+				{Side: "BUY", Qty: 0.1, Price: 100},
+				{Side: "BUY", Qty: 0.1, Price: 98},
+				{Side: "SELL", Qty: 0.1, Price: 99},
+			},
+			dualThreshold: 1, globalThreshold: 1, globalRatio: 0.5,
+			wantDual: false, wantGlobal: false,
+		},
+		{
+			name: "非形态部分减仓（FIFO 兜底量）不标记",
+			fills: append(append([]FillRecord{}, entry3...),
+				FillRecord{Side: "SELL", Qty: 0.05, Price: 95}),
+			dualThreshold: 2, globalThreshold: 2, globalRatio: 0.5,
+			wantDual: false, wantGlobal: false,
+		},
+		{
+			name: "补仓次数未达阈值不标记",
+			fills: append(append([]FillRecord{}, entry3...),
+				FillRecord{Side: "SELL", Qty: 0.1, Price: 95}),
+			dualThreshold: 3, globalThreshold: 3, globalRatio: 0.5,
+			wantDual: false, wantGlobal: false,
+		},
+		{
+			name: "threshold<1 视为关闭不标记",
+			fills: append(append([]FillRecord{}, entry3...),
+				FillRecord{Side: "SELL", Qty: 0.1, Price: 95}),
+			dualThreshold: 0, globalThreshold: 0, globalRatio: 0.5,
+			wantDual: false, wantGlobal: false,
+		},
+		{
+			name: "全平循环结束后标记清零（只报告当前循环）",
+			fills: append(append([]FillRecord{}, entry3...),
+				FillRecord{Side: "SELL", Qty: 0.1, Price: 95},      // 对向燃烧
+				FillRecord{Side: "SELL", Qty: 0.206208, Price: 99}, // 全平结束循环
+				FillRecord{Side: "BUY", Qty: 0.5, Price: 100}),     // 新循环单档
+			dualThreshold: 2, globalThreshold: 5, globalRatio: 0.5,
+			wantDual: false, wantGlobal: false,
+		},
+		{
+			name: "自定义比例全局形态（0.25×总量）标记",
+			fills: append(append([]FillRecord{}, entry3...),
+				FillRecord{Side: "SELL", Qty: 0.076552, Price: 95}),
+			dualThreshold: 2, globalThreshold: 2, globalRatio: 0.25,
+			wantDual: false, wantGlobal: true,
+		},
+	}
+	for _, tc := range cases {
+		dual, global := RebuildBurnMarksFromFills(tc.fills, tc.dualThreshold, tc.globalThreshold, tc.globalRatio)
+		if dual != tc.wantDual || global != tc.wantGlobal {
+			t.Fatalf("%s: = (%v,%v), want (%v,%v)", tc.name, dual, global, tc.wantDual, tc.wantGlobal)
+		}
+	}
+}
+
+// 重启重建端到端（对向）：账本含本循环已成交的对向燃烧（斩首档），restored_fills
+// 重放后 BurnDualFired 置位——恢复持仓再补仓达阈值时燃烧不重复触发，补仓阶梯照常。
+func TestCRABurnFiredRebuiltOnRestart(t *testing.T) {
+	s := startBurnContract(t, map[string]any{
+		"burn_dual_enabled":   true,
+		"burn_dual_threshold": 2,
+		"restored_fills": []any{
+			map[string]any{"side": "BUY", "qty": 0.1, "price": 100},
+			map[string]any{"side": "BUY", "qty": 0.102041, "price": 98},
+			map[string]any{"side": "BUY", "qty": 0.104167, "price": 96},
+			map[string]any{"side": "SELL", "qty": 0.1, "price": 95}, // 对向燃烧斩首档
+		},
+	})
+	st := s.state
+	if !st.BurnDualFired || st.BurnGlobalFired {
+		t.Fatalf("restored fired = dual:%v global:%v, want dual only", st.BurnDualFired, st.BurnGlobalFired)
+	}
+	if st.PositionCount != 2 || len(st.Lots) != 2 || !almostEq(st.Lots[0].Price, 98) || !almostEq(st.Lots[1].Price, 96) {
+		t.Fatalf("restored lots = %+v count=%d, want 98/96 两档", st.Lots, st.PositionCount)
+	}
+	// 再补仓 1 次（94）→ 补仓 2 次又达阈值。burnAddOnce 内部断言触发信号非
+	// CLOSE——fired 若失效，优先级更高的燃烧 CLOSE 会抢在补仓前面直接红。
+	burnAddOnce(t, s, 94)
+	if st.PositionCount != 3 {
+		t.Fatalf("position count after add = %d, want 3", st.PositionCount)
+	}
+	// 达阈值后燃烧不重复触发：放行的是补仓 #4 挂起/触发信号（LONG），绝不是燃烧。
+	if sig, _ := s.OnBar(bar(93), nil); sig != nil {
+		t.Fatalf("expect add-arming bar, got %+v", sig)
+	}
+	sig, _ := s.OnBar(bar(93), nil)
+	if sig == nil || sig.Direction != "LONG" || !strings.Contains(sig.Reason, "add position") {
+		t.Fatalf("fired burn must stay silent after restart, ladder continues: %+v", sig)
+	}
+}
+
+// 重启重建端到端（全局）：账本含本循环已成交的全局燃烧（0.5×总量 FIFO），重放后
+// BurnGlobalFired 置位；再补仓达阈值全局不重复斩仓（对向未启用，任何 CLOSE 即红）。
+func TestCRABurnGlobalFiredRebuiltOnRestart(t *testing.T) {
+	s := startBurnContract(t, map[string]any{
+		"burn_global_enabled":   true,
+		"burn_global_threshold": 2,
+		"restored_fills": []any{
+			map[string]any{"side": "BUY", "qty": 0.1, "price": 100},
+			map[string]any{"side": "BUY", "qty": 0.102041, "price": 98},
+			map[string]any{"side": "BUY", "qty": 0.104167, "price": 96},
+			map[string]any{"side": "SELL", "qty": 0.153104, "price": 95}, // 全局燃烧斩 50%
+		},
+	})
+	st := s.state
+	if !st.BurnGlobalFired || st.BurnDualFired {
+		t.Fatalf("restored fired = dual:%v global:%v, want global only", st.BurnDualFired, st.BurnGlobalFired)
+	}
+	// FIFO 核销：首档 0.1 尽 + 次档 0.053104 → 余 {98,0.048937}+{96,0.104167}。
+	if len(st.Lots) != 2 || !almostEq(st.Lots[0].Qty, 0.048937) || !almostEq(st.Lots[1].Qty, 0.104167) {
+		t.Fatalf("restored lots = %+v, want partial head 0.048937 + 0.104167", st.Lots)
+	}
+	burnAddOnce(t, s, 94) // 补仓 2 次再达阈值；全局 fired 不得重复触发
+	if sig, _ := s.OnBar(bar(93), nil); sig != nil {
+		t.Fatalf("expect add-arming bar, got %+v", sig)
+	}
+	sig, _ := s.OnBar(bar(93), nil)
+	if sig == nil || sig.Direction == "CLOSE" {
+		t.Fatalf("global burn must not refire after restart: %+v", sig)
+	}
+}
+
+// 聚合兜底路径（无逐笔明细）不推断：fired 保持 false，退回推断前行为（重启后
+// 达档重新评估一次），如实接受。
+func TestCRABurnFiredAggregateRestoreNotInferred(t *testing.T) {
+	s := startBurnContract(t, map[string]any{
+		"burn_dual_enabled":      true,
+		"burn_dual_threshold":    2,
+		"restored_position_qty":  0.206208,
+		"restored_position_vwap": 97.0,
+	})
+	st := s.state
+	if !st.InPosition || st.PositionCount != 1 {
+		t.Fatalf("aggregate restore = %+v, want single lot in position", st)
+	}
+	if st.BurnDualFired || st.BurnGlobalFired {
+		t.Fatal("aggregate restore must leave burn fired flags false（无逐笔明细不推断）")
 	}
 }

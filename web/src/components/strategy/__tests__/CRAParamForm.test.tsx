@@ -249,8 +249,8 @@ describe('CRAParamForm', () => {
     // 对向燃烧：斩首单档 + 单侧模型无法并行对向仓的差异标注。
     expect(screen.getByText(/市价斩掉首单档/)).toBeTruthy()
     expect(screen.getByText(/无法并行持有对向仓/)).toBeTruthy()
-    // 全局燃烧：斩 50% + 无跨实例盈利数据源的保守版标注。
-    expect(screen.getByText(/斩掉当前持仓的 50%/)).toBeTruthy()
+    // 全局燃烧：斩设定比例（默认 50%）+ 无跨实例盈利数据源的保守版标注。
+    expect(screen.getByText(/斩掉当前持仓的设定比例/)).toBeTruthy()
     expect(screen.getByText(/拿不到其它实例的盈利数据/)).toBeTruthy()
     // 拒单重试不静默假成功的备注。
     expect(screen.getByText(/自动重试并如实记日志/)).toBeTruthy()
@@ -291,5 +291,78 @@ describe('CRAParamForm', () => {
     expect(def.burnDualThreshold).toBe(3)
     expect(def.burnGlobalEnabled).toBe(false)
     expect(def.burnGlobalThreshold).toBe(5)
+  })
+
+  // ── G2-1：反向止盈判定周期扩档（币富反向止盈适合大周期：4h 金叉开多 1h 死叉卖）──
+
+  it('reverse take profit period select offers 30m/1h/4h/8h (contract)', () => {
+    render(<CRAParamForm {...baseProps} market="contract" />, { wrapper })
+    const labelText = screen.getByText('反向止盈')
+    const select = labelText.parentElement!.querySelector('select') as HTMLSelectElement
+    expect(select).toBeTruthy()
+    expect(Array.from(select.options).map((o) => o.value)).toEqual([
+      'close',
+      '5m',
+      '15m',
+      '30m',
+      '1h',
+      '4h',
+      '8h',
+    ])
+  })
+
+  it('round-trips reverse take profit period 4h in the api payload', () => {
+    const payload = craParamsToApiPayload({ ...DEFAULT_CRA_PARAMS, reverseTP: '4h' })
+    expect(payload.reverse_take_profit_period).toBe('4h')
+    const restored = apiPayloadToCraParams({ reverse_take_profit_period: '4h' })
+    expect(restored.reverseTP).toBe('4h')
+    // 缺省回填默认 close（与后端 ParseCRAParams 一致）。
+    expect(apiPayloadToCraParams({}).reverseTP).toBe('close')
+  })
+
+  // ── G2-2：全局燃烧斩仓比例输入框（跟随全局燃烧开关显示）──
+
+  it('shows burn global close ratio input only when global burn enabled (contract)', () => {
+    const { unmount } = render(<CRAParamForm {...baseProps} market="contract" />, { wrapper })
+    expect(screen.queryByText('斩仓比例 (%)')).toBeNull()
+    unmount()
+
+    render(
+      <CRAParamForm {...baseProps} market="contract" value={{ ...DEFAULT_CRA_PARAMS, burnGlobalEnabled: true }} />,
+      { wrapper }
+    )
+    const input = screen.getByText('斩仓比例 (%)').parentElement!.querySelector('input') as HTMLInputElement
+    expect(input).toBeTruthy()
+    expect(input.value).toBe('50')
+  })
+
+  it('updates burnGlobalCloseRatio via the input, clamped to 10-90', () => {
+    const onChange = vi.fn()
+    render(
+      <CRAParamForm
+        {...baseProps}
+        market="contract"
+        value={{ ...DEFAULT_CRA_PARAMS, burnGlobalEnabled: true }}
+        onChange={onChange}
+      />,
+      { wrapper }
+    )
+    const input = screen.getByText('斩仓比例 (%)').parentElement!.querySelector('input') as HTMLInputElement
+    fireEvent.change(input, { target: { value: '30' } })
+    let lastCall = onChange.mock.calls[onChange.mock.calls.length - 1][0] as CRAParams
+    expect(lastCall.burnGlobalCloseRatio).toBe(30)
+    // 越界钳制到 10-90（与后端 0.1-0.9 校验口径一致）。
+    fireEvent.change(input, { target: { value: '95' } })
+    lastCall = onChange.mock.calls[onChange.mock.calls.length - 1][0] as CRAParams
+    expect(lastCall.burnGlobalCloseRatio).toBe(90)
+  })
+
+  it('round-trips burnGlobalCloseRatio as burn_global_close_ratio in the api payload', () => {
+    const payload = craParamsToApiPayload({ ...DEFAULT_CRA_PARAMS, burnGlobalCloseRatio: 30 })
+    expect(payload.burn_global_close_ratio).toBe(0.3)
+    const restored = apiPayloadToCraParams({ burn_global_close_ratio: 0.25 })
+    expect(restored.burnGlobalCloseRatio).toBe(25)
+    // 缺省回填默认 50%（与后端 ParseCRAParams 默认 0.5 一致）。
+    expect(apiPayloadToCraParams({}).burnGlobalCloseRatio).toBe(50)
   })
 })

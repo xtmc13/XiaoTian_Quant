@@ -259,6 +259,7 @@ export function createDefaultCRAParams(market: 'spot' | 'contract'): CRAParams {
     reverseSL: false,
     burnGlobalEnabled: false,
     burnGlobalThreshold: 5,
+    burnGlobalCloseRatio: 50,
     burnDualEnabled: false,
     burnDualThreshold: 3,
     openDouble: false,

@@ -424,6 +424,50 @@ func TestCRAReverseTimeframesDeclaration(t *testing.T) {
 	}
 }
 
+// 判定周期扩档（G2-1，前端下拉补齐 30m/1h/4h/8h——币富反向止盈本就适合大周期：
+// 4h 金叉开多 1h 死叉卖）：引擎经 A 片 IsFeedablePeriod 已支持全档，此处锁定
+// Timeframes 订阅声明与 4h 端到端触发，防 reversePeriodArmed/Timeframes 回归。
+func TestCRAReverseTakeProfitExtendedPeriods(t *testing.T) {
+	// 判定周期 ≠ 工作周期（15m）的全档副周期都经 Timeframes 声明订阅。
+	for _, period := range []string{"5m", "30m", "1h", "4h", "8h"} {
+		s := startReverseContract(t, map[string]any{
+			"reverse_take_profit_period": period,
+		})
+		if tfs := s.Timeframes(); len(tfs) != 1 || tfs[0] != period {
+			t.Fatalf("period %s: Timeframes = %v, want [%s]", period, tfs, period)
+		}
+	}
+	// 判定周期 = 工作周期（15m）：数据随 OnBar 供给，无需副周期声明。
+	s := startReverseContract(t, map[string]any{
+		"reverse_take_profit_period": "15m",
+	})
+	if tfs := s.Timeframes(); len(tfs) != 0 {
+		t.Fatalf("period == working timeframe: Timeframes = %v, want empty", tfs)
+	}
+
+	// 4h 端到端：4h 副周期供给末根死叉 + 未补仓浮盈 → 触发反向止盈全平。
+	s = startReverseContract(t, map[string]any{
+		"reverse_take_profit_period": "4h",
+	})
+	feed := &fakeBarProvider{series: map[string][]model.Bar{
+		"BTCUSDT|4h": makeBars(risingThenCrossDownSeries()[:40]...),
+	}}
+	s.SetBarProvider(feed)
+	enterLong(t, s, 100)
+	// 浮盈 1% 但 4h 无交叉 → 不触发。
+	if sig, _ := s.OnBar(bar(101), nil); sig != nil {
+		t.Fatalf("4h feed without cross must not fire: %+v", sig)
+	}
+	feed.series["BTCUSDT|4h"] = makeBars(risingThenCrossDownSeries()...)
+	sig, _ := s.OnBar(bar(101), nil)
+	if sig == nil || sig.Direction != "CLOSE" || !strings.Contains(sig.Reason, "reverse take profit") {
+		t.Fatalf("4h reverse tp = %+v, want reverse take profit CLOSE", sig)
+	}
+	if s.state.PendingCloseKind != "reverse_tp" {
+		t.Fatalf("pending = %q, want reverse_tp", s.state.PendingCloseKind)
+	}
+}
+
 // 默认关闭零影响回归：不带反向参数的合约策略在"浮盈+死叉"场景下无任何
 // 反向出场（常规分支行为不变）；现货策略即使配了反向参数也不消费（仅合约）。
 func TestCRAReverseExitDisabledByDefault(t *testing.T) {

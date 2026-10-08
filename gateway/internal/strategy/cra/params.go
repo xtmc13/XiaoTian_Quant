@@ -93,14 +93,15 @@ type CRAParams struct {
 	StopLossPrice   float64 `json:"stop_loss_price"`
 
 	// Contract reverse TP/SL
-	ReverseTakeProfitPeriod string `json:"reverse_take_profit_period"` // "close" | "5m" | "15m"
+	ReverseTakeProfitPeriod string `json:"reverse_take_profit_period"` // "close" | "5m" | "15m" | "30m" | "1h" | "4h" | "8h"
 	ReverseStopLoss         bool   `json:"reverse_stop_loss"`
 
 	// Contract burn
-	BurnGlobalEnabled   bool `json:"burn_global_enabled"`
-	BurnGlobalThreshold int  `json:"burn_global_threshold"`
-	BurnDualEnabled     bool `json:"burn_dual_enabled"`
-	BurnDualThreshold   int  `json:"burn_dual_threshold"`
+	BurnGlobalEnabled    bool    `json:"burn_global_enabled"`
+	BurnGlobalThreshold  int     `json:"burn_global_threshold"`
+	BurnGlobalCloseRatio float64 `json:"burn_global_close_ratio"` // 全局燃烧斩仓比例，缺省 0.5
+	BurnDualEnabled      bool    `json:"burn_dual_enabled"`
+	BurnDualThreshold    int     `json:"burn_dual_threshold"`
 
 	// Contract extras
 	OpenDouble        bool     `json:"open_double"`
@@ -268,6 +269,7 @@ func ParseCRAParams(configJSON string) (*CRAParams, error) {
 
 	p.BurnGlobalEnabled = boolVal(raw, "burn_global_enabled", false)
 	p.BurnGlobalThreshold = numInt(raw, "burn_global_threshold", 5)
+	p.BurnGlobalCloseRatio = numFloat(raw, "burn_global_close_ratio", defaultBurnGlobalCloseRatio)
 	p.BurnDualEnabled = boolVal(raw, "burn_dual_enabled", false)
 	p.BurnDualThreshold = numInt(raw, "burn_dual_threshold", 3)
 
@@ -394,6 +396,9 @@ func (p *CRAParams) Validate() error {
 	if p.TradeCountMode != "single" && p.TradeCountMode != "cycle" {
 		return fmt.Errorf("trade_count_mode must be single or cycle")
 	}
+	if p.BurnGlobalCloseRatio < 0.1 || p.BurnGlobalCloseRatio > 0.9 {
+		return fmt.Errorf("burn_global_close_ratio must be between 0.1 and 0.9")
+	}
 	return nil
 }
 
@@ -486,6 +491,7 @@ func DefaultSpot(strategyType string) *CRAParams {
 		ProfitCallback:       0.003,
 		WaterfallEnabled:     true,
 		WaterfallProtection:  0.02,
+		BurnGlobalCloseRatio: defaultBurnGlobalCloseRatio,
 		Direction:            "long",
 		MarketType:           "spot",
 		PositionSide:         "LONG",
@@ -544,6 +550,7 @@ func DefaultContract(strategyType string) *CRAParams {
 		StopLossEnabled:      true,
 		StopLossType:         "ratio",
 		StopLossRatio:        0.40,
+		BurnGlobalCloseRatio: defaultBurnGlobalCloseRatio,
 		Leverage:             10,
 		Direction:            "long",
 		MarketType:           "swap",

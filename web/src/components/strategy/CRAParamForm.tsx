@@ -80,12 +80,14 @@ export interface CRAParams {
   stopLossPrice: number
 
   // ── 合约反向止盈/止损 ──
-  reverseTP: 'close' | '5m' | '15m'
+  reverseTP: CRAIndicatorPeriod
   reverseSL: boolean
 
   // ── 合约燃烧 ──
   burnGlobalEnabled: boolean
   burnGlobalThreshold: number
+  /** 全局燃烧斩仓比例（UI 百分比 10-90，payload 小数 0.1-0.9，默认 50%）。 */
+  burnGlobalCloseRatio: number
   burnDualEnabled: boolean
   burnDualThreshold: number
 
@@ -140,6 +142,7 @@ export const DEFAULT_CRA_PARAMS: CRAParams = {
   reverseSL: false,
   burnGlobalEnabled: false,
   burnGlobalThreshold: 5,
+  burnGlobalCloseRatio: 50,
   burnDualEnabled: false,
   burnDualThreshold: 3,
   openDouble: false,
@@ -712,12 +715,14 @@ export function CRAParamForm({ value, onChange, market, className, openFields = 
               <label className="text-[11px] text-muted-foreground">反向止盈</label>
               <select
                 value={value.reverseTP}
-                onChange={(e) => update('reverseTP', e.target.value as 'close' | '5m' | '15m')}
+                onChange={(e) => update('reverseTP', e.target.value as CRAIndicatorPeriod)}
                 className="bg-quant-bg border border-quant-border rounded px-2 py-1 text-xs focus:outline-none focus:border-quant-gold"
               >
-                <option value="close">关闭</option>
-                <option value="5m">5 分钟</option>
-                <option value="15m">15 分钟</option>
+                {CRA_INDICATOR_PERIOD_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
               </select>
             </div>
             <label className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -847,9 +852,25 @@ export function CRAParamForm({ value, onChange, market, className, openFields = 
                   className={cn(inputCls, !value.burnGlobalEnabled && 'opacity-40')}
                 />
               </div>
+              {value.burnGlobalEnabled && (
+                <div className="w-28">
+                  <label className="text-[11px] text-muted-foreground mb-1.5 block">斩仓比例 (%)</label>
+                  <input
+                    type="number"
+                    min={10}
+                    max={90}
+                    step={1}
+                    value={value.burnGlobalCloseRatio}
+                    onChange={(e) =>
+                      update('burnGlobalCloseRatio', Math.min(90, Math.max(10, Number(e.target.value) || 10)))
+                    }
+                    className={inputCls}
+                  />
+                </div>
+              )}
             </div>
             <div className="text-[10px] text-muted-foreground -mt-2">
-              全局燃烧：补仓达设定次数时本循环触发一次——市价斩掉当前持仓的 50%（从浮亏最深的首档起核销），大幅下移均价、释放保证金。
+              全局燃烧：补仓达设定次数时本循环触发一次——市价斩掉当前持仓的设定比例（斩仓比例，默认 50%，从浮亏最深的首档起核销），大幅下移均价、释放保证金。
               币富原版是用其它盈利币兑的盈利来抵消这笔亏损（跨币种燃烧）；本系统单实例单币种运行，引擎拿不到其它实例的盈利数据，
               故为保守实现：斩仓亏损真实实现，收益是仓位解压（均价下移、解套门槛降低）。
             </div>
@@ -938,10 +959,11 @@ interface ApiPayload {
   stop_loss_ratio: number
   stop_loss_amount: number
   stop_loss_price: number
-  reverse_take_profit_period: 'close' | '5m' | '15m'
+  reverse_take_profit_period: CRAIndicatorPeriod
   reverse_stop_loss: boolean
   burn_global_enabled: boolean
   burn_global_threshold: number
+  burn_global_close_ratio: number
   burn_dual_enabled: boolean
   burn_dual_threshold: number
   open_double: boolean
@@ -1015,6 +1037,7 @@ export function craParamsToApiPayload(p: CRAParams): ApiPayload {
     reverse_stop_loss: p.reverseSL,
     burn_global_enabled: p.burnGlobalEnabled,
     burn_global_threshold: p.burnGlobalThreshold,
+    burn_global_close_ratio: percentToDecimal(p.burnGlobalCloseRatio),
     burn_dual_enabled: p.burnDualEnabled,
     burn_dual_threshold: p.burnDualThreshold,
     open_double: p.openDouble,
@@ -1101,6 +1124,10 @@ export function apiPayloadToCraParams(payload: Partial<ApiPayload>): CRAParams {
     reverseSL: payload.reverse_stop_loss ?? base.reverseSL,
     burnGlobalEnabled: payload.burn_global_enabled ?? base.burnGlobalEnabled,
     burnGlobalThreshold: payload.burn_global_threshold ?? base.burnGlobalThreshold,
+    burnGlobalCloseRatio: decimalToPercent(
+      payload.burn_global_close_ratio ?? base.burnGlobalCloseRatio,
+      PERCENTAGE_FIELD_THRESHOLDS.burnGlobalCloseRatio
+    ),
     burnDualEnabled: payload.burn_dual_enabled ?? base.burnDualEnabled,
     burnDualThreshold: payload.burn_dual_threshold ?? base.burnDualThreshold,
     openDouble: payload.open_double ?? base.openDouble,

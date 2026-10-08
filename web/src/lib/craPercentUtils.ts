@@ -19,6 +19,7 @@ export const PERCENTAGE_FIELD_THRESHOLDS: Record<string, number> = {
   addPositionCallback: 0.05,
   movingTPRatio: 0.5,
   movingTPDrawback: 1.0,
+  burnGlobalCloseRatio: 1.0,
 }
 
 /** Convert a UI percentage value to the decimal ratio the backend expects. */

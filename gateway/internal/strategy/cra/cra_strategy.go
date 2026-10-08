@@ -137,13 +137,19 @@ func (s *BaseCRAStrategy) Start(params map[string]any) error {
 	// 修复注入时序）。逐笔明细 restored_fills 重放优先——各档成本精确
 	// （尾单/首尾止盈依赖档级成本）；聚合 restored_position_qty/vwap 兜底
 	// ——净持仓合成单档，tail/head_tail 退化为均价判定的单档。
-	if lots, side, prevSide, prevAdds := parseRestoredLots(params); len(lots) > 0 {
+	if lots, side, prevSide, prevAdds, burnDual, burnGlobal := parseRestoredLots(params, p); len(lots) > 0 {
 		s.restoreLotsLocked(lots, side)
 		// 顺势换向锚点随逐笔重放一并重建（E 片重启存续）：最近一个全平
 		// 循环的 {方向, 峰值补仓次数}。聚合兜底路径（restored_position_qty
 		// 无逐笔明细）无法反推历史循环，锚点降级为 0——重启后首轮不放大。
 		s.state.PrevLoopSide = prevSide
 		s.state.PrevLoopTrappedAdds = prevAdds
+		// 燃烧 fired 标记随逐笔重放按数量形态推断（G2 重启存续，推断口径与
+		// 局限见 RebuildBurnMarksFromFills）：restoreLotsLocked 内部
+		// ResetForNextLoop 会清零，须在其后写入。聚合兜底路径无逐笔明细，
+		// 标记保持 false（退回推断前行为：重启后达档重新评估触发一次）。
+		s.state.BurnDualFired = burnDual
+		s.state.BurnGlobalFired = burnGlobal
 	} else if q, ok := params["restored_position_qty"].(float64); ok && q > 0 {
 		v, _ := params["restored_position_vwap"].(float64)
 		s.restorePositionLocked(q, v)
@@ -341,12 +347,14 @@ func (s *BaseCRAStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Sign
 		// 开仓加倍（币富名词解释 #15，open_double）：只放大首单名义（首单金额
 		// ×2），不改变 add_positions 阶梯的基数——补仓第 N 档仍按首单原始金额
 		// ×multiplier 计（见下方 Add positions 分支，entryQty 的 multiplier 实参
-		// 是 cfg.Multiplier，不经过此处的 doubling）。
+		// 是 cfg.Multiplier，不经过此处的 doubling）。仅合约消费（与 follow_trend
+		// 门控同款）：D 片表单已仅合约显示，引擎层对现货存量配置的残留 true 也
+		// 不生效。
 		// 顺势而为（币富名词解释 #13/#40，follow_trend）同理只放大首单名义：
 		// 与 open_double 叠加时 首单 = 首单金额 ×首单倍数 ×(open_double?2:1)
 		// ×顺势倍数，补仓阶梯基数一律不随任何首单放大变化（同 D 片口径纪律）。
 		mult := p.FirstOrderMultiplier
-		if p.OpenDouble {
+		if s.isContract && p.OpenDouble {
 			mult *= 2
 		}
 		trendMult := s.followTrendMultiplier(st.Side)
@@ -593,17 +601,20 @@ func (s *BaseCRAStrategy) restorePositionLocked(qty, vwap float64) {
 // parseRestoredLots 解析 handler 注入的 restored_fills（[]any of
 // {"side","qty","price"}，成交时间升序）并重放重建分档持仓；分档总量与聚合
 // 净持仓对不上（账本残缺/越权改单）时返回空，调用方退化聚合单档。
-// 顺带重建顺势换向锚点（E 片）：最近一个全平循环的 {方向, 峰值补仓次数}。
-func parseRestoredLots(params map[string]any) ([]EntryLot, PositionSide, PositionSide, int) {
+// 顺带重建顺势换向锚点（E 片）：最近一个全平循环的 {方向, 峰值补仓次数}；
+// 以及燃烧 fired 标记（G2）：当前未平仓循环是否已触发过对向/全局燃烧
+// （数量形态推断，口径见 RebuildBurnMarksFromFills），阈值/比例取解析后
+// 的当前配置 p。
+func parseRestoredLots(params map[string]any, p *CRAParams) ([]EntryLot, PositionSide, PositionSide, int, bool, bool) {
 	raw, ok := params["restored_fills"].([]any)
 	if !ok || len(raw) == 0 {
-		return nil, "", "", 0
+		return nil, "", "", 0, false, false
 	}
 	fills := make([]FillRecord, 0, len(raw))
 	for _, item := range raw {
 		m, ok := item.(map[string]any)
 		if !ok {
-			return nil, "", "", 0
+			return nil, "", "", 0, false, false
 		}
 		fills = append(fills, FillRecord{
 			Side:  strVal(m, "side", ""),
@@ -613,7 +624,7 @@ func parseRestoredLots(params map[string]any) ([]EntryLot, PositionSide, Positio
 	}
 	lots, side, prevSide, prevAdds := replayFills(fills)
 	if len(lots) == 0 {
-		return nil, "", "", 0
+		return nil, "", "", 0, false, false
 	}
 	if q, ok := params["restored_position_qty"].(float64); ok && q > 0 {
 		total := 0.0
@@ -621,10 +632,11 @@ func parseRestoredLots(params map[string]any) ([]EntryLot, PositionSide, Positio
 			total += l.Qty
 		}
 		if !approxQty(total, q) {
-			return nil, "", "", 0
+			return nil, "", "", 0, false, false
 		}
 	}
-	return lots, side, prevSide, prevAdds
+	burnDual, burnGlobal := RebuildBurnMarksFromFills(fills, p.BurnDualThreshold, p.BurnGlobalThreshold, p.BurnGlobalCloseRatio)
+	return lots, side, prevSide, prevAdds, burnDual, burnGlobal
 }
 
 func (s *BaseCRAStrategy) signal(direction string, qty float64, reason string) *model.Signal {
@@ -746,8 +758,9 @@ func (s *BaseCRAStrategy) evaluateTakeProfit(price float64) (bool, float64, stri
 // ── C 片：反向止盈/反向止损（币富名词解释 #35/#36，仅合约）──
 //
 // 反向信号 = 与持仓方向相反的 MACD 交叉事件：金叉开多 → 死叉为反向；死叉开空
-// → 金叉为反向。判定周期 = reverse_take_profit_period（5m/15m，经 A2 多周期
-// 供给取数；等于工作周期或未接线时 indicatorBars 如实降级为工作周期 bar）。
+// → 金叉为反向。判定周期 = reverse_take_profit_period（close/5m/15m/30m/1h/4h/8h，
+// G2-1 起前端补齐大周期档位；副周期经 A2 多周期供给取数，等于工作周期或未接线
+// 时 indicatorBars 如实降级为工作周期 bar）。
 // MACD 参数沿用 A3 tunables（indicator_params.macd，缺省 12/26/9）。
 // 判定点沿用 OnBar 节奏：每根工作 K 线闭合时对判定周期序列末根做交叉检测
 // （与开仓 MACD 门槛同口径，只有新鲜交叉事件才算"出现反向信号"）。
@@ -840,16 +853,17 @@ func reverseExitReason(kind string) string {
 //   - 全局燃烧（#41-2）：币富是补到第 M 次时用所有盈利币兑的盈利跨币种消耗该逆势
 //     单浮亏。本引擎实例间无 PnL 通道（策略引擎拿不到其它实例盈利数据，D 片的跨实例
 //     数据仅在 handler 启停闸层），保守实现为本实例内更大力度斩仓：补仓达 M 次时
-//     市价斩掉当前持仓的 burnGlobalCloseRatio（FIFO 从首档起核销）。
+//     市价斩掉当前持仓的 burn_global_close_ratio（缺省 0.5，FIFO 从首档起核销）。
 //
 // 共用纪律：各自独立开关、各自每循环至多一次（fired 标记）；threshold<1 视为关闭
 // （防 enabled+0 在首单后即触发）；仅合约消费（OnBar 调用点已 gate）；出场走 B 片
 // PendingClose 在途机制——成交确认才核销档位，拒单/撤单/过期清除 fired 重新武装
 // （OnOrderUpdate），不做静默假成功。
 
-// burnGlobalCloseRatio 全局燃烧斩仓比例（当前持仓的 1/2，FIFO 从首档起）。对向燃烧
-// 只斩首档，全局燃烧是对整体浮亏的升级解压，比例须明显大于首档占比。
-const burnGlobalCloseRatio = 0.5
+// defaultBurnGlobalCloseRatio 全局燃烧斩仓比例缺省值（当前持仓的 1/2，FIFO 从首档
+// 起）。G2 起经 burn_global_close_ratio 参数化（0.1-0.9，params.go 解析校验）；对向
+// 燃烧只斩首档，全局燃烧是对整体浮亏的升级解压，比例须明显大于首档占比。
+const defaultBurnGlobalCloseRatio = 0.5
 
 // evaluateBurn 燃烧斩仓判定，返回 (触发, 平仓数量, 出场形态 burn_dual|burn_global)。
 // 触发锚点 = 当前已成交补仓次数（PositionCount−1；不用 PeakAddCount——部分止盈削档
@@ -865,7 +879,7 @@ func (s *BaseCRAStrategy) evaluateBurn() (bool, float64, string) {
 		return false, 0, ""
 	}
 	if p.BurnGlobalEnabled && p.BurnGlobalThreshold >= 1 && !st.BurnGlobalFired && adds >= p.BurnGlobalThreshold {
-		if qty := RoundQty(st.TotalQty * burnGlobalCloseRatio); qty > 0 && qty < st.TotalQty {
+		if qty := RoundQty(st.TotalQty * p.BurnGlobalCloseRatio); qty > 0 && qty < st.TotalQty {
 			return true, qty, "burn_global"
 		}
 	}

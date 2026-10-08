@@ -127,13 +127,13 @@ func TestCRAFollowTrendBoostAfterOppositeTrapped(t *testing.T) {
 		t.Fatalf("flipped direction = %s, want SHORT", sig.Direction)
 	}
 	// 10U ×1 ×3（2 次被套+1）×5 杠杆 @90。
-	if want := RoundQty(10*3*5/90.0); sig.Qty != want {
+	if want := RoundQty(10 * 3 * 5 / 90.0); sig.Qty != want {
 		t.Fatalf("boosted qty = %v, want %v (3×)", sig.Qty, want)
 	}
 	// 对照：默认关闭同剧本零放大（绝对值锁定；RoundQty 分档精度不同，不做
 	// 四舍五入后数量的倍数交叉断言）。
 	_, ctrl := ftTrappedLongThenFlip(t, map[string]any{"follow_trend": false}, []float64{98.5, 97}, 90)
-	if want := RoundQty(10*1*5/90.0); ctrl.Qty != want {
+	if want := RoundQty(10 * 1 * 5 / 90.0); ctrl.Qty != want {
 		t.Fatalf("control qty = %v, want %v (unboosted)", ctrl.Qty, want)
 	}
 }
@@ -142,7 +142,7 @@ func TestCRAFollowTrendBoostAfterOppositeTrapped(t *testing.T) {
 // （币富 #13 cap=5 硬上限）。
 func TestCRAFollowTrendCapFive(t *testing.T) {
 	_, sig := ftTrappedLongThenFlip(t, nil, []float64{98.5, 97, 95.5, 94, 92.5, 91}, 90)
-	want := RoundQty(10*followTrendMaxMultiplier*5/90.0)
+	want := RoundQty(10 * followTrendMaxMultiplier * 5 / 90.0)
 	if sig.Qty != want {
 		t.Fatalf("capped qty = %v, want %v (cap %d×, 6+1=7 被钳制)", sig.Qty, want, followTrendMaxMultiplier)
 	}
@@ -169,7 +169,7 @@ func TestCRAFollowTrendAnchorClearedAfterCleanLoop(t *testing.T) {
 	if next.Direction != "LONG" {
 		t.Fatalf("next direction = %s, want LONG", next.Direction)
 	}
-	if want := RoundQty(10*1*5/100.0); next.Qty != want {
+	if want := RoundQty(10 * 1 * 5 / 100.0); next.Qty != want {
 		t.Fatalf("qty after clean loop = %v, want %v（锚点已清零不放大）", next.Qty, want)
 	}
 }
@@ -181,7 +181,7 @@ func TestCRAFollowTrendSameSideNoBoost(t *testing.T) {
 	if sig.Direction != "LONG" {
 		t.Fatalf("same-side direction = %s, want LONG", sig.Direction)
 	}
-	if want := RoundQty(10*1*5/105.0); sig.Qty != want {
+	if want := RoundQty(10 * 1 * 5 / 105.0); sig.Qty != want {
 		t.Fatalf("same-side qty = %v, want %v（同向不放大）", sig.Qty, want)
 	}
 }
@@ -191,7 +191,7 @@ func TestCRAFollowTrendSameSideNoBoost(t *testing.T) {
 func TestCRAFollowTrendStacksWithOpenDouble(t *testing.T) {
 	_, sig := ftTrappedLongThenFlip(t, map[string]any{"open_double": true}, []float64{98.5, 97}, 90)
 	// 10U ×2（open_double）×3（2 次被套+1）×5 杠杆 @90。
-	if want := RoundQty(10*2*3*5/90.0); sig.Qty != want {
+	if want := RoundQty(10 * 2 * 3 * 5 / 90.0); sig.Qty != want {
 		t.Fatalf("open_double+follow_trend qty = %v, want %v (2×3)", sig.Qty, want)
 	}
 }
@@ -200,7 +200,7 @@ func TestCRAFollowTrendStacksWithOpenDouble(t *testing.T) {
 func TestCRAFollowTrendDisabledByDefault(t *testing.T) {
 	_, absent := ftTrappedLongThenFlip(t, map[string]any{"follow_trend": nil}, []float64{98.5, 97}, 90)
 	_, explicit := ftTrappedLongThenFlip(t, map[string]any{"follow_trend": false}, []float64{98.5, 97}, 90)
-	want := RoundQty(10*1*5/90.0)
+	want := RoundQty(10 * 1 * 5 / 90.0)
 	if absent.Qty != want || explicit.Qty != want {
 		t.Fatalf("default off qty absent=%v explicit=%v, want %v", absent.Qty, explicit.Qty, want)
 	}
@@ -323,7 +323,7 @@ func TestCRAFollowTrendAnchorRebuiltOnRestart(t *testing.T) {
 	if next.Direction != "LONG" {
 		t.Fatalf("next direction = %s, want LONG", next.Direction)
 	}
-	if want := RoundQty(10*2*5/100.0); next.Qty != want {
+	if want := RoundQty(10 * 2 * 5 / 100.0); next.Qty != want {
 		t.Fatalf("post-restart boosted qty = %v, want %v (2×)", next.Qty, want)
 	}
 }
