@@ -105,8 +105,9 @@ func TestInsightsRepoTotalsByDayByModel(t *testing.T) {
 	if len(byDay) != 1 || byDay[0].PromptTokens != 310 || byDay[0].CompletionTokens != 55 || byDay[0].Rounds != 2 {
 		t.Errorf("by_day = %+v", byDay)
 	}
-	if byDay[0].Date != time.Now().Format("2006-01-02") {
-		t.Errorf("by_day date = %q, want 今日", byDay[0].Date)
+	// 种子时间戳是 now-3600，跨日窗口（00:00-01:00）会落前一日——断言跟随种子日期而非 time.Now()
+	if want := time.Now().Add(-time.Hour).Format("2006-01-02"); byDay[0].Date != want {
+		t.Errorf("by_day date = %q, want %q（种子 recent 当日）", byDay[0].Date, want)
 	}
 
 	byModel, err := repo.GetInsightsByModel(5, since)
