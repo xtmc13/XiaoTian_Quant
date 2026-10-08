@@ -1263,19 +1263,42 @@ func startStrategyInEngine(id string, item map[string]any) error {
 			if net, vwap, err := store.NetFilledByStrategy(id, sym); err != nil {
 				log.Printf("[strategy] %s 仓位重建查询失败: %v", id, err)
 			} else if net > 0 {
-				params["restored_position_qty"] = net
-				params["restored_position_vwap"] = vwap
-				// 分档重建（CRA 尾单/首尾止盈的各档成本）：逐笔成交明细一并
-				// 注入，策略支持分档时按成交时间重放（cra RebuildLotsFromFills）；
-				// 不消费该键的策略走聚合 qty/vwap 兜底，行为不变。
-				if fills, ferr := store.FilledOrdersByStrategy(id, sym); ferr != nil {
-					log.Printf("[strategy] %s 逐笔成交查询失败（分档重建降级为聚合）: %v", id, ferr)
-				} else if len(fills) > 0 {
-					list := make([]any, 0, len(fills))
-					for _, f := range fills {
-						list = append(list, map[string]any{"side": f.Side, "qty": f.Filled, "price": f.AvgFillPrice})
+				injectQty := net
+				inject := true
+				// paper 模式：恢复注入必须有 paper 账户真实余额背书（平仓单
+				// 的 OMS 余额锁查 paper 账户账本，与引擎状态无关）——按账户
+				// 实际 free 余额/镜像持仓钳制注入量；背书为零则不注入、策略
+				// 空仓起步，引擎状态与账户严格一致（2026-10-08 实锤：无背书
+				// 注入让策略卡死在"有仓位但平不掉"）。live 模式维持账本净额
+				// 口径不动。
+				if em, _ := item["execution_mode"].(string); em != "live" {
+					if q, ok := clampRestoredQtyByPaperBacking(sym, net); ok {
+						if q < net {
+							log.Printf("[strategy] %s 仓位重建钳制: %s 账本净额 %.6f → paper 账户背书 %.6f", id, sym, net, q)
+						}
+						injectQty = q
+					} else {
+						log.Printf("[strategy] %s 仓位重建跳过: %s 账本净额 %.6f 但 paper 账户无可卖背书，策略空仓起步", id, sym, net)
+						inject = false
 					}
-					params["restored_fills"] = list
+				}
+				if inject {
+					params["restored_position_qty"] = injectQty
+					params["restored_position_vwap"] = vwap
+					// 分档重建（CRA 尾单/首尾止盈的各档成本）：逐笔成交明细一并
+					// 注入，策略支持分档时按成交时间重放（cra RebuildLotsFromFills）；
+					// 不消费该键的策略走聚合 qty/vwap 兜底，行为不变。
+					// 注入量被钳时逐笔明细之和大于注入量，分档重放会超出背书——
+					// 降级为聚合（合成单档），量与背书严格一致。
+					if fills, ferr := store.FilledOrdersByStrategy(id, sym); ferr != nil {
+						log.Printf("[strategy] %s 逐笔成交查询失败（分档重建降级为聚合）: %v", id, ferr)
+					} else if len(fills) > 0 && injectQty >= net {
+						list := make([]any, 0, len(fills))
+						for _, f := range fills {
+							list = append(list, map[string]any{"side": f.Side, "qty": f.Filled, "price": f.AvgFillPrice})
+						}
+						params["restored_fills"] = list
+					}
 				}
 			}
 		}

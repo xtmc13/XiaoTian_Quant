@@ -398,9 +398,11 @@ func (pe *PaperExchange) ApplySimulatedFill(orderID string, trade model.TradeDat
 	pe.notifyStateChange()
 }
 
-// settleSimulatedFill OMS 模拟成交的资金结算（锁仓语义在 OMS/组合层，这里
-// 只动 Free）：买 = quote 减少(含费) + base 增加；卖 = base 减少 + quote
-// 增加(扣费)。防御性截断，任何路径不得把余额记成负。
+// settleSimulatedFill OMS 模拟成交的资金结算：买 = quote 减少(含费) + base
+// 增加；卖 = base 减少 + quote 增加(扣费)。OMS 下单链路在成交前已通过
+// LockOrderFunds 把资金从 Free 锁到 Used——结算先释放对应锁定再按实扣，
+// 否则同一笔成交会被扣两次（锁定一次、结算一次）。无锁定的旧路径
+// （Used=0）行为与之前完全一致。防御性截断，任何路径不得把余额记成负。
 func (pe *PaperExchange) settleSimulatedFill(trade model.TradeData, fee float64) {
 	baseCur := pe.getBaseCurrency(trade.Symbol)
 	quote, ok := pe.balances["USDT"]
@@ -410,6 +412,15 @@ func (pe *PaperExchange) settleSimulatedFill(trade model.TradeData, fee float64)
 	}
 	base, baseOK := pe.balances[baseCur]
 	if trade.Side == "BUY" {
+		// 释放 OMS 锁定的 quote 成本（锁定价与成交价尾差多退少补）。
+		if quote.Used > 0 {
+			release := trade.Price * trade.Quantity
+			if release > quote.Used {
+				release = quote.Used
+			}
+			quote.Used -= release
+			quote.Free += release
+		}
 		cost := trade.Price*trade.Quantity + fee
 		if quote.Free < cost {
 			cost = quote.Free // 防御截断（OMS 风控已 gate，正常到不了这里）
@@ -421,11 +432,21 @@ func (pe *PaperExchange) settleSimulatedFill(trade model.TradeData, fee float64)
 		}
 		base.Free += trade.Quantity
 	} else {
-		// 卖出：base 无条件扣减（合约开空时允许为负 = 空头负债，买平回补）。
 		if !baseOK {
 			base = &model.Balance{Currency: baseCur}
 			pe.balances[baseCur] = base
 		}
+		// 释放 OMS 锁定的 base（平多卖出已在 LockOrderFunds 锁过；
+		// 合约开空无锁定，release=0）。
+		if base.Used > 0 {
+			release := trade.Quantity
+			if release > base.Used {
+				release = base.Used
+			}
+			base.Used -= release
+			base.Free += release
+		}
+		// 卖出：base 无条件扣减（合约开空时允许为负 = 空头负债，买平回补）。
 		base.Free -= trade.Quantity
 		proceeds := trade.Price*trade.Quantity - fee
 		if proceeds > 0 {
@@ -981,6 +1002,123 @@ func (pe *PaperExchange) availableBase(base string) float64 {
 		return bal.Free
 	}
 	return 0
+}
+
+// FreeBalance 某币种当前可用余额（OMS 锁仓与重启恢复注入的背书读取）。
+func (pe *PaperExchange) FreeBalance(currency string) float64 {
+	pe.mu.RLock()
+	defer pe.mu.RUnlock()
+	if bal, ok := pe.balances[currency]; ok {
+		return bal.Free
+	}
+	return 0
+}
+
+// NetPositionQuantity 某 symbol 镜像持仓的净数量（无持仓返回 0；合约开空
+// 结算允许为负，此处如实返回）。
+func (pe *PaperExchange) NetPositionQuantity(symbol string) float64 {
+	pe.mu.RLock()
+	defer pe.mu.RUnlock()
+	net := 0.0
+	for _, pos := range pe.positions[symbol] {
+		net += pos.Quantity
+	}
+	return net
+}
+
+// LockOrderFunds OMS 下单链路（app Context wiring）对 paper 单的资金锁。
+// 口径与 ApplySimulatedFill 的结算严格一一对应：
+//   - 买入：锁 quote（USDT）成本 price*qty（结算扣 成本+手续费，多退少补）；
+//   - 现货卖出：必须持有足额 base，锁 qty，不足即拒单（此前 OMS 锁的是
+//     PortfolioManager 内存镜像——每次重启只重建 USDT 初始余额、base 归零，
+//     重启恢复持仓的平仓单全被"余额不足"误拒，2026-10-08 生产实锤）；
+//   - 合约（swap）卖出：base 足额时锁 qty（平多），不足时放行不锁（开空——
+//     结算允许 base 记负=空头负债，与 settleSimulatedFill 同口径）。
+//
+// 锁定的资金在结算（ApplySimulatedFill）或 UnlockOrderFunds（拒单/撤单）
+// 时释放。price 对市价单须由调用方先解析（last/synthetic 价）。
+func (pe *PaperExchange) LockOrderFunds(symbol string, side model.OrderSide, marketType model.MarketType, price, qty float64) error {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+
+	if side == model.SideBuy {
+		cost := price * qty
+		quote, ok := pe.balances["USDT"]
+		if !ok {
+			quote = &model.Balance{Currency: "USDT"}
+			pe.balances["USDT"] = quote
+		}
+		if quote.Free < cost {
+			return fmt.Errorf("insufficient %s balance: %.2f < %.2f", "USDT", quote.Free, cost)
+		}
+		quote.Free -= cost
+		quote.Used += cost
+		quote.Total = quote.Free + quote.Used
+		return nil
+	}
+
+	baseCur := pe.getBaseCurrency(symbol)
+	base, ok := pe.balances[baseCur]
+	if !ok {
+		base = &model.Balance{Currency: baseCur}
+		pe.balances[baseCur] = base
+	}
+	if marketType == model.MarketSwap {
+		// 平多锁已有的部分；开空无锁放行。
+		lockQty := qty
+		if base.Free < lockQty {
+			lockQty = base.Free
+		}
+		if lockQty < 0 {
+			lockQty = 0
+		}
+		base.Free -= lockQty
+		base.Used += lockQty
+		base.Total = base.Free + base.Used
+		return nil
+	}
+	if base.Free < qty {
+		return fmt.Errorf("insufficient %s balance: %.2f < %.2f", baseCur, base.Free, qty)
+	}
+	base.Free -= qty
+	base.Used += qty
+	base.Total = base.Free + base.Used
+	return nil
+}
+
+// UnlockOrderFunds 撤销 LockOrderFunds（拒单/撤单回滚）：买入按锁定时同价
+// 释放 quote 成本，卖出释放 base（不超过当前 Used，合约开空无锁时为 0）。
+func (pe *PaperExchange) UnlockOrderFunds(symbol string, side model.OrderSide, price, qty float64) {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+
+	if side == model.SideBuy {
+		cost := price * qty
+		quote, ok := pe.balances["USDT"]
+		if !ok || quote.Used <= 0 {
+			return
+		}
+		if cost > quote.Used {
+			cost = quote.Used
+		}
+		quote.Used -= cost
+		quote.Free += cost
+		quote.Total = quote.Free + quote.Used
+		return
+	}
+
+	baseCur := pe.getBaseCurrency(symbol)
+	base, ok := pe.balances[baseCur]
+	if !ok || base.Used <= 0 {
+		return
+	}
+	release := qty
+	if release > base.Used {
+		release = base.Used
+	}
+	base.Used -= release
+	base.Free += release
+	base.Total = base.Free + base.Used
 }
 
 // settleFill 单笔成交结算（在 pe.mu 保护下调用）：

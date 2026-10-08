@@ -346,6 +346,21 @@ func (ctx *Context) wireOrderManager() {
 
 	// ── Balance Lock (paper trading default account) ──
 	om.LockBalance = func(req *order.Request) error {
+		// paper 单锁 paper 交易所账户（paper/paper.go）——唯一持久化、重启
+		// 经 RestoreAccount 完整恢复（含历史 base 资产/持仓）的真实账本。
+		// 此前锁下方 PortfolioManager 内存镜像：该镜像每次重启只按初始余额
+		// 重建 USDT（portfolio.NewManager），base 资产归零——重启恢复持仓的
+		// 平仓单全被"insufficient <base> balance: 0.00"误拒，策略卡死在
+		// "有仓位但平不掉"（2026-10-08 生产实锤：SOL 12.52/BTC 0.001198）。
+		if isPaperExchangeName(req.Exchange) {
+			price := req.Price
+			if req.OrderType == model.TypeMarket || price <= 0 {
+				// paper 允许合成价兜底（与 simulatePaperFill 同一价格源）。
+				price, _ = getLastPriceSource(req.Symbol)
+			}
+			return paper.GetPaperExchange().LockOrderFunds(req.Symbol, req.Side, req.MarketType, price, req.Quantity)
+		}
+
 		acct := ctx.PortfolioManager.GetAccount("default")
 		if acct == nil {
 			return fmt.Errorf("default account not found")
@@ -433,6 +448,16 @@ func (ctx *Context) wireOrderManager() {
 
 	// ── Balance Unlock ──
 	om.UnlockBalance = func(ord *model.OrderData) {
+		// paper 单：与 LockBalance 同一账本（paper 交易所账户）对称释放。
+		if isPaperExchangeName(ord.Exchange) {
+			price := ord.Price
+			if ord.OrderType == model.TypeMarket || price <= 0 {
+				price = getLastPrice(ord.Symbol)
+			}
+			paper.GetPaperExchange().UnlockOrderFunds(ord.Symbol, ord.Side, price, ord.Quantity)
+			return
+		}
+
 		acct := ctx.PortfolioManager.GetAccount("default")
 		if acct == nil {
 			return
@@ -1584,40 +1609,9 @@ func (ctx *Context) wireStrategyEngine() {
 		// （如 "macd"）而非配置 id，GetStrategyConfig 按 id 查永远落空——这曾导致
 		// execution_mode=paper 与杠杆/TP/SL 配置被静默跳过，信号单直连真实交易所。
 		if cfg := findStrategyConfigForSignal(signal); cfg != nil {
-			// 策略配置 execution_mode=paper 时强制 paper 撮合：dry_run 下
-			// 真实交易所路径不会自动成交，信号单会永远停在 NEW。
-			// 安全红线：任何非显式 live 的值（空/signal 等）一律 paper——
-			// resolveExchange 有凭证即直连真实交易所，空值/历史残值绝不放行。
-			// 保存侧（fillStrategyFieldDefaults）已把非 paper 压回 paper，
-			// 这里是第二道防线。
-			if em, _ := cfg["execution_mode"].(string); em != "live" {
-				req.Exchange = "paper"
-			}
+			applyStrategyExecConfig(req, cfg, string(signal.Direction))
 			if cj, ok := cfg["config_json"].(string); ok && cj != "" {
 				if craParams, err := cra.ParseCRAParams(cj); err == nil && craParams.IsContract() {
-					req.MarketType = model.MarketSwap
-					if craParams.Leverage > 0 {
-						req.Leverage = craParams.Leverage
-					} else {
-						req.Leverage = 10
-					}
-					if craParams.MarginMode == "isolated" {
-						req.MarginMode = model.MarginIsolated
-					} else {
-						req.MarginMode = model.MarginCross
-					}
-					switch craParams.PositionSide {
-					case "SHORT":
-						req.PositionSide = model.PositionShort
-					case "BOTH":
-						if signal.Direction == "SHORT" || signal.Direction == "short" || signal.Direction == "SELL" {
-							req.PositionSide = model.PositionShort
-						} else {
-							req.PositionSide = model.PositionLong
-						}
-					default:
-						req.PositionSide = model.PositionLong
-					}
 					// Static TP/SL: pass to order manager for conditional order tracking.
 					if craParams.TPMode == "static" {
 						if craParams.TakeProfitRatio > 0 {
@@ -1693,6 +1687,55 @@ func findStrategyConfigForSignal(signal model.Signal) map[string]any {
 		}
 	}
 	return nil
+}
+
+// applyStrategyExecConfig 把策略配置的执行语义套用到下单请求：execution_mode
+// 强制 paper 防线 + 合约 market_type/杠杆/保证金模式/持仓方向。信号入场单与
+// 账本兜底平仓单共用——兜底路径此前不读配置：paper 策略在配置了币安凭证的
+// 机器上会把平仓单发往真实交易所，swap 策略的平仓单按现货锁 base 钱包
+// （查错钱包，2026-10-08 实锤被拒"insufficient SOL balance"）。
+//
+// 安全红线：任何非显式 live 的 execution_mode（空/signal 等）一律 paper——
+// resolveExchange 有凭证即直连真实交易所，空值/历史残值绝不放行。
+// 保存侧（fillStrategyFieldDefaults）已把非 paper 压回 paper，这里是第二道防线。
+// direction 为信号方向（"LONG"/"SHORT"/"CLOSE"…），仅用于 BOTH 双向时的方向判定。
+func applyStrategyExecConfig(req *order.Request, cfg map[string]any, direction string) {
+	// 策略配置 execution_mode=paper 时强制 paper 撮合：dry_run 下
+	// 真实交易所路径不会自动成交，信号单会永远停在 NEW。
+	if em, _ := cfg["execution_mode"].(string); em != "live" {
+		req.Exchange = "paper"
+	}
+	cj, ok := cfg["config_json"].(string)
+	if !ok || cj == "" {
+		return
+	}
+	craParams, err := cra.ParseCRAParams(cj)
+	if err != nil || !craParams.IsContract() {
+		return
+	}
+	req.MarketType = model.MarketSwap
+	if craParams.Leverage > 0 {
+		req.Leverage = craParams.Leverage
+	} else {
+		req.Leverage = 10
+	}
+	if craParams.MarginMode == "isolated" {
+		req.MarginMode = model.MarginIsolated
+	} else {
+		req.MarginMode = model.MarginCross
+	}
+	switch craParams.PositionSide {
+	case "SHORT":
+		req.PositionSide = model.PositionShort
+	case "BOTH":
+		if direction == "SHORT" || direction == "short" || direction == "SELL" {
+			req.PositionSide = model.PositionShort
+		} else {
+			req.PositionSide = model.PositionLong
+		}
+	default:
+		req.PositionSide = model.PositionLong
+	}
 }
 
 // resolveSignalQuantity determines the order quantity from strategy config or defaults.
@@ -1803,6 +1846,35 @@ func (ctx *Context) closePositionFromSignal(signal model.Signal) {
 			Exchange:  ctx.resolveExchange(signal.Symbol),
 			ClientOID: fmt.Sprintf("sig:%s:%d", signal.Strategy, time.Now().UnixNano()),
 			Source:    "signal:" + signal.Strategy,
+		}
+		// 与入场单同一配置语义：execution_mode 非 live 强制 paper；swap 策略
+		// 补 MarketType/杠杆/方向（此前按现货锁 base 钱包——查错钱包）。
+		if cfg := findStrategyConfigForSignal(signal); cfg != nil {
+			applyStrategyExecConfig(req, cfg, string(signal.Direction))
+		}
+		// paper 平仓按账户实际可卖背书钳制：账本净额可能大于 paper 账户
+		// 实际持仓（恢复注入被钳/账户被重置/手工划转），超出部分永远卖不出
+		// ——与其拒单空转，不如如实平掉可卖部分；背书为零说明账户已无该
+		// 资产，直接跳过（策略引擎已随信号复位为空仓，不会卡死）。
+		if isPaperExchangeName(req.Exchange) {
+			pe := paper.GetPaperExchange()
+			base, _ := parseSymbolPair(req.Symbol)
+			backing := pe.FreeBalance(base)
+			if posQty := pe.NetPositionQuantity(req.Symbol); posQty > 0 && posQty < backing {
+				backing = posQty
+			}
+			if backing <= 0 {
+				ctx.Logger.Warn("Ledger close skipped: paper account holds no sellable balance",
+					"strategy", signal.Strategy, "symbol", signal.Symbol, "ledger_qty", qty)
+				return
+			}
+			if backing < closeQty {
+				ctx.Logger.Warn("Ledger close clamped to paper account backing",
+					"strategy", signal.Strategy, "symbol", signal.Symbol,
+					"ledger_qty", qty, "backing", backing)
+				closeQty = backing
+				req.Quantity = closeQty
+			}
 		}
 		if ord, err := order.GetOrderManager().PlaceOrder(req); err != nil {
 			ctx.Logger.Warn("Ledger close order failed",
