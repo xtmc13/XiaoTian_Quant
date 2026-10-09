@@ -249,7 +249,7 @@ export function createDefaultCRAParams(market: 'spot' | 'contract'): CRAParams {
     addMacdEnabled: false,
     addMacdPeriod: 'close',
     addEmaEnabled: false,
-    addEmaPeriod: '15m',
+    addEmaPeriod: 'close',
     waterfallEnabled: true,
     waterfall: 2,
     stopLossEnabled: market === 'contract',
@@ -266,7 +266,6 @@ export function createDefaultCRAParams(market: 'spot' | 'contract'): CRAParams {
     burnDualThreshold: 3,
     openDouble: false,
     followTrend: false,
-    onlineOrderLimit: 10,
     leverage: defaults.leverage,
     direction: 'long',
   }

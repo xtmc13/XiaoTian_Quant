@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/xiaotian-quant/gateway/internal/risk"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
@@ -25,6 +26,13 @@ import (
 // 侧——long 计入多侧、short 计入空侧、dual 两侧各占一席（dual 实例下个循环
 // 可能开任一侧，两侧都必须占名额）。待启动实例的多侧 running 数与空侧
 // running 数分别不超上限才放行；任一侧超限即拒，409 文案注明是哪一侧。
+//
+// 2026-10-10 迁移：上限值从策略级 config_json 挪到风控中心风控参数
+// （GET/PUT /api/risk/config，config.yaml risk 段持久化，全局单份——与
+// max_concurrent_orders 等风控参数同口径，非 per-user）。多/空分列语义不变：
+// 单个全局上限值，按实例 direction 分侧计数。存量策略 config_json 里已落的
+// online_order_limit 键自此忽略（不再逐策略读）；风控参数缺失时默认值保持
+// 10（risk.DefaultOnlineOrderLimit，与迁移前口径一致）。
 //
 // 校验点在用户主动 Start 路径（StartStrategyConfig/BatchStartConfigs）；
 // ResumeRunningStrategiesLoop 的断点续跑不校验——那是恢复重启前已合规运行
@@ -49,26 +57,12 @@ func isCRAContractItem(item map[string]any) bool {
 	return ok && mapped == "cra_contract"
 }
 
-// craOnlineOrderLimit 读取配置自身的 online_order_limit（config_json，兼容
-// 顶层平铺键）：缺失默认 10（与 cra.ParseCRAParams/前端预设一致），<1 钳制
-// 为 1——限额参数必须始终有牙齿，0/负数视为配置错误按最严口径处理。
-func craOnlineOrderLimit(item map[string]any) int {
-	limit := 10
-	if v := getFloat(item, "online_order_limit", -1); v >= 0 {
-		limit = int(v)
-	}
-	if cj, ok := item["config_json"].(string); ok && cj != "" {
-		var parsed map[string]any
-		if json.Unmarshal([]byte(cj), &parsed) == nil {
-			if v := getFloat(parsed, "online_order_limit", -1); v >= 0 {
-				limit = int(v)
-			}
-		}
-	}
-	if limit < 1 {
-		limit = 1
-	}
-	return limit
+// craOnlineOrderLimit 读取风控中心的全局在线单量限制（risk 包原子值，
+// config.yaml risk.online_order_limit 持久化）。缺失/未配置时回退
+// risk.DefaultOnlineOrderLimit（10）。2026-10-10 起不再逐策略读
+// config_json.online_order_limit——存量策略里的旧键保留但忽略。
+func craOnlineOrderLimit() int {
+	return risk.OnlineOrderLimit()
 }
 
 // craItemDirection 读取配置的有效方向（long/short/dual），与引擎运行时口径
@@ -125,20 +119,20 @@ func countRunningCRAContractsBySide(userID int64, excludeID string) (longN, shor
 
 // enforceOnlineOrderLimit 启动前校验：待启动配置是 CRA 合约实例时，该用户
 // 名下 running 的 CRA 合约实例按方向分列计数——多侧/空侧 running 数分别
-// 达到本配置的 online_order_limit 即拒绝启动（报错注明超限的是哪一侧）。
+// 达到风控中心的全局在线单量限制即拒绝启动（报错注明超限的是哪一侧）。
 // 非 CRA 合约配置一律放行（现货无此参数，币富该功能在合约页）。
 func enforceOnlineOrderLimit(id string, item map[string]any) error {
 	if !isCRAContractItem(item) {
 		return nil
 	}
-	limit := craOnlineOrderLimit(item)
+	limit := craOnlineOrderLimit()
 	dir := craItemDirection(item)
 	longN, shortN := countRunningCRAContractsBySide(getInt64Of(item, "user_id"), id)
 	if dir != "short" && longN >= limit {
-		return fmt.Errorf("在线单量限制（多侧）：当前已有 %d 个多单侧 running CRA 合约实例，达到本策略上限 %d（online_order_limit，多/空分别计）；请先停止部分多单实例或调大该值", longN, limit)
+		return fmt.Errorf("在线单量限制（多侧）：当前已有 %d 个多单侧 running CRA 合约实例，达到风控上限 %d（风控中心·风控参数·在线单量限制，多/空分别计）；请先停止部分多单实例或在风控中心调大该值", longN, limit)
 	}
 	if dir != "long" && shortN >= limit {
-		return fmt.Errorf("在线单量限制（空侧）：当前已有 %d 个空单侧 running CRA 合约实例，达到本策略上限 %d（online_order_limit，多/空分别计）；请先停止部分空单实例或调大该值", shortN, limit)
+		return fmt.Errorf("在线单量限制（空侧）：当前已有 %d 个空单侧 running CRA 合约实例，达到风控上限 %d（风控中心·风控参数·在线单量限制，多/空分别计）；请先停止部分空单实例或在风控中心调大该值", shortN, limit)
 	}
 	return nil
 }

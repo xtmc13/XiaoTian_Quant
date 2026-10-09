@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/xiaotian-quant/gateway/internal/event"
+	"github.com/xiaotian-quant/gateway/internal/risk"
 	"github.com/xiaotian-quant/gateway/internal/store"
 	"github.com/xiaotian-quant/gateway/internal/strategy"
 	"github.com/xiaotian-quant/gateway/internal/strategy/cra"
@@ -24,22 +25,31 @@ import (
 // H3（2026-10-09）补全币富 #32 完整语义：多单数量与空单数量**分别**限制。
 // 按实例 direction 分列计数（long→多侧、short→空侧、dual 两侧各占一席），
 // 多侧与空侧 running 数分别不超上限才放行，超任一侧 409 注明是哪一侧。
+//
+// 2026-10-10 迁移：上限值改读风控中心全局风控参数（risk.OnlineOrderLimit，
+// /api/risk/config 读写，config.yaml risk 段持久化），不再逐策略读
+// config_json.online_order_limit（存量键忽略）；风控参数缺失默认 10。
+
+// setGlobalOnlineLimit 设置全局限额并登记复原（测试间互不污染全局原子值；
+// 0=未设置，读取侧回退默认 10）。
+func setGlobalOnlineLimit(t *testing.T, n int) {
+	t.Helper()
+	risk.SetOnlineOrderLimit(n)
+	t.Cleanup(func() { risk.SetOnlineOrderLimit(0) })
+}
 
 // seedCRAConfig 落库一条策略配置（经 DB 往返，与生产读取路径一致）。
-func seedCRAConfig(t *testing.T, id string, userID int64, stype, status string, limit any) {
+func seedCRAConfig(t *testing.T, id string, userID int64, stype, status string) {
 	t.Helper()
-	seedCRAConfigDir(t, id, userID, stype, status, "long", limit)
+	seedCRAConfigDir(t, id, userID, stype, status, "long")
 }
 
 // seedCRAConfigDir 同 seedCRAConfig，显式指定 direction（H3 多空分列用例）。
-func seedCRAConfigDir(t *testing.T, id string, userID int64, stype, status, direction string, limit any) {
+func seedCRAConfigDir(t *testing.T, id string, userID int64, stype, status, direction string) {
 	t.Helper()
 	cfg := map[string]any{
 		"first_order_amount": 10, "tp_mode": "static", "take_profit_ratio": 0.013,
 		"market_type": "swap", "leverage": 10, "direction": direction,
-	}
-	if limit != nil {
-		cfg["online_order_limit"] = limit
 	}
 	cj, _ := json.Marshal(cfg)
 	item := map[string]any{
@@ -55,27 +65,44 @@ func seedCRAConfigDir(t *testing.T, id string, userID int64, stype, status, dire
 	})
 }
 
-func TestCRAOnlineOrderLimitParsing(t *testing.T) {
-	// 缺失 → 默认 10（与 cra.ParseCRAParams/前端预设一致）。
-	if got := craOnlineOrderLimit(map[string]any{}); got != 10 {
-		t.Fatalf("missing key: got %d, want 10", got)
+// 迁移后口径：限额是风控中心全局值——未配置默认 10，设置后即为生效值，
+// 0/负数视为未配置回退默认（限额必须始终有牙齿）。
+func TestCRAOnlineOrderLimitGlobalSource(t *testing.T) {
+	setGlobalOnlineLimit(t, 0) // 未设置
+	if got := craOnlineOrderLimit(); got != 10 {
+		t.Fatalf("unset global limit: got %d, want default 10", got)
 	}
-	// config_json 取值。
-	if got := craOnlineOrderLimit(map[string]any{"config_json": `{"online_order_limit":3}`}); got != 3 {
-		t.Fatalf("config_json: got %d, want 3", got)
+	risk.SetOnlineOrderLimit(3)
+	if got := craOnlineOrderLimit(); got != 3 {
+		t.Fatalf("global limit 3: got %d", got)
 	}
-	// 顶层平铺键兜底；config_json 优先于顶层。
-	if got := craOnlineOrderLimit(map[string]any{"online_order_limit": 4}); got != 4 {
-		t.Fatalf("top-level: got %d, want 4", got)
+	risk.SetOnlineOrderLimit(-2)
+	if got := craOnlineOrderLimit(); got != 10 {
+		t.Fatalf("negative treated as unset: got %d, want 10", got)
 	}
-	if got := craOnlineOrderLimit(map[string]any{
-		"online_order_limit": 4, "config_json": `{"online_order_limit":2}`,
-	}); got != 2 {
-		t.Fatalf("config_json must win over top-level: got %d, want 2", got)
+}
+
+// 迁移语义：存量策略 config_json 里的 online_order_limit 键被忽略——
+// 配置写 1 但全局默认 10 时，已有 1 个 running 同侧实例仍放行（若读旧键必拒）。
+func TestCRAOnlineOrderLimitIgnoresStrategyConfigJSON(t *testing.T) {
+	setGlobalOnlineLimit(t, 0) // 全局未配置 → 默认 10
+	seedCRAConfig(t, "ool-mig-run", 31, "cra_contract", "running")
+
+	item := map[string]any{
+		"id": "ool-mig-new", "user_id": int64(31), "strategy_type": "cra_contract",
+		// 旧版策略级键：迁移前会读到 1 并拒绝；迁移后必须忽略。
+		"config_json": `{"online_order_limit":1,"direction":"long"}`,
 	}
-	// <1 钳制为 1（限额必须有牙齿，0/负数视为配置错误按最严口径）。
-	if got := craOnlineOrderLimit(map[string]any{"config_json": `{"online_order_limit":0}`}); got != 1 {
-		t.Fatalf("zero clamp: got %d, want 1", got)
+	if err := enforceOnlineOrderLimit("ool-mig-new", item); err != nil {
+		t.Fatalf("存量 config_json.online_order_limit 必须忽略（全局限额口径）, got %v", err)
+	}
+
+	// 全局限额调到 1 后同一配置即被拒——证明生效值来自风控参数。
+	risk.SetOnlineOrderLimit(1)
+	if err := enforceOnlineOrderLimit("ool-mig-new", item); err == nil {
+		t.Fatal("全局限额 1 + 1 个多侧 running，必须拒绝")
+	} else if !strings.Contains(err.Error(), "多侧") {
+		t.Fatalf("报错须注明多侧, got %v", err)
 	}
 }
 
@@ -103,13 +130,13 @@ func TestCRAItemDirection(t *testing.T) {
 }
 
 func TestCRAOnlineOrderLimitCountScope(t *testing.T) {
-	seedCRAConfig(t, "ool-scope-run", 7, "cra_contract", "running", nil)
+	seedCRAConfig(t, "ool-scope-run", 7, "cra_contract", "running")
 	// 别名类型（trend_long → cra_contract 引擎）也计入。
-	seedCRAConfig(t, "ool-scope-alias", 7, "trend_long", "running", nil)
+	seedCRAConfig(t, "ool-scope-alias", 7, "trend_long", "running")
 	// 以下一律不计入：stopped / 现货 / 其他用户。
-	seedCRAConfig(t, "ool-scope-stopped", 7, "cra_contract", "stopped", nil)
-	seedCRAConfig(t, "ool-scope-spot", 7, "cra_spot", "running", nil)
-	seedCRAConfig(t, "ool-scope-other-user", 8, "cra_contract", "running", nil)
+	seedCRAConfig(t, "ool-scope-stopped", 7, "cra_contract", "stopped")
+	seedCRAConfig(t, "ool-scope-spot", 7, "cra_spot", "running")
+	seedCRAConfig(t, "ool-scope-other-user", 8, "cra_contract", "running")
 
 	longN, shortN := countRunningCRAContractsBySide(7, "")
 	if longN != 2 || shortN != 0 {
@@ -128,11 +155,11 @@ func TestCRAOnlineOrderLimitCountScope(t *testing.T) {
 
 // H3：按方向分列计数——long 计多侧、short 计空侧、dual 两侧各占一席。
 func TestCRAOnlineOrderLimitCountBySide(t *testing.T) {
-	seedCRAConfigDir(t, "ool-side-long", 21, "cra_contract", "running", "long", nil)
-	seedCRAConfigDir(t, "ool-side-short", 21, "cra_contract", "running", "short", nil)
-	seedCRAConfigDir(t, "ool-side-dual", 21, "cra_contract", "running", "dual", nil)
+	seedCRAConfigDir(t, "ool-side-long", 21, "cra_contract", "running", "long")
+	seedCRAConfigDir(t, "ool-side-short", 21, "cra_contract", "running", "short")
+	seedCRAConfigDir(t, "ool-side-dual", 21, "cra_contract", "running", "dual")
 	// stopped 的 dual 不计入。
-	seedCRAConfigDir(t, "ool-side-dual-stopped", 21, "cra_contract", "stopped", "dual", nil)
+	seedCRAConfigDir(t, "ool-side-dual-stopped", 21, "cra_contract", "stopped", "dual")
 
 	longN, shortN := countRunningCRAContractsBySide(21, "")
 	if longN != 2 || shortN != 2 {
@@ -146,11 +173,13 @@ func TestCRAOnlineOrderLimitCountBySide(t *testing.T) {
 }
 
 func TestCRAOnlineOrderLimitEnforcement(t *testing.T) {
-	seedCRAConfig(t, "ool-enf-run", 9, "cra_contract", "running", nil)
+	seedCRAConfig(t, "ool-enf-run", 9, "cra_contract", "running")
 
+	// 全局限额 1、多侧已运行 1 → 拒。
+	setGlobalOnlineLimit(t, 1)
 	overLimit := map[string]any{
 		"id": "ool-enf-new", "user_id": int64(9), "strategy_type": "cra_contract",
-		"config_json": `{"online_order_limit":1}`,
+		"config_json": `{"direction":"long"}`,
 	}
 	if err := enforceOnlineOrderLimit("ool-enf-new", overLimit); err == nil {
 		t.Fatal("over-limit start must be rejected")
@@ -158,12 +187,9 @@ func TestCRAOnlineOrderLimitEnforcement(t *testing.T) {
 		t.Fatalf("error must name the limit, got %v", err)
 	}
 
-	// 限额 2、已运行 1 → 放行。
-	underLimit := map[string]any{
-		"id": "ool-enf-new", "user_id": int64(9), "strategy_type": "cra_contract",
-		"config_json": `{"online_order_limit":2}`,
-	}
-	if err := enforceOnlineOrderLimit("ool-enf-new", underLimit); err != nil {
+	// 全局限额调大为 2、已运行 1 → 放行。
+	risk.SetOnlineOrderLimit(2)
+	if err := enforceOnlineOrderLimit("ool-enf-new", overLimit); err != nil {
 		t.Fatalf("under-limit start must pass, got %v", err)
 	}
 
@@ -176,11 +202,12 @@ func TestCRAOnlineOrderLimitEnforcement(t *testing.T) {
 
 // H3 多空分列核心语义：多侧满、空侧有余 → 开空放行 / 开多拒绝（409 注明多侧）。
 func TestCRAOnlineOrderLimitLongFullShortOpen(t *testing.T) {
-	seedCRAConfigDir(t, "ool-split-long-run", 22, "cra_contract", "running", "long", nil)
+	setGlobalOnlineLimit(t, 1)
+	seedCRAConfigDir(t, "ool-split-long-run", 22, "cra_contract", "running", "long")
 
 	newLong := map[string]any{
 		"id": "ool-split-new-long", "user_id": int64(22), "strategy_type": "cra_contract",
-		"config_json": `{"online_order_limit":1,"direction":"long"}`,
+		"config_json": `{"direction":"long"}`,
 	}
 	err := enforceOnlineOrderLimit("ool-split-new-long", newLong)
 	if err == nil {
@@ -197,7 +224,7 @@ func TestCRAOnlineOrderLimitLongFullShortOpen(t *testing.T) {
 	// 空侧无 running 实例 → 开空放行（同一限额口径下两侧互不占名额）。
 	newShort := map[string]any{
 		"id": "ool-split-new-short", "user_id": int64(22), "strategy_type": "cra_contract",
-		"config_json": `{"online_order_limit":1,"direction":"short"}`,
+		"config_json": `{"direction":"short"}`,
 	}
 	if err := enforceOnlineOrderLimit("ool-split-new-short", newShort); err != nil {
 		t.Fatalf("多侧满不影响开空, got %v", err)
@@ -206,11 +233,12 @@ func TestCRAOnlineOrderLimitLongFullShortOpen(t *testing.T) {
 
 // H3 空侧镜像：空侧满、多侧有余 → 开多放行 / 开空拒绝（409 注明空侧）。
 func TestCRAOnlineOrderLimitShortFullLongOpen(t *testing.T) {
-	seedCRAConfigDir(t, "ool-split-short-run", 23, "cra_contract", "running", "short", nil)
+	setGlobalOnlineLimit(t, 1)
+	seedCRAConfigDir(t, "ool-split-short-run", 23, "cra_contract", "running", "short")
 
 	newShort := map[string]any{
 		"id": "ool-split-new-short", "user_id": int64(23), "strategy_type": "cra_contract",
-		"config_json": `{"online_order_limit":1,"direction":"short"}`,
+		"config_json": `{"direction":"short"}`,
 	}
 	err := enforceOnlineOrderLimit("ool-split-new-short", newShort)
 	if err == nil {
@@ -221,7 +249,7 @@ func TestCRAOnlineOrderLimitShortFullLongOpen(t *testing.T) {
 
 	newLong := map[string]any{
 		"id": "ool-split-new-long", "user_id": int64(23), "strategy_type": "cra_contract",
-		"config_json": `{"online_order_limit":1,"direction":"long"}`,
+		"config_json": `{"direction":"long"}`,
 	}
 	if err := enforceOnlineOrderLimit("ool-split-new-long", newLong); err != nil {
 		t.Fatalf("空侧满不影响开多, got %v", err)
@@ -231,12 +259,13 @@ func TestCRAOnlineOrderLimitShortFullLongOpen(t *testing.T) {
 // H3 dual 语义：dual 实例两侧各占一席——running dual 把两侧都顶到限额时，
 // 开多/开空都拒；新开 dual 要求两侧同时有余（一侧满即拒，报满的那一侧）。
 func TestCRAOnlineOrderLimitDualOccupiesBothSides(t *testing.T) {
-	seedCRAConfigDir(t, "ool-dual-run", 24, "cra_contract", "running", "dual", nil)
+	setGlobalOnlineLimit(t, 1)
+	seedCRAConfigDir(t, "ool-dual-run", 24, "cra_contract", "running", "dual")
 
 	mk := func(id, dir string) map[string]any {
 		return map[string]any{
 			"id": id, "user_id": int64(24), "strategy_type": "cra_contract",
-			"config_json": `{"online_order_limit":1,"direction":"` + dir + `"}`,
+			"config_json": `{"direction":"` + dir + `"}`,
 		}
 	}
 	// dual 占了两侧 → 开多/开空/再开 dual 全拒。
@@ -254,17 +283,17 @@ func TestCRAOnlineOrderLimitDualOccupiesBothSides(t *testing.T) {
 	}
 
 	// 新开 dual：多侧满（空侧有余）→ 拒，报多侧。
-	seedCRAConfigDir(t, "ool-dual-long2", 25, "cra_contract", "running", "long", nil)
+	seedCRAConfigDir(t, "ool-dual-long2", 25, "cra_contract", "running", "long")
 	if err := enforceOnlineOrderLimit("ool-dual-new25", map[string]any{
 		"id": "ool-dual-new25", "user_id": int64(25), "strategy_type": "cra_contract",
-		"config_json": `{"online_order_limit":1,"direction":"dual"}`,
+		"config_json": `{"direction":"dual"}`,
 	}); err == nil || !strings.Contains(err.Error(), "多侧") {
 		t.Fatalf("多侧满时新开 dual 必须拒且报多侧, got %v", err)
 	}
 	// 两侧都有余 → dual 放行。
 	if err := enforceOnlineOrderLimit("ool-dual-new26", map[string]any{
 		"id": "ool-dual-new26", "user_id": int64(26), "strategy_type": "cra_contract",
-		"config_json": `{"online_order_limit":1,"direction":"dual"}`,
+		"config_json": `{"direction":"dual"}`,
 	}); err != nil {
 		t.Fatalf("两侧有余时 dual 必须放行, got %v", err)
 	}
@@ -289,17 +318,19 @@ func TestCRAOnlineOrderLimitStartHTTP(t *testing.T) {
 		return w.Code, resp
 	}
 
-	// 已运行 1 个（用户 11），新配置限额 1 → 409，detail 说明口径。
-	seedCRAConfig(t, "ool-http-run", 11, "cra_contract", "running", nil)
-	seedCRAConfig(t, "ool-http-blocked", 11, "cra_contract", "stopped", 1)
+	// 全局限额 1，已运行 1 个（用户 11）→ 409，detail 说明口径。
+	setGlobalOnlineLimit(t, 1)
+	seedCRAConfig(t, "ool-http-run", 11, "cra_contract", "running")
+	seedCRAConfig(t, "ool-http-blocked", 11, "cra_contract", "stopped")
 	code, resp := start("ool-http-blocked")
 	assertEq(t, code, http.StatusConflict, "over-limit start must be 409")
 	assertTrue(t, strings.Contains(getString(resp, "detail", ""), "在线单量限制"),
 		"409 detail must explain the limit, got "+getString(resp, "detail", ""))
 	assertTrue(t, eng.Get("ool-http-blocked") == nil, "blocked strategy must not enter engine")
 
-	// 限额调大为 2 → 同一 Start 链路放行，引擎实例真实在跑。
-	seedCRAConfig(t, "ool-http-ok", 11, "cra_contract", "stopped", 2)
+	// 全局限额调大为 2 → 同一 Start 链路放行，引擎实例真实在跑。
+	risk.SetOnlineOrderLimit(2)
+	seedCRAConfig(t, "ool-http-ok", 11, "cra_contract", "stopped")
 	code, resp = start("ool-http-ok")
 	assertEq(t, code, http.StatusOK, "under-limit start must be 200, detail="+getString(resp, "detail", ""))
 	t.Cleanup(func() { stopStrategyInEngine("ool-http-ok") })
@@ -308,7 +339,7 @@ func TestCRAOnlineOrderLimitStartHTTP(t *testing.T) {
 	}
 }
 
-// H3 Start 端到端多空分列：多侧满（限额 1）时，同用户开多 409 注明多侧、
+// H3 Start 端到端多空分列：全局限额 1、多侧满时，同用户开多 409 注明多侧、
 // 开空 200 真实启动——409/200 由 direction 决定而非总数。
 func TestCRAOnlineOrderLimitSplitStartHTTP(t *testing.T) {
 	eng := strategy.GetEngine(event.NewEventBus(4096, 1))
@@ -327,11 +358,12 @@ func TestCRAOnlineOrderLimitSplitStartHTTP(t *testing.T) {
 		return w.Code, resp
 	}
 
-	// 用户 12：多侧已跑 1 个（限额 1 顶满多侧，空侧空）。
-	seedCRAConfigDir(t, "ool-split-http-run", 12, "cra_contract", "running", "long", nil)
+	// 全局限额 1；用户 12：多侧已跑 1 个（顶满多侧，空侧空）。
+	setGlobalOnlineLimit(t, 1)
+	seedCRAConfigDir(t, "ool-split-http-run", 12, "cra_contract", "running", "long")
 
 	// 开多 → 409 且注明多侧。
-	seedCRAConfigDir(t, "ool-split-http-long", 12, "cra_contract", "stopped", "long", 1)
+	seedCRAConfigDir(t, "ool-split-http-long", 12, "cra_contract", "stopped", "long")
 	code, resp := start("ool-split-http-long")
 	assertEq(t, code, http.StatusConflict, "long-side full: new long must be 409")
 	assertTrue(t, strings.Contains(getString(resp, "detail", ""), "多侧"),
@@ -339,7 +371,7 @@ func TestCRAOnlineOrderLimitSplitStartHTTP(t *testing.T) {
 	assertTrue(t, eng.Get("ool-split-http-long") == nil, "blocked long must not enter engine")
 
 	// 开空 → 200 放行（空侧有余），引擎真实启动。
-	seedCRAConfigDir(t, "ool-split-http-short", 12, "cra_contract", "stopped", "short", 1)
+	seedCRAConfigDir(t, "ool-split-http-short", 12, "cra_contract", "stopped", "short")
 	code, resp = start("ool-split-http-short")
 	assertEq(t, code, http.StatusOK, "short side has room: new short must be 200, detail="+getString(resp, "detail", ""))
 	t.Cleanup(func() { stopStrategyInEngine("ool-split-http-short") })

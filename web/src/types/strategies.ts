@@ -282,6 +282,8 @@ export interface StrategyRuntimeStatus {
 export interface StrategyRuntimeResponse {
   status: StrategyRuntimeStatus | null
   price: number
+  /** 现价来源：ws=WS ticker 新鲜缓存；kline=策略工作周期 K 线最新收盘（WS 无订阅/断连回落）；取不到价时无此键。 */
+  price_source?: 'ws' | 'kline'
   config: Record<string, unknown>
   /** 现价到下一档未触发补仓档位的距离百分比（可计算才返回）。 */
   next_add_distance_pct?: number

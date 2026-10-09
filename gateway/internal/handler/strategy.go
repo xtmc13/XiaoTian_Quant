@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/app"
 	"github.com/xiaotian-quant/gateway/internal/market"
+	"github.com/xiaotian-quant/gateway/internal/model"
 	"github.com/xiaotian-quant/gateway/internal/paper"
 	"github.com/xiaotian-quant/gateway/internal/store"
 	"github.com/xiaotian-quant/gateway/internal/strategy"
@@ -234,7 +235,10 @@ func GetStrategyConfig(c *gin.Context) {
 
 // GetStrategyRuntime 返回运行中策略的实时状态（运行面板数据源）：
 // status=引擎内策略实例的 RuntimeStatus（未运行/不支持时为 null）、
-// price=币安 WS 最新价（取不到为 0）、config=该策略 config_json 解析结果，
+// price=最新可得现价（WS ticker 缓存新鲜时取 WS；否则回落该策略工作周期
+// K 线供给的最新收盘——WS 对未订阅/断连 symbol 会返回冻结残留值，2026-10-10
+// 生产实证 SOLUSDT 面板价停在数小时前的旧值）、price_source=价格来源
+// （ws/kline，取不到价时不返回该键）、config=该策略 config_json 解析结果，
 // 另附 next_add_distance_pct（下一档补仓距离）与 take_profit_distance_pct
 // （静态止盈距离，可计算时才返回）。
 func GetStrategyRuntime(c *gin.Context) {
@@ -255,18 +259,23 @@ func GetStrategyRuntime(c *gin.Context) {
 		}
 	}
 
-	price := 0.0
-	if appCtx := app.Get(); appCtx != nil && appCtx.BinanceWS != nil {
-		sym := strings.ToUpper(strings.TrimSpace(getString(item, "symbol", "")))
-		if sym == "" {
-			if coin := strings.TrimSpace(getString(item, "coin", "")); coin != "" {
-				sym = strings.ToUpper(coin) + "USDT"
-			}
-		}
-		if sym != "" {
-			price = appCtx.BinanceWS.GetPrice(sym)
+	sym := strings.ToUpper(strings.TrimSpace(getString(item, "symbol", "")))
+	if sym == "" {
+		if coin := strings.TrimSpace(getString(item, "coin", "")); coin != "" {
+			sym = strings.ToUpper(coin) + "USDT"
 		}
 	}
+	var ws freshPricer
+	if appCtx := app.Get(); appCtx != nil && appCtx.BinanceWS != nil {
+		ws = appCtx.BinanceWS
+	}
+	var md runtimeMarketData
+	primaryTF := ""
+	if eng := strategy.GetEngine(nil); eng != nil {
+		md = eng.MarketData()
+		primaryTF = strategyPrimaryTFOf(eng.Get(id))
+	}
+	price, priceSrc := resolveRuntimePrice(ws, md, primaryTF, sym)
 
 	// 持仓数量补真值：经典策略（MACD 等）的 RuntimeStatus 不发 position_qty
 	// （曾把 500U 本金当数量展示——2026-10-04 实证），paper 实例按成交账本
@@ -301,6 +310,9 @@ func GetStrategyRuntime(c *gin.Context) {
 		"price":  price,
 		"config": config,
 	}
+	if priceSrc != "" {
+		resp["price_source"] = priceSrc
+	}
 	if d, ok := computeNextAddDistance(status, config, price); ok {
 		resp["next_add_distance_pct"] = d
 	}
@@ -308,6 +320,75 @@ func GetStrategyRuntime(c *gin.Context) {
 		resp["take_profit_distance_pct"] = d
 	}
 	c.JSON(http.StatusOK, resp)
+}
+
+// ── 现价解析（2026-10-10 陈旧价根修）──
+
+// wsPriceMaxStale 是 WS 价缓存的新鲜度上限：已订阅 symbol 在连接健康时
+// ticker/trade 秒级推送，超过该窗口未更新即视为缓存冻结（断连/从未订阅），
+// 现价回落到策略工作周期 K 线供给的最新收盘。
+const wsPriceMaxStale = 2 * time.Minute
+
+// freshPricer 抽象 WS 价缓存的新鲜读取（*exchange.BinanceWSStream 满足），
+// 便于测试替身。
+type freshPricer interface {
+	GetPriceFresh(symbol string, maxStale time.Duration) float64
+}
+
+// resolveRuntimePrice 取运行面板"现价"的最新鲜来源：WS ticker 缓存新鲜优先；
+// 否则回落该策略工作周期 K 线供给的最新收盘（kline_feeder 发布、引擎
+// MarketData 累积的运行中策略 bar 序列）。md 为引擎 MarketData（ nil 表示
+// 无 K 线源），primaryTF 为策略声明的工作周期（空=不过滤，取任意周期最新）。
+// source 为 "ws"/"kline"/""。
+func resolveRuntimePrice(ws freshPricer, md runtimeMarketData, primaryTF, sym string) (price float64, source string) {
+	if sym == "" {
+		return 0, ""
+	}
+	if ws != nil {
+		if p := ws.GetPriceFresh(sym, wsPriceMaxStale); p > 0 {
+			return p, "ws"
+		}
+	}
+	if p, ok := latestKlineClose(md, primaryTF, sym); ok {
+		return p, "kline"
+	}
+	return 0, ""
+}
+
+// runtimeMarketData 是引擎 MarketData 的最小读取面（*strategy.MarketData
+// 满足），接口化便于测试替身/独立实例。
+type runtimeMarketData interface {
+	GetBar(symbol, tf string) (model.Bar, bool)
+	LastBar(symbol string) (model.Bar, bool)
+}
+
+// latestKlineClose 取该 symbol 的最新闭合 K 线收盘：优先工作周期（primaryTF），
+// 取不到回退任意周期最新一根。
+func latestKlineClose(md runtimeMarketData, primaryTF, sym string) (float64, bool) {
+	if md == nil {
+		return 0, false
+	}
+	if primaryTF != "" {
+		if bar, ok := md.GetBar(sym, primaryTF); ok && bar.Close > 0 {
+			return bar.Close, true
+		}
+	}
+	if bar, ok := md.LastBar(sym); ok && bar.Close > 0 {
+		return bar.Close, true
+	}
+	return 0, false
+}
+
+// strategyPrimaryTFOf 取策略声明的工作周期（PrimaryTimeframer 可选接口；
+// 未声明/未在引擎中运行返回空串，回落任意周期最新 K 线）。
+func strategyPrimaryTFOf(s strategy.Strategy) string {
+	if s == nil {
+		return ""
+	}
+	if pt, ok := strategy.UnwrapStrategy(s).(strategy.PrimaryTimeframer); ok {
+		return strings.ToLower(strings.TrimSpace(pt.PrimaryTimeframe()))
+	}
+	return ""
 }
 
 // computeNextAddDistance 计算现价到下一档未触发补仓档位的距离百分比。
@@ -1135,8 +1216,9 @@ func StartStrategyConfig(c *gin.Context) {
 	if !requireOwner(c, getInt64Of(item, "user_id")) {
 		return
 	}
-	// D2 在线单量限制（online_order_limit，币富 #32）：CRA 合约实例的
-	// 跨交易对总量闸，按同一用户名下 running 的 CRA 合约实例数校验。
+	// D2 在线单量限制（币富 #32）：CRA 合约实例的跨交易对总量闸，按同一用户
+	// 名下 running 的 CRA 合约实例数多/空分列校验；上限值来自风控中心风控
+	// 参数（全局，2026-10-10 自策略级 config_json 迁入）。
 	if err := enforceOnlineOrderLimit(id, item); err != nil {
 		c.JSON(http.StatusConflict, gin.H{"detail": err.Error()})
 		return

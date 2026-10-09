@@ -3219,6 +3219,8 @@ export interface RiskConfig {
   position_limit_pct: number
   profit_protection_enabled: boolean
   indicator_fail_open: boolean
+  /** 在线单量限制（CRA 合约跨实例总量闸，多/空按实例 direction 分列计数）。 */
+  online_order_limit: number
 }
 
 export const riskApi = {

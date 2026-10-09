@@ -89,49 +89,80 @@ describe('CRAParamForm', () => {
     expect(apiPayloadToCraParams({}).followTrend).toBe(false)
   })
 
-  // ── D2：在线单量限制输入框（合约区，币富 #32 跨实例总量闸口径）──
+  // ── 在线单量限制已迁往风控中心风控参数（2026-10-10）：策略表单不再出现，
+  // payload 不再携带该键；存量 config_json 里的旧键由后端忽略。 ──
 
-  it('renders online order limit input with default 10 (contract only)', () => {
-    const { unmount } = render(<CRAParamForm {...baseProps} market="contract" />, { wrapper })
-    expect(screen.getByText('在线单量限制')).toBeTruthy()
-    const input = screen.getByText('在线单量限制').parentElement!.querySelector('input') as HTMLInputElement
-    expect(input).toBeTruthy()
-    expect(input.value).toBe('10')
-    unmount()
-
-    // 现货不渲染（币富该功能在合约页）。
-    render(<CRAParamForm {...baseProps} />, { wrapper })
+  it('no longer renders the online order limit input (moved to 风控中心风控参数)', () => {
+    render(<CRAParamForm {...baseProps} market="contract" />, { wrapper })
     expect(screen.queryByText('在线单量限制')).toBeNull()
   })
 
-  it('updates onlineOrderLimit via the input, clamped to min 1', () => {
-    const onChange = vi.fn()
-    render(<CRAParamForm {...baseProps} market="contract" onChange={onChange} />, { wrapper })
-    const input = screen.getByText('在线单量限制').parentElement!.querySelector('input') as HTMLInputElement
-    fireEvent.change(input, { target: { value: '3' } })
-    let lastCall = onChange.mock.calls[onChange.mock.calls.length - 1][0] as CRAParams
-    expect(lastCall.onlineOrderLimit).toBe(3)
-    // 0/空输入钳制为 1（与后端 craOnlineOrderLimit 的最严口径一致）。
-    fireEvent.change(input, { target: { value: '0' } })
-    lastCall = onChange.mock.calls[onChange.mock.calls.length - 1][0] as CRAParams
-    expect(lastCall.onlineOrderLimit).toBe(1)
+  it('api payload no longer carries online_order_limit', () => {
+    const payload = craParamsToApiPayload(DEFAULT_CRA_PARAMS)
+    expect('online_order_limit' in payload).toBe(false)
+    // 存量配置的旧键回填时被忽略（不抛错、不产生策略级字段）。
+    const restored = apiPayloadToCraParams({
+      online_order_limit: 3,
+    } as unknown as Parameters<typeof apiPayloadToCraParams>[0])
+    expect('onlineOrderLimit' in restored).toBe(false)
   })
 
-  // ── H3：口径说明同步——多/空分别计（币富 #32 完整语义）──
-  it('H3: 在线单量限制口径说明注明多单/空单分别计数', () => {
+  // ── 补仓 EMA 监测行（币富"补仓MACD监测+补仓EMA监测"两行补齐）──
+
+  it('renders add-position EMA monitor row under MACD (contract only)', () => {
+    const { unmount } = render(<CRAParamForm {...baseProps} market="contract" />, { wrapper })
+    expect(screen.getByLabelText('补仓 MACD 监测')).toBeTruthy()
+    expect(screen.getByLabelText('补仓 EMA 监测')).toBeTruthy()
+    unmount()
+
+    // 现货不渲染补仓指标区（币富该功能在合约页）。
+    render(<CRAParamForm {...baseProps} />, { wrapper })
+    expect(screen.queryByLabelText('补仓 EMA 监测')).toBeNull()
+  })
+
+  it('add-position EMA monitor defaults to off / close（与引擎 ParseCRAParams 默认一致）', () => {
+    expect(DEFAULT_CRA_PARAMS.addEmaEnabled).toBe(false)
+    expect(DEFAULT_CRA_PARAMS.addEmaPeriod).toBe('close')
+    // 默认关闭时周期下拉不渲染（与 MACD 行同一 PeriodSelect 行为）。
     render(<CRAParamForm {...baseProps} market="contract" />, { wrapper })
-    const desc = screen.getByText('在线单量限制').parentElement!.querySelector('.text-\\[10px\\]')
-    expect(desc?.textContent).toContain('多/空分别计')
-    expect(desc?.textContent).toContain('dual 两侧各占一席')
+    const labelText = screen.getByText('补仓 EMA 监测')
+    const row = labelText.closest('label')!.parentElement!
+    expect(row.querySelector('select')).toBeNull()
   })
 
-  it('round-trips onlineOrderLimit as online_order_limit in the api payload', () => {
-    const payload = craParamsToApiPayload({ ...DEFAULT_CRA_PARAMS, onlineOrderLimit: 3 })
-    expect(payload.online_order_limit).toBe(3)
-    const restored = apiPayloadToCraParams({ online_order_limit: 5 })
-    expect(restored.onlineOrderLimit).toBe(5)
-    // 缺省回填默认 10（与后端 ParseCRAParams 一致）。
-    expect(apiPayloadToCraParams({}).onlineOrderLimit).toBe(10)
+  it('toggles add-position EMA monitor and changes its period', () => {
+    const onChange = vi.fn()
+    const value: CRAParams = { ...DEFAULT_CRA_PARAMS, addEmaEnabled: true }
+    render(<CRAParamForm {...baseProps} market="contract" value={value} onChange={onChange} />, { wrapper })
+
+    // 周期下拉复用统一档位（含 close/30m/1h/4h/8h）。
+    const labelText = screen.getByText('补仓 EMA 监测')
+    const row = labelText.closest('label')!.parentElement!
+    const select = row.querySelector('select') as HTMLSelectElement
+    expect(select).toBeTruthy()
+    expect(Array.from(select.options).map((o) => o.value)).toEqual(['close', '5m', '15m', '30m', '1h', '4h', '8h'])
+    fireEvent.change(select, { target: { value: '1h' } })
+    let lastCall = onChange.mock.calls[onChange.mock.calls.length - 1][0] as CRAParams
+    expect(lastCall.addEmaPeriod).toBe('1h')
+
+    // 开关切换。
+    const checkbox = screen.getByLabelText('补仓 EMA 监测') as HTMLInputElement
+    fireEvent.click(checkbox)
+    lastCall = onChange.mock.calls[onChange.mock.calls.length - 1][0] as CRAParams
+    expect(lastCall.addEmaEnabled).toBe(false)
+  })
+
+  it('round-trips add_ema_enabled/add_ema_period in the api payload（编辑回填可用）', () => {
+    const payload = craParamsToApiPayload({ ...DEFAULT_CRA_PARAMS, addEmaEnabled: true, addEmaPeriod: '4h' })
+    expect(payload.add_ema_enabled).toBe(true)
+    expect(payload.add_ema_period).toBe('4h')
+    const restored = apiPayloadToCraParams({ add_ema_enabled: true, add_ema_period: '30m' })
+    expect(restored.addEmaEnabled).toBe(true)
+    expect(restored.addEmaPeriod).toBe('30m')
+    // 缺省回填默认关闭/close（与后端 ParseCRAParams 一致）。
+    const def = apiPayloadToCraParams({})
+    expect(def.addEmaEnabled).toBe(false)
+    expect(def.addEmaPeriod).toBe('close')
   })
 
   // ── A1：首单挂单价格输入框 ──

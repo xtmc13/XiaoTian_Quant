@@ -19,17 +19,21 @@ import (
 // BinanceWSStream connects to Binance WebSocket for real-time market data.
 // Publishes tick/bar data to the event bus for strategy consumption.
 type BinanceWSStream struct {
-	symbols    []string
-	bus        *event.EventBus
-	conn       *websocket.Conn
-	mu         sync.RWMutex
-	running    bool
-	stopCh     chan struct{}
-	reconnect  chan struct{}
+	symbols   []string
+	bus       *event.EventBus
+	conn      *websocket.Conn
+	mu        sync.RWMutex
+	running   bool
+	stopCh    chan struct{}
+	reconnect chan struct{}
 
 	// Last prices for bar building
-	prices     map[string]float64
-	pricesMu   sync.RWMutex
+	prices   map[string]float64
+	pricesMu sync.RWMutex
+	// pricesTs 记录每个 symbol 价格缓存的本地写入时间（unix ms）。陈旧度判定
+	// 用本地接收时刻而非交易所事件时间：它度量的是"我们多久没收到行情"
+	// （断连/未订阅/流失效），与载荷时钟偏移无关。
+	pricesTs map[string]int64
 
 	// Callbacks
 	onTick      func(tick model.Tick)
@@ -48,6 +52,7 @@ func NewBinanceWSStream(symbols []string, bus *event.EventBus) *BinanceWSStream 
 		stopCh:    make(chan struct{}),
 		reconnect: make(chan struct{}, 1),
 		prices:    make(map[string]float64),
+		pricesTs:  make(map[string]int64),
 	}
 }
 
@@ -255,6 +260,7 @@ func (s *BinanceWSStream) handleTrade(data json.RawMessage, stream string) {
 
 	s.pricesMu.Lock()
 	s.prices[trade.Symbol] = price
+	s.pricesTs[trade.Symbol] = time.Now().UnixMilli()
 	s.pricesMu.Unlock()
 
 	tick := model.Tick{
@@ -286,15 +292,15 @@ func (s *BinanceWSStream) handleTrade(data json.RawMessage, stream string) {
 
 func (s *BinanceWSStream) handleTicker(data json.RawMessage, stream string) {
 	var ticker struct {
-		Symbol       string `json:"s"`
-		LastPrice    string `json:"c"`
-		OpenPrice    string `json:"o"`
-		HighPrice    string `json:"h"`
-		LowPrice     string `json:"l"`
-		Volume       string `json:"v"`
-		BidPrice     string `json:"b"`
-		AskPrice     string `json:"a"`
-		PriceChange  string `json:"p"`
+		Symbol         string `json:"s"`
+		LastPrice      string `json:"c"`
+		OpenPrice      string `json:"o"`
+		HighPrice      string `json:"h"`
+		LowPrice       string `json:"l"`
+		Volume         string `json:"v"`
+		BidPrice       string `json:"b"`
+		AskPrice       string `json:"a"`
+		PriceChange    string `json:"p"`
 		PriceChangePct string `json:"P"`
 	}
 	if err := json.Unmarshal(data, &ticker); err != nil {
@@ -310,6 +316,7 @@ func (s *BinanceWSStream) handleTicker(data json.RawMessage, stream string) {
 
 	s.pricesMu.Lock()
 	s.prices[ticker.Symbol] = last
+	s.pricesTs[ticker.Symbol] = time.Now().UnixMilli()
 	s.pricesMu.Unlock()
 
 	// Build bar-like data from the 24h ticker for the optional local onBar
@@ -335,10 +342,10 @@ func (s *BinanceWSStream) handleTicker(data json.RawMessage, stream string) {
 
 func (s *BinanceWSStream) handleMarkPrice(data json.RawMessage, stream string) {
 	var mark struct {
-		Symbol       string `json:"s"`
-		MarkPrice    string `json:"p"`
-		FundingRate  string `json:"r"`
-		NextFunding  int64  `json:"T"`
+		Symbol      string `json:"s"`
+		MarkPrice   string `json:"p"`
+		FundingRate string `json:"r"`
+		NextFunding int64  `json:"T"`
 	}
 	if err := json.Unmarshal(data, &mark); err != nil {
 		return
@@ -352,6 +359,7 @@ func (s *BinanceWSStream) handleMarkPrice(data json.RawMessage, stream string) {
 	// Update price cache (mark price is more accurate for contract positions)
 	s.pricesMu.Lock()
 	s.prices[mark.Symbol] = price
+	s.pricesTs[mark.Symbol] = time.Now().UnixMilli()
 	s.pricesMu.Unlock()
 
 	// Publish mark price event for contract position updates
@@ -394,10 +402,30 @@ func (s *BinanceWSStream) keepalive() {
 }
 
 // GetPrice returns the last known price for a symbol.
+// 原始读取：可能是任意时刻的残留值（WS 断连后缓存永冻结，未订阅的 symbol
+// 恒为 0）。对新鲜度敏感的消费方（运行面板现价等）应使用 GetPriceFresh。
 func (s *BinanceWSStream) GetPrice(symbol string) float64 {
 	s.pricesMu.RLock()
 	defer s.pricesMu.RUnlock()
 	return s.prices[strings.ToUpper(symbol)]
+}
+
+// GetPriceFresh 与 GetPrice 同源，但只在缓存新鲜（本地写入时间距今不超过
+// maxStale）时返回价格；从未收到该 symbol 行情、缓存冻结超过阈值或价格
+// 非正数时返回 0，调用方据此回落其它价格源（如工作周期 K 线最新收盘）。
+func (s *BinanceWSStream) GetPriceFresh(symbol string, maxStale time.Duration) float64 {
+	s.pricesMu.RLock()
+	defer s.pricesMu.RUnlock()
+	sym := strings.ToUpper(symbol)
+	p := s.prices[sym]
+	if p <= 0 {
+		return 0
+	}
+	ts := s.pricesTs[sym]
+	if ts <= 0 || time.Since(time.UnixMilli(ts)) > maxStale {
+		return 0
+	}
+	return p
 }
 
 // SetOnTick sets the tick callback.

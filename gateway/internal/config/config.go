@@ -67,7 +67,10 @@ type RiskConfig struct {
 	ProfitProtectionEnabled bool `yaml:"profit_protection_enabled"`
 	// IndicatorFailOpen 自定义指标开仓检查失败时的处理：true=放行（fail-open），
 	// false=拦截（fail-close）。指针类型：nil 表示配置未写，默认放行。
-	IndicatorFailOpen       *bool   `yaml:"indicator_fail_open"`
+	IndicatorFailOpen *bool `yaml:"indicator_fail_open"`
+	// OnlineOrderLimit 在线单量限制（CRA 合约跨实例总量闸，多/空按实例
+	// direction 分列计数）：0=未配置，运行时回退 risk.DefaultOnlineOrderLimit。
+	OnlineOrderLimit        int     `yaml:"online_order_limit"`
 	MaxConcurrentOrders     int     `yaml:"max_concurrent_orders"`
 	MaxPositions            int     `yaml:"max_positions"`
 	PositionLimit           float64 `yaml:"position_limit_pct"`

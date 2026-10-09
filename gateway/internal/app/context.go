@@ -164,6 +164,12 @@ func (ctx *Context) Init(cfg *config.Config) error {
 	if cfg.Risk.IndicatorFailOpen != nil {
 		risk.SetIndicatorFailOpen(*cfg.Risk.IndicatorFailOpen)
 	}
+	// 在线单量限制（CRA 合约跨实例总量闸）：config.yaml risk.online_order_limit
+	// 初始化，运行时由 PUT /api/risk/config 通过 risk.SetOnlineOrderLimit 调整；
+	// 未配置（0）时读取侧回退 risk.DefaultOnlineOrderLimit（10）。
+	if cfg.Risk.OnlineOrderLimit > 0 {
+		risk.SetOnlineOrderLimit(cfg.Risk.OnlineOrderLimit)
+	}
 	ctx.Logger.Info("Risk manager initialized", "profit_protection", cfg.Risk.ProfitProtectionEnabled)
 
 	// 6. Portfolio Manager

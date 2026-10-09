@@ -198,6 +198,7 @@ function RiskParamsCard() {
   const [positionLimit, setPositionLimit] = useState(50)
   const [profitProtection, setProfitProtection] = useState(false)
   const [indicatorFailOpen, setIndicatorFailOpen] = useState(true)
+  const [onlineOrderLimit, setOnlineOrderLimit] = useState(10)
   const [loaded, setLoaded] = useState(false)
   const [saving, setSaving] = useState(false)
 
@@ -210,6 +211,7 @@ function RiskParamsCard() {
         setPositionLimit(cfg.position_limit_pct ?? 50)
         setProfitProtection(cfg.profit_protection_enabled ?? false)
         setIndicatorFailOpen(cfg.indicator_fail_open ?? true)
+        setOnlineOrderLimit(cfg.online_order_limit ?? 10)
         setLoaded(true)
       })
       .catch(() => {
@@ -228,6 +230,10 @@ function RiskParamsCard() {
       toast('error', '单笔仓位上限必须在 1-100 之间')
       return
     }
+    if (!Number.isInteger(onlineOrderLimit) || onlineOrderLimit < 1 || onlineOrderLimit > 100) {
+      toast('error', '在线单量限制必须是 1-100 的整数')
+      return
+    }
     setSaving(true)
     try {
       await riskApi.updateConfig({
@@ -235,6 +241,7 @@ function RiskParamsCard() {
         position_limit_pct: positionLimit,
         profit_protection_enabled: profitProtection,
         indicator_fail_open: indicatorFailOpen,
+        online_order_limit: onlineOrderLimit,
       })
       toast('success', '风控参数已保存并即时生效')
     } catch (e: unknown) {
@@ -290,6 +297,23 @@ function RiskParamsCard() {
             onChange={(e) => setPositionLimit(Number(e.target.value) || 0)}
             className={inputCls}
           />
+        </div>
+        <div>
+          <label className="text-[11px] text-muted-foreground mb-1.5 block">在线单量限制（CRA 合约，1-100）</label>
+          <input
+            type="number"
+            min={1}
+            max={100}
+            step={1}
+            value={onlineOrderLimit}
+            disabled={!isAdmin}
+            onChange={(e) => setOnlineOrderLimit(Math.floor(Number(e.target.value) || 0))}
+            className={inputCls}
+          />
+          <div className="text-[10px] text-muted-foreground mt-1">
+            同一账户下允许同时运行的 CRA 合约实例数上限（跨交易对总闸，币富 #32 多/空分别计）：direction=long 占多侧名额、short 占空侧名额、dual
+            两侧各占一席；任一侧达到上限后同侧新实例启动被拒。全局单份，对所有用户生效。
+          </div>
         </div>
         <div className="sm:col-span-2 flex items-center justify-between rounded-lg border border-quant-border bg-quant-bg px-3 py-2.5">
           <div>

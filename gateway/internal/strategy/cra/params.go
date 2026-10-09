@@ -110,8 +110,13 @@ type CRAParams struct {
 	BurnDualThreshold    int     `json:"burn_dual_threshold"`
 
 	// Contract extras
-	OpenDouble        bool     `json:"open_double"`
-	FollowTrend       bool     `json:"follow_trend"`
+	OpenDouble  bool `json:"open_double"`
+	FollowTrend bool `json:"follow_trend"`
+	// OnlineOrderLimit 遗留字段（2026-10-10 迁移）：限额已挪到风控中心
+	// 风控参数（全局单份，risk.OnlineOrderLimit，enforcement 在
+	// handler/cra_online_limit.go 改读全局值）。存量 config_json 里的
+	// 该键仍会被解析进本字段但无任何消费方——保留解析仅为结构兼容，
+	// 引擎内不得再读它做限额判定。
 	OnlineOrderLimit  int      `json:"online_order_limit"`
 	Leverage          float64  `json:"leverage"`
 	Direction         string   `json:"direction"`     // "long" | "short" | "dual"

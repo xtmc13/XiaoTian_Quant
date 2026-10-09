@@ -654,6 +654,8 @@ export function Settings() {
         position_limit_pct: current?.position_limit_pct ?? 100,
         profit_protection_enabled: profitProtection,
         indicator_fail_open: current?.indicator_fail_open ?? true,
+        // 在线单量限制由风控中心维护，这里原样保留（同 position_limit_pct 口径）。
+        online_order_limit: current?.online_order_limit ?? 10,
       })
       return { ok: true }
     },

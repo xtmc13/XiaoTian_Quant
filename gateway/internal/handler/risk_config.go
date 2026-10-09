@@ -13,17 +13,20 @@ import (
 // 单笔订单名义价值占账户权益比例上限 %，C2.1 起限定 1-100——历史上
 // 曾被调到 2500% 导致风控形同虚设，PUT 越界一律 400）、
 // profit_protection_enabled（盈利保护开关）、
-// indicator_fail_open（自定义指标开仓检查失败时放行，默认 true）。
+// indicator_fail_open（自定义指标开仓检查失败时放行，默认 true）、
+// online_order_limit（CRA 合约在线单量限制，1-100 整数；多/空按实例
+// direction 分列计数，2026-10-10 自策略级 config_json 迁入）。
 type RiskConfigPayload struct {
 	MaxConcurrentOrders     int     `json:"max_concurrent_orders"`
 	PositionLimitPct        float64 `json:"position_limit_pct"`
 	ProfitProtectionEnabled bool    `json:"profit_protection_enabled"`
 	IndicatorFailOpen       bool    `json:"indicator_fail_open"`
+	OnlineOrderLimit        int     `json:"online_order_limit"`
 }
 
 // GetRiskConfig 返回当前生效的风控参数。来源 = 运行时内存（risk manager 启动时
 // 以 config.yaml risk 段初始化，PUT 后即为覆盖值），盈利保护/指标失败放行开关
-// 为包级原子变量。
+// 与在线单量限制为包级原子变量。
 func GetRiskConfig(c *gin.Context) {
 	cfg := risk.GetManager().Config()
 	c.JSON(http.StatusOK, RiskConfigPayload{
@@ -31,6 +34,7 @@ func GetRiskConfig(c *gin.Context) {
 		PositionLimitPct:        cfg.MaxPositionPct,
 		ProfitProtectionEnabled: risk.ProfitProtectionEnabled(),
 		IndicatorFailOpen:       risk.IndicatorFailOpen(),
+		OnlineOrderLimit:        risk.OnlineOrderLimit(),
 	})
 }
 
@@ -52,6 +56,11 @@ func UpdateRiskConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": "position_limit_pct 必须在 1-100 之间（百分比上限 100%）"})
 		return
 	}
+	// 在线单量限制必须有牙齿：0/负数会让默认口径悄悄接管，越界一律拒绝。
+	if body.OnlineOrderLimit < 1 || body.OnlineOrderLimit > 100 {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "online_order_limit 必须在 1-100 之间"})
+		return
+	}
 
 	// 1) 持久化到 config.yaml risk 段（合并写回，保留其他键）。
 	patch := map[string]any{
@@ -59,6 +68,7 @@ func UpdateRiskConfig(c *gin.Context) {
 		"position_limit_pct":        body.PositionLimitPct,
 		"profit_protection_enabled": body.ProfitProtectionEnabled,
 		"indicator_fail_open":       body.IndicatorFailOpen,
+		"online_order_limit":        body.OnlineOrderLimit,
 	}
 	if err := store.SaveRiskSection(patch); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "保存配置失败: " + err.Error()})
@@ -73,6 +83,7 @@ func UpdateRiskConfig(c *gin.Context) {
 	mgr.UpdateConfig(cur)
 	risk.SetProfitProtectionEnabled(body.ProfitProtectionEnabled)
 	risk.SetIndicatorFailOpen(body.IndicatorFailOpen)
+	risk.SetOnlineOrderLimit(body.OnlineOrderLimit)
 
 	c.JSON(http.StatusOK, body)
 }

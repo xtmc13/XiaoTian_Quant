@@ -203,6 +203,14 @@ func (e *Engine) SetProtectionManager(mgr *protection.ProtectionManager) {
 	e.protectionMgr = mgr
 }
 
+// Bus 返回引擎创建时绑定的事件总线（只读；供测试经真实总线驱动
+// MarketData/分发链路，生产代码不应绕过引擎直接发布）。
+func (e *Engine) Bus() *event.EventBus {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.bus
+}
+
 // SetStrategyProtectionManager 注入/替换某策略的策略级 protection manager；
 // mgr 为 nil 时清除（策略 config_json 不再含 protections 的重载场景）。
 func (e *Engine) SetStrategyProtectionManager(name string, mgr *protection.ProtectionManager) {
