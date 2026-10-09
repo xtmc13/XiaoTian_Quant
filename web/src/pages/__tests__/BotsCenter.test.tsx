@@ -81,9 +81,9 @@ describe('新建机器人向导（合约类型已精简）', () => {
     fireEvent.click(screen.getByRole('button', { name: /新建机器人/ }))
     // 第 1 级：点合约策略卡（名称含描述文案以区别筛选 chips）
     fireEvent.click(await screen.findByRole('button', { name: /合约策略 合约网格/ }))
-    // 第 2 级：只剩 合约网格/高频策略/首尾套利/主力行为
+    // 第 2 级：CRA 四类型 + 经典指标策略（EMA/MACD/RSI/布林带，2026-10-09 加回）
     await screen.findByText('第 2 步：选择策略类型')
-    for (const v of ['cra_contract', 'high_frequency', 'head_tail_arbitrage', 'smart_money']) {
+    for (const v of ['cra_contract', 'high_frequency', 'head_tail_arbitrage', 'smart_money', 'ema_cross', 'macd', 'rsi', 'bollinger_bands']) {
       expect(screen.getByText(v)).toBeTruthy()
     }
     for (const gone of ['trend_long', 'trend_short', 'counter_stable', 'counter_safe']) {

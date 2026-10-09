@@ -28,12 +28,22 @@ export const STRAT_TYPES: Record<string, { value: string; label: string }[]> = {
     { value: 'aggressive', label: '激进' },
     { value: 'conservative', label: '保守' },
     { value: 'high_frequency', label: '高频' },
+    // 经典指标策略（2026-10-09 用户要求加入创建入口，后端工厂/paramDefs 均已具备）
+    { value: 'ema_cross', label: 'EMA 策略' },
+    { value: 'macd', label: 'MACD 策略' },
+    { value: 'rsi', label: 'RSI 策略' },
+    { value: 'bollinger_bands', label: '布林带策略' },
   ],
   contract: [
     { value: 'cra_contract', label: '合约网格' },
     { value: 'high_frequency', label: '高频策略' },
     { value: 'head_tail_arbitrage', label: '首尾套利' },
     { value: 'smart_money', label: '主力行为' },
+    // 经典指标策略（同上）
+    { value: 'ema_cross', label: 'EMA 策略' },
+    { value: 'macd', label: 'MACD 策略' },
+    { value: 'rsi', label: 'RSI 策略' },
+    { value: 'bollinger_bands', label: '布林带策略' },
   ],
 }
 
