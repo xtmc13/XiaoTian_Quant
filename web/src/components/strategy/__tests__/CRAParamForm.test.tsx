@@ -117,6 +117,14 @@ describe('CRAParamForm', () => {
     expect(lastCall.onlineOrderLimit).toBe(1)
   })
 
+  // ── H3：口径说明同步——多/空分别计（币富 #32 完整语义）──
+  it('H3: 在线单量限制口径说明注明多单/空单分别计数', () => {
+    render(<CRAParamForm {...baseProps} market="contract" />, { wrapper })
+    const desc = screen.getByText('在线单量限制').parentElement!.querySelector('.text-\\[10px\\]')
+    expect(desc?.textContent).toContain('多/空分别计')
+    expect(desc?.textContent).toContain('dual 两侧各占一席')
+  })
+
   it('round-trips onlineOrderLimit as online_order_limit in the api payload', () => {
     const payload = craParamsToApiPayload({ ...DEFAULT_CRA_PARAMS, onlineOrderLimit: 3 })
     expect(payload.online_order_limit).toBe(3)

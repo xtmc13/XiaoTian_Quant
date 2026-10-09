@@ -62,6 +62,14 @@ type Context struct {
 
 	mu      sync.Mutex
 	started bool
+
+	// H2：PortfolioManager 镜像的成交结算幂等键（orderID）。同一订单的
+	// FILLED 回报可能经多条路径重复触达（PlaceOrder 即时成交 + reconcile /
+	// 成交恢复回写），重复结算会重复释放锁定+实扣（双重扣减换一种形态
+	// 复发）。与 paper filledApplied 同款"累计键去重"语义；空 ID（测试
+	// 直调）不参与去重。
+	mirrorFillMu      sync.Mutex
+	mirrorFillApplied map[string]bool
 }
 
 var instance *Context
@@ -985,6 +993,30 @@ func (ctx *Context) updatePortfolioFromFill(ord *model.OrderData) {
 		return
 	}
 
+	// 镜像结算幂等：FILLED 终态回报重复触达时只结算一次（见 Context 字段注）。
+	if ord.ID != "" {
+		ctx.mirrorFillMu.Lock()
+		if ctx.mirrorFillApplied == nil {
+			ctx.mirrorFillApplied = make(map[string]bool)
+		}
+		if ctx.mirrorFillApplied[ord.ID] {
+			ctx.mirrorFillMu.Unlock()
+			return
+		}
+		ctx.mirrorFillApplied[ord.ID] = true
+		ctx.mirrorFillMu.Unlock()
+	}
+
+	// H2 双重扣减修复：非 paper 单在 PlaceOrder 时已对镜像锁仓（上方
+	// LockBalance 非 paper 分支 Free→Used），成交结算必须先释放该锁再实扣
+	// （与 paper settleSimulatedFill "先释放锁定再按实扣"同款语义）——否则
+	// 同一笔资金被扣两次：Free 二次扣减（钳 0 后继续漂移）、Used 永久残留
+	// 推高 MarginUsed，Portfolio 页/风险口径随之失真。paper 单的锁在 paper
+	// 账户（ApplySimulatedFill 已对称释放），镜像本无锁可释，跳过。
+	if !isPaperExchangeName(ord.Exchange) {
+		releaseMirrorLock(acct, ord, price, qty)
+	}
+
 	if ord.MarketType == model.MarketSwap {
 		// ── CONTRACT (SWAP) ──
 		ctx.updatePortfolioFromContractFill(ord, acct, price, qty)
@@ -1203,6 +1235,57 @@ func (ctx *Context) updatePortfolioFromContractFill(ord *model.OrderData, acct *
 			}
 			ctx.PortfolioManager.UpdatePosition(newPos)
 		}
+	}
+}
+
+// releaseMirrorLock 释放 OMS 下单时对 PortfolioManager 镜像的资金锁
+// （锁定见 LockBalance 非 paper 分支：Free→Used）。成交结算专用：先按成交
+// 价/量释放锁定回 Free，调用方随后再按实际成交实扣——与 paper
+// settleSimulatedFill 的"先释放锁定再实扣"严格同款。释放量钳到当前 Used
+// （多订单并发锁同一币种时不得吃掉他单的锁），任何路径不得把 Used 记成负。
+// 撤单/拒单的释放走 UnlockBalance 闭包（按订单价/最近价，历史行为不变）。
+func releaseMirrorLock(acct *model.AccountData, ord *model.OrderData, price, qty float64) {
+	if acct == nil || price <= 0 || qty <= 0 {
+		return
+	}
+
+	// ── CONTRACT (SWAP)：下单时锁的是 USDT 保证金 ──
+	if ord.MarketType == model.MarketSwap {
+		leverage := ord.Leverage
+		if leverage <= 0 {
+			leverage = 1
+		}
+		release := price * qty / leverage
+		if qb := acct.Balances["USDT"]; qb != nil && qb.Used > 0 {
+			if release > qb.Used {
+				release = qb.Used
+			}
+			qb.Used -= release
+			qb.Free += release
+		}
+		return
+	}
+
+	// ── SPOT：买入锁 quote 成本，卖出锁 base 数量 ──
+	base, quote := parseSymbolPair(ord.Symbol)
+	if ord.Side == model.SideBuy {
+		release := price * qty
+		if qb := acct.Balances[quote]; qb != nil && qb.Used > 0 {
+			if release > qb.Used {
+				release = qb.Used
+			}
+			qb.Used -= release
+			qb.Free += release
+		}
+		return
+	}
+	if bb := acct.Balances[base]; bb != nil && bb.Used > 0 {
+		release := qty
+		if release > bb.Used {
+			release = bb.Used
+		}
+		bb.Used -= release
+		bb.Free += release
 	}
 }
 

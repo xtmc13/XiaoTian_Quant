@@ -215,6 +215,12 @@ func (s *BaseCRAStrategy) RuntimeStatus() map[string]any {
 			m["add_positions_triggered"] = 0
 		}
 		m["pending_add_count"] = st.PendingAddCount
+		// H4：在途平仓透出（尾单/首尾止盈、反向止盈/止损、燃烧斩仓、手动减仓/
+		// 清仓信号已发出待成交终态）。仅在途时出现该键——默认无键零行为变化，
+		// 前端 RuntimePanel 据键存在性显示"平仓在途"徽标。
+		if st.PendingCloseKind != "" {
+			m["pending_close_kind"] = st.PendingCloseKind
+		}
 		if st.InPosition {
 			m["direction"] = string(st.Side)
 			m["entry_price"] = st.EntryPrice

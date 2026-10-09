@@ -472,7 +472,7 @@ export function CRAParamForm({ value, onChange, market, className, openFields = 
               className={inputCls}
             />
             <div className="text-[10px] text-muted-foreground mt-1">
-              同一账户下允许同时运行的 CRA 合约实例数上限（跨交易对总闸）：达到上限后启动新实例会被拒绝，需先停止部分实例或调大该值。
+              同一账户下允许同时运行的 CRA 合约实例数上限（跨交易对总闸，币富 #32 多/空分别计）：direction=long 占多侧名额、short 占空侧名额、dual 两侧各占一席；任一侧达到上限后同侧新实例启动被拒（报错注明超限侧），需先停止部分实例或调大该值。
               单个实例持仓期间本就不会再开新首单，该参数不改变实例内部的补仓/止盈行为。
             </div>
           </div>

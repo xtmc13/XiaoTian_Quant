@@ -609,6 +609,50 @@ func (m *Manager) GetAccount(id string) *model.AccountData {
 	return m.accounts[id]
 }
 
+// SeedPaperMirror 启动时把 paper 账户恢复快照的余额/持仓补注进 "default"
+// 镜像账户。背景：NewManager 每次启动只按配置注入 USDT 初始余额，base 资产
+// 与持仓归零——而 Portfolio 页/风险口径（PortfolioSummary/PortfolioPositions、
+// MarginUsed、NetExposure、WS 持仓推送）读的都是本镜像，重启后已恢复的
+// paper 持仓会从面板上消失、base 资产显示 0（2026-10-08 事故修复 2a5ddcb
+// 遗留的展示侧缺口）。补注后镜像与 paper 账户（唯一持久化真实账本）一致。
+//
+// 零行为变化边界：default 账户不存在（paper 被 config 关闭）或快照无数据
+// （无余额且无持仓）时不动——全新部署保持"只有 USDT 初始余额"的旧形态。
+// 调用方须传入 paper 账户恢复后的实际状态（SnapshotAccount），而非配置值。
+func (m *Manager) SeedPaperMirror(balances map[string]*model.Balance, positions []model.PositionData) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	acct := m.accounts["default"]
+	if acct == nil {
+		return
+	}
+	if len(balances) == 0 && len(positions) == 0 {
+		return
+	}
+	if len(balances) > 0 {
+		// 整体替换（含 USDT）：快照里的 USDT 是持久化真值，NewManager 按
+		// config 注入的初始余额在已有历史成交后是过期值。拷贝防共享指针。
+		cp := make(map[string]*model.Balance, len(balances))
+		for k, v := range balances {
+			if v == nil {
+				continue
+			}
+			b := *v
+			cp[k] = &b
+		}
+		acct.Balances = cp
+	}
+	for _, pos := range positions {
+		if pos.Quantity == 0 {
+			continue
+		}
+		p := pos
+		m.positions[p.ID] = &p
+		acct.Positions[p.ID] = &p
+	}
+	log.Printf("[Portfolio] paper 镜像已随账户快照补注: 余额 %d 项, 持仓 %d 只", len(balances), len(positions))
+}
+
 // UpdateBalance updates an account's balance.
 func (m *Manager) UpdateBalance(accountID, currency string, total, free, used float64) {
 	m.mu.Lock()

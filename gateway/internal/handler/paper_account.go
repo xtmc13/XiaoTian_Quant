@@ -5,7 +5,9 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xiaotian-quant/gateway/internal/model"
 	"github.com/xiaotian-quant/gateway/internal/paper"
+	"github.com/xiaotian-quant/gateway/internal/portfolio"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
@@ -68,4 +70,17 @@ func RestorePaperAccount() {
 		return
 	}
 	pe.RestoreAccount(snap)
+
+	// H2：paper 账户恢复后，把同一快照的余额/持仓补注进 PortfolioManager
+	// 内存镜像——该镜像是 Portfolio 页/风险视图的读取口径，但 NewManager
+	// 启动只注入 USDT 初始余额（base/持仓归零），不补注会让重启后已恢复的
+	// paper 持仓从面板上消失。以恢复后的账户实际状态为准（而非原始快照
+	// 字节），保证镜像与 paper 账户逐字节一致。无快照时上方已 return，
+	// 全新部署零行为变化。
+	restored := pe.SnapshotAccount()
+	positions := make([]model.PositionData, 0, len(restored.Positions))
+	for _, ps := range restored.Positions {
+		positions = append(positions, ps.Data)
+	}
+	portfolio.GetManager().SeedPaperMirror(restored.Balances, positions)
 }

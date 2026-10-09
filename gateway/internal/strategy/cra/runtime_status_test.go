@@ -72,3 +72,46 @@ func TestBaseCRAStrategyRuntimeStatus(t *testing.T) {
 		t.Errorf("last_signal_direction = %v, want LONG", st["last_signal_direction"])
 	}
 }
+
+// H4：RuntimeStatus 透出 pending_close_kind——仅在途平仓时出现（默认无键
+// 零行为变化），各在途形态（尾单/首尾止盈、反向止盈/止损、燃烧、手动减仓/
+// 清仓）原样透出，终态清除后键消失。
+func TestRuntimeStatusPendingCloseKind(t *testing.T) {
+	s := NewCRAContractStrategy("test_cra_pck", "BTCUSDT")
+	if err := s.Start(map[string]any{
+		"symbol": "BTCUSDT", "first_order_amount": 100, "order_count": 5,
+		"tp_mode": "static", "take_profit_ratio": 0.013, "take_profit_method": "tail",
+		"market_type": "swap", "leverage": 10,
+	}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	// 默认（无在途平仓）：键必须不存在（零行为变化边界）。
+	st := s.RuntimeStatus()
+	if _, ok := st["pending_close_kind"]; ok {
+		t.Fatalf("无在途平仓时 pending_close_kind 不得出现, got %v", st["pending_close_kind"])
+	}
+
+	// 在仓但无在途平仓：同样无键。
+	s.state.EnterPosition(50000, SideLong)
+	s.state.RecordFill(50000, 0.2, SideBuy)
+	s.state.PositionCount = 1
+	if _, ok := s.RuntimeStatus()["pending_close_kind"]; ok {
+		t.Fatal("在仓无在途平仓时不得透出 pending_close_kind")
+	}
+
+	// 各在途形态原样透出。
+	for _, kind := range []string{"tail", "head_tail", "reverse_tp", "reverse_sl", "burn_dual", "burn_global", "manual_reduce", "manual_close"} {
+		s.state.PendingCloseKind = kind
+		st = s.RuntimeStatus()
+		if st["pending_close_kind"] != kind {
+			t.Fatalf("pending_close_kind = %v, want %q", st["pending_close_kind"], kind)
+		}
+	}
+
+	// 终态清除：键消失。
+	s.state.PendingCloseKind = ""
+	if _, ok := s.RuntimeStatus()["pending_close_kind"]; ok {
+		t.Fatal("在途平仓终态清除后 pending_close_kind 必须消失")
+	}
+}

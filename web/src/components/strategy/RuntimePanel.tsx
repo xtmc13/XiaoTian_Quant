@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query'
-import { Activity, Layers, TrendingUp, TrendingDown, Crosshair, Target, Timer } from 'lucide-react'
+import { Activity, Layers, TrendingUp, TrendingDown, Crosshair, Target, Timer, Loader2 } from 'lucide-react'
 import { strategyApi } from '@/lib/api'
 import type { StrategyItem, StrategyRuntimeResponse, StrategyRuntimeStatus } from '@/types'
 import { cn } from '@/lib/utils'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ManualActionPanel } from '@/components/strategy/ManualActionPanel'
+import { useI18n } from '@/i18n'
 
 const POLL_MS = 5000
 
@@ -60,6 +61,7 @@ function PanelStat({
  * 加仓阶梯进度/下一档与止盈距离。未运行时由父组件渲染 EmptyState。
  */
 export function RuntimePanel({ strategy }: { strategy: StrategyItem }) {
+  const { t } = useI18n()
   const { data, isLoading, isError } = useQuery<StrategyRuntimeResponse>({
     queryKey: ['strategy-runtime', strategy.id],
     queryFn: () => strategyApi.runtime(strategy.id),
@@ -135,6 +137,22 @@ export function RuntimePanel({ strategy }: { strategy: StrategyItem }) {
 
   return (
     <div className="space-y-3">
+      {/* H4 平仓在途徽标：后端 RuntimeStatus.pending_close_kind 仅在途时透出
+          （尾单/首尾止盈、反向止盈/止损、燃烧斩仓、手动减仓/清仓信号已发出
+          待成交终态），键消失徽标即消失。未知 kind 回退原始字符串。 */}
+      {st.pending_close_kind && (
+        <div
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-quant-gold/10 border border-quant-gold/30 text-quant-gold text-[11px]"
+          data-testid="pending-close-badge"
+        >
+          <Loader2 className="w-3 h-3 animate-spin" />
+          {t('runtime.pending_close').replace(
+            '{kind}',
+            t(`runtime.pending_close.kind.${st.pending_close_kind}`, st.pending_close_kind)
+          )}
+        </div>
+      )}
+
       {/* KPI 行 */}
       <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-2">
         <PanelStat

@@ -273,6 +273,9 @@ export interface StrategyRuntimeStatus {
   entry_paused?: boolean
   /** 本循环已成交的手动补仓笔数（不计自动阶梯）。 */
   manual_add_count?: number
+  /** H4：在途平仓形态（仅在途时透出）：tail/head_tail/reverse_tp/reverse_sl/
+      burn_dual/burn_global/manual_reduce/manual_close。 */
+  pending_close_kind?: string
 }
 
 /** GET /strategies/configs/:id/runtime 响应体。 */
