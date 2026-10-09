@@ -28,24 +28,28 @@ export const STRAT_TYPES: Record<string, { value: string; label: string }[]> = {
     { value: 'aggressive', label: '激进' },
     { value: 'conservative', label: '保守' },
     { value: 'high_frequency', label: '高频' },
-    // 经典指标策略（2026-10-09 用户要求加入创建入口，后端工厂/paramDefs 均已具备）
-    { value: 'ema_cross', label: 'EMA 策略' },
-    { value: 'macd', label: 'MACD 策略' },
-    { value: 'rsi', label: 'RSI 策略' },
-    { value: 'bollinger_bands', label: '布林带策略' },
   ],
   contract: [
     { value: 'cra_contract', label: '合约网格' },
     { value: 'high_frequency', label: '高频策略' },
     { value: 'head_tail_arbitrage', label: '首尾套利' },
     { value: 'smart_money', label: '主力行为' },
-    // 经典指标策略（同上）
-    { value: 'ema_cross', label: 'EMA 策略' },
-    { value: 'macd', label: 'MACD 策略' },
-    { value: 'rsi', label: 'RSI 策略' },
-    { value: 'bollinger_bands', label: '布林带策略' },
   ],
 }
+
+/**
+ * 指标策略快捷卡（币富模型，2026-10-09 纠偏）：指标策略 = CRA 壳（补仓/移动
+ * 止盈/杠杆全套）+ 预选开仓指标，不是裸经典策略类型（裸类型无 CRA 壳，已从
+ * STRAT_TYPES 创建入口撤下）。点击跳 /create?market=<市场>&type=<cra_*>&indicator
+ * =<indicator>，创建页据 indicator 预选开仓指标选择器。indicator 取值即
+ * indicatorPresets.ts OPEN_INDICATORS 的 key。
+ */
+export const INDICATOR_STRAT_SHORTCUTS: { value: string; label: string; indicator: string }[] = [
+  { value: 'ind_ema_cross', label: 'EMA 策略', indicator: 'ema_cross' },
+  { value: 'ind_macd', label: 'MACD 策略', indicator: 'macd' },
+  { value: 'ind_rsi', label: 'RSI 策略', indicator: 'rsi' },
+  { value: 'ind_bollinger', label: '布林带策略', indicator: 'bollinger' },
+]
 
 export const TIMEFRAMES = ['1m', '5m', '15m', '30m', '1h', '4h', '8h', '1D']
 

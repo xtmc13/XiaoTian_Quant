@@ -1,6 +1,7 @@
 package cra
 
 import (
+	"math"
 	"strings"
 
 	"github.com/xiaotian-quant/gateway/internal/model"
@@ -161,6 +162,84 @@ func InflectionUp(closes []float64) bool {
 		return false
 	}
 	return closes[n-1] > closes[n-2] && closes[n-2] <= closes[n-3]
+}
+
+// BollingerTunables carries user-configured Bollinger band parameters; zero
+// fields fall back to the standard defaults (period 20, std multiplier 2).
+type BollingerTunables struct {
+	Period int
+	Std    float64
+}
+
+func (t BollingerTunables) withDefaults() BollingerTunables {
+	if t.Period < 2 {
+		t.Period = 20
+	}
+	if t.Std <= 0 {
+		t.Std = 2
+	}
+	return t
+}
+
+// BollingerBands returns upper/mid/lower bands (SMA ± stdMult·population
+// stddev). Output index j corresponds to closes index j+period-1; nil when the
+// series is shorter than period.
+func BollingerBands(closes []float64, period int, stdMult float64) (upper, mid, lower []float64) {
+	if period < 1 || len(closes) < period || stdMult <= 0 {
+		return nil, nil, nil
+	}
+	n := len(closes) - period + 1
+	upper = make([]float64, n)
+	mid = make([]float64, n)
+	lower = make([]float64, n)
+	var sum, sumSq float64
+	for i := 0; i < period; i++ {
+		sum += closes[i]
+		sumSq += closes[i] * closes[i]
+	}
+	fill := func(j int) {
+		mean := sum / float64(period)
+		variance := sumSq/float64(period) - mean*mean
+		if variance < 0 { // 滚动累加的浮点误差钳位
+			variance = 0
+		}
+		sd := math.Sqrt(variance)
+		mid[j] = mean
+		upper[j] = mean + stdMult*sd
+		lower[j] = mean - stdMult*sd
+	}
+	fill(0)
+	for i := period; i < len(closes); i++ {
+		sum += closes[i] - closes[i-period]
+		sumSq += closes[i]*closes[i] - closes[i-period]*closes[i-period]
+		fill(i - period + 1)
+	}
+	return upper, mid, lower
+}
+
+// BollingerConfirmed 布林带开仓门槛（与既有 EMA/MACD 门槛同风格，参数化
+// period/std）：做多 = 上一根收盘跌破下轨、末根收回轨内（假跌破反转），或
+// 末根收盘仍低于下轨且收盘序列出现向上拐点；做空镜像（突破上轨后收回轨内，
+// 或收盘高于上轨出现向下拐点）。序列不足 period+1 时不确认。
+func BollingerConfirmed(bars []model.Bar, t BollingerTunables, side PositionSide) bool {
+	t = t.withDefaults()
+	closes := BarsToCloses(bars)
+	if len(closes) < t.Period+1 {
+		return false
+	}
+	upper, _, lower := BollingerBands(closes, t.Period, t.Std)
+	if len(upper) < 2 {
+		return false
+	}
+	// 带序列下标 j 对齐收盘价下标 j+period-1：末根/前一根对应带序列末两项。
+	lb := len(upper) - 1
+	lastC, prevC := closes[len(closes)-1], closes[len(closes)-2]
+	if side == SideShort {
+		recoverIn := prevC > upper[lb-1] && lastC < upper[lb]
+		return recoverIn || (lastC > upper[lb] && InflectionDown(closes))
+	}
+	recoverIn := prevC < lower[lb-1] && lastC > lower[lb]
+	return recoverIn || (lastC < lower[lb] && InflectionUp(closes))
 }
 
 // InflectionDown detects a downward turning point (mirror of InflectionUp).

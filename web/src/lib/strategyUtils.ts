@@ -241,6 +241,8 @@ export function createDefaultCRAParams(market: 'spot' | 'contract'): CRAParams {
     openCounterEmaPeriod: '15m',
     openTrendEmaEnabled: false,
     openTrendEmaPeriod: '15m',
+    openBollingerEnabled: false,
+    openBollingerPeriod: 'close',
     openIndicator: 'none',
     openIndicatorParams: {},
     openIndicatorCustom: null,

@@ -3,8 +3,9 @@
  *
  * 新旧键兼容设计：
  * - 引擎已认识的键（open_macd_enabled/open_macd_period/open_trend_ema_enabled/
- *   open_trend_ema_period）按"选择器派生优先、旧字段回退"写入，引擎无需改动
- *   即可用默认参数跑 MACD/EMA 门槛；
+ *   open_trend_ema_period/open_bollinger_enabled/open_bollinger_period）按
+ *   "选择器派生优先、旧字段回退"写入，引擎以默认参数跑 MACD/EMA/布林带门槛
+ *   （布林带门槛为 2026-10-09 引擎新增，键口径与既有 MACD/EMA 一致）；
  * - 新参数统一放 config.indicator_params[<key>]，后端 CRA 解析读新键、回退旧键；
  * - open_indicator 为新标记键（'custom' 等无引擎门槛的指标靠它识别）。
  */
@@ -14,6 +15,7 @@ export type OpenIndicatorKey =
   | 'macd'
   | 'ema_cross'
   | 'rsi'
+  | 'bollinger'
   | 'trend'
   | 'range'
   | 'custom'
@@ -78,6 +80,17 @@ export const OPEN_INDICATORS: IndicatorDef[] = [
       { key: 'period', label: 'RSI 周期', type: 'int', default: 14, min: 2, max: 200 },
       { key: 'oversold', label: '超卖阈值', type: 'int', default: 30, min: 1, max: 100 },
       { key: 'overbought', label: '超买阈值', type: 'int', default: 70, min: 1, max: 100 },
+    ],
+  },
+  {
+    key: 'bollinger',
+    label: '布林带',
+    desc: '跌破下轨收回或下轨向上拐点开仓',
+    fields: [
+      // period 被布林周期占用（数值型），监测周期键用 timeframe（引擎回退同源）。
+      { key: 'period', label: '布林周期', type: 'int', default: 20, min: 2, max: 500 },
+      { key: 'std', label: '标准差倍数', type: 'float', default: 2, min: 0.5, max: 10 },
+      { key: 'timeframe', label: '监测周期', type: 'select', default: 'close', options: PERIOD_OPTIONS },
     ],
   },
   {
@@ -161,6 +174,8 @@ export interface OpenIndicatorConfig {
   open_counter_ema_period: string
   open_trend_ema_enabled: boolean
   open_trend_ema_period: string
+  open_bollinger_enabled: boolean
+  open_bollinger_period: string
   open_indicator?: string
   indicator_params?: Record<string, unknown>
 }
@@ -177,6 +192,8 @@ export function buildOpenIndicatorConfig(
     open_counter_ema_period: 'close',
     open_trend_ema_enabled: false,
     open_trend_ema_period: 'close',
+    open_bollinger_enabled: false,
+    open_bollinger_period: 'close',
   }
   if (key === 'none') return cfg
   cfg.open_indicator = key
@@ -193,6 +210,14 @@ export function buildOpenIndicatorConfig(
       cfg.open_trend_ema_period = period ?? 'close'
       cfg.indicator_params = { ema_cross: { ...params } }
       break
+    case 'bollinger': {
+      // 布林带的监测周期键是 timeframe（period 被布林周期占用为数值型）。
+      const tf = typeof params.timeframe === 'string' && params.timeframe !== 'close' ? params.timeframe : undefined
+      cfg.open_bollinger_enabled = true
+      cfg.open_bollinger_period = tf ?? 'close'
+      cfg.indicator_params = { bollinger: { ...params } }
+      break
+    }
     case 'trend':
       cfg.open_trend_ema_enabled = true
       cfg.open_trend_ema_period = 'close'
@@ -245,6 +270,11 @@ export function detectOpenIndicator(payload: Record<string, unknown>): {
   // 回退：按旧 enabled 键推导
   if (payload.open_macd_enabled === true) {
     return { indicator: 'macd', params: defaultIndicatorParams('macd'), custom: null }
+  }
+  if (payload.open_bollinger_enabled === true) {
+    const sub = ((payload.indicator_params as Record<string, unknown> | undefined)?.bollinger ??
+      {}) as Record<string, IndicatorParamValue>
+    return { indicator: 'bollinger', params: { ...defaultIndicatorParams('bollinger'), ...sub }, custom: null }
   }
   if (payload.open_trend_ema_enabled === true) {
     return { indicator: 'trend', params: defaultIndicatorParams('trend'), custom: null }

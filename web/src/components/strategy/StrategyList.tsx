@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import type { StrategyItem } from '@/types'
 import { cn } from '@/lib/utils'
 import { VirtualList } from '@/components/VirtualList'
-import { STRAT_TYPES } from './StrategyFormFields'
+import { STRAT_TYPES, INDICATOR_STRAT_SHORTCUTS } from './StrategyFormFields'
 import { decimalToPercent, PERCENTAGE_FIELD_THRESHOLDS } from '@/lib/craPercentUtils'
 import {
   Search,
@@ -495,6 +495,7 @@ export function StrategyList({
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const [marketType, setMarketType] = useState<MarketType>('spot')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const navigate = useNavigate()
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -641,6 +642,23 @@ export function StrategyList({
               {t.label}
             </button>
           ))}
+          {/* 指标策略快捷项（币富模型：CRA 壳 + 预选开仓指标）：onCreateType 语义
+              不带 indicator，直接跳 /create 携带 type+indicator */}
+          <div className="pt-1 mt-1 border-t border-quant-border">
+            <div className="text-[10px] text-muted-foreground mb-1 px-0.5">指标策略（含补仓/移动止盈）</div>
+            {INDICATOR_STRAT_SHORTCUTS.map((t) => (
+              <button
+                key={t.value}
+                onClick={() => {
+                  const craType = marketType === 'contract' ? 'cra_contract' : 'cra_spot'
+                  navigate(`/create?market=${marketType}&type=${craType}&indicator=${t.indicator}`)
+                }}
+                className="w-full text-left px-2.5 py-2 rounded-md bg-quant-bg border border-quant-border text-xs font-medium text-foreground hover:border-quant-gold/30 hover:bg-quant-bg-tertiary transition-colors mb-1"
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 

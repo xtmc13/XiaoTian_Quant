@@ -287,6 +287,7 @@ func (s *BaseCRAStrategy) Timeframes() []string {
 	add(p.OpenMacdEnabled, p.OpenMacdPeriod)
 	add(p.OpenCounterEmaEnabled, p.OpenCounterEmaPeriod)
 	add(p.OpenTrendEmaEnabled, p.OpenTrendEmaPeriod)
+	add(p.OpenBollingerEnabled, p.OpenBollingerPeriod)
 	add(p.AddMacdEnabled, p.AddMacdPeriod)
 	add(p.AddEmaEnabled, p.AddEmaPeriod)
 	// C 片：反向信号判定周期（反向止盈/止损共用）也要订阅副周期供给。
@@ -368,6 +369,11 @@ func (s *BaseCRAStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Sign
 			}
 			st.EnterPosition(bar.Close, side)
 		} else {
+			// 现货（long-only）：开仓指标门槛同样生效（币富#20：金叉开多适用合约
+			// 和现货）。open_* 默认全关时 openIndicatorsConfirmed 恒 true，存量零变化。
+			if !s.openIndicatorsConfirmed(SideLong) {
+				return nil, nil
+			}
 			st.EnterPosition(bar.Close, SideLong)
 		}
 		// 开仓加倍（币富名词解释 #15，open_double）：只放大首单名义（首单金额
@@ -982,6 +988,14 @@ func (s *BaseCRAStrategy) openIndicatorsConfirmed(side PositionSide) bool {
 	}
 	if p.OpenTrendEmaEnabled && !IndicatorConfirmedWithTunables(s.indicatorBars(p.OpenTrendEmaPeriod, emaMin), true, p.OpenTrendEmaPeriod, "ema_trend", side, macd, ema) {
 		return false
+	}
+	// 布林带开仓门槛（币富"布林带策略"）：跌破下轨收回/下轨向上拐点做多，镜像
+	// 做空；多周期取数复用 indicatorBars。默认关闭，零行为变化。
+	if p.OpenBollingerEnabled {
+		boll := BollingerTunables{Period: p.BollingerPeriod, Std: p.BollingerStd}
+		if !BollingerConfirmed(s.indicatorBars(p.OpenBollingerPeriod, p.BollingerPeriod+2), boll, side) {
+			return false
+		}
 	}
 	return true
 }

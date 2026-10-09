@@ -5,9 +5,10 @@ import { toast } from '@/lib/useToast'
 import { strategyApi, configApi } from '@/lib/api'
 import { useStrategyData } from '@/hooks/useStrategyData'
 import { SectionCard } from '@/components/ui/SectionCard'
-import { CRAParamForm, craParamsToApiPayload, type CRAParams } from './CRAParamForm'
+import { CRAParamForm, craParamsToApiPayload, withOpenIndicator, type CRAParams } from './CRAParamForm'
 import { ExchangeSelectModal } from './ExchangeSelectModal'
-import { DynamicParamField, STRAT_TYPES, TIMEFRAMES } from './StrategyFormFields'
+import { DynamicParamField, STRAT_TYPES, TIMEFRAMES, INDICATOR_STRAT_SHORTCUTS } from './StrategyFormFields'
+import { defaultIndicatorParams, type OpenIndicatorKey } from './indicatorPresets'
 import { STRATEGY_PRESETS, type Preset } from './StrategyPresets'
 import { createDefaultCRAParams, isCRAStrategyType, CRA_FEATURE_KEYS, applyServerStrategyDefaults } from '@/lib/strategyUtils'
 import type { StrategyParamDefs, ExchangeConfiguredStatus, AddPositionItem } from '@/types'
@@ -119,6 +120,7 @@ function deriveTimeframeFromCRA(params: CRAParams): string {
   if (params.openCounterEmaEnabled && params.openCounterEmaPeriod !== 'close')
     candidates.push(params.openCounterEmaPeriod)
   if (params.openTrendEmaEnabled && params.openTrendEmaPeriod !== 'close') candidates.push(params.openTrendEmaPeriod)
+  if (params.openBollingerEnabled && params.openBollingerPeriod !== 'close') candidates.push(params.openBollingerPeriod)
   if (params.addMacdEnabled && params.addMacdPeriod !== 'close') candidates.push(params.addMacdPeriod)
   if (params.addEmaEnabled && params.addEmaPeriod !== 'close') candidates.push(params.addEmaPeriod)
 
@@ -187,6 +189,10 @@ export interface StrategyCreateFormOptions {
   initialConfig?: Record<string, unknown>
   /** 类型锁定：经三级选项/编辑进入时不再显示策略类型下拉（用户已选定）。 */
   lockType?: boolean
+  /** 指标策略快捷入口预选开仓指标（?indicator=xx）：仅创建场景、仅
+   *  INDICATOR_STRAT_SHORTCUTS 中的合法值（ema_cross/macd/rsi/bollinger）生效；
+   *  编辑回填优先于预选。 */
+  initialIndicator?: string
 }
 
 export function useStrategyCreateForm(
@@ -196,6 +202,18 @@ export function useStrategyCreateForm(
 ): StrategyCreateFormState {
   const initialType = options?.initialType
   const editId = options?.editId
+  // 指标策略快捷入口预选开仓指标（?indicator=xx）：仅创建场景、仅快捷卡
+  // 合法值生效；编辑回填（页面 effect 直填 craParams）在 reset 之后执行，天然优先。
+  const presetIndicator = useMemo<OpenIndicatorKey | null>(() => {
+    if (editId || !options?.initialIndicator) return null
+    const ind = options.initialIndicator
+    return INDICATOR_STRAT_SHORTCUTS.some((s) => s.indicator === ind) ? (ind as OpenIndicatorKey) : null
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editId, options?.initialIndicator])
+  const withPresetIndicator = (p: CRAParams): CRAParams =>
+    presetIndicator
+      ? withOpenIndicator(p, { indicator: presetIndicator, params: defaultIndicatorParams(presetIndicator), custom: null })
+      : p
   // 类型锁定：经三级选项（?type=xx）或编辑（?id=xx）进入时类型已确定，
   // 基础信息不再显示类型下拉（用户 2026-09-30："策略选择进来了就不要再选择策略了"）。
   const typeLocked = !!initialType
@@ -348,7 +366,7 @@ export function useStrategyCreateForm(
     if (isGridProfile(profile)) {
       const gridProfile = profile
       setSpotGridState({ priceLower: '', priceUpper: '', gridCount: gridProfile.gridCount, perGridAmount: gridProfile.perGridAmount })
-      setCraParams((prev) => ({
+      setCraParams((prev) => withPresetIndicator({
         ...defaults,
         firstOrderAmount: gridProfile.perGridAmount,
         firstOrderMultiplier: 1,
@@ -359,10 +377,11 @@ export function useStrategyCreateForm(
       const next = profile ? { ...defaults, ...expandSpotProfile(profile) } : defaults
       // 流动性热力：默认移动止盈（档位式"涨得越多锁得越紧"，用户 2026-09-30
       // 指定），档位表在下方止盈设置区可视可编辑。
-      setCraParams(strategyType === 'liquidity_heat' ? { ...next, tpMode: 'moving' } : next)
+      setCraParams(withPresetIndicator(strategyType === 'liquidity_heat' ? { ...next, tpMode: 'moving' } : next))
     }
     setPresetKey(null)
-  }, [strategyType, market])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [strategyType, market, presetIndicator])
 
   // 服务端默认参数兜底（/strategies/defaults + /strategies/contract-defaults）：
   // 创建场景每个 (market, strategyType) 组合一次性叠加；失败/缺档案时保持本地默认。

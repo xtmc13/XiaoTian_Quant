@@ -58,6 +58,9 @@ export function CreateStrategyPage() {
   // 快捷入口支持 ?type=xxx（如 /create?market=spot&type=support_rebound）：
   // 新创建场景直接以该类型初始化（策略参数定义由后端 param-defs 驱动渲染）。
   const urlType = searchParams.get('type') || undefined
+  // 指标策略快捷卡（机器人中心/策略管理侧栏）附加 ?indicator=xx：创建场景预选
+  // 开仓指标选择器（CRA 壳 + 指标 = 币富"指标策略"）；编辑回填优先于预选。
+  const urlIndicator = searchParams.get('indicator') || undefined
 
   const form = useStrategyCreateForm(
     market,
@@ -70,8 +73,8 @@ export function CreateStrategyPage() {
           initialType: editingItem.strategy_type ?? editingItem.type,
           initialConfig: editConfig,
         }
-      : urlType
-        ? { initialType: urlType }
+      : urlType || urlIndicator
+        ? { initialType: urlType, initialIndicator: urlIndicator }
         : undefined
   )
 

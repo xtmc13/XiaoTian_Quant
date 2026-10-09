@@ -53,6 +53,9 @@ type CRAParams struct {
 	OpenCounterEmaPeriod  string `json:"open_counter_ema_period"`
 	OpenTrendEmaEnabled   bool   `json:"open_trend_ema_enabled"`
 	OpenTrendEmaPeriod    string `json:"open_trend_ema_period"`
+	// 布林带开仓门槛（指标策略快捷卡/选择器写入）：默认关闭，零行为变化。
+	OpenBollingerEnabled bool   `json:"open_bollinger_enabled"`
+	OpenBollingerPeriod  string `json:"open_bollinger_period"`
 
 	// 开仓指标选择器（IndicatorPicker）新键。OpenIndicator 为选择器标记键
 	//（macd/ema_cross/rsi/trend/trend_long/trend_short/range/custom）；
@@ -74,6 +77,9 @@ type CRAParams struct {
 	MacdSignal int `json:"-"`
 	EmaFast    int `json:"-"`
 	EmaSlow    int `json:"-"`
+	// 布林带门槛参数（indicator_params.bollinger 解析；缺省 20/2，非法回退默认）。
+	BollingerPeriod int     `json:"-"`
+	BollingerStd    float64 `json:"-"`
 
 	// Contract add indicators
 	AddMacdEnabled bool   `json:"add_macd_enabled"`
@@ -184,6 +190,8 @@ func ParseCRAParams(configJSON string) (*CRAParams, error) {
 	p.OpenCounterEmaPeriod = strVal(raw, "open_counter_ema_period", "close")
 	p.OpenTrendEmaEnabled = boolVal(raw, "open_trend_ema_enabled", false)
 	p.OpenTrendEmaPeriod = strVal(raw, "open_trend_ema_period", "close")
+	p.OpenBollingerEnabled = boolVal(raw, "open_bollinger_enabled", false)
+	p.OpenBollingerPeriod = strVal(raw, "open_bollinger_period", "close")
 
 	// 开仓指标选择器新键：indicator_params 宽松校验（对象/正数范围），
 	// custom 需要 code_id+name；非法值直接报错，避免脏配置静默进引擎。
@@ -199,17 +207,26 @@ func ParseCRAParams(configJSON string) (*CRAParams, error) {
 		p.IndicatorParams = m
 	}
 	// 新键回退旧键：选择器参数里的 period 覆盖同义旧键，保持引擎行为一致。
+	// bollinger 的监测周期键为 timeframe（period 已被布林周期占用为数值型）。
 	if p.IndicatorParams != nil {
-		for _, ik := range []string{"macd", "ema_cross", "trend_long", "trend_short"} {
+		for _, ik := range []string{"macd", "ema_cross", "trend_long", "trend_short", "bollinger"} {
 			sub, _ := p.IndicatorParams[ik].(map[string]any)
 			if sub == nil {
 				continue
 			}
-			if period := strVal(sub, "period", ""); period != "" && period != "close" {
+			periodKey := "period"
+			if ik == "bollinger" {
+				periodKey = "timeframe"
+			}
+			if period := strVal(sub, periodKey, ""); period != "" && period != "close" {
 				switch ik {
 				case "macd":
 					if p.OpenMacdPeriod == "close" {
 						p.OpenMacdPeriod = period
+					}
+				case "bollinger":
+					if p.OpenBollingerPeriod == "close" {
+						p.OpenBollingerPeriod = period
 					}
 				default:
 					if p.OpenTrendEmaPeriod == "close" {
@@ -227,11 +244,16 @@ func ParseCRAParams(configJSON string) (*CRAParams, error) {
 	// MACD 12/26/9、EMA 5/15；存在且为正数（posInt 兜底）才覆盖。
 	p.MacdFast, p.MacdSlow, p.MacdSignal = 12, 26, 9
 	p.EmaFast, p.EmaSlow = 5, 15
+	p.BollingerPeriod, p.BollingerStd = 20, 2
 	if p.IndicatorParams != nil {
 		if sub, _ := p.IndicatorParams["macd"].(map[string]any); sub != nil {
 			p.MacdFast = posInt(sub, "fast", p.MacdFast)
 			p.MacdSlow = posInt(sub, "slow", p.MacdSlow)
 			p.MacdSignal = posInt(sub, "signal", p.MacdSignal)
+		}
+		if sub, _ := p.IndicatorParams["bollinger"].(map[string]any); sub != nil {
+			p.BollingerPeriod = posInt(sub, "period", p.BollingerPeriod)
+			p.BollingerStd = posFloat(sub, "std", p.BollingerStd)
 		}
 		// EMA 双均线：ema_cross 优先，存量 trend_long/trend_short 记录回退。
 		for _, ik := range []string{"ema_cross", "trend_long", "trend_short"} {
@@ -303,6 +325,7 @@ func ValidateIndicatorParams(m map[string]any) error {
 		"rsi":         {"period", "oversold", "overbought"},
 		"trend":       {"period"},
 		"range":       {"period", "neutral_band"},
+		"bollinger":   {"period", "std"},
 	}
 	for key, fields := range numeric {
 		sub, ok := m[key]
@@ -372,6 +395,19 @@ func posInt(m map[string]any, key string, def int) int {
 		return def
 	}
 	return int(f)
+}
+
+// posFloat 取正浮点参数：缺失/非数值/≤0 时回退 def（与 posInt 同纪律）。
+func posFloat(m map[string]any, key string, def float64) float64 {
+	v, ok := m[key]
+	if !ok || v == nil {
+		return def
+	}
+	f, ok := toFloat(v)
+	if !ok || f <= 0 {
+		return def
+	}
+	return f
 }
 
 // Validate checks CRA params against frontend/CRA constraints.
