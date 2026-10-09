@@ -265,12 +265,21 @@ func (r *OrderRepo) ListFilledByClientOIDPrefix(prefix, symbol string, limit int
 	return result, nil
 }
 
-// NetFilledByStrategy 汇总某策略的已成交净买量与买入 VWAP：
+// NetFilledByStrategy 汇总某策略的已成交净买量与入场侧 VWAP：
 // signal 下单链路给订单打标 client_oid "sig:<策略配置id>:<nonce>"，
 // 据此把成交归属到策略（orders 表无 strategy 列，Source 不落库）。
-// 重启仓位重建用：净买量 = Σ买入filled − Σ卖出filled；VWAP 按各买单
-// avg_fill_price 加权。无记录返回 0。
-func NetFilledByStrategy(strategyID, symbol string) (netQty, buyVWAP float64, err error) {
+// 重启仓位重建用：净量 = Σ买入filled − Σ卖出filled，带符号——正=净多持仓、
+// 负=净空持仓（合约空单先 SELL 开仓，2026-10-09 H1 片起支持空单重建，
+// 此前负净额被钳到 0 丢弃）。VWAP 为持仓入场侧均价：净多取各买单
+// avg_fill_price 加权、净空取各卖单加权（聚合兜底合成单档的开仓成本）。
+// 无记录返回 0。
+//
+// 口径说明：本引擎策略均为"每循环单侧"持仓（CRA resolveContractSide 循环起点
+// 选边、InPosition 期间不开新首单；MACD 单仓位），同一策略账本不存在多空同时
+// 持仓，双边轧差后的符号即当前未平仓循环方向（dual 历史循环逐循环全平、互相
+// 抵消为 0 不影响当前循环）。逐笔口径见 cra.replayFills（超量反向成交=翻向，
+// 与本函数净额符号严格一致）。
+func NetFilledByStrategy(strategyID, symbol string) (netQty, entryVWAP float64, err error) {
 	prefix := "sig:" + strategyID + ":%"
 	rows, err := db.Query(
 		`SELECT side, COALESCE(SUM(filled),0), COALESCE(SUM(filled*avg_fill_price),0)
@@ -281,7 +290,7 @@ func NetFilledByStrategy(strategyID, symbol string) (netQty, buyVWAP float64, er
 		return 0, 0, err
 	}
 	defer rows.Close()
-	var buyQty, sellQty, buyCost float64
+	var buyQty, sellQty, buyCost, sellCost float64
 	for rows.Next() {
 		var side string
 		var qty, cost float64
@@ -292,17 +301,18 @@ func NetFilledByStrategy(strategyID, symbol string) (netQty, buyVWAP float64, er
 		case "BUY":
 			buyQty, buyCost = qty, cost
 		case "SELL":
-			sellQty = qty
+			sellQty, sellCost = qty, cost
 		}
 	}
 	netQty = buyQty - sellQty
-	if buyQty > 0 {
-		buyVWAP = buyCost / buyQty
+	if netQty >= 0 {
+		if buyQty > 0 {
+			entryVWAP = buyCost / buyQty
+		}
+	} else if sellQty > 0 {
+		entryVWAP = sellCost / sellQty
 	}
-	if netQty < 0 {
-		netQty = 0 // 净卖出/无持仓不恢复
-	}
-	return netQty, buyVWAP, nil
+	return netQty, entryVWAP, nil
 }
 
 // OrderFill 一笔已成交订单的重建视图（重启分档重建输入）。

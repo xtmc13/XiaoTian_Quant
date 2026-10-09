@@ -480,7 +480,10 @@ type FillRecord struct {
 // 方向。规则与运行时记账镜像：仓位为空时第一笔成交定方向（BUY=多/SELL=空，
 // 支持历史多循环与 dual 换向）；同向成交追加一档；反向成交按数量匹配运行时
 // 出场形态核销——≈剩余总量=全平清空、≈尾档=尾单止盈平尾档、≈首+尾档=
-// 首尾止盈平首尾、其它=FIFO 从首档消耗（手工/未知减仓兜底）。
+// 首尾止盈平首尾、其它=FIFO 从首档消耗（手工/未知减仓兜底）；超量反向成交
+// （>当时总量）按净额口径翻向——旧循环全平、余量以成交价开对向新循环首档
+// （H1 片修正：与 NetFilledByStrategy 带符号净额严格一致，重建方向不再与
+// 闸门矛盾）。
 func RebuildLotsFromFills(fills []FillRecord) ([]EntryLot, PositionSide) {
 	lots, side, _, _ := replayFills(fills)
 	return lots, side
@@ -540,6 +543,20 @@ func RebuildBurnMarksFromFills(fills []FillRecord, dualThreshold, globalThreshol
 			lots = append(lots, EntryLot{Price: f.Price, Qty: f.Qty, Manual: f.Manual})
 			continue
 		}
+		// 超量反向成交 = 本循环全平 + 余量反向开仓（与 replayFills 同口径）：
+		// 旧循环的燃烧标记随循环清零，余量开对向新循环（不可能是燃烧形态——
+		// 燃烧斩仓量严格小于当时总量）。旧实现走 FIFO 丢弃余量会丢翻向。
+		if total := lotsTotalQty(lots); f.Qty > total && !approxQty(f.Qty, total) {
+			dualFired = false
+			globalFired = false
+			if isBuy {
+				side = SideLong
+			} else {
+				side = SideShort
+			}
+			lots = []EntryLot{{Price: f.Price, Qty: f.Qty - total, Manual: f.Manual}}
+			continue
+		}
 		// 减仓成交：核销前先按当前档位形态分类（分类用的是核销前的档集，
 		// 与运行时信号发出时刻的 PositionCount/Lots 同源）。n/adds 只数自动
 		// 阶梯档（G1 手动档不推进阶梯）；形态匹配（首/尾档量、总量）用全量档。
@@ -554,10 +571,7 @@ func RebuildBurnMarksFromFills(fills []FillRecord, dualThreshold, globalThreshol
 			}
 			continue
 		}
-		total := 0.0
-		for _, l := range lots {
-			total += l.Qty
-		}
+		total := lotsTotalQty(lots)
 		n := countAutoLots(lots)
 		adds := n - 1
 		isFull := approxQty(f.Qty, total)
@@ -614,6 +628,29 @@ func replayFills(fills []FillRecord) (lots []EntryLot, side PositionSide, prevSi
 			}
 			continue
 		}
+		// 超量反向成交（减仓量 > 当前持仓总量，超出浮点近似）= 本循环全平 +
+		// 余量反向开仓——单向持仓账户的净额口径语义（合约卖出超持仓即翻空）。
+		// 旧实现丢弃余量（consumeLots* 静默吃掉），会把"翻向"重建丢成空仓/错向，
+		// 与 NetFilledByStrategy 的带符号净额互相矛盾（闸门按净额判方向、重放
+		// 却产出相反方向）。翻向同时意味着旧循环结束：顺势锚点按旧循环重写。
+		if total := lotsTotalQty(lots); f.Qty > total && !approxQty(f.Qty, total) {
+			prevSide = side
+			prevAdds = peakAutoLots - 1
+			if prevAdds < 0 {
+				prevAdds = 0
+			}
+			peakAutoLots = 0
+			if isBuy {
+				side = SideLong
+			} else {
+				side = SideShort
+			}
+			lots = []EntryLot{{Price: f.Price, Qty: f.Qty - total, Manual: f.Manual}}
+			if n := countAutoLots(lots); n > peakAutoLots {
+				peakAutoLots = n
+			}
+			continue
+		}
 		// G1：带 ":manual:" 标记的减仓成交（自定义减仓/清仓）与运行时
 		// ApplyCloseFill 的 manual_reduce/manual_close 口径一致——FIFO 从首档
 		// 消耗，不做尾单/首尾形态猜测（形态推断只对无标记的自动出场成交，
@@ -637,12 +674,10 @@ func replayFills(fills []FillRecord) (lots []EntryLot, side PositionSide, prevSi
 }
 
 // consumeLotsReplay 重放期的平仓核销：按数量匹配运行时出场形态（全平/尾单/
-// 首尾），对不上则 FIFO 从首档消耗。
+// 首尾），对不上则 FIFO 从首档消耗。调用方须先排除超量翻向（qty>total，
+// replayFills 的翻向分支）——本函数不处理负库存。
 func consumeLotsReplay(lots []EntryLot, qty float64) []EntryLot {
-	total := 0.0
-	for _, l := range lots {
-		total += l.Qty
-	}
+	total := lotsTotalQty(lots)
 	if approxQty(qty, total) {
 		return nil
 	}
@@ -653,6 +688,15 @@ func consumeLotsReplay(lots []EntryLot, qty float64) []EntryLot {
 		return lots[1 : n-1]
 	}
 	return consumeLotsFIFO(lots, qty)
+}
+
+// lotsTotalQty 分档总量（重放/形态推断共用）。
+func lotsTotalQty(lots []EntryLot) float64 {
+	total := 0.0
+	for _, l := range lots {
+		total += l.Qty
+	}
+	return total
 }
 
 // consumeLotsFIFO 重放期的 FIFO 核销（从首档起）：consumeLotsReplay 形态兜底

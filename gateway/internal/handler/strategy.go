@@ -270,13 +270,17 @@ func GetStrategyRuntime(c *gin.Context) {
 
 	// 持仓数量补真值：经典策略（MACD 等）的 RuntimeStatus 不发 position_qty
 	// （曾把 500U 本金当数量展示——2026-10-04 实证），paper 实例按成交账本
-	// 净持仓补，面板不再误显示本金。
+	// 净持仓补，面板不再误显示本金。净额带符号（H1 片）：净空取绝对值，
+	// 方向由策略 RuntimeStatus 的 direction 键展示。
 	if status != nil {
 		if _, ok := status["position_qty"]; !ok {
 			if mode := strings.ToLower(getString(item, "execution_mode", getString(item, "mode", ""))); mode == "paper" {
 				sym := getString(item, "symbol", "")
 				if sym != "" {
-					if net, _, err := store.NetFilledByStrategy(id, sym); err == nil && net > 1e-12 {
+					if net, _, err := store.NetFilledByStrategy(id, sym); err == nil && (net > 1e-12 || net < -1e-12) {
+						if net < 0 {
+							net = -net
+						}
 						status["position_qty"] = net
 					}
 				}
@@ -1258,51 +1262,80 @@ func startStrategyInEngine(id string, item map[string]any) error {
 	// 之后、暖机重放之前自行恢复（恢复若发生在 Start 之前会被清态抹掉，
 	// 若晚于重放开始则已重复入场——2026-10-01 实证两败）。见 liquidity_heat
 	// Start 收尾的 restored_position_qty 处理。
+	// H1 片（2026-10-09）：闸门从"仅净多"扩展为带符号净额——净多 net>0 恢复
+	// 多单，净空 net<0（swap 空单：先 SELL 开仓）恢复空单，方向随账本符号经
+	// restored_position_side 注入；现货策略无空单语义，负净额拒绝注入并 WARN。
 	if _, isRestorer := strategy.UnwrapStrategy(wrapped).(strategy.PositionRestorer); isRestorer {
 		if sym, _ := params["symbol"].(string); sym != "" {
 			if net, vwap, err := store.NetFilledByStrategy(id, sym); err != nil {
 				log.Printf("[strategy] %s 仓位重建查询失败: %v", id, err)
-			} else if net > 0 {
-				injectQty := net
-				inject := true
-				// paper 模式：恢复注入必须有 paper 账户真实余额背书（平仓单
-				// 的 OMS 余额锁查 paper 账户账本，与引擎状态无关）——按账户
-				// 实际 free 余额/镜像持仓钳制注入量；背书为零则不注入、策略
-				// 空仓起步，引擎状态与账户严格一致（2026-10-08 实锤：无背书
-				// 注入让策略卡死在"有仓位但平不掉"）。live 模式维持账本净额
-				// 口径不动。
-				if em, _ := item["execution_mode"].(string); em != "live" {
-					if q, ok := clampRestoredQtyByPaperBacking(sym, net); ok {
-						if q < net {
-							log.Printf("[strategy] %s 仓位重建钳制: %s 账本净额 %.6f → paper 账户背书 %.6f", id, sym, net, q)
-						}
-						injectQty = q
-					} else {
-						log.Printf("[strategy] %s 仓位重建跳过: %s 账本净额 %.6f 但 paper 账户无可卖背书，策略空仓起步", id, sym, net)
-						inject = false
-					}
+			} else if net != 0 {
+				side := "long"
+				absNet := net
+				if net < 0 {
+					side = "short"
+					absNet = -net
 				}
-				if inject {
-					params["restored_position_qty"] = injectQty
-					params["restored_position_vwap"] = vwap
-					// 分档重建（CRA 尾单/首尾止盈的各档成本）：逐笔成交明细一并
-					// 注入，策略支持分档时按成交时间重放（cra RebuildLotsFromFills）；
-					// 不消费该键的策略走聚合 qty/vwap 兜底，行为不变。
-					// 注入量被钳时逐笔明细之和大于注入量，分档重放会超出背书——
-					// 降级为聚合（合成单档），量与背书严格一致。
-					if fills, ferr := store.FilledOrdersByStrategy(id, sym); ferr != nil {
-						log.Printf("[strategy] %s 逐笔成交查询失败（分档重建降级为聚合）: %v", id, ferr)
-					} else if len(fills) > 0 && injectQty >= net {
-						list := make([]any, 0, len(fills))
-						for _, f := range fills {
-							// G1：client_oid ":manual:" 中缀透传手动补仓标记，
-							// 重放恢复 Manual 档（重启后手动单依然不推自动阶梯）。
-							list = append(list, map[string]any{
-								"side": f.Side, "qty": f.Filled, "price": f.AvgFillPrice,
-								"manual": strings.Contains(f.ClientOID, ":manual:"),
-							})
+				// 现货/无合约语义策略拒绝空单注入（账本出现负净额本身即异常：
+				// 超卖/污染），WARN 留痕、空仓起步——绝不把空单当多单恢复。
+				if net < 0 && !strategyContractCapable(factoryName, item) {
+					log.Printf("[strategy] %s 仓位重建拒绝: %s 账本净额 %.6f 为净空，但策略非合约语义（现货无空单），空仓起步", id, sym, net)
+				} else {
+					injectQty := absNet
+					inject := true
+					// paper 模式：恢复注入必须有 paper 账户真实背书（平仓单
+					// 的 OMS 资金锁查 paper 账户账本，与引擎状态无关）——按方向
+					// 取背书（多单=free base/镜像多头，空单=镜像空头）钳制注入量；
+					// 背书为零则不注入、策略空仓起步，引擎状态与账户严格一致
+					// （2026-10-08 实锤：无背书注入让策略卡死在"有仓位但平不掉"）。
+					// live 模式维持账本净额口径不动。
+					if em, _ := item["execution_mode"].(string); em != "live" {
+						if q, ok := clampRestoredQtyByPaperBacking(sym, net); ok {
+							if q < absNet {
+								log.Printf("[strategy] %s 仓位重建钳制: %s 账本净额 %.6f → paper 账户背书 %.6f", id, sym, net, q)
+							}
+							injectQty = q
+							// 空单买平需 quote 支付（开空回款已在账户）：回款被
+							// 抽干到不足以按成本价买回时如实 WARN（不钳量——钳小
+							// 注入只会让账户空头残留失控；价格上行超成本的补仓
+							// 缺口同理只在日志如实可见）。
+							if side == "short" && vwap > 0 {
+								if freeQuote := paper.GetPaperExchange().FreeBalance("USDT"); freeQuote < q*vwap {
+									log.Printf("[strategy] %s 仓位重建风险: %s 空单 %.6f 的买平约需 %.2f USDT（按成本价 %.2f 估），paper 账户可用仅 %.2f——价格上行时平仓单可能被余额锁拒", id, sym, q, q*vwap, vwap, freeQuote)
+								}
+							}
+						} else {
+							backingDesc := "可卖"
+							if side == "short" {
+								backingDesc = "空头镜像"
+							}
+							log.Printf("[strategy] %s 仓位重建跳过: %s 账本净额 %.6f 但 paper 账户无%s背书，策略空仓起步", id, sym, net, backingDesc)
+							inject = false
 						}
-						params["restored_fills"] = list
+					}
+					if inject {
+						params["restored_position_qty"] = injectQty
+						params["restored_position_vwap"] = vwap
+						params["restored_position_side"] = side
+						// 分档重建（CRA 尾单/首尾止盈的各档成本）：逐笔成交明细一并
+						// 注入，策略支持分档时按成交时间重放（cra RebuildLotsFromFills）；
+						// 不消费该键的策略走聚合 qty/vwap 兜底，行为不变。
+						// 注入量被钳时逐笔明细之和大于注入量，分档重放会超出背书——
+						// 降级为聚合（合成单档），量与背书严格一致。
+						if fills, ferr := store.FilledOrdersByStrategy(id, sym); ferr != nil {
+							log.Printf("[strategy] %s 逐笔成交查询失败（分档重建降级为聚合）: %v", id, ferr)
+						} else if len(fills) > 0 && injectQty >= absNet {
+							list := make([]any, 0, len(fills))
+							for _, f := range fills {
+								// G1：client_oid ":manual:" 中缀透传手动补仓标记，
+								// 重放恢复 Manual 档（重启后手动单依然不推自动阶梯）。
+								list = append(list, map[string]any{
+									"side": f.Side, "qty": f.Filled, "price": f.AvgFillPrice,
+									"manual": strings.Contains(f.ClientOID, ":manual:"),
+								})
+							}
+							params["restored_fills"] = list
+						}
 					}
 				}
 			}

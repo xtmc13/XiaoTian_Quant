@@ -252,9 +252,15 @@ func (s *LiquidityHeatStrategy) Start(params map[string]any) error {
 	// 重启仓位重建（handler 按本地成交账本注入 Start 参数）：在 Start 清态
 	// 之后、暖机重放之前恢复持仓态——恢复若发生在 Start 之前会被上面的
 	// resetPositionLocked 清掉，若发生在重放之后则已重复入场（竞态窗口）。
+	// 本策略现货 long-only：负净额（空单）注入明确拒绝、空仓起步——handler
+	// 闸门已对非合约配置拦截并 WARN，此处是第二道防线（拒绝如实留日志）。
 	if q, ok := params["restored_position_qty"].(float64); ok && q > 0 {
-		v, _ := params["restored_position_vwap"].(float64)
-		s.restorePositionLocked(q, v)
+		if sd, _ := params["restored_position_side"].(string); sd == "short" {
+			log.Printf("[liquidity_heat] %s 拒绝空单重建注入: qty=%.8f（现货 long-only 语义），空仓起步", s.name, q)
+		} else {
+			v, _ := params["restored_position_vwap"].(float64)
+			s.restorePositionLocked(q, v)
+		}
 	}
 
 	s.holdCountFrom = time.Now().UnixMilli()

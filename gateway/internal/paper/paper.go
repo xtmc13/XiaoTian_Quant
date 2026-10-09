@@ -57,9 +57,12 @@ func (p *PaperPosition) AddTrade(trade model.TradeData) {
 		}
 	}
 	p.Quantity = totalQty
-	if totalQty > 0 {
+	if totalQty != 0 {
+		// 空单（totalQty<0）均价 = 负成本/负量 = 正开仓价（此前 totalQty>0 才
+		// 赋值，空单均价恒 0、浮亏显示全错）。CostBasis 取名义绝对值（与
+		// service/store 侧 Quantity×AvgEntryPrice 的量纲一致，PnL% 分母为正）。
 		p.AvgEntryPrice = totalCost / totalQty
-		p.CostBasis = totalCost
+		p.CostBasis = math.Abs(totalCost)
 	} else {
 		p.AvgEntryPrice = 0
 		p.CostBasis = 0
@@ -340,6 +343,23 @@ func (pe *PaperExchange) RestoreAccount(snap AccountSnapshot) {
 		pos := &PaperPosition{
 			PositionData: ps.Data,
 			trades:       append([]model.TradeData(nil), ps.Trades...),
+		}
+		// 旧格式/手工快照只有聚合 Quantity 没有逐笔 trades：AddTrade 的持仓量
+		// 由 trades 序列重算，空 trades 会在恢复后第一笔成交时把持仓量整个
+		// 吃掉（恢复 16.82 的多仓卖 12.52 会被记成 -12.52）。按快照聚合量
+		// 补一笔合成开仓成交（方向随持仓符号、价格取均价），保持"trades 是
+		// 真值"的不变量。
+		if len(pos.trades) == 0 {
+			side := "BUY"
+			qty := ps.Data.Quantity
+			if qty < 0 {
+				side = "SELL"
+				qty = -qty
+			}
+			pos.trades = []model.TradeData{{
+				Symbol: ps.Data.Symbol, Side: side, Quantity: qty,
+				Price: ps.Data.AvgEntryPrice, Timestamp: ps.Data.OpenedAt,
+			}}
 		}
 		if pe.positions[pos.Symbol] == nil {
 			pe.positions[pos.Symbol] = make(map[string]*PaperPosition)

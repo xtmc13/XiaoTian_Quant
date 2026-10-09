@@ -121,12 +121,18 @@ func (s *SmartMoneyStrategy) Start(params map[string]any) error {
 	s.lastRes = nil
 	s.inPosition = false
 	s.entryPrice = 0
-	// 重启仓位重建（经典策略同款机制，2026-10-04）。
+	// 重启仓位重建（经典策略同款机制，2026-10-04）。本策略现货 long-only：
+	// 负净额（空单）注入明确拒绝、空仓起步——handler 闸门已对非合约配置
+	// 拦截并 WARN，此处是第二道防线（拒绝如实留日志，绝不把空单当多单恢复）。
 	if q, ok := params["restored_position_qty"].(float64); ok && q > 0 {
-		v, _ := params["restored_position_vwap"].(float64)
-		s.inPosition = true
-		s.entryPrice = v
-		log.Printf("[smart_money] %s 重启仓位重建: qty=%.6f vwap=%.2f", s.name, q, v)
+		if sd, _ := params["restored_position_side"].(string); sd == "short" {
+			log.Printf("[smart_money] %s 拒绝空单重建注入: qty=%.6f（现货 long-only 语义），空仓起步", s.name, q)
+		} else {
+			v, _ := params["restored_position_vwap"].(float64)
+			s.inPosition = true
+			s.entryPrice = v
+			log.Printf("[smart_money] %s 重启仓位重建: qty=%.6f vwap=%.2f", s.name, q, v)
+		}
 	}
 	s.running = true
 	return nil

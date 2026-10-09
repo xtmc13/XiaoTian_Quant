@@ -296,31 +296,43 @@ func (s *MACDStrategy) Start(params map[string]any) error {
 	// 就再开一单（MACD SOL 实例三次重启三次"加仓"实证，持仓 12.5 SOL =
 	// 3×4.17）。handler 按账本净持仓注入 restored_position_*，此处认领后
 	// inPosition=true，暖机重放只会管理已有仓（SL/TP），不再重复入场。
+	// H1 片（2026-10-09）：方向随账本净额符号注入（restored_position_side），
+	// 合约空单（净额<0）恢复为 SHORT 仓，checkExit 的空单 TP/SL 镜像继续管理。
 	if q, ok := params["restored_position_qty"].(float64); ok && q > 0 {
 		v, _ := params["restored_position_vwap"].(float64)
-		s.restorePositionLocked(q, v)
+		dir := "LONG"
+		if sd, _ := params["restored_position_side"].(string); sd == "short" {
+			dir = "SHORT"
+		}
+		s.restorePositionLocked(q, v, dir)
 	}
 	s.running = true
 	return nil
 }
 
-// restorePositionLocked 重启仓位重建实现。须持锁。方向按净多处理（合约空
-// 单的账本净值为 0，空仓位重建暂不支持——出场管理落空但不会再加仓）。
-func (s *MACDStrategy) restorePositionLocked(qty, avgPrice float64) {
+// restorePositionLocked 重启仓位重建实现。须持锁。direction 为持仓方向
+// （"LONG"/"SHORT"，空值按 LONG——RestorePosition 直调路径无方向参数，
+// 保持净多历史默认；生产路径经 Start 注入 restored_position_side，空单
+// 按账本符号如实恢复）。
+func (s *MACDStrategy) restorePositionLocked(qty, avgPrice float64, direction string) {
 	s.inPosition = true
 	s.entryPrice = avgPrice
 	s.direction = "LONG"
+	if direction == "SHORT" {
+		s.direction = "SHORT"
+	}
 	if s.entryPrice <= 0 {
 		s.entryPrice = 0.01 // 无均价时的占位（checkExit 需要非零基准）
 	}
-	log.Printf("[macd] %s 重启仓位重建: qty=%.6f vwap=%.2f", s.name, qty, avgPrice)
+	log.Printf("[macd] %s 重启仓位重建: qty=%.6f vwap=%.2f direction=%s", s.name, qty, avgPrice, s.direction)
 }
 
-// RestorePosition PositionRestorer 接口（引擎/工具链直调路径）。
+// RestorePosition PositionRestorer 接口（引擎/工具链直调路径，无方向参数，
+// 按净多恢复；生产方向感知的重建走 Start 的 restored_position_side 注入）。
 func (s *MACDStrategy) RestorePosition(qty, avgPrice float64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.restorePositionLocked(qty, avgPrice)
+	s.restorePositionLocked(qty, avgPrice, "LONG")
 	return nil
 }
 

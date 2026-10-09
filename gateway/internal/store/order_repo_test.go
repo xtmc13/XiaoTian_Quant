@@ -139,6 +139,57 @@ func TestNetFilledByStrategy(t *testing.T) {
 	if net, _, err := NetFilledByStrategy("nope", "BTCUSDT"); err != nil || net != 0 {
 		t.Fatalf("empty strategy: net=%v err=%v", net, err)
 	}
+
+	// 合约空单（H1 片）：先 SELL 开空 → 净额为负（不钳零），VWAP 取卖出侧
+	// （开仓侧）加权均价——聚合兜底重建空单档的成本来源。
+	if err := repo.Create(mk("ord-s1", "SELL", "sig:cfg-short:1", 1.0, 100)); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Create(mk("ord-s2", "SELL", "sig:cfg-short:2", 1.0, 110)); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Create(mk("ord-s3", "BUY", "sig:cfg-short:3", 0.5, 105)); err != nil {
+		t.Fatal(err)
+	}
+	net, vwap, err = NetFilledByStrategy("cfg-short", "BTCUSDT")
+	if err != nil {
+		t.Fatalf("short net: %v", err)
+	}
+	if net < -1.5001 || net > -1.4999 {
+		t.Fatalf("short net = %v, want -1.5（负净额不得钳零）", net)
+	}
+	if vwap != 105 {
+		t.Fatalf("short entry vwap = %v, want 105（卖出侧加权）", vwap)
+	}
+
+	// dual 分账口径：循环1 多仓全平（BUY 1 → SELL 1 抵消为 0）+ 循环2 空仓
+	// 在持（SELL 0.8、BUY 0.3 减仓）→ 净额 = -0.5 = 当前循环方向与数量，
+	// 历史循环不互相抵消当前循环（每循环单侧模型的顺序账本天然分账）。
+	if err := repo.Create(mk("ord-d1", "BUY", "sig:cfg-dual:1", 1.0, 100)); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Create(mk("ord-d2", "SELL", "sig:cfg-dual:2", 1.0, 103)); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Create(mk("ord-d3", "SELL", "sig:cfg-dual:3", 0.8, 104)); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Create(mk("ord-d4", "BUY", "sig:cfg-dual:4", 0.3, 100)); err != nil {
+		t.Fatal(err)
+	}
+	net, vwap, err = NetFilledByStrategy("cfg-dual", "BTCUSDT")
+	if err != nil {
+		t.Fatalf("dual net: %v", err)
+	}
+	if net < -0.5001 || net > -0.4999 {
+		t.Fatalf("dual net = %v, want -0.5（当前空仓循环）", net)
+	}
+	// 聚合 VWAP 是全部卖单的加权（含循环1 的平仓卖单 @103）=186.2/1.8≈103.44：
+	// 聚合口径的历史循环混合是既有近似（多单侧同样如此），当前循环精确成本
+	// 由 restored_fills 逐笔重放承载（cra.replayFills 按循环切割）。
+	if want := (103.0 + 0.8*104) / 1.8; vwap < want-0.01 || vwap > want+0.01 {
+		t.Fatalf("dual entry vwap = %v, want ≈%v（卖出侧聚合加权）", vwap, want)
+	}
 }
 
 // TestStrategyPaperPnL 平均成本法绩效：已实现 + 浮动，超卖保护，账本归属隔离。

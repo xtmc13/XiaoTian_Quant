@@ -152,7 +152,14 @@ func (s *BaseCRAStrategy) Start(params map[string]any) error {
 		s.state.BurnGlobalFired = burnGlobal
 	} else if q, ok := params["restored_position_qty"].(float64); ok && q > 0 {
 		v, _ := params["restored_position_vwap"].(float64)
-		s.restorePositionLocked(q, v)
+		// H1 片：方向由 handler 按账本净额符号注入（restored_position_side），
+		// dual 持仓的空单也能按真实方向聚合重建（此前方向取参数 direction，
+		// dual 一律被误恢复为多单）。
+		side := SideLong
+		if sd, _ := params["restored_position_side"].(string); sd == "short" {
+			side = SideShort
+		}
+		s.restoreAggregateLocked(q, v, side)
 	}
 
 	s.running = true
@@ -607,17 +614,24 @@ func (s *BaseCRAStrategy) restoreLotsLocked(lots []EntryLot, side PositionSide) 
 }
 
 // restorePositionLocked 聚合重建兜底（无逐笔明细）：净持仓合成单档，
-// tail/head_tail 退化为以均价判定的该档。方向取参数 direction（dual 无法
-// 从聚合量反推，按多处理——聚合注入本身只在净多账本时发生）。聚合量同样
-// 无法反推历史循环，顺势换向锚点（PrevLoopSide/PrevLoopTrappedAdds）在此
-// 路径保持 0——重启后首轮不放大，待本循环结束后按运行时口径重写。
+// tail/head_tail 退化为以均价判定的该档。方向取参数 direction（直调路径无
+// restored_position_side 可读；生产路径走 Start，方向由 handler 按账本净额
+// 符号注入）。聚合量同样无法反推历史循环，顺势换向锚点
+// （PrevLoopSide/PrevLoopTrappedAdds）在此路径保持 0——重启后首轮不放大，
+// 待本循环结束后按运行时口径重写。
 func (s *BaseCRAStrategy) restorePositionLocked(qty, vwap float64) {
-	if qty <= 0 || vwap <= 0 {
-		return
-	}
 	side := SideLong
 	if s.params != nil && s.params.Direction == "short" {
 		side = SideShort
+	}
+	s.restoreAggregateLocked(qty, vwap, side)
+}
+
+// restoreAggregateLocked 聚合单档重建实现：EntryPrice=开仓 VWAP、方向按
+// 给定 side（净额符号）。须持锁。
+func (s *BaseCRAStrategy) restoreAggregateLocked(qty, vwap float64, side PositionSide) {
+	if qty <= 0 || vwap <= 0 {
+		return
 	}
 	s.restoreLotsLocked([]EntryLot{{Price: vwap, Qty: qty}}, side)
 }

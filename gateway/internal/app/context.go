@@ -1150,6 +1150,18 @@ func (ctx *Context) updatePortfolioFromContractFill(ord *model.OrderData, acct *
 		}
 	} else {
 		// ── OPEN / INCREASE position ──
+		// 方向与持仓键一致才是开仓/加仓（BUY+LONG 开多、SELL+SHORT 开空）；
+		// 反向组合（BUY+SHORT / SELL+LONG）是平仓语义——上方减仓分支要求
+		// 存在该侧持仓，无持仓时落到这里若照开仓记账会造出幻影镜像仓
+		// （实锤路径：重启后账本兜底平仓单成交，镜像本无持仓，SELL+LONG
+		// 被记成新开 LONG 仓，下一次 CLOSE 会把幻影再"平"一次变成真超卖/
+		// 翻空）。无持仓的反向成交如实忽略（账本/交易所侧才是真值，镜像不
+		// 无中生有）。
+		matchedOpen := (positionSide == model.PositionLong && ord.Side == model.SideBuy) ||
+			(positionSide == model.PositionShort && ord.Side == model.SideSell)
+		if !matchedOpen {
+			return
+		}
 		// Deduct margin
 		ctx.adjustBalance("default", "USDT", -margin)
 
@@ -1842,17 +1854,25 @@ func (ctx *Context) closePositionFromSignal(signal model.Signal) {
 	// 又真买——无限买入直到余额耗尽（2026-10-01 用户质疑的正是这条路径）。
 	// 部分平仓（CRA 尾单/首尾止盈、position_reduce 减仓）：0 < signal.Qty <
 	// 净持仓时只平 signal.Qty，剩余仓位续存；否则全平（历史行为）。
-	if qty, _, err := store.NetFilledByStrategy(signal.Strategy, signal.Symbol); err == nil && qty > 0 {
-		closeQty := qty
-		partial := signal.Qty > 0 && signal.Qty < qty
+	// H1 片（2026-10-09）：净额带符号——净空（<0，重启恢复的 swap 空单）按
+	// BUY 买回平仓，与净多 SELL 对称（此前 qty>0 才处理，空单 CLOSE 空转）。
+	if net, _, err := store.NetFilledByStrategy(signal.Strategy, signal.Symbol); err == nil && net != 0 {
+		closeSide := model.SideSell
+		absNet := net
+		if net < 0 {
+			closeSide = model.SideBuy
+			absNet = -net
+		}
+		closeQty := absNet
+		partial := signal.Qty > 0 && signal.Qty < absNet
 		if partial {
 			closeQty = signal.Qty
 		}
 		ctx.Logger.Info("Close from strategy ledger (no mirrored position)",
-			"strategy", signal.Strategy, "symbol", signal.Symbol, "qty", closeQty, "partial", partial)
+			"strategy", signal.Strategy, "symbol", signal.Symbol, "qty", closeQty, "side", closeSide, "partial", partial)
 		req := &order.Request{
 			Symbol:    signal.Symbol,
-			Side:      model.SideSell,
+			Side:      closeSide,
 			OrderType: model.TypeMarket,
 			Price:     0,
 			Quantity:  closeQty,
@@ -1865,26 +1885,50 @@ func (ctx *Context) closePositionFromSignal(signal model.Signal) {
 		if cfg := findStrategyConfigForSignal(signal); cfg != nil {
 			applyStrategyExecConfig(req, cfg, string(signal.Direction))
 		}
-		// paper 平仓按账户实际可卖背书钳制：账本净额可能大于 paper 账户
-		// 实际持仓（恢复注入被钳/账户被重置/手工划转），超出部分永远卖不出
-		// ——与其拒单空转，不如如实平掉可卖部分；背书为零说明账户已无该
-		// 资产，直接跳过（策略引擎已随信号复位为空仓，不会卡死）。
+		// 平仓单的持仓方向键按被平仓位方向钉死（BOTH 配置下 CLOSE 信号方向
+		// 不含持仓信息，applyStrategyExecConfig 会默认 LONG——平空 BUY 必须
+		// 带 SHORT 键，否则对冲模式下成交回报会把镜像账记错侧）。
+		if req.MarketType == model.MarketSwap {
+			if closeSide == model.SideBuy {
+				req.PositionSide = model.PositionShort
+			} else {
+				req.PositionSide = model.PositionLong
+			}
+		}
+		// paper 平仓按账户实际背书钳制：账本净额可能大于 paper 账户实际持仓
+		// （恢复注入被钳/账户被重置/手工划转），超出部分永远平不掉——与其拒单
+		// 空转，不如如实平掉可平部分；背书为零说明账户已无该仓位，直接跳过
+		// （策略引擎已随信号复位为空仓，不会卡死）。多单背书=可卖 base/镜像
+		// 多头；空单背书=镜像空头量，且买回需 quote 足额（按现价估，含手续费
+		// 余量），不足时钳到买得起部分（如实减仓强过硬拒单）。
 		if isPaperExchangeName(req.Exchange) {
 			pe := paper.GetPaperExchange()
-			base, _ := parseSymbolPair(req.Symbol)
-			backing := pe.FreeBalance(base)
-			if posQty := pe.NetPositionQuantity(req.Symbol); posQty > 0 && posQty < backing {
-				backing = posQty
+			var backing float64
+			if closeSide == model.SideSell {
+				base, _ := parseSymbolPair(req.Symbol)
+				backing = pe.FreeBalance(base)
+				if posQty := pe.NetPositionQuantity(req.Symbol); posQty > 0 && posQty < backing {
+					backing = posQty
+				}
+			} else {
+				if shortQty := -pe.NetPositionQuantity(req.Symbol); shortQty > 0 {
+					backing = shortQty
+				}
+				if px := getLastPrice(req.Symbol); px > 0 && backing > 0 {
+					if affordable := pe.FreeBalance("USDT") / (px * (1 + pe.FeeRate())); affordable < backing {
+						backing = affordable
+					}
+				}
 			}
 			if backing <= 0 {
-				ctx.Logger.Warn("Ledger close skipped: paper account holds no sellable balance",
-					"strategy", signal.Strategy, "symbol", signal.Symbol, "ledger_qty", qty)
+				ctx.Logger.Warn("Ledger close skipped: paper account holds no closable backing",
+					"strategy", signal.Strategy, "symbol", signal.Symbol, "ledger_qty", net, "side", closeSide)
 				return
 			}
 			if backing < closeQty {
 				ctx.Logger.Warn("Ledger close clamped to paper account backing",
 					"strategy", signal.Strategy, "symbol", signal.Symbol,
-					"ledger_qty", qty, "backing", backing)
+					"ledger_qty", net, "backing", backing, "side", closeSide)
 				closeQty = backing
 				req.Quantity = closeQty
 			}
@@ -1893,7 +1937,7 @@ func (ctx *Context) closePositionFromSignal(signal model.Signal) {
 			ctx.Logger.Warn("Ledger close order failed",
 				"strategy", signal.Strategy, "symbol", signal.Symbol, "error", err.Error())
 		} else {
-			ctx.Logger.Info("Ledger close order placed", "order_id", ord.ID, "qty", closeQty, "partial", partial)
+			ctx.Logger.Info("Ledger close order placed", "order_id", ord.ID, "qty", closeQty, "side", closeSide, "partial", partial)
 		}
 	}
 }

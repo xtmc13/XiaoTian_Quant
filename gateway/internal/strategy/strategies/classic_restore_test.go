@@ -49,3 +49,73 @@ func TestMACDRestorePositionBlocksReentry(t *testing.T) {
 		}
 	}
 }
+
+// H1 片（2026-10-09）：MACD 合约空单重启重建——账本净额<0 时 handler 注入
+// restored_position_side=short，恢复为 SHORT 仓；出场管理对称：价格上涨
+// 触发空单止损、下跌触发空单止盈；暖机重放不再重复开空。
+func TestMACDRestoreShortPositionManagesExits(t *testing.T) {
+	mk := func(close float64) model.Bar {
+		return model.Bar{Symbol: "SOLUSDT", Time: time.Now().UnixMilli(), Close: close}
+	}
+	newRestoredShort := func(t *testing.T) *MACDStrategy {
+		t.Helper()
+		s := NewMACDStrategy()
+		if err := s.Start(map[string]any{
+			"symbol":                 "SOLUSDT",
+			"restored_position_qty":  2.0,
+			"restored_position_vwap": 100.0,
+			"restored_position_side": "short",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		s.mu.RLock()
+		if !s.inPosition || s.direction != "SHORT" || s.entryPrice != 100 {
+			t.Fatalf("short restore failed: inPos=%v dir=%s entry=%v", s.inPosition, s.direction, s.entryPrice)
+		}
+		s.mu.RUnlock()
+		return s
+	}
+	// 暖机：40 根平价 bar 填满指标窗口（恢复仓只管理出场，不重复入场）。
+	warm := func(t *testing.T, s *MACDStrategy) {
+		t.Helper()
+		for i := 0; i < 40; i++ {
+			if sig, _ := s.OnBar(mk(100), nil); sig != nil {
+				t.Fatalf("warmup bar %d: unexpected signal %+v（恢复态不得重复入场/误出场）", i, sig)
+			}
+		}
+	}
+
+	// 空单止损：成本 100，102.5 ≥ 100×(1+2%) → short stop loss。
+	s := newRestoredShort(t)
+	warm(t, s)
+	sig, err := s.OnBar(mk(102.5), nil)
+	if err != nil || sig == nil || sig.Direction != "CLOSE" || sig.Reason != "short stop loss" {
+		t.Fatalf("short SL = %+v err=%v, want CLOSE short stop loss", sig, err)
+	}
+	s.mu.RLock()
+	if s.inPosition {
+		t.Fatal("SL 后必须复位为空仓")
+	}
+	s.mu.RUnlock()
+
+	// 空单止盈：95.5 ≤ 100×(1-4%) → short take profit。
+	s = newRestoredShort(t)
+	warm(t, s)
+	sig, err = s.OnBar(mk(95.5), nil)
+	if err != nil || sig == nil || sig.Direction != "CLOSE" || sig.Reason != "short take profit" {
+		t.Fatalf("short TP = %+v err=%v, want CLOSE short take profit", sig, err)
+	}
+
+	// 价格在上/下限度之间（100.5）：既不止盈也不止损。
+	s = newRestoredShort(t)
+	warm(t, s)
+	if sig, _ := s.OnBar(mk(100.5), nil); sig != nil {
+		t.Fatalf("mid price must not trigger exit: %+v", sig)
+	}
+
+	// RuntimeStatus 如实透出空单方向。
+	rs := newRestoredShort(t).RuntimeStatus()
+	if rs["in_position"] != true || rs["direction"] != "SHORT" || rs["entry_price"] != 100.0 {
+		t.Fatalf("runtime status = %+v, want in_position/SHORT/100", rs)
+	}
+}
