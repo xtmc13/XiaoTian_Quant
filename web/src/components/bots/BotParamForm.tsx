@@ -1,6 +1,7 @@
 import React from 'react'
 import { CRAParamForm, DEFAULT_CRA_PARAMS, type CRAParams } from '@/components/strategy/CRAParamForm'
 import { apiPayloadToCraParams, craParamsToApiPayload } from '@/components/strategy/CRAParamForm'
+import { createDefaultCRAParams, CRA_FEATURE_KEYS } from '@/lib/strategyUtils'
 
 export function WizardField({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
@@ -51,6 +52,10 @@ function craToForm(cra: CRAParams, f: Record<string, unknown>): Record<string, u
   }
 }
 
+export function resolveCraParams(f: Record<string, unknown>, market: 'spot' | 'contract'): CRAParams {
+  return CRA_FEATURE_KEYS.some((k) => k in f) ? formToCra(f) : createDefaultCRAParams(market)
+}
+
 export function BotParamForm({ form, setForm, effectiveType }: BotParamFormProps) {
   const CRA_TYPES = new Set([
     'martin_trend',
@@ -90,10 +95,14 @@ export function BotParamForm({ form, setForm, effectiveType }: BotParamFormProps
         <div className="text-xs font-semibold text-foreground">基础策略参数</div>
         <WizardField label="K线周期">
           <select
-            value={(form.timeframe as string) || '1h'}
+            aria-label="K线周期"
+            value={(form.timeframe as string) || ''}
             onChange={(e) => setForm((f) => ({ ...f, timeframe: e.target.value }))}
             className="w-full rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] px-3 py-2 text-sm text-foreground outline-none focus:border-[#4f6ed1]/40"
           >
+            <option value="" disabled>
+              请选择
+            </option>
             <option value="1m">1分钟</option>
             <option value="5m">5分钟</option>
             <option value="15m">15分钟</option>
@@ -109,7 +118,7 @@ export function BotParamForm({ form, setForm, effectiveType }: BotParamFormProps
       {isCraType && (
         <div className="rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-4 space-y-4">
           <div className="text-xs font-semibold text-[#4f6ed1]">智能补仓/移动止盈参数</div>
-          <CRAParamForm value={formToCra(form)} onChange={handleCraChange} market={market} />
+          <CRAParamForm value={resolveCraParams(form, market)} onChange={handleCraChange} market={market} />
         </div>
       )}
     </div>

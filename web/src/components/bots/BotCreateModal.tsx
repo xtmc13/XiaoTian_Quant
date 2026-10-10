@@ -3,10 +3,14 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, X, RefreshCw, Sparkles } from 'lucide-react'
 import { strategyApi, aiApi } from '@/lib/api'
 import { cn, formatCurrency } from '@/lib/utils'
+import { toast } from '@/lib/useToast'
 import type { StrategyItem } from '@/types'
 import type { BotItem } from '@/hooks/useBotData'
 import { BOT_TYPES, BOT_TYPE_TO_STRATEGY_TYPE } from '@/hooks/useBotData'
-import { WizardField, BotParamForm } from './BotParamForm'
+import { WizardField, BotParamForm, resolveCraParams } from './BotParamForm'
+import { craParamsToApiPayload } from '@/components/strategy/CRAParamForm'
+import { deriveTimeframeFromCRA, marketTypeFromType } from '@/components/strategy/StrategyCreateForm'
+import { isCRAStrategyType } from '@/lib/strategyUtils'
 
 export function AiCreateDialog({
   open,
@@ -140,19 +144,32 @@ export function BotCreateModal({
     if (step < steps.length - 1) {
       setStep((s) => s + 1)
     } else {
+      const strategyType = BOT_TYPE_TO_STRATEGY_TYPE[effectiveType] || effectiveType
+      const botParams = { ...aiPreset?.params, ...form }
+      const craParams = isCRAStrategyType(strategyType)
+        ? resolveCraParams(botParams, marketTypeFromType(strategyType))
+        : null
+      const craPayload = craParams ? craParamsToApiPayload(craParams) : null
+      const timeframe = (craParams ? deriveTimeframeFromCRA(craParams) : '') || (form.timeframe as string) || ''
+      if (!timeframe) {
+        toast('error', '请选择工作周期')
+        return
+      }
       const payload: Partial<StrategyItem> & Record<string, unknown> = {
         strategy_name: (form.name as string) || '未命名机器人',
-        strategy_type: BOT_TYPE_TO_STRATEGY_TYPE[effectiveType] || effectiveType,
+        name: (form.name as string) || '未命名机器人',
+        strategy_type: strategyType,
         strategy_mode: 'bot' as const,
         bot_type: effectiveType,
         market_category: (form.market as string) || 'crypto',
         execution_mode: (form.execution as 'live' | 'paper' | 'signal') || 'paper',
+        timeframe,
         trading_config: {
           symbol: form.symbol,
           initial_capital: Number(form.capital) || 1000,
-          timeframe: form.timeframe || '1h',
+          timeframe,
           bot_type: effectiveType,
-          bot_params: { ...aiPreset?.params, ...form },
+          bot_params: craPayload ? { ...botParams, ...craPayload } : botParams,
           order_count: Number(form.order_count) || 7,
           first_order_amount: Number(form.first_order_amount) || 100,
           add_position_spread: Number(form.add_position_spread) || 3,
@@ -177,6 +194,7 @@ export function BotCreateModal({
           profit_protection: !!form.profit_protection,
           close_add_position: !!form.close_add_position,
         },
+        ...(craPayload ? { config_json: JSON.stringify(craPayload) } : {}),
       }
       if (isEdit && editBot) {
         updateMutation.mutate({ id: editBot.id, data: payload })

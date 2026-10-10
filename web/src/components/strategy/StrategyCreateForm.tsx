@@ -148,6 +148,7 @@ export interface StrategyCreateFormState {
   setStrategyType: (t: string) => void
   /** 类型锁定（三级选项/编辑进入）：true 时界面不显示类型下拉。 */
   typeLocked: boolean
+  presetIndicator: OpenIndicatorKey | null
   name: string
   setName: Dispatch<SetStateAction<string>>
   symbol: string
@@ -614,6 +615,7 @@ export function useStrategyCreateForm(
     strategyType,
     setStrategyType,
     typeLocked,
+    presetIndicator,
     name,
     setName,
     symbol,
@@ -675,6 +677,7 @@ export function StrategyCreateFormSections({
     timeframe,
     setTimeframe,
     typeLocked,
+    presetIndicator,
     selectedExchanges,
     setSelectedExchanges,
     marginMode,
@@ -742,7 +745,12 @@ export function StrategyCreateFormSections({
                 <div>
                   <label className="text-[11px] text-muted-foreground mb-1.5 block">策略类型</label>
                   <div className={cn(inputCls, 'text-foreground flex items-center justify-between')}>
-                    <span>{STRAT_TYPES.spot.find((t) => t.value === strategyType)?.label || strategyType}</span>
+                    <span>
+                      {(presetIndicator &&
+                        INDICATOR_STRAT_SHORTCUTS.find((s) => s.indicator === presetIndicator)?.label) ||
+                        STRAT_TYPES.spot.find((t) => t.value === strategyType)?.label ||
+                        strategyType}
+                    </span>
                     <span className="text-[10px] text-muted-foreground">已锁定</span>
                   </div>
                 </div>

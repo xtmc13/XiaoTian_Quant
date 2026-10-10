@@ -227,7 +227,7 @@ describe('CreateStrategyPage 策略身份说明条（壳 + 指标组合语义）
   it('indicator=bollinger：指标名随参数变（布林带 开仓监测）', async () => {
     renderCreate('/create?market=spot&type=cra_spot&indicator=bollinger')
     await waitFor(() => expect(screen.getByTestId('strategy-identity-banner')).toBeTruthy())
-    expect(screen.getByText('布林带策略')).toBeTruthy()
+    expect(screen.getAllByText('布林带策略').length).toBeGreaterThan(0)
     expect(screen.getByText(/布林带 开仓监测/)).toBeTruthy()
   })
 
@@ -279,5 +279,59 @@ describe('CreateStrategyPage 策略身份说明条（壳 + 指标组合语义）
     expect(config.indicator_params).toMatchObject({ ema_cross: { fast: 12, slow: 26, period: 'close' } })
     // 引擎兼容键同步（顺势 EMA 门槛承载双均线类指标）
     expect(config.open_trend_ema_enabled).toBe(true)
+  })
+})
+
+describe('CreateStrategyPage 快捷卡落点类型标签（?indicator= 快捷卡身份）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(useStrategyDataModule.useStrategyData).mockReturnValue({
+      create: vi.fn(),
+    } as unknown as ReturnType<typeof useStrategyDataModule.useStrategyData>)
+    vi.mocked(configApi.exchangesConfigured).mockResolvedValue({})
+    vi.mocked(strategyApi.defaults).mockRejectedValue(new Error('no defaults'))
+    vi.mocked(strategyApi.paramDefs).mockResolvedValue({ params: [] } as never)
+  })
+
+  const lockedTypeField = async () => {
+    await waitFor(() => expect(screen.getByText('已锁定')).toBeTruthy())
+    return screen.getByText('已锁定').parentElement as HTMLElement
+  }
+
+  it('快捷卡进入（indicator=bollinger）：锁定标签显示「布林带策略」', async () => {
+    renderCreate('/create?market=spot&type=cra_spot&indicator=bollinger')
+    const field = await lockedTypeField()
+    expect(field.textContent).toContain('布林带策略')
+    expect(field.textContent).not.toContain('现货网格')
+  })
+
+  it('普通进入（无 indicator）：锁定标签显示原类型名「现货网格」', async () => {
+    renderCreate('/create?market=spot&type=cra_spot')
+    const field = await lockedTypeField()
+    expect(field.textContent).toContain('现货网格')
+  })
+
+  it('非法 indicator 不冒充：仍显示原类型名「现货网格」', async () => {
+    renderCreate('/create?market=spot&type=cra_spot&indicator=foo')
+    const field = await lockedTypeField()
+    expect(field.textContent).toContain('现货网格')
+    expect(field.textContent).not.toContain('布林带策略')
+  })
+
+  it('编辑模式带 indicator：身份由记录承担，显示原类型名', async () => {
+    vi.mocked(strategyApi.get).mockResolvedValue({
+      id: 's9',
+      name: '既有现货网格',
+      symbol: 'BTCUSDT',
+      timeframe: '1h',
+      market_type: 'spot',
+      strategy_type: 'cra_spot',
+      status: 'stopped',
+      config_json: '{}',
+    } as never)
+    renderCreate('/create?market=spot&id=s9&indicator=bollinger')
+    const field = await lockedTypeField()
+    expect(field.textContent).toContain('现货网格')
+    expect(field.textContent).not.toContain('布林带策略')
   })
 })
