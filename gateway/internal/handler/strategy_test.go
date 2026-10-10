@@ -1008,8 +1008,9 @@ func TestSpotConfigEngineChain(t *testing.T) {
 }
 
 // M6（2026-10-10）：运行面板现价对 WS 启动列表外的 symbol 走 REST 兜底
-// （runtimePriceSource 生产实现 = app.LastPriceForDisplay：WS 缓存→REST，
-// 不用合成假价）。修复前面板只查 WS 内存缓存，非五币种现价恒 0。
+// （runtimePriceSource 生产实现 = app.LastPriceViaREST：纯 REST 探针，
+// 不用合成假价；WS 新鲜缓存/K 线收盘两档由 resolveRuntimePrice 先行裁决）。
+// 修复前面板只查 WS 内存缓存，非五币种现价恒 0。
 func TestGetStrategyRuntimeNonWSSymbolPriceFallback(t *testing.T) {
 	// 挂一个未启动的 WS 流（缓存为空，GetPrice 恒 0），隔离真实网络。
 	appCtx := app.Get()

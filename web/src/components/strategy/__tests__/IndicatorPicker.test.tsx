@@ -33,6 +33,24 @@ describe('indicatorPresets（纯函数）', () => {
     expect(cfg.indicator_params?.rsi).toMatchObject({ period: 14 })
   })
 
+  it('buildOpenIndicatorConfig: bollinger 写 open_bollinger_* 引擎键 + indicator_params', () => {
+    const cfg = buildOpenIndicatorConfig('bollinger', { period: 20, std: 2, timeframe: '15m' }, null)
+    expect(cfg.open_bollinger_enabled).toBe(true)
+    expect(cfg.open_bollinger_period).toBe('15m')
+    expect(cfg.open_macd_enabled).toBe(false)
+    expect(cfg.open_indicator).toBe('bollinger')
+    expect(cfg.indicator_params?.bollinger).toMatchObject({ period: 20, std: 2 })
+    // 监测周期 close（不额外监测）时引擎键保持 close
+    const cfgClose = buildOpenIndicatorConfig('bollinger', { period: 20, std: 2, timeframe: 'close' }, null)
+    expect(cfgClose.open_bollinger_period).toBe('close')
+  })
+
+  it('detectOpenIndicator: 无 open_indicator 时按 open_bollinger_enabled 回退', () => {
+    const det = detectOpenIndicator({ open_bollinger_enabled: true, indicator_params: { bollinger: { period: 30 } } })
+    expect(det.indicator).toBe('bollinger')
+    expect(det.params).toMatchObject({ period: 30, std: 2 })
+  })
+
   it('buildOpenIndicatorConfig: custom 存 code_id/name', () => {
     const cfg = buildOpenIndicatorConfig('custom', {}, { code_id: 42, name: '我的指标' })
     expect(cfg.open_indicator).toBe('custom')

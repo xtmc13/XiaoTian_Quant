@@ -52,6 +52,7 @@ describe('RiskControl 风控参数卡片', () => {
       position_limit_pct: 100,
       profit_protection_enabled: true,
       indicator_fail_open: true,
+      online_order_limit: 7,
     })
     vi.mocked(riskApi.updateConfig).mockResolvedValue({} as never)
   })
@@ -65,6 +66,12 @@ describe('RiskControl 风控参数卡片', () => {
     expect((screen.getByDisplayValue('100') as HTMLInputElement).value).toBe('100')
   })
 
+  it('在线单量限制（CRA 合约）字段渲染并 GET 回填', async () => {
+    render(<RiskControl />, { wrapper })
+    expect(screen.getByText(/在线单量限制（CRA 合约/)).toBeTruthy()
+    await waitFor(() => expect((screen.getByDisplayValue('7') as HTMLInputElement).value).toBe('7'))
+  })
+
   it('保存 → PUT riskApi.updateConfig（含回填值），成功 toast', async () => {
     render(<RiskControl />, { wrapper })
     await waitFor(() => expect(screen.getByText('保存')).toBeTruthy())
@@ -75,10 +82,25 @@ describe('RiskControl 风控参数卡片', () => {
       position_limit_pct: 100,
       profit_protection_enabled: true,
       indicator_fail_open: true,
+      online_order_limit: 7,
     })
     await waitFor(() =>
       expect(useToastModule.toast).toHaveBeenCalledWith('success', '风控参数已保存并即时生效')
     )
+  })
+
+  it('保存前前端校验：在线单量限制越界拦截不提交', async () => {
+    render(<RiskControl />, { wrapper })
+    await waitFor(() => expect(screen.getByDisplayValue('7')).toBeTruthy())
+    fireEvent.change(screen.getByDisplayValue('7'), { target: { value: '0' } })
+    fireEvent.click(screen.getByText('保存'))
+    await new Promise((r) => setTimeout(r, 50))
+    expect(riskApi.updateConfig).not.toHaveBeenCalled()
+    expect(
+      (useToastModule.toast as unknown as ReturnType<typeof vi.fn>).mock.calls.some(
+        (c) => c[0] === 'error' && String(c[1]).includes('在线单量限制')
+      )
+    ).toBe(true)
   })
 
   it('保存前前端校验：最大挂单数越界拦截不提交', async () => {

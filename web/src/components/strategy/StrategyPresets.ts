@@ -30,7 +30,6 @@ export const STRATEGY_PRESETS: Preset[] = [
       tpRatio: 1.5,
       profitCallback: 0.2,
       waterfall: 1.5,
-      onlineOrderLimit: 5,
       stopLossRatio: 5,
     }),
   },
@@ -52,7 +51,6 @@ export const STRATEGY_PRESETS: Preset[] = [
       tpRatio: 1.3,
       profitCallback: 0.1,
       waterfall: 2,
-      onlineOrderLimit: 10,
     }),
   },
   {
@@ -73,7 +71,6 @@ export const STRATEGY_PRESETS: Preset[] = [
       tpRatio: 2.0,
       profitCallback: 0.05,
       waterfall: 4,
-      onlineOrderLimit: 20,
       openDouble: true,
       followTrend: true,
     }),

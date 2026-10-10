@@ -56,6 +56,9 @@ export interface CRAParams {
   openCounterEmaPeriod: CRAIndicatorPeriod
   openTrendEmaEnabled: boolean
   openTrendEmaPeriod: CRAIndicatorPeriod
+  // 布林带开仓门槛（引擎 2026-10-09 新增；默认关闭零行为变化）
+  openBollingerEnabled: boolean
+  openBollingerPeriod: CRAIndicatorPeriod
 
   // ── 开仓指标选择器（IndicatorPicker）──
   openIndicator: OpenIndicatorKey
@@ -94,7 +97,6 @@ export interface CRAParams {
   // ── 其他 ──
   openDouble: boolean
   followTrend: boolean
-  onlineOrderLimit: number
   leverage: number
   direction: 'long' | 'short' | 'dual'
 }
@@ -127,13 +129,15 @@ export const DEFAULT_CRA_PARAMS: CRAParams = {
   openCounterEmaPeriod: '15m',
   openTrendEmaEnabled: false,
   openTrendEmaPeriod: '15m',
+  openBollingerEnabled: false,
+  openBollingerPeriod: 'close',
   openIndicator: 'none',
   openIndicatorParams: {},
   openIndicatorCustom: null,
   addMacdEnabled: false,
   addMacdPeriod: 'close',
   addEmaEnabled: false,
-  addEmaPeriod: '15m',
+  addEmaPeriod: 'close',
   waterfallEnabled: true,
   waterfall: 2,
   stopLossEnabled: false,
@@ -150,13 +154,38 @@ export const DEFAULT_CRA_PARAMS: CRAParams = {
   burnDualThreshold: 3,
   openDouble: false,
   followTrend: false,
-  onlineOrderLimit: 10,
   leverage: 1,
   direction: 'long',
 }
 
 /** 为 Settings 页面提供的简化默认参数 */
 export const DEFAULT_CRA_SETTINGS: CRAParams = { ...DEFAULT_CRA_PARAMS }
+
+/**
+ * 将开仓指标选择写回 CRAParams：选择器派生引擎兼容键（open_macd/open_trend_ema/
+ * open_bollinger 等旧字段同步写入）。IndicatorPicker onChange 与创建页
+ * ?indicator= 预选（指标策略快捷卡）共用同一条路径，避免口径漂移。
+ */
+export function withOpenIndicator(
+  base: CRAParams,
+  sel: { indicator: OpenIndicatorKey; params: Record<string, IndicatorParamValue>; custom: { code_id: number; name: string } | null }
+): CRAParams {
+  const cfg = buildOpenIndicatorConfig(sel.indicator, sel.params, sel.custom)
+  return {
+    ...base,
+    openIndicator: sel.indicator,
+    openIndicatorParams: sel.params,
+    openIndicatorCustom: sel.custom,
+    openMacdEnabled: cfg.open_macd_enabled,
+    openMacdPeriod: cfg.open_macd_period as CRAParams['openMacdPeriod'],
+    openCounterEmaEnabled: cfg.open_counter_ema_enabled,
+    openCounterEmaPeriod: cfg.open_counter_ema_period as CRAParams['openCounterEmaPeriod'],
+    openTrendEmaEnabled: cfg.open_trend_ema_enabled,
+    openTrendEmaPeriod: cfg.open_trend_ema_period as CRAParams['openTrendEmaPeriod'],
+    openBollingerEnabled: cfg.open_bollinger_enabled,
+    openBollingerPeriod: cfg.open_bollinger_period as CRAParams['openBollingerPeriod'],
+  }
+}
 
 /* ─── useCRAConfig hook ─────────────────────────────────────────────── */
 export function useCRAConfig() {
@@ -414,19 +443,7 @@ export function CRAParamForm({ value, onChange, market, className, openFields = 
               onChange={(sel) => {
                 // 选择器为唯一事实源：由选择派生引擎兼容键（旧 open_* 字段
                 // 同步写入，供周期推断等既有消费方使用），复合指标锁定方向。
-                const cfg = buildOpenIndicatorConfig(sel.indicator, sel.params, sel.custom)
-                onChange({
-                  ...value,
-                  openIndicator: sel.indicator,
-                  openIndicatorParams: sel.params,
-                  openIndicatorCustom: sel.custom,
-                  openMacdEnabled: cfg.open_macd_enabled,
-                  openMacdPeriod: cfg.open_macd_period as CRAParams['openMacdPeriod'],
-                  openCounterEmaEnabled: cfg.open_counter_ema_enabled,
-                  openCounterEmaPeriod: cfg.open_counter_ema_period as CRAParams['openCounterEmaPeriod'],
-                  openTrendEmaEnabled: cfg.open_trend_ema_enabled,
-                  openTrendEmaPeriod: cfg.open_trend_ema_period as CRAParams['openTrendEmaPeriod'],
-                })
+                onChange(withOpenIndicator(value, sel))
               }}
             />
           </div>
@@ -466,23 +483,6 @@ export function CRAParamForm({ value, onChange, market, className, openFields = 
           <div className="text-[10px] text-muted-foreground -mt-1">
             顺势而为：仅双向（dual）模式生效——上一循环以被套状态结束（补仓 N 次）且新一轮换向开仓时，首单金额放大 min(N+1, 5) 倍（上限 5 倍）；
             同向新开或上轮无补仓不放大，补仓阶梯基数不变。单向（做多/做空）模式下该开关不影响下单量。
-          </div>
-        )}
-        {isContract && (
-          <div>
-            <label className="text-[11px] text-muted-foreground mb-1.5 block">在线单量限制</label>
-            <input
-              type="number"
-              min={1}
-              step={1}
-              value={value.onlineOrderLimit}
-              onChange={(e) => update('onlineOrderLimit', Math.max(1, Math.floor(Number(e.target.value) || 1)))}
-              className={inputCls}
-            />
-            <div className="text-[10px] text-muted-foreground mt-1">
-              同一账户下允许同时运行的 CRA 合约实例数上限（跨交易对总闸，币富 #32 多/空分别计）：direction=long 占多侧名额、short 占空侧名额、dual 两侧各占一席；任一侧达到上限后同侧新实例启动被拒（报错注明超限侧），需先停止部分实例或调大该值。
-              单个实例持仓期间本就不会再开新首单，该参数不改变实例内部的补仓/止盈行为。
-            </div>
           </div>
         )}
           </>
@@ -970,6 +970,8 @@ interface ApiPayload {
   open_counter_ema_period: CRAIndicatorPeriod
   open_trend_ema_enabled: boolean
   open_trend_ema_period: CRAIndicatorPeriod
+  open_bollinger_enabled: boolean
+  open_bollinger_period: CRAIndicatorPeriod
   add_macd_enabled: boolean
   add_macd_period: CRAIndicatorPeriod
   add_ema_enabled: boolean
@@ -990,7 +992,6 @@ interface ApiPayload {
   burn_dual_threshold: number
   open_double: boolean
   follow_trend: boolean
-  online_order_limit: number
   leverage: number
   direction: 'long' | 'short' | 'dual'
 }
@@ -1031,6 +1032,8 @@ export function craParamsToApiPayload(p: CRAParams): ApiPayload {
           open_counter_ema_period: cfg.open_counter_ema_period as ApiPayload['open_counter_ema_period'],
           open_trend_ema_enabled: cfg.open_trend_ema_enabled,
           open_trend_ema_period: cfg.open_trend_ema_period as ApiPayload['open_trend_ema_period'],
+          open_bollinger_enabled: cfg.open_bollinger_enabled,
+          open_bollinger_period: cfg.open_bollinger_period as ApiPayload['open_bollinger_period'],
           open_indicator: cfg.open_indicator,
           indicator_params: cfg.indicator_params,
         }
@@ -1042,6 +1045,8 @@ export function craParamsToApiPayload(p: CRAParams): ApiPayload {
         open_counter_ema_period: p.openCounterEmaPeriod,
         open_trend_ema_enabled: p.openTrendEmaEnabled,
         open_trend_ema_period: p.openTrendEmaPeriod,
+        open_bollinger_enabled: p.openBollingerEnabled,
+        open_bollinger_period: p.openBollingerPeriod,
       }
     })(),
     add_macd_enabled: p.addMacdEnabled,
@@ -1064,7 +1069,6 @@ export function craParamsToApiPayload(p: CRAParams): ApiPayload {
     burn_dual_threshold: p.burnDualThreshold,
     open_double: p.openDouble,
     follow_trend: p.followTrend,
-    online_order_limit: p.onlineOrderLimit,
     leverage: p.leverage,
     direction: p.direction,
   }
@@ -1128,6 +1132,8 @@ export function apiPayloadToCraParams(payload: Partial<ApiPayload>): CRAParams {
     openCounterEmaPeriod: payload.open_counter_ema_period ?? base.openCounterEmaPeriod,
     openTrendEmaEnabled: payload.open_trend_ema_enabled ?? base.openTrendEmaEnabled,
     openTrendEmaPeriod: payload.open_trend_ema_period ?? base.openTrendEmaPeriod,
+    openBollingerEnabled: payload.open_bollinger_enabled ?? base.openBollingerEnabled,
+    openBollingerPeriod: payload.open_bollinger_period ?? base.openBollingerPeriod,
     addMacdEnabled: payload.add_macd_enabled ?? base.addMacdEnabled,
     addMacdPeriod: payload.add_macd_period ?? base.addMacdPeriod,
     addEmaEnabled: payload.add_ema_enabled ?? base.addEmaEnabled,
@@ -1154,7 +1160,6 @@ export function apiPayloadToCraParams(payload: Partial<ApiPayload>): CRAParams {
     burnDualThreshold: payload.burn_dual_threshold ?? base.burnDualThreshold,
     openDouble: payload.open_double ?? base.openDouble,
     followTrend: payload.follow_trend ?? base.followTrend,
-    onlineOrderLimit: payload.online_order_limit ?? base.onlineOrderLimit,
     leverage: payload.leverage ?? base.leverage,
     direction: payload.direction ?? detRef.current?.directionHint ?? base.direction,
   }

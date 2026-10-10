@@ -8,6 +8,12 @@ import { configApi, strategyApi, strategyVersionApi } from '@/lib/api'
 // 词典按 import 副作用注册：L11 文案断言需要 zh-CN 词条就位。
 import '@/i18n/locales/dashboard'
 
+// 本文件为两线测试并集：
+// - 编辑回填（L11/L12：交易所如实标注、margin_mode 回填）——renderPage 驱动；
+// - 指标策略快捷卡（?indicator=xx）创建页预选：创建预选生效/非法 indicator 忽略/
+//   编辑场景回填优先于预选——renderCreate 驱动。
+// 仅打桩网络边界（api/hooks），表单与选择器为真实渲染。
+
 vi.mock('@/hooks/useStrategyData', () => ({
   useStrategyData: vi.fn(),
 }))
@@ -42,11 +48,25 @@ vi.mock('@/lib/api', async () => {
   }
 })
 
+// 历史版本（仅编辑模式渲染）不在本测试范围
+vi.mock('@/components/strategy/StrategyVersionHistory', () => ({ StrategyVersionHistory: () => null }))
+
 function renderPage(search: string) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[`/create${search}`]}>
+        <CreateStrategyPage />
+      </MemoryRouter>
+    </QueryClientProvider>
+  )
+}
+
+function renderCreate(url: string) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter initialEntries={[url]}>
         <CreateStrategyPage />
       </MemoryRouter>
     </QueryClientProvider>
@@ -116,5 +136,61 @@ describe('CreateStrategyPage 编辑回填（L12 margin_mode）', () => {
     await waitFor(() => {
       expect(screen.getByText('仅记录偏好，实际下单交易所由账户凭证决定')).toBeTruthy()
     })
+  })
+})
+
+describe('CreateStrategyPage ?indicator= 预选（指标策略快捷卡）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(useStrategyDataModule.useStrategyData).mockReturnValue({
+      create: vi.fn(),
+    } as unknown as ReturnType<typeof useStrategyDataModule.useStrategyData>)
+    vi.mocked(configApi.exchangesConfigured).mockResolvedValue({})
+    vi.mocked(strategyApi.defaults).mockRejectedValue(new Error('no defaults'))
+    vi.mocked(strategyApi.paramDefs).mockResolvedValue({ params: [] } as never)
+  })
+
+  it('indicator=ema_cross：picker 初始选中 EMA交叉（提交 payload 带派生引擎键）', async () => {
+    renderCreate('/create?market=contract&type=cra_contract&indicator=ema_cross')
+    // 选中态的指标卡才有 ⚙ 参数按钮（aria-label="<label> 参数"）
+    await waitFor(() => expect(screen.getByLabelText('EMA交叉 参数')).toBeTruthy())
+    // 未选中其他指标
+    expect(screen.queryByLabelText('MACD 参数')).toBeNull()
+    // 说明行显示当前开仓指标
+    expect(screen.getByText('当前开仓指标：')).toBeTruthy()
+  })
+
+  it('indicator=bollinger：picker 初始选中 布林带', async () => {
+    renderCreate('/create?market=contract&type=cra_contract&indicator=bollinger')
+    await waitFor(() => expect(screen.getByLabelText('布林带 参数')).toBeTruthy())
+  })
+
+  it('非法 indicator 忽略：picker 保持未设置（壳默认）', async () => {
+    renderCreate('/create?market=contract&type=cra_contract&indicator=foo')
+    await screen.findByText('未设置（将使用壳默认）：首单不受指标门槛限制。')
+    for (const label of ['EMA交叉', 'MACD', 'RSI超卖', '布林带']) {
+      expect(screen.queryByLabelText(`${label} 参数`)).toBeNull()
+    }
+  })
+
+  it('编辑场景回填优先于预选：记录为 MACD 时忽略 ?indicator=ema_cross', async () => {
+    vi.mocked(strategyApi.get).mockResolvedValue({
+      id: 's1',
+      name: '既有策略',
+      symbol: 'BTCUSDT',
+      timeframe: '15m',
+      market_type: 'swap',
+      strategy_type: 'cra_contract',
+      status: 'stopped',
+      config_json: JSON.stringify({
+        open_indicator: 'macd',
+        indicator_params: { macd: { fast: 8, slow: 21, signal: 5 } },
+      }),
+    } as never)
+    renderCreate('/create?market=contract&id=s1&indicator=ema_cross')
+    await waitFor(() => expect(screen.getByLabelText('MACD 参数')).toBeTruthy())
+    expect(screen.queryByLabelText('EMA交叉 参数')).toBeNull()
+    // 回填参数来自记录（F8/S21），不是默认值
+    expect(screen.getByText('F8/S21/Sig5')).toBeTruthy()
   })
 })

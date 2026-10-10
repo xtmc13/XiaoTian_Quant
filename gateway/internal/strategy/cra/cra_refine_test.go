@@ -450,3 +450,56 @@ func TestLegacyEmaGateUnchanged(t *testing.T) {
 		t.Error("legacy ema gate should reject long on empty bars")
 	}
 }
+
+// ── 现货开仓指标门槛（币富#20：金叉开多适用合约和现货）──
+
+func TestCRAOpenIndicatorGateSpot(t *testing.T) {
+	feed := func(s *BaseCRAStrategy, closes []float64) *model.Signal {
+		t.Helper()
+		var sig *model.Signal
+		for _, c := range closes {
+			r, err := s.OnBar(model.Bar{Symbol: "BTCUSDT", Interval: "15m", Close: c, High: c, Low: c}, nil)
+			if err != nil {
+				t.Fatalf("onbar: %v", err)
+			}
+			if r != nil {
+				sig = r
+			}
+		}
+		return sig
+	}
+	flatDecline := func() []float64 {
+		c := make([]float64, 0, 43)
+		p := 100.0
+		for i := 0; i < 43; i++ {
+			c = append(c, p)
+			p -= 0.4
+		}
+		return c
+	}
+	start := func(extra map[string]any) *BaseCRAStrategy {
+		t.Helper()
+		cfg := map[string]any{"symbol": "BTCUSDT", "timeframe": "15m", "tp_mode": "static"}
+		for k, v := range extra {
+			cfg[k] = v
+		}
+		s := NewCRASpotStrategy("cra_spot", "BTCUSDT")
+		if err := s.Start(cfg); err != nil {
+			t.Fatalf("start: %v", err)
+		}
+		return s
+	}
+
+	// 启用 MACD 开仓门槛 + 末根金叉 → 现货放行开多。
+	if sig := feed(start(map[string]any{"open_macd_enabled": true, "open_macd_period": "15m"}), decliningThenCrossSeries()); sig == nil {
+		t.Error("spot: macd golden cross should allow long entry")
+	}
+	// 启用门槛 + 持续阴跌无金叉 → 不开仓。
+	if sig := feed(start(map[string]any{"open_macd_enabled": true, "open_macd_period": "15m"}), flatDecline()); sig != nil {
+		t.Errorf("spot: no golden cross must not open, got %+v", sig)
+	}
+	// 默认关闭（无门槛键）：同一阴跌序列照开（存量零变化回归）。
+	if sig := feed(start(nil), flatDecline()); sig == nil {
+		t.Error("spot: default (no gate) must keep legacy immediate entry")
+	}
+}

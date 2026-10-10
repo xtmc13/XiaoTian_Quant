@@ -164,6 +164,12 @@ func (ctx *Context) Init(cfg *config.Config) error {
 	if cfg.Risk.IndicatorFailOpen != nil {
 		risk.SetIndicatorFailOpen(*cfg.Risk.IndicatorFailOpen)
 	}
+	// 在线单量限制（CRA 合约跨实例总量闸）：config.yaml risk.online_order_limit
+	// 初始化，运行时由 PUT /api/risk/config 通过 risk.SetOnlineOrderLimit 调整；
+	// 未配置（0）时读取侧回退 risk.DefaultOnlineOrderLimit（10）。
+	if cfg.Risk.OnlineOrderLimit > 0 {
+		risk.SetOnlineOrderLimit(cfg.Risk.OnlineOrderLimit)
+	}
 	ctx.Logger.Info("Risk manager initialized", "profit_protection", cfg.Risk.ProfitProtectionEnabled)
 
 	// 6. Portfolio Manager
@@ -1458,6 +1464,17 @@ func getLastPrice(symbol string) float64 {
 // paper 的离线兜底，绝不用于面板展示——宁可显示 0（无数据）也不显示假价。
 func LastPriceForDisplay(symbol string) float64 {
 	if p, synthetic := getLastPriceSource(symbol); !synthetic {
+		return p
+	}
+	return 0
+}
+
+// LastPriceViaREST 仅经 REST 短超时探针取价（不读 WS 缓存、不合成），
+// 供运行面板在 WS 新鲜缓存与 K 线供给都不可用时的最后兜底——WS 原始缓存
+// 档位在上游已被新鲜度判定否决，此处直接探交易所，避免把冻结残留值
+// 当新价重新透出。
+func LastPriceViaREST(symbol string) float64 {
+	if p, ok := priceRestProbe(normalizeMarketSymbol(symbol)); ok {
 		return p
 	}
 	return 0

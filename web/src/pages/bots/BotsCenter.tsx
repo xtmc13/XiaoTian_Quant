@@ -19,7 +19,7 @@ import type { GridBot, GridBotDetail, GridBotPayload, GridLegView } from '@/lib/
 import type { StrategyItem } from '@/types'
 import { RuntimePanel } from '@/components/strategy/RuntimePanel'
 import { StrategyTradeHistory } from '@/components/strategy/StrategyTradeHistory'
-import { STRAT_TYPES } from '@/components/strategy/StrategyFormFields'
+import { STRAT_TYPES, INDICATOR_STRAT_SHORTCUTS } from '@/components/strategy/StrategyFormFields'
 import type { BotItem } from '@/hooks/useBotData'
 import { SectionCard } from '@/components/ui/SectionCard'
 import { Button } from '@/components/ui/Button'
@@ -296,7 +296,7 @@ const LEVEL1_TEMPLATES: {
   desc: string
   icon: React.ReactNode
 }[] = [
-  { key: 'spot', title: '现货策略', desc: '现货网格 / 马丁 / 华尔街 / 支撑回踩 / 流动性热力 等', icon: <TrendingUp className="w-5 h-5" /> },
+  { key: 'spot', title: '现货策略', desc: '现货网格 / 马丁 / 支撑回踩 / EMA·MACD 等指标策略 等', icon: <TrendingUp className="w-5 h-5" /> },
   { key: 'contract', title: '合约策略', desc: '合约网格 / 高频 / 首尾套利 / EMA·MACD 等指标策略', icon: <BarChart3 className="w-5 h-5" /> },
   { key: 'ai', title: 'AI 机器人', desc: 'AI 生成的策略机器人实例库', icon: <BrainCircuit className="w-5 h-5" /> },
   { key: 'custom', title: 'AI 自定义机器人', desc: '用自然语言描述策略，AI 生成参数', icon: <Bot className="w-5 h-5" /> },
@@ -1023,6 +1023,29 @@ export function BotsCenter() {
                 </div>
               </button>
             ))}
+          </div>
+          {/* 指标策略（币富模型：CRA 壳 + 预选开仓指标；含补仓/移动止盈全套） */}
+          <div className="mt-4 pt-3 border-t border-quant-border">
+            <div className="text-[10px] text-muted-foreground mb-2">指标策略（含补仓/移动止盈）</div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {INDICATOR_STRAT_SHORTCUTS.map((t) => (
+                <button
+                  key={t.value}
+                  onClick={() => {
+                    setWizard(null)
+                    const craType = wizard === 'contract' ? 'cra_contract' : 'cra_spot'
+                    navigate(`/create?market=${wizard}&type=${craType}&indicator=${t.indicator}`)
+                  }}
+                  className="flex items-center gap-3 p-4 rounded-xl border border-quant-border text-left transition-all hover:border-quant-gold/30 hover:bg-quant-gold/5"
+                >
+                  <div className="w-2 h-2 rounded-full bg-quant-gold shrink-0" />
+                  <div className="min-w-0">
+                    <div className="text-xs font-semibold text-foreground">{t.label}</div>
+                    <div className="text-[10px] text-muted-foreground mt-0.5">{t.indicator}</div>
+                  </div>
+                </button>
+              ))}
+            </div>
           </div>
         </ModalShell>
       )}
