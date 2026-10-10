@@ -66,9 +66,9 @@ describe('RiskControl 风控参数卡片', () => {
     expect((screen.getByDisplayValue('100') as HTMLInputElement).value).toBe('100')
   })
 
-  it('在线单量限制（CRA 合约）字段渲染并 GET 回填', async () => {
+  it('在线单量限制（合约策略）字段渲染并 GET 回填', async () => {
     render(<RiskControl />, { wrapper })
-    expect(screen.getByText(/在线单量限制（CRA 合约/)).toBeTruthy()
+    expect(screen.getByText(/在线单量限制（合约策略/)).toBeTruthy()
     await waitFor(() => expect((screen.getByDisplayValue('7') as HTMLInputElement).value).toBe('7'))
   })
 

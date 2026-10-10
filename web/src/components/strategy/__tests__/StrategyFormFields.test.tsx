@@ -24,7 +24,7 @@ describe('STRAT_TYPES 创建入口', () => {
     expect(values).toEqual(['cra_contract', 'high_frequency', 'head_tail_arbitrage', 'smart_money'])
   })
 
-  it('裸经典指标类型不在创建入口（无 CRA 壳，2026-10-09 纠偏撤下）', () => {
+  it('裸经典指标类型不在创建入口（无智能补仓壳，2026-10-09 纠偏撤下）', () => {
     for (const market of ['spot', 'contract'] as const) {
       const values = STRAT_TYPES[market].map((t) => t.value)
       for (const bare of ['ema_cross', 'macd', 'rsi', 'bollinger_bands']) {
@@ -34,7 +34,7 @@ describe('STRAT_TYPES 创建入口', () => {
   })
 })
 
-describe('INDICATOR_STRAT_SHORTCUTS 指标策略快捷卡（CRA 壳 + 预选开仓指标）', () => {
+describe('INDICATOR_STRAT_SHORTCUTS 指标策略快捷卡（智能补仓/移动止盈壳 + 预选开仓指标）', () => {
   it('四张快捷卡：EMA/MACD/RSI/布林带，indicator 均为选择器合法 key', () => {
     expect(INDICATOR_STRAT_SHORTCUTS.map((t) => t.label)).toEqual([
       'EMA 策略',

@@ -97,7 +97,7 @@ export function RuntimePanel({ strategy }: { strategy: StrategyItem }) {
       <EmptyState
         icon={<Activity className="w-6 h-6" />}
         title="暂无运行详情"
-        description="引擎中未找到该策略的运行状态（仅 MACD/CRA 系列策略提供）"
+        description="引擎中未找到该策略的运行状态（仅 MACD/智能补仓系列策略提供）"
       />
     )
   }

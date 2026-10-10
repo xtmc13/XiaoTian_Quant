@@ -94,12 +94,12 @@ describe('新建机器人向导（合约类型已精简）', () => {
     expect(screen.getByTestId('loc').textContent).toBe('/create?market=contract&type=cra_contract')
   })
 
-  it('指标策略节：四张快捷卡（CRA 壳 + 预选开仓指标），跳转 URL 带 type+indicator', async () => {
+  it('指标策略节：四张快捷卡（智能补仓/移动止盈壳 + 预选开仓指标），跳转 URL 带 type+indicator', async () => {
     renderBots('/bots')
     fireEvent.click(screen.getByRole('button', { name: /新建机器人/ }))
     fireEvent.click(await screen.findByRole('button', { name: /合约策略 合约网格/ }))
     await screen.findByText('第 2 步：选择策略类型')
-    // 指标策略节标题 + 四张卡（币富模型：含补仓/移动止盈的 CRA 壳，非裸类型）
+    // 指标策略节标题 + 四张卡（币富模型：含补仓/移动止盈的智能补仓壳，非裸类型）
     expect(screen.getByText('指标策略（含补仓/移动止盈）')).toBeTruthy()
     for (const label of ['EMA 策略', 'MACD 策略', 'RSI 策略', '布林带策略']) {
       expect(screen.getByRole('button', { name: new RegExp(label) })).toBeTruthy()

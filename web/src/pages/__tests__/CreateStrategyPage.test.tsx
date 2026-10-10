@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { CreateStrategyPage } from '../CreateStrategyPage'
@@ -11,7 +11,8 @@ import '@/i18n/locales/dashboard'
 // 本文件为两线测试并集：
 // - 编辑回填（L11/L12：交易所如实标注、margin_mode 回填）——renderPage 驱动；
 // - 指标策略快捷卡（?indicator=xx）创建页预选：创建预选生效/非法 indicator 忽略/
-//   编辑场景回填优先于预选——renderCreate 驱动。
+//   编辑场景回填优先于预选——renderCreate 驱动；
+// - 策略身份说明条：快捷卡进入显示"壳 + 指标"组合语义，编辑模式不显示。
 // 仅打桩网络边界（api/hooks），表单与选择器为真实渲染。
 
 vi.mock('@/hooks/useStrategyData', () => ({
@@ -192,5 +193,81 @@ describe('CreateStrategyPage ?indicator= 预选（指标策略快捷卡）', () 
     expect(screen.queryByLabelText('EMA交叉 参数')).toBeNull()
     // 回填参数来自记录（F8/S21），不是默认值
     expect(screen.getByText('F8/S21/Sig5')).toBeTruthy()
+  })
+})
+
+describe('CreateStrategyPage 策略身份说明条（壳 + 指标组合语义）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(useStrategyDataModule.useStrategyData).mockReturnValue({
+      create: vi.fn(),
+    } as unknown as ReturnType<typeof useStrategyDataModule.useStrategyData>)
+    vi.mocked(configApi.exchangesConfigured).mockResolvedValue({})
+    vi.mocked(strategyApi.defaults).mockRejectedValue(new Error('no defaults'))
+    vi.mocked(strategyApi.paramDefs).mockResolvedValue({ params: [] } as never)
+  })
+
+  it('indicator=ema_cross：说明条显示「EMA 策略 = 智能补仓/移动止盈壳 + EMA 开仓监测」', async () => {
+    renderCreate('/create?market=contract&type=cra_contract&indicator=ema_cross')
+    await waitFor(() => expect(screen.getByTestId('strategy-identity-banner')).toBeTruthy())
+    expect(screen.getByText('EMA 策略')).toBeTruthy()
+    expect(screen.getByText(/= 智能补仓\/移动止盈壳 \+/)).toBeTruthy()
+    expect(screen.getByText(/EMA 开仓监测/)).toBeTruthy()
+  })
+
+  it('indicator=bollinger：指标名随参数变（布林带 开仓监测）', async () => {
+    renderCreate('/create?market=spot&type=cra_spot&indicator=bollinger')
+    await waitFor(() => expect(screen.getByTestId('strategy-identity-banner')).toBeTruthy())
+    expect(screen.getByText('布林带策略')).toBeTruthy()
+    expect(screen.getByText(/布林带 开仓监测/)).toBeTruthy()
+  })
+
+  it('非法 indicator 不显示说明条（与预选忽略口径一致）', async () => {
+    renderCreate('/create?market=contract&type=cra_contract&indicator=foo')
+    await screen.findByText('未设置（将使用壳默认）：首单不受指标门槛限制。')
+    expect(screen.queryByTestId('strategy-identity-banner')).toBeNull()
+  })
+
+  it('编辑模式不显示说明条（身份由已有配置承担）', async () => {
+    vi.mocked(strategyApi.get).mockResolvedValue({
+      id: 's1',
+      name: '既有策略',
+      symbol: 'BTCUSDT',
+      timeframe: '15m',
+      market_type: 'swap',
+      strategy_type: 'cra_contract',
+      status: 'stopped',
+      config_json: JSON.stringify({ open_indicator: 'macd' }),
+    } as never)
+    renderCreate('/create?market=contract&id=s1&indicator=ema_cross')
+    await waitFor(() => expect(screen.getByLabelText('MACD 参数')).toBeTruthy())
+    expect(screen.queryByTestId('strategy-identity-banner')).toBeNull()
+  })
+
+  it('快捷卡创建提交：config_json 带 open_indicator + indicator_params（预选指标默认参数）', async () => {
+    const create = vi.fn().mockResolvedValue({ id: 'new1' })
+    vi.mocked(useStrategyDataModule.useStrategyData).mockReturnValue({
+      create,
+    } as unknown as ReturnType<typeof useStrategyDataModule.useStrategyData>)
+    // 交易所按钮仅在已配置凭证时可点（ExchangeSelectModal ready 口径）
+    vi.mocked(configApi.exchangesConfigured).mockResolvedValue({
+      binance: { enabled: true, has_credentials: true, testnet: false, futures: true },
+    })
+    renderCreate('/create?market=contract&type=cra_contract&indicator=ema_cross')
+    await waitFor(() => expect(screen.getByLabelText('EMA交叉 参数')).toBeTruthy())
+    fireEvent.change(screen.getByPlaceholderText('输入策略名称'), { target: { value: 'EMA快捷策略' } })
+    fireEvent.click(screen.getByText('点击选择'))
+    await waitFor(() => expect(screen.getByText('Binance')).toBeTruthy())
+    fireEvent.click(screen.getByText('Binance'))
+    fireEvent.click(screen.getByText('确认选择'))
+    fireEvent.click(screen.getAllByRole('button', { name: '保存策略' })[0])
+    await waitFor(() => expect(create).toHaveBeenCalled())
+    const payload = create.mock.calls[0][0] as Record<string, unknown>
+    expect(payload.strategy_type).toBe('cra_contract')
+    const config = JSON.parse(payload.config_json as string) as Record<string, unknown>
+    expect(config.open_indicator).toBe('ema_cross')
+    expect(config.indicator_params).toMatchObject({ ema_cross: { fast: 12, slow: 26, period: 'close' } })
+    // 引擎兼容键同步（顺势 EMA 门槛承载双均线类指标）
+    expect(config.open_trend_ema_enabled).toBe(true)
   })
 })

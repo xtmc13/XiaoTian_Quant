@@ -108,7 +108,7 @@ export function BotParamForm({ form, setForm, effectiveType }: BotParamFormProps
       {/* -- CRA 参数配置 (shared component) -- */}
       {isCraType && (
         <div className="rounded-lg border border-[#1c1c1c] bg-[#0a0a0a] p-4 space-y-4">
-          <div className="text-xs font-semibold text-[#4f6ed1]">CRA 量化参数</div>
+          <div className="text-xs font-semibold text-[#4f6ed1]">智能补仓/移动止盈参数</div>
           <CRAParamForm value={formToCra(form)} onChange={handleCraChange} market={market} />
         </div>
       )}

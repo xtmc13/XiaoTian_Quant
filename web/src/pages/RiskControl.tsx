@@ -299,7 +299,7 @@ function RiskParamsCard() {
           />
         </div>
         <div>
-          <label className="text-[11px] text-muted-foreground mb-1.5 block">在线单量限制（CRA 合约，1-100）</label>
+          <label className="text-[11px] text-muted-foreground mb-1.5 block">在线单量限制（合约策略，1-100）</label>
           <input
             type="number"
             min={1}
@@ -311,7 +311,7 @@ function RiskParamsCard() {
             className={inputCls}
           />
           <div className="text-[10px] text-muted-foreground mt-1">
-            同一账户下允许同时运行的 CRA 合约实例数上限（跨交易对总闸，币富 #32 多/空分别计）：direction=long 占多侧名额、short 占空侧名额、dual
+            同一账户下允许同时运行的合约策略实例数上限（跨交易对总闸，多/空分别计）：direction=long 占多侧名额、short 占空侧名额、dual
             两侧各占一席；任一侧达到上限后同侧新实例启动被拒。全局单份，对所有用户生效。
           </div>
         </div>

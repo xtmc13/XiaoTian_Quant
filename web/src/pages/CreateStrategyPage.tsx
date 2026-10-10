@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, Sparkles } from 'lucide-react'
 import { strategyApi } from '@/lib/api'
 import {
   useStrategyCreateForm,
@@ -12,6 +12,7 @@ import {
 } from '@/components/strategy/StrategyCreateForm'
 import { StrategyVersionHistory } from '@/components/strategy/StrategyVersionHistory'
 import { apiPayloadToCraParams } from '@/components/strategy/CRAParamForm'
+import { INDICATOR_STRAT_SHORTCUTS } from '@/components/strategy/StrategyFormFields'
 
 const STEPS = [
   { id: 'create-sec-presets', label: '快速预设' },
@@ -63,6 +64,10 @@ export function CreateStrategyPage() {
   // 指标策略快捷卡（机器人中心/策略管理侧栏）附加 ?indicator=xx：创建场景预选
   // 开仓指标选择器（CRA 壳 + 指标 = 币富"指标策略"）；编辑回填优先于预选。
   const urlIndicator = searchParams.get('indicator') || undefined
+  // 策略身份说明条：仅快捷卡进入的创建场景显示（编辑模式身份由已有配置承担）；
+  // 非法 indicator 与 hook 侧预选同样忽略。
+  const indicatorShortcut =
+    !editId && urlIndicator ? INDICATOR_STRAT_SHORTCUTS.find((s) => s.indicator === urlIndicator) : undefined
 
   const form = useStrategyCreateForm(
     market,
@@ -204,6 +209,25 @@ export function CreateStrategyPage() {
 
           {/* 右侧表单区：现货/合约统一用原创建表单（CRA 全套参数，合约多杠杆/逐全仓） */}
           <div className="flex-1 space-y-4 min-w-0">
+            {/* 策略身份说明条：快捷卡（?indicator=）进入时把"壳 + 指标"组合语义摆到明面 */}
+            {indicatorShortcut && (
+              <div
+                data-testid="strategy-identity-banner"
+                className="rounded-xl border border-quant-gold/30 bg-quant-gold/5 px-4 py-3 flex items-start gap-2.5"
+              >
+                <Sparkles className="w-4 h-4 text-quant-gold shrink-0 mt-0.5" />
+                <div className="text-xs leading-relaxed">
+                  <span className="font-semibold text-quant-gold">{indicatorShortcut.label}</span>
+                  <span className="text-muted-foreground"> = 智能补仓/移动止盈壳 + </span>
+                  <span className="font-medium text-foreground">
+                    {indicatorShortcut.label.replace(/\s?策略$/, '')} 开仓监测
+                  </span>
+                  <div className="text-[10px] text-muted-foreground mt-0.5">
+                    首单/补仓阶梯/移动止盈/止损由壳统一管理，开仓时机由所选指标监测触发
+                  </div>
+                </div>
+              </div>
+            )}
             <StrategyCreateFormSections form={form} />
             {/* 历史版本（仅编辑模式）：更新前自动快照，支持手动快照/查看 JSON/恢复 */}
             {editId && <StrategyVersionHistory strategyId={editId} />}

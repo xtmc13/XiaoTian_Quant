@@ -233,11 +233,10 @@ export function StrategyDetailPanel({
       </div>
 
       <div className="rounded-xl border border-quant-border bg-quant-card p-5">
-        <div className="text-xs font-semibold mb-3">CRA 量化参数</div>
+        <div className="text-xs font-semibold mb-3">智能补仓/移动止盈参数</div>
         {!craType ? (
           <div className="text-[11px] text-muted-foreground py-2">
-            当前策略类型（{s.strategy_type || s.type || '未知'}）为指标/脚本策略，不支持 CRA
-            补仓/移动止盈参数；此类参数即使写入配置也不会在运行时生效。
+            当前策略类型（{s.strategy_type || s.type || '未知'}）为指标/脚本策略，不支持智能补仓/移动止盈参数；此类参数即使写入配置也不会在运行时生效。
           </div>
         ) : (
           <>

@@ -406,11 +406,11 @@ export function StrategyCreateModal({
     const craType = isCRAStrategyType(strategyType)
     if (craType) {
       if (!craParams.firstOrderAmount || craParams.firstOrderAmount < 1) {
-        toast('error', '参数与策略类型不匹配：CRA 策略需要首单金额 ≥ 1')
+        toast('error', '参数与策略类型不匹配：智能补仓策略需要首单金额 ≥ 1')
         return
       }
       if (craParams.enableAddPosition && craParams.addPositions.length === 0) {
-        toast('error', '参数与策略类型不匹配：CRA 策略需要至少一档补仓（或关闭补仓）')
+        toast('error', '参数与策略类型不匹配：智能补仓策略需要至少一档补仓（或关闭补仓）')
         return
       }
     }
@@ -698,7 +698,7 @@ export function StrategyCreateModal({
                 <>
                   <div className="text-xs text-muted-foreground mb-2">调整策略参数，或使用预设快速填充</div>
 
-                  <CollapsibleSection title="CRA 量化参数" count={4} defaultOpen>
+                  <CollapsibleSection title="智能补仓/移动止盈参数" count={4} defaultOpen>
                     <CRAParamForm
                       value={craParams}
                       onChange={setCraParams}
@@ -725,7 +725,7 @@ export function StrategyCreateModal({
               ) : (
                 /* P0-4：非 CRA 类型不展示 CRA 专属参数区，避免类型-参数错配。 */
                 <div className="text-xs text-muted-foreground py-6 text-center leading-relaxed">
-                  当前策略类型不支持 CRA 补仓/移动止盈参数
+                  当前策略类型不支持智能补仓/移动止盈参数
                   <br />
                   仅需配置交易对、杠杆、方向等通用字段（后续步骤）
                 </div>

@@ -37,7 +37,7 @@ describe('StrategyCreateModal 支撑回踩反弹（support_rebound）', () => {
     vi.mocked(strategyApi.update).mockResolvedValue({} as never)
   })
 
-  it('选中 support_rebound → CRA参数区 + 策略指标卡弹窗编辑专属参数 → 提交 config_json 含参数', async () => {
+  it('选中 support_rebound → 智能补仓参数区 + 策略指标卡弹窗编辑专属参数 → 提交 config_json 含参数', async () => {
     const create = vi.mocked(strategyApi.create)
     render(<StrategyCreateModal editing={null} defaultMarket="spot" inline onClose={vi.fn()} onSaved={vi.fn()} />, {
       wrapper,
@@ -52,10 +52,10 @@ describe('StrategyCreateModal 支撑回踩反弹（support_rebound）', () => {
     fireEvent.click(screen.getByText('确认选择'))
     fireEvent.click(screen.getByText('下一步'))
 
-    // ── Step 1 参数配置：CRA 量化参数区 + 开仓指标区的策略卡 ──
+    // ── Step 1 参数配置：智能补仓/移动止盈参数区 + 开仓指标区的策略卡 ──
     // 2026-09-30 设计：support_rebound 属 CRA 兼容类型（仓位管理复用 CRA），
     // 14 个专属参数经开仓指标区的策略卡 → StrategyParamModal 弹窗编辑。
-    await waitFor(() => expect(screen.getByText('CRA 量化参数')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('智能补仓/移动止盈参数')).toBeTruthy())
     await waitFor(() => expect(screen.getAllByText('支撑回踩反弹').length).toBeGreaterThan(0))
 
     // 打开策略参数弹窗（⚙ 按钮）。

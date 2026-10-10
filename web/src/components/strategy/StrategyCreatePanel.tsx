@@ -26,7 +26,7 @@ export function StrategyCreatePanel({ market, initialType, onClose, onSaved }: S
         <div>
           <h3 className="text-sm font-bold">新建 {strategyTypeLabel(form.strategyType, form.market)} 策略</h3>
           <p className="text-[10px] text-muted-foreground mt-0.5">
-            {form.market === 'spot' ? '现货策略' : '合约策略'} · 直接配置 CRA 参数
+            {form.market === 'spot' ? '现货策略' : '合约策略'} · 直接配置智能补仓/移动止盈参数
           </p>
         </div>
         <button

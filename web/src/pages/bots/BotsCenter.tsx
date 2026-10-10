@@ -1024,7 +1024,7 @@ export function BotsCenter() {
               </button>
             ))}
           </div>
-          {/* 指标策略（币富模型：CRA 壳 + 预选开仓指标；含补仓/移动止盈全套） */}
+          {/* 指标策略（币富模型：智能补仓/移动止盈壳 + 预选开仓指标；含补仓/移动止盈全套） */}
           <div className="mt-4 pt-3 border-t border-quant-border">
             <div className="text-[10px] text-muted-foreground mb-2">指标策略（含补仓/移动止盈）</div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

@@ -1131,8 +1131,8 @@ export function Backtest() {
           {/* Advanced CRA params */}
           {isCraStrategy && (
             <div className="space-y-3 border-t border-quant-border/60 pt-4">
-              <GroupLabel icon={SlidersHorizontal}>高级参数（CRA 量化）</GroupLabel>
-              <CollapsibleSection title="CRA 量化参数" count={4} defaultOpen>
+              <GroupLabel icon={SlidersHorizontal}>高级参数（智能补仓/移动止盈）</GroupLabel>
+              <CollapsibleSection title="智能补仓/移动止盈参数" count={4} defaultOpen>
                 <CRAParamForm
                   value={craParams}
                   onChange={setCraParams}

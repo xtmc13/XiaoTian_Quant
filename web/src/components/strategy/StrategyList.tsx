@@ -40,7 +40,7 @@ const CREATE_TEMPLATES: {
   {
     key: 'cra_contract',
     title: '合约网格',
-    desc: 'CRA 合约网格：首单 100U · 5 档补仓 · 10x 杠杆（模拟盘）',
+    desc: '合约网格：首单 100U · 5 档补仓 · 10x 杠杆（模拟盘）',
     strategyType: 'cra_contract',
     config: {
       first_order_amount: 100,

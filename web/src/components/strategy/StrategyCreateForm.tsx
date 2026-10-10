@@ -517,11 +517,11 @@ export function useStrategyCreateForm(
     const craType = isCRAStrategyType(strategyType)
     if (craType) {
       if (!craParams.firstOrderAmount || craParams.firstOrderAmount < 1) {
-        toast('error', '参数与策略类型不匹配：CRA 策略需要首单金额 ≥ 1')
+        toast('error', '参数与策略类型不匹配：智能补仓策略需要首单金额 ≥ 1')
         return
       }
       if (craParams.enableAddPosition && craParams.addPositions.length === 0) {
-        toast('error', '参数与策略类型不匹配：CRA 策略需要至少一档补仓（或关闭补仓）')
+        toast('error', '参数与策略类型不匹配：智能补仓策略需要至少一档补仓（或关闭补仓）')
         return
       }
     }
@@ -934,7 +934,7 @@ export function StrategyCreateFormSections({
         ) : (
           <SectionCard title="参数">
             <div className="text-xs text-muted-foreground py-4 text-center">
-              当前策略类型不支持 CRA 补仓/移动止盈参数，仅使用通用字段与动态参数
+              当前策略类型不支持智能补仓/移动止盈参数，仅使用通用字段与动态参数
             </div>
           </SectionCard>
         )}
