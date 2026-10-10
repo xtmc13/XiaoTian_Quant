@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateActio
 import { useQuery } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { toast } from '@/lib/useToast'
+import { useI18nSafe } from '@/i18n'
 import { strategyApi, configApi } from '@/lib/api'
 import { useStrategyData } from '@/hooks/useStrategyData'
 import { SectionCard } from '@/components/ui/SectionCard'
@@ -9,7 +10,7 @@ import { CRAParamForm, craParamsToApiPayload, type CRAParams } from './CRAParamF
 import { ExchangeSelectModal } from './ExchangeSelectModal'
 import { DynamicParamField, STRAT_TYPES, TIMEFRAMES } from './StrategyFormFields'
 import { STRATEGY_PRESETS, type Preset } from './StrategyPresets'
-import { createDefaultCRAParams, isCRAStrategyType, CRA_FEATURE_KEYS, applyServerStrategyDefaults } from '@/lib/strategyUtils'
+import { createDefaultCRAParams, isCRAStrategyType, CRA_FEATURE_KEYS, applyServerStrategyDefaults, calculateAddPositionTotal } from '@/lib/strategyUtils'
 import type { StrategyParamDefs, ExchangeConfiguredStatus, AddPositionItem } from '@/types'
 import { CheckCircle2, Globe, Activity, AlertTriangle } from 'lucide-react'
 
@@ -90,10 +91,12 @@ export function expandSpotProfile(profile: Extract<SpotTypeProfile, { kind: 'lad
 }
 
 /** 现货网格 ladder 生成（UI 百分比单位）：spread_i% = i × (upper-lower)/upper/格数 ×100，
- * callback 0.3%，multiplier 1。提交时 craParamsToApiPayload 负责转小数。 */
+ * callback 0.3%，multiplier 1。档数 = 格数（order 1..grids，与引擎"order=N=第 N 次
+ * 补仓、order_count=补仓次数"口径一致，2026-10-10 H3）：首单占顶格，N 格逐档补到
+ * 区间下沿。提交时 craParamsToApiPayload 负责转小数。 */
 export function buildSpotGridLadder(lower: number, upper: number, grids: number): AddPositionItem[] {
   const stepPct = ((upper - lower) / upper / grids) * 100
-  return Array.from({ length: grids - 1 }, (_, i) => ({
+  return Array.from({ length: grids }, (_, i) => ({
     order: i + 1,
     multiplier: 1,
     spread: stepPct * (i + 1),
@@ -150,6 +153,9 @@ export interface StrategyCreateFormState {
   setTimeframe: Dispatch<SetStateAction<string>>
   selectedExchanges: string[]
   setSelectedExchanges: Dispatch<SetStateAction<string[]>>
+  /** 保证金模式（仅合约；现货语义固定全仓，不落逐仓）。 */
+  marginMode: 'cross' | 'isolated'
+  setMarginMode: Dispatch<SetStateAction<'cross' | 'isolated'>>
   showExchangeModal: boolean
   setShowExchangeModal: Dispatch<SetStateAction<boolean>>
   configuredExchanges: Record<string, ExchangeConfiguredStatus> | undefined
@@ -245,6 +251,8 @@ export function useStrategyCreateForm(
   const [symbol, setSymbol] = useState('BTCUSDT')
   const [timeframe, setTimeframe] = useState('15m')
   const [selectedExchanges, setSelectedExchanges] = useState<string[]>([])
+  // 保证金模式（L12）：此前创建硬编码 cross、编辑回填不读，逐仓配置无法表达。
+  const [marginMode, setMarginMode] = useState<'cross' | 'isolated'>('cross')
   const [showExchangeModal, setShowExchangeModal] = useState(false)
   const [notifyChannels, setNotifyChannels] = useState<string[]>(['browser'])
   // 执行方式默认模拟盘；实盘卡片需确认且过服务端 live_enabled 总闸（后端
@@ -302,9 +310,9 @@ export function useStrategyCreateForm(
   const [paramDefsLoading, setParamDefsLoading] = useState(false)
 
   const totalAddPosition = useMemo(() => {
-    const first = craParams.firstOrderAmount * craParams.firstOrderMultiplier
-    return craParams.addPositions.reduce((sum, pos) => sum + first * pos.multiplier, first)
-  }, [craParams.firstOrderAmount, craParams.firstOrderMultiplier, craParams.addPositions])
+    // 补仓总金额只计会被消费的档（1≤order≤orderCount；strategyUtils 同名函数同口径）
+    return calculateAddPositionTotal(craParams.firstOrderAmount, craParams.firstOrderMultiplier, craParams.addPositions, craParams.orderCount)
+  }, [craParams.firstOrderAmount, craParams.firstOrderMultiplier, craParams.addPositions, craParams.orderCount])
 
   useEffect(() => {
     if (!strategyType) return
@@ -394,12 +402,29 @@ export function useStrategyCreateForm(
 
   // 编辑回填（现货网格）：自定义键 price_lower/price_upper/grid_count/per_grid_amount
   // 优先；缺省从 CRA 键回退（first_order_amount→每格金额、order_count→格数，
-  // 区间留空）。仅 mount 时执行一次；其余类型的回填由页面 effect 直填 craParams。
+  // 区间留空）。initialConfig 到达时执行一次（/create?id= 首渲染时编辑数据
+  // 尚未加载，mount-only 会永远回默认、保存被 spotGridError 硬拦——M8 修复）；
+  // 其余类型的回填由页面 effect 直填 craParams。依赖用网格键的内容签名
+  // （原始字符串）而非 config 对象引用——内联/反复 JSON.parse 的不稳定引用
+  // 不会触发重复回填，用户回填后的编辑不被覆盖。
   const initialConfig = options?.initialConfig
+  const gridConfigSig = initialConfig
+    ? [
+        initialConfig.price_lower,
+        initialConfig.price_upper,
+        initialConfig.grid_count,
+        initialConfig.per_grid_amount,
+        initialConfig.order_count,
+        initialConfig.first_order_amount,
+      ].join('|')
+    : ''
+  const gridBackfilledFor = useRef('')
   useEffect(() => {
     if (!initialConfig || market !== 'spot') return
+    if (!gridConfigSig || gridBackfilledFor.current === gridConfigSig) return
     const type = initialType ?? deriveStrategyType(market)
     if (type !== 'cra_spot') return
+    gridBackfilledFor.current = gridConfigSig
     const num = (k: string) => (typeof initialConfig[k] === 'number' ? (initialConfig[k] as number) : undefined)
     setSpotGridState({
       priceLower: num('price_lower') != null ? String(num('price_lower')) : '',
@@ -407,8 +432,9 @@ export function useStrategyCreateForm(
       gridCount: num('grid_count') ?? num('order_count') ?? 5,
       perGridAmount: num('per_grid_amount') ?? num('first_order_amount') ?? 50,
     })
+    // initialConfig 只经 gridConfigSig 消费；市场/类型兜底语义同上。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [gridConfigSig, market, initialType])
 
   const applyPreset = (preset: Preset) => {
     setPresetKey(preset.key)
@@ -491,7 +517,12 @@ export function useStrategyCreateForm(
         ...dynamicConfig,
         market_type: market === 'spot' ? 'spot' : 'swap',
         position_side: craParams.direction === 'long' ? 'LONG' : craParams.direction === 'short' ? 'SHORT' : 'BOTH',
-        margin_mode: 'cross',
+        margin_mode: marginMode,
+        // L13：顶层 leverage 同步写进 config_json——执行层（applyStrategyExecConfig）
+        // 读 config_json 的 leverage，此前经典合约策略 config_json 无此键、执行按
+        // 默认 1× 而记录/展示是 10×。CRA 类型 craParamsToApiPayload 已含同值键，
+        // 此处幂等覆盖。
+        leverage: market === 'spot' ? 1 : craParams.leverage,
         selected_exchanges: selectedExchanges,
       }
       if (!craType && CRA_FEATURE_KEYS.some((k) => k in config)) {
@@ -512,6 +543,7 @@ export function useStrategyCreateForm(
         leverage: market === 'spot' ? 1 : craParams.leverage,
         trade_direction: market === 'spot' ? 'long' : craParams.direction,
         market_type: market === 'spot' ? 'spot' : 'swap',
+        margin_mode: marginMode,
         execution_mode: executionMode, // 模拟盘默认；实盘需服务端 trading.live_enabled 开启
         notification_config: { channels: notifyChannels },
         strategy_type: strategyType,
@@ -554,6 +586,8 @@ export function useStrategyCreateForm(
     setTimeframe,
     selectedExchanges,
     setSelectedExchanges,
+    marginMode,
+    setMarginMode,
     showExchangeModal,
     setShowExchangeModal,
     configuredExchanges,
@@ -607,6 +641,8 @@ export function StrategyCreateFormSections({
     typeLocked,
     selectedExchanges,
     setSelectedExchanges,
+    marginMode,
+    setMarginMode,
     showExchangeModal,
     setShowExchangeModal,
     configuredExchanges,
@@ -623,6 +659,10 @@ export function StrategyCreateFormSections({
     dynamicParams,
     setDynamicParams,
   } = form
+  // L11：selected_exchanges 是全链死参数（不接下单路由）——交易所选择器下
+  // 如实标注"仅记录偏好"。该说明是本表单唯一的 i18n 词条（三语），组件其余
+  // 文案保持既有硬编码中文惯例。
+  const { t } = useI18nSafe()
 
   return (
     <>
@@ -749,7 +789,36 @@ export function StrategyCreateFormSections({
                 </span>
                 {selectedExchanges.length > 0 && <span className="text-quant-gold">✓</span>}
               </button>
+              <div className="text-[10px] text-muted-foreground mt-1">{t('dashboard.strategy.exchanges-pref-note')}</div>
             </div>
+            {/* 保证金模式（仅合约；L12：创建不再硬编码全仓，编辑回填真实值） */}
+            {market === 'contract' && (
+              <div>
+                <label className="text-[11px] text-muted-foreground mb-1.5 block">保证金模式</label>
+                <div className="flex gap-2">
+                  {(
+                    [
+                      { key: 'cross', label: '全仓' },
+                      { key: 'isolated', label: '逐仓' },
+                    ] as const
+                  ).map((m) => (
+                    <button
+                      key={m.key}
+                      type="button"
+                      onClick={() => setMarginMode(m.key)}
+                      className={cn(
+                        'flex-1 py-2 rounded-lg text-xs border transition-colors',
+                        marginMode === m.key
+                          ? 'bg-quant-gold/10 border-quant-gold/20 text-quant-gold'
+                          : 'border-quant-border text-muted-foreground hover:text-foreground'
+                      )}
+                    >
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </SectionCard>

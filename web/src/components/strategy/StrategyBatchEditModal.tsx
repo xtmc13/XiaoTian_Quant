@@ -146,7 +146,7 @@ export function StrategyBatchEditModal({ ids, market, onClose, onSaved }: Strate
               />
             </FieldRow>
 
-            <FieldRow label="做单数量" enabled={fields.orderCount.enabled} onToggle={() => toggleField('orderCount')}>
+            <FieldRow label="补仓次数" enabled={fields.orderCount.enabled} onToggle={() => toggleField('orderCount')}>
               <input
                 type="number"
                 min={1}

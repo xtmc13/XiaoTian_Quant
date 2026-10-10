@@ -103,7 +103,10 @@ export const DEFAULT_CRA_PARAMS: CRAParams = {
   firstOrderPrice: 0,
   firstOrderAmount: 10,
   firstOrderMultiplier: 1,
-  tradeCountMode: 'single',
+  // L17：默认循环模式对齐后端（ParseCRAParams/DefaultSpot/DefaultContract
+  // 三处默认 'cycle'；SpotStrategyForm 与 loopCount 默认 100/5000 也只有
+  // 循环语义下才有意义）。此前表单默认 'single' 与后端不一致。
+  tradeCountMode: 'cycle',
   loopCount: 100,
   enableAddPosition: true,
   orderCount: 7,
@@ -255,8 +258,13 @@ export function CRAParamForm({ value, onChange, market, className, openFields = 
 
   const totalAddPosition = useMemo(() => {
     const first = value.firstOrderAmount * value.firstOrderMultiplier
-    return value.addPositions.reduce((sum, pos) => sum + first * pos.multiplier, first)
-  }, [value.firstOrderAmount, value.firstOrderMultiplier, value.addPositions])
+    // 只计会被引擎消费的档（order 1..orderCount；order=N=第 N 次补仓，
+    // order_count=补仓次数，2026-10-10 H3 口径）。与 lib/strategyUtils
+    // calculateAddPositionTotal 同口径（此处内联以避免循环 import）。
+    return value.addPositions
+      .filter((pos) => pos.order >= 1 && pos.order <= value.orderCount)
+      .reduce((sum, pos) => sum + first * pos.multiplier, first)
+  }, [value.firstOrderAmount, value.firstOrderMultiplier, value.addPositions, value.orderCount])
 
   const isContract = market === 'contract'
 
@@ -542,6 +550,7 @@ export function CRAParamForm({ value, onChange, market, className, openFields = 
             value={value.addPositions}
             onChange={(next) => update('addPositions', next)}
             disabled={!value.enableAddPosition}
+            showEma={isContract}
           />
         </div>
 
@@ -556,7 +565,20 @@ export function CRAParamForm({ value, onChange, market, className, openFields = 
                 onToggle={(v) => update('addMacdEnabled', v)}
                 onPeriodChange={(v) => update('addMacdPeriod', v)}
               />
+              <PeriodSelect
+                label="补仓 EMA 确认"
+                enabled={value.addEmaEnabled}
+                period={value.addEmaPeriod}
+                onToggle={(v) => update('addEmaEnabled', v)}
+                onPeriodChange={(v) => update('addEmaPeriod', v)}
+              />
             </div>
+            {value.addEmaEnabled && (
+              <div className="text-[10px] text-muted-foreground -mt-1">
+                补仓 EMA 确认为双闸：还需在「配置补仓参数」弹窗中为对应档打开 EMA 确认列，该档补仓才会要求
+                EMA 确认（金叉或收盘价站上慢线）；档级未开的档位不受本开关影响。监测周期选「关闭」时不评估、直接放行。
+              </div>
+            )}
           </div>
         )}
       </Section>

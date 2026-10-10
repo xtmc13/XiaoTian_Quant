@@ -222,6 +222,116 @@ func legacyEmaConfirmed(bars []model.Bar, t EMATunables, side PositionSide) bool
 	return EMACrossDetect(bars, t.Fast, t.Slow) || bars[last].Close > emaSlow[last]
 }
 
+// RSI 计算 Wilder 平滑 RSI 序列（与前端 technicalIndicators.ts calculateRSI
+// 同口径：首个有效值在索引 period，之前为 0 需忽略；avgLoss=0 时 rs 取 100）。
+func RSI(closes []float64, period int) []float64 {
+	if period <= 0 || len(closes) <= period {
+		return nil
+	}
+	out := make([]float64, len(closes))
+	var avgGain, avgLoss float64
+	for i := 1; i <= period; i++ {
+		diff := closes[i] - closes[i-1]
+		if diff > 0 {
+			avgGain += diff
+		} else {
+			avgLoss -= diff
+		}
+	}
+	avgGain /= float64(period)
+	avgLoss /= float64(period)
+	out[period] = rsiValue(avgGain, avgLoss)
+	for i := period + 1; i < len(closes); i++ {
+		diff := closes[i] - closes[i-1]
+		gain, loss := 0.0, 0.0
+		if diff > 0 {
+			gain = diff
+		} else {
+			loss = -diff
+		}
+		avgGain = (avgGain*float64(period-1) + gain) / float64(period)
+		avgLoss = (avgLoss*float64(period-1) + loss) / float64(period)
+		out[i] = rsiValue(avgGain, avgLoss)
+	}
+	return out
+}
+
+func rsiValue(avgGain, avgLoss float64) float64 {
+	rs := 100.0
+	if avgLoss != 0 {
+		rs = avgGain / avgLoss
+	}
+	return 100 - 100/(1+rs)
+}
+
+// RSIOversoldReboundConfirmed RSI 超卖反弹门槛（开仓指标选择器 rsi）：做多=
+// 上一根 RSI 仍低于超卖线、当前根回升站上超卖线（离开超卖区=反弹确认，与
+// strategies/classic.go RSIStrategy "RSI exit oversold" 同口径）；做空镜像
+// （上一根高于超买线、当前根回落跌破超买线）。序列不足（< period+2）不确认。
+func RSIOversoldReboundConfirmed(bars []model.Bar, period, oversold, overbought int, side PositionSide) bool {
+	if period < 2 || len(bars) < period+2 {
+		return false
+	}
+	if oversold < 1 {
+		oversold = 30
+	}
+	if overbought < 1 {
+		overbought = 70
+	}
+	r := RSI(BarsToCloses(bars), period)
+	last := len(bars) - 1
+	prev, cur := r[last-1], r[last]
+	if side == SideShort {
+		return prev > float64(overbought) && cur <= float64(overbought)
+	}
+	return prev < float64(oversold) && cur >= float64(oversold)
+}
+
+// RSINeutralBandConfirmed 震荡门槛（开仓指标选择器 range）：当前 RSI 处于
+// 50±neutralBand 的中性区才放行——只在震荡行情开仓，避开超买/超卖极端区
+// （高抛低吸网格的入场环境过滤，方向无关）。序列不足不确认。
+func RSINeutralBandConfirmed(bars []model.Bar, period, neutralBand int) bool {
+	if period < 2 || len(bars) < period+2 {
+		return false
+	}
+	if neutralBand < 1 {
+		neutralBand = 10
+	}
+	r := RSI(BarsToCloses(bars), period)
+	cur := r[len(bars)-1]
+	return cur >= 50-float64(neutralBand) && cur <= 50+float64(neutralBand)
+}
+
+// TrendMAConfirmed 趋势确认门槛（开仓指标选择器 trend）：收盘价站上
+// MA(period) 放行做多、跌破放行做空（预设文案"价格在均线之上确认趋势后
+// 开仓"的一一对应实现）。ma_type 支持 EMA/SMA，缺省/未知一律 EMA（前端
+// 选项只有这两种，钳制口径与 ValidateIndicatorParams 的宽松校验一致）。
+func TrendMAConfirmed(bars []model.Bar, period int, maType string, side PositionSide) bool {
+	if period < 2 || len(bars) < period+1 {
+		return false
+	}
+	closes := BarsToCloses(bars)
+	last := len(closes) - 1
+	var ma float64
+	if strings.EqualFold(strings.TrimSpace(maType), "SMA") {
+		s := SMA(closes, period)
+		if len(s) == 0 {
+			return false
+		}
+		ma = s[len(s)-1]
+	} else {
+		e := EMA(closes, period)
+		if len(e) == 0 {
+			return false
+		}
+		ma = e[last]
+	}
+	if side == SideShort {
+		return closes[last] < ma
+	}
+	return closes[last] > ma
+}
+
 // IndicatorConfirmed decides whether an entry/add-position is allowed by the configured indicator switch.
 func IndicatorConfirmed(bars []model.Bar, enabled bool, period string, indicatorType string, side PositionSide) bool {
 	return IndicatorConfirmedWithTunables(bars, enabled, period, indicatorType, side, MACDTunables{}, EMATunables{})

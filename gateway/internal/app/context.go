@@ -1453,6 +1453,16 @@ func getLastPrice(symbol string) float64 {
 	return p
 }
 
+// LastPriceForDisplay 运行面板展示价：getLastPriceSource 的 WS 缓存 + REST
+// 探针两档（WS 订阅表之外的 symbol 面板现价此前恒 0）。第三档合成价是
+// paper 的离线兜底，绝不用于面板展示——宁可显示 0（无数据）也不显示假价。
+func LastPriceForDisplay(symbol string) float64 {
+	if p, synthetic := getLastPriceSource(symbol); !synthetic {
+		return p
+	}
+	return 0
+}
+
 // isPaperExchangeName：空/paper 视为模拟盘。
 func isPaperExchangeName(exchange string) bool {
 	return exchange == "" || exchange == "paper"
@@ -1709,22 +1719,32 @@ func (ctx *Context) wireStrategyEngine() {
 			if cj, ok := cfg["config_json"].(string); ok && cj != "" {
 				if craParams, err := cra.ParseCRAParams(cj); err == nil && craParams.IsContract() {
 					// Static TP/SL: pass to order manager for conditional order tracking.
+					// 信号单是市价单（上方 req.Price=0）：比例口径 TP/SL 的锚定价取
+					// 当前市价估算（此前按 req.Price 计算恒得 0，订单级 TP/SL 从未
+					// 生效）；行情只剩合成价（离线兜底）时不锚——假价挂出的 TP/SL
+					// 比不挂更危险。
+					refPrice := req.Price
+					if refPrice <= 0 {
+						if p, synthetic := getLastPriceSource(req.Symbol); !synthetic && p > 0 {
+							refPrice = p
+						}
+					}
 					if craParams.TPMode == "static" {
-						if craParams.TakeProfitRatio > 0 {
+						if craParams.TakeProfitRatio > 0 && refPrice > 0 {
 							if req.PositionSide == model.PositionShort {
-								req.TPPrice = req.Price * (1 - craParams.TakeProfitRatio)
+								req.TPPrice = refPrice * (1 - craParams.TakeProfitRatio)
 							} else {
-								req.TPPrice = req.Price * (1 + craParams.TakeProfitRatio)
+								req.TPPrice = refPrice * (1 + craParams.TakeProfitRatio)
 							}
 						}
 						if craParams.StopLossEnabled {
 							switch craParams.StopLossType {
 							case "ratio":
-								if craParams.StopLossRatio > 0 {
+								if craParams.StopLossRatio > 0 && refPrice > 0 {
 									if req.PositionSide == model.PositionShort {
-										req.SLPrice = req.Price * (1 + craParams.StopLossRatio)
+										req.SLPrice = refPrice * (1 + craParams.StopLossRatio)
 									} else {
-										req.SLPrice = req.Price * (1 - craParams.StopLossRatio)
+										req.SLPrice = refPrice * (1 - craParams.StopLossRatio)
 									}
 								}
 							case "price":

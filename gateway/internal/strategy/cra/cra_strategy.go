@@ -349,6 +349,11 @@ func (s *BaseCRAStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Sign
 		if st.EntryPaused {
 			return nil, nil
 		}
+		// 防瀑布暂停期不开首单/新循环（此前 WaterfallPaused 只挡补仓分支，
+		// 瀑布下跌途中照样入场接刀）。
+		if st.WaterfallPaused {
+			return nil, nil
+		}
 		if !st.CanStartNewLoop(p.TradeCountMode, p.LoopCount) {
 			return nil, nil
 		}
@@ -361,15 +366,18 @@ func (s *BaseCRAStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Sign
 				return nil, nil
 			}
 		}
+		// 开仓指标门槛现货/合约同闸（H1 修复：此前现货分支不评估任何指标，
+		// IndicatorPicker 对现货选中的 MACD/EMA/RSI/trend/range/custom 门槛
+		// 全是死参数）。未选指标（open_indicator 空、旧 open_* 键全关）时
+		// openIndicatorsConfirmed 放行，现货默认"无门槛直接进"行为不变。
+		side := SideLong
 		if s.isContract {
-			side := s.resolveContractSide()
-			if !s.openIndicatorsConfirmed(side) {
-				return nil, nil
-			}
-			st.EnterPosition(bar.Close, side)
-		} else {
-			st.EnterPosition(bar.Close, SideLong)
+			side = s.resolveContractSide()
 		}
+		if !s.openIndicatorsConfirmed(side) {
+			return nil, nil
+		}
+		st.EnterPosition(bar.Close, side)
 		// 开仓加倍（币富名词解释 #15，open_double）：只放大首单名义（首单金额
 		// ×2），不改变 add_positions 阶梯的基数——补仓第 N 档仍按首单原始金额
 		// ×multiplier 计（见下方 Add positions 分支，entryQty 的 multiplier 实参
@@ -461,8 +469,17 @@ func (s *BaseCRAStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Sign
 
 	// Add positions（G1 #25：AddPositionDisabled 关闭补仓时跳过本分支——只挡
 	// 自动补仓评估，上方止盈/止损/反向出场/燃烧各独立分支不受影响，照常评估）。
-	if p.EnableAddPosition && !st.AddPositionDisabled && st.PositionCount+st.PendingAddCount < p.OrderCount && !st.WaterfallPaused {
-		nextOrder := st.PositionCount + st.PendingAddCount + 1
+	// 档位口径（2026-10-10 H3 修复 off-by-one）：order=N 对应第 N 次补仓——
+	// 首单成交占 PositionCount=1，nextOrder=PositionCount+PendingAddCount 即
+	// 下一笔补仓的 1 基序号；order_count=补仓次数（与前端"补仓次数"标签一致），
+	// 单循环总单数上限=order_count+1。行为变化如实标注：修复前 order=1 档永不
+	// 消费（首次补仓直接吃 order=2）、补仓次数比配置少一次；重启重放按
+	// PositionCount（已成交档数）续档，与本口径同源（restoreLotsLocked）。
+	// PositionCount>=1 护栏：首单信号已发但成交未确认的窗口内（InPosition=true、
+	// PositionCount=0）不补仓——nextOrder=0 只会匹配畸形 order:0 配置行，且梯子
+	// 本就锚在未经成交证实的价格上。
+	if p.EnableAddPosition && !st.AddPositionDisabled && st.PositionCount >= 1 && st.PositionCount+st.PendingAddCount <= p.OrderCount && !st.WaterfallPaused {
+		nextOrder := st.PositionCount + st.PendingAddCount
 		cfg := p.AddPositionForOrder(nextOrder)
 		if cfg != nil {
 			// For contract, check per-order EMA switch and global add indicators.
@@ -479,6 +496,26 @@ func (s *BaseCRAStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Sign
 	}
 
 	return nil, nil
+}
+
+// OnWarmupBar strategy.Warmupper 实现（2026-10-10 H4）：早于本次启动时刻收盘的
+// 历史回补 K 线只养指标序列——s.bars 是开仓/补仓 MACD/EMA 门槛、dual 选边
+// （EMA20）与自定义指标沙箱的唯一输入（indicators.go/custom_indicator.go 均为
+// 对该序列的纯函数），暖机维护与 OnBar 同构（append+200 截断），故暖机后首根
+// 实时 bar 的指标值与连续运行等价。不做 EnterPosition/PendingAddCount/任何状态
+// 迁移，不发信号：修复前历史 bar 直接走 OnBar，第一根回补 bar 就按 100 周期前
+// 的陈旧价 EnterPosition+发单（EntryPrice 锚错整条梯子），直接暖机路径
+// （handler 同 symbol 已有策略时）丢弃信号还会留下 PendingAddCount 虚挂。
+func (s *BaseCRAStrategy) OnWarmupBar(bar model.Bar) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.running || s.params == nil {
+		return
+	}
+	s.bars = append(s.bars, bar)
+	if len(s.bars) > 200 {
+		s.bars = s.bars[len(s.bars)-200:]
+	}
 }
 
 func (s *BaseCRAStrategy) OnOrderUpdate(order model.OrderData, bus *event.EventBus) (*model.Signal, error) {
@@ -968,6 +1005,25 @@ func (s *BaseCRAStrategy) openIndicatorsConfirmed(side PositionSide) bool {
 			return false
 		}
 		return confirmed
+	}
+	// H2：rsi/range/trend 选择器门槛（修复前三者是假门槛——预设注释自认
+	// "无对应引擎门槛键，引擎视为无开仓门槛"）。均只吃工作周期 bar（预设无
+	// 监测周期字段），用 s.bars 全窗（≤200 根，暖机回补约 100 根）而非
+	// indicatorBars 的 50 根截断；数据不足时不放行——门槛已选但算不出值时
+	// 宁可不开仓，暖机/积累到位后自然解锁，绝不静默降级为无门槛。
+	switch strings.ToLower(p.OpenIndicator) {
+	case "rsi":
+		if !RSIOversoldReboundConfirmed(s.bars, p.RsiPeriod, p.RsiOversold, p.RsiOverbought, side) {
+			return false
+		}
+	case "range":
+		if !RSINeutralBandConfirmed(s.bars, p.RangePeriod, p.RangeNeutralBand) {
+			return false
+		}
+	case "trend":
+		if !TrendMAConfirmed(s.bars, p.TrendPeriod, p.TrendMAType, side) {
+			return false
+		}
 	}
 	macd := MACDTunables{Fast: p.MacdFast, Slow: p.MacdSlow, Signal: p.MacdSignal}
 	ema := EMATunables{Fast: p.EmaFast, Slow: p.EmaSlow}

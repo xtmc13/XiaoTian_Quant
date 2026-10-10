@@ -10,8 +10,9 @@ import (
 
 // ── helpers ──
 
-// startTailSpot 启动 spot CRA：静态止盈、指定 method、首单 10U、默认补仓梯
-// （order2: 5%/0.5%/2x、order3: 7%/0.5%/4x）、关回调。
+// startTailSpot 启动 spot CRA：静态止盈、指定 method、首单 10U、显式补仓梯
+// （order1: 5%/0.5%/2x、order2: 7%/0.5%/4x——order=N=第 N 次补仓，
+// 2026-10-10 H3 口径）、关回调。
 func startTPSpot(t *testing.T, method string) *BaseCRAStrategy {
 	t.Helper()
 	s := NewCRASpotStrategy("martin_trend", "BTCUSDT")
@@ -24,6 +25,10 @@ func startTPSpot(t *testing.T, method string) *BaseCRAStrategy {
 		"profit_callback":     0,
 		"enable_add_position": true,
 		"order_count":         7,
+		"add_positions": []any{
+			map[string]any{"order": 1, "multiplier": 2, "spread": 0.05, "callback": 0.005},
+			map[string]any{"order": 2, "multiplier": 4, "spread": 0.07, "callback": 0.005},
+		},
 	}); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -281,14 +286,14 @@ func TestCRATailTakeProfitFlow(t *testing.T) {
 	}
 	fillBuy(t, s, 100, sig.Qty) // 0.1
 
-	// 补仓 #2（order2: spread 5% / callback 0.5% / mult 2）：94.5 挂起、
+	// 补仓 #1（order1: spread 5% / callback 0.5% / mult 2）：94.5 挂起、
 	// 94.98 反弹触发（回调触发时价格仍须 ≥5% 低于首单价，见 ShouldAddPosition）。
 	if sig, _ := s.OnBar(bar(94.5), nil); sig != nil {
 		t.Fatalf("add must arm, not fire: %+v", sig)
 	}
 	sig, _ = s.OnBar(bar(94.98), nil)
 	if sig == nil || sig.Direction != "LONG" {
-		t.Fatal("add position #2 must fire after bounce")
+		t.Fatal("add position #1 must fire after bounce")
 	}
 	addQty := sig.Qty // 20/94.98 ≈ 0.210571
 	fillBuy(t, s, 94.98, addQty)
@@ -351,17 +356,17 @@ func TestCRAHeadTailTakeProfitFlow(t *testing.T) {
 	}
 	fillBuy(t, s, 100, sig.Qty) // 0.1 @100
 
-	// 补仓 #2 @94.98（20U）、补仓 #3 @92.97（40U，order3: 7%/0.5%/4x）。
+	// 补仓 #1 @94.98（20U）、补仓 #2 @92.97（40U，order2: 7%/0.5%/4x）。
 	s.OnBar(bar(94.5), nil)
 	sig, _ = s.OnBar(bar(94.98), nil)
 	if sig == nil {
-		t.Fatal("add #2 expected")
+		t.Fatal("add #1 expected")
 	}
 	fillBuy(t, s, 94.98, sig.Qty)
 	s.OnBar(bar(92.5), nil)
 	sig, _ = s.OnBar(bar(92.97), nil)
 	if sig == nil {
-		t.Fatal("add #3 expected")
+		t.Fatal("add #2 expected")
 	}
 	add3Qty := sig.Qty // ≈0.430247
 	fillBuy(t, s, 92.97, add3Qty)
@@ -458,7 +463,7 @@ func TestCRAPartialCloseRejectRearms(t *testing.T) {
 	s.OnBar(bar(94.5), nil)
 	sig, _ = s.OnBar(bar(94.98), nil)
 	if sig == nil {
-		t.Fatal("add #2 expected")
+		t.Fatal("add #1 expected")
 	}
 	fillBuy(t, s, 94.98, sig.Qty)
 

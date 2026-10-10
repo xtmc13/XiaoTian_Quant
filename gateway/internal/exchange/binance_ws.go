@@ -23,6 +23,7 @@ type BinanceWSStream struct {
 	bus        *event.EventBus
 	conn       *websocket.Conn
 	mu         sync.RWMutex
+	writeMu    sync.Mutex // gorilla conn 单写者纪律（keepalive ping / 动态 SUBSCRIBE 共用）
 	running    bool
 	stopCh     chan struct{}
 	reconnect  chan struct{}
@@ -88,16 +89,6 @@ func (s *BinanceWSStream) Stop() {
 }
 
 func (s *BinanceWSStream) connect() {
-	// Build combined stream URL: wss://stream.binance.com:9443/stream?streams=btcusdt@trade/ethusdt@trade
-	var streams []string
-	for _, sym := range s.symbols {
-		sym = strings.ToLower(sym)
-		streams = append(streams, fmt.Sprintf("%s@trade", sym))
-		streams = append(streams, fmt.Sprintf("%s@ticker", sym))
-		streams = append(streams, fmt.Sprintf("%s@markPrice@1s", sym)) // Mark price for contract positions
-	}
-	url := fmt.Sprintf("wss://stream.binance.com:9443/stream?streams=%s", strings.Join(streams, "/"))
-
 	dialer := wsDialer()
 
 	for {
@@ -107,6 +98,10 @@ func (s *BinanceWSStream) connect() {
 		default:
 		}
 
+		// 每次拨号按当前订阅表重建 URL：运行期经 EnsureSymbol 加入的
+		// symbol 在断线重连后依然保持订阅（连接中的动态 SUBSCRIBE 只覆盖
+		// 当前连接生命周期）。
+		url := s.streamURL()
 		log.Printf("[binance_ws] connecting to %s...", url)
 		conn, _, err := dialer.Dial(url, nil)
 		if err != nil {
@@ -387,9 +382,67 @@ func (s *BinanceWSStream) keepalive() {
 			conn := s.conn
 			s.mu.RUnlock()
 			if conn != nil {
+				s.writeMu.Lock()
 				conn.WriteMessage(websocket.PingMessage, nil)
+				s.writeMu.Unlock()
 			}
 		}
+	}
+}
+
+// symbolStreams 展开单个 symbol 的组合流名（成交/24h ticker/合约标记价）。
+func symbolStreams(sym string) []string {
+	sym = strings.ToLower(sym)
+	return []string{
+		fmt.Sprintf("%s@trade", sym),
+		fmt.Sprintf("%s@ticker", sym),
+		fmt.Sprintf("%s@markPrice@1s", sym), // Mark price for contract positions
+	}
+}
+
+// streamURL 按当前订阅表构建 combined stream URL。
+func (s *BinanceWSStream) streamURL() string {
+	s.mu.RLock()
+	syms := append([]string(nil), s.symbols...)
+	s.mu.RUnlock()
+	var streams []string
+	for _, sym := range syms {
+		streams = append(streams, symbolStreams(sym)...)
+	}
+	return fmt.Sprintf("wss://stream.binance.com:9443/stream?streams=%s", strings.Join(streams, "/"))
+}
+
+// EnsureSymbol 动态订阅新交易对（策略/网格启动时按需扩展行情覆盖——启动列表
+// 之外的 symbol 的 tick 此前永不到达，CRA 防瀑布与运行面板现价对它们失效）。
+// 已订阅去重；连接中立即发 SUBSCRIBE 帧，未连接/断线时只并入订阅表，下次
+// （重）连拨号统一带上（connect 每次拨号重建 URL）。
+func (s *BinanceWSStream) EnsureSymbol(symbol string) {
+	sym := strings.ToLower(strings.TrimSpace(symbol))
+	if sym == "" {
+		return
+	}
+	s.mu.Lock()
+	for _, existing := range s.symbols {
+		if existing == sym {
+			s.mu.Unlock()
+			return
+		}
+	}
+	s.symbols = append(s.symbols, sym)
+	conn := s.conn
+	s.mu.Unlock()
+
+	if conn == nil {
+		return
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := conn.WriteJSON(map[string]any{
+		"method": "SUBSCRIBE",
+		"params": symbolStreams(sym),
+		"id":     time.Now().UnixMilli(),
+	}); err != nil {
+		log.Printf("[binance_ws] dynamic subscribe %s failed: %v（已入订阅表，重连后生效）", sym, err)
 	}
 }
 

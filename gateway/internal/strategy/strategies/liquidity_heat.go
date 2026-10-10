@@ -634,8 +634,10 @@ func (s *LiquidityHeatStrategy) restorePositionLocked(qty, avgPrice float64) {
 		// 重建持仓的档位无法从账本精确反推（金额加权 ≠ 档位数，且 666 实证
 		// 重启失忆期间把 5 笔全算成"只持仓 1 档"→ 重放风暴连环发补仓单真金
 		// 白银买货）。保守按满档处理：重建后不补仓，只管理止盈/超时离场。
+		// 档位口径 2026-10-10 H3：order_count=补仓次数、上限 PC+Pending≤OC，
+		// 满档须写成 OC+1（写 OC 在新口径下还会再放行一笔）。
 		if s.craParams != nil {
-			s.craState.PositionCount = s.craParams.OrderCount
+			s.craState.PositionCount = s.craParams.OrderCount + 1
 		}
 	}
 	log.Printf("[liquidity_heat] %s 重启仓位重建: qty=%.8f vwap=%.2f (cra=%v)",
@@ -1062,11 +1064,12 @@ func (s *LiquidityHeatStrategy) manageCRAPositionLocked(bar model.Bar, countHold
 	if sig := s.manageCRAExitsLocked(bar.Close, bar.Time); sig != nil {
 		return sig
 	}
-	// 池触发补仓（消耗规则保证一个池只补一次）。
+	// 池触发补仓（消耗规则保证一个池只补一次）。档位口径与 cra_strategy.go
+	// 同源（2026-10-10 H3）：order=N 对应第 N 次补仓，order_count=补仓次数。
 	if p.EnableAddPosition && st.InPosition &&
-		st.PositionCount+st.PendingAddCount < p.OrderCount && !st.WaterfallPaused {
+		st.PositionCount+st.PendingAddCount <= p.OrderCount && !st.WaterfallPaused {
 		if pool := s.sweptReclaimPoolLocked(bar, st.AvgEntryPrice); pool != nil {
-			next := st.PositionCount + st.PendingAddCount + 1
+			next := st.PositionCount + st.PendingAddCount
 			cfg := p.AddPositionForOrder(next)
 			if cfg != nil {
 				st.PendingAddCount++

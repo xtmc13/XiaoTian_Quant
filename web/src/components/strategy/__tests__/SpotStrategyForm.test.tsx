@@ -81,10 +81,12 @@ describe('SpotStrategyForm（现货专用表单）', () => {
     expect(config.first_order_amount).toBe(50)
     expect(config.order_count).toBe(5)
     expect(config.direction).toBe('long')
+    // 档数=格数（order 1..5 全量档，最深档落在区间下沿——H3 口径）
     const ladder = config.add_positions as { order: number; spread: number }[]
-    expect(ladder.length).toBe(4)
+    expect(ladder.length).toBe(5)
     expect(ladder[0].order).toBe(1)
-    expect(ladder[3].spread).toBeCloseTo(((50000 - 40000) / 50000 / 5) * 4, 6)
+    expect(ladder[4].order).toBe(5)
+    expect(ladder[4].spread).toBeCloseTo(((50000 - 40000) / 50000 / 5) * 5, 6)
     // 止盈 = 单格跌幅
     expect(config.take_profit_ratio).toBeCloseTo((50000 - 40000) / 50000 / 5, 6)
   })
@@ -115,7 +117,7 @@ describe('SpotStrategyForm（现货专用表单）', () => {
     expect(config.first_order_amount).toBe(20)
     expect(config.order_count).toBe(7)
     expect(Array.isArray(config.add_positions)).toBe(true)
-    expect((config.add_positions as unknown[]).length).toBe(6)
+    expect((config.add_positions as unknown[]).length).toBe(7)
     expect(config.trade_count_mode).toBe('cycle')
   })
 

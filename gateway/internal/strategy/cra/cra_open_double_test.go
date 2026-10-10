@@ -87,8 +87,9 @@ func addPositionQty(t *testing.T, openDouble bool) float64 {
 		"take_profit_ratio":      0.5,
 		"enable_add_position":    true,
 		"order_count":            3,
-		// 引擎首档补仓消费 order=2 的配置（nextOrder=PositionCount+1，首单成交
-		// 占 order 1）：显式给出 order 2，其 spread/callback 与测试价格路径对齐。
+		// 档位口径（2026-10-10 H3）：order=1 对应首次补仓（nextOrder=
+		// PositionCount+PendingAddCount，首单成交占 PositionCount=1）。
+		// 两档同参数，消费量一致——本测试锁定的是阶梯基数不随 open_double 放大。
 		"add_positions": []any{
 			map[string]any{"order": 1, "multiplier": 1, "spread": 0.03, "callback": 0.003},
 			map[string]any{"order": 2, "multiplier": 1, "spread": 0.03, "callback": 0.003},

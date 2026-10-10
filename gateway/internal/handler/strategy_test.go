@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xiaotian-quant/gateway/internal/app"
 	"github.com/xiaotian-quant/gateway/internal/event"
+	"github.com/xiaotian-quant/gateway/internal/exchange"
 	"github.com/xiaotian-quant/gateway/internal/model"
 	"github.com/xiaotian-quant/gateway/internal/store"
 	"github.com/xiaotian-quant/gateway/internal/strategy"
@@ -900,12 +902,13 @@ func TestLiveTradingGate(t *testing.T) {
 /* ── 任务1：现货专用参数模型 → cra_spot 引擎直驱 ─────────────── */
 
 // buildSpotConfig 复刻前端现货表单的双键 config：自定义键（回填优先）+
-// 引擎认识的 CRA 映射键（first_order_amount=每格金额、order_count=格数、
-// add_positions 由区间/格数生成等差 ladder、direction 固定 long）。
+// 引擎认识的 CRA 映射键（first_order_amount=每格金额、order_count=格数=
+// 补仓次数、add_positions 由区间/格数生成等差 ladder——order 1..grids 全量
+// 档，与修复后的前端 buildSpotGridLadder 同形，2026-10-10 H3 口径）。
 func buildSpotConfig(lower, upper float64, grids int) map[string]any {
 	stepPct := (upper - lower) / upper / float64(grids)
-	ladder := make([]any, 0, grids-1)
-	for i := 1; i < grids; i++ {
+	ladder := make([]any, 0, grids)
+	for i := 1; i <= grids; i++ {
 		ladder = append(ladder, map[string]any{
 			"order": i, "multiplier": 1,
 			"spread": stepPct * float64(i), "callback": 0.003, "ema_enabled": false,
@@ -1002,4 +1005,44 @@ func TestSpotConfigEngineChain(t *testing.T) {
 	// 自定义键落库可回读（回填优先键）。
 	assertTrue(t, strings.Contains(getString(item, "config_json", ""), `"price_lower"`), "price_lower must persist")
 	assertTrue(t, strings.Contains(getString(item, "config_json", ""), `"per_grid_amount"`), "per_grid_amount must persist")
+}
+
+// M6（2026-10-10）：运行面板现价对 WS 启动列表外的 symbol 走 REST 兜底
+// （runtimePriceSource 生产实现 = app.LastPriceForDisplay：WS 缓存→REST，
+// 不用合成假价）。修复前面板只查 WS 内存缓存，非五币种现价恒 0。
+func TestGetStrategyRuntimeNonWSSymbolPriceFallback(t *testing.T) {
+	// 挂一个未启动的 WS 流（缓存为空，GetPrice 恒 0），隔离真实网络。
+	appCtx := app.Get()
+	origWS := appCtx.BinanceWS
+	appCtx.BinanceWS = exchange.NewBinanceWSStream([]string{"btcusdt"}, nil)
+	t.Cleanup(func() { appCtx.BinanceWS = origWS })
+
+	orig := runtimePriceSource
+	t.Cleanup(func() { runtimePriceSource = orig })
+	var queried string
+	runtimePriceSource = func(symbol string) float64 {
+		queried = symbol
+		if symbol == "PEPEUSDT" {
+			return 0.5
+		}
+		return 0
+	}
+
+	r := setupRouter()
+	r.GET("/strategies/configs/:id/runtime", GetStrategyRuntime)
+
+	store.SetStrategyConfig("runtime-fallback-1", map[string]any{
+		"id": "runtime-fallback-1", "name": "非WS币种", "strategy_type": "cra_spot",
+		"symbol": "PEPEUSDT", "status": "stopped",
+	})
+	t.Cleanup(func() { store.DeleteStrategyConfig("runtime-fallback-1") })
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/strategies/configs/runtime-fallback-1/runtime", nil)
+	r.ServeHTTP(w, req)
+	assertEq(t, w.Code, http.StatusOK, "runtime status code")
+	var payload map[string]any
+	assertTrue(t, json.Unmarshal(w.Body.Bytes(), &payload) == nil, "runtime response JSON")
+	assertTrue(t, queried == "PEPEUSDT", "price source must be queried with the strategy symbol")
+	assertTrue(t, payload["price"] == 0.5, "price must come from REST fallback")
 }

@@ -1,6 +1,7 @@
 import type { AddPositionItem, MovingTPTier } from '@/types'
 import { apiPayloadToCraParams } from '@/components/strategy/CRAParamForm'
 import type { CRAParams } from '@/components/strategy/CRAParamForm'
+import { PERCENTAGE_FIELD_THRESHOLDS } from './craPercentUtils'
 
 export type StrategyMultiplierPreset =
   | 'martin'
@@ -136,15 +137,21 @@ export function createDefaultMovingTPTiers(market: 'spot' | 'contract'): MovingT
 
 /**
  * Calculate total capital required for the add-position plan.
- * Includes the first order (after its multiplier) plus every add-position order.
+ * Includes the first order (after its multiplier) plus every consumable
+ * add-position tier. 引擎口径（2026-10-10 H3）：order=N 对应第 N 次补仓、
+ * order_count=补仓次数，只有 1≤order≤orderCount 的档会被消费——超出
+ * 补仓次数的配置行永不下单，不计入总额。
  */
 export function calculateAddPositionTotal(
   firstOrderAmount: number,
   firstOrderMultiplier: number,
-  addPositions: AddPositionItem[]
+  addPositions: AddPositionItem[],
+  orderCount: number
 ): number {
   const first = firstOrderAmount * firstOrderMultiplier
-  return addPositions.reduce((sum, pos) => sum + first * pos.multiplier, first)
+  return addPositions
+    .filter((pos) => pos.order >= 1 && pos.order <= orderCount)
+    .reduce((sum, pos) => sum + first * pos.multiplier, first)
 }
 
 /**
@@ -225,7 +232,7 @@ export function createDefaultCRAParams(market: 'spot' | 'contract'): CRAParams {
     firstOrderPrice: 0,
     firstOrderAmount: defaults.firstOrderAmount,
     firstOrderMultiplier: 1,
-    tradeCountMode: 'single',
+    tradeCountMode: 'cycle',
     loopCount: defaults.loopCount,
     enableAddPosition: true,
     orderCount: defaults.orderCount,
@@ -385,7 +392,14 @@ export function applyServerStrategyDefaults(
   if ((spreadPct && spreadPct > 0) || (callbackPct && callbackPct > 0)) {
     next.addPositions = base.addPositions.map((row, i) => ({
       ...row,
-      spread: spreadPct && spreadPct > 0 ? spreadPct * 100 * (i + 1) : row.spread,
+      // L15：spread 生成钳到换算阈值域内（addPositionSpread 阈值 0.5 ↔ UI 50%）。
+      // 超阈值后保存的小数值回填时会被 decimalToPercent 当作"已是百分数"原样
+      // 显示（0.525%），再保存静默缩 100 倍——生成器从源头杜绝越阈。生成值
+      // 舍入 6 位小数（与保存侧 percentToDecimal 同精度），浮点噪声不进表单。
+      spread:
+        spreadPct && spreadPct > 0
+          ? Math.min(Math.round(spreadPct * 100 * (i + 1) * 1e6) / 1e6, PERCENTAGE_FIELD_THRESHOLDS.addPositionSpread * 100)
+          : row.spread,
       callback: callbackPct && callbackPct > 0 ? callbackPct * 100 : row.callback,
     }))
   }

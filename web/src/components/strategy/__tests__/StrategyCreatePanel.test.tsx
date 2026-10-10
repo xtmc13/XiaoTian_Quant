@@ -206,12 +206,14 @@ describe('现货策略类型 → CRA 参数档案联动', () => {
     const agg = SPOT_TYPE_PROFILES.aggressive
     if (agg.kind !== 'ladder') throw new Error('aggressive must be ladder profile')
     expect(agg.addPositions).toHaveLength(10)
-    // 网格 ladder：长度=格数-1，spread 等差
+    // 网格 ladder：档数=格数（order 1..5 全量档，2026-10-10 H3 口径——
+    // order=N=第 N 次补仓、order_count=格数=补仓次数），spread 等差
     const ladder = buildSpotGridLadder(40000, 50000, 5)
-    expect(ladder).toHaveLength(4)
-    // UI 百分比单位：每格 0.2/5=4%
-    expect(ladder.map((a) => a.spread)).toEqual([4, 8, 12, 16])
+    expect(ladder).toHaveLength(5)
+    // UI 百分比单位：每格 0.2/5=4%，最深档 20% 落在区间下沿
+    expect(ladder.map((a) => a.spread)).toEqual([4, 8, 12, 16, 20])
     expect(ladder[0]).toMatchObject({ order: 1, multiplier: 1, callback: 0.3 })
+    expect(ladder[4]).toMatchObject({ order: 5, multiplier: 1 })
   })
 
   it('spot 面板切「马丁趋势」→ 首单额度 20 / 补仓次数 7（CRA 参数跟随）', () => {
@@ -265,7 +267,7 @@ describe('现货网格模式（cra_spot → 网格参数组）', () => {
     expect(screen.getByText('开仓指标（策略选择）')).toBeTruthy()
   })
 
-  it('改格数→提交 config.add_positions 长度=格数-1 且等差；自定义键落库', async () => {
+  it('改格数→提交 config.add_positions 长度=格数且等差（order 1..格数全量档）；自定义键落库', async () => {
     render(<StrategyCreatePanel market="spot" onClose={vi.fn()} onSaved={vi.fn()} />, { wrapper })
     fireEvent.change(screen.getByPlaceholderText('输入策略名称'), { target: { value: '现货网格A' } })
     fireEvent.change(screen.getByPlaceholderText('40000'), { target: { value: '40000' } })
@@ -289,13 +291,15 @@ describe('现货网格模式（cra_spot → 网格参数组）', () => {
     expect(config.price_upper).toBe(50000)
     expect(config.grid_count).toBe(7)
     expect(config.per_grid_amount).toBe(30)
-    // CRA 映射键：ladder 长度=格数-1，spread 等差，每格金额→first_order_amount
+    // CRA 映射键：ladder 档数=格数（order 1..7，order=N=第 N 次补仓，2026-10-10
+    // H3 口径——最深档落在区间下沿，不再由后端马丁默认补第 7 档），spread 等差，
+    // 每格金额→first_order_amount
     expect(config.first_order_amount).toBe(30)
     expect(config.order_count).toBe(7)
     const ladder = config.add_positions as { order: number; spread: number; multiplier: number; callback: number }[]
-    expect(ladder).toHaveLength(6)
+    expect(ladder).toHaveLength(7)
     // 每格步长 = (50000-40000)/50000/7 ≈ 0.285714%（小数）
-    const expected = [1, 2, 3, 4, 5, 6].map((i) => (10000 / 50000 / 7) * i)
+    const expected = [1, 2, 3, 4, 5, 6, 7].map((i) => (10000 / 50000 / 7) * i)
     ladder.forEach((l, idx) => expect(l.spread).toBeCloseTo(expected[idx], 6))
     expect(ladder.every((l) => l.multiplier === 1)).toBe(true)
     expect(ladder[0].callback).toBeCloseTo(0.003, 6)
@@ -377,5 +381,60 @@ describe('表单精简 + 执行设置（模拟盘/实盘选择器回归）', () 
     await waitFor(() => expect(create).toHaveBeenCalledTimes(2))
     const livePayload = create.mock.calls[1][0] as Record<string, unknown>
     expect(livePayload.execution_mode).toBe('live')
+  })
+})
+
+describe('L12/L13：保证金模式与杠杆落 config_json', () => {
+  const create = vi.fn()
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(useStrategyDataModule.useStrategyData).mockReturnValue({
+      create,
+    } as unknown as ReturnType<typeof useStrategyDataModule.useStrategyData>)
+    vi.mocked(configApi.exchangesConfigured).mockResolvedValue(mockConfigured)
+  })
+
+  it('合约表单显示保证金模式选择器，现货不显示', () => {
+    const { unmount } = render(<StrategyCreatePanel market="contract" onClose={vi.fn()} onSaved={vi.fn()} />, { wrapper })
+    expect(screen.getByText('保证金模式')).toBeTruthy()
+    expect(screen.getByText('全仓')).toBeTruthy()
+    expect(screen.getByText('逐仓')).toBeTruthy()
+    unmount()
+    render(<StrategyCreatePanel market="spot" onClose={vi.fn()} onSaved={vi.fn()} />, { wrapper })
+    expect(screen.queryByText('保证金模式')).toBeFalsy()
+  })
+
+  it('合约选逐仓提交：config_json 与顶层 margin_mode 都是 isolated', async () => {
+    render(<StrategyCreatePanel market="contract" onClose={vi.fn()} onSaved={vi.fn()} />, { wrapper })
+    fireEvent.change(screen.getByPlaceholderText('输入策略名称'), { target: { value: '逐仓合约' } })
+    fireEvent.click(screen.getByText('逐仓'))
+    fireEvent.click(screen.getByText('点击选择'))
+    await waitFor(() => expect(screen.getByText('Binance')).toBeTruthy())
+    fireEvent.click(screen.getByText('Binance'))
+    fireEvent.click(screen.getByText('确认选择'))
+    fireEvent.click(screen.getByText('保存策略'))
+    await waitFor(() => expect(create).toHaveBeenCalled())
+    const payload = create.mock.calls[0][0] as Record<string, unknown>
+    expect(payload.margin_mode).toBe('isolated')
+    const config = JSON.parse(payload.config_json as string) as Record<string, unknown>
+    expect(config.margin_mode).toBe('isolated')
+  })
+
+  it('L13：合约经典策略（macd）config_json 带 leverage，与顶层一致', async () => {
+    render(<StrategyCreatePanel market="contract" initialType="macd" onClose={vi.fn()} onSaved={vi.fn()} />, { wrapper })
+    fireEvent.change(screen.getByPlaceholderText('输入策略名称'), { target: { value: 'MACD合约' } })
+    fireEvent.click(screen.getByText('点击选择'))
+    await waitFor(() => expect(screen.getByText('Binance')).toBeTruthy())
+    fireEvent.click(screen.getByText('Binance'))
+    fireEvent.click(screen.getByText('确认选择'))
+    fireEvent.click(screen.getByText('保存策略'))
+    await waitFor(() => expect(create).toHaveBeenCalled())
+    const payload = create.mock.calls[0][0] as Record<string, unknown>
+    expect(payload.strategy_type).toBe('macd')
+    const config = JSON.parse(payload.config_json as string) as Record<string, unknown>
+    // 执行层读 config_json leverage；此前缺失导致"显示 10× 实际 1×"。
+    expect(config.leverage).toBe(payload.leverage)
+    expect(config.leverage).toBe(10)
   })
 })

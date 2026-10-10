@@ -232,9 +232,17 @@ func GetStrategyConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, normalizeStrategyConfig(result))
 }
 
+// runtimePriceSource 运行面板现价来源（生产 = app.LastPriceForDisplay：WS
+// 缓存优先、短超时 REST 兜底，不用合成假价）；抽成包级变量以便测试替换
+// （与 gridPriceSource 同模式）。
+var runtimePriceSource = func(symbol string) float64 {
+	return app.LastPriceForDisplay(symbol)
+}
+
 // GetStrategyRuntime 返回运行中策略的实时状态（运行面板数据源）：
 // status=引擎内策略实例的 RuntimeStatus（未运行/不支持时为 null）、
-// price=币安 WS 最新价（取不到为 0）、config=该策略 config_json 解析结果，
+// price=币安 WS 最新价（WS 订阅表外的 symbol 走 REST 兜底，取不到为 0）、
+// config=该策略 config_json 解析结果，
 // 另附 next_add_distance_pct（下一档补仓距离）与 take_profit_distance_pct
 // （静态止盈距离，可计算时才返回）。
 func GetStrategyRuntime(c *gin.Context) {
@@ -264,7 +272,7 @@ func GetStrategyRuntime(c *gin.Context) {
 			}
 		}
 		if sym != "" {
-			price = appCtx.BinanceWS.GetPrice(sym)
+			price = runtimePriceSource(sym)
 		}
 	}
 
@@ -333,7 +341,10 @@ func computeNextAddDistance(status, config map[string]any, price float64) (float
 	}
 	side, _ := status["direction"].(string)
 	filled := int(getFloat(status, "filled_orders", 0))
-	// 当前价下方（做多）/上方（做空）最近的未触发档位。
+	// 当前价下方（做多）/上方（做空）最近的未触发档位。档位口径与 CRA 引擎
+	// 同源（2026-10-10 H3）：order=N 对应第 N 次补仓——filled_orders=
+	// PositionCount 含首单，已消费的补仓档是 order<filled，下一档=
+	// order==filled（在途补仓仍显示为"下一档"，与旧口径展示行为一致）。
 	best := 0.0
 	found := false
 	for _, it := range ladder {
@@ -342,7 +353,7 @@ func computeNextAddDistance(status, config map[string]any, price float64) (float
 			continue
 		}
 		order := int(getFloat(m, "order", 0))
-		if order <= filled {
+		if order < filled {
 			continue // 已触发
 		}
 		spread := getFloat(m, "spread", 0)
@@ -704,6 +715,44 @@ func flattenCRAParams(body map[string]any) map[string]any {
 var craFormMarkers = []string{
 	"first_order_amount", "first_order_multiplier", "add_positions",
 	"tp_mode", "take_profit_method", "moving_take_profit_tiers", "enable_add_position",
+}
+
+// craParamKeys 是 cra.ParseCRAParams 消费的完整键集（params.go 每个 numFloat/
+// strVal/boolVal/numInt/parse* 读取点）。startStrategyInEngine 的参数注册表
+// 过滤对"携带 CRA 特征键的参数包"按本集合放行——support_rebound/liquidity_heat
+// 等 hasCRAKeys 策略的 registry 不含这些键，只放行 craFormMarkers 会让
+// take_profit_ratio/profit_callback/stop_loss_*/trade_count_mode/loop_count/
+// first_order_price/waterfall_* 等在 Start 前被静默丢弃（止盈比/止损比退回
+// 默认值，stop_loss_ratio>0 自动启用止损的语义失效）。新增 CRA 键时必须同步
+// 本集合（与 params.go ParseCRAParams 的读取清单一一对应）。
+var craParamKeys = []string{
+	// 开仓/循环
+	"first_order_price", "first_order_amount", "first_order_multiplier",
+	"trade_count_mode", "loop_count",
+	// 补仓
+	"enable_add_position", "order_count", "add_positions",
+	// 止盈
+	"take_profit_method", "tp_mode", "take_profit_ratio", "profit_callback",
+	"moving_take_profit_tiers",
+	// 开仓指标（含选择器新键）
+	"open_macd_enabled", "open_macd_period",
+	"open_counter_ema_enabled", "open_counter_ema_period",
+	"open_trend_ema_enabled", "open_trend_ema_period",
+	"open_indicator", "indicator_params",
+	// 补仓指标
+	"add_macd_enabled", "add_macd_period", "add_ema_enabled", "add_ema_period",
+	// 风控/止损
+	"waterfall_enabled", "waterfall_protection",
+	"stop_loss_enabled", "stop_loss_type", "stop_loss_ratio",
+	"stop_loss_amount", "stop_loss_price",
+	// 反向止盈/止损
+	"reverse_take_profit_period", "reverse_stop_loss",
+	// 燃烧
+	"burn_global_enabled", "burn_global_threshold", "burn_global_close_ratio",
+	"burn_dual_enabled", "burn_dual_threshold",
+	// 合约杂项
+	"open_double", "follow_trend", "online_order_limit", "leverage",
+	"direction", "market_type", "position_side", "margin_mode", "selected_exchanges",
 }
 
 // craCompatibleTypes 是接受 CRA 参数包的策略类型：cra_contract/cra_spot 及
@@ -1170,6 +1219,56 @@ func StopStrategyConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
+// filterParamsForStrategy 按策略参数注册表过滤启动参数：只保留 registry
+// 声明的键 + 引擎级键（symbol/timeframe/timeframes/schedule——策略要靠它们
+// 识别交易对、声明多周期供给（A7.1）与计划调度（A7.2）；market_type/category
+// 是执行语义键——经典指标策略靠它判定现货只做多钳制（M9），缺失会把现货
+// 策略当合约双向跑）。registry 为 nil（CRA 引擎等无注册表策略）不过滤。
+// CRA 仓位管理键（support_rebound/liquidity_heat 等声明 hasCRAKeys 的策略）：
+// 不在各策略 registry 里，但 Start 靠键存在性激活 CRA 模式——被过滤会让
+// CRA 静默不生效（222 实证：配置全套 CRA 键，运行时 cra_enabled=False，
+// 补仓/移动止盈从未真正跑过）。参数包带任一 CRA 特征键即按 craParamKeys
+// 全集放行（M7：此前只放行 7 个特征键 + order_count，take_profit_ratio/
+// profit_callback/stop_loss_*/trade_count_mode/loop_count/first_order_price/
+// waterfall_* 被静默丢弃，引擎拿到的全是默认值——support_rebound 配
+// stop_loss_ratio=5% 启动后止损从未生效）。
+func filterParamsForStrategy(s strategy.Strategy, params map[string]any) map[string]any {
+	registry := s.GetParameters()
+	if registry == nil {
+		return params
+	}
+	engineKeys := map[string]bool{"symbol": true, "timeframe": true, "timeframes": true, "schedule": true, "market_type": true, "category": true}
+	filtered := make(map[string]any)
+	for _, p := range registry.All() {
+		if v, ok := params[p.Name]; ok {
+			filtered[p.Name] = v
+		}
+	}
+	for k, v := range params {
+		if engineKeys[strings.ToLower(k)] {
+			filtered[k] = v
+		}
+	}
+	craPack := false
+	for _, k := range craFormMarkers {
+		if _, ok := params[k]; ok {
+			craPack = true
+			break
+		}
+	}
+	if craPack {
+		for _, k := range craParamKeys {
+			if v, ok := params[k]; ok {
+				filtered[k] = v
+			}
+		}
+	}
+	if v, ok := params["order_count"]; ok {
+		filtered["order_count"] = v
+	}
+	return filtered
+}
+
 // startStrategyInEngine registers and starts a strategy instance in the engine.
 func startStrategyInEngine(id string, item map[string]any) error {
 	strategyType, _ := item["strategy_type"].(string)
@@ -1220,35 +1319,7 @@ func startStrategyInEngine(id string, item map[string]any) error {
 
 	// Filter params to only those accepted by the strategy's parameter registry.
 	// CRA-style configs carry many frontend fields that indicator strategies do not declare.
-	// 引擎级键（symbol/timeframe/timeframes/schedule）始终保留：策略要靠它们
-	// 识别交易对、声明多周期供给（A7.1）与计划调度（A7.2）。
-	if registry := s.GetParameters(); registry != nil {
-		engineKeys := map[string]bool{"symbol": true, "timeframe": true, "timeframes": true, "schedule": true}
-		filtered := make(map[string]any)
-		for _, p := range registry.All() {
-			if v, ok := params[p.Name]; ok {
-				filtered[p.Name] = v
-			}
-		}
-		for k, v := range params {
-			if engineKeys[strings.ToLower(k)] {
-				filtered[k] = v
-			}
-		}
-		// CRA 仓位管理键（support_rebound/liquidity_heat 等声明 hasCRAKeys
-		// 的策略）：不在各策略 registry 里，但 Start 靠键存在性激活 CRA 模式——
-		// 被过滤会让 CRA 静默不生效（222 实证：配置全套 CRA 键，运行时
-		// cra_enabled=False，补仓/移动止盈从未真正跑过）。见 commit 修复记录。
-		for _, k := range craFormMarkers {
-			if v, ok := params[k]; ok {
-				filtered[k] = v
-			}
-		}
-		if v, ok := params["order_count"]; ok {
-			filtered["order_count"] = v
-		}
-		params = filtered
-	}
+	params = filterParamsForStrategy(s, params)
 
 	// 策略级 protections（config_json["protections"]，hyperopt epoch 回写）：
 	// 配置非法拒绝启动——静默裸奔比明确报错更危险。
@@ -1351,17 +1422,30 @@ func startStrategyInEngine(id string, item map[string]any) error {
 		_ = eng.Unregister(id) // Unregister 一并释放策略级 protection manager
 		return fmt.Errorf("start strategy: %w", err)
 	}
+	// 实时行情订阅随策略扩展：WS 启动列表只覆盖少数硬编码币种，其余 symbol
+	// 的 tick 永不到达——CRA 防瀑布（OnTick）与运行面板现价对它们失效。
+	// 启动时确保策略 symbol 已订阅（连接中动态 SUBSCRIBE，断线并入重连订阅表）。
+	if a := app.Get(); a != nil && a.BinanceWS != nil {
+		a.BinanceWS.EnsureSymbol(wrapped.Symbol())
+	}
 	// 引擎订阅的 topic 是 wrapped.Symbol()（Start 应用参数后的值），
 	// K 线供给管必须按同一 symbol 发布，策略的 OnBar 才收得到。
 	timeframe, _ := item["timeframe"].(string)
 	if fresh := ensureKlineFeed(id, wrapped.Symbol(), timeframe); !fresh {
 		// 供给管已在运行（其他策略共用），不会有历史回补推给本策略。
-		// 直接喂最近 100 根已闭合 K 线暖机：只吃 K 线养指标状态，信号丢弃，
-		// 实盘信号等下一根真实 K 线（否则新策略最长要干等一个完整周期）。
+		// 直接喂最近 100 根已闭合 K 线暖机（H4 统一口径）：实现 Warmupper
+		// 的策略只养指标序列、不动持仓状态（虚持仓/PendingAddCount 虚挂
+		// 修复——此前直调 OnBar 丢弃信号但状态已迁移）；未实现的策略维持
+		// 原样直调 OnBar，信号丢弃，实盘信号等下一根真实 K 线。
 		if klineFeeder != nil {
 			if bars, err := klineFeeder.RecentClosedBars(wrapped.Symbol(), timeframe, 100); err == nil && len(bars) > 0 {
+				w, isWarmupper := strategy.UnwrapStrategy(wrapped).(strategy.Warmupper)
 				for _, b := range bars {
-					_, _ = wrapped.OnBar(b, nil)
+					if isWarmupper {
+						w.OnWarmupBar(b)
+					} else {
+						_, _ = wrapped.OnBar(b, nil)
+					}
 				}
 				log.Printf("[KlineFeed] direct warmup %d bars for strategy %s (%s %s)",
 					len(bars), id, wrapped.Symbol(), timeframe)

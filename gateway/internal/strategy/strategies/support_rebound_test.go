@@ -440,8 +440,9 @@ func TestSupportReboundLifecycle(t *testing.T) {
 // add_positions/take_profit_method/moving_take_profit_tiers/stop_loss_ratio），
 // 启用后入场/补仓/止盈/止损联动 cra.CRAState，未启用时保持原固定止损行为。
 
-// srCRAOverrides 构造基础 CRA 参数：首单 100U、3 单补仓梯度
-// （#2 跌 5% 补 2 倍、#3 跌 8% 补 4 倍）、静态止盈 full +3%。
+// srCRAOverrides 构造基础 CRA 参数：首单 100U、3 次补仓梯度
+// （#1 跌 5% 补 2 倍、#2 跌 8% 补 4 倍——order=N=第 N 次补仓，
+// 2026-10-10 H3 口径）、静态止盈 full +3%。
 func srCRAOverrides() map[string]any {
 	return map[string]any{
 		"first_order_amount":  100.0,
@@ -452,9 +453,9 @@ func srCRAOverrides() map[string]any {
 		"enable_add_position": true,
 		"order_count":         3,
 		"add_positions": []any{
-			map[string]any{"order": 1, "multiplier": 1.0, "spread": 0.0, "callback": 0.0},
-			map[string]any{"order": 2, "multiplier": 2.0, "spread": 0.05, "callback": 0.005},
-			map[string]any{"order": 3, "multiplier": 4.0, "spread": 0.08, "callback": 0.005},
+			map[string]any{"order": 1, "multiplier": 2.0, "spread": 0.05, "callback": 0.005},
+			map[string]any{"order": 2, "multiplier": 4.0, "spread": 0.08, "callback": 0.005},
+			map[string]any{"order": 3, "multiplier": 8.0, "spread": 0.12, "callback": 0.005},
 		},
 	}
 }
@@ -504,7 +505,7 @@ func TestSupportReboundNoCRAKeysBackwardCompatible(t *testing.T) {
 }
 
 // TestSupportReboundCRAAddLadder CRA 补仓梯度：首单 stake=100；跌 5% 后
-// 回调触发 #2（Qty=200/price），跌 8% 后回调触发 #3（Qty=400/price）。
+// 回调触发 #1（Qty=200/price），跌 8% 后回调触发 #2（Qty=400/price）。
 func TestSupportReboundCRAAddLadder(t *testing.T) {
 	s := newStartedSupportRebound(t, srCRAOverrides())
 	if !s.craEnabled || s.craParams == nil || s.craState == nil {
@@ -529,7 +530,7 @@ func TestSupportReboundCRAAddLadder(t *testing.T) {
 		t.Fatalf("cra avg entry = %f, want 106", s.craState.AvgEntryPrice)
 	}
 
-	// 补仓 #2：跌穿 5%（收 100.6，−5.1%）激活，再创低 99.0 后回调 ≥0.5% 触发。
+	// 补仓 #1：跌穿 5%（收 100.6，−5.1%）激活，再创低 99.0 后回调 ≥0.5% 触发。
 	if sigs := feedSupportReboundBars(s, srTestBar(101, 101.5, 100.4, 100.6, 100)); len(sigs) != 0 {
 		t.Fatalf("signal on spread-touch bar, want none (arming): %+v", sigs[0])
 	}
@@ -541,22 +542,22 @@ func TestSupportReboundCRAAddLadder(t *testing.T) {
 	}
 	sigs := feedSupportReboundBars(s, srTestBar(99.0, 99.7, 98.9, 99.55, 100))
 	if len(sigs) != 1 || sigs[0].Direction != "LONG" {
-		t.Fatalf("add #2 signal = %+v", sigs)
+		t.Fatalf("add #1 signal = %+v", sigs)
 	}
-	if !strings.Contains(sigs[0].Reason, "cra add position #2") {
-		t.Fatalf("add #2 reason = %q", sigs[0].Reason)
+	if !strings.Contains(sigs[0].Reason, "cra add position #1") {
+		t.Fatalf("add #1 reason = %q", sigs[0].Reason)
 	}
 	if want := 200.0 / 99.55; math.Abs(sigs[0].Qty-math.Round(want*1000)/1000) > 1e-9 {
-		t.Fatalf("add #2 qty = %f, want RoundQty(200/99.55)=%f", sigs[0].Qty, math.Round(want*1000)/1000)
+		t.Fatalf("add #1 qty = %f, want RoundQty(200/99.55)=%f", sigs[0].Qty, math.Round(want*1000)/1000)
 	}
 	if s.craState.PendingAddCount != 1 {
 		t.Fatalf("PendingAddCount = %d, want 1 after add signal", s.craState.PendingAddCount)
 	}
 
-	// #2 成交回填后再跌 8% 触发 #3。
+	// #1 成交回填后再跌 8% 触发 #2。
 	srCRAFillBuy(t, s, 99.55, 200.0/99.55)
 	if s.craState.PositionCount != 2 || s.craState.PendingAddCount != 0 {
-		t.Fatalf("after add #2 fill: count/pending = %d/%d", s.craState.PositionCount, s.craState.PendingAddCount)
+		t.Fatalf("after add #1 fill: count/pending = %d/%d", s.craState.PositionCount, s.craState.PendingAddCount)
 	}
 	if sigs := feedSupportReboundBars(s, srTestBar(98.0, 98.2, 96.4, 97.4, 100)); len(sigs) != 0 {
 		t.Fatalf("signal on 8%% spread touch, want none (arming): %+v", sigs[0])
@@ -565,11 +566,11 @@ func TestSupportReboundCRAAddLadder(t *testing.T) {
 		t.Fatalf("signal on deeper low, want none (below callback): %+v", sigs[0])
 	}
 	sigs = feedSupportReboundBars(s, srTestBar(96.0, 96.8, 95.9, 96.5, 100))
-	if len(sigs) != 1 || sigs[0].Direction != "LONG" || !strings.Contains(sigs[0].Reason, "cra add position #3") {
-		t.Fatalf("add #3 signal = %+v", sigs)
+	if len(sigs) != 1 || sigs[0].Direction != "LONG" || !strings.Contains(sigs[0].Reason, "cra add position #2") {
+		t.Fatalf("add #2 signal = %+v", sigs)
 	}
 	if want := 400.0 / 96.5; math.Abs(sigs[0].Qty-math.Round(want*1000)/1000) > 1e-9 {
-		t.Fatalf("add #3 qty = %f, want RoundQty(400/96.5)=%f", sigs[0].Qty, math.Round(want*1000)/1000)
+		t.Fatalf("add #2 qty = %f, want RoundQty(400/96.5)=%f", sigs[0].Qty, math.Round(want*1000)/1000)
 	}
 }
 
@@ -681,7 +682,7 @@ func TestSupportReboundCRAOnOrderUpdateBackfill(t *testing.T) {
 	if math.Abs(s.craState.AvgEntryPrice-101.7) > 1e-9 {
 		t.Fatalf("AvgEntryPrice = %f, want 101.7", s.craState.AvgEntryPrice)
 	}
-	// 下一档（#3）补仓触发价 = 基准价 106×(1−8%) = 97.52。
+	// 下一档（#2）补仓触发价 = 基准价 106×(1−8%) = 97.52（order=N=第 N 次补仓）。
 	rs := s.RuntimeStatus()
 	if rs["cra_enabled"] != true || rs["cra_position_count"] != 2 {
 		t.Fatalf("RuntimeStatus CRA fields = %v", rs)
@@ -689,8 +690,8 @@ func TestSupportReboundCRAOnOrderUpdateBackfill(t *testing.T) {
 	if math.Abs(rs["cra_avg_entry_price"].(float64)-101.7) > 1e-9 {
 		t.Fatalf("RuntimeStatus avg = %v, want 101.7", rs["cra_avg_entry_price"])
 	}
-	if rs["cra_next_add_order"] != 3 || math.Abs(rs["cra_next_add_price"].(float64)-97.52) > 1e-9 {
-		t.Fatalf("RuntimeStatus next add = %v/%v, want 3/97.52",
+	if rs["cra_next_add_order"] != 2 || math.Abs(rs["cra_next_add_price"].(float64)-97.52) > 1e-9 {
+		t.Fatalf("RuntimeStatus next add = %v/%v, want 2/97.52",
 			rs["cra_next_add_order"], rs["cra_next_add_price"])
 	}
 

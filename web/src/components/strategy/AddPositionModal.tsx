@@ -8,6 +8,8 @@ interface AddPositionModalProps {
   value: AddPositionItem[]
   onChange: (next: AddPositionItem[]) => void
   disabled?: boolean
+  /** 档级 EMA 确认列（仅合约传入 true；引擎只给合约评估补仓指标）。 */
+  showEma?: boolean
 }
 
 export function AddPositionModal({
@@ -16,6 +18,7 @@ export function AddPositionModal({
   value,
   onChange,
   disabled = false,
+  showEma = false,
 }: AddPositionModalProps) {
   if (!open) return null
 
@@ -55,7 +58,13 @@ export function AddPositionModal({
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-6">
-          <AddPositionTable value={value} onChange={onChange} disabled={disabled} />
+          <AddPositionTable value={value} onChange={onChange} disabled={disabled} showEma={showEma} />
+          {showEma && (
+            <div className="text-[10px] text-muted-foreground mt-3 leading-relaxed">
+              EMA 确认为双闸：档级开关（本表）与补仓设置区的全局「补仓 EMA 确认」同时开启时，该档补仓才要求
+              EMA 确认（金叉或收盘价站上慢线）才下单；任一关闭则该档不评估 EMA。
+            </div>
+          )}
         </div>
 
         {/* Footer */}

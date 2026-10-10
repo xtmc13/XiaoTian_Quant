@@ -105,17 +105,29 @@ describe('strategyUtils', () => {
         { order: 3, multiplier: 4, spread: 7, callback: 0.5 },
       ]
       // first = 10 * 1 = 10; total = 10 + 10*1 + 10*2 + 10*4 = 80
-      expect(calculateAddPositionTotal(10, 1, addPositions)).toBe(80)
+      expect(calculateAddPositionTotal(10, 1, addPositions, 3)).toBe(80)
     })
 
     it('applies first order multiplier', () => {
       const addPositions: AddPositionItem[] = [{ order: 1, multiplier: 1, spread: 3.5, callback: 0.3 }]
       // first = 10 * 2 = 20; total = 20 + 20*1 = 40
-      expect(calculateAddPositionTotal(10, 2, addPositions)).toBe(40)
+      expect(calculateAddPositionTotal(10, 2, addPositions, 1)).toBe(40)
     })
 
     it('returns first order total when no add positions', () => {
-      expect(calculateAddPositionTotal(100, 1, [])).toBe(100)
+      expect(calculateAddPositionTotal(100, 1, [], 7)).toBe(100)
+    })
+
+    it('只计会被消费的档：order 超出 order_count 的配置行不计入（H3 口径）', () => {
+      const addPositions: AddPositionItem[] = [
+        { order: 1, multiplier: 1, spread: 3.5, callback: 0.3 },
+        { order: 2, multiplier: 2, spread: 5, callback: 0.5 },
+        { order: 3, multiplier: 4, spread: 7, callback: 0.5 }, // 不会被消费
+      ]
+      // orderCount=2 → 引擎只消费 order 1..2：total = 10 + 10*1 + 10*2 = 40
+      expect(calculateAddPositionTotal(10, 1, addPositions, 2)).toBe(40)
+      // orderCount=0（关闭补仓）→ 只有首单
+      expect(calculateAddPositionTotal(10, 1, addPositions, 0)).toBe(10)
     })
   })
 
@@ -265,5 +277,37 @@ describe('applyServerStrategyDefaults（服务端默认参数兜底）', () => {
       applyServerStrategyDefaults(base, { market: 'spot', strategyType: 'cra_spot', defaults: { strategies: [] } })
     ).toBe(base)
     expect(applyServerStrategyDefaults(base, { market: 'spot', strategyType: 'martin_trend', defaults: null })).toBe(base)
+  })
+
+  it('L15：深梯子 spread 生成钳到换算阈值内（orderCount≥15 回填不再缩 100 倍）', async () => {
+    const { applyServerStrategyDefaults, createDefaultCRAParams } = await import('./strategyUtils')
+    const { percentToDecimal, decimalToPercent, PERCENTAGE_FIELD_THRESHOLDS } = await import('./craPercentUtils')
+    // 15 档梯子 + 服务端 add_position_spread=3.5%：修复前最深档 52.5% 超
+    // addPositionSpread 阈值（0.5），落库 0.525 回填显示 0.525%、再保存缩 100 倍。
+    const base = {
+      ...createDefaultCRAParams('spot'),
+      addPositions: Array.from({ length: 15 }, (_, i) => ({
+        order: i + 1,
+        multiplier: 1,
+        spread: 3.5 * (i + 1),
+        callback: 0.5,
+      })),
+    }
+    const next = applyServerStrategyDefaults(base, {
+      market: 'spot',
+      strategyType: 'martin_trend',
+      defaults: {
+        strategies: [{ key: 'martin_trend_v2', parameters: { add_position_spread: 0.035 } }],
+      },
+    })
+    const cap = PERCENTAGE_FIELD_THRESHOLDS.addPositionSpread * 100
+    // 浅档不钳（1 档 = 3.5%、14 档 = 49%），最深档（52.5%）钳到 50%。
+    expect(next.addPositions[0].spread).toBeCloseTo(3.5)
+    expect(next.addPositions[13].spread).toBeCloseTo(49)
+    expect(next.addPositions[14].spread).toBe(cap)
+    // 闭环稳定：钳后值 保存→回填 不再漂移。
+    for (const p of next.addPositions) {
+      expect(decimalToPercent(percentToDecimal(p.spread), PERCENTAGE_FIELD_THRESHOLDS.addPositionSpread)).toBe(p.spread)
+    }
   })
 })

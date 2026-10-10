@@ -42,4 +42,24 @@ describe('AddPositionModal', () => {
     const { container } = render(<AddPositionModal {...baseProps} open={false} />)
     expect(container.firstChild).toBeNull()
   })
+
+  // ── M5：档级 EMA 确认列（仅合约 showEma=true 时渲染；与全局开关双闸）──
+
+  it('hides EMA column by default (spot/无 showEma)', () => {
+    render(<AddPositionModal {...baseProps} />)
+    expect(screen.queryByText('EMA 确认')).toBeNull()
+  })
+
+  it('shows per-tier EMA switch when showEma and toggles emaEnabled', () => {
+    const onChange = vi.fn()
+    render(<AddPositionModal {...baseProps} showEma onChange={onChange} />)
+    expect(screen.getByText('EMA 确认')).toBeTruthy()
+    const checkbox = screen.getByLabelText('第 1 次补仓 EMA 确认') as HTMLInputElement
+    expect(checkbox.checked).toBe(false)
+    fireEvent.click(checkbox)
+    expect(onChange).toHaveBeenCalled()
+    const next = onChange.mock.calls[0][0] as AddPositionItem[]
+    expect(next[0].emaEnabled).toBe(true)
+    expect(next[1].emaEnabled ?? false).toBe(false)
+  })
 })

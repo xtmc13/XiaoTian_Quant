@@ -18,8 +18,9 @@ import { Activity, AlertTriangle, CheckCircle2, Globe } from 'lucide-react'
  * config_json 双键设计（回填时自定义键优先）：
  * - 自定义键：price_lower / price_upper / grid_count / per_grid_amount /
  *   loop_mode / fee_rate（UI 显示与回填的数据源）；
- * - CRA 引擎映射键：first_order_amount=每格金额、order_count=格数、
- *   add_positions=由区间/格数生成的等差下跌补仓 ladder（spread_i = i×单格跌幅），
+ * - CRA 引擎映射键：first_order_amount=每格金额、order_count=格数（=补仓次数）、
+ *   add_positions=由区间/格数生成的等差下跌补仓 ladder（order 1..gridCount，
+ *   spread_i = i×单格跌幅，最深档落在区间下沿），
  *   take_profit_ratio=单格跌幅（一格利润即止盈）、direction 固定 long ——
  *   保证 cra_spot 引擎无需改动即可真实跑起来（区间下沿即 ladder 末端，作
  *   止损参考语义）。
@@ -125,7 +126,9 @@ export const SpotStrategyForm = forwardRef<SpotStrategyFormRef, SpotStrategyForm
   const [executionMode, setExecutionMode] = useState<'paper' | 'live'>(initial?.executionMode ?? 'paper')
   const [notifyChannels, setNotifyChannels] = useState<string[]>(initial?.notifyChannels ?? ['browser'])
 
-  const totalInvestment = perGridAmount * gridCount
+  // 预计总投入 = 首单（每格金额）+ gridCount 档补仓（等倍）：首单占顶格，
+  // 区间均分 gridCount 格逐格补仓到下沿，共 gridCount+1 笔。
+  const totalInvestment = perGridAmount * (gridCount + 1)
 
   const handleIndicatorChange = (sel: IndicatorSelection) => {
     setIndicator(sel.indicator)
@@ -148,8 +151,13 @@ export const SpotStrategyForm = forwardRef<SpotStrategyFormRef, SpotStrategyForm
     setIsSubmitting(true)
     try {
       // 单格跌幅（小数）：价格从上限跌到下限均分为 gridCount 格。
+      // 档数=格数（order 1..gridCount，与引擎"order=N=第 N 次补仓、
+      // order_count=补仓次数"口径一致，2026-10-10 H3）：首单占顶格，N 档
+      // 逐格补到区间下沿——修复前只生成 gridCount-1 档，最深档由后端
+      // fillMissingAddPositions 用马丁默认值补齐（5 格时第 5 档=16×/11%
+      // 差价，网格末格变马丁巨单）。
       const stepPct = (upper - lower) / upper / gridCount
-      const ladder = Array.from({ length: gridCount - 1 }, (_, i) => ({
+      const ladder = Array.from({ length: gridCount }, (_, i) => ({
         order: i + 1,
         multiplier: 1,
         spread: stepPct * (i + 1),

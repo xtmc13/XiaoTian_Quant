@@ -25,7 +25,7 @@ describe('indicatorPresets（纯函数）', () => {
     expect(cfg.indicator_params).toEqual({ macd: { fast: 12, slow: 26, signal: 9, period: '5m' } })
   })
 
-  it('buildOpenIndicatorConfig: rsi 无引擎门槛键，仅新键', () => {
+  it('buildOpenIndicatorConfig: rsi 落 open_indicator+indicator_params（引擎按新键执行真实门槛）', () => {
     const cfg = buildOpenIndicatorConfig('rsi', { period: 14, oversold: 30, overbought: 70 }, null)
     expect(cfg.open_macd_enabled).toBe(false)
     expect(cfg.open_trend_ema_enabled).toBe(false)
@@ -58,6 +58,27 @@ describe('indicatorPresets（纯函数）', () => {
     expect(detectOpenIndicator({ open_macd_enabled: true }).indicator).toBe('macd')
     expect(detectOpenIndicator({ open_trend_ema_enabled: true }).indicator).toBe('trend')
     expect(detectOpenIndicator({}).indicator).toBe('none')
+  })
+
+  it('L16: counter 语义闭环——旧键回退 ema_counter，再保存仍是逆势门槛', () => {
+    // 旧配置只有 enabled 键：回退必须显示为逆势指标（修复前显示 ema_cross，
+    // 再保存经选择器派生写成 open_trend_ema_enabled，逆势→顺势静默漂移）。
+    const det = detectOpenIndicator({ open_counter_ema_enabled: true, open_counter_ema_period: '15m' })
+    expect(det.indicator).toBe('ema_counter')
+    // 再保存（选择器派生）：counter 键保持 true，trend 键不置位。
+    const cfg = buildOpenIndicatorConfig(det.indicator, det.params, det.custom)
+    expect(cfg.open_counter_ema_enabled).toBe(true)
+    expect(cfg.open_trend_ema_enabled).toBe(false)
+    expect(cfg.open_indicator).toBe('ema_counter')
+    // 新键直读：open_indicator='ema_counter' 回显同指标与自定义参数。
+    const det2 = detectOpenIndicator({ open_indicator: 'ema_counter', indicator_params: { ema_counter: { fast: 8 } } })
+    expect(det2.indicator).toBe('ema_counter')
+    expect(det2.params.fast).toBe(8)
+    // 完整往返：build→detect 语义不变。
+    const round = detectOpenIndicator(buildOpenIndicatorConfig('ema_counter', { fast: 9, slow: 30, period: '1h' }, null) as unknown as Record<string, unknown>)
+    expect(round.indicator).toBe('ema_counter')
+    expect(round.params.fast).toBe(9)
+    expect(round.params.period).toBe('1h')
   })
 
   it('validateIndicatorValues: 非正数报错，fast≥slow 仅提示', () => {

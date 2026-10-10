@@ -5,6 +5,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/xiaotian-quant/gateway/internal/event"
 	"github.com/xiaotian-quant/gateway/internal/metrics"
@@ -170,6 +171,11 @@ type Engine struct {
 	// adjCounts 记录每策略当前持仓的加仓次数（持仓归零时清零，
 	// MaxPositionAdjustmentsProvider 的上限按此判定；减仓不计入）。
 	adjCounts map[string]int
+
+	// startedAt 记录每策略本次 Start 完成的时刻（Unix ms，H4 暖机语义）：
+	// dispatch 对实现 Warmupper 的策略把收盘时刻早于该时刻的历史回补 bar
+	// 路由进 OnWarmupBar（只养指标），而非 OnBar（会下单/迁移状态）。
+	startedAt map[string]int64
 }
 
 var (
@@ -190,6 +196,7 @@ func GetEngine(bus *event.EventBus) *Engine {
 			universes:           make(map[string]*universeState),
 			scheduled:           make(map[string]*scheduledEntry),
 			adjCounts:           make(map[string]int),
+			startedAt:           make(map[string]int64),
 			strategyProtections: make(map[string]*protection.ProtectionManager),
 		}
 	})
@@ -355,6 +362,7 @@ func (e *Engine) Unregister(name string) error {
 	}
 	delete(e.subSym, name)
 	delete(e.strategies, name)
+	delete(e.startedAt, name)
 	delete(e.strategyProtections, name) // 策略级 protection 随注销释放
 	e.mu.Unlock()
 
@@ -373,6 +381,14 @@ func (e *Engine) Start(name string, params map[string]any) error {
 	if err := s.Start(params); err != nil {
 		return err
 	}
+	// 记录本次启动时刻（H4）：实现 Warmupper 的策略，收盘早于此时的历史
+	// 回补 bar 走暖机分支。重入 Start 覆盖旧值（暖机窗口按最近一次启动算）。
+	e.mu.Lock()
+	if e.startedAt == nil { // 防御：struct 字面量构造的引擎（测试）
+		e.startedAt = make(map[string]int64)
+	}
+	e.startedAt[name] = time.Now().UnixMilli()
+	e.mu.Unlock()
 	// 参数应用后 symbol 可能与注册时的默认不同：校正事件订阅 topic。
 	e.resubscribeIfSymbolChanged(name, s)
 	// 多周期供给 / 计划调度 / 动态 universe 的启用与资源记账
@@ -500,6 +516,20 @@ func (e *Engine) dispatch(s Strategy, evt event.Event) {
 			if _, multi := core.(UniverseProvider); !multi && evt.Symbol != "" {
 				if sym := strings.ToUpper(strings.TrimSpace(s.Symbol())); sym != "" &&
 					!strings.EqualFold(evt.Symbol, sym) {
+					break
+				}
+			}
+			// H4 暖机语义：实现 Warmupper 的策略，收盘早于本次启动时刻的历史
+			// 回补 bar 只养指标（OnWarmupBar），不进 OnBar——否则 feeder 回补
+			// 100 根的第一根历史 bar 就会按陈旧价 EnterPosition+发单
+			// （2026-10-10 全链审计实证）。暖机 bar 不驱动 universe 刷新与
+			// adjust_trade_position（都是交易行为），也不产生信号。
+			if w, ok2 := core.(Warmupper); ok2 {
+				e.mu.RLock()
+				startedAt := e.startedAt[s.Name()]
+				e.mu.RUnlock()
+				if isWarmupBar(bar, startedAt) {
+					w.OnWarmupBar(bar)
 					break
 				}
 			}

@@ -16,6 +16,50 @@ import (
 // ── EMACrossStrategy ───────────────────────────────────────────
 // Enters when fast EMA crosses above/below slow EMA.
 
+// classicPosition 四个经典指标策略（EMA/MACD/RSI/Bollinger）共用的最小持仓
+// 状态与重启恢复（M10：MACD 2026-10-04 的恢复语义推广到其余三个）：handler
+// 按本地成交账本净持仓注入 restored_position_*，认领后 inPosition=true，
+// 暖机重放只管理已有仓（SL/TP），不再重复入场。
+type classicPosition struct {
+	inPosition bool
+	entryPrice float64
+	direction  string
+	// spotOnly 现货只做多钳制（M9）：现货无持仓卖出会被交易所拒绝，反向交叉
+	// 直接发 SHORT 会让 inPosition 永不复位（策略永久"持仓中"）。显式现货
+	// （market_type=spot / category=spot）才钳；未声明市场的回测/直调参数
+	// 保持双向历史行为不变。
+	spotOnly bool
+}
+
+// restore 重启仓位重建。direction 为持仓方向（"LONG"/"SHORT"，空值按
+// LONG——RestorePosition 直调路径无方向参数，保持净多历史默认；生产路径经
+// Start 注入 restored_position_side，空单按账本符号如实恢复）。
+func (p *classicPosition) restore(qty, avgPrice float64, direction string) {
+	p.inPosition = true
+	p.entryPrice = avgPrice
+	p.direction = "LONG"
+	if direction == "SHORT" {
+		p.direction = "SHORT"
+	}
+	if p.entryPrice <= 0 {
+		p.entryPrice = 0.01 // 无均价时的占位（checkExit 需要非零基准）
+	}
+}
+
+// classicSpotOnly 判定启动参数是否为现货语义：显式 spot 钳制；
+// swap/futures/margin 或 category=contract 为合约（双向）；缺省不钳。
+func classicSpotOnly(m map[string]any) bool {
+	mt, _ := m["market_type"].(string)
+	switch strings.ToLower(strings.TrimSpace(mt)) {
+	case "spot":
+		return true
+	case "swap", "futures", "margin":
+		return false
+	}
+	cat, _ := m["category"].(string)
+	return strings.EqualFold(strings.TrimSpace(cat), "spot")
+}
+
 type EMACrossStrategy struct {
 	strategy.BaseStrategy
 	name    string
@@ -29,10 +73,8 @@ type EMACrossStrategy struct {
 	takeProfitPct float64
 	positionSize  float64
 
-	bars       []model.Bar
-	inPosition bool
-	entryPrice float64
-	direction  string
+	bars []model.Bar
+	classicPosition
 
 	params *strategy.ParamRegistry
 }
@@ -86,7 +128,27 @@ func (s *EMACrossStrategy) Start(params map[string]any) error {
 		s.fastPeriod = 12
 		s.slowPeriod = 26
 	}
+	// 重启仓位重建（与 MACD 同语义，M10）：handler 按账本净持仓注入
+	// restored_position_*，认领后暖机重放只管理已有仓，不再重复入场。
+	if q, ok := params["restored_position_qty"].(float64); ok && q > 0 {
+		v, _ := params["restored_position_vwap"].(float64)
+		dir := "LONG"
+		if sd, _ := params["restored_position_side"].(string); sd == "short" {
+			dir = "SHORT"
+		}
+		s.classicPosition.restore(q, v, dir)
+		log.Printf("[ema_cross] %s 重启仓位重建: qty=%.6f vwap=%.2f direction=%s", s.symbol, q, v, s.direction)
+	}
 	s.running = true
+	return nil
+}
+
+// RestorePosition PositionRestorer 接口（引擎/工具链直调路径，无方向参数，
+// 按净多恢复；生产方向感知的重建走 Start 的 restored_position_side 注入）。
+func (s *EMACrossStrategy) RestorePosition(qty, avgPrice float64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.classicPosition.restore(qty, avgPrice, "LONG")
 	return nil
 }
 
@@ -122,6 +184,7 @@ func (s *EMACrossStrategy) ApplyParams(m map[string]any) error {
 	if p := s.params.Get("position_size"); p != nil {
 		s.positionSize = p.GetFloat()
 	}
+	s.spotOnly = classicSpotOnly(m)
 	return nil
 }
 func (s *EMACrossStrategy) ParamDefs() []map[string]any {
@@ -183,6 +246,11 @@ func (s *EMACrossStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Sig
 		return &model.Signal{Symbol: s.symbol, Direction: "LONG", Strength: 0.7, Strategy: s.name, Reason: "EMA golden cross"}, nil
 	}
 	if prevFast >= prevSlow && fastEMA < slowEMA {
+		if s.spotOnly {
+			// 现货只做多（M9）：死亡交叉不开空——无持仓卖出被拒会让
+			// inPosition 永不复位，策略永久卡死。
+			return nil, nil
+		}
 		s.inPosition = true
 		s.entryPrice = bar.Close
 		s.direction = "SHORT"
@@ -231,10 +299,8 @@ type MACDStrategy struct {
 	takeProfitPct float64
 	positionSize  float64
 
-	bars       []model.Bar
-	inPosition bool
-	entryPrice float64
-	direction  string
+	bars []model.Bar
+	classicPosition
 
 	// 最近信号（RuntimeStatus 展示用）：时间与方向，信号产生时更新。
 	lastSignalTime      int64 // Unix 毫秒
@@ -313,17 +379,9 @@ func (s *MACDStrategy) Start(params map[string]any) error {
 // restorePositionLocked 重启仓位重建实现。须持锁。direction 为持仓方向
 // （"LONG"/"SHORT"，空值按 LONG——RestorePosition 直调路径无方向参数，
 // 保持净多历史默认；生产路径经 Start 注入 restored_position_side，空单
-// 按账本符号如实恢复）。
+// 按账本符号如实恢复）。M10 起状态迁移逻辑由 classicPosition 共享承载。
 func (s *MACDStrategy) restorePositionLocked(qty, avgPrice float64, direction string) {
-	s.inPosition = true
-	s.entryPrice = avgPrice
-	s.direction = "LONG"
-	if direction == "SHORT" {
-		s.direction = "SHORT"
-	}
-	if s.entryPrice <= 0 {
-		s.entryPrice = 0.01 // 无均价时的占位（checkExit 需要非零基准）
-	}
+	s.classicPosition.restore(qty, avgPrice, direction)
 	log.Printf("[macd] %s 重启仓位重建: qty=%.6f vwap=%.2f direction=%s", s.name, qty, avgPrice, s.direction)
 }
 
@@ -371,6 +429,7 @@ func (s *MACDStrategy) ApplyParams(m map[string]any) error {
 	if p := s.params.Get("position_size"); p != nil {
 		s.positionSize = p.GetFloat()
 	}
+	s.spotOnly = classicSpotOnly(m)
 	return nil
 }
 func (s *MACDStrategy) ParamDefs() []map[string]any {
@@ -453,6 +512,10 @@ func (s *MACDStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Signal,
 		return &model.Signal{Symbol: s.symbol, Direction: "LONG", Strength: 0.75, Strategy: s.name, Reason: "MACD bullish crossover"}, nil
 	}
 	if prevMACD >= prevSignal && macdLine < signalLine {
+		if s.spotOnly {
+			// 现货只做多（M9）：死叉不开空（无持仓卖出被拒会永久卡死）。
+			return nil, nil
+		}
 		s.inPosition = true
 		s.entryPrice = bar.Close
 		s.direction = "SHORT"
@@ -508,10 +571,8 @@ type RSIStrategy struct {
 	takeProfitPct float64
 	positionSize  float64
 
-	bars       []model.Bar
-	inPosition bool
-	entryPrice float64
-	direction  string
+	bars []model.Bar
+	classicPosition
 
 	params *strategy.ParamRegistry
 }
@@ -564,7 +625,26 @@ func (s *RSIStrategy) Start(params map[string]any) error {
 	if err := s.ApplyParams(params); err != nil {
 		return fmt.Errorf("rsi apply params: %w", err)
 	}
+	// 重启仓位重建（与 MACD 同语义，M10）。
+	if q, ok := params["restored_position_qty"].(float64); ok && q > 0 {
+		v, _ := params["restored_position_vwap"].(float64)
+		dir := "LONG"
+		if sd, _ := params["restored_position_side"].(string); sd == "short" {
+			dir = "SHORT"
+		}
+		s.classicPosition.restore(q, v, dir)
+		log.Printf("[rsi] %s 重启仓位重建: qty=%.6f vwap=%.2f direction=%s", s.symbol, q, v, s.direction)
+	}
 	s.running = true
+	return nil
+}
+
+// RestorePosition PositionRestorer 接口（引擎/工具链直调路径，无方向参数，
+// 按净多恢复；生产方向感知的重建走 Start 的 restored_position_side 注入）。
+func (s *RSIStrategy) RestorePosition(qty, avgPrice float64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.classicPosition.restore(qty, avgPrice, "LONG")
 	return nil
 }
 
@@ -603,6 +683,7 @@ func (s *RSIStrategy) ApplyParams(m map[string]any) error {
 	if p := s.params.Get("position_size"); p != nil {
 		s.positionSize = p.GetFloat()
 	}
+	s.spotOnly = classicSpotOnly(m)
 	return nil
 }
 func (s *RSIStrategy) ParamDefs() []map[string]any {
@@ -662,6 +743,10 @@ func (s *RSIStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Signal, 
 		return &model.Signal{Symbol: s.symbol, Direction: "LONG", Strength: 0.7, Strategy: s.name, Reason: "RSI exit oversold"}, nil
 	}
 	if prevRSI > s.overbought && rsiVal <= s.overbought {
+		if s.spotOnly {
+			// 现货只做多（M9）：超买回落不开空。
+			return nil, nil
+		}
 		s.inPosition = true
 		s.entryPrice = bar.Close
 		s.direction = "SHORT"
@@ -709,10 +794,8 @@ type BollingerBandsStrategy struct {
 	takeProfitPct float64
 	positionSize  float64
 
-	bars       []model.Bar
-	inPosition bool
-	entryPrice float64
-	direction  string
+	bars []model.Bar
+	classicPosition
 
 	params *strategy.ParamRegistry
 }
@@ -762,7 +845,26 @@ func (s *BollingerBandsStrategy) Start(params map[string]any) error {
 	if err := s.ApplyParams(params); err != nil {
 		return fmt.Errorf("bollinger_bands apply params: %w", err)
 	}
+	// 重启仓位重建（与 MACD 同语义，M10）。
+	if q, ok := params["restored_position_qty"].(float64); ok && q > 0 {
+		v, _ := params["restored_position_vwap"].(float64)
+		dir := "LONG"
+		if sd, _ := params["restored_position_side"].(string); sd == "short" {
+			dir = "SHORT"
+		}
+		s.classicPosition.restore(q, v, dir)
+		log.Printf("[bollinger_bands] %s 重启仓位重建: qty=%.6f vwap=%.2f direction=%s", s.symbol, q, v, s.direction)
+	}
 	s.running = true
+	return nil
+}
+
+// RestorePosition PositionRestorer 接口（引擎/工具链直调路径，无方向参数，
+// 按净多恢复；生产方向感知的重建走 Start 的 restored_position_side 注入）。
+func (s *BollingerBandsStrategy) RestorePosition(qty, avgPrice float64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.classicPosition.restore(qty, avgPrice, "LONG")
 	return nil
 }
 
@@ -798,6 +900,7 @@ func (s *BollingerBandsStrategy) ApplyParams(m map[string]any) error {
 	if p := s.params.Get("position_size"); p != nil {
 		s.positionSize = p.GetFloat()
 	}
+	s.spotOnly = classicSpotOnly(m)
 	return nil
 }
 func (s *BollingerBandsStrategy) ParamDefs() []map[string]any {
@@ -859,6 +962,10 @@ func (s *BollingerBandsStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*mod
 		return &model.Signal{Symbol: s.symbol, Direction: "LONG", Strength: 0.7, Strategy: s.name, Reason: "price bounced off lower band"}, nil
 	}
 	if prevC >= prevUpper && c < upper {
+		if s.spotOnly {
+			// 现货只做多（M9）：上轨回落不开空。
+			return nil, nil
+		}
 		s.inPosition = true
 		s.entryPrice = bar.Close
 		s.direction = "SHORT"

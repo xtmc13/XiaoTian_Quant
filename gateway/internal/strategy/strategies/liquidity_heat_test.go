@@ -257,11 +257,12 @@ func startLHCRA(t *testing.T) *LiquidityHeatStrategy {
 		"pivot_bars": 2, "min_pool_strength_pct": 30,
 		"tp_min_pool_strength_pct": 15, "tp_fallback_pct": 0.02,
 		"sl_buffer_atr": 0.5, "position_size": 100, "max_hold_bars": 10,
-		// CRA 参数包（键存在即启用 CRA 模式）。
+		// CRA 参数包（键存在即启用 CRA 模式）。档位口径 2026-10-10 H3：
+		// order=N=第 N 次补仓——首个池触发补仓消费 order=1。
 		"first_order_amount": 100, "order_count": 3, "enable_add_position": true,
 		"add_positions": []map[string]any{
-			{"order": 2, "multiplier": 1.5, "spread": 0.01, "callback": 0.01},
-			{"order": 3, "multiplier": 2.0, "spread": 0.01, "callback": 0.01},
+			{"order": 1, "multiplier": 1.5, "spread": 0.01, "callback": 0.01},
+			{"order": 2, "multiplier": 2.0, "spread": 0.01, "callback": 0.01},
 		},
 		"tp_mode": "static", "take_profit_method": "full", "take_profit_ratio": 0.05,
 		"profit_callback": 0,
@@ -307,7 +308,7 @@ func TestLiquidityHeatCRAFlow(t *testing.T) {
 	s.OnBar(mkLHBar(next+1, 98.5, 99.0, 97.5, 98.2, 300), nil)
 	next += 2
 
-	// 扫反包那个更低的池 → CRA 补仓 #2，Qty=100×1.5/close。
+	// 扫反包那个更低的池 → CRA 补仓 #1，Qty=100×1.5/close。
 	lowPool := strongBuyPool(s)
 	if lowPool == nil || lowPool == pool {
 		t.Fatal("expected a second strong buy pool below entry")
@@ -317,8 +318,8 @@ func TestLiquidityHeatCRAFlow(t *testing.T) {
 	if sig == nil || sig.Direction != "LONG" {
 		t.Fatalf("expect CRA add signal, got %v", sig)
 	}
-	if !strings.Contains(sig.Reason, "补仓 #2") {
-		t.Fatalf("expect add #2, reason: %s", sig.Reason)
+	if !strings.Contains(sig.Reason, "补仓 #1") {
+		t.Fatalf("expect add #1, reason: %s", sig.Reason)
 	}
 	wantQty := 100 * 1.5 / 98.0
 	if math.Abs(sig.Qty-wantQty) > 1e-3 {
@@ -367,7 +368,7 @@ func TestLiquidityHeatCRANoStopLoss(t *testing.T) {
 
 // TestLiquidityHeatCRAAddSkipsWeakPool CRA 补仓与入场同判定（2026-10-03 对齐
 // 策略头注释"同入场判定"）：跌破均价下方的弱池（强度 <30% POC）并收回，不得
-// 触发补仓；同区域强度达标的池被扫反包才放行 #2。
+// 触发补仓；同区域强度达标的池被扫反包才放行 #1。
 func TestLiquidityHeatCRAAddSkipsWeakPool(t *testing.T) {
 	s := startLHCRA(t)
 	next := feedBaseline(s, 0, 30)
@@ -415,7 +416,7 @@ func TestLiquidityHeatCRAAddSkipsWeakPool(t *testing.T) {
 		t.Fatalf("no add should be pending, got %d", s.craState.PendingAddCount)
 	}
 
-	// 同区域强池（放量 pivot 低 97.5）→ 扫反包 → 补仓 #2 放行。
+	// 同区域强池（放量 pivot 低 97.5）→ 扫反包 → 补仓 #1 放行。
 	s.OnBar(mkLHBar(next+1, 97.8, 98.2, 97.5, 97.9, 300), nil)
 	s.mu.RLock()
 	var strong *lhPool
@@ -432,8 +433,8 @@ func TestLiquidityHeatCRAAddSkipsWeakPool(t *testing.T) {
 	}
 	sig, _ = s.OnBar(mkLHBar(next+2, strong.price-1, strong.price+0.2,
 		strong.price-0.3, strong.price+0.4, 2), nil)
-	if sig == nil || sig.Direction != "LONG" || !strings.Contains(sig.Reason, "补仓 #2") {
-		t.Fatalf("strong pool sweep-reclaim must add #2, got %v", sig)
+	if sig == nil || sig.Direction != "LONG" || !strings.Contains(sig.Reason, "补仓 #1") {
+		t.Fatalf("strong pool sweep-reclaim must add #1, got %v", sig)
 	}
 }
 
@@ -608,6 +609,8 @@ func TestLiquidityHeatStartAppliesRestoredPosition(t *testing.T) {
 // TestLiquidityHeatRestorePositionFullCRA 重建的 CRA 持仓按满档处理：
 // 666 实证——重建只按 EnterPosition(=1 档) 会让引擎认为还差两档，
 // 重放 K 线里的池形态触发连环补仓单（真买）。满档后不得再发补仓。
+// 满档标记随 2026-10-10 H3 新档位口径（上限 PositionCount+Pending≤OrderCount）
+// 写为 OrderCount+1——写 OrderCount 在新口径下还会再放行一笔。
 func TestLiquidityHeatRestorePositionFullCRA(t *testing.T) {
 	s := startLHCRA(t)
 	feedBaseline(s, 0, 30) // ATR/池就绪
@@ -615,9 +618,9 @@ func TestLiquidityHeatRestorePositionFullCRA(t *testing.T) {
 	if err := s.RestorePosition(0.00055, 83868.2); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
-	if s.craState.PositionCount != s.craParams.OrderCount {
+	if s.craState.PositionCount != s.craParams.OrderCount+1 {
 		t.Fatalf("restored CRA must be full-ladder: count=%d want %d",
-			s.craState.PositionCount, s.craParams.OrderCount)
+			s.craState.PositionCount, s.craParams.OrderCount+1)
 	}
 
 	// 构造更低强池 + 扫反包（正常会触发 CRA 补仓的形态）→ 不得再发 LONG。

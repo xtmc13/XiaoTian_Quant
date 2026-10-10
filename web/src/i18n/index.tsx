@@ -80,3 +80,18 @@ export function useI18n() {
   if (!ctx) throw new Error('useI18n must be used within I18nProvider')
   return ctx
 }
+
+/**
+ * useI18nSafe 无 Provider 时不抛错：回退 zh-CN 直查表。用于整体硬编码中文、
+ * 只内嵌个别 i18n 词条的组件（如 StrategyCreateForm 的交易所偏好说明 L11），
+ * 避免测试/独立渲染必须包 I18nProvider。
+ */
+export function useI18nSafe(): I18nContextType {
+  const ctx = useContext(I18nContext)
+  if (ctx) return ctx
+  return {
+    lang: 'zh-CN',
+    setLang: () => {},
+    t: (key: string, fallback?: string) => translations['zh-CN'][key] ?? fallback ?? key,
+  }
+}

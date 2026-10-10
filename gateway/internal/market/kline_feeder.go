@@ -90,6 +90,8 @@ func feedKey(symbol, interval string) string {
 // paired with one ReleaseSymbol. The first successful poll back-publishes up
 // to 100 recently closed bars (oldest→newest) for indicator warmup, then
 // only newly closed bars are published.
+// 回补 bar 上总线后由引擎 dispatch 按 strategy.Warmupper 口径路由
+// （2026-10-10 H4）：实现 Warmupper 的策略只养指标不下单；未实现的照旧。
 // 返回值 started 表示本次是否新起了轮询 goroutine：false 说明供给管已在跑、
 // 不会再有历史回补——新启动的策略需要调用方自行暖机（否则要等下一根新 K 线）。
 func (f *KlineFeeder) EnsureSymbol(symbol, interval string) (started bool) {

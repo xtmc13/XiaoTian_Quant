@@ -373,4 +373,53 @@ describe('CRAParamForm', () => {
     // 缺省回填默认 50%（与后端 ParseCRAParams 默认 0.5 一致）。
     expect(apiPayloadToCraParams({}).burnGlobalCloseRatio).toBe(50)
   })
+
+  // ── M5：补仓 EMA 确认（双闸：全局开关 + 档级开关；合约区）──
+
+  it('renders add-position EMA confirm toggle (contract only)', () => {
+    const { unmount } = render(<CRAParamForm {...baseProps} market="contract" />, { wrapper })
+    expect(screen.getByText('补仓 EMA 确认')).toBeTruthy()
+    unmount()
+    // 现货不渲染（引擎只给合约评估补仓指标，现货显示即死开关）。
+    render(<CRAParamForm {...baseProps} />, { wrapper })
+    expect(screen.queryByText('补仓 EMA 确认')).toBeNull()
+  })
+
+  it('toggles addEmaEnabled and shows dual-gate caption only when enabled', () => {
+    const onChange = vi.fn()
+    const { unmount } = render(<CRAParamForm {...baseProps} market="contract" onChange={onChange} />, { wrapper })
+    // 默认关闭：不渲染双闸说明。
+    expect(screen.queryByText(/双闸/)).toBeNull()
+    fireEvent.click(screen.getByLabelText('补仓 EMA 确认'))
+    const lastCall = onChange.mock.calls[onChange.mock.calls.length - 1][0] as CRAParams
+    expect(lastCall.addEmaEnabled).toBe(true)
+    unmount()
+    // 开启后：渲染双闸口径说明（档级开关在补仓参数弹窗）。
+    render(<CRAParamForm {...baseProps} market="contract" value={{ ...DEFAULT_CRA_PARAMS, addEmaEnabled: true }} />, { wrapper })
+    expect(screen.getByText(/双闸/)).toBeTruthy()
+  })
+
+  it('round-trips add EMA switch/period and per-tier ema_enabled in the api payload', () => {
+    const payload = craParamsToApiPayload({
+      ...DEFAULT_CRA_PARAMS,
+      addEmaEnabled: true,
+      addEmaPeriod: '1h',
+      addPositions: [{ order: 1, multiplier: 1, spread: 3, callback: 0.3, emaEnabled: true }],
+    })
+    expect(payload.add_ema_enabled).toBe(true)
+    expect(payload.add_ema_period).toBe('1h')
+    expect(payload.add_positions[0].ema_enabled).toBe(true)
+    const restored = apiPayloadToCraParams({
+      add_ema_enabled: true,
+      add_ema_period: '4h',
+      add_positions: [{ order: 1, multiplier: 1, spread: 0.03, callback: 0.003, ema_enabled: true }],
+    })
+    expect(restored.addEmaEnabled).toBe(true)
+    expect(restored.addEmaPeriod).toBe('4h')
+    expect(restored.addPositions[0].emaEnabled).toBe(true)
+    // 缺省回填默认关闭（与后端 ParseCRAParams 一致）。
+    const def = apiPayloadToCraParams({})
+    expect(def.addEmaEnabled).toBe(false)
+    expect(def.addEmaPeriod).toBe('15m')
+  })
 })

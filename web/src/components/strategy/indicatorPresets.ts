@@ -6,13 +6,15 @@
  *   open_trend_ema_period）按"选择器派生优先、旧字段回退"写入，引擎无需改动
  *   即可用默认参数跑 MACD/EMA 门槛；
  * - 新参数统一放 config.indicator_params[<key>]，后端 CRA 解析读新键、回退旧键；
- * - open_indicator 为新标记键（'custom' 等无引擎门槛的指标靠它识别）。
+ * - open_indicator 为选择器标记键：rsi/range/trend/custom 的引擎门槛以它路由
+ *   （rsi=超卖反弹、range=RSI 中性区、trend=收盘价 vs 均线，custom 走指标沙箱）。
  */
 
 export type OpenIndicatorKey =
   | 'none'
   | 'macd'
   | 'ema_cross'
+  | 'ema_counter'
   | 'rsi'
   | 'trend'
   | 'range'
@@ -71,9 +73,19 @@ export const OPEN_INDICATORS: IndicatorDef[] = [
     ],
   },
   {
+    key: 'ema_counter',
+    label: 'EMA交叉（逆势）',
+    desc: '逆势反转确认：价格偏离慢线后反转回归时开仓（与顺势 EMA交叉 互为镜像）',
+    fields: [
+      { key: 'fast', label: '快线周期', type: 'int', default: 12, min: 1, max: 500 },
+      { key: 'slow', label: '慢线周期', type: 'int', default: 26, min: 1, max: 500 },
+      { key: 'period', label: '监测周期', type: 'select', default: 'close', options: PERIOD_OPTIONS },
+    ],
+  },
+  {
     key: 'rsi',
     label: 'RSI超卖',
-    desc: 'RSI 进入超卖区反弹开仓',
+    desc: 'RSI 跌破超卖线后重新站上时开仓（超卖反弹确认）',
     fields: [
       { key: 'period', label: 'RSI 周期', type: 'int', default: 14, min: 2, max: 200 },
       { key: 'oversold', label: '超卖阈值', type: 'int', default: 30, min: 1, max: 100 },
@@ -83,7 +95,7 @@ export const OPEN_INDICATORS: IndicatorDef[] = [
   {
     key: 'trend',
     label: '趋势确认',
-    desc: '价格在均线之上确认趋势后开仓',
+    desc: '收盘价站上均线确认趋势后开仓（做空方向为跌破均线）',
     fields: [
       { key: 'period', label: '均线周期', type: 'int', default: 20, min: 2, max: 500 },
       {
@@ -101,7 +113,7 @@ export const OPEN_INDICATORS: IndicatorDef[] = [
   {
     key: 'range',
     label: '震荡',
-    desc: 'RSI 中性区往返（高抛低吸）',
+    desc: 'RSI 处于中性区（50±带宽）时开仓，避开超买超卖极端行情',
     fields: [
       { key: 'period', label: 'RSI 周期', type: 'int', default: 14, min: 2, max: 200 },
       { key: 'neutral_band', label: '中性带宽（±）', type: 'int', default: 10, min: 1, max: 50 },
@@ -193,14 +205,25 @@ export function buildOpenIndicatorConfig(
       cfg.open_trend_ema_period = period ?? 'close'
       cfg.indicator_params = { ema_cross: { ...params } }
       break
+    case 'ema_counter':
+      // 引擎侧以"逆势 EMA"门槛承载（反转确认，open_counter_ema_* 键）。
+      // open_indicator 标记键一并写入 'ema_counter'：引擎 openIndicatorsConfirmed
+      // 的 open_indicator 分支不消费该值，回落到 enabled 键判定（逆势门槛）。
+      cfg.open_counter_ema_enabled = true
+      cfg.open_counter_ema_period = period ?? 'close'
+      cfg.indicator_params = { ema_counter: { ...params } }
+      break
     case 'trend':
+      // 引擎经 open_indicator='trend' 路由到趋势门槛（收盘价 vs MA(period)，
+      // ma_type 支持 EMA/SMA）；open_trend_ema_enabled 旧键仅作存量回退兼容。
       cfg.open_trend_ema_enabled = true
       cfg.open_trend_ema_period = 'close'
       cfg.indicator_params = { trend: { ...params } }
       break
     case 'rsi':
     case 'range':
-      // 无对应引擎门槛键：引擎视为无开仓门槛，参数仅落 indicator_params。
+      // 引擎读 open_indicator + indicator_params 执行真实门槛（rsi=超卖反弹、
+      // range=RSI 中性区，cra openIndicatorsConfirmed 的 H2 分支）。
       cfg.indicator_params = { [key]: { ...params } }
       break
     case 'custom':
@@ -250,7 +273,12 @@ export function detectOpenIndicator(payload: Record<string, unknown>): {
     return { indicator: 'trend', params: defaultIndicatorParams('trend'), custom: null }
   }
   if (payload.open_counter_ema_enabled === true) {
-    return { indicator: 'ema_cross', params: defaultIndicatorParams('ema_cross'), custom: null }
+    // L16：counter 语义必须保持——此前回退显示为 ema_cross，再保存经
+    // buildOpenIndicatorConfig 写成 open_trend_ema_enabled，逆势门槛被静默
+    // 改成顺势。独立的 ema_counter 键让"显示→再保存"闭环不改变语义。
+    const params =
+      (indicatorParams['ema_counter'] as Record<string, IndicatorParamValue> | undefined) ?? {}
+    return { indicator: 'ema_counter', params: { ...defaultIndicatorParams('ema_counter'), ...params }, custom: null }
   }
   return { indicator: 'none', params: {}, custom: null }
 }

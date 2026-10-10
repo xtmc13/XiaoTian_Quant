@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
@@ -46,14 +46,16 @@ export function CreateStrategyPage() {
   const populatedFor = useRef<string | null>(null)
 
   // 编辑回填：config_json 解析结果传给 hook（现货网格自定义键优先还原）。
-  const editConfig = (() => {
+  // useMemo 避免每次渲染重复 JSON.parse（hook 侧回填以网格键内容签名为
+  // 依赖，对引用不稳定已健壮——M8）。
+  const editConfig = useMemo(() => {
     if (!editId || !editingItem) return undefined
     try {
       return JSON.parse(editingItem.config_json || '{}') as Record<string, unknown>
     } catch {
       return undefined
     }
-  })()
+  }, [editId, editingItem])
 
   // 快捷入口支持 ?type=xxx（如 /create?market=spot&type=support_rebound）：
   // 新创建场景直接以该类型初始化（策略参数定义由后端 param-defs 驱动渲染）。
@@ -92,6 +94,9 @@ export function CreateStrategyPage() {
     if (editingItem.symbol) form.setSymbol(editingItem.symbol)
     if (editingItem.timeframe) form.setTimeframe(editingItem.timeframe)
     if (Array.isArray(cfg.selected_exchanges)) form.setSelectedExchanges(cfg.selected_exchanges as string[])
+    // L12：保证金模式回填真实值（config_json 优先，顶层列兜底；缺省全仓）。
+    const mm = (cfg.margin_mode ?? (editingItem as { margin_mode?: string }).margin_mode) as string | undefined
+    if (mm === 'isolated' || mm === 'cross') form.setMarginMode(mm)
     form.setCraParams(apiPayloadToCraParams(cfg))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editId, editingItem])

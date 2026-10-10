@@ -367,8 +367,9 @@ func (s *SupportReboundStrategy) RuntimeStatus() map[string]any {
 			m["cra_avg_entry_price"] = st.AvgEntryPrice
 		}
 		// 下一档补仓触发价：与 ShouldAddPosition 同一基准（首次成交价的
-		// (1−spread)），从 add_positions 推导。
-		next := st.PositionCount + st.PendingAddCount + 1
+		// (1−spread)），从 add_positions 推导。档位口径与 cra_strategy.go
+		// 同源（2026-10-10 H3）：order=N 对应第 N 次补仓。
+		next := st.PositionCount + st.PendingAddCount
 		if cfg := p.AddPositionForOrder(next); cfg != nil && st.EntryPrice > 0 {
 			m["cra_next_add_order"] = next
 			m["cra_next_add_price"] = st.EntryPrice * (1 - cfg.Spread)
@@ -728,9 +729,10 @@ func (s *SupportReboundStrategy) manageCRAPosition(price float64, ts int64, coun
 		return closePosition("cra take profit")
 	}
 
-	// 3. 补仓（加仓梯度）。
-	if p.EnableAddPosition && st.PositionCount+st.PendingAddCount < p.OrderCount && !st.WaterfallPaused {
-		next := st.PositionCount + st.PendingAddCount + 1
+	// 3. 补仓（加仓梯度）。档位口径与 cra_strategy.go 同源（2026-10-10 H3）：
+	//    order=N 对应第 N 次补仓，order_count=补仓次数。
+	if p.EnableAddPosition && st.PositionCount+st.PendingAddCount <= p.OrderCount && !st.WaterfallPaused {
+		next := st.PositionCount + st.PendingAddCount
 		cfg := p.AddPositionForOrder(next)
 		if cfg != nil && st.ShouldAddPosition(price, cfg) {
 			st.PendingAddCount++

@@ -58,7 +58,9 @@ type CRAParams struct {
 	//（macd/ema_cross/rsi/trend/trend_long/trend_short/range/custom）；
 	// IndicatorParams 承载各指标的自定义数值参数（fast/slow/signal/period
 	// 等）。解析策略：新键优先，旧 open_* 键回退；引擎已认识的门槛仍走旧键，
-	// custom 由 custom_indicator.go 经指标沙箱执行开仓门槛。
+	// rsi/range/trend 由 openIndicatorsConfirmed 的 H2 分支按 OpenIndicator
+	// 路由到真实门槛（超卖反弹/中性区/均线趋势），custom 由
+	// custom_indicator.go 经指标沙箱执行开仓门槛。
 	OpenIndicator   string         `json:"open_indicator"`
 	IndicatorParams map[string]any `json:"indicator_params"`
 
@@ -74,6 +76,17 @@ type CRAParams struct {
 	MacdSignal int `json:"-"`
 	EmaFast    int `json:"-"`
 	EmaSlow    int `json:"-"`
+
+	// H2 开仓门槛参数（从 indicator_params.rsi/range/trend 解析；缺省与前端
+	// indicatorPresets 预设一致：rsi 14/30/70、range 14/±10、trend EMA20）。
+	// 仅 OpenIndicator 选中对应指标时由 openIndicatorsConfirmed 消费。
+	RsiPeriod        int    `json:"-"`
+	RsiOversold      int    `json:"-"`
+	RsiOverbought    int    `json:"-"`
+	RangePeriod      int    `json:"-"`
+	RangeNeutralBand int    `json:"-"`
+	TrendPeriod      int    `json:"-"`
+	TrendMAType      string `json:"-"`
 
 	// Contract add indicators
 	AddMacdEnabled bool   `json:"add_macd_enabled"`
@@ -125,7 +138,9 @@ func (p *CRAParams) IsContract() bool {
 	return p.MarketType == "swap" || p.MarketType == "futures" || p.MarketType == "margin"
 }
 
-// AddPositionForOrder returns the add-position config for the nth order (1-based).
+// AddPositionForOrder returns the add-position config for the nth add (1-based):
+// order=N 对应第 N 次补仓（2026-10-10 H3 口径；首单不占序号——首单成交后
+// PositionCount=1，首次补仓消费 order=1）。
 func (p *CRAParams) AddPositionForOrder(order int) *AddPositionItem {
 	for _, ap := range p.AddPositions {
 		if ap.Order == order {
@@ -247,6 +262,29 @@ func ParseCRAParams(configJSON string) (*CRAParams, error) {
 			p.EmaFast = posInt(sub, "fast", p.EmaFast)
 			p.EmaSlow = posInt(sub, "slow", p.EmaSlow)
 			break
+		}
+	}
+
+	// H2：rsi/range/trend 门槛参数接进引擎（缺省与前端预设一致）。存在且为
+	// 正数（posInt 兜底）才覆盖；ma_type 只支持 EMA/SMA，其余值钳制为 EMA。
+	p.RsiPeriod, p.RsiOversold, p.RsiOverbought = 14, 30, 70
+	p.RangePeriod, p.RangeNeutralBand = 14, 10
+	p.TrendPeriod, p.TrendMAType = 20, "EMA"
+	if p.IndicatorParams != nil {
+		if sub, _ := p.IndicatorParams["rsi"].(map[string]any); sub != nil {
+			p.RsiPeriod = posInt(sub, "period", p.RsiPeriod)
+			p.RsiOversold = posInt(sub, "oversold", p.RsiOversold)
+			p.RsiOverbought = posInt(sub, "overbought", p.RsiOverbought)
+		}
+		if sub, _ := p.IndicatorParams["range"].(map[string]any); sub != nil {
+			p.RangePeriod = posInt(sub, "period", p.RangePeriod)
+			p.RangeNeutralBand = posInt(sub, "neutral_band", p.RangeNeutralBand)
+		}
+		if sub, _ := p.IndicatorParams["trend"].(map[string]any); sub != nil {
+			p.TrendPeriod = posInt(sub, "period", p.TrendPeriod)
+			if mt := strings.ToUpper(strings.TrimSpace(strVal(sub, "ma_type", ""))); mt == "SMA" {
+				p.TrendMAType = "SMA"
+			}
 		}
 	}
 
@@ -425,6 +463,8 @@ func (p *CRAParams) Clone() *CRAParams {
 }
 
 // fillMissingAddPositions adds default add-position entries so that OrderCount is always satisfiable.
+// （order_count=补仓次数，消费档位 order 1..OrderCount——逐档补齐保证每档都有
+// 配置可消费；缺口档按市场默认马丁梯补，2026-10-10 H3 口径注释。）
 func (p *CRAParams) fillMissingAddPositions() {
 	if !p.EnableAddPosition || p.OrderCount <= 0 {
 		return

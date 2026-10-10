@@ -92,12 +92,13 @@ const zhCN: Record<string, string> = {
   'dashboard.strategy.tp-tail': '尾单',
   'dashboard.strategy.tp-head-tail': '首尾',
   'dashboard.strategy.tp-moving': '移动',
-  'dashboard.strategy.order-desc': '{n}单·首{a}U',
+  'dashboard.strategy.order-desc': '补仓{n}次·首{a}U',
   'dashboard.strategy.params-line': '补差{s}% · 止盈{p}%',
   'dashboard.strategy.open-macd-golden': 'MACD金叉',
   'dashboard.strategy.open-macd-death': 'MACD死叉',
   'dashboard.strategy.open-ema': 'EMA拐点',
   'dashboard.strategy.open-market': '市价',
+  'dashboard.strategy.exchanges-pref-note': '仅记录偏好，实际下单交易所由账户凭证决定',
 
   // ── 策略排行榜 ──
   'dashboard.ranking.title': '策略排行榜',
@@ -238,12 +239,13 @@ const enUS: Record<string, string> = {
   'dashboard.strategy.tp-tail': 'Tail',
   'dashboard.strategy.tp-head-tail': 'Head+Tail',
   'dashboard.strategy.tp-moving': 'Trailing',
-  'dashboard.strategy.order-desc': '{n} orders · first {a}U',
+  'dashboard.strategy.order-desc': '{n} adds · first {a}U',
   'dashboard.strategy.params-line': 'Gap {s}% · TP {p}%',
   'dashboard.strategy.open-macd-golden': 'MACD Golden Cross',
   'dashboard.strategy.open-macd-death': 'MACD Death Cross',
   'dashboard.strategy.open-ema': 'EMA Pivot',
   'dashboard.strategy.open-market': 'Market',
+  'dashboard.strategy.exchanges-pref-note': 'Preference only — the actual execution venue is determined by your account credentials',
 
   // ── Strategy ranking ──
   'dashboard.ranking.title': 'Strategy Leaderboard',
@@ -385,12 +387,13 @@ const ja: Record<string, string> = {
   'dashboard.strategy.tp-tail': '末尾',
   'dashboard.strategy.tp-head-tail': '先頭+末尾',
   'dashboard.strategy.tp-moving': 'トレーリング',
-  'dashboard.strategy.order-desc': '{n} 注文・初回 {a}U',
+  'dashboard.strategy.order-desc': '补仓{n}回・初回 {a}U',
   'dashboard.strategy.params-line': '追加幅 {s}%・利確 {p}%',
   'dashboard.strategy.open-macd-golden': 'MACDゴールデンクロス',
   'dashboard.strategy.open-macd-death': 'MACDデッドクロス',
   'dashboard.strategy.open-ema': 'EMA転換点',
   'dashboard.strategy.open-market': '成行',
+  'dashboard.strategy.exchanges-pref-note': '偏好の記録のみ。実際の発注先取引所はアカウント認証情報で決まります',
 
   // ── 戦略ランキング ──
   'dashboard.ranking.title': '戦略ランキング',

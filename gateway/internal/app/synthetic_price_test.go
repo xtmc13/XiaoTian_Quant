@@ -93,3 +93,26 @@ func TestFinalizeLiveSubmitResult(t *testing.T) {
 		t.Fatalf("success path broken: res=%v err=%v", res, err)
 	}
 }
+
+// M6（2026-10-10）：LastPriceForDisplay 运行面板展示价——WS 缓存 miss 时
+// REST 探针兜底；只剩合成价（离线兜底）时返回 0（面板宁可无数据也不显示假价）。
+func TestLastPriceForDisplay(t *testing.T) {
+	origProbe := priceRestProbe
+	t.Cleanup(func() { priceRestProbe = origProbe })
+	if appCtx := Get(); appCtx != nil {
+		origWS := appCtx.BinanceWS
+		appCtx.BinanceWS = nil
+		t.Cleanup(func() { appCtx.BinanceWS = origWS })
+	}
+
+	// REST 探针有值 → 面板价来自探针。
+	priceRestProbe = func(norm string) (float64, bool) { return 0.5, true }
+	if p := LastPriceForDisplay("PEPEUSDT"); p != 0.5 {
+		t.Fatalf("display price = %v, want 0.5 (REST fallback)", p)
+	}
+	// 探针也失败 → 只剩合成价 → 面板显示 0（诚实无数据）。
+	priceRestProbe = func(norm string) (float64, bool) { return 0, false }
+	if p := LastPriceForDisplay("PEPEUSDT"); p != 0 {
+		t.Fatalf("display price = %v, want 0 (synthetic never displayed)", p)
+	}
+}

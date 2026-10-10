@@ -17,7 +17,8 @@ import (
 //   - 关闭补仓（#25）只挡 OnBar 自动补仓分支，止盈照常。
 
 // startSpotWithLadder 启动一个现货 CRA：首单 100 USDT，order_count=3，
-// 补仓档 spread 5%/10%、callback 0，静态止盈 1.3% 无回调。
+// 补仓档 spread 0%/5%/10%、callback 0（order=N=第 N 次补仓，2026-10-10 H3
+// 口径），静态止盈 1.3% 无回调。
 func startSpotWithLadder(t *testing.T) *BaseCRAStrategy {
 	t.Helper()
 	s := NewCRASpotStrategy("cra_spot", "BTCUSDT")
@@ -116,7 +117,8 @@ func TestCRAManualAddPositionLotNoLadderAdvance(t *testing.T) {
 		t.Fatalf("lots = %+v, want 2 lots with tail Manual", s.state.Lots)
 	}
 
-	// 自动阶梯接续口径：价格下跌 5% 触发的是自动补仓 #2（而非 #3）。
+	// 自动阶梯接续口径：价格下跌 5% 触发的是自动补仓 #1（手动单不占梯档，
+	// 首次自动补仓消费 order=1，2026-10-10 H3 口径）。
 	addSig, err := s.OnBar(model.Bar{Symbol: "BTCUSDT", Close: 94, High: 94, Low: 94}, nil)
 	if err != nil {
 		t.Fatalf("onbar: %v", err)
@@ -125,8 +127,8 @@ func TestCRAManualAddPositionLotNoLadderAdvance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("onbar: %v", err)
 	}
-	if addSig == nil || !strings.Contains(addSig.Reason, "#2") {
-		t.Fatalf("auto add signal = %+v, want 'cra add position #2'（梯档未被手动单顶掉）", addSig)
+	if addSig == nil || !strings.Contains(addSig.Reason, "#1") {
+		t.Fatalf("auto add signal = %+v, want 'cra add position #1'（梯档未被手动单顶掉）", addSig)
 	}
 }
 
