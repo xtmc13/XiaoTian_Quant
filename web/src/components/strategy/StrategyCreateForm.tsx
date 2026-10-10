@@ -128,7 +128,7 @@ export function deriveTimeframeFromCRA(params: CRAParams): string {
   if (params.openTrendEmaEnabled && params.openTrendEmaPeriod !== 'close') candidates.push(params.openTrendEmaPeriod)
   if (params.openBollingerEnabled && params.openBollingerPeriod !== 'close') candidates.push(params.openBollingerPeriod)
 
-  if (candidates.length === 0) return '15m'
+  if (candidates.length === 0) return ''
   return candidates.sort((a, b) => PERIOD_ORDER[a] - PERIOD_ORDER[b])[0]
 }
 
@@ -268,7 +268,7 @@ export function useStrategyCreateForm(
   // Basic fields
   const [name, setName] = useState('')
   const [symbol, setSymbol] = useState('BTCUSDT')
-  const [timeframe, setTimeframe] = useState('15m')
+  const [timeframe, setTimeframe] = useState('')
   const [selectedExchanges, setSelectedExchanges] = useState<string[]>([])
   // 保证金模式（L12）：此前创建硬编码 cross、编辑回填不读，逐仓配置无法表达。
   const [marginMode, setMarginMode] = useState<'cross' | 'isolated'>('cross')
@@ -368,8 +368,10 @@ export function useStrategyCreateForm(
     setName('')
     setSymbol('BTCUSDT')
     // 支撑回踩反弹以 4h 为工作K线（策略语义锁定）；流动性热力不默认任何周期，
-    // 由用户手动选择（2026-09-30 用户明确"不要默认 1h"）；其余类型沿用指标推导周期。
-    setTimeframe(strategyType === 'support_rebound' ? '4h' : strategyType === 'liquidity_heat' ? '' : deriveTimeframeFromCRA(defaults))
+    // 由用户手动选择（2026-09-30 用户明确"不要默认 1h"）；其余类型开仓指标周期
+    // 能推出则跟随，推不出保留当前值（不硬编码默认周期）。
+    const derived = strategyType === 'support_rebound' ? '4h' : strategyType === 'liquidity_heat' ? '' : deriveTimeframeFromCRA(defaults)
+    setTimeframe((prev) => derived || prev)
     setSelectedExchanges([])
     setNotifyChannels(['browser'])
     if (isGridProfile(profile)) {
@@ -411,13 +413,22 @@ export function useStrategyCreateForm(
     setCraParams((prev) => applyServerStrategyDefaults(prev, { market, strategyType, defaults: serverDefaults }))
   }, [serverDefaults, strategyType, market, editId])
 
-  // Keep the main timeframe in sync with active indicator periods (no hardcoding)。
+  // 工作周期跟随开仓指标周期（开仓判定节奏）；推不出时保留用户选择/记录值，
+  // 不写死默认。用户手动改过的周期不被后续参数改动覆盖（lastDerivedTf 跟踪
+  // 上一次推导值：仅当当前值仍等于上次推导值或为空时才跟随新推导）。
   // 支撑回踩反弹例外：工作K线是策略语义的一部分（默认 4h，创建时锁定），
   // 不随指标周期推导覆盖。流动性热力同样例外：工作周期由用户手动选择
   // （2026-09-30 用户明确"不要 15m、周期可选"，默认 1h）。
+  const lastDerivedTf = useRef('')
   useEffect(() => {
     if (strategyType === 'support_rebound' || strategyType === 'liquidity_heat') return
-    setTimeframe(deriveTimeframeFromCRA(craParams))
+    const derived = deriveTimeframeFromCRA(craParams)
+    if (!derived) {
+      lastDerivedTf.current = ''
+      return
+    }
+    setTimeframe((prev) => (prev === '' || prev === lastDerivedTf.current ? derived : prev))
+    lastDerivedTf.current = derived
   }, [craParams, strategyType])
 
   // 编辑回填（现货网格）：自定义键 price_lower/price_upper/grid_count/per_grid_amount
@@ -505,6 +516,11 @@ export function useStrategyCreateForm(
     }
     // 流动性热力：工作周期由用户显式选择，无默认（避免再出现"不想要 15m"的错位）。
     if (strategyType === 'liquidity_heat' && !timeframe) {
+      toast('error', '请选择工作周期')
+      return
+    }
+    // 智能补仓壳类型同样不默认周期：开仓指标周期推不出时必须由用户选择
+    if (isCRAStrategyType(strategyType) && !timeframe) {
       toast('error', '请选择工作周期')
       return
     }
@@ -767,11 +783,13 @@ export function StrategyCreateFormSections({
                 placeholder="BTCUSDT"
               />
             </div>
-            {/* 工作周期（流动性热力：用户手动选择，不随指标推导） */}
-            {strategyType === 'liquidity_heat' && (
+            {/* 工作周期：流动性热力由用户手动选择；智能补仓壳类型跟随开仓指标
+                 周期推导、推不出时由用户选择（不写死默认周期） */}
+            {(strategyType === 'liquidity_heat' || isCRAStrategyType(strategyType)) && (
               <div>
                 <label className="text-[11px] text-muted-foreground mb-1.5 block">工作周期</label>
                 <select
+                  data-testid="timeframe-select"
                   value={timeframe}
                   onChange={(e) => setTimeframe(e.target.value)}
                   className={inputCls}
@@ -786,7 +804,9 @@ export function StrategyCreateFormSections({
                   ))}
                 </select>
                 <div className="text-[10px] text-muted-foreground mt-1">
-                  流动性池构建的工作 K 线：越小信号越多噪音越大，推荐 1h 及以上
+                  {strategyType === 'liquidity_heat'
+                    ? '流动性池构建的工作 K 线：越小信号越多噪音越大，推荐 1h 及以上'
+                    : '开仓判定按此周期 K 线收盘进行；选开仓指标周期后自动跟随，可手动改'}
                 </div>
               </div>
             )}

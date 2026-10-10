@@ -76,6 +76,15 @@ function renderCreate(url: string) {
 
 /** L12（2026-10-10）：保证金模式创建可选、编辑回填真实值（修复前创建硬编码
  * cross、回填不读——逐仓配置永远显示全仓）。 */
+
+// 工作周期不再硬编码默认（2026-10-10）：CRA 类型无开仓指标时为空需显式选择，
+// 测试统一在提交前补选；无下拉（非 CRA/编辑回填有值）时 no-op。
+const pickTimeframeIfNeeded = () => {
+  const sel = screen.queryByTestId('timeframe-select')
+  if (sel && (sel as HTMLSelectElement).value === '') {
+    fireEvent.change(sel, { target: { value: '15m' } })
+  }
+}
 describe('CreateStrategyPage 编辑回填（L12 margin_mode）', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -260,6 +269,7 @@ describe('CreateStrategyPage 策略身份说明条（壳 + 指标组合语义）
     await waitFor(() => expect(screen.getByText('Binance')).toBeTruthy())
     fireEvent.click(screen.getByText('Binance'))
     fireEvent.click(screen.getByText('确认选择'))
+    pickTimeframeIfNeeded()
     fireEvent.click(screen.getAllByRole('button', { name: '保存策略' })[0])
     await waitFor(() => expect(create).toHaveBeenCalled())
     const payload = create.mock.calls[0][0] as Record<string, unknown>

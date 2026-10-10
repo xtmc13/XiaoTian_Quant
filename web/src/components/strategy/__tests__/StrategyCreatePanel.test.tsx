@@ -45,6 +45,15 @@ function wrapper({ children }: { children: React.ReactNode }) {
   return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
 }
 
+
+// 工作周期不再硬编码默认（2026-10-10）：CRA 类型无开仓指标时为空需显式选择，
+// 测试统一在提交前补选；无下拉（非 CRA/编辑回填有值）时 no-op。
+const pickTimeframeIfNeeded = () => {
+  const sel = screen.queryByTestId('timeframe-select')
+  if (sel && (sel as HTMLSelectElement).value === '') {
+    fireEvent.change(sel, { target: { value: '15m' } })
+  }
+}
 describe('StrategyCreatePanel', () => {
   const create = vi.fn()
 
@@ -74,6 +83,7 @@ describe('StrategyCreatePanel', () => {
   it('shows validation error when no exchange is selected', async () => {
     render(<StrategyCreatePanel market="spot" onClose={vi.fn()} onSaved={vi.fn()} />, { wrapper })
     fireEvent.change(screen.getByPlaceholderText('输入策略名称'), { target: { value: 'Test' } })
+    pickTimeframeIfNeeded()
     fireEvent.click(screen.getByText('保存策略'))
     await waitFor(() => expect(useToastModule.toast).toHaveBeenCalledWith('error', '请至少选择一个交易所'))
     expect(create).not.toHaveBeenCalled()
@@ -92,6 +102,7 @@ describe('StrategyCreatePanel', () => {
     fireEvent.click(screen.getByText('Binance'))
     fireEvent.click(screen.getByText('确认选择'))
 
+    pickTimeframeIfNeeded()
     fireEvent.click(screen.getByText('保存策略'))
     await waitFor(() => expect(create).toHaveBeenCalled())
 
@@ -114,7 +125,9 @@ describe('StrategyCreatePanel', () => {
     fireEvent.click(screen.getByText('Binance'))
     fireEvent.click(screen.getByText('确认选择'))
 
+    pickTimeframeIfNeeded()
     fireEvent.click(screen.getByText('保存为默认策略模板'))
+    pickTimeframeIfNeeded()
     fireEvent.click(screen.getByText('保存策略'))
     await waitFor(() => expect(create).toHaveBeenCalled())
     await waitFor(() => expect(strategyApi.createTemplate).toHaveBeenCalled())
@@ -146,6 +159,7 @@ describe('StrategyCreatePanel 类型派生（无类型下拉）', () => {
     await waitFor(() => expect(screen.getByText('Binance')).toBeTruthy())
     fireEvent.click(screen.getByText('Binance'))
     fireEvent.click(screen.getByText('确认选择'))
+    pickTimeframeIfNeeded()
     fireEvent.click(screen.getByText('保存策略'))
     await waitFor(() => expect(create).toHaveBeenCalled())
     expect((create.mock.calls[0][0] as Record<string, unknown>).strategy_type).toBe('cra_spot')
@@ -157,6 +171,7 @@ describe('StrategyCreatePanel 类型派生（无类型下拉）', () => {
     await waitFor(() => expect(screen.getByText('Binance')).toBeTruthy())
     fireEvent.click(screen.getByText('Binance'))
     fireEvent.click(screen.getByText('确认选择'))
+    pickTimeframeIfNeeded()
     fireEvent.click(screen.getByText('保存策略'))
     await waitFor(() => expect(create.mock.calls.length).toBe(2))
     expect((create.mock.calls[1][0] as Record<string, unknown>).strategy_type).toBe('cra_contract')
@@ -171,6 +186,7 @@ describe('StrategyCreatePanel 类型派生（无类型下拉）', () => {
     await waitFor(() => expect(screen.getByText('Binance')).toBeTruthy())
     fireEvent.click(screen.getByText('Binance'))
     fireEvent.click(screen.getByText('确认选择'))
+    pickTimeframeIfNeeded()
     fireEvent.click(screen.getByText('保存策略'))
     await waitFor(() => expect(create).toHaveBeenCalled())
     expect((create.mock.calls[0][0] as Record<string, unknown>).strategy_type).toBe('martin_trend')
@@ -278,6 +294,7 @@ describe('现货网格模式（cra_spot → 网格参数组）', () => {
     await waitFor(() => expect(screen.getByText('Binance')).toBeTruthy())
     fireEvent.click(screen.getByText('Binance'))
     fireEvent.click(screen.getByText('确认选择'))
+    pickTimeframeIfNeeded()
     fireEvent.click(screen.getByText('保存策略'))
     const create = vi.mocked(useStrategyDataModule.useStrategyData).mock.results[0].value.create as ReturnType<
       typeof vi.fn
@@ -322,6 +339,7 @@ describe('现货网格模式（cra_spot → 网格参数组）', () => {
     fireEvent.change(screen.getByPlaceholderText('输入策略名称'), { target: { value: '坏区间' } })
     fireEvent.change(screen.getByPlaceholderText('40000'), { target: { value: '50000' } })
     fireEvent.change(screen.getByPlaceholderText('50000'), { target: { value: '40000' } })
+    pickTimeframeIfNeeded()
     fireEvent.click(screen.getByText('保存策略'))
     const create = vi.mocked(useStrategyDataModule.useStrategyData).mock.results[0].value.create as ReturnType<
       typeof vi.fn
@@ -365,6 +383,7 @@ describe('表单精简 + 执行设置（模拟盘/实盘选择器回归）', () 
     fireEvent.click(screen.getByText('确认选择'))
 
     // 默认模拟盘直接提交。
+    pickTimeframeIfNeeded()
     fireEvent.click(screen.getByText('保存策略'))
     const create = vi.mocked(useStrategyDataModule.useStrategyData).mock.results[0].value.create as ReturnType<
       typeof vi.fn
@@ -377,6 +396,7 @@ describe('表单精简 + 执行设置（模拟盘/实盘选择器回归）', () 
     // 选择实盘（confirm 确认）→ payload 变 live。
     vi.spyOn(window, 'confirm').mockReturnValue(true)
     fireEvent.click(screen.getByText('实盘（真实资金）'))
+    pickTimeframeIfNeeded()
     fireEvent.click(screen.getByText('保存策略'))
     await waitFor(() => expect(create).toHaveBeenCalledTimes(2))
     const livePayload = create.mock.calls[1][0] as Record<string, unknown>
@@ -413,6 +433,7 @@ describe('L12/L13：保证金模式与杠杆落 config_json', () => {
     await waitFor(() => expect(screen.getByText('Binance')).toBeTruthy())
     fireEvent.click(screen.getByText('Binance'))
     fireEvent.click(screen.getByText('确认选择'))
+    pickTimeframeIfNeeded()
     fireEvent.click(screen.getByText('保存策略'))
     await waitFor(() => expect(create).toHaveBeenCalled())
     const payload = create.mock.calls[0][0] as Record<string, unknown>
@@ -428,6 +449,7 @@ describe('L12/L13：保证金模式与杠杆落 config_json', () => {
     await waitFor(() => expect(screen.getByText('Binance')).toBeTruthy())
     fireEvent.click(screen.getByText('Binance'))
     fireEvent.click(screen.getByText('确认选择'))
+    pickTimeframeIfNeeded()
     fireEvent.click(screen.getByText('保存策略'))
     await waitFor(() => expect(create).toHaveBeenCalled())
     const payload = create.mock.calls[0][0] as Record<string, unknown>

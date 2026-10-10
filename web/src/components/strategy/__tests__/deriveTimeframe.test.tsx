@@ -17,13 +17,13 @@ describe('deriveTimeframeFromCRA：工作周期只跟开仓指标周期', () => 
     expect(deriveTimeframeFromCRA(p)).toBe('1h')
   })
 
-  it('只开补仓指标（开仓全关）→ 回退默认 15m', () => {
+  it('只开补仓指标（开仓全关）→ 不硬编码，返回空（保留用户选择）', () => {
     const p: CRAParams = {
       ...createDefaultCRAParams('contract'),
       addMacdEnabled: true,
       addMacdPeriod: '5m',
     }
-    expect(deriveTimeframeFromCRA(p)).toBe('15m')
+    expect(deriveTimeframeFromCRA(p)).toBe('')
   })
 
   it('多个开仓旧键取最快者；布林周期参与推导', () => {
@@ -45,6 +45,6 @@ describe('deriveTimeframeFromCRA：工作周期只跟开仓指标周期', () => 
       addMacdEnabled: true,
       addMacdPeriod: '30m',
     }
-    expect(deriveTimeframeFromCRA(p)).toBe('15m')
+    expect(deriveTimeframeFromCRA(p)).toBe('')
   })
 })
