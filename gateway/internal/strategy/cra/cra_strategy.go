@@ -196,7 +196,11 @@ func (s *BaseCRAStrategy) RuntimeStatus() map[string]any {
 	}
 	st := s.state
 	if st != nil {
-		m["in_position"] = st.InPosition
+		// qty>0 门：信号已发但成交未确认（或拒单回滚前残留）的窗口期按空仓
+		// 透出——持仓方向/均价/在仓时长只对真实成交持仓显示（2026-10-10 幽灵
+		// 持仓事故：InPosition=true/TotalQty=0 被面板显示为"做多/均价/3 分钟"）。
+		inPos := st.InPosition && st.TotalQty > 0
+		m["in_position"] = inPos
 		m["loops_executed"] = st.LoopExecuted
 		m["waterfall_paused"] = st.WaterfallPaused
 		// G1 手动操控状态如实透出（前端操控区按 add_position_enabled 键的
@@ -221,7 +225,7 @@ func (s *BaseCRAStrategy) RuntimeStatus() map[string]any {
 		if st.PendingCloseKind != "" {
 			m["pending_close_kind"] = st.PendingCloseKind
 		}
-		if st.InPosition {
+		if inPos {
 			m["direction"] = string(st.Side)
 			m["entry_price"] = st.EntryPrice
 			m["avg_entry_price"] = st.AvgEntryPrice
@@ -355,6 +359,11 @@ func (s *BaseCRAStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Sign
 		if st.WaterfallPaused {
 			return nil, nil
 		}
+		// 首单拒单回滚后的当根拦截：同一根 bar 不重发首单（防拒单-重发风暴），
+		// 下一根 bar 条件仍满足可重新入场（与平仓拒单重武装语义一致）。
+		if st.EntryRejectedBarTime != 0 && st.EntryRejectedBarTime == bar.Time {
+			return nil, nil
+		}
 		if !st.CanStartNewLoop(p.TradeCountMode, p.LoopCount) {
 			return nil, nil
 		}
@@ -379,6 +388,7 @@ func (s *BaseCRAStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Sign
 			return nil, nil
 		}
 		st.EnterPosition(bar.Close, side)
+		st.EntrySignalBarTime = bar.Time
 		// 开仓加倍（币富名词解释 #15，open_double）：只放大首单名义（首单金额
 		// ×2），不改变 add_positions 阶梯的基数——补仓第 N 档仍按首单原始金额
 		// ×multiplier 计（见下方 Add positions 分支，entryQty 的 multiplier 实参
@@ -599,6 +609,27 @@ func (s *BaseCRAStrategy) OnOrderUpdate(order model.OrderData, bus *event.EventB
 		}
 		s.state.PendingCloseKind = ""
 		s.state.PendingCloseQty = 0
+	}
+
+	// 入场单的拒单/撤单/过期（2026-10-10 生产实锤：风控拒单只记日志不回传，
+	// 策略在信号时已 EnterPosition → 永久幽灵持仓）：首单在途窗口
+	// （InPosition 且 PositionCount==0，无任何成交）整体回滚乐观记账——不走
+	// ExitPosition（拒掉的循环不消耗 loop 计数、不写顺势锚点）；并记当根
+	// bar 拦截（同根不重发，下一根恢复评估）。补仓单只回补在途计数（与
+	// liquidity_heat 拒单回补同口径），持仓不动。G1 手动补仓单信号时无乐观
+	// 变更，跳过；平仓方向单由上方在途平仓块处理。
+	if (order.Status == model.StatusRejected || order.Status == model.StatusCancelled || order.Status == model.StatusExpired) &&
+		!order.ClosePosition && !s.isReduceSide(order.Side) && !strings.Contains(order.ClientOID, ":manual:") {
+		if s.state.InPosition && s.state.PositionCount == 0 {
+			s.logger.Warn("cra first order ended without fill, rollback entry",
+				"symbol", s.symbol, "status", order.Status, "client_oid", order.ClientOID)
+			s.state.ResetForNextLoop()
+			s.state.EntryRejectedBarTime = s.state.EntrySignalBarTime
+		} else if s.state.PendingAddCount > 0 {
+			s.logger.Warn("cra add order ended without fill, re-arm pending add",
+				"symbol", s.symbol, "status", order.Status, "pending_add", s.state.PendingAddCount)
+			s.state.PendingAddCount--
+		}
 	}
 	return nil, nil
 }

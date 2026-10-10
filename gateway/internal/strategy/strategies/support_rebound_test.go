@@ -758,3 +758,90 @@ func TestSupportReboundCRAInvalidParamsStartFails(t *testing.T) {
 			s.IsRunning(), s.craEnabled)
 	}
 }
+
+
+// ── 终态未成交（拒/撤/过期）回滚：2026-10-10 CRA 幽灵持仓事故同型缺口 ──
+
+// TestSupportReboundRejectedEntryRollsBack 入场单被拒：enterLong 信号发出即
+// 乐观入场（inPosition=true），拒单终态必须回滚回 IDLE，否则永久虚持仓
+// （新形态不再识别、面板显示持仓）。重复投递幂等。
+func TestSupportReboundRejectedEntryRollsBack(t *testing.T) {
+	s := newStartedSupportRebound(t, nil)
+	sig := driveSupportReboundToEntry(t, s)
+	if sig.Direction != "LONG" {
+		t.Fatalf("entry direction = %q, want LONG", sig.Direction)
+	}
+	if !s.inPosition || s.state != srStatePosition {
+		t.Fatalf("optimistic entry missing: inPosition=%v state=%s", s.inPosition, s.state)
+	}
+
+	reject := model.OrderData{
+		Symbol: "BTCUSDT", Side: model.SideBuy, Status: model.StatusRejected,
+		ClientOID: "sig:sr:1",
+	}
+	for i := 0; i < 2; i++ { // 重复投递幂等
+		if _, err := s.OnOrderUpdate(reject, nil); err != nil {
+			t.Fatalf("reject update: %v", err)
+		}
+	}
+	if s.inPosition || s.state != srStateIdle || s.entryPrice != 0 {
+		t.Fatalf("entry rejection must roll back to idle flat: inPosition=%v state=%s entry=%v",
+			s.inPosition, s.state, s.entryPrice)
+	}
+	rs := s.RuntimeStatus()
+	if rs["in_position"] != false {
+		t.Fatalf("runtime status after rollback = %v, want flat", rs)
+	}
+}
+
+// TestSupportReboundCRARejectedEntryRollsBack CRA 模式入场单被拒：乐观入场
+// 回滚；CRAState 从未入场（成交才 EnterPosition），保持空仓。
+func TestSupportReboundCRARejectedEntryRollsBack(t *testing.T) {
+	s := newStartedSupportRebound(t, srCRAOverrides())
+	driveSupportReboundToEntry(t, s)
+	if !s.inPosition || s.craState.InPosition {
+		t.Fatalf("before reject: inPosition=%v craInPosition=%v", s.inPosition, s.craState.InPosition)
+	}
+	if _, err := s.OnOrderUpdate(model.OrderData{
+		Symbol: "BTCUSDT", Side: model.SideBuy, Status: model.StatusRejected,
+		ClientOID: "sig:sr:2",
+	}, nil); err != nil {
+		t.Fatalf("reject update: %v", err)
+	}
+	if s.inPosition || s.state != srStateIdle || s.craState.InPosition {
+		t.Fatalf("cra entry rejection must roll back: inPosition=%v state=%s cra=%v",
+			s.inPosition, s.state, s.craState.InPosition)
+	}
+}
+
+// TestSupportReboundCRARejectedAddKeepsPosition CRA 模式补仓单被拒：只回补
+// 挂起计数，已成交持仓与阶梯档数不动（与 liquidity_heat 拒单回补同口径）。
+func TestSupportReboundCRARejectedAddKeepsPosition(t *testing.T) {
+	s := newStartedSupportRebound(t, srCRAOverrides())
+	driveSupportReboundToEntry(t, s)
+	srCRAFillBuy(t, s, 106, 100.0/106.0) // 首单成交
+
+	// 补仓 #1 触发（与 TestSupportReboundCRAAddLadder 同驱动序列）。
+	feedSupportReboundBars(s,
+		srTestBar(101, 101.5, 100.4, 100.6, 100),
+		srTestBar(100, 100.2, 99.0, 99.0, 100),
+	)
+	sigs := feedSupportReboundBars(s, srTestBar(99.0, 99.7, 98.9, 99.55, 100))
+	if len(sigs) != 1 || s.craState.PendingAddCount != 1 {
+		t.Fatalf("add #1 signal/pending = %+v/%d, want 1/1", sigs, s.craState.PendingAddCount)
+	}
+
+	if _, err := s.OnOrderUpdate(model.OrderData{
+		Symbol: "BTCUSDT", Side: model.SideBuy, Status: model.StatusRejected,
+		ClientOID: "sig:sr:3",
+	}, nil); err != nil {
+		t.Fatalf("reject update: %v", err)
+	}
+	if s.craState.PendingAddCount != 0 {
+		t.Fatalf("PendingAddCount = %d, want 0（拒单回补）", s.craState.PendingAddCount)
+	}
+	if !s.inPosition || !s.craState.InPosition || s.craState.PositionCount != 1 {
+		t.Fatalf("position must survive add rejection: inPosition=%v cra=%+v",
+			s.inPosition, s.craState)
+	}
+}

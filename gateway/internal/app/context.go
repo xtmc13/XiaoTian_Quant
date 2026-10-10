@@ -1780,6 +1780,13 @@ func (ctx *Context) wireStrategyEngine() {
 				"symbol", signal.Symbol,
 				"side", side,
 				"error", err.Error())
+			// ord==nil 的失败发生在订单创建之前（请求校验/限流/paper 停用），
+			// OMS 四条拒绝路径不覆盖、无任何事件回传——策略信号时已乐观记账，
+			// 补发拒绝态订单更新让策略回滚（2026-10-10 幽灵持仓事故同型缺口）。
+			// ord!=nil 的失败（风控/AI门/锁仓/交易所提交）OMS 已广播，不重复发。
+			if ord == nil {
+				ctx.fireSignalOrderRejected(req)
+			}
 			return
 		}
 
@@ -1804,6 +1811,41 @@ func (ctx *Context) wireStrategyEngine() {
 	}
 
 	ctx.Logger.Info("StrategyEngine wired")
+}
+
+// fireSignalOrderRejected 信号单在 OMS 订单创建之前失败的补偿回传：按
+// oms.fireOrderUpdate 同款事件形态与通道（OnOrderUpdate 钩子 → 事件总线
+// TypeOrderUpdate）广播一张拒绝态订单，带信号单原样 client_oid——引擎
+// wrapper 按 "sig:<配置id>:" 前缀路由回本策略执行拒单回滚。订单未创建，
+// 不落库（与 OMS 创建前拒绝零记录口径一致）。
+func (ctx *Context) fireSignalOrderRejected(req *order.Request) {
+	om := order.GetOrderManager()
+	if om == nil || om.OnOrderUpdate == nil {
+		return
+	}
+	now := time.Now().UnixMilli()
+	om.OnOrderUpdate(&model.OrderData{
+		ID:            fmt.Sprintf("sig-rej-%d", time.Now().UnixNano()),
+		Symbol:        req.Symbol,
+		Side:          req.Side,
+		OrderType:     req.OrderType,
+		Price:         req.Price,
+		StopPrice:     req.StopPrice,
+		Quantity:      req.Quantity,
+		Status:        model.StatusRejected,
+		Exchange:      req.Exchange,
+		UserID:        req.UserID,
+		ClientOID:     req.ClientOID,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		MarketType:    req.MarketType,
+		PositionSide:  req.PositionSide,
+		Leverage:      req.Leverage,
+		MarginMode:    req.MarginMode,
+		TPPrice:       req.TPPrice,
+		SLPrice:       req.SLPrice,
+		ClosePosition: req.ClosePosition,
+	})
 }
 
 // clientOIDForSignal 信号下单的归属打标：自动信号 "sig:<配置id>:<nonce>"；

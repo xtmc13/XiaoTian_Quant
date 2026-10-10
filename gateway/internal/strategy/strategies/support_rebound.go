@@ -397,10 +397,22 @@ func (s *SupportReboundStrategy) OnOrderBook(_ model.OrderBookData, _ *event.Eve
 // PositionCount++、RecordFill 更新均价/数量；首笔买单成交时 EnterPosition
 // 建立 CRA 持仓基准（EntryPrice = 首单成交价，后续补仓以此算回撤）；
 // 清仓单成交 → ExitPosition。非 CRA 模式本策略不下单跟踪，保持空壳。
+// 终态未成交（拒/撤/过期）：入场买单回滚乐观记账——enterLong 信号发出即
+// inPosition=true，拒单不回滚会永久虚持仓（2026-10-10 CRA 幽灵持仓事故
+// 同型缺口）；CRA 模式补仓单只回补挂起计数（已成交持仓不动）。
 func (s *SupportReboundStrategy) OnOrderUpdate(order model.OrderData, _ *event.EventBus) (*model.Signal, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.running || !s.craEnabled || s.craState == nil {
+	if !s.running {
+		return nil, nil
+	}
+
+	if order.Status == model.StatusRejected || order.Status == model.StatusCancelled || order.Status == model.StatusExpired {
+		s.handleUnfilledTerminalLocked(order)
+		return nil, nil
+	}
+
+	if !s.craEnabled || s.craState == nil {
 		return nil, nil
 	}
 
@@ -422,6 +434,25 @@ func (s *SupportReboundStrategy) OnOrderUpdate(order model.OrderData, _ *event.E
 		}
 	}
 	return nil, nil
+}
+
+// handleUnfilledTerminalLocked 终态未成交订单的处置。须持锁。入场/补仓都是
+// 买单方向：CRA 已有成交持仓时按补仓拒单回补挂起计数；否则按首单拒单回滚
+// 乐观入场（回 IDLE 重新识别支撑）。平仓单（卖向/ClosePosition）信号发出时
+// 状态已先复位（先清后发），无乐观记账可回滚。
+func (s *SupportReboundStrategy) handleUnfilledTerminalLocked(order model.OrderData) {
+	if order.Side != model.SideBuy || order.ClosePosition {
+		return
+	}
+	if s.craEnabled && s.craState != nil && s.craState.InPosition {
+		if s.craState.PendingAddCount > 0 {
+			s.craState.PendingAddCount--
+		}
+		return
+	}
+	if s.inPosition {
+		s.resetToIdleLocked()
+	}
 }
 
 // OnTick 持仓管理（止损/止盈/保本移损按最新成交价判定，K 线计数只走 OnBar）。

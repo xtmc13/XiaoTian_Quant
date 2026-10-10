@@ -83,6 +83,14 @@ type CRAState struct {
 
 	// ── G1：运行时手动操控（币富名词解释 #23/#24/#25/#28）──
 	//
+	// EntrySignalBarTime 最近一次首单信号的触发 bar 开盘时刻（拒单回滚时
+	// 据此给 EntryRejectedBarTime 归因）。ResetForNextLoop 不清——它只对
+	// "InPosition 且 PositionCount==0"（首单在途窗口）的拒单有意义。
+	EntrySignalBarTime int64
+	// EntryRejectedBarTime 首单被拒/撤/过期终态的触发 bar 开盘时刻：同根 bar
+	// 不再重发首单（防拒单-重发风暴），下一根 bar 恢复评估（与平仓拒单重武装
+	// 语义一致）。随 ResetForNextLoop 清零（新循环/新入场不背旧账）。
+	EntryRejectedBarTime int64
 	// AddPositionDisabled 关闭补仓（#25）运行时开关：置位后 OnBar 跳过自动
 	// 补仓评估分支，止盈/止损/反向出场/燃烧（各自独立分支）照常。选 CRAState
 	// 运行时字段而非配置字段（不改 config_json）：重启/Stop 即恢复配置默认
@@ -130,6 +138,7 @@ func (s *CRAState) ResetForNextLoop() {
 	s.BurnDualFired = false
 	s.BurnGlobalFired = false
 	s.ManualAddCount = 0
+	s.EntryRejectedBarTime = 0
 	// AddPositionDisabled/EntryPaused（G1 手动操控开关）刻意不清：币富 #25
 	// "关闭补仓"与 #23"清仓后暂停订单"是跨循环的运行时干预，只随
 	// Reset（Stop/重启）恢复默认。
