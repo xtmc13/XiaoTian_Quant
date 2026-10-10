@@ -255,8 +255,8 @@ func TestBacktestAdjustTradePositionReduce(t *testing.T) {
 		return nil, nil
 	}
 	s.adjust = func(pos *Position, bar model.Bar, state *StrategyState) float64 {
-		if bar.Time == 120000 { // 第 2 根（close=110）减仓 55U = 0.5 币
-			return -55
+		if bar.Time == 180000 { // 第 3 根（close=120）减仓 60U = 0.5 币
+			return -60
 		}
 		return 0
 	}
@@ -271,19 +271,20 @@ func TestBacktestAdjustTradePositionReduce(t *testing.T) {
 		t.Fatalf("want 1 trade, got %d", res.TotalTrades)
 	}
 	pos := res.Trades[0]
-	// 减仓腿：0.5 × (110-100) = 5；平仓腿：1.5 × (130-100) = 45 → 50
-	if !almostEq(pos.RealizedPnL, 50) {
-		t.Fatalf("RealizedPnL = %v, want 50 (5 reduce leg + 45 close leg)", pos.RealizedPnL)
+	// T+1 开盘成交口径：bar0 信号在 bar1 开盘 110 入场（qty 2）；
+	// 减仓腿：0.5 × (120-110) = 5；平仓腿：1.5 × (130-110) = 30 → 35
+	if !almostEq(pos.RealizedPnL, 35) {
+		t.Fatalf("RealizedPnL = %v, want 35 (5 reduce leg + 30 close leg)", pos.RealizedPnL)
 	}
 	if pos.Adjustments != 1 {
 		t.Fatalf("adjustments = %d, want 1", pos.Adjustments)
 	}
 	// 现金账（既有口径：平仓/减仓腿现金 = 名义价值 + 腿盈亏，与 CLOSE 信号
-	// 同约定）：-200（开仓） +60（减仓 55 + 5 盈）；权益曲线按市价重估：
-	// bar1=9800+2×110=10020、bar2=9860+1.5×120=10040、bar3=9860+1.5×130=10055，
-	// end_of_test 平仓不再追加分 → TotalReturn=55（50 盈亏 + 既有口径加成）。
-	if !almostEq(res.TotalReturn, 55) {
-		t.Fatalf("TotalReturn = %v, want 55 (existing close-leg cash convention)", res.TotalReturn)
+	// 同约定）：-220（开仓） +65（减仓 60 + 5 盈）；权益曲线按市价重估：
+	// bar1=9780+2×110=10000、bar2=9845+1.5×120=10025、bar3=9845+1.5×130=10040，
+	// end_of_test 平仓不再追加分 → TotalReturn=40。
+	if !almostEq(res.TotalReturn, 40) {
+		t.Fatalf("TotalReturn = %v, want 40 (existing close-leg cash convention)", res.TotalReturn)
 	}
 }
 
@@ -298,7 +299,7 @@ func TestBacktestAdjustReduceToZero(t *testing.T) {
 		return nil, nil
 	}
 	s.adjust = func(pos *Position, bar model.Bar, state *StrategyState) float64 {
-		if bar.Time == 120000 {
+		if bar.Time == 180000 { // 第 3 根（close=120）全平
 			return -10000 // 远超持仓价值 → 全平
 		}
 		return 0
@@ -313,7 +314,7 @@ func TestBacktestAdjustReduceToZero(t *testing.T) {
 	if res.TotalTrades != 1 || res.Trades[0].ExitReason != "position_reduce" {
 		t.Fatalf("reduce-to-zero must close as position_reduce, got %+v", res.Trades)
 	}
-	// 1 × (110-100) = 10
+	// T+1 开盘成交口径：bar0 信号在 bar1 开盘 110 入场；1 × (120-110) = 10
 	if !almostEq(res.Trades[0].RealizedPnL, 10) {
 		t.Fatalf("RealizedPnL = %v, want 10", res.Trades[0].RealizedPnL)
 	}

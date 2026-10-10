@@ -601,6 +601,7 @@ func InternalCallIndicator(c *gin.Context) {
 		return
 	}
 
+	NormalizeOutputMap(result.Output)
 	c.JSON(http.StatusOK, gin.H{"code": 1, "msg": "success", "data": result.Output})
 }
 

@@ -407,6 +407,21 @@ func ValidateOutputJSON(outputJSON string) (IndicatorOutput, []ValidationHint) {
 				Params:   map[string]any{"index": i},
 			})
 		}
+		if plot.Type != "" {
+			output.Plots[i].Type = NormalizePlotType(plot.Type)
+		}
+	}
+
+	for i, layer := range output.Layers {
+		switch layer.Type {
+		case "zone", "line", "label":
+		default:
+			hints = append(hints, ValidationHint{
+				Severity: "warn",
+				Code:     "LAYER_UNKNOWN_TYPE",
+				Params:   map[string]any{"index": i, "type": layer.Type},
+			})
+		}
 	}
 
 	return output, hints

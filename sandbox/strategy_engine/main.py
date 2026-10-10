@@ -111,32 +111,77 @@ class TimeoutException(Exception):
     pass
 
 
+def _inject_thread_exception(thread_id: int, exc_type) -> None:
+    """Asynchronously raise exc_type in the target thread (CPython only).
+
+    Same watchdog mechanism as QuantDinger safe_exec.py: PyThreadState_SetAsyncExc
+    is the only way to interrupt a thread stuck inside exec()."""
+    try:
+        import ctypes
+    except ImportError:
+        return
+    ret = ctypes.pythonapi.PyThreadState_SetAsyncExc(
+        ctypes.c_ulong(thread_id), ctypes.py_object(exc_type)
+    )
+    if ret > 1:
+        # More than one thread state was modified — undo to avoid corruption.
+        ctypes.pythonapi.PyThreadState_SetAsyncExc(
+            ctypes.c_ulong(thread_id), ctypes.py_object(0)
+        )
+
+
 def timeout_context(seconds: int):
+    """Interrupt the *entering* thread after N seconds.
+
+    threading.Timer raises in the timer thread and can never interrupt exec();
+    we inject TimeoutException into the entering thread instead."""
     class _Timeout:
         def __enter__(self):
+            self._target_tid = threading.get_ident()
+            self.timed_out = False
             self.timer = threading.Timer(seconds, self._raise_timeout)
+            self.timer.daemon = True
             self.timer.start()
             return self
 
         def __exit__(self, exc_type, exc_val, exc_tb):
             self.timer.cancel()
             if exc_type is TimeoutException:
-                return True
+                return True  # Suppress the injected exception; caller checks timed_out
             return False
 
         def _raise_timeout(self):
-            raise TimeoutException(f"Execution timed out after {seconds} seconds")
+            self.timed_out = True
+            _inject_thread_exception(self._target_tid, TimeoutException)
 
     return _Timeout()
 
 
 def apply_memory_limit(mb: int):
+    """Lower RLIMIT_AS for the duration of one exec call; returns the previous
+    (soft, hard) limits for restore_memory_limit(), or None when unchanged.
+
+    NOTE: RLIMIT_AS is process-wide, so the FastAPI host shares the lowered
+    ceiling while user code runs in-process. The proper fix is a subprocess
+    sandbox; until then the window is narrowed to the exec call and restored."""
     try:
         import resource
         soft, hard = resource.getrlimit(resource.RLIMIT_AS)
         limit_bytes = mb * 1024 * 1024
         if soft > limit_bytes or soft == -1:
             resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, hard))
+            return (soft, hard)
+    except (ImportError, OSError, ValueError):
+        pass
+    return None
+
+
+def restore_memory_limit(previous):
+    if previous is None:
+        return
+    try:
+        import resource
+        resource.setrlimit(resource.RLIMIT_AS, previous)
     except (ImportError, OSError, ValueError):
         pass
 
@@ -201,14 +246,19 @@ def run_indicator_strategy(req: IndicatorStrategyRequest):
         "__builtins__": build_safe_builtins(),
     }
 
+    prev_limits = apply_memory_limit(MAX_MEMORY_MB)
+    effective_timeout = min(req.timeout, MAX_TIMEOUT_SECONDS)
     try:
-        apply_memory_limit(MAX_MEMORY_MB)
-        with timeout_context(min(req.timeout, MAX_TIMEOUT_SECONDS)):
+        with timeout_context(effective_timeout) as tctx:
             exec(compile(req.code, "<strategy>", "exec"), exec_globals)
+        if tctx.timed_out:
+            raise TimeoutException(f"Execution timed out after {effective_timeout} seconds")
     except TimeoutException as e:
-        raise HTTPException(status_code=408, detail=str(e))
+        raise HTTPException(status_code=408, detail=str(e) or f"Execution timed out after {effective_timeout} seconds")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Runtime error: {traceback.format_exc()}")
+    finally:
+        restore_memory_limit(prev_limits)
 
     result_df = exec_globals.get("df", df)
     if "buy" not in result_df.columns:
@@ -294,14 +344,19 @@ def run_script_strategy(req: ScriptStrategyRequest):
         "__builtins__": build_safe_builtins(),
     }
 
+    prev_limits = apply_memory_limit(MAX_MEMORY_MB)
+    effective_timeout = min(req.timeout, MAX_TIMEOUT_SECONDS)
     try:
-        apply_memory_limit(MAX_MEMORY_MB)
-        with timeout_context(min(req.timeout, MAX_TIMEOUT_SECONDS)):
+        with timeout_context(effective_timeout) as tctx:
             exec(compile(req.code, "<strategy>", "exec"), exec_globals)
+        if tctx.timed_out:
+            raise TimeoutException(f"Execution timed out after {effective_timeout} seconds")
     except TimeoutException as e:
-        raise HTTPException(status_code=408, detail=str(e))
+        raise HTTPException(status_code=408, detail=str(e) or f"Execution timed out after {effective_timeout} seconds")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Runtime error: {traceback.format_exc()}")
+    finally:
+        restore_memory_limit(prev_limits)
 
     on_bar = exec_globals.get("on_bar")
     if not callable(on_bar):
@@ -311,10 +366,12 @@ def run_script_strategy(req: ScriptStrategyRequest):
     for idx, bar in enumerate(req.bars):
         ctx.signals = []
         try:
-            with timeout_context(min(req.timeout, MAX_TIMEOUT_SECONDS)):
+            with timeout_context(min(req.timeout, MAX_TIMEOUT_SECONDS)) as tctx:
                 on_bar(ctx, bar)
+            if tctx.timed_out:
+                raise TimeoutException(f"on_bar timed out after {min(req.timeout, MAX_TIMEOUT_SECONDS)} seconds")
         except TimeoutException as e:
-            raise HTTPException(status_code=408, detail=str(e))
+            raise HTTPException(status_code=408, detail=str(e) or f"on_bar timed out after {min(req.timeout, MAX_TIMEOUT_SECONDS)} seconds")
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"on_bar error: {traceback.format_exc()}")
 

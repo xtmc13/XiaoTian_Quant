@@ -5,24 +5,63 @@ type IndicatorOutput struct {
 	Name          string            `json:"name"`
 	Plots         []Plot            `json:"plots"`
 	Signals       []Signal          `json:"signals"`
+	Layers        []Layer           `json:"layers,omitempty"`
+	LatestSignal  map[string]any    `json:"latest_signal,omitempty"`
 	CalculatedVars map[string]any   `json:"calculatedVars,omitempty"`
 }
 
 // Plot represents a single plot line/band on the chart.
 type Plot struct {
 	Name    string  `json:"name"`
-	Data    []any   `json:"data"` // length must match len(df)
+	Data    []any   `json:"data"` // length must match len(df); element may be a number, nil, or {"value","color","size"}
 	Color   string  `json:"color,omitempty"`
 	Overlay bool    `json:"overlay,omitempty"`
-	Type    string  `json:"type,omitempty"` // "line", "bar", etc.
+	Type    string  `json:"type,omitempty"` // "line", "bar", "circle", "lamp"; aliases normalized by NormalizeOutputMap
+	// Style pass-through fields (QuantDinger contract §7)
+	LineWidth   float64 `json:"lineWidth,omitempty"`
+	LineStyle   string  `json:"lineStyle,omitempty"` // "solid" | "dashed"; "style" accepted as input alias
+	Opacity     float64 `json:"opacity,omitempty"`
+	Size        float64 `json:"size,omitempty"` // "radius" accepted as input alias
+	BorderColor string  `json:"borderColor,omitempty"`
+	BorderSize  float64 `json:"borderSize,omitempty"`
+	BaseValue   float64 `json:"baseValue,omitempty"` // bar baseline
 }
 
 // Signal represents buy/sell markers on the chart.
 type Signal struct {
 	Type string `json:"type"` // "buy" or "sell"
 	Text string `json:"text,omitempty"`
-	Data []any  `json:"data"` // length must match len(df), value is float price or nil
+	Data []any  `json:"data"` // length must match len(df); float price, nil, bool, or {"active","price","text","color"}
 	Color string `json:"color,omitempty"`
+	// RenderMode controls how persistent conditions become markers:
+	// "events" | "points"/"markers"/"raw" | "state"/"continuous"/"condition".
+	// When omitted, dense series (>18% active) are edge-ified by the executor.
+	RenderMode string `json:"renderMode,omitempty"`
+	TextData   []any  `json:"textData,omitempty"` // optional per-bar labels, length len(df)
+}
+
+// Layer represents a sparse visual object (zone, horizontal/sloped line, label).
+// Layers do not need per-bar arrays; indices or times must be meaningful for df.
+type Layer struct {
+	Type        string  `json:"type"` // "zone" | "line" | "label"
+	StartIndex  int     `json:"startIndex,omitempty"`
+	EndIndex    int     `json:"endIndex,omitempty"`
+	Index       int     `json:"index,omitempty"` // label anchor
+	StartTime   int64   `json:"startTime,omitempty"`
+	EndTime     int64   `json:"endTime,omitempty"`
+	Time        int64   `json:"time,omitempty"`
+	Top         float64 `json:"top,omitempty"`    // zone
+	Bottom      float64 `json:"bottom,omitempty"` // zone
+	Price       float64 `json:"price,omitempty"`  // horizontal line / label
+	StartPrice  float64 `json:"startPrice,omitempty"` // sloped line
+	EndPrice    float64 `json:"endPrice,omitempty"`   // sloped line
+	Text        string  `json:"text,omitempty"`
+	Color       string  `json:"color,omitempty"`
+	FillColor   string  `json:"fillColor,omitempty"`
+	BorderColor string  `json:"borderColor,omitempty"`
+	TextColor   string  `json:"textColor,omitempty"`
+	Opacity     float64 `json:"opacity,omitempty"`
+	Dashed      bool    `json:"dashed,omitempty"`
 }
 
 // ParamDecl represents a tunable parameter declared via # @param.

@@ -25,14 +25,16 @@ type Runner struct {
 	positionSizePct float64
 	riskFreeRate    float64
 
-	rng        *rand.Rand
-	bars       map[string][]model.Bar  // symbol -> bars
-	ticks      map[string][]model.Tick // symbol -> ticks
-	trades     []model.TradeData
-	orders     []model.OrderData
-	positions  []Position
-	equity     []EquityPoint
-	equityPeak float64
+	rng         *rand.Rand
+	bars        map[string][]model.Bar  // symbol -> bars
+	ticks       map[string][]model.Tick // symbol -> ticks
+	trades      []model.TradeData
+	orders      []model.OrderData
+	positions   []Position
+	equity      []EquityPoint
+	executions  []Execution
+	orderLedger []OrderLedgerEntry
+	equityPeak  float64
 
 	maxPositionAdjustments int // v1.2: 单笔持仓加/减仓次数上限（<=0 不限）
 
@@ -68,6 +70,37 @@ type EquityPoint struct {
 	Equity        float64 `json:"equity"`
 	AvailableCash float64 `json:"available_cash"`
 	PositionValue float64 `json:"position_value"`
+	// Drawdown 是相对历史峰值的回撤百分比（<=0，峰值处为 0；QuantDinger
+	// equityCurve[].drawdown 同口径），由 buildResult 统一回填。
+	Drawdown float64 `json:"drawdown,omitempty"`
+}
+
+// Execution 单次成交明细（对标 QuantDinger executions[]：每次实际成交一条，
+// 含信号时间与成交时间，前端据此在 K 线图上叠加买卖点）。
+type Execution struct {
+	Time       int64   `json:"time"`                  // 成交时间（unix ms，T+1 开盘价成交）
+	SignalTime int64   `json:"signal_time,omitempty"` // 信号产生的 K 线时间（钩子调整单无）
+	Side       string  `json:"side"`                  // buy | sell（按持仓量增量方向）
+	Quantity   float64 `json:"quantity"`
+	Price      float64 `json:"price"`
+	Notional   float64 `json:"notional"`
+	Commission float64 `json:"commission"`
+	Balance    float64 `json:"balance"` // 成交后的账户权益
+	Reason     string  `json:"reason,omitempty"`
+}
+
+// OrderLedgerEntry 订单台账（对标 QuantDinger orderLedger）：策略信号产生的
+// 订单从产生到成交/否决/拒绝/过期的全生命周期记录；vetoed=确认钩子否决，
+// rejected=成交时不可执行（余额不足/无持仓/方向冲突），expired=末根 K 线
+// 信号无下一根可成交。
+type OrderLedgerEntry struct {
+	SignalTime int64   `json:"signal_time"`
+	Direction  string  `json:"direction"`           // LONG | SHORT | CLOSE
+	Status     string  `json:"status"`              // filled | vetoed | rejected | expired
+	Reason     string  `json:"reason,omitempty"`    // 信号原因或拒绝原因
+	FillTime   int64   `json:"fill_time,omitempty"` // status=filled 时的成交时间
+	Quantity   float64 `json:"quantity,omitempty"`
+	Price      float64 `json:"price,omitempty"`
 }
 
 // RunnerConfig configures the backtest runner.
@@ -246,6 +279,19 @@ type RunResult struct {
 	// AvgAdjustmentsPerTrade 是平均每笔交易的调整次数（DCA 密集度）。
 	TotalAdjustments       int     `json:"total_adjustments"`
 	AvgAdjustmentsPerTrade float64 `json:"avg_adjustments_per_trade"`
+
+	// ── QuantDinger 对齐字段（v1.3）──
+	AnnualizedReturn     float64 `json:"annualized_return,omitempty"`     // 年化收益 %（复合，区间 <1 天为 0）
+	AnnualizedVolatility float64 `json:"annualized_volatility,omitempty"` // 年化波动率 %（按 K 线间隔推断年化因子）
+	TotalCommission      float64 `json:"total_commission,omitempty"`      // 全部成交的手续费合计
+	MaxDrawdownPeakTime  int64   `json:"max_drawdown_peak_time,omitempty"`
+	MaxDrawdownTroughTime int64  `json:"max_drawdown_trough_time,omitempty"`
+	Executions           []Execution        `json:"executions,omitempty"`
+	OrderLedger          []OrderLedgerEntry `json:"order_ledger,omitempty"`
+	// ResultStatus 三态（QuantDinger resultStatus）：no_signals=无任何成交；
+	// open_position_only=有成交但无信号驱动的完整回合（仅 end_of_test 强制平仓）；
+	// completed_trades=至少一笔信号驱动的完整回合。
+	ResultStatus string `json:"result_status,omitempty"`
 }
 
 // Run executes the backtest using bar data for the given strategy.
@@ -276,12 +322,16 @@ func (r *Runner) Run(strategy BacktestStrategy) (*RunResult, error) {
 	r.orders = nil
 	r.positions = nil
 	r.equity = nil
+	r.executions = nil
+	r.orderLedger = nil
 	r.equityPeak = r.initialBalance
 	r.mu.Unlock()
 
 	cash := r.initialBalance
 	var position *Position
-	equityPoints := []EquityPoint{{Timestamp: bars[0].Time, Equity: cash, AvailableCash: cash}}
+	var pending *model.Signal
+	var pendingTime int64
+	var equityPoints []EquityPoint
 
 	startTime := time.Now()
 
@@ -294,6 +344,14 @@ func (r *Runner) Run(strategy BacktestStrategy) (*RunResult, error) {
 
 	for i := 0; i < len(bars); i++ {
 		bar := bars[i]
+
+		// 上一根 K 线（T）产生的信号在本根（T+1）开盘价成交——
+		// QuantDinger/freqtrade pending 订单口径，消除当根收盘价成交的前视偏差。
+		if pending != nil {
+			r.fillPending(strategy, pending, pendingTime, bar, symbol, &position, &cash, state)
+			pending = nil
+		}
+
 		state.Bars = append(state.Bars, bar)
 		state.BarIndex = i
 		state.Equity = cash
@@ -304,141 +362,32 @@ func (r *Runner) Run(strategy BacktestStrategy) (*RunResult, error) {
 		state.Position = position
 
 		signal, err := strategy.OnBar(bar, state)
-		if err != nil {
-			continue
+		vetoed := false
+		if err == nil && signal != nil {
+			switch {
+			case r.hookVetoes(strategy, signal, position, state):
+				vetoed = true
+				r.appendLedger(OrderLedgerEntry{
+					SignalTime: bar.Time, Direction: signal.Direction,
+					Status: "vetoed", Reason: "hook_veto",
+				})
+			case i == len(bars)-1:
+				// 末根 K 线的信号没有下一根可成交，挂起即过期（freqtrade 同口径丢弃）。
+				r.appendLedger(OrderLedgerEntry{
+					SignalTime: bar.Time, Direction: signal.Direction,
+					Status: "expired", Reason: "end_of_data",
+				})
+			default:
+				pending = signal
+				pendingTime = bar.Time
+			}
 		}
-		if signal == nil {
-			// v1.2 adjust_trade_position：无信号 K 线同样询问加/减仓
-			// （freqtrade 每个迭代轮次都问，不只信号 K 线）。
+
+		// v1.2 adjust_trade_position：持仓期间每根 K 线（含无信号 K 线）询问
+		// 加/减仓；被确认钩子否决的信号 K 线不询问（信号未成交，视同无信号）。
+		if err == nil && !vetoed {
 			r.maybeAdjustPosition(strategy, position, bar, state, &cash)
-			equityPoints = append(equityPoints, EquityPoint{
-				Timestamp: bar.Time, Equity: state.Equity, AvailableCash: cash,
-			})
-			continue
 		}
-
-		// v1.2 下单前确认钩子：confirm_trade_entry（新仓）/ confirm_trade_exit。
-		if r.hookVetoes(strategy, signal, position, state) {
-			equityPoints = append(equityPoints, EquityPoint{
-				Timestamp: bar.Time, Equity: state.Equity, AvailableCash: cash,
-			})
-			continue
-		}
-
-		execPrice := r.applySlippage(bar.Close, signal.Direction)
-
-		switch signal.Direction {
-		case "LONG":
-			if position != nil && !position.IsClosed {
-				if position.Side == model.SideBuy && signal.Qty > 0 {
-					// Add to existing long position
-					addQty := signal.Qty
-					addNotional := addQty * execPrice
-					commissionCost := addNotional * r.commission
-					cash -= addNotional + commissionCost
-					totalCost := position.Quantity*position.EntryPrice + addQty*execPrice
-					position.Quantity += addQty
-					position.EntryPrice = totalCost / position.Quantity
-					position.Adjustments++ // v1.2: 信号驱动加仓计入统计
-					position.addCount++
-					state.TradeCount++
-				}
-				continue
-			}
-			qty := signal.Qty
-			if qty <= 0 {
-				// v1.2 custom_stake_amount：策略自定义入场金额（<=0 用默认）
-				stake := r.initialBalance * r.positionSizePct
-				if sc, ok := strategy.(StakeCustomizer); ok {
-					if custom := sc.CustomStakeAmount(stake, signal, state); custom > 0 {
-						stake = custom
-					}
-				}
-				qty = stake / execPrice
-			}
-			position = &Position{
-				Symbol:     symbol,
-				Side:       model.SideBuy,
-				Quantity:   qty,
-				EntryPrice: execPrice,
-				EntryTime:  bar.Time,
-			}
-			notional := position.Quantity * execPrice
-			commissionCost := notional * r.commission
-			cash -= notional + commissionCost
-			state.TradeCount++
-
-		case "SHORT":
-			if position != nil && !position.IsClosed {
-				if position.Side == model.SideSell && signal.Qty > 0 {
-					// Add to existing short position
-					addQty := signal.Qty
-					addNotional := addQty * execPrice
-					commissionCost := addNotional * r.commission
-					cash -= addNotional + commissionCost
-					totalCost := position.Quantity*position.EntryPrice + addQty*execPrice
-					position.Quantity += addQty
-					position.EntryPrice = totalCost / position.Quantity
-					position.Adjustments++ // v1.2: 信号驱动加仓计入统计
-					position.addCount++
-					state.TradeCount++
-				}
-				continue
-			}
-			qty := signal.Qty
-			if qty <= 0 {
-				stake := r.initialBalance * r.positionSizePct
-				if sc, ok := strategy.(StakeCustomizer); ok {
-					if custom := sc.CustomStakeAmount(stake, signal, state); custom > 0 {
-						stake = custom
-					}
-				}
-				qty = stake / execPrice
-			}
-			position = &Position{
-				Symbol:     symbol,
-				Side:       model.SideSell,
-				Quantity:   qty,
-				EntryPrice: execPrice,
-				EntryTime:  bar.Time,
-			}
-			notional := position.Quantity * execPrice
-			commissionCost := notional * r.commission
-			cash -= notional + commissionCost
-			state.TradeCount++
-
-		case "CLOSE":
-			if position == nil || position.IsClosed {
-				continue
-			}
-			position.ExitPrice = execPrice
-			position.ExitTime = bar.Time
-			position.IsClosed = true
-			position.ExitReason = signal.Reason
-
-			var closeLegPnL float64
-			if position.Side == model.SideBuy {
-				closeLegPnL = position.Quantity * (execPrice - position.EntryPrice)
-			} else {
-				closeLegPnL = position.Quantity * (position.EntryPrice - execPrice)
-			}
-			closeNotional := position.Quantity * execPrice
-			closeCommission := closeNotional * r.commission
-			closeLegPnL -= closeCommission
-			// v1.2：减仓调整已落袋的盈亏并入展示口径；现金只记平仓腿
-			// （减仓腿的现金在减仓当时已入账，不能重复计）。
-			position.RealizedPnL = closeLegPnL + position.partialPnL
-			cash += closeNotional + closeLegPnL
-
-			r.mu.Lock()
-			r.positions = append(r.positions, *position)
-			r.mu.Unlock()
-		}
-
-		// v1.2 adjust_trade_position：信号处理后再询问加/减仓（新开仓的
-		// 同根 K 线也会被询问——freqtrade 回测成交在下一根 K 线开盘，存在
-		// 一根 K 线的口径差异）。
-		r.maybeAdjustPosition(strategy, position, bar, state, &cash)
 
 		equity := cash
 		if position != nil && !position.IsClosed {
@@ -458,32 +407,20 @@ func (r *Runner) Run(strategy BacktestStrategy) (*RunResult, error) {
 	// Close any open position at the last bar
 	if position != nil && !position.IsClosed {
 		lastBar := bars[len(bars)-1]
-		position.ExitPrice = lastBar.Close
-		position.ExitTime = lastBar.Time
-		position.IsClosed = true
-		position.ExitReason = "end_of_test"
-
-		var closeLegPnL float64
-		if position.Side == model.SideBuy {
-			closeLegPnL = position.Quantity * (lastBar.Close - position.EntryPrice)
-		} else {
-			closeLegPnL = position.Quantity * (position.EntryPrice - lastBar.Close)
-		}
-		position.RealizedPnL = closeLegPnL + position.partialPnL
-		cash += position.Quantity*lastBar.Close + closeLegPnL
-
-		r.mu.Lock()
-		r.positions = append(r.positions, *position)
-		r.mu.Unlock()
+		r.closePosition(position, lastBar.Close, lastBar.Time, 0, "end_of_test", false, &cash)
 	}
 
 	r.mu.Lock()
 	r.equity = equityPoints
 	positions := make([]Position, len(r.positions))
 	copy(positions, r.positions)
+	executions := make([]Execution, len(r.executions))
+	copy(executions, r.executions)
+	ledger := make([]OrderLedgerEntry, len(r.orderLedger))
+	copy(ledger, r.orderLedger)
 	r.mu.Unlock()
 
-	return r.buildResult(positions, equityPoints, time.Since(startTime).Milliseconds()), nil
+	return r.buildResult(positions, equityPoints, executions, ledger, time.Since(startTime).Milliseconds()), nil
 }
 
 // RunWithTicks executes the backtest using tick data.
@@ -589,7 +526,7 @@ func (r *Runner) RunWithTicks(strategy BacktestStrategy) (*RunResult, error) {
 	copy(positions, r.positions)
 	r.mu.Unlock()
 
-	return r.buildResult(positions, equityPoints, time.Since(startTime).Milliseconds()), nil
+	return r.buildResult(positions, equityPoints, nil, nil, time.Since(startTime).Milliseconds()), nil
 }
 
 // hookVetoes 应用 v1.2 确认钩子：新仓入场问 EntryConfirmer，平仓问
@@ -612,6 +549,175 @@ func (r *Runner) hookVetoes(strategy BacktestStrategy, signal *model.Signal, pos
 		}
 	}
 	return false
+}
+
+// appendExecution / appendLedger 记录成交明细与订单台账。
+func (r *Runner) appendExecution(exec Execution) {
+	r.mu.Lock()
+	r.executions = append(r.executions, exec)
+	r.mu.Unlock()
+}
+
+func (r *Runner) appendLedger(entry OrderLedgerEntry) {
+	r.mu.Lock()
+	r.orderLedger = append(r.orderLedger, entry)
+	r.mu.Unlock()
+}
+
+// fillPending 在本根 K 线开盘价成交上一根挂起的信号（QuantDinger/freqtrade
+// T+1 开盘成交口径）。成交方向/加减仓按成交时的持仓状态判定；现金不足、
+// 无持仓可平或方向冲突的订单记入台账（rejected）且不成交。
+func (r *Runner) fillPending(strategy BacktestStrategy, signal *model.Signal, signalTime int64, bar model.Bar, symbol string, position **Position, cash *float64, state *StrategyState) {
+	execPrice := r.applySlippage(bar.Open, signal.Direction)
+	if execPrice <= 0 {
+		r.appendLedger(OrderLedgerEntry{SignalTime: signalTime, Direction: signal.Direction, Status: "rejected", Reason: "invalid_price"})
+		return
+	}
+	ledger := OrderLedgerEntry{
+		SignalTime: signalTime, Direction: signal.Direction,
+		Status: "filled", Reason: signal.Reason, FillTime: bar.Time, Price: execPrice,
+	}
+
+	switch signal.Direction {
+	case "LONG", "SHORT":
+		side := model.SideBuy
+		execSide := "buy"
+		if signal.Direction == "SHORT" {
+			side = model.SideSell
+			execSide = "sell"
+		}
+		if *position != nil && !(*position).IsClosed {
+			pos := *position
+			if pos.Side == side && signal.Qty > 0 {
+				// Add to existing position
+				addNotional := signal.Qty * execPrice
+				commissionCost := addNotional * r.commission
+				if addNotional+commissionCost > *cash {
+					r.appendLedger(OrderLedgerEntry{
+						SignalTime: signalTime, Direction: signal.Direction,
+						Status: "rejected", Reason: "insufficient_balance",
+					})
+					return
+				}
+				*cash -= addNotional + commissionCost
+				totalCost := pos.Quantity*pos.EntryPrice + signal.Qty*execPrice
+				pos.Quantity += signal.Qty
+				pos.EntryPrice = totalCost / pos.Quantity
+				pos.Adjustments++ // v1.2: 信号驱动加仓计入统计
+				pos.addCount++
+				state.TradeCount++
+				ledger.Quantity = signal.Qty
+				r.appendLedger(ledger)
+				r.appendExecution(Execution{
+					Time: bar.Time, SignalTime: signalTime, Side: execSide,
+					Quantity: signal.Qty, Price: execPrice, Notional: addNotional,
+					Commission: commissionCost, Balance: *cash + pos.Quantity*execPrice,
+					Reason: signal.Reason,
+				})
+				return
+			}
+			r.appendLedger(OrderLedgerEntry{
+				SignalTime: signalTime, Direction: signal.Direction,
+				Status: "rejected", Reason: "conflicting_position",
+			})
+			return
+		}
+		qty := signal.Qty
+		if qty <= 0 {
+			// v1.2 custom_stake_amount：策略自定义入场金额（<=0 用默认）
+			stake := r.initialBalance * r.positionSizePct
+			if sc, ok := strategy.(StakeCustomizer); ok {
+				if custom := sc.CustomStakeAmount(stake, signal, state); custom > 0 {
+					stake = custom
+				}
+			}
+			qty = stake / execPrice
+		}
+		notional := qty * execPrice
+		commissionCost := notional * r.commission
+		if notional+commissionCost > *cash {
+			r.appendLedger(OrderLedgerEntry{
+				SignalTime: signalTime, Direction: signal.Direction,
+				Status: "rejected", Reason: "insufficient_balance",
+			})
+			return
+		}
+		*position = &Position{
+			Symbol:     symbol,
+			Side:       side,
+			Quantity:   qty,
+			EntryPrice: execPrice,
+			EntryTime:  bar.Time,
+		}
+		*cash -= notional + commissionCost
+		state.TradeCount++
+		ledger.Quantity = qty
+		r.appendLedger(ledger)
+		r.appendExecution(Execution{
+			Time: bar.Time, SignalTime: signalTime, Side: execSide,
+			Quantity: qty, Price: execPrice, Notional: notional,
+			Commission: commissionCost, Balance: *cash + qty*execPrice,
+			Reason: signal.Reason,
+		})
+
+	case "CLOSE":
+		if *position == nil || (*position).IsClosed {
+			r.appendLedger(OrderLedgerEntry{
+				SignalTime: signalTime, Direction: signal.Direction,
+				Status: "rejected", Reason: "no_open_position",
+			})
+			return
+		}
+		pos := *position
+		ledger.Quantity = pos.Quantity
+		r.appendLedger(ledger)
+		r.closePosition(pos, execPrice, bar.Time, signalTime, signal.Reason, true, cash)
+	}
+}
+
+// closePosition 平仓结算：盈亏落袋（chargeCommission 区分信号平仓收手续费 /
+// end_of_test 强平不收费的既有口径），记录已平仓持仓与成交明细。
+func (r *Runner) closePosition(position *Position, execPrice float64, t int64, signalTime int64, reason string, chargeCommission bool, cash *float64) {
+	position.ExitPrice = execPrice
+	position.ExitTime = t
+	position.IsClosed = true
+	position.ExitReason = reason
+
+	var closeLegPnL float64
+	if position.Side == model.SideBuy {
+		closeLegPnL = position.Quantity * (execPrice - position.EntryPrice)
+	} else {
+		closeLegPnL = position.Quantity * (position.EntryPrice - execPrice)
+	}
+	closeNotional := position.Quantity * execPrice
+	closeCommission := 0.0
+	if chargeCommission {
+		closeCommission = closeNotional * r.commission
+		closeLegPnL -= closeCommission
+	}
+	// v1.2：减仓调整已落袋的盈亏并入展示口径；现金只记平仓腿
+	// （减仓腿的现金在减仓当时已入账，不能重复计）。
+	position.RealizedPnL = closeLegPnL + position.partialPnL
+	*cash += closeNotional + closeLegPnL
+
+	execSide := "sell"
+	if position.Side == model.SideSell {
+		execSide = "buy"
+	}
+	execReason := reason
+	if execReason == "" {
+		execReason = "close"
+	}
+	r.appendExecution(Execution{
+		Time: t, SignalTime: signalTime, Side: execSide,
+		Quantity: position.Quantity, Price: execPrice, Notional: closeNotional,
+		Commission: closeCommission, Balance: *cash,
+		Reason: execReason,
+	})
+
+	r.mu.Lock()
+	r.positions = append(r.positions, *position)
+	r.mu.Unlock()
 }
 
 // maybeAdjustPosition 驱动 PositionAdjuster（v1.2，对标 adjust_trade_position）：
@@ -649,8 +755,10 @@ func (r *Runner) maybeAdjustPosition(strategy BacktestStrategy, position *Positi
 func (r *Runner) applyPositionAdjustment(position *Position, amt float64, bar model.Bar, state *StrategyState, cash *float64) {
 	if amt > 0 {
 		dir := "LONG"
+		execSide := "buy"
 		if position.Side == model.SideSell {
 			dir = "SHORT"
+			execSide = "sell"
 		}
 		execPrice := r.applySlippage(bar.Close, dir)
 		if execPrice <= 0 {
@@ -666,6 +774,12 @@ func (r *Runner) applyPositionAdjustment(position *Position, amt float64, bar mo
 		position.Adjustments++
 		position.addCount++
 		state.TradeCount++
+		r.appendExecution(Execution{
+			Time: bar.Time, Side: execSide,
+			Quantity: addQty, Price: execPrice, Notional: addNotional,
+			Commission: commissionCost, Balance: *cash + position.Quantity*execPrice,
+			Reason: "position_adjust",
+		})
 		return
 	}
 	execPrice := r.applySlippage(bar.Close, "CLOSE")
@@ -678,17 +792,26 @@ func (r *Runner) applyPositionAdjustment(position *Position, amt float64, bar mo
 	}
 	reduceNotional := reduceQty * execPrice
 	var legPnL float64
+	execSide := "sell"
 	if position.Side == model.SideBuy {
 		legPnL = reduceQty * (execPrice - position.EntryPrice)
 	} else {
 		legPnL = reduceQty * (position.EntryPrice - execPrice)
+		execSide = "buy"
 	}
-	legPnL -= reduceNotional * r.commission
+	reduceCommission := reduceNotional * r.commission
+	legPnL -= reduceCommission
 	*cash += reduceNotional + legPnL
 	position.partialPnL += legPnL
 	position.Quantity -= reduceQty
 	position.Adjustments++
 	state.TradeCount++
+	r.appendExecution(Execution{
+		Time: bar.Time, Side: execSide,
+		Quantity: reduceQty, Price: execPrice, Notional: reduceNotional,
+		Commission: reduceCommission, Balance: *cash + position.Quantity*execPrice,
+		Reason: "position_adjust",
+	})
 	if position.Quantity <= 0 {
 		position.IsClosed = true
 		position.ExitPrice = execPrice
@@ -721,15 +844,34 @@ func MetricsFromEquity(equity []EquityPoint, initialBalance, riskFreeRate float6
 		riskFreeRate = 0.02
 	}
 	r := &Runner{initialBalance: initialBalance, riskFreeRate: riskFreeRate, commission: 0.001}
-	return r.buildResult(positions, equity, durationMs)
+	return r.buildResult(positions, equity, nil, nil, durationMs)
 }
 
-func (r *Runner) buildResult(positions []Position, equity []EquityPoint, durationMs int64) *RunResult {
+func (r *Runner) buildResult(positions []Position, equity []EquityPoint, executions []Execution, ledger []OrderLedgerEntry, durationMs int64) *RunResult {
 	result := &RunResult{
 		EquityCurve: equity,
 		Trades:      positions,
 		TotalTrades: len(positions),
+		Executions:  executions,
+		OrderLedger: ledger,
 		DurationMs:  durationMs,
+	}
+
+	// resultStatus 三态（QuantDinger 口径）：无任何成交与平仓 → no_signals；
+	// 有成交但没有信号驱动的完整回合（仅 end_of_test 强平）→ open_position_only。
+	completedTrades := 0
+	for _, pos := range positions {
+		if pos.ExitReason != "end_of_test" {
+			completedTrades++
+		}
+	}
+	switch {
+	case len(executions) == 0 && len(positions) == 0:
+		result.ResultStatus = "no_signals"
+	case completedTrades == 0:
+		result.ResultStatus = "open_position_only"
+	default:
+		result.ResultStatus = "completed_trades"
 	}
 
 	if len(equity) == 0 {
@@ -786,16 +928,25 @@ func (r *Runner) buildResult(positions []Position, equity []EquityPoint, duratio
 		result.ProfitFactor = math.Inf(1)
 	}
 
-	// Drawdown
+	// Drawdown：每点回填相对峰值的回撤（<=0，QuantDinger equityCurve[].drawdown
+	// 口径），并记录最大回撤的峰值/谷值时间。
 	peak := r.initialBalance
+	peakTime := equity[0].Timestamp
 	maxDD := 0.0
-	for _, pt := range equity {
-		if pt.Equity > peak {
-			peak = pt.Equity
+	for i := range equity {
+		if equity[i].Equity > peak {
+			peak = equity[i].Equity
+			peakTime = equity[i].Timestamp
 		}
-		dd := (peak - pt.Equity) / peak * 100
-		if dd > maxDD {
-			maxDD = dd
+		dd := 0.0
+		if peak > 0 {
+			dd = (equity[i].Equity/peak - 1) * 100 // <=0
+		}
+		equity[i].Drawdown = dd
+		if -dd > maxDD {
+			maxDD = -dd
+			result.MaxDrawdownPeakTime = peakTime
+			result.MaxDrawdownTroughTime = equity[i].Timestamp
 		}
 	}
 	result.MaxDrawdownPct = maxDD
@@ -813,6 +964,29 @@ func (r *Runner) buildResult(positions []Position, equity []EquityPoint, duratio
 	result.SortinoRatio = sortinoRatio(returns, r.riskFreeRate)
 	if maxDD > 0 {
 		result.CalmarRatio = result.TotalReturnPct / maxDD
+	}
+
+	// ── QuantDinger 对齐指标（v1.3）──
+	// totalCommission：全部成交的手续费合计。
+	for _, exec := range executions {
+		result.TotalCommission += exec.Commission
+	}
+	// annualizedReturn：复合年化 %（区间 <1 天或初值 <=0 时为 0；上限对齐
+	// QuantDinger 的 1e6% 截断）。
+	if elapsedDays := float64(equity[len(equity)-1].Timestamp-equity[0].Timestamp) / 86400000.0; elapsedDays >= 1 && r.initialBalance > 0 {
+		if finalEquity <= 0 {
+			result.AnnualizedReturn = -100
+		} else {
+			result.AnnualizedReturn = math.Expm1(math.Min(
+				math.Log(finalEquity/r.initialBalance)*(365.25/elapsedDays),
+				math.Log(10001.0),
+			)) * 100
+		}
+	}
+	// annualizedVolatility：bar 收益 std(ddof=0) × √periodsPerYear × 100，
+	// periodsPerYear 按权益点时间间隔中位数推断（无法推断时按日频 252）。
+	if len(returns) >= 2 {
+		result.AnnualizedVolatility = stddev(returns) * math.Sqrt(periodsPerYear(equity)) * 100
 	}
 
 	return result
@@ -904,4 +1078,37 @@ func average(vals []float64) float64 {
 		return 0
 	}
 	return sum(vals) / float64(len(vals))
+}
+
+// stddev 总体标准差（ddof=0，QuantDinger returns.std(ddof=0) 口径）。
+func stddev(vals []float64) float64 {
+	if len(vals) == 0 {
+		return 0
+	}
+	avg := average(vals)
+	variance := 0.0
+	for _, v := range vals {
+		variance += (v - avg) * (v - avg)
+	}
+	return math.Sqrt(variance / float64(len(vals)))
+}
+
+// periodsPerYear 按权益点时间间隔中位数推断每年的 bar 数；无法推断时
+// 回退日频 252。
+func periodsPerYear(equity []EquityPoint) float64 {
+	if len(equity) < 2 {
+		return 252
+	}
+	diffs := make([]float64, 0, len(equity)-1)
+	for i := 1; i < len(equity); i++ {
+		if d := equity[i].Timestamp - equity[i-1].Timestamp; d > 0 {
+			diffs = append(diffs, float64(d))
+		}
+	}
+	if len(diffs) == 0 {
+		return 252
+	}
+	sort.Float64s(diffs)
+	median := diffs[len(diffs)/2]
+	return 365.25 * 86400 * 1000 / median
 }

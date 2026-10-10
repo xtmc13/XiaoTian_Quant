@@ -39,6 +39,10 @@ func SandboxExecute(c *gin.Context) {
 		return
 	}
 
+	if result.Success {
+		NormalizeOutputMap(result.Output)
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"code": 1,
 		"msg":  result.Msg,

@@ -91,8 +91,16 @@ func BacktestIndicator(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"code": 1,
 		"msg":  "backtest completed",
-		"data": result,
+		"data": indicatorBacktestResponse{RunResult: result, Candles: bars},
 	})
+}
+
+// indicatorBacktestResponse 在 RunResult 的基础上回传回测所用 K 线
+// （QuantDinger candles 口径），供前端在图表上叠加买卖点复盘；
+// RunResult 字段平铺，保持既有 API 兼容。
+type indicatorBacktestResponse struct {
+	*backtest.RunResult
+	Candles []model.Bar `json:"candles,omitempty"`
 }
 
 // klinesToBars converts frontend kline format to model.Bar.
@@ -206,7 +214,7 @@ func (s *indicatorStrategy) Precompute(bars []model.Bar) error {
 			continue
 		}
 		for i, v := range sig.Data {
-			if v == nil {
+			if !signalPointActive(v) {
 				continue
 			}
 			if sig.Type == "buy" {
@@ -218,6 +226,22 @@ func (s *indicatorStrategy) Precompute(bars []model.Bar) error {
 	}
 
 	return nil
+}
+
+// signalPointActive 按契约判定信号点是否活跃：nil / false / {"active":false}
+// 均为非活跃；数字、true、缺省 active 的点对象视为活跃。
+func signalPointActive(v any) bool {
+	switch p := v.(type) {
+	case nil:
+		return false
+	case bool:
+		return p
+	case map[string]any:
+		if a, ok := p["active"].(bool); ok {
+			return a
+		}
+	}
+	return true
 }
 
 func (s *indicatorStrategy) Name() string { return "indicator" }

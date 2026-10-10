@@ -4,10 +4,13 @@ Provides: AST security check, whitelisted builtins, timeout, memory limit.
 """
 
 import ast
+import json
+import math
 import os
 import sys
 import threading
 import traceback
+import urllib.request
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -162,15 +165,37 @@ def build_safe_import():
 # ── Memory Limit ─────────────────────────────────────────────────
 
 def apply_memory_limit(mb: int):
-    """Apply memory limit (POSIX only). Silently skips on Windows."""
+    """Lower RLIMIT_AS for the duration of one exec call.
+
+    Returns the previous (soft, hard) limits so the caller can restore them
+    with restore_memory_limit(); returns None when nothing was changed.
+
+    NOTE: RLIMIT_AS is process-wide, so while user code runs in-process the
+    FastAPI host itself shares the lowered ceiling. The proper fix is running
+    user code in a subprocess (QuantDinger safe_exec_worker); until then we
+    narrow the limited window to the exec call and restore immediately after.
+    Silently skips on platforms without resource (Windows, etc.)."""
     try:
         import resource
         soft, hard = resource.getrlimit(resource.RLIMIT_AS)
         limit_bytes = mb * 1024 * 1024
         if soft > limit_bytes or soft == -1:
             resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, hard))
+            return (soft, hard)
     except (ImportError, OSError, ValueError):
-        pass  # memory limiting not available on this platform (Windows, etc.)
+        pass
+    return None
+
+
+def restore_memory_limit(previous):
+    """Restore limits captured by apply_memory_limit."""
+    if previous is None:
+        return
+    try:
+        import resource
+        resource.setrlimit(resource.RLIMIT_AS, previous)
+    except (ImportError, OSError, ValueError):
+        pass
 
 
 # ── Timeout Context Manager ───────────────────────────────────────
@@ -179,24 +204,257 @@ class TimeoutException(Exception):
     pass
 
 
+def _inject_thread_exception(thread_id: int, exc_type) -> None:
+    """Asynchronously raise exc_type in the target thread (CPython only).
+
+    Same watchdog mechanism as QuantDinger safe_exec.py: PyThreadState_SetAsyncExc
+    is the only way to interrupt a thread stuck inside exec()."""
+    try:
+        import ctypes
+    except ImportError:
+        return
+    ret = ctypes.pythonapi.PyThreadState_SetAsyncExc(
+        ctypes.c_ulong(thread_id), ctypes.py_object(exc_type)
+    )
+    if ret > 1:
+        # More than one thread state was modified — undo to avoid corruption.
+        ctypes.pythonapi.PyThreadState_SetAsyncExc(
+            ctypes.c_ulong(thread_id), ctypes.py_object(0)
+        )
+
+
 def timeout_context(seconds: int):
-    """Context manager that raises TimeoutException after N seconds."""
+    """Context manager that interrupts the *entering* thread after N seconds.
+
+    The previous implementation raised TimeoutException inside the timer
+    thread, which never interrupted exec(). We now inject the exception into
+    the thread that entered the context via PyThreadState_SetAsyncExc."""
     class _Timeout:
         def __enter__(self):
+            self._target_tid = threading.get_ident()
+            self.timed_out = False
             self.timer = threading.Timer(seconds, self._raise_timeout)
+            self.timer.daemon = True
             self.timer.start()
             return self
 
         def __exit__(self, exc_type, exc_val, exc_tb):
             self.timer.cancel()
             if exc_type is TimeoutException:
-                return True  # Suppress
+                return True  # Suppress the injected exception; caller checks timed_out
             return False
 
         def _raise_timeout(self):
-            raise TimeoutException(f"Execution timed out after {seconds} seconds")
+            self.timed_out = True
+            _inject_thread_exception(self._target_tid, TimeoutException)
 
     return _Timeout()
+
+
+# ── Output Contract Normalization (QuantDinger INDICATOR_DEV_GUIDE §6-§9) ──
+
+_PLOT_TYPE_ALIASES = {
+    "line": "line",
+    "bar": "bar", "histogram": "bar", "column": "bar",
+    "circle": "circle", "dot": "circle", "point": "circle", "scatter": "circle",
+    "lamp": "lamp",
+}
+
+_VALID_LAYER_TYPES = {"zone", "line", "label"}
+
+_FALSE_SIGNAL_STRINGS = {"", "0", "false", "none", "null", "nan", "na", "n/a"}
+
+# Signal series denser than this are treated as persistent state and edge-ified
+# (QuantDinger indicator_signal_alerts.py heuristic).
+_EDGE_DENSITY_THRESHOLD = 0.18
+
+
+def _sanitize_value(value: Any) -> Any:
+    """Convert NaN/±inf to None and numpy scalars to plain types (recursively).
+
+    Contract rule: output must never emit NaN or infinity; missing points are None."""
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return {str(k): _sanitize_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_value(v) for v in value]
+    if isinstance(value, (np.bool_,)):
+        return bool(value)
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, (float, np.floating)):
+        f = float(value)
+        return f if math.isfinite(f) else None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return value
+
+
+def _normalize_point_object(point: Dict[str, Any]) -> Dict[str, Any]:
+    """Canonicalize a per-point plot object: value/y/data -> value,
+    color/fillColor/backgroundColor -> color, size/radius/r -> size."""
+    if "value" not in point:
+        for alias in ("y", "data"):
+            if alias in point:
+                point["value"] = point.pop(alias)
+                break
+    if "color" not in point:
+        for alias in ("fillColor", "backgroundColor"):
+            if alias in point:
+                point["color"] = point.pop(alias)
+                break
+    if "size" not in point:
+        for alias in ("radius", "r"):
+            if alias in point:
+                point["size"] = point.pop(alias)
+                break
+    return point
+
+
+def _normalize_plot(plot: Dict[str, Any]) -> None:
+    plot_type = str(plot.get("type") or "").strip().lower()
+    if plot_type:
+        plot["type"] = _PLOT_TYPE_ALIASES.get(plot_type, plot_type)
+    if "lineStyle" not in plot and "style" in plot:
+        plot["lineStyle"] = plot.pop("style")
+    if "size" not in plot and "radius" in plot:
+        plot["size"] = plot.pop("radius")
+    data = plot.get("data")
+    if isinstance(data, list):
+        plot["data"] = [
+            _normalize_point_object(p) if isinstance(p, dict) else p
+            for p in data
+        ]
+
+
+def _signal_marker_is_active(value: Any) -> bool:
+    """Port of QuantDinger _signal_marker_is_active: labels alone never activate."""
+    if value is None:
+        return False
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if isinstance(value, dict):
+        for key in ("active", "signal", "triggered", "hit", "visible"):
+            if key in value and value.get(key) is not None:
+                return _signal_marker_is_active(value.get(key))
+        for key in ("price", "value", "y", "data"):
+            if key in value and _signal_marker_is_active(value.get(key)):
+                return True
+        return False
+    try:
+        if pd.isna(value):
+            return False
+    except (TypeError, ValueError):
+        return False
+    if isinstance(value, str):
+        return value.strip().lower() not in _FALSE_SIGNAL_STRINGS
+    try:
+        number = float(value)
+        return math.isfinite(number) and number != 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _signal_marker_price(value: Any, fallback: float) -> float:
+    if isinstance(value, dict):
+        for key in ("price", "value", "y", "data"):
+            if key in value:
+                return _safe_float(value.get(key), fallback)
+        return fallback
+    if isinstance(value, (bool, np.bool_)):
+        return fallback
+    return _safe_float(value, fallback)
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return default
+        f = float(value)
+        if math.isnan(f) or math.isinf(f):
+            return default
+        return f
+    except (TypeError, ValueError):
+        return default
+
+
+def _signal_render_mode(signal: Dict[str, Any], data: List[Any]) -> str:
+    """Resolve effective render mode: events | points | edge."""
+    raw_mode = str(signal.get("renderMode") or signal.get("mode") or "").strip().lower()
+    if raw_mode in ("event", "events"):
+        return "events"
+    if raw_mode in ("point", "points", "marker", "markers", "raw"):
+        return "points"
+    if raw_mode in ("state", "continuous", "condition"):
+        return "edge"
+    if not data:
+        return "events"
+    active_count = sum(1 for value in data if _signal_marker_is_active(value))
+    return "edge" if active_count / len(data) > _EDGE_DENSITY_THRESHOLD else "events"
+
+
+def _edge_filter_data(data: List[Any]) -> List[Any]:
+    """Keep only the first active point of each active run (False -> True edge)."""
+    out = []
+    prev_active = False
+    for value in data:
+        active = _signal_marker_is_active(value)
+        out.append(value if (active and not prev_active) else None)
+        prev_active = active
+    return out
+
+
+def _normalize_signal(signal: Dict[str, Any]) -> None:
+    if "renderMode" not in signal and "mode" in signal:
+        signal["renderMode"] = signal.pop("mode")
+    data = signal.get("data")
+    if isinstance(data, list) and _signal_render_mode(signal, data) == "edge":
+        # Dense state series: render and notify only on rising edges.
+        signal["data"] = _edge_filter_data(data)
+        signal.setdefault("renderMode", "state")
+
+
+def _compute_latest_signal(signals: List[Any], df: pd.DataFrame) -> Optional[Dict[str, Any]]:
+    """Newest visible marker for chart summaries (port of _latest_chart_signal).
+
+    Runs after _normalize_signal, so state series are already edge-ified and a
+    plain active check matches the edge semantics."""
+    if df is None or len(df) == 0:
+        return None
+    closes = df["close"] if "close" in df.columns else None
+    times = df["time"] if "time" in df.columns else None
+    for idx in range(len(df) - 1, -1, -1):
+        for signal in signals:
+            if not isinstance(signal, dict):
+                continue
+            data = signal.get("data") if isinstance(signal.get("data"), list) else []
+            if idx >= len(data):
+                continue
+            marker = data[idx]
+            if not _signal_marker_is_active(marker):
+                continue
+            text_data = signal.get("textData") if isinstance(signal.get("textData"), list) else []
+            point_text = text_data[idx] if idx < len(text_data) else None
+            signal_type = str(signal.get("type") or "signal").strip() or "signal"
+            fallback = _safe_float(closes.iloc[idx]) if closes is not None else 0.0
+            entry: Dict[str, Any] = {
+                "type": signal_type,
+                "label": str(point_text or signal.get("text") or signal_type).strip(),
+                "price": _signal_marker_price(marker, fallback),
+                "bar_index": idx,
+            }
+            if isinstance(marker, dict) and marker.get("color"):
+                entry["color"] = marker.get("color")
+            elif signal.get("color"):
+                entry["color"] = signal.get("color")
+            if times is not None:
+                entry["bar_time"] = _sanitize_value(times.iloc[idx])
+            return entry
+    return None
 
 
 # ── Main Safe Execution ───────────────────────────────────────────
@@ -263,15 +521,22 @@ def safe_exec_with_validation(
             raise RuntimeError(f"Circular dependency detected: {_call_stack} -> {indicator_ref}")
 
         gateway_url = os.environ.get("GATEWAY_URL", "http://localhost:8080")
+        # NOTE: requests stays in UNSAFE_MODULES (user code must not import it);
+        # the sandbox host itself uses stdlib urllib for this trusted callback.
+        payload = json.dumps({
+            "indicator_ref": int(indicator_ref),
+            "df_json": input_df.to_dict('records'),
+            "params": call_params or {},
+        }).encode("utf-8")
+        http_req = urllib.request.Request(
+            f"{gateway_url}/api/indicator/internal-call",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
         try:
-            resp = requests.post(
-                f"{gateway_url}/api/indicator/internal-call",
-                json={"indicator_ref": int(indicator_ref), "df_json": input_df.to_dict('records'), "params": call_params or {}},
-                timeout=20,
-                headers={"Content-Type": "application/json"},
-            )
-            resp.raise_for_status()
-            data = resp.json()
+            with urllib.request.urlopen(http_req, timeout=20) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
             if data.get("code") != 1:
                 raise RuntimeError(data.get("msg", "internal call failed"))
             output = data.get("data", {})
@@ -301,15 +566,24 @@ def safe_exec_with_validation(
         'call_indicator': call_indicator,
     }
 
+    # Convenience OHLCV Series variables (QuantDinger safe_exec_worker contract)
+    exec_df = exec_globals['df']
+    for col in ('open', 'high', 'low', 'close', 'volume'):
+        if col in exec_df.columns:
+            exec_globals[col] = exec_df[col]
+
     # 3. Execute with timeout and memory limit
+    prev_limits = apply_memory_limit(MAX_MEMORY_MB)
+    effective_timeout = min(timeout, MAX_TIMEOUT_SECONDS)
     try:
-        apply_memory_limit(MAX_MEMORY_MB)
-        with timeout_context(min(timeout, MAX_TIMEOUT_SECONDS)):
+        with timeout_context(effective_timeout) as tctx:
             exec(compile(code, '<sandbox>', 'exec'), exec_globals)
+        if tctx.timed_out:
+            raise TimeoutException(f"Execution timed out after {effective_timeout} seconds")
     except TimeoutException as e:
         return {
             "success": False,
-            "msg": str(e),
+            "msg": str(e) or f"Execution timed out after {effective_timeout} seconds",
             "output": None,
             "error": str(e),
             "error_type": "TimeoutError",
@@ -330,6 +604,8 @@ def safe_exec_with_validation(
             "error": tb,
             "error_type": type(e).__name__,
         }
+    finally:
+        restore_memory_limit(prev_limits)
 
     # 4. Validate output
     output = exec_globals.get('output')
@@ -354,6 +630,7 @@ def safe_exec_with_validation(
     # 5. Validate plots and signals length
     plots = output.get('plots', [])
     signals = output.get('signals', [])
+    layers = output.get('layers', []) or []
     df_len = len(df)
 
     for p in plots:
@@ -392,7 +669,50 @@ def safe_exec_with_validation(
                 "error_type": "LengthMismatch",
             }
 
-    # 6. Success
+    # 6. Validate layers (sparse visual objects: zone/line/label, no per-bar arrays)
+    if not isinstance(layers, list):
+        return {
+            "success": False,
+            "msg": "'layers' must be a list of zone/line/label objects.",
+            "output": None,
+            "error": f"Invalid layers type: {type(layers).__name__}",
+            "error_type": "InvalidLayer",
+        }
+    for layer in layers:
+        if not isinstance(layer, dict):
+            return {
+                "success": False,
+                "msg": "Each layer must be an object with a 'type' of zone/line/label.",
+                "output": None,
+                "error": f"Invalid layer: {layer!r}",
+                "error_type": "InvalidLayer",
+            }
+        layer_type = str(layer.get("type") or "").strip().lower()
+        if layer_type not in _VALID_LAYER_TYPES:
+            return {
+                "success": False,
+                "msg": f"Layer type '{layer.get('type')}' is not supported; use one of: zone, line, label.",
+                "output": None,
+                "error": f"Invalid layer type: {layer.get('type')}",
+                "error_type": "InvalidLayer",
+            }
+
+    # 7. Normalize output to the public contract: plot type/style aliases,
+    #    per-point object aliases, signal renderMode + edge-ification of dense
+    #    state series, NaN/±inf -> None.
+    for p in plots:
+        if isinstance(p, dict):
+            _normalize_plot(p)
+    for s in signals:
+        if isinstance(s, dict):
+            _normalize_signal(s)
+    output = _sanitize_value(output)
+
+    latest_signal = _compute_latest_signal(output.get('signals', []), df)
+    if latest_signal:
+        output["latest_signal"] = latest_signal
+
+    # 8. Success
     return {
         "success": True,
         "msg": "Execution passed! Code executed successfully.",
