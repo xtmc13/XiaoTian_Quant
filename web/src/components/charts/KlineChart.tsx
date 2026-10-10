@@ -4,7 +4,8 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState, useCallback, memo } from 'react'
 import { init, dispose } from 'klinecharts'
-import type { Chart } from 'klinecharts'
+import type { Chart, Styles, DeepPartial, CandleTooltipCustomCallbackData } from 'klinecharts'
+import { LineType, CandleType, TooltipShowRule, TooltipShowType } from 'klinecharts'
 import { cn } from '@/lib/utils'
 import type { KLineBar } from '@/lib/technicalIndicators'
 import { useDebounce } from '@/hooks/useAsyncData'
@@ -136,8 +137,178 @@ const INDICATOR_TEMPLATES: IndicatorTemplate[] = [
     ] },
 ]
 
-const INDICATOR_COLORS_DARK = ['#13c2c2', '#e040fb', '#ffeb3b', '#00e676', '#ff6d00', '#9c27b0']
-const INDICATOR_COLORS_LIGHT = ['#13c2c2', '#9c27b0', '#f57c00', '#1976d2', '#c2185b', '#7b1fa2']
+const INDICATOR_COLORS_DARK = ['#2962ff', '#ff9800', '#ab47bc', '#26a69a', '#ef5350', '#78909c']
+const INDICATOR_COLORS_LIGHT = ['#2962ff', '#f57c00', '#7b1fa2', '#00897b', '#d32f2f', '#546e7a']
+
+/* ── 图表主题（QuantDinger updateChartTheme 移植） ─────────── */
+
+const CHART_FONT_FAMILY = 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+const CHART_UP_COLOR = '#089981'
+const CHART_DOWN_COLOR = '#f23645'
+
+const CHART_THEME_COLORS = {
+  dark: {
+    textColorSecondary: '#787b86',
+    borderColor: '#2a2a2a',
+    gridLineColor: 'rgba(255, 255, 255, 0.055)',
+    gridLineColorDashed: '#4a4d57',
+    axisLabelColor: '#787b86',
+  },
+  light: {
+    textColorSecondary: '#6a6d78',
+    borderColor: '#e0e3eb',
+    gridLineColor: '#f0f3fa',
+    gridLineColorDashed: '#d6d9e0',
+    axisLabelColor: '#6a6d78',
+  },
+}
+
+function chartStylesFor(isDark: boolean, precision: number): DeepPartial<Styles> {
+  const theme = isDark ? CHART_THEME_COLORS.dark : CHART_THEME_COLORS.light
+  return {
+    grid: {
+      show: true,
+      horizontal: { show: true, color: theme.gridLineColor, style: LineType.Solid, size: 1 },
+      vertical: { show: true, color: theme.gridLineColor, style: LineType.Solid, size: 1 },
+    },
+    candle: {
+      type: CandleType.CandleSolid,
+      bar: {
+        upColor: CHART_UP_COLOR, downColor: CHART_DOWN_COLOR, noChangeColor: theme.axisLabelColor,
+        upBorderColor: CHART_UP_COLOR, downBorderColor: CHART_DOWN_COLOR, noChangeBorderColor: theme.axisLabelColor,
+        upWickColor: CHART_UP_COLOR, downWickColor: CHART_DOWN_COLOR, noChangeWickColor: theme.axisLabelColor,
+      },
+      priceMark: {
+        show: true,
+        high: { show: true, color: theme.axisLabelColor, textOffset: 5, textSize: 10, textFamily: CHART_FONT_FAMILY, textWeight: 'normal' },
+        low: { show: true, color: theme.axisLabelColor, textOffset: 5, textSize: 10, textFamily: CHART_FONT_FAMILY, textWeight: 'normal' },
+        last: {
+          show: true,
+          upColor: CHART_UP_COLOR, downColor: CHART_DOWN_COLOR, noChangeColor: theme.axisLabelColor,
+          line: { show: true, style: LineType.Dashed, dashedValue: [3, 3], size: 1 },
+          text: {
+            show: true, color: '#ffffff', size: 11, family: CHART_FONT_FAMILY, weight: '600',
+            paddingLeft: 5, paddingRight: 5, paddingTop: 3, paddingBottom: 3, borderRadius: 2,
+          },
+        },
+      },
+      tooltip: {
+        showRule: TooltipShowRule.Always, showType: TooltipShowType.Standard,
+        offsetLeft: 8, offsetTop: 31, offsetRight: 8, offsetBottom: 5,
+        text: {
+          size: 11, family: CHART_FONT_FAMILY, weight: 'normal', color: theme.textColorSecondary,
+          marginLeft: 4, marginRight: 6, marginTop: 2, marginBottom: 2,
+        },
+        custom: ({ current }: CandleTooltipCustomCallbackData) => {
+          const d = new Date(current.timestamp)
+          const pad = (n: number) => String(n).padStart(2, '0')
+          return [
+            { title: '时间', value: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}` },
+            { title: '开', value: current.open.toFixed(precision) },
+            { title: '高', value: current.high.toFixed(precision) },
+            { title: '低', value: current.low.toFixed(precision) },
+            { title: '收', value: current.close.toFixed(precision) },
+            { title: '量', value: Number(current.volume ?? 0).toFixed(0) },
+          ]
+        },
+      },
+      area: { point: { animation: false, animationDuration: 0 } },
+    },
+    indicator: {
+      ohlc: {
+        upColor: 'rgba(8, 153, 129, 0.72)',
+        downColor: 'rgba(242, 54, 69, 0.72)',
+        noChangeColor: theme.axisLabelColor,
+      },
+      lastValueMark: { show: false },
+      tooltip: {
+        showRule: TooltipShowRule.Always, showType: TooltipShowType.Standard, showName: true, showParams: true,
+        offsetLeft: 8, offsetTop: 4, offsetRight: 8, offsetBottom: 4,
+        text: {
+          size: 11, family: CHART_FONT_FAMILY, weight: 'normal', color: theme.textColorSecondary,
+          marginLeft: 4, marginRight: 6, marginTop: 2, marginBottom: 2,
+        },
+      },
+    },
+    xAxis: {
+      show: true,
+      axisLine: { show: false, color: theme.borderColor },
+      tickLine: { show: false, color: theme.borderColor, size: 1, length: 0 },
+      tickText: { show: true, color: theme.axisLabelColor, size: 11, family: CHART_FONT_FAMILY, weight: 'normal', marginStart: 4, marginEnd: 4 },
+    },
+    yAxis: {
+      show: true,
+      axisLine: { show: false, color: theme.borderColor },
+      tickLine: { show: false, color: theme.borderColor, size: 1, length: 0 },
+      tickText: { show: true, color: theme.axisLabelColor, size: 11, family: CHART_FONT_FAMILY, weight: 'normal', marginStart: 5, marginEnd: 5 },
+    },
+    separator: {
+      size: 1, color: theme.borderColor, fill: true,
+      activeBackgroundColor: isDark ? 'rgba(120, 123, 134, 0.12)' : 'rgba(106, 109, 120, 0.08)',
+    },
+    crosshair: {
+      show: true,
+      horizontal: {
+        show: true,
+        line: { show: true, style: LineType.Dashed, color: theme.gridLineColorDashed, size: 1, dashedValue: [4, 3] },
+        text: {
+          show: true, color: '#ffffff', backgroundColor: isDark ? '#363a45' : '#6a6d78',
+          size: 11, family: CHART_FONT_FAMILY, weight: 'normal',
+          paddingLeft: 5, paddingRight: 5, paddingTop: 3, paddingBottom: 3, borderRadius: 2,
+        },
+      },
+      vertical: {
+        show: true,
+        line: { show: true, style: LineType.Dashed, color: theme.gridLineColorDashed, size: 1, dashedValue: [4, 3] },
+        text: {
+          show: true, color: '#ffffff', backgroundColor: isDark ? '#363a45' : '#6a6d78',
+          size: 11, family: CHART_FONT_FAMILY, weight: 'normal',
+          paddingLeft: 5, paddingRight: 5, paddingTop: 3, paddingBottom: 3, borderRadius: 2,
+        },
+      },
+    },
+    overlay: {
+      point: {
+        color: isDark ? '#6b7a8c' : '#94a0ad',
+        borderColor: isDark ? '#6b7a8c' : '#94a0ad',
+        borderSize: 2,
+        radius: 4,
+        activeColor: '#26a69a',
+        activeBorderColor: '#26a69a',
+        activeBorderSize: 2,
+        activeRadius: 5,
+      },
+      text: {
+        color: isDark ? 'rgba(236, 240, 245, 0.9)' : 'rgba(38, 44, 52, 0.88)',
+        backgroundColor: 'transparent',
+        size: 11,
+      },
+    },
+  }
+}
+
+/* ── klinecharts 内置指标映射（没有的模板保持只切 chip） ────── */
+
+interface BuiltinIndicatorSpec {
+  name: string
+  overlay: boolean
+  calcParams: (params: Record<string, number>) => number[]
+}
+
+const BUILTIN_INDICATORS: Record<string, BuiltinIndicatorSpec> = {
+  sma: { name: 'MA', overlay: true, calcParams: (p) => [p.length ?? 20] },
+  ema: { name: 'EMA', overlay: true, calcParams: (p) => [p.length ?? 20] },
+  rsi: { name: 'RSI', overlay: false, calcParams: (p) => [p.length ?? 14] },
+  macd: { name: 'MACD', overlay: false, calcParams: (p) => [p.fast ?? 12, p.slow ?? 26, p.signal ?? 9] },
+  bb: { name: 'BOLL', overlay: true, calcParams: (p) => [p.length ?? 20, p.mult ?? 2] },
+  cci: { name: 'CCI', overlay: false, calcParams: (p) => [p.length ?? 20] },
+  williams: { name: 'WR', overlay: false, calcParams: (p) => [p.length ?? 14] },
+  adx: { name: 'DMI', overlay: false, calcParams: (p) => [p.length ?? 14, 6] },
+  obv: { name: 'OBV', overlay: false, calcParams: () => [] },
+  kdj: { name: 'KDJ', overlay: false, calcParams: (p) => [p.period ?? 9, p.k ?? 3, p.d ?? 3] },
+}
+
+const SUB_PANE_OPTIONS = { height: 112, minHeight: 64, dragEnabled: true }
 
 /* ═════════════════════════════════════════════════════════════════ */
 /*  Main Component                                                   */
@@ -205,9 +376,44 @@ export const KlineChart = memo(function KlineChart({
     renderIndicatorOutput(chart as never, output, klines, runtimeCreatedRef.current)
   }, [isDark, debouncedData])
 
+  const renderRuntimeRef = useRef(renderRuntime)
+  renderRuntimeRef.current = renderRuntime
+  const activeIndicatorsRef = useRef(activeIndicators)
+  activeIndicatorsRef.current = activeIndicators
+  /** 内置指标实例：instanceId/id → 内置名 + paneId（重建图表后按此重放） */
+  const builtinIndicatorsRef = useRef(new Map<string, { name: string; paneId: string }>())
+
   useEffect(() => { renderRuntime() }, [debouncedIndicatorOutput, renderRuntime])
 
-  /* ─── Chart Init (re-runs when loading ends and container is available) ─── */
+  /* ─── klinecharts 内置指标创建/移除 ─── */
+  const syncBuiltinIndicator = useCallback((indicator: IndicatorConfig) => {
+    const chart = chartRef.current
+    const spec = BUILTIN_INDICATORS[indicator.id]
+    if (!chart || !spec) return
+    const key = indicator.instanceId || indicator.id
+    const calcParams = spec.calcParams(indicator.params)
+    const existing = builtinIndicatorsRef.current.get(key)
+    try {
+      if (existing) {
+        chart.overrideIndicator({ name: spec.name, calcParams }, existing.paneId)
+        return
+      }
+      const paneId = spec.overlay
+        ? chart.createIndicator({ name: spec.name, calcParams }, true, { id: 'candle_pane' })
+        : chart.createIndicator({ name: spec.name, calcParams }, false, SUB_PANE_OPTIONS)
+      if (paneId) builtinIndicatorsRef.current.set(key, { name: spec.name, paneId })
+    } catch { /* ignore */ }
+  }, [])
+
+  const removeBuiltinIndicator = useCallback((indicator: IndicatorConfig) => {
+    const key = indicator.instanceId || indicator.id
+    const existing = builtinIndicatorsRef.current.get(key)
+    if (!existing) return
+    try { chartRef.current?.removeIndicator(existing.paneId, existing.name) } catch { /* ignore */ }
+    builtinIndicatorsRef.current.delete(key)
+  }, [])
+
+  /* ─── Chart Init (re-runs when loading ends or theme flips) ─── */
   useLayoutEffect(() => {
     if (loading) return
     const el = containerRef.current
@@ -215,34 +421,32 @@ export const KlineChart = memo(function KlineChart({
 
     try {
       const chart = init(el, {
-        styles: {
-          candle: {
-            bar: {
-              upColor: '#089981', downColor: '#F23645',
-              upBorderColor: '#089981', downBorderColor: '#F23645',
-              upWickColor: '#089981', downWickColor: '#F23645',
-            },
-          },
-          grid: {
-            horizontal: { color: 'rgba(43,49,57,0.2)', size: 1 },
-            vertical: { color: 'rgba(43,49,57,0.2)', size: 1 },
-          },
-          separator: {
-            size: 1, color: 'rgba(43,49,57,0.4)',
-          },
-        },
+        styles: chartStylesFor(isDark, detectPrecision((pendingDataRef.current ?? []) as KLineLike[])),
       })
       if (!chart) return
       chartRef.current = chart
       ;(window as unknown as Record<string, unknown>).__kcChart = chart
+
+      try {
+        chart.setOffsetRightDistance(64)
+        chart.setRightMinVisibleBarCount(4)
+        chart.setBarSpace(8)
+      } catch { /* ignore */ }
+
+      // VOL 成交量副图（QuantDinger 同款默认面板）
+      try {
+        chart.createIndicator('VOL', false, SUB_PANE_OPTIONS)
+      } catch { /* ignore */ }
 
       // Apply data that arrived before chart init
       if (pendingDataRef.current?.length) {
         chart.applyNewData(toChartData(pendingDataRef.current))
       }
 
-      // 图表重建后重新渲染指标运行时资源（旧实例已随 dispose 销毁）
-      renderRuntime()
+      // 图表重建后重放内置指标与指标运行时资源（旧实例已随 dispose 销毁）
+      builtinIndicatorsRef.current.clear()
+      activeIndicatorsRef.current.forEach((indicator) => syncBuiltinIndicator(indicator))
+      renderRuntimeRef.current()
 
       const ro = new ResizeObserver(() => { try { chart.resize() } catch { /* ignore */ } })
       ro.observe(el)
@@ -255,7 +459,7 @@ export const KlineChart = memo(function KlineChart({
     } catch {
       // 图表初始化错误，已在 UI 中处理
     }
-  }, [loading, renderRuntime])
+  }, [loading, isDark, syncBuiltinIndicator])
 
   /* ─── Helper: convert KLineBar[] to klinecharts format ─── */
   function toChartData(src: KLineBar[]) {
@@ -339,24 +543,24 @@ export const KlineChart = memo(function KlineChart({
     if (!onActiveIndicatorsChange) return
     const existing = activeIndicators.find(i => i.id === template.id)
     if (existing) {
+      removeBuiltinIndicator(existing)
       onActiveIndicatorsChange(activeIndicators.filter(i => i.id !== template.id))
     } else {
       const color = colors[activeIndicators.length % colors.length]
-      onActiveIndicatorsChange([
-        ...activeIndicators,
-        {
-          id: template.id,
-          name: template.name,
-          shortName: template.shortName,
-          type: template.type,
-          params: { ...template.defaultParams },
-          style: { color, lineWidth: 2 },
-          visible: true,
-          instanceId: `${template.id}_${Date.now()}`,
-        },
-      ])
+      const next: IndicatorConfig = {
+        id: template.id,
+        name: template.name,
+        shortName: template.shortName,
+        type: template.type,
+        params: { ...template.defaultParams },
+        style: { color, lineWidth: 2 },
+        visible: true,
+        instanceId: `${template.id}_${Date.now()}`,
+      }
+      syncBuiltinIndicator(next)
+      onActiveIndicatorsChange([...activeIndicators, next])
     }
-  }, [activeIndicators, onActiveIndicatorsChange, colors])
+  }, [activeIndicators, onActiveIndicatorsChange, colors, syncBuiltinIndicator, removeBuiltinIndicator])
 
   const openEditor = useCallback((indicator: IndicatorConfig) => {
     setEditorTarget(indicator)
@@ -365,14 +569,16 @@ export const KlineChart = memo(function KlineChart({
 
   const applyEditor = useCallback(() => {
     if (!editorTarget || !onActiveIndicatorsChange) return
+    const updatedIndicator = { ...editorTarget, params: { ...editorForm } }
+    syncBuiltinIndicator(updatedIndicator)
     const updated = activeIndicators.map(i =>
       (i.instanceId || i.id) === (editorTarget.instanceId || editorTarget.id)
-        ? { ...i, params: { ...editorForm } }
+        ? updatedIndicator
         : i
     )
     onActiveIndicatorsChange(updated)
     setEditorTarget(null)
-  }, [editorTarget, editorForm, activeIndicators, onActiveIndicatorsChange])
+  }, [editorTarget, editorForm, activeIndicators, onActiveIndicatorsChange, syncBuiltinIndicator])
 
   const template = editorTarget ? INDICATOR_TEMPLATES.find(t => t.id === editorTarget.id) : null
 
@@ -456,7 +662,7 @@ export const KlineChart = memo(function KlineChart({
                 className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-quant-card border border-quant-border"
               >
                 <span className="text-foreground">{ind.shortName}</span>
-                <button onClick={() => onActiveIndicatorsChange?.(activeIndicators.filter(i => (i.instanceId || i.id) !== (ind.instanceId || ind.id)))} className="text-muted-foreground hover:text-quant-red">
+                <button onClick={() => { removeBuiltinIndicator(ind); onActiveIndicatorsChange?.(activeIndicators.filter(i => (i.instanceId || i.id) !== (ind.instanceId || ind.id))) }} className="text-muted-foreground hover:text-quant-red">
                   <X className="w-2.5 h-2.5" />
                 </button>
                 <button onClick={() => openEditor(ind)} className="text-muted-foreground hover:text-quant-gold">

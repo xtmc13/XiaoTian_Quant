@@ -106,6 +106,9 @@ export function buildSpotGridLadder(lower: number, upper: number, grids: number)
 }
 
 // Derive the strategy bar timeframe from enabled indicator periods.
+// 只由开仓指标周期推导（开仓判定节奏 = 工作周期）：补仓/反向监测周期经
+// 引擎多周期供给（Timeframes/BarProvider）独立订阅，不应拖低工作周期——
+// 否则开仓评估节奏会被补仓周期带着走（2026-10-10 用户指出）。
 const PERIOD_ORDER: Record<string, number> = {
   '1m': 1,
   '5m': 2,
@@ -117,15 +120,13 @@ const PERIOD_ORDER: Record<string, number> = {
   '1d': 8,
   close: 99,
 }
-function deriveTimeframeFromCRA(params: CRAParams): string {
+export function deriveTimeframeFromCRA(params: CRAParams): string {
   const candidates: string[] = []
   if (params.openMacdEnabled && params.openMacdPeriod !== 'close') candidates.push(params.openMacdPeriod)
   if (params.openCounterEmaEnabled && params.openCounterEmaPeriod !== 'close')
     candidates.push(params.openCounterEmaPeriod)
   if (params.openTrendEmaEnabled && params.openTrendEmaPeriod !== 'close') candidates.push(params.openTrendEmaPeriod)
   if (params.openBollingerEnabled && params.openBollingerPeriod !== 'close') candidates.push(params.openBollingerPeriod)
-  if (params.addMacdEnabled && params.addMacdPeriod !== 'close') candidates.push(params.addMacdPeriod)
-  if (params.addEmaEnabled && params.addEmaPeriod !== 'close') candidates.push(params.addEmaPeriod)
 
   if (candidates.length === 0) return '15m'
   return candidates.sort((a, b) => PERIOD_ORDER[a] - PERIOD_ORDER[b])[0]

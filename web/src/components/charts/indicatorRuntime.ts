@@ -416,7 +416,7 @@ export function normalizeIndicatorOutput(output: unknown, klines: KLineLike[]): 
 
 /* ── plots → figures ─────────────────────────────────────── */
 
-const CIRCLE_TYPE_ALIASES = ['circle', 'dot', 'point', 'scatter']
+const CIRCLE_TYPE_ALIASES = ['lamp', 'circle', 'dot', 'point', 'scatter']
 
 function normalizeFigureType(type: unknown): 'circle' | 'bar' | 'line' {
   const raw = String(type || 'line').toLowerCase()
@@ -675,7 +675,7 @@ function buildFigure(
       const coordinate = params?.coordinate?.current || {}
       const runtimeSize = positiveNumber(row[sizeKey], defaultSize)
       const barSpace = Math.max(3, Math.min(5, (Number(params?.barSpace?.bar ?? params?.barSpace?.gapBar ?? 8) || 8) * 0.42, runtimeSize * 0.82))
-      const dotHeight = Math.max(8, Math.min(12, barSpace * 2.15))
+      const dotHeight = Math.max(8, Math.min(12, runtimeSize * 2.15))
       const leftBound = Number(params?.bounding?.left || 0) + 82
       const x = Number(coordinate.x)
       if (!Number.isFinite(x) || x < leftBound) {
@@ -800,17 +800,17 @@ export function buildPlotGroup(plots: IndicatorPlotSpec[], dataLength: number): 
 }
 
 /**
- * 指标 calc（Ht）：按时间戳把图表数据对齐到 plot 数据的索引，
- * 返回逐 bar 的 `{key: value|null}` 行。
+ * 指标 calc（Ht）：以 plot 自带的源数据（klines）建 timestamp→index 映射，
+ * 再把图表行按时间戳映射回源索引，图表数据 prepend/插空时指标线不错位。
  */
 export function makePlotCalc(klines: KLineLike[], plotDataMap: Record<string, unknown[]>) {
+  const indexByTs = new Map<number, number>()
+  klines.forEach((kline, index) => {
+    const ts = tsOf(kline)
+    if (ts !== null) indexByTs.set(ts, index)
+  })
   return (kLineDataList: Array<Record<string, unknown>>) => {
     const source = Array.isArray(kLineDataList) ? kLineDataList : []
-    const indexByTs = new Map<number, number>()
-    source.forEach((kline, index) => {
-      const ts = tsOf(kline as KLineLike)
-      if (ts !== null) indexByTs.set(ts, index)
-    })
     return source.map((kline, dataIndex) => {
       const ts = tsOf(kline as KLineLike)
       const alignedIndex = ts !== null && indexByTs.has(ts) ? indexByTs.get(ts)! : dataIndex
@@ -921,14 +921,14 @@ function makeLampBeltDraw(shortName: string) {
       const headerH = 26
       const paddingBottom = 8
       const laneLabelWidth = 82
-      const headerTop = top + 7
       const contentTop = top + headerH
-      const laneHeight = Math.max(24, (height - headerH - paddingBottom) / laneCount)
+      const contentHeight = Math.max(24, height - headerH - paddingBottom)
+      const laneHeight = contentHeight / laneCount
       const lanes = Array.isArray(lampBelt.lanes) ? lampBelt.lanes : []
       const labelByLane = new Map(lanes.map((l) => [Number(l.lane), l.label]))
       const bg0 = isDark ? 'rgba(255,255,255,0.018)' : 'rgba(17,24,39,0.022)'
       const bg1 = isDark ? 'rgba(255,255,255,0.026)' : 'rgba(17,24,39,0.03)'
-      const bg2 = isDark ? 'rgba(255,255,255,0.045)' : 'rgba(17,24,39,0.06)'
+      const laneLine = isDark ? 'rgba(255,255,255,0.045)' : 'rgba(17,24,39,0.06)'
       const panelBg = isDark ? 'rgba(8,12,18,0.84)' : 'rgba(255,255,255,0.9)'
       const borderColor = isDark ? 'rgba(255,255,255,0.09)' : 'rgba(15,23,42,0.12)'
       const headerColor = isDark ? 'rgba(220,226,235,0.78)' : 'rgba(45,55,72,0.78)'
@@ -953,33 +953,35 @@ function makeLampBeltDraw(shortName: string) {
       for (let lane = 1; lane <= laneCount; lane++) {
         const y = laneY(lane)
         if (y == null) continue
-        ctx.fillStyle = lane % 2 === 0 ? bg1 : bg2
-        ctx.fillRect(left + laneLabelWidth, y - laneHeight / 2, Math.max(0, width - laneLabelWidth - 10), laneHeight)
-        const label = labelByLane.get(lane)
-        if (label) {
-          const text = String(label).toUpperCase().slice(0, 14)
-          const textWidth = ctx.measureText(text).width
-          const pillWidth = textWidth + 12
-          const pillX = left + laneLabelWidth - pillWidth - 6
-          const pillY = y - 8
-          ctx.beginPath()
-          ctx.rect(pillX, pillY, pillWidth, 16)
-          ctx.fillStyle = panelBg
+        if (lane % 2 === 0) {
+          roundedRectPath(ctx, left + 8, y - laneHeight * 0.38, Math.max(0, width - 16), laneHeight * 0.76, 5)
+          ctx.fillStyle = bg1
           ctx.fill()
-          ctx.strokeStyle = borderColor
-          ctx.lineWidth = 1
-          ctx.stroke()
-          ctx.fillStyle = labelColor
-          ctx.textAlign = 'left'
-          ctx.textBaseline = 'middle'
-          ctx.fillText(text, pillX + 6, y + 1)
         }
+        ctx.beginPath()
+        ctx.moveTo(left + laneLabelWidth + 8, y)
+        ctx.lineTo(left + width - 10, y)
+        ctx.strokeStyle = laneLine
+        ctx.lineWidth = 1
+        ctx.stroke()
+        const label = labelByLane.get(lane) ?? `L${lane}`
+        const text = String(label).replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim().toUpperCase().slice(0, 8)
+        roundedRectPath(ctx, left + 8, y - 9, laneLabelWidth - 16, 18, 5)
+        ctx.fillStyle = panelBg
+        ctx.fill()
+        ctx.strokeStyle = borderColor
+        ctx.lineWidth = 1
+        ctx.stroke()
+        ctx.fillStyle = labelColor
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText(text, left + laneLabelWidth / 2, y)
       }
       ctx.restore()
-      return true
     } catch {
-      return false
+      try { ctx.restore() } catch { /* already restored */ }
     }
+    return false
   }
 }
 
@@ -1009,8 +1011,8 @@ export const SIGNAL_TAG_OVERLAY = {
     const isBacktest = extendData.source === 'backtest'
     if (!coordinates[0]) return []
     const x = coordinates[0].x
-    const anchorY = coordinates[0].y
-    const tagY = coordinates[1] ? coordinates[1].y : anchorY
+    const signalY = coordinates[0].y
+    const anchorY = coordinates[1] ? coordinates[1].y : signalY
     const padX = isBacktest ? 5 : 8
     const padY = isBacktest ? 2 : 4
     const fontSize = Number(extendData.fontSize) || (isBacktest ? 11 : 12)
@@ -1021,7 +1023,7 @@ export const SIGNAL_TAG_OVERLAY = {
     const side = (extendData.side as string) || (extendData.type as string) || 'buy'
     const isBuy = side === 'buy'
 
-    // 回测紧凑模式：右侧泳道小标签
+    // 回测紧凑模式：外侧泳道小标签 + K 线高/低点锚定圆点
     if (isBacktest && extendData.labelMode !== 'full') {
       const lane = Math.max(0, Math.min(3, Number(extendData.lane) || 0))
       const shortText = shortSignalText(extendData.shortText || text, side)
@@ -1029,8 +1031,8 @@ export const SIGNAL_TAG_OVERLAY = {
       const boxH = dashed ? 13 : 15
       const boxW = Math.max(18, Math.min(isBacktest ? 72 : 38, shortText.length * 7 + 10))
       const laneOffset = lane * 16
-      const boxTop = isBuy ? anchorY + laneOffset : anchorY - boxH - laneOffset
-      const dotY = tagY
+      const boxTop = isBuy ? signalY + laneOffset : signalY - boxH - laneOffset
+      const dotY = anchorY
       const textY = isBuy ? boxTop : boxTop + boxH
       const fill = dashed ? 'rgba(0,0,0,0)' : color
       const textColor = dashed ? hexToRgba(color, 0.86) : '#ffffff'
@@ -1070,14 +1072,51 @@ export const SIGNAL_TAG_OVERLAY = {
       ]
     }
 
-    // 标准模式：标签贴在 K 线高/低点外侧
-    const boxTop = isBuy ? anchorY : anchorY - boxHeight
-    const dotY = tagY
+    // 标准模式：标签盒在标记价（外侧），实心圆点锚定 K 线高/低点
+    const boxTop = isBuy ? signalY : signalY - boxHeight
+    const dotY = anchorY
     const connectorBottom = isBuy ? boxTop : boxTop + boxHeight
     const connectorStyle = isBacktest
       ? { style: 'stroke', color, dashedValue: dashed ? [3, 2] : [4, 3] }
       : { style: 'stroke', color, dashedValue: [2, 2] }
-    const figures: Array<Record<string, unknown>> = [
+    const circleRadius = isBacktest ? 3 : 4
+
+    if (dashed) {
+      return [
+        {
+          type: 'line',
+          attrs: { coordinates: [{ x, y: dotY }, { x, y: connectorBottom }] },
+          styles: connectorStyle,
+          ignoreEvent: true,
+        },
+        {
+          type: 'circle',
+          attrs: { x, y: dotY, r: circleRadius },
+          styles: { style: 'stroke', color, lineWidth: 1.5 },
+          ignoreEvent: true,
+        },
+        {
+          type: 'rect',
+          attrs: { x: x - boxWidth / 2, y: boxTop, width: boxWidth, height: boxHeight, r: 3 },
+          styles: {
+            style: 'stroke',
+            color: 'rgba(0,0,0,0)',
+            borderColor: color,
+            borderSize: 1.5,
+            borderDashedValue: [4, 3],
+          },
+          ignoreEvent: true,
+        },
+        {
+          type: 'text',
+          attrs: { x, y: boxTop + boxHeight / 2, text, align: 'center', baseline: 'middle' },
+          styles: { color, size: fontSize, weight: '600' },
+          ignoreEvent: true,
+        },
+      ]
+    }
+
+    return [
       {
         type: 'line',
         attrs: { coordinates: [{ x, y: dotY }, { x, y: connectorBottom }] },
@@ -1086,14 +1125,14 @@ export const SIGNAL_TAG_OVERLAY = {
       },
       {
         type: 'circle',
-        attrs: { x, y: dotY, r: isBacktest ? 2.5 : 3 },
+        attrs: { x, y: dotY, r: circleRadius },
         styles: { style: 'fill', color },
         ignoreEvent: true,
       },
       {
         type: 'rect',
-        attrs: { x: x - boxWidth / 2, y: boxTop, width: boxWidth, height: boxHeight, r: 4 },
-        styles: { style: 'fill', color },
+        attrs: { x: x - boxWidth / 2, y: boxTop, width: boxWidth, height: boxHeight, r: 3 },
+        styles: { style: 'fill', color, borderSize: 0 },
         ignoreEvent: true,
       },
       {
@@ -1103,7 +1142,6 @@ export const SIGNAL_TAG_OVERLAY = {
         ignoreEvent: true,
       },
     ]
-    return figures
   },
 }
 
@@ -1206,8 +1244,8 @@ export const LINE_OVERLAY = {
     if (extendData.text) {
       figures.push({
         type: 'text',
-        attrs: { x: coordinates[1].x + 6, y: coordinates[1].y - 6, text: String(extendData.text), align: 'left', baseline: 'bottom' },
-        styles: { color: (extendData.textColor as string) || color, size: Number(extendData.fontSize || 10), weight: '700', backgroundColor: 'transparent' },
+        attrs: { x: coordinates[1].x + 6, y: coordinates[1].y, text: String(extendData.text), align: 'left', baseline: 'middle' },
+        styles: { color: (extendData.textColor as string) || color, size: Number(extendData.fontSize || 10), weight: '600', backgroundColor: 'transparent' },
         ignoreEvent: true,
       })
     }
@@ -1226,37 +1264,166 @@ export const LABEL_OVERLAY = {
   createPointFigures: ({ coordinates, overlay }: { coordinates: Array<{ x: number; y: number }>; overlay: { extendData?: Record<string, unknown> } }) => {
     if (!coordinates[0]) return []
     const extendData = overlay.extendData || {}
-    const isDark = runtimeTheme === 'dark'
-    const color = (extendData.color as string) || '#1890ff'
     const text = String(extendData.text || '')
-    const size = Number(extendData.fontSize || 11)
-    const textWidth = estimateTextWidth(text, size, 40, 160)
-    const boxHeight = Math.max(18, size + 8)
-    const figures: Array<Record<string, unknown>> = [
+    if (!text) return []
+    const isDark = runtimeTheme === 'dark'
+    const lower = text.toLowerCase()
+    const color = (extendData.color as string) || (lower.includes('bull') ? '#12b76a' : lower.includes('bear') ? '#f04438' : '#1677ff')
+    const side = String(extendData.side || '')
+    const isAbove = side === 'above' || side === 'sell'
+    const anchorRight = side === 'right' || lower.startsWith('regime')
+    const size = Number(extendData.fontSize || 10)
+    const textWidth = estimateTextWidth(text, size, 38, 132)
+    const boxHeight = size + 9
+    const x = coordinates[0].x
+    const rectX = anchorRight ? x + 8 : x - textWidth / 2
+    const rectY = coordinates[0].y + (isAbove ? -boxHeight - 7 : 7)
+    return [
       {
         type: 'rect',
-        attrs: { x: coordinates[0].x + 6, y: coordinates[0].y - boxHeight / 2, width: textWidth, height: boxHeight, r: 5 },
+        attrs: { x: rectX, y: rectY, width: textWidth, height: boxHeight, r: 5 },
         styles: {
           style: 'stroke_fill',
-          color: resolveAlphaColor(extendData.fillColor, isDark ? '#0e1219' : '#ffffff', isDark ? 0.85 : 0.92),
-          borderColor: resolveAlphaColor(extendData.borderColor, color, isDark ? 0.5 : 0.42),
+          color: extendData.fillColor
+            ? resolveAlphaColor(extendData.fillColor, color, isDark ? 0.2 : 0.12)
+            : isDark ? 'rgba(14, 18, 25, 0.76)' : 'rgba(255, 255, 255, 0.82)',
+          borderColor: extendData.borderColor
+            ? resolveAlphaColor(extendData.borderColor, color, 0.46)
+            : hexToRgba(color, 0.46),
           borderSize: 1,
         },
         ignoreEvent: true,
       },
       {
         type: 'text',
-        attrs: { x: coordinates[0].x + 6 + textWidth / 2, y: coordinates[0].y, text, align: 'center', baseline: 'middle' },
+        attrs: { x: rectX + textWidth / 2, y: rectY + boxHeight / 2, text, align: 'center', baseline: 'middle' },
         styles: { color: (extendData.textColor as string) || color, size, weight: '700', backgroundColor: 'transparent' },
         ignoreEvent: true,
       },
     ]
-    return figures
   },
 }
 
+function buildPriceRangeMeasureFigures(
+  startPoint: { value?: number; timestamp?: number; dataIndex?: number } | undefined,
+  endPoint: { value?: number; timestamp?: number; dataIndex?: number } | undefined,
+  coordinates: Array<{ x: number; y: number }>,
+): Array<Record<string, unknown>> {
+  if (!startPoint || !endPoint || !coordinates[0] || !coordinates[1]) return []
+  const startPrice = Number(startPoint.value)
+  const endPrice = Number(endPoint.value)
+  if (!Number.isFinite(startPrice) || !Number.isFinite(endPrice)) return []
+  const priceChange = endPrice - startPrice
+  const percentChange = startPrice !== 0 ? (priceChange / startPrice) * 100 : 0
+  const timeDiff = Math.abs(Number(endPoint.timestamp || 0) - Number(startPoint.timestamp || 0))
+
+  const days = Math.floor(timeDiff / 86400000)
+  const hours = Math.floor((timeDiff % 86400000) / 3600000)
+  const minutes = Math.floor((timeDiff % 3600000) / 60000)
+  const seconds = Math.floor((timeDiff % 60000) / 1000)
+  const timeSpan = days > 0
+    ? `${days}天${hours > 0 ? `${hours}小时` : ''}`
+    : hours > 0
+      ? `${hours}小时${minutes > 0 ? `${minutes}分` : ''}`
+      : minutes > 0 ? `${minutes}分` : `${seconds}秒`
+
+  const barCount = Number.isFinite(startPoint.dataIndex) && Number.isFinite(endPoint.dataIndex)
+    ? Math.abs(Number(endPoint.dataIndex) - Number(startPoint.dataIndex))
+    : 0
+
+  const percentStr = `${percentChange >= 0 ? '+' : ''}${percentChange.toFixed(2)}%`
+  const priceChangeStr = `${priceChange >= 0 ? '+' : ''}${priceChange.toFixed(runtimePrecision)}`
+  let metaText = ''
+  if (barCount > 0) {
+    metaText = `${barCount}根`
+    if (timeSpan) metaText += ` · ${timeSpan}`
+  } else if (timeSpan) {
+    metaText = timeSpan
+  }
+
+  const isUp = priceChange >= 0
+  const isDark = runtimeTheme === 'dark'
+  const accentColor = isUp ? '#26a69a' : '#ef5350'
+  const accentSoft = isUp ? 'rgba(38, 166, 154, 0.55)' : 'rgba(239, 83, 80, 0.55)'
+  const labelBg = isDark ? 'rgba(22, 26, 35, 0.94)' : 'rgba(255, 255, 255, 0.96)'
+  const labelBorder = isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)'
+  const labelText = isDark ? 'rgba(236, 240, 245, 0.92)' : 'rgba(38, 44, 52, 0.88)'
+  const labelMuted = isDark ? 'rgba(180, 187, 198, 0.78)' : 'rgba(96, 105, 118, 0.82)'
+  const dotFill = isDark ? '#161a23' : '#ffffff'
+
+  const x1 = coordinates[0].x
+  const y1 = coordinates[0].y
+  const x2 = coordinates[1].x
+  const y2 = coordinates[1].y
+  const midX = (x1 + x2) / 2
+  const midY = (y1 + y2) / 2
+  const fontSize = 11
+  const metaFontSize = 10
+  const percentWidth = percentStr.length * 6.8 + 8
+  const priceWidth = priceChangeStr.length * 6.5 + 8
+  const metaWidth = metaText ? metaText.length * 5.8 + 10 : 0
+  const boxWidth = percentWidth + priceWidth + metaWidth + (metaText ? 12 : 4)
+  const boxHeight = metaText ? 34 : 24
+  const boxX = midX - boxWidth / 2
+  const boxY = midY - boxHeight - 14
+  const row1Y = metaText ? boxY + 13 : boxY + boxHeight / 2
+  const row2Y = boxY + 26
+  const priceX = boxX + percentWidth + 2
+
+  const figures: Array<Record<string, unknown>> = [
+    {
+      type: 'line',
+      attrs: { coordinates: [{ x: x1, y: y1 }, { x: x2, y: y2 }] },
+      styles: { style: 'stroke', color: accentSoft, size: 1.5, dashedValue: [5, 4] },
+      ignoreEvent: false,
+    },
+    { type: 'circle', attrs: { x: x1, y: y1, r: 5 }, styles: { style: 'stroke', color: accentColor, size: 2 }, ignoreEvent: false },
+    { type: 'circle', attrs: { x: x1, y: y1, r: 2.5 }, styles: { style: 'fill', color: dotFill }, ignoreEvent: false },
+    { type: 'circle', attrs: { x: x2, y: y2, r: 5 }, styles: { style: 'stroke', color: accentColor, size: 2 }, ignoreEvent: false },
+    { type: 'circle', attrs: { x: x2, y: y2, r: 2.5 }, styles: { style: 'fill', color: dotFill }, ignoreEvent: false },
+    {
+      type: 'rect',
+      attrs: { x: boxX, y: boxY, width: boxWidth, height: boxHeight, r: 6 },
+      styles: { style: 'stroke_fill', color: labelBg, borderColor: labelBorder, borderSize: 1 },
+      ignoreEvent: false,
+    },
+    {
+      type: 'text',
+      attrs: { x: boxX + 8, y: row1Y, text: percentStr, align: 'left', baseline: 'middle' },
+      styles: { color: accentColor, size: fontSize, weight: 'bold', backgroundColor: 'transparent' },
+      ignoreEvent: false,
+    },
+    {
+      type: 'text',
+      attrs: { x: priceX, y: row1Y, text: priceChangeStr, align: 'left', baseline: 'middle' },
+      styles: { color: labelText, size: fontSize, weight: 'normal', backgroundColor: 'transparent' },
+      ignoreEvent: false,
+    },
+  ]
+  if (metaText) {
+    figures.push({
+      type: 'text',
+      attrs: { x: boxX + 8, y: row2Y, text: metaText, align: 'left', baseline: 'middle' },
+      styles: { color: labelMuted, size: metaFontSize, weight: 'normal', backgroundColor: 'transparent' },
+      ignoreEvent: false,
+    })
+  }
+  return figures
+}
+
+export const PRICE_RANGE_MEASURE_OVERLAY = {
+  name: 'priceRangeMeasure',
+  totalStep: 3,
+  lock: false,
+  needDefaultPointFigure: false,
+  needDefaultXAxisFigure: false,
+  needDefaultYAxisFigure: false,
+  createPointFigures: ({ coordinates, overlay }: { coordinates: Array<{ x: number; y: number }>; overlay: { points?: Array<{ value?: number; timestamp?: number; dataIndex?: number }> } }) =>
+    buildPriceRangeMeasureFigures(overlay.points?.[0], overlay.points?.[1], coordinates),
+}
+
 export function registerRuntimeOverlays(): void {
-  for (const overlay of [SIGNAL_TAG_OVERLAY, ZONE_OVERLAY, LINE_OVERLAY, LABEL_OVERLAY]) {
+  for (const overlay of [SIGNAL_TAG_OVERLAY, ZONE_OVERLAY, LINE_OVERLAY, LABEL_OVERLAY, PRICE_RANGE_MEASURE_OVERLAY]) {
     try {
       registerOverlay(overlay as never)
     } catch {
@@ -1391,14 +1558,28 @@ export interface CreatedResource {
 interface ChartLike {
   createIndicator?: (name: string, isStack?: boolean, paneOptions?: unknown) => string | null
   createOverlay?: (overlay: unknown, paneId?: string) => string | null
+  removeIndicator?: (paneId: string, name?: string) => void
+  removeOverlay?: (id: string) => void
+}
+
+function rollbackCreated(chart: ChartLike, created: CreatedResource): void {
+  created.indicators.forEach(({ paneId, name }) => {
+    try { chart.removeIndicator?.(paneId, name) } catch { /* ignore */ }
+  })
+  created.overlays.forEach((id) => {
+    try { chart.removeOverlay?.(id) } catch { /* ignore */ }
+  })
+  created.indicators = []
+  created.overlays = []
 }
 
 /**
  * 把归一化后的 output 渲染到图表上（QuantDinger ge() 的移植）：
- *  1. plots 分主图/副图组，按内容签名注册指标并创建实例
- *  2. signalPoints → signalTag overlay（锚点=K线高/低点，标签在外侧）
+ *  1. plots 分主图/副图组，主图 overlay plots 合并成一个堆叠指标 QD_MAIN_OVERLAY_*，
+ *     副图按内容签名注册指标并创建实例
+ *  2. signalPoints → signalTag overlay（points=[标记价(外侧), 锚定价(K线高/低点)]）
  *  3. layers → zone/line/label overlay
- * 所有创建的资源记录到 created，由调用方负责重跑前清理。
+ * 所有创建的资源记录到 created，由调用方负责重跑前清理；渲染中途异常时回滚本次创建。
  */
 export function renderIndicatorOutput(
   chart: ChartLike,
@@ -1407,92 +1588,98 @@ export function renderIndicatorOutput(
   created: CreatedResource,
 ): void {
   if (!chart || !klines.length) return
-  const normalized = normalizeIndicatorOutput(output, klines)
+  try {
+    const normalized = normalizeIndicatorOutput(output, klines)
 
-  // ── plots → indicators ──
-  const plots = normalized.plots.filter((p) => p && Array.isArray(p.data) && p.data.length > 0)
-  if (plots.length > 0) {
-    const name = normalized.name || 'Custom Indicator'
-    const { overlayPlots, panePlots } = splitOverlayPane(plots)
-    const groups = [
-      { plots: overlayPlots, shouldOverlay: true, groupName: 'overlay' },
-      { plots: panePlots, shouldOverlay: false, groupName: 'pane' },
-    ]
-    for (const group of groups) {
-      if (!group.plots.length) continue
-      const build = buildPlotGroup(group.plots, klines.length)
-      const signature = `XT_${group.groupName}_${contentSignature({
-        v: 1,
-        name,
-        plots: group.plots.map((p) => ({ name: p.name, title: p.title, type: p.type, overlay: p.overlay, color: p.color })),
-        lampLaneCount: build.lampBeltMeta.laneCount,
-        len: klines.length,
-      })}`
-      const extra: Record<string, unknown> = {}
-      if (build.lampBeltMeta.enabled && build.lampBeltExtendData) {
-        extra.minValue = 1
-        extra.maxValue = build.lampBeltMeta.laneCount
-        extra.extendData = { lampBelt: build.lampBeltExtendData }
-        extra.draw = makeLampBeltDraw(name)
-        extra.createTooltipDataSource = makeLampBeltTooltip(name)
-      }
-      const ok = registerRuntimeIndicator({
-        signature,
-        calc: makePlotCalc(klines, build.plotDataMap),
-        figures: build.figures,
-        calcParams: [],
-        isPriceSeries: group.shouldOverlay,
-        shortName: name,
-        extra,
-      })
-      if (!ok) continue
-      const paneId = group.shouldOverlay
-        ? chart.createIndicator?.(signature, false, { id: 'candle_pane' })
-        : chart.createIndicator?.(signature, false, paneOptionsFor(group.plots, build.lampBeltMeta))
-      if (paneId) {
-        created.indicators.push({ paneId, name: signature })
-      } else if (group.shouldOverlay) {
-        created.indicators.push({ paneId: 'candle_pane', name: signature })
+    // ── plots → indicators ──
+    const plots = normalized.plots.filter((p) => p && Array.isArray(p.data) && p.data.length > 0)
+    if (plots.length > 0) {
+      const name = normalized.name || 'Custom Indicator'
+      const { overlayPlots, panePlots } = splitOverlayPane(plots)
+      const groups = [
+        { plots: overlayPlots, shouldOverlay: true, groupName: 'overlay' },
+        { plots: panePlots, shouldOverlay: false, groupName: 'pane' },
+      ]
+      for (const group of groups) {
+        if (!group.plots.length) continue
+        const build = buildPlotGroup(group.plots, klines.length)
+        const signatureHash = contentSignature({
+          v: 1,
+          name,
+          plots: group.plots.map((p) => ({ name: p.name, title: p.title, type: p.type, overlay: p.overlay, color: p.color })),
+          lampLaneCount: build.lampBeltMeta.laneCount,
+          len: klines.length,
+        })
+        const signature = group.shouldOverlay ? `QD_MAIN_OVERLAY_${signatureHash}` : `XT_pane_${signatureHash}`
+        const extra: Record<string, unknown> = {}
+        if (build.lampBeltMeta.enabled && build.lampBeltExtendData) {
+          extra.minValue = 1
+          extra.maxValue = build.lampBeltMeta.laneCount
+          extra.extendData = { lampBelt: build.lampBeltExtendData }
+          extra.draw = makeLampBeltDraw(name)
+          extra.createTooltipDataSource = makeLampBeltTooltip(name)
+        }
+        const ok = registerRuntimeIndicator({
+          signature,
+          calc: makePlotCalc(klines, build.plotDataMap),
+          figures: build.figures,
+          calcParams: [],
+          isPriceSeries: group.shouldOverlay,
+          shortName: name,
+          extra,
+        })
+        if (!ok) continue
+        const paneId = group.shouldOverlay
+          ? chart.createIndicator?.(signature, true, { id: 'candle_pane' })
+          : chart.createIndicator?.(signature, false, paneOptionsFor(group.plots, build.lampBeltMeta))
+        if (paneId) {
+          created.indicators.push({ paneId, name: signature })
+        } else if (group.shouldOverlay) {
+          created.indicators.push({ paneId: 'candle_pane', name: signature })
+        }
       }
     }
-  }
 
-  // ── signals → signalTag overlays ──
-  if (typeof chart.createOverlay === 'function') {
-    for (const point of normalized.signalPoints) {
-      try {
-        const overlayId = chart.createOverlay(
-          {
-            name: 'signalTag',
-            points: [
-              { timestamp: point.timestamp, value: point.anchorPrice },
-              { timestamp: point.timestamp, value: point.price },
-            ],
-            extendData: {
-              text: point.text,
-              color: point.color,
-              side: point.side,
-              action: point.action,
-              rawPrice: point.rawPrice,
+    // ── signals → signalTag overlays ──
+    if (typeof chart.createOverlay === 'function') {
+      for (const point of normalized.signalPoints) {
+        try {
+          const overlayId = chart.createOverlay(
+            {
+              name: 'signalTag',
+              points: [
+                { timestamp: point.timestamp, value: point.price },
+                { timestamp: point.timestamp, value: point.anchorPrice },
+              ],
+              extendData: {
+                text: point.text,
+                color: point.color,
+                side: point.side,
+                action: point.action,
+                price: point.price,
+                rawPrice: point.rawPrice,
+              },
+              lock: true,
             },
-            lock: true,
-          },
-          'candle_pane',
-        )
-        if (overlayId) created.overlays.push(String(overlayId))
-      } catch {
-        /* 单点失败不影响其余 */
+            'candle_pane',
+          )
+          if (overlayId) created.overlays.push(String(overlayId))
+        } catch {
+          /* 单点失败不影响其余 */
+        }
       }
-    }
 
-    // ── layers → zone/line/label overlays ──
-    for (const spec of layersToOverlaySpecs(normalized.layers, klines)) {
-      try {
-        const overlayId = chart.createOverlay(spec, 'candle_pane')
-        if (overlayId) created.overlays.push(String(overlayId))
-      } catch {
-        /* 单个图层失败不影响其余 */
+      // ── layers → zone/line/label overlays ──
+      for (const spec of layersToOverlaySpecs(normalized.layers, klines)) {
+        try {
+          const overlayId = chart.createOverlay(spec, 'candle_pane')
+          if (overlayId) created.overlays.push(String(overlayId))
+        } catch {
+          /* 单个图层失败不影响其余 */
+        }
       }
     }
+  } catch {
+    rollbackCreated(chart, created)
   }
 }
