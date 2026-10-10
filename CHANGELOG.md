@@ -37,6 +37,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 - 信号/信号执行表补 user_id 归属（迁移 0057），执行统计按用户隔离；删除信号源无属主放宽洞与社交 follow 的 query 参数身份回退
 
+## [3.3.0] - 2026-10-10
+
+### Added
+- 双线合并：市场 MVP（3.2.x 线）与生产修复线（版本更新横幅 AppUpdateBanner、online_order_limit 迁入风控中心、现价陈旧根修 resolveRuntimePrice、布林带开仓门槛、指标策略 CRA 壳快捷卡）合流
+- 现价三级口径：WS 新鲜 → 工作周期 K 线收盘 → REST 探针兜底（price_source=ws|kline|rest）
+
+### Fixed
+- CRA 参数链路审计修复：补仓档位 off-by-one、暖机副作用、现货开仓指标死链路、rsi/range/trend 假门槛、防瀑布币种覆盖与入场拦截、经典策略现货卡死与重启恢复
+
 ## [Unreleased]
 
 ### Added
