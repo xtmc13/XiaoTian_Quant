@@ -3,12 +3,13 @@ import { useAuthStore } from '@/stores/authStore'
 import { riskApi, type RiskConfig } from '@/lib/api'
 import { toast } from '@/lib/useToast'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { protectionApi } from '@/lib/api'
+import { protectionApi, paperApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { SectionCard } from '@/components/ui/SectionCard'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { KPICard } from '@/components/ui/KPICard'
+import { useConfirmDialog } from '@/components/ui/ConfirmDialog'
 import {
   Shield,
   ShieldAlert,
@@ -372,6 +373,146 @@ function RiskParamsCard() {
   )
 }
 
+const UNLOCK_CONFIRM_PHRASE = '我明白将使用真实资金下单'
+
+/** 实盘总闸：GET /api/trading/safety 轮询；unlock/lock 仅 admin，解锁需输入确认文案。 */
+function LiveTradingGateCard() {
+  const isAdmin = useAuthStore((s) => s.user?.role === 'admin')
+  const queryClient = useQueryClient()
+  const { prompt, Dialog } = useConfirmDialog()
+
+  const { data: safety } = useQuery({
+    queryKey: ['trading-safety'],
+    queryFn: () => paperApi.safety(),
+    refetchInterval: 10000,
+  })
+
+  const unlockMutation = useMutation({
+    mutationFn: () => paperApi.unlock(),
+    onSuccess: () => {
+      toast('success', '实盘交易已解锁（运行时，重启后失效）')
+      queryClient.invalidateQueries({ queryKey: ['trading-safety'] })
+    },
+  })
+
+  const lockMutation = useMutation({
+    mutationFn: () => paperApi.lock(),
+    onSuccess: () => {
+      toast('success', '实盘交易已锁定，回到模拟盘')
+      queryClient.invalidateQueries({ queryKey: ['trading-safety'] })
+    },
+  })
+
+  const handleUnlock = async () => {
+    const phrase = await prompt({
+      title: '确认解锁实盘交易',
+      message: '解锁后策略将使用真实资金在交易所下单，盈亏直接发生在真实账户。',
+      inputLabel: `请输入「${UNLOCK_CONFIRM_PHRASE}」以确认`,
+      confirmText: '解锁实盘',
+      variant: 'danger',
+    })
+    if (phrase === null) return
+    if (phrase.trim() !== UNLOCK_CONFIRM_PHRASE) {
+      toast('error', '确认文案不匹配，已取消解锁')
+      return
+    }
+    unlockMutation.mutate()
+  }
+
+  const enabled = safety?.live_trading_enabled ?? false
+  const overrideText = !safety?.runtime_override_locked
+    ? '未设置（跟随环境变量/配置）'
+    : enabled
+      ? '强制开启（运行时解锁）'
+      : '强制关闭（运行时锁定）'
+
+  const sources = [
+    { label: '配置文件 trading.live_enabled', on: safety?.config_live_trading ?? false },
+    { label: '环境变量 LIVE_TRADING_ENABLED', on: safety?.env_live_trading ?? false },
+  ]
+
+  return (
+    <SectionCard
+      title={<>实盘总闸 <ShieldAlert className="w-4 h-4 inline ml-1 text-quant-gold" /></>}
+      className={enabled ? 'border-red-500/30' : undefined}
+    >
+      <div className="space-y-3">
+        <div className="flex items-center gap-3">
+          <span
+            className={cn(
+              'px-4 py-1.5 rounded-lg text-lg font-bold',
+              enabled ? 'bg-red-500/15 text-red-400' : 'bg-green-500/10 text-green-400'
+            )}
+          >
+            {enabled ? '已开启' : '已关闭'}
+          </span>
+          <span className="text-xs text-muted-foreground">
+            {enabled ? '策略将使用真实资金下单' : '当前为模拟盘，真实交易所下单被拦截'}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          {sources.map((s) => (
+            <div
+              key={s.label}
+              className="flex items-center justify-between rounded-lg border border-quant-border bg-quant-bg px-3 py-2"
+            >
+              <span className="text-[11px] text-muted-foreground">{s.label}</span>
+              <span className={cn('text-xs font-semibold', s.on ? 'text-red-400' : 'text-green-400')}>
+                {s.on ? '开' : '关'}
+              </span>
+            </div>
+          ))}
+          <div className="flex items-center justify-between rounded-lg border border-quant-border bg-quant-bg px-3 py-2">
+            <span className="text-[11px] text-muted-foreground">运行时覆盖</span>
+            <span className="text-xs font-semibold">{overrideText}</span>
+          </div>
+        </div>
+
+        {safety?.confirm_required && (
+          <div className="text-[11px] text-muted-foreground">实盘下单仍需逐笔二次确认（confirmed=true）</div>
+        )}
+        <div className="text-[11px] text-muted-foreground">
+          优先级：运行时覆盖 &gt; 环境变量 &gt; 配置文件。运行时解锁/锁定重启后失效；持久开启需设置环境变量
+          LIVE_TRADING_ENABLED=true 或 config.yaml trading.live_enabled: true。
+        </div>
+
+        {unlockMutation.isError && (
+          <div className="text-xs text-red-400">解锁失败: {unlockMutation.error?.message}</div>
+        )}
+        {lockMutation.isError && (
+          <div className="text-xs text-red-400">锁定失败: {lockMutation.error?.message}</div>
+        )}
+
+        {isAdmin && (
+          <div className="flex items-center gap-2">
+            {enabled ? (
+              <button
+                onClick={() => lockMutation.mutate()}
+                disabled={lockMutation.isPending}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-md bg-quant-bg-secondary text-xs font-medium hover:bg-white/5 transition-colors disabled:opacity-50"
+              >
+                <Lock className="w-3.5 h-3.5" />
+                {lockMutation.isPending ? '锁定中...' : '锁定（回到模拟盘）'}
+              </button>
+            ) : (
+              <button
+                onClick={() => void handleUnlock()}
+                disabled={unlockMutation.isPending}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-md bg-red-500/20 text-red-400 text-xs font-medium hover:bg-red-500/30 transition-colors disabled:opacity-50"
+              >
+                <Unlock className="w-3.5 h-3.5" />
+                {unlockMutation.isPending ? '解锁中...' : '解锁实盘交易'}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+      <Dialog />
+    </SectionCard>
+  )
+}
+
 export function RiskControl() {
   const queryClient = useQueryClient()
   const [activeProtections, setActiveProtections] = useState<ProtectionConfigItem[]>([])
@@ -459,6 +600,8 @@ export function RiskControl() {
           subtitle="配置交易保护机制，防止过度交易和重大亏损"
           actions={<Shield className="w-6 h-6 text-quant-gold" />}
         />
+
+        <LiveTradingGateCard />
 
         <RiskParamsCard />
 

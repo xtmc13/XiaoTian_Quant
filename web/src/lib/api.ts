@@ -326,6 +326,7 @@ axiosInstance.interceptors.response.use(
         (wrappedError?.message as string) ||
         (data?.message as string) ||
         (data?.detail as string) ||
+        (typeof data?.error === 'string' ? data.error : '') ||
         `请求失败 (${status})`
       const code = (wrappedError?.code as string) || (data?.code as string) || 'HTTP_ERROR'
       // Show toast for client errors (4xx except 401/403/429)
@@ -3240,8 +3241,8 @@ export const analysisApi = {
 // ── Paper / Live Trading Safety ──
 export const paperApi = {
   safety: () => api.get<TradingSafetyResponse>('/trading/safety'),
-  unlock: () => api.post<{ success: boolean }>('/trading/unlock'),
-  lock: () => api.post<{ success: boolean }>('/trading/lock'),
+  unlock: () => api.post<{ message: string }>('/trading/unlock'),
+  lock: () => api.post<{ message: string }>('/trading/lock'),
 }
 
 // ── Exchange Status ──

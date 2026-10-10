@@ -194,8 +194,10 @@ export interface LiquidationPriceResult {
 }
 
 export interface TradingSafetyResponse {
-  locked: boolean
-  paper_mode: boolean
-  reason?: string
-  unlocked_at?: number
+  live_trading_enabled: boolean
+  confirm_required: boolean
+  paper_trading_default: boolean
+  env_live_trading: boolean
+  config_live_trading: boolean
+  runtime_override_locked: boolean
 }
