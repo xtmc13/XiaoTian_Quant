@@ -193,7 +193,7 @@ describe('RiskControl 实盘总闸卡片', () => {
     fireEvent.click(screen.getByText('解锁实盘'))
     await waitFor(() => expect(paperApi.unlock).toHaveBeenCalledTimes(1))
     await waitFor(() =>
-      expect(useToastModule.toast).toHaveBeenCalledWith('success', '实盘交易已解锁（运行时，重启后失效）')
+      expect(useToastModule.toast).toHaveBeenCalledWith('success', '实盘交易已解锁（持久生效，直到手动锁定）')
     )
   })
 

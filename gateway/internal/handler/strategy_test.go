@@ -899,6 +899,28 @@ func TestLiveTradingGate(t *testing.T) {
 	assertEq(t, code, http.StatusBadRequest, "live must be 400 again after gate closed")
 }
 
+// TestFillDefaultsKeepsLiveWhenGateClosed 加载侧不再静默压回（2026-10-11 事故
+// 回归：重启丢失运行时解锁后 live 被压回 paper，用户以为实盘在跑而币安无仓）：
+// 总闸关闭时 execution_mode=live 如实保留（其信号单由订单时实盘闸拦截）；
+// 空值兜底 paper、signal 等非法值压回 paper 的红线不变。
+func TestFillDefaultsKeepsLiveWhenGateClosed(t *testing.T) {
+	atomic.StoreInt32(&liveTradingOverride, 2)
+	t.Cleanup(func() { atomic.StoreInt32(&liveTradingOverride, 0) })
+
+	item := map[string]any{"id": "ld-live", "name": "加载live", "execution_mode": "live"}
+	fillStrategyFieldDefaults(item, nil)
+	assertTrue(t, getString(item, "execution_mode", "") == "live", "总闸关闭时加载侧不得压回 live")
+	assertTrue(t, getString(item, "mode", "") == "live", "别名字段必须同步为 live")
+
+	item = map[string]any{"id": "ld-signal", "name": "加载signal", "execution_mode": "signal"}
+	fillStrategyFieldDefaults(item, nil)
+	assertTrue(t, getString(item, "execution_mode", "") == "paper", "signal 非法值必须压回 paper")
+
+	item = map[string]any{"id": "ld-empty", "name": "加载空"}
+	fillStrategyFieldDefaults(item, nil)
+	assertTrue(t, getString(item, "execution_mode", "") == "paper", "空 execution_mode 必须兜底 paper")
+}
+
 /* ── 任务1：现货专用参数模型 → cra_spot 引擎直驱 ─────────────── */
 
 // buildSpotConfig 复刻前端现货表单的双键 config：自定义键（回填优先）+

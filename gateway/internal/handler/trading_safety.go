@@ -8,7 +8,9 @@ import (
 	"sync/atomic"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xiaotian-quant/gateway/internal/app"
 	"github.com/xiaotian-quant/gateway/internal/config"
+	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
 // liveTradingOverride allows runtime enable/disable of live trading.
@@ -77,7 +79,10 @@ func UnlockLiveTrading(c *gin.Context) {
 		return
 	}
 	atomic.StoreInt32(&liveTradingOverride, 1)
-	c.JSON(http.StatusOK, gin.H{"message": "实盘交易已启用（运行时，重启后需重新解锁或配置环境变量）"})
+	if err := store.SaveTradingLiveOverride("1"); err != nil {
+		log.Printf("[WARN] [trading-safety] 实盘解锁态持久化失败（重启后将回落 env/config）: %v", err)
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "实盘交易已启用（解锁后持久生效，直到手动锁定）"})
 }
 
 // LockLiveTrading disables live trading at runtime (admin only).
@@ -87,5 +92,24 @@ func LockLiveTrading(c *gin.Context) {
 		return
 	}
 	atomic.StoreInt32(&liveTradingOverride, 2)
+	if err := store.SaveTradingLiveOverride(""); err != nil {
+		log.Printf("[WARN] [trading-safety] 实盘锁定态持久化失败: %v", err)
+	}
 	c.JSON(http.StatusOK, gin.H{"message": "实盘交易已禁用"})
+}
+
+// RestoreLiveTradingOverride 启动时从 DB 恢复实盘总闸运行时覆盖
+// （须在 store.InitDB 之后、策略恢复之前调用）；无持久化记录时保持
+// 跟随 env/config。
+func RestoreLiveTradingOverride() {
+	if store.GetTradingLiveOverride() == "1" {
+		atomic.StoreInt32(&liveTradingOverride, 1)
+		log.Printf("[trading-safety] 已从 DB 恢复实盘解锁态（运行时覆盖=强制开启）")
+	}
+}
+
+// 信号单实盘闸：策略信号直连 OMS，不经 HTTP 层的 canPlaceLiveOrder，
+// 这里把同一总闸注入 app 上下文（与 pystrat runner 的 LiveGate 同口径）。
+func init() {
+	app.Get().LiveGate = func(exchange string) error { return canPlaceLiveOrder(exchange, true) }
 }

@@ -1048,17 +1048,17 @@ func fillStrategyFieldDefaults(item map[string]any, payloadConfig map[string]any
 			item["category"] = "spot"
 		}
 	}
-	// 安全红线：一切下单默认 paper。execution_mode=live 仅在实盘总闸开启时
-	// 放行（用户明确要求加回实盘选项，2026-09-17）；signal 等直连值与未开启
-	// 总闸的 live 一律压回 paper 并留痕。将来收紧/放宽实盘时应只改总闸。
+	// 安全红线：一切下单默认 paper。execution_mode=live 如实保留——保存侧
+	// 有 400 闸（Create/Update），加载侧不再静默压回（2026-10-11 事故：重启
+	// 丢失运行时解锁后 live 被压回 paper，用户以为实盘在跑而币安无仓）；
+	// live 策略的信号单在下单时由实盘总闸拦截并回传拒绝事件。signal 等
+	// 非法直连值仍压回 paper 并留痕。将来收紧/放宽实盘时应只改总闸。
 	em := strings.ToLower(getString(item, "execution_mode", ""))
 	switch {
 	case em == "":
 		item["execution_mode"] = "paper"
-	case em == "live" && isLiveTradingEnabled():
-		// 实盘总闸已开启：接受 live。
-	case em != "paper":
-		log.Printf("[strategy] execution_mode=%s 已压回 paper（安全红线，实盘未开启）: id=%v name=%v type=%v",
+	case em != "paper" && em != "live":
+		log.Printf("[strategy] execution_mode=%s 已压回 paper（安全红线，非法取值）: id=%v name=%v type=%v",
 			em, item["id"], item["name"], item["strategy_type"])
 		item["execution_mode"] = "paper"
 	}

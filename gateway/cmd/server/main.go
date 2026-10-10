@@ -102,6 +102,9 @@ func main() {
 	// P1：恢复 DB 持久化的 pairlist 配置（须在 store.InitDB() 之后）
 	handler.RestorePairlistConfig()
 	handler.RestorePaperAccount()
+	// 实盘总闸运行时覆盖持久化：须在策略恢复（ResumeRunningStrategiesLoop）
+	// 与任何加载/编辑落库之前恢复，否则重启丢失解锁态。
+	handler.RestoreLiveTradingOverride()
 	handler.StartPaperMatcher()
 
 	// ── 凭证安全（P0-4）：启动期主密钥检查（production 未设 → fatal，与

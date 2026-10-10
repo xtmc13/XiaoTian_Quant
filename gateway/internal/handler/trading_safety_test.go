@@ -15,6 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/xiaotian-quant/gateway/internal/config"
+	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
 // loadTempRiskConfig 用临时 config.yaml 覆盖全局配置（risk.position_limit_pct
@@ -34,6 +35,12 @@ func adminUnlock(c *gin.Context) {
 	c.Set("user_id", int64(1))
 	c.Set("role", "admin")
 	UnlockLiveTrading(c)
+}
+
+func adminLock(c *gin.Context) {
+	c.Set("user_id", int64(1))
+	c.Set("role", "admin")
+	LockLiveTrading(c)
 }
 
 // resetLiveOverride 解锁测试会写包级 liveTradingOverride，必须复位为
@@ -106,4 +113,42 @@ func TestUnlockAllowsRelaxedWithEscapeHatch(t *testing.T) {
 	assertTrue(t, atomic.LoadInt32(&liveTradingOverride) == 1, "解锁必须生效")
 	assertTrue(t, strings.Contains(buf.String(), "XIAOTIAN_ALLOW_RELAXED_RISK"),
 		"逃逸开关放行必须留痕（日志）")
+}
+
+// 解锁态持久化（2026-10-11 事故：重启丢失运行时解锁）：unlock 落库 →
+// 模拟重启（内存覆盖清零 + RestoreLiveTradingOverride）总闸仍开；
+// lock 清库 → 模拟重启回落 env/config（均为关）。
+func TestLiveOverridePersistsAcrossRestart(t *testing.T) {
+	loadTempRiskConfig(t, 100)
+	os.Unsetenv("XIAOTIAN_ALLOW_RELAXED_RISK")
+	os.Unsetenv("LIVE_TRADING_ENABLED")
+	resetLiveOverride(t)
+	t.Cleanup(func() { _ = store.SaveTradingLiveOverride("") })
+
+	r := setupRouter()
+	r.POST("/trading/unlock", adminUnlock)
+	r.POST("/trading/lock", adminLock)
+
+	w := postUnlock(r)
+	assertEq(t, w.Code, http.StatusOK, "unlock must succeed")
+	assertTrue(t, store.GetTradingLiveOverride() == "1", "unlock 必须把覆盖态落库")
+
+	// 模拟重启：内存原子值丢失，从 DB 恢复。
+	atomic.StoreInt32(&liveTradingOverride, 0)
+	RestoreLiveTradingOverride()
+	assertTrue(t, atomic.LoadInt32(&liveTradingOverride) == 1, "重启后解锁态必须从 DB 恢复")
+	assertTrue(t, isLiveTradingEnabledRuntime(), "恢复后实盘总闸必须开启")
+
+	w = httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/trading/lock", nil)
+	r.ServeHTTP(w, req)
+	assertEq(t, w.Code, http.StatusOK, "lock must succeed")
+	assertTrue(t, atomic.LoadInt32(&liveTradingOverride) == 2, "锁定必须立即生效（本进程强制关）")
+	assertTrue(t, store.GetTradingLiveOverride() == "", "锁定必须清除持久化覆盖")
+
+	// 再次模拟重启：无持久化覆盖 → 回落 env/config（均未开启）。
+	atomic.StoreInt32(&liveTradingOverride, 0)
+	RestoreLiveTradingOverride()
+	assertTrue(t, atomic.LoadInt32(&liveTradingOverride) == 0, "清库后重启不得恢复覆盖")
+	assertTrue(t, !isLiveTradingEnabledRuntime(), "清库后重启必须回落 env/config（关）")
 }

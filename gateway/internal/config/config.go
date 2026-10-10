@@ -117,7 +117,7 @@ type TradingConfig struct {
 	//   2. 按真实资金规模回调 risk.* 限额（尤其 position_limit_pct）；
 	//   3. 先用小额资金验证；
 	//   4. 确认所在辖区法律合规。
-	// 运行时也可由管理员调用解锁接口临时开关（重启后失效）。
+	// 运行时也可由管理员调用解锁接口开关（解锁态落库持久化，直到手动锁定）。
 	LiveEnabled bool `yaml:"live_enabled"`
 }
 

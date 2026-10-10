@@ -390,7 +390,7 @@ function LiveTradingGateCard() {
   const unlockMutation = useMutation({
     mutationFn: () => paperApi.unlock(),
     onSuccess: () => {
-      toast('success', '实盘交易已解锁（运行时，重启后失效）')
+      toast('success', '实盘交易已解锁（持久生效，直到手动锁定）')
       queryClient.invalidateQueries({ queryKey: ['trading-safety'] })
     },
   })
@@ -473,8 +473,8 @@ function LiveTradingGateCard() {
           <div className="text-[11px] text-muted-foreground">实盘下单仍需逐笔二次确认（confirmed=true）</div>
         )}
         <div className="text-[11px] text-muted-foreground">
-          优先级：运行时覆盖 &gt; 环境变量 &gt; 配置文件。运行时解锁/锁定重启后失效；持久开启需设置环境变量
-          LIVE_TRADING_ENABLED=true 或 config.yaml trading.live_enabled: true。
+          优先级：运行时覆盖 &gt; 环境变量 &gt; 配置文件。运行时解锁后持久生效，直到手动锁定；锁定后回到环境变量
+          /配置（LIVE_TRADING_ENABLED=true 或 config.yaml trading.live_enabled: true）口径。
         </div>
 
         {unlockMutation.isError && (

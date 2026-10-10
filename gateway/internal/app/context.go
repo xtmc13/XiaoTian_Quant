@@ -60,6 +60,10 @@ type Context struct {
 	MatchingService  *service.MatchingService
 	FundingTracker   *risk.FundingFeeTracker
 
+	// LiveGate 实盘总闸（handler 注入 canPlaceLiveOrder 同口径）：信号单
+	// exchange 非 paper 时下单前必过；nil 视为未接线，真实交易所单拒放。
+	LiveGate func(exchange string) error
+
 	mu      sync.Mutex
 	started bool
 
@@ -1773,6 +1777,16 @@ func (ctx *Context) wireStrategyEngine() {
 			}
 		}
 
+		if err := ctx.signalLiveGate(req.Exchange); err != nil {
+			ctx.Logger.Warn("Signal order blocked by live gate",
+				"strategy", signal.Strategy,
+				"symbol", signal.Symbol,
+				"exchange", req.Exchange,
+				"error", err.Error())
+			ctx.fireSignalOrderRejected(req)
+			return
+		}
+
 		ord, err := order.GetOrderManager().PlaceOrder(req)
 		if err != nil {
 			ctx.Logger.Warn("Signal order failed",
@@ -1848,6 +1862,19 @@ func (ctx *Context) fireSignalOrderRejected(req *order.Request) {
 	})
 }
 
+// signalLiveGate 信号单实盘闸：paper 放行；真实交易所单过 handler 注入的
+// 总闸（canPlaceLiveOrder 同口径），未接线时拒放——与"任何一环未显式开启
+// 即视为未开启"同语义。
+func (ctx *Context) signalLiveGate(exchange string) error {
+	if exchange == "" || strings.EqualFold(exchange, "paper") {
+		return nil
+	}
+	if ctx.LiveGate == nil {
+		return fmt.Errorf("实盘下单闸未接线，拒绝真实交易所信号单")
+	}
+	return ctx.LiveGate(exchange)
+}
+
 // clientOIDForSignal 信号下单的归属打标：自动信号 "sig:<配置id>:<nonce>"；
 // G1 手动操控信号（Tag=manual）打 "sig:<配置id>:manual:<nonce>"——保持
 // "sig:<id>:" 前缀（wrapper 路由/成交账本归属口径不变），":manual:" 中缀
@@ -1884,7 +1911,8 @@ func findStrategyConfigForSignal(signal model.Signal) map[string]any {
 //
 // 安全红线：任何非显式 live 的 execution_mode（空/signal 等）一律 paper——
 // resolveExchange 有凭证即直连真实交易所，空值/历史残值绝不放行。
-// 保存侧（fillStrategyFieldDefaults）已把非 paper 压回 paper，这里是第二道防线。
+// live 在保存/加载侧如实保留，其真实交易所单由订单时实盘闸（signalLiveGate）
+// 拦截；这里是 paper 防线的最后一道。
 // direction 为信号方向（"LONG"/"SHORT"/"CLOSE"…），仅用于 BOTH 双向时的方向判定。
 func applyStrategyExecConfig(req *order.Request, cfg map[string]any, direction string) {
 	// 策略配置 execution_mode=paper 时强制 paper 撮合：dry_run 下
