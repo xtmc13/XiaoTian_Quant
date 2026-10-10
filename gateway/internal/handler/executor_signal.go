@@ -86,6 +86,17 @@ func normalizeMarginMode(raw, marketType string) (string, error) {
 	return mode, nil
 }
 
+// resolveSignalOwnerID 取信号源属主作为信号归属用户（多用户隔离的写入口径）；
+// 源不存在/查询失败时落 0 并告警（历史无属主口径）。
+func resolveSignalOwnerID(sourceID string) int {
+	src, err := executorSourceRepo.GetByID(sourceID)
+	if err != nil || src == nil {
+		log.Printf("[executor] WARN: signal source %s owner not found, signal falls back to user_id=0", sourceID)
+		return 0
+	}
+	return src.OwnerUserID
+}
+
 // recordSignalFromWebhook 把 webhook 收到的信号落库（此前链路缺失的环节）。
 // 返回落库记录；调用方决定走普通成交流程还是信号执行流程。
 func recordSignalFromWebhook(body map[string]any, symbol, direction, sourceID string) *store.SignalRecord {
@@ -102,6 +113,7 @@ func recordSignalFromWebhook(body map[string]any, symbol, direction, sourceID st
 		PositionSize: getFloat(body, "quantity", getFloat(body, "qty", 0)),
 		Status:       "PENDING",
 		SourceID:     sourceID,
+		UserID:       resolveSignalOwnerID(sourceID),
 		MarginMode:   strings.ToLower(getString(body, "margin_mode", marginModeCross)),
 		TP1:          getFloat(body, "tp1", 0),
 		TP2:          getFloat(body, "tp2", 0),
@@ -220,6 +232,7 @@ func executeSignalRecord(sig *store.SignalRecord, body map[string]any) (*store.S
 	exec := &store.SignalExecution{
 		SignalID:     sig.ID,
 		SourceID:     sig.SourceID,
+		UserID:       sig.UserID,
 		Symbol:       sig.Symbol,
 		Direction:    string(positionSide),
 		MarginMode:   mode,

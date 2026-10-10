@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils'
 import { adminMarketApi, marketListingApi, type MarketListing, type MarketListingStatus } from '@/lib/api'
 import { useI18n } from '@/i18n'
 import { Skeleton } from '@/components/ui/Skeleton'
+import { useConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { toast } from '@/lib/useToast'
 
 const QUEUE_TABS: { key: MarketListingStatus; labelKey: string }[] = [
@@ -19,6 +20,7 @@ const QUEUE_TABS: { key: MarketListingStatus; labelKey: string }[] = [
 export function AdminMarketReview() {
   const { t } = useI18n()
   const queryClient = useQueryClient()
+  const { prompt, Dialog } = useConfirmDialog()
   const [status, setStatus] = useState<MarketListingStatus>('pending_review')
   const [rulesForm, setRulesForm] = useState<{ min_days: string; min_trades: string; max_drawdown_pct: string } | null>(null)
 
@@ -66,13 +68,17 @@ export function AdminMarketReview() {
     onError: (e) => toast('error', e instanceof Error ? e.message : t('market.admin.rulesSaveFail')),
   })
 
-  const act = (l: MarketListing, action: 'approve' | 'reject' | 'delist') => {
+  const act = async (l: MarketListing, action: 'approve' | 'reject' | 'delist') => {
     if (action === 'approve') {
       reviewMut.mutate({ id: l.id, action })
       return
     }
-    const label = action === 'reject' ? t('market.admin.rejectReasonPrompt') : t('market.admin.delistReasonPrompt')
-    const reason = window.prompt(label)
+    const reason = await prompt({
+      title: action === 'reject' ? t('market.admin.reject') : t('market.admin.delist'),
+      inputLabel: action === 'reject' ? t('market.admin.rejectReasonPrompt') : t('market.admin.delistReasonPrompt'),
+      confirmText: action === 'reject' ? t('market.admin.reject') : t('market.admin.delist'),
+      variant: 'danger',
+    })
     if (!reason || !reason.trim()) return
     reviewMut.mutate({ id: l.id, action, reason: reason.trim() })
   }
@@ -227,6 +233,7 @@ export function AdminMarketReview() {
           ))}
         </div>
       )}
+      <Dialog />
     </div>
   )
 }

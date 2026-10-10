@@ -26,6 +26,21 @@ const switchTrack = vi.fn((_id: number, _data: { track: string; chain?: string }
 )
 const approveProvider = vi.fn((_id: number) => Promise.resolve({ provider: { id: 5 } }))
 const rejectProvider = vi.fn((_id: number, _note?: string) => Promise.resolve({ provider: { id: 5 } }))
+const adminProviders = vi.fn((_status?: string) =>
+  Promise.resolve([
+    {
+      id: 5,
+      user_id: 42,
+      name: '新入驻信号',
+      description: '高频网格',
+      monthly_fee: 0,
+      profit_share_pct: 20,
+      fee_mode: 'profit_share',
+      apply_status: 'pending',
+      created_at: 1760000000000,
+    },
+  ])
+)
 
 const marketProvider = {
   id: 1000003, // 引擎 offset id
@@ -57,6 +72,7 @@ vi.mock('@/lib/api', () => ({
     mySubscription: () => Promise.resolve({ subscription: subState.subscription, available_tracks: ['subscription', 'profit_share'] }),
     subscribe: (id: number, data: { track: string; chain?: string }) => subscribe(id, data),
     switchTrack: (id: number, data: { track: string; chain?: string }) => switchTrack(id, data),
+    adminProviders: (status?: string) => adminProviders(status),
     approveProvider: (id: number) => approveProvider(id),
     rejectProvider: (id: number, note?: string) => rejectProvider(id, note),
   },
@@ -144,7 +160,7 @@ describe('MarketProviders（市场 Provider 双轨订阅）', () => {
   })
 })
 
-describe('AdminProviderReview（provider 入驻审核，单条 ID 操作）', () => {
+describe('AdminProviderReview（provider 入驻待审队列）', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     authState.role = 'admin'
@@ -157,19 +173,27 @@ describe('AdminProviderReview（provider 入驻审核，单条 ID 操作）', ()
     expect(screen.queryByText('Provider 入驻审核')).toBeNull()
   })
 
-  it('approves by application id after confirm', async () => {
+  it('lists pending applications with fee info', async () => {
     render(<AdminProviderReview />, { wrapper: Wrapper })
-    fireEvent.change(screen.getByPlaceholderText('申请 ID'), { target: { value: '5' } })
+    await waitFor(() => expect(screen.getByText('新入驻信号')).toBeTruthy())
+    expect(screen.getByText(/#5/)).toBeTruthy()
+    expect(screen.getByText(/免费订阅 · 分成 20%/)).toBeTruthy()
+    expect(adminProviders).toHaveBeenCalledWith('pending')
+  })
+
+  it('approves an application after confirm', async () => {
+    render(<AdminProviderReview />, { wrapper: Wrapper })
+    await waitFor(() => expect(screen.getByText('新入驻信号')).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: '通过' }))
     const dialog = await screen.findByRole('dialog')
-    expect(within(dialog).getByText(/#5/)).toBeTruthy()
+    expect(within(dialog).getByText(/新入驻信号/)).toBeTruthy()
     fireEvent.click(within(dialog).getByRole('button', { name: '通过' }))
     await waitFor(() => expect(approveProvider).toHaveBeenCalledWith(5))
   })
 
-  it('rejects by application id with note', async () => {
+  it('rejects an application with note', async () => {
     render(<AdminProviderReview />, { wrapper: Wrapper })
-    fireEvent.change(screen.getByPlaceholderText('申请 ID'), { target: { value: '5' } })
+    await waitFor(() => expect(screen.getByText('新入驻信号')).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: '拒绝' }))
     const dialog = await screen.findByRole('dialog')
     fireEvent.change(within(dialog).getByRole('textbox'), { target: { value: '资料不全' } })
@@ -177,11 +201,9 @@ describe('AdminProviderReview（provider 入驻审核，单条 ID 操作）', ()
     await waitFor(() => expect(rejectProvider).toHaveBeenCalledWith(5, '资料不全'))
   })
 
-  it('rejects invalid id without calling api', () => {
+  it('shows empty state when no pending applications', async () => {
+    adminProviders.mockResolvedValueOnce([])
     render(<AdminProviderReview />, { wrapper: Wrapper })
-    fireEvent.change(screen.getByPlaceholderText('申请 ID'), { target: { value: 'abc' } })
-    fireEvent.click(screen.getByRole('button', { name: '通过' }))
-    expect(approveProvider).not.toHaveBeenCalled()
-    expect(screen.queryByRole('dialog')).toBeNull()
+    await waitFor(() => expect(screen.getByText('暂无待审申请')).toBeTruthy())
   })
 })

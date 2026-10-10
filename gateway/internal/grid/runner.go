@@ -43,6 +43,10 @@ type Runner struct {
 	exec  ContractExecutor
 	bots  map[string]*botRuntime
 
+	// OnProfitableFill 盈利落袋腿（pnl>0）回调，成交落库后同步触发
+	// （0060 市场订阅归因接线；nil = 不接线）。实现方自行兜底错误。
+	OnProfitableFill func(rec *store.GridBotRecord, f LegFill)
+
 	// TickInterval 为取价驱动节拍，SnapshotInterval 为权益快照节拍；
 	// NewRunner 赋默认值，测试可调短。
 	TickInterval     time.Duration
@@ -261,6 +265,9 @@ func (r *Runner) runBot(rt *botRuntime) {
 				if err := r.repo.InsertTrade(rt.record.ID, f.Level, string(f.Side),
 					f.Price, f.Qty, f.QuoteQty, f.Fee, f.Pnl, f.Leg, f.Ts); err != nil {
 					log.Printf("grid runner: bot %s insert trade: %v", rt.record.ID, err)
+				}
+				if f.Pnl > 0 && r.OnProfitableFill != nil {
+					r.OnProfitableFill(rt.record, f)
 				}
 			}
 			if len(fills) > 0 {

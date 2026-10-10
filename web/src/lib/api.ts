@@ -778,6 +778,7 @@ export interface SocialEarnings {
 }
 export interface SocialWithdrawal {
   id: string
+  provider_user_id: number
   amount: number
   chain: string
   address: string
@@ -2407,7 +2408,11 @@ export const socialApi = {
     api.get<{ subscription: SocialTrackSubscription | null; available_tracks?: string[] }>(
       `/social/providers/${dbId}/subscription`
     ),
-  // 入驻审核（admin only；无待审列表端点，只能按 id 单条操作）
+  // 入驻审核（admin only）：待审队列 + 单条通过/拒绝
+  adminProviders: (status = 'pending') =>
+    api
+      .get<{ providers: SocialProviderApply[] }>('/social/admin/providers', { params: { status } })
+      .then((d) => d?.providers ?? []),
   approveProvider: (dbId: number) =>
     api.post<{ provider: SocialProviderApply }>(`/social/providers/${dbId}/approve`),
   rejectProvider: (dbId: number, note = '') =>
@@ -2742,6 +2747,10 @@ export interface MarketListing {
   id: string
   author_user_id: number
   bot_instance_id: string
+  /** 上架对象类型（0058）：ai_bot | grid_bot，缺省按 ai_bot 展示。 */
+  object_kind?: string
+  /** 上架对象 id（ai_bot=实例 id，grid_bot=grid_bots.id）。 */
+  object_id?: string
   kind: string
   name: string
   description: string
@@ -2768,8 +2777,47 @@ export interface MarketRules {
   max_drawdown_pct: number
 }
 
-export interface MarketListingCreateRequest {
+export interface MarketListingTrade {
+  id: number
   bot_instance_id: string
+  symbol: string
+  side: string
+  /** grid_bot 成交为单格 fill，无开仓价/盈亏百分比/平仓原因概念（缺省由前端显示占位）。 */
+  entry_price?: number
+  exit_price?: number
+  quantity: number
+  pnl: number
+  pnl_pct?: number
+  close_reason?: string
+  opened_at: number
+  closed_at: number
+}
+
+// 考核通过快照：提交时快照进条目的规则红线 + 最新日快照的达标数值
+export interface MarketListingProbation {
+  rule_min_days: number
+  rule_min_trades: number
+  rule_max_drawdown_pct: number
+  days_elapsed?: number
+  trades_in_window?: number
+  max_drawdown_pct?: number
+}
+
+export interface MarketListingStatsResponse {
+  listing: MarketListing
+  series: MarketListingStats[]
+  trades: MarketListingTrade[]
+  trades_total: number
+  probation?: MarketListingProbation
+  metric_source: string
+}
+
+export interface MarketListingCreateRequest {
+  /** 旧字段：ai_bot 实例 id（object_id 缺省时后端回落此字段）。 */
+  bot_instance_id?: string
+  /** 上架对象类型：ai_bot（默认）| grid_bot。 */
+  object_kind?: string
+  object_id?: string
   kind?: string
   name?: string
   description?: string
@@ -2790,9 +2838,71 @@ export const marketListingApi = {
     api.get<{ listings: MarketListing[]; total: number; page: number; page_size: number }>('/market/listings', {
       params,
     }),
-  stats: (id: string, limit = 90) =>
-    api.get<{ listing: MarketListing; series: MarketListingStats[] }>(`/market/listings/${id}/stats?limit=${limit}`),
+  stats: (id: string, opts?: { limit?: number; trades_limit?: number; trades_offset?: number }) =>
+    api.get<MarketListingStatsResponse>(`/market/listings/${id}/stats`, {
+      params: { limit: opts?.limit ?? 90, trades_limit: opts?.trades_limit ?? 50, trades_offset: opts?.trades_offset ?? 0 },
+    }),
   rules: () => api.get<MarketRules>('/market/rules'),
+  // 订阅扣费链路（0059）：价格字段以条目快照为准（服务端权威），chain 仅月费订单用
+  subscribe: (id: string, data?: { chain?: string }) =>
+    api.post<MarketSubscribeResult>(`/market/listings/${id}/subscribe`, data ?? {}),
+  mySubscriptions: () =>
+    api.get<{ subscriptions: MarketSubscription[] }>('/market/my-subscriptions').then((d) => d?.subscriptions ?? []),
+  cancelSubscription: (subId: number) =>
+    api.post<{ id: number; status: string }>(`/market/my-subscriptions/${subId}/cancel`),
+  // 订阅实例化（0060）：克隆条目源对象配置为当前用户名下实例，幂等
+  instantiate: (subId: number) =>
+    api.post<MarketInstantiateResult>(`/market/my-subscriptions/${subId}/instantiate`),
+}
+
+// 订阅实例化结果（0060）：克隆出的实例 id 与类型；already=true 表示幂等返回既有实例
+export interface MarketInstantiateResult {
+  kind: 'ai_bot' | 'grid_bot'
+  instance_id: string
+  already?: boolean
+}
+
+// 市场条目订阅（ai_bot_subscriptions 的 listing 维度行；迁移 0059）
+export interface MarketSubscription {
+  id: number
+  user_id: number
+  listing_id: string
+  /** 收费模式快照：free | monthly | profit_share（服务端从条目取，请求体不可改）。 */
+  fee_type: string
+  fee_percent: number
+  monthly_fee: number
+  /** active | pending_payment | expired | cancelled */
+  status: string
+  /** 到期时间（Unix 秒；0 = 无到期）。 */
+  expires_at: number
+  created_at: number
+  // my-subscriptions 关联条目摘要
+  listing_name?: string
+  object_kind?: string
+  fee_model?: string
+  listing_status?: string
+  /** 已实例化的克隆实例 id（0060 订阅实例化；空 = 未实例化）。 */
+  instance_id?: string
+}
+
+// 月费订阅的计费订单（store.BillingOrder；amount_usdt 为微 USDT，1e6=1 USDT）
+export interface MarketSubscriptionOrder {
+  order_id: string
+  chain: string
+  address: string
+  amount_usdt: number
+  status: string
+  created_at: number
+}
+
+export interface MarketSubscribeResult {
+  subscription: MarketSubscription
+  /** true = 已有进行中订阅，幂等返回（未重复创建）。 */
+  already?: boolean
+  order?: MarketSubscriptionOrder
+  /** 订单过期时间（Unix 秒）。 */
+  expires_at?: number
+  period_days?: number
 }
 
 // ── Admin Market（上架审核队列）──

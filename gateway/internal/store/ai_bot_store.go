@@ -45,7 +45,7 @@ func GetAIBotInstances(userID int) []map[string]any {
 			       status, execution_mode, config_json, exchange_id,
 			       unrealized_pnl, realized_pnl, total_return_pct, max_drawdown_pct,
 			       sharpe_ratio, win_rate, total_trades, initial_balance, error_message,
-			       created_at, updated_at, started_at, stopped_at
+			       origin_listing_id, created_at, updated_at, started_at, stopped_at
 			FROM ai_bot_instances WHERE user_id=? ORDER BY updated_at DESC
 		`, userID)
 	} else {
@@ -54,7 +54,7 @@ func GetAIBotInstances(userID int) []map[string]any {
 			       status, execution_mode, config_json, exchange_id,
 			       unrealized_pnl, realized_pnl, total_return_pct, max_drawdown_pct,
 			       sharpe_ratio, win_rate, total_trades, initial_balance, error_message,
-			       created_at, updated_at, started_at, stopped_at
+			       origin_listing_id, created_at, updated_at, started_at, stopped_at
 			FROM ai_bot_instances ORDER BY updated_at DESC
 		`)
 	}
@@ -71,7 +71,7 @@ func GetAIBotInstanceByID(id string, userID int) map[string]any {
 		       status, execution_mode, config_json, exchange_id,
 		       unrealized_pnl, realized_pnl, total_return_pct, max_drawdown_pct,
 		       sharpe_ratio, win_rate, total_trades, initial_balance, error_message,
-		       created_at, updated_at, started_at, stopped_at
+		       origin_listing_id, created_at, updated_at, started_at, stopped_at
 		FROM ai_bot_instances WHERE id=? AND user_id=?`, id, userID)
 	return scanAIBotInstanceRow(row)
 }
@@ -88,6 +88,23 @@ func GetAIBotInstanceOwner(id string) (int, bool) {
 		return 0, false
 	}
 	return userID, true
+}
+
+// FindAIBotInstanceByOrigin 查用户名下克隆自某市场条目的实例（0060，
+// 订阅实例化幂等用）；无则返回 nil。
+func FindAIBotInstanceByOrigin(userID int, listingID string) map[string]any {
+	if db == nil || listingID == "" {
+		return nil
+	}
+	row := db.QueryRow(`
+		SELECT id, user_id, catalog_id, name, strategy_type, symbol, market_type,
+		       status, execution_mode, config_json, exchange_id,
+		       unrealized_pnl, realized_pnl, total_return_pct, max_drawdown_pct,
+		       sharpe_ratio, win_rate, total_trades, initial_balance, error_message,
+		       origin_listing_id, created_at, updated_at, started_at, stopped_at
+		FROM ai_bot_instances WHERE user_id=? AND origin_listing_id=?
+		ORDER BY created_at DESC LIMIT 1`, userID, listingID)
+	return scanAIBotInstanceRow(row)
 }
 
 func SaveAIBotInstance(item map[string]any) {
@@ -108,8 +125,8 @@ func SaveAIBotInstance(item map[string]any) {
 		 status, execution_mode, config_json, exchange_id,
 		 unrealized_pnl, realized_pnl, total_return_pct, max_drawdown_pct,
 		 sharpe_ratio, win_rate, total_trades, initial_balance, error_message,
-		 created_at, updated_at, started_at, stopped_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 origin_listing_id, created_at, updated_at, started_at, stopped_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, id, getInt(item, "user_id", 0), getString(item, "catalog_id", ""),
 		getString(item, "name", ""), getString(item, "strategy_type", ""),
 		getString(item, "symbol", ""), getString(item, "market_type", "spot"),
@@ -119,7 +136,7 @@ func SaveAIBotInstance(item map[string]any) {
 		getFloat(item, "total_return_pct", 0), getFloat(item, "max_drawdown_pct", 0),
 		getFloat(item, "sharpe_ratio", 0), getFloat(item, "win_rate", 0),
 		getInt(item, "total_trades", 0), getFloat(item, "initial_balance", 10000), getString(item, "error_message", ""),
-		getInt64(item, "created_at", 0), getInt64(item, "updated_at", 0),
+		getString(item, "origin_listing_id", ""), getInt64(item, "created_at", 0), getInt64(item, "updated_at", 0),
 		getInt64(item, "started_at", 0), getInt64(item, "stopped_at", 0))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[AIBotStore] save error: %v\n", err)
@@ -552,7 +569,7 @@ func scanAIBotInstanceRows(rows *sql.Rows) []map[string]any {
 	var result []map[string]any
 	for rows.Next() {
 		var id, catalogID, name, strategyType, symbol, marketType, status, executionMode, configJSON string
-		var exchangeID, errorMessage sql.NullString
+		var exchangeID, errorMessage, originListingID sql.NullString
 		var userID int
 		var unrealizedPnl, realizedPnl, totalReturnPct, maxDrawdownPct, sharpeRatio, winRate, initialBalance float64
 		var totalTrades int
@@ -561,7 +578,7 @@ func scanAIBotInstanceRows(rows *sql.Rows) []map[string]any {
 			&status, &executionMode, &configJSON, &exchangeID,
 			&unrealizedPnl, &realizedPnl, &totalReturnPct, &maxDrawdownPct,
 			&sharpeRatio, &winRate, &totalTrades, &initialBalance, &errorMessage,
-			&createdAt, &updatedAt, &startedAt, &stoppedAt); err != nil {
+			&originListingID, &createdAt, &updatedAt, &startedAt, &stoppedAt); err != nil {
 			continue
 		}
 		result = append(result, map[string]any{
@@ -574,7 +591,8 @@ func scanAIBotInstanceRows(rows *sql.Rows) []map[string]any {
 			"total_return_pct": totalReturnPct, "max_drawdown_pct": maxDrawdownPct,
 			"sharpe_ratio": sharpeRatio, "win_rate": winRate,
 			"total_trades": totalTrades, "initial_balance": initialBalance, "error_message": nullStr(errorMessage),
-			"created_at": createdAt, "updated_at": updatedAt,
+			"origin_listing_id": nullStr(originListingID),
+			"created_at":        createdAt, "updated_at": updatedAt,
 			"started_at": startedAt, "stopped_at": stoppedAt,
 		})
 	}
@@ -583,7 +601,7 @@ func scanAIBotInstanceRows(rows *sql.Rows) []map[string]any {
 
 func scanAIBotInstanceRow(row *sql.Row) map[string]any {
 	var id, catalogID, name, strategyType, symbol, marketType, status, executionMode, configJSON string
-		var exchangeID, errorMessage sql.NullString
+	var exchangeID, errorMessage, originListingID sql.NullString
 	var userID int
 	var unrealizedPnl, realizedPnl, totalReturnPct, maxDrawdownPct, sharpeRatio, winRate, initialBalance float64
 	var totalTrades int
@@ -592,7 +610,7 @@ func scanAIBotInstanceRow(row *sql.Row) map[string]any {
 		&status, &executionMode, &configJSON, &exchangeID,
 		&unrealizedPnl, &realizedPnl, &totalReturnPct, &maxDrawdownPct,
 		&sharpeRatio, &winRate, &totalTrades, &initialBalance, &errorMessage,
-		&createdAt, &updatedAt, &startedAt, &stoppedAt)
+		&originListingID, &createdAt, &updatedAt, &startedAt, &stoppedAt)
 	if err != nil {
 		return nil
 	}
@@ -606,7 +624,8 @@ func scanAIBotInstanceRow(row *sql.Row) map[string]any {
 		"total_return_pct": totalReturnPct, "max_drawdown_pct": maxDrawdownPct,
 		"sharpe_ratio": sharpeRatio, "win_rate": winRate,
 		"total_trades": totalTrades, "initial_balance": initialBalance, "error_message": nullStr(errorMessage),
-		"created_at": createdAt, "updated_at": updatedAt,
+		"origin_listing_id": nullStr(originListingID),
+		"created_at":        createdAt, "updated_at": updatedAt,
 		"started_at": startedAt, "stopped_at": stoppedAt,
 	}
 }

@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -51,6 +52,8 @@ func listingCard(l *store.MarketListingRecord) gin.H {
 		"id":              l.ID,
 		"author_user_id":  l.AuthorUserID,
 		"bot_instance_id": l.BotInstanceID,
+		"object_kind":     l.ObjectKind,
+		"object_id":       l.ObjectID,
 		"kind":            l.Kind,
 		"name":            l.Name,
 		"description":     l.Description,
@@ -68,9 +71,35 @@ func listingCard(l *store.MarketListingRecord) gin.H {
 	return card
 }
 
+// gridListingTradesPage 网格条目成交明细分页：grid_bot_trades 映射到与
+// ai_bot_trades 相同的响应形状（symbol 取自机器人主表；单格成交价进
+// exit_price，entry_price/pnl_pct/close_reason 缺省；ts 毫秒折算成秒）。
+func gridListingTradesPage(l *store.MarketListingRecord, limit, offset int) ([]map[string]any, int) {
+	out := []map[string]any{}
+	bot, err := gridBotRepo.GetByID(l.ObjectID)
+	if err != nil || bot == nil {
+		return out, 0
+	}
+	fills, total, err := gridBotRepo.GetTradesPage(l.ObjectID, limit, offset)
+	if err != nil {
+		return out, 0
+	}
+	for _, f := range fills {
+		out = append(out, map[string]any{
+			"id": f.ID, "bot_instance_id": f.BotID, "symbol": bot.Symbol,
+			"side": strings.ToUpper(f.Side), "exit_price": f.Price,
+			"quantity": f.Quantity, "pnl": f.PnL,
+			"opened_at": 0, "closed_at": f.Ts / 1000,
+		})
+	}
+	return out, total
+}
+
 // ── 作者侧 ──
 
 // MarketListingCreate 创建 draft 条目；body.submit=true 时直接提交考核。
+// 上架对象：object_kind（ai_bot|grid_bot，默认 ai_bot）+ object_id
+// （缺省回落 bot_instance_id，兼容旧客户端）。
 // POST /api/market/listings
 func MarketListingCreate(c *gin.Context) {
 	uid, ok := marketUserID(c)
@@ -82,12 +111,17 @@ func MarketListingCreate(c *gin.Context) {
 		marketError(c, http.StatusBadRequest, "invalid json")
 		return
 	}
-	instanceID := getString(body, "bot_instance_id", "")
-	if instanceID == "" {
-		marketError(c, http.StatusBadRequest, "bot_instance_id required")
+	objectID := getString(body, "object_id", "")
+	if objectID == "" {
+		objectID = getString(body, "bot_instance_id", "")
+	}
+	if objectID == "" {
+		marketError(c, http.StatusBadRequest, "object_id required")
 		return
 	}
-	rec, err := marketSvc.Create(int64(uid), instanceID,
+	rec, err := marketSvc.Create(int64(uid),
+		getString(body, "object_kind", marketplace.ObjectKindAIBot),
+		objectID,
 		getString(body, "kind", "robot"),
 		getString(body, "name", ""),
 		getString(body, "description", ""),
@@ -192,8 +226,11 @@ func MarketListingList(c *gin.Context) {
 	})
 }
 
-// MarketListingStats 快照序列：listed 对所有人可见；其他状态仅作者/admin。
-// GET /api/market/listings/:id/stats?limit=
+// MarketListingStats 快照序列 + 成交明细分页 + 考核通过快照：
+// listed 对所有人可见；其他状态仅作者/admin。
+// 全部指标由平台侧 ai_bot_snapshots/ai_bot_trades 聚合（作者不可篡改），
+// 顶层 metric_source=platform_verified 供前端打「平台验证业绩」标识。
+// GET /api/market/listings/:id/stats?limit=&trades_limit=&trades_offset=
 func MarketListingStats(c *gin.Context) {
 	l := marketSvc.Repo().GetByID(c.Param("id"))
 	if l == nil {
@@ -206,10 +243,36 @@ func MarketListingStats(c *gin.Context) {
 		}
 	}
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "90"))
+	tradesLimit, _ := strconv.Atoi(c.DefaultQuery("trades_limit", "50"))
+	tradesOffset, _ := strconv.Atoi(c.DefaultQuery("trades_offset", "0"))
 	series := marketSvc.Repo().StatsSeries(l.ID, limit)
+	// 成交明细按上架对象分派数据源（grid_bot 时字段映射到同一响应形状，
+	// entry_price/pnl_pct 网格无此概念则缺省，前端按 object_kind 展示）。
+	var trades []map[string]any
+	var tradesTotal int
+	if l.ObjectKind == marketplace.ObjectKindGridBot {
+		trades, tradesTotal = gridListingTradesPage(l, tradesLimit, tradesOffset)
+	} else {
+		trades, tradesTotal = marketSvc.Repo().ListBotTradesPage(l.BotInstanceID, tradesLimit, tradesOffset)
+	}
+	// 考核通过快照：提交时快照进条目的规则红线 vs 最新日快照的达标数值。
+	probation := gin.H{
+		"rule_min_days":         l.RuleMinDays,
+		"rule_min_trades":       l.RuleMinTrades,
+		"rule_max_drawdown_pct": l.RuleMaxDrawdownPct,
+	}
+	if latest := marketSvc.Repo().LatestStats(l.ID); latest != nil {
+		probation["days_elapsed"] = latest.RunningDays
+		probation["trades_in_window"] = latest.TotalTrades
+		probation["max_drawdown_pct"] = latest.MaxDrawdownPct
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"listing": listingCard(l),
-		"series":  series,
+		"listing":       listingCard(l),
+		"series":        series,
+		"trades":        trades,
+		"trades_total":  tradesTotal,
+		"probation":     probation,
+		"metric_source": "platform_verified",
 	})
 }
 

@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils'
 import {
   socialApi,
   type SocialMarketProvider,
+  type SocialProviderApply,
   type SocialSubscribeResult,
 } from '@/lib/api'
 import { useI18n } from '@/i18n'
@@ -327,52 +328,58 @@ export function MarketProviders() {
   )
 }
 
-/* ── 管理员入驻审核（无待审列表端点，按申请 ID 单条操作）── */
+/* ── 管理员入驻审核（GET /social/admin/providers?status=pending 待审队列）── */
+function providerFeeLabel(t: TFunc, p: SocialProviderApply): string {
+  const pct = p.profit_share_pct ?? 0
+  if (p.monthly_fee > 0 && pct > 0) {
+    return t('social.adminReview.feeHybrid').replace('{fee}', String(p.monthly_fee)).replace('{pct}', String(pct))
+  }
+  if (p.monthly_fee > 0) return t('social.adminReview.feeMonthly').replace('{fee}', String(p.monthly_fee))
+  return t('social.adminReview.feeFreeShare').replace('{pct}', String(pct))
+}
+
 export function AdminProviderReview() {
   const { t } = useI18n()
   const isAdmin = useAuthStore((s) => s.user?.role === 'admin')
   const addToast = useToastStore((s) => s.addToast)
+  const queryClient = useQueryClient()
   const { confirm, prompt, Dialog } = useConfirmDialog()
-  const [idInput, setIdInput] = useState('')
+
+  const { data: applications = [] } = useQuery({
+    queryKey: ['social-admin-providers'],
+    queryFn: () => socialApi.adminProviders('pending'),
+    refetchInterval: 30_000,
+    enabled: isAdmin,
+  })
 
   const mut = useMutation({
     mutationFn: ({ id, action, note }: { id: number; action: 'approve' | 'reject'; note?: string }) =>
       action === 'approve' ? socialApi.approveProvider(id) : socialApi.rejectProvider(id, note || ''),
-    onSuccess: (_, v) =>
+    onSuccess: async (_, v) => {
       addToast({
         type: 'success',
         message: v.action === 'approve' ? t('social.adminReview.approveOk') : t('social.adminReview.rejectOk'),
         duration: 3000,
-      }),
+      })
+      await queryClient.invalidateQueries({ queryKey: ['social-admin-providers'] })
+      await queryClient.invalidateQueries({ queryKey: ['social-market-providers'] })
+    },
     onError: (e: Error) =>
       addToast({ type: 'error', message: e.message || t('social.adminReview.actionFail'), duration: 5000 }),
   })
 
   if (!isAdmin) return null
 
-  const parseId = (): number | null => {
-    const id = Number(idInput.trim())
-    if (!Number.isInteger(id) || id <= 0) {
-      addToast({ type: 'warning', message: t('social.adminReview.invalidId'), duration: 3000 })
-      return null
-    }
-    return id
-  }
-
-  const approve = async () => {
-    const id = parseId()
-    if (id == null) return
+  const approve = async (p: SocialProviderApply) => {
     const ok = await confirm({
       title: t('social.adminReview.approveConfirmTitle'),
-      message: t('social.adminReview.approveConfirmMsg').replace('{id}', String(id)),
+      message: t('social.adminReview.approveConfirmMsg').replace('{name}', p.name),
       confirmText: t('social.adminReview.approve'),
     })
-    if (ok) mut.mutate({ id, action: 'approve' })
+    if (ok) mut.mutate({ id: p.id, action: 'approve' })
   }
 
-  const reject = async () => {
-    const id = parseId()
-    if (id == null) return
+  const reject = async (p: SocialProviderApply) => {
     const note = await prompt({
       title: t('social.adminReview.rejectTitle'),
       inputLabel: t('social.adminReview.rejectNoteLabel'),
@@ -380,7 +387,7 @@ export function AdminProviderReview() {
       variant: 'danger',
     })
     if (note === null) return
-    mut.mutate({ id, action: 'reject', note })
+    mut.mutate({ id: p.id, action: 'reject', note })
   }
 
   return (
@@ -390,30 +397,42 @@ export function AdminProviderReview() {
         <span className="text-sm font-semibold text-foreground">{t('social.adminReview.title')}</span>
         <span className="text-[10px] text-muted-foreground">{t('social.adminReview.note')}</span>
       </div>
-      <div className="flex items-center gap-2">
-        <input
-          value={idInput}
-          onChange={(e) => setIdInput(e.target.value)}
-          placeholder={t('social.adminReview.providerId')}
-          inputMode="numeric"
-          className="w-40 rounded border border-quant-border bg-quant-bg px-2 py-1.5 text-xs outline-none focus:border-quant-gold"
-        />
-        <button
-          onClick={approve}
-          disabled={mut.isPending}
-          className="px-3 py-1.5 rounded bg-quant-green text-white text-xs font-medium hover:opacity-90 disabled:opacity-50 inline-flex items-center gap-1"
-        >
-          {mut.isPending && <Loader2 className="w-3 h-3 animate-spin" />}
-          {t('social.adminReview.approve')}
-        </button>
-        <button
-          onClick={reject}
-          disabled={mut.isPending}
-          className="px-3 py-1.5 rounded bg-quant-red text-white text-xs font-medium hover:opacity-90 disabled:opacity-50"
-        >
-          {t('social.adminReview.reject')}
-        </button>
-      </div>
+      {applications.length === 0 ? (
+        <div className="text-center py-6 text-muted-foreground text-xs">{t('social.adminReview.empty')}</div>
+      ) : (
+        <div className="space-y-2">
+          {applications.map((p) => (
+            <div key={p.id} className="rounded-lg border border-quant-border bg-quant-bg p-3">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-semibold text-xs text-foreground">{p.name}</span>
+                <span className="text-[10px] text-muted-foreground">
+                  #{p.id} · {t('social.adminReview.applicant')} {p.user_id} · {providerFeeLabel(t, p)}
+                </span>
+                <span className="flex-1" />
+                <button
+                  onClick={() => approve(p)}
+                  disabled={mut.isPending}
+                  className="px-3 py-1 rounded bg-quant-green text-white text-[11px] font-medium hover:opacity-90 disabled:opacity-50 inline-flex items-center gap-1"
+                >
+                  {mut.isPending && <Loader2 className="w-3 h-3 animate-spin" />}
+                  {t('social.adminReview.approve')}
+                </button>
+                <button
+                  onClick={() => reject(p)}
+                  disabled={mut.isPending}
+                  className="px-3 py-1 rounded bg-quant-red text-white text-[11px] font-medium hover:opacity-90 disabled:opacity-50"
+                >
+                  {t('social.adminReview.reject')}
+                </button>
+              </div>
+              {p.description && <p className="mt-1 text-[11px] text-muted-foreground line-clamp-2">{p.description}</p>}
+              <div className="mt-1 text-[10px] text-muted-foreground">
+                {t('social.adminReview.appliedAt')}: {fmtMs(p.created_at)}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
       <Dialog />
     </div>
   )

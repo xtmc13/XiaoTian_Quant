@@ -101,6 +101,14 @@ func (r *BillingRepo) FindByTxHash(hash string) (*BillingOrder, error) {
 	return scanBillingOrder(db.QueryRow(`SELECT `+billingOrderCols+` FROM billing_orders WHERE tx_hash=?`, hash))
 }
 
+// FindPendingByRef 查当前用户指定用途/引用的未完结订单（pending/confirming，
+// 新→旧取最新），供订阅下单幂等重放：返回既有待支付订单而不是重复下单。
+func (r *BillingRepo) FindPendingByRef(userID int64, purpose, refID string) (*BillingOrder, error) {
+	return scanBillingOrder(db.QueryRow(`SELECT `+billingOrderCols+` FROM billing_orders
+		WHERE user_id=? AND purpose=? AND ref_id=? AND status IN ('pending','confirming')
+		ORDER BY created_at DESC LIMIT 1`, userID, purpose, refID))
+}
+
 // ListByUser 返回指定用户订单（新→旧）。
 func (r *BillingRepo) ListByUser(userID int64, limit int) ([]*BillingOrder, error) {
 	return r.list(`SELECT `+billingOrderCols+` FROM billing_orders WHERE user_id=? ORDER BY created_at DESC LIMIT ?`, userID, limit)
@@ -305,6 +313,62 @@ func (r *BillingRepo) GrantMarketSubscriptionTx(orderID string, userID, provider
 				providerID, userID, nowMs+periodMs, nowMs); err != nil {
 				return false, err
 			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// GrantListingSubscriptionTx 市场条目（listing）订阅发放（迁移 0059）：
+// 单事务内订单置 paid + 激活/顺延 ai_bot_subscriptions 中 ref_id 指向的订阅行。
+// 幂等同 GrantPlanTx：已 paid 返回 granted=false。
+// 续费顺延：active 行在现有到期时间上叠加（MAX 处理到期后续费/未到期续费）；
+// pending_payment/expired/cancelled 行从当前时间起算 periodDays。
+// 订阅行不存在或归属不符时整体回滚（订单保持原状态，下轮核验重试）。
+func (r *BillingRepo) GrantListingSubscriptionTx(orderID string, userID, subscriptionID, periodDays, now int64) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	tx, err := db.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec(`UPDATE billing_orders SET status='paid', fail_reason='', confirmed_at=?, updated_at=?
+		WHERE id=? AND status != 'paid'`, now, now, orderID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if n == 0 {
+		return false, nil // 已发放过（幂等）
+	}
+
+	periodSec := periodDays * 86400
+	// 已有 active 行：顺延（MAX 处理到期后续费/未到期续费两种）。
+	res, err = tx.Exec(`UPDATE ai_bot_subscriptions SET status='active',
+		expires_at = MAX(expires_at, ?) + ?
+		WHERE id=? AND user_id=? AND status='active'`,
+		now, periodSec, subscriptionID, userID)
+	if err != nil {
+		return false, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		// 待支付/已过期/已取消行激活：从当前时间起算。
+		res, err = tx.Exec(`UPDATE ai_bot_subscriptions SET status='active', expires_at=?
+			WHERE id=? AND user_id=? AND status IN ('pending_payment','expired','cancelled')`,
+			now+periodSec, subscriptionID, userID)
+		if err != nil {
+			return false, err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return false, fmt.Errorf("listing subscription %d not found for user %d", subscriptionID, userID)
 		}
 	}
 	if err := tx.Commit(); err != nil {

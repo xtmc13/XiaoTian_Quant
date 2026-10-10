@@ -336,6 +336,36 @@ func (m *MarketService) ListApprovedProviders() ([]*ProviderApply, error) {
 	return out, nil
 }
 
+// ListProvidersByStatus 按审核状态列出入驻申请（admin 审核队列用），新的在前。
+func (m *MarketService) ListProvidersByStatus(status string) ([]*ProviderApply, error) {
+	db, err := m.db()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.Query(`SELECT id FROM xt_social_providers WHERE apply_status = ? ORDER BY created_at DESC LIMIT 200`, status)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	out := make([]*ProviderApply, 0, len(ids))
+	for _, id := range ids {
+		p, err := m.GetProvider(id)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
 // ApproveProvider 审核通过：仅 pending 可流转（幂等，重复通过返回当前档案）。
 func (m *MarketService) ApproveProvider(id int64) (*ProviderApply, error) {
 	db, err := m.db()

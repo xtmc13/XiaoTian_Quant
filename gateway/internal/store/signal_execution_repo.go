@@ -68,13 +68,16 @@ type SignalExecution struct {
 	CloseReason string  `json:"close_reason"` // tp1 | tp2 | tp3 | sl | manual
 	ClosedAt    int64   `json:"closed_at"`
 	CreatedAt   int64   `json:"created_at"`
+
+	// ── 0057 用户归属（多用户越权隔离）──
+	UserID int `json:"user_id"` // 继承父信号的 user_id
 }
 
 type SignalExecutionRepo struct{ mu sync.RWMutex }
 
 func NewSignalExecutionRepo() *SignalExecutionRepo { return &SignalExecutionRepo{} }
 
-const sigExecCols = `id, signal_id, source_id, symbol, direction, margin_mode, position_side, position_id, status, entry_order_id, entry_price, entry_qty, entry_time, tp1_price, tp1_qty, tp1_time, tp1_filled, tp2_price, tp2_qty, tp2_time, tp2_filled, tp3_price, tp3_qty, tp3_time, tp3_filled, sl_price, sl_triggered, sl_time, move_sl_after, move_sl_to, trailing_active, trailing_pct, trailing_peak, candle_close_sl, candle_close_interval, current_tp, current_sl, remaining_qty, realized_pnl, close_reason, closed_at, created_at`
+const sigExecCols = `id, signal_id, source_id, symbol, direction, margin_mode, position_side, position_id, status, entry_order_id, entry_price, entry_qty, entry_time, tp1_price, tp1_qty, tp1_time, tp1_filled, tp2_price, tp2_qty, tp2_time, tp2_filled, tp3_price, tp3_qty, tp3_time, tp3_filled, sl_price, sl_triggered, sl_time, move_sl_after, move_sl_to, trailing_active, trailing_pct, trailing_peak, candle_close_sl, candle_close_interval, current_tp, current_sl, remaining_qty, realized_pnl, close_reason, closed_at, created_at, user_id`
 
 func scanSignalExecution(row interface{ Scan(...any) error }) (*SignalExecution, error) {
 	var e SignalExecution
@@ -83,7 +86,7 @@ func scanSignalExecution(row interface{ Scan(...any) error }) (*SignalExecution,
 		&e.TP3Price, &e.TP3Qty, &e.TP3Time, &e.TP3Filled, &e.SLPrice, &e.SLTriggered, &e.SLTime,
 		&e.MoveSLAfter, &e.MoveSLTo, &e.TrailingActive, &e.TrailingPct, &e.TrailingPeak,
 		&e.CandleCloseSL, &e.CandleCloseInterval,
-		&e.CurrentTP, &e.CurrentSL, &e.RemainingQty, &e.RealizedPnL, &e.CloseReason, &e.ClosedAt, &e.CreatedAt)
+		&e.CurrentTP, &e.CurrentSL, &e.RemainingQty, &e.RealizedPnL, &e.CloseReason, &e.ClosedAt, &e.CreatedAt, &e.UserID)
 	if err != nil {
 		return nil, err
 	}
@@ -99,13 +102,13 @@ func (r *SignalExecutionRepo) Create(e *SignalExecution) error {
 	}
 	_, err := db.Exec(
 		`INSERT INTO xt_signal_executions (`+sigExecCols+`)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		e.ID, e.SignalID, e.SourceID, e.Symbol, e.Direction, e.MarginMode, e.PositionSide, e.PositionID, e.Status, e.EntryOrderID, e.EntryPrice, e.EntryQty, e.EntryTime,
 		e.TP1Price, e.TP1Qty, e.TP1Time, e.TP1Filled, e.TP2Price, e.TP2Qty, e.TP2Time, e.TP2Filled,
 		e.TP3Price, e.TP3Qty, e.TP3Time, e.TP3Filled, e.SLPrice, e.SLTriggered, e.SLTime,
 		e.MoveSLAfter, e.MoveSLTo, e.TrailingActive, e.TrailingPct, e.TrailingPeak,
 		e.CandleCloseSL, e.CandleCloseInterval,
-		e.CurrentTP, e.CurrentSL, e.RemainingQty, e.RealizedPnL, e.CloseReason, e.ClosedAt, e.CreatedAt,
+		e.CurrentTP, e.CurrentSL, e.RemainingQty, e.RealizedPnL, e.CloseReason, e.ClosedAt, e.CreatedAt, e.UserID,
 	)
 	return err
 }
@@ -119,7 +122,7 @@ func (r *SignalExecutionRepo) List(filter map[string]any, limit int) ([]*SignalE
 	allowedCols := map[string]bool{
 		"id": true, "signal_id": true, "source_id": true, "symbol": true, "direction": true,
 		"margin_mode": true, "position_side": true, "position_id": true, "status": true,
-		"close_reason": true, "created_at": true, "closed_at": true,
+		"close_reason": true, "created_at": true, "closed_at": true, "user_id": true,
 	}
 	args, where := buildFilter(filter, allowedCols)
 	if where != "" {
@@ -168,6 +171,34 @@ func (r *SignalExecutionRepo) ListActive() ([]*SignalExecution, error) {
 func (r *SignalExecutionRepo) ListSince(sinceMs int64, limit int) ([]*SignalExecution, error) {
 	query := `SELECT ` + sigExecCols + ` FROM xt_signal_executions WHERE created_at>=? ORDER BY created_at ASC`
 	args := []any{sinceMs}
+	if limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, limit)
+	}
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []*SignalExecution
+	for rows.Next() {
+		e, err := scanSignalExecution(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, e)
+	}
+	return result, nil
+}
+
+// ListSinceByUser 返回指定用户 created_at >= sinceMs 的执行记录（时间升序），
+// 供多用户统计按属主隔离；userID<=0 时退化为全量（与 ListSince 一致）。
+func (r *SignalExecutionRepo) ListSinceByUser(userID int, sinceMs int64, limit int) ([]*SignalExecution, error) {
+	if userID <= 0 {
+		return r.ListSince(sinceMs, limit)
+	}
+	query := `SELECT ` + sigExecCols + ` FROM xt_signal_executions WHERE user_id=? AND created_at>=? ORDER BY created_at ASC`
+	args := []any{userID, sinceMs}
 	if limit > 0 {
 		query += " LIMIT ?"
 		args = append(args, limit)

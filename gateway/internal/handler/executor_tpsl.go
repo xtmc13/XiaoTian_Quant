@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xiaotian-quant/gateway/internal/marketplace"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
@@ -323,6 +324,12 @@ func finalizeExecution(e *store.SignalExecution, repo *store.SignalExecutionRepo
 			share := e.RealizedPnL * src.FeePercent / 100
 			if err := srcRepo.AddPendingShare(e.SourceID, share); err != nil {
 				log.Printf("[executor] add pending share for source %s failed: %v", e.SourceID, err)
+			}
+			// 归因钱轨收口（0060）：信号源属主已在 xt_social_providers 建档时，
+			// 同步落 xt_social_copy_pnl（结算/提现走 social 利润分成栈）；
+			// 失败只记日志，不影响 pending_share 兼容字段。
+			if err := marketplace.AttributeSignalSourcePnL(src, e.RealizedPnL, "signal_executor:"+e.ID); err != nil {
+				log.Printf("[executor] attribute pnl for source %s failed: %v", e.SourceID, err)
 			}
 		}
 	}

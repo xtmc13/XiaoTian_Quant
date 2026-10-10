@@ -11,8 +11,7 @@ import (
 )
 
 // followerIDFromJWT 从 JWT context 取当前用户 id（C4：follower_id 一律以 JWT 为准）。
-// 第二个返回值为 context 是否注入了用户；未注入（内部调用/单用户兼容）时
-// 调用方可回退到旧参数来源。
+// 第二个返回值为 context 是否注入了用户。
 func followerIDFromJWT(c *gin.Context) (int, bool) {
 	v, exists := c.Get(middleware.UserIDKey)
 	if !exists {
@@ -29,12 +28,25 @@ func followerIDFromJWT(c *gin.Context) (int, bool) {
 	return 0, false
 }
 
-// followerIDOrLegacy 优先取 JWT 用户；未注入时回退 query/body 里的旧参数。
-func followerIDOrLegacy(c *gin.Context, legacy int) int {
-	if uid, ok := followerIDFromJWT(c); ok {
-		return uid
+// requireFollowerID 取当前 JWT 用户 id 作为 follower 身份；取不到用户时写出 401
+// 并返回 false。不再回退 query/body 里的 follower_id 参数（越权后门收口）。
+func requireFollowerID(c *gin.Context) (int, bool) {
+	uid, ok := followerIDFromJWT(c)
+	if !ok || uid <= 0 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "login required"})
+		return 0, false
 	}
-	return legacy
+	return uid, true
+}
+
+// requireAdminRole handler 内 admin 复核（路由层已挂 middleware.AdminRequired 时的双保险）。
+func requireAdminRole(c *gin.Context) bool {
+	role, _ := c.Get(middleware.RoleKey)
+	if r, _ := role.(string); r != "admin" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "admin access required"})
+		return false
+	}
+	return true
 }
 
 // RegisterRoutes registers social trading HTTP endpoints.
@@ -69,6 +81,7 @@ func RegisterRoutes(r *gin.RouterGroup, engine *Engine) {
 	r.GET("/earnings", hm.earnings)
 	r.POST("/earnings/withdraw", hm.withdraw)
 	r.GET("/earnings/withdrawals", hm.myWithdrawals)
+	r.GET("/admin/providers", middleware.AdminRequired(), hm.adminProviders)
 	r.GET("/admin/withdrawals", middleware.AdminRequired(), hm.adminWithdrawals)
 	r.POST("/admin/withdrawals/:id/pay", middleware.AdminRequired(), hm.adminPayWithdrawal)
 	r.POST("/admin/withdrawals/:id/reject", middleware.AdminRequired(), hm.adminRejectWithdrawal)
@@ -126,10 +139,8 @@ func (h *handler) resolveMarketProvider(c *gin.Context, engineID int) (*Provider
 
 func (h *handler) followProvider(c *gin.Context) {
 	providerID, _ := strconv.Atoi(c.Param("id"))
-	followerID, _ := strconv.Atoi(c.Query("follower_id"))
-	followerID = followerIDOrLegacy(c, followerID)
-	if followerID == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "follower_id required"})
+	followerID, ok := requireFollowerID(c)
+	if !ok {
 		return
 	}
 	var marketProvider *ProviderApply
@@ -158,10 +169,8 @@ func (h *handler) followProvider(c *gin.Context) {
 
 func (h *handler) unfollowProvider(c *gin.Context) {
 	providerID, _ := strconv.Atoi(c.Param("id"))
-	followerID, _ := strconv.Atoi(c.Query("follower_id"))
-	followerID = followerIDOrLegacy(c, followerID)
-	if followerID == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "follower_id required"})
+	followerID, ok := requireFollowerID(c)
+	if !ok {
 		return
 	}
 	h.engine.Unfollow(followerID, providerID)
@@ -250,9 +259,8 @@ func (h *handler) saveFollowerConfig(c *gin.Context) {
 		return
 	}
 	// C4: follower_id 一律取自 JWT，忽略请求体
-	followerID := followerIDOrLegacy(c, req.FollowerID)
-	if followerID == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "follower_id required"})
+	followerID, ok := requireFollowerID(c)
+	if !ok {
 		return
 	}
 	update := CopyConfig{
@@ -279,10 +287,8 @@ func (h *handler) saveFollowerConfig(c *gin.Context) {
 }
 
 func (h *handler) getFollowerConfigs(c *gin.Context) {
-	followerID, _ := strconv.Atoi(c.Query("follower_id"))
-	followerID = followerIDOrLegacy(c, followerID)
-	if followerID == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "follower_id required"})
+	followerID, ok := requireFollowerID(c)
+	if !ok {
 		return
 	}
 	configs := h.engine.GetFollowerConfigs(followerID)

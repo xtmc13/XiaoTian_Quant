@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ClipboardList, Plus, XCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { aiBotApi, marketListingApi, type MarketListing, type MarketListingStatus } from '@/lib/api'
+import { aiBotApi, gridApi, marketListingApi, type MarketListing, type MarketListingStatus } from '@/lib/api'
 import { useI18n } from '@/i18n'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -78,7 +78,8 @@ export function MyListings() {
   const { t } = useI18n()
   const queryClient = useQueryClient()
   const [showForm, setShowForm] = useState(false)
-  const [instanceID, setInstanceID] = useState('')
+  const [objectKind, setObjectKind] = useState<'ai_bot' | 'grid_bot'>('ai_bot')
+  const [objectID, setObjectID] = useState('')
   const [name, setName] = useState('')
   const [feeModel, setFeeModel] = useState<'free' | 'monthly' | 'profit_share'>('free')
   const [feePercent, setFeePercent] = useState('20')
@@ -91,13 +92,15 @@ export function MyListings() {
   })
   const { data: rules } = useQuery({ queryKey: ['market', 'rules'], queryFn: () => marketListingApi.rules(), staleTime: 60_000 })
   const { data: instances = [] } = useQuery({ queryKey: ['ai-bots', 'instances'], queryFn: () => aiBotApi.list(), staleTime: 30_000 })
+  const { data: gridBots = [] } = useQuery({ queryKey: ['grid', 'bots'], queryFn: () => gridApi.list(), staleTime: 30_000 })
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['market'] })
 
   const createMut = useMutation({
     mutationFn: () =>
       marketListingApi.create({
-        bot_instance_id: instanceID,
+        object_kind: objectKind,
+        object_id: objectID,
         kind: 'robot',
         name: name.trim(),
         fee_model: feeModel,
@@ -108,7 +111,7 @@ export function MyListings() {
     onSuccess: async () => {
       toast('success', t('market.my.submitOk'))
       setShowForm(false)
-      setInstanceID('')
+      setObjectID('')
       setName('')
       await invalidate()
     },
@@ -125,8 +128,15 @@ export function MyListings() {
     onError: (e) => toast('error', e instanceof Error ? e.message : t('market.my.actionFail')),
   })
 
-  const listedInstanceIDs = new Set(listings.filter((l) => l.status === 'probation' || l.status === 'pending_review' || l.status === 'listed').map((l) => l.bot_instance_id))
-  const candidateInstances = instances.filter((i) => !listedInstanceIDs.has(i.id))
+  // 已在考核/审核/上架中的对象不可重复提交（按 object_kind + object_id 判重，
+  // 存量条目 object_id 缺省时回落 bot_instance_id）。
+  const activeObjects = new Set(
+    listings
+      .filter((l) => l.status === 'probation' || l.status === 'pending_review' || l.status === 'listed')
+      .map((l) => `${l.object_kind ?? 'ai_bot'}:${l.object_id || l.bot_instance_id}`)
+  )
+  const candidateInstances = instances.filter((i) => !activeObjects.has(`ai_bot:${i.id}`))
+  const candidateGridBots = gridBots.filter((b) => !activeObjects.has(`grid_bot:${b.id}`))
 
   const inputCls =
     'w-full bg-quant-bg border border-quant-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-quant-gold'
@@ -150,14 +160,45 @@ export function MyListings() {
       {showForm && (
         <div className="bg-quant-card border border-quant-border rounded-xl p-4 space-y-3">
           <div>
-            <label className="text-[11px] text-muted-foreground mb-1 block">{t('market.my.selectInstance')}</label>
-            <select value={instanceID} onChange={(e) => setInstanceID(e.target.value)} className={inputCls}>
-              <option value="">{t('market.my.selectInstancePlaceholder')}</option>
-              {candidateInstances.map((i) => (
-                <option key={i.id} value={i.id}>
-                  {i.name} · {i.symbol} · {i.execution_mode}
-                </option>
+            <label className="text-[11px] text-muted-foreground mb-1 block">{t('market.my.objectType')}</label>
+            <div className="grid grid-cols-2 gap-2">
+              {(['ai_bot', 'grid_bot'] as const).map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => {
+                    setObjectKind(k)
+                    setObjectID('')
+                  }}
+                  className={cn(
+                    'px-3 py-2 rounded-lg border text-xs transition-colors',
+                    objectKind === k
+                      ? 'bg-quant-gold/10 text-quant-gold border-quant-gold/40 font-semibold'
+                      : 'bg-quant-bg border-quant-border text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  {t(k === 'ai_bot' ? 'market.my.objectAiBot' : 'market.my.objectGridBot')}
+                </button>
               ))}
+            </div>
+          </div>
+          <div>
+            <label className="text-[11px] text-muted-foreground mb-1 block">{t('market.my.selectInstance')}</label>
+            <select value={objectID} onChange={(e) => setObjectID(e.target.value)} className={inputCls}>
+              <option value="">
+                {t(objectKind === 'grid_bot' ? 'market.my.selectGridPlaceholder' : 'market.my.selectInstancePlaceholder')}
+              </option>
+              {objectKind === 'grid_bot'
+                ? candidateGridBots.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name} · {b.symbol} · {b.mode ?? 'long'}
+                    </option>
+                  ))
+                : candidateInstances.map((i) => (
+                    <option key={i.id} value={i.id}>
+                      {i.name} · {i.symbol} · {i.execution_mode}
+                    </option>
+                  ))}
             </select>
           </div>
           <div>
@@ -191,7 +232,7 @@ export function MyListings() {
             className="w-full"
             isLoading={createMut.isPending}
             onClick={() => {
-              if (!instanceID) return toast('warning', t('market.my.needInstance'))
+              if (!objectID) return toast('warning', t('market.my.needInstance'))
               createMut.mutate()
             }}
           >
@@ -218,6 +259,9 @@ export function MyListings() {
             <div key={l.id} className="bg-quant-card border border-quant-border rounded-xl p-3.5">
               <div className="flex items-center gap-2">
                 <span className="font-bold text-xs text-foreground truncate">{l.name}</span>
+                <span className="px-1 py-0.5 rounded bg-violet-500/15 text-violet-400 text-[10px] shrink-0">
+                  {(l.object_kind ?? 'ai_bot') === 'grid_bot' ? t('market.board.objectGrid') : t('market.board.objectAi')}
+                </span>
                 <StatusBadge status={l.status} />
                 <span className="flex-1" />
                 {(l.status === 'draft' || l.status === 'rejected' || l.status === 'delisted') && (

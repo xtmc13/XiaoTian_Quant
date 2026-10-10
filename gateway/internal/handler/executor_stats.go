@@ -188,15 +188,31 @@ func computeExecutorStats(signals []*store.SignalRecord, execs []*store.SignalEx
 // 信号统计总览：总数/今日数、成功率、T1/T2/T3 达成率、日均频率、
 // 累计盈亏、近 30 日曲线、按来源与 symbol 分组。
 // 可选 query：symbol=BTCUSDT 时 BySymbol 只保留该币种。
+// 多用户隔离：普通用户只聚合自己 user_id 的信号/执行；admin 全量；
+// 未注入用户（单用户模式/内部调用）保持全量行为。
 func ExecutorStats(c *gin.Context) {
 	sigRepo := store.NewSignalRepo()
 	execRepo := store.NewSignalExecutionRepo()
 
-	signals, err := sigRepo.ListSince(0, 0)
+	uid, injected := ctxUserID(c)
+	onlyOwn := injected && !ctxIsAdmin(c)
+
+	var signals []*store.SignalRecord
+	var execs []*store.SignalExecution
+	var err error
+	if onlyOwn {
+		signals, err = sigRepo.ListSinceByUser(uid, 0, 0)
+	} else {
+		signals, err = sigRepo.ListSince(0, 0)
+	}
 	if err != nil {
 		signals = nil
 	}
-	execs, err := execRepo.ListSince(0, 0)
+	if onlyOwn {
+		execs, err = execRepo.ListSinceByUser(uid, 0, 0)
+	} else {
+		execs, err = execRepo.ListSince(0, 0)
+	}
 	if err != nil {
 		execs = nil
 	}

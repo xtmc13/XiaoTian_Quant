@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { BadgeCheck, ChevronLeft, ChevronRight, Store, Users } from 'lucide-react'
 import { cn, formatCurrency } from '@/lib/utils'
@@ -23,10 +24,20 @@ function StatCell({ label, value, tone }: { label: string; value: string; tone?:
 
 export function MarketListingCard({ listing }: { listing: MarketListing }) {
   const { t } = useI18n()
+  const navigate = useNavigate()
   const s = listing.stats
   const pct = (v?: number) => `${(v ?? 0) >= 0 ? '+' : ''}${(v ?? 0).toFixed(2)}%`
+  const openDetail = () => navigate(`/bots/ai/market/${listing.id}`)
   return (
-    <div className="bg-quant-card border border-quant-border rounded-xl p-3.5 transition-all hover:border-quant-gold/20">
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={openDetail}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') openDetail()
+      }}
+      className="bg-quant-card border border-quant-border rounded-xl p-3.5 transition-all hover:border-quant-gold/20 cursor-pointer"
+    >
       {/* 行1：名称 + 付费模式 */}
       <div className="flex items-center justify-between gap-2">
         <span className="font-bold text-xs text-foreground truncate">{listing.name}</span>
@@ -45,8 +56,11 @@ export function MarketListingCard({ listing }: { listing: MarketListing }) {
         )}
       </div>
 
-      {/* 行2：类型 + 考核通过标识 + 跟踪数 */}
+      {/* 行2：对象类型 + 类型 + 考核通过标识 + 跟踪数 */}
       <div className="mt-1.5 flex items-center gap-1.5 text-[10px] text-muted-foreground min-w-0">
+        <span className="px-1 py-0.5 rounded bg-violet-500/15 text-violet-400 shrink-0">
+          {(listing.object_kind ?? 'ai_bot') === 'grid_bot' ? t('market.board.objectGrid') : t('market.board.objectAi')}
+        </span>
         <span className="px-1 py-0.5 rounded bg-cyan-500/15 text-cyan-400 shrink-0">
           {listing.kind === 'signal' ? t('market.board.kindSignal') : t('market.board.kindRobot')}
         </span>

@@ -79,7 +79,11 @@ func ExecutorCreateSignalSource(c *gin.Context) {
 		b, _ := json.Marshal(body.TPSL)
 		tpslJSON = string(b)
 	}
-	uid, _ := ctxUserID(c)
+	uid, injected := ctxUserID(c)
+	if !injected || uid <= 0 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "login required to create signal source"})
+		return
+	}
 	src := &store.SignalSource{
 		Name:        body.Name,
 		Type:        typ,
@@ -192,14 +196,18 @@ func ExecutorSourceSubscribers(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true, "subscribers": subs})
 }
 
-// signalSourceWriteAllowed 与 subscribers 端点同一套属主语义：
-// 属主或 admin 可改/删；OwnerUserID==0（系统/匿名创建）放宽给已登录上下文。
+// signalSourceWriteAllowed 信号源写/删的属主语义：
+// 仅属主本人或 admin 可改/删；OwnerUserID==0（历史无主/内置源）仅 admin 可管，
+// 不再放宽给任意登录用户。未注入用户（单用户模式/内部调用）保持放行。
 func signalSourceWriteAllowed(c *gin.Context, src *store.SignalSource) bool {
 	uid, injected := ctxUserID(c)
-	if injected && ctxUserRole(c) != "admin" && src.OwnerUserID != 0 && src.OwnerUserID != uid {
-		return false
+	if !injected {
+		return true
 	}
-	return true
+	if ctxIsAdmin(c) {
+		return true
+	}
+	return src.OwnerUserID != 0 && src.OwnerUserID == uid
 }
 
 // ExecutorUpdateSignalSource godoc

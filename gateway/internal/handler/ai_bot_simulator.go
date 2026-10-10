@@ -3,11 +3,13 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"math/rand"
 	"sync"
 	"time"
 
+	"github.com/xiaotian-quant/gateway/internal/marketplace"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
@@ -167,6 +169,11 @@ func simulateAIBotStep(inst map[string]any) (unrealized, realized, totalReturn, 
 			state.tradeCount++
 			if pnl > 0 {
 				state.winCount++
+				// 市场订阅归因（0060）：克隆实例平仓盈利进 provider 钱轨；
+				// 失败只记日志，不阻断平仓记账。
+				if err := marketplace.AttributeListingPnL(getString(inst, "origin_listing_id", ""), userID, pnl, "ai_bot:"+id); err != nil {
+					log.Printf("[ai-bot-sim] attribute close pnl for bot %s failed: %v", id, err)
+				}
 			} else if pnl < 0 {
 				state.lossCount++
 			}

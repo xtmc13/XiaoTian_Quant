@@ -58,6 +58,7 @@ const PythonStrategyPage = lazyPage(() => import('./pages/strategy/PythonStrateg
 const AlertManagerPage = lazyPage(() => import('./components/alerts/AlertManager'), 'AlertManager')
 const BotsSignal = lazyPage(() => import('./pages/bots/BotsSignal'), 'BotsSignal')
 const BotsAI = lazyPage(() => import('./pages/bots/BotsAI'), 'BotsAI')
+const MarketListingDetail = lazyPage(() => import('./components/market/MarketListingDetail'), 'MarketListingDetail')
 const BotsCenter = lazyPage(() => import('./pages/bots/BotsCenter'), 'BotsCenter')
 const SmartMoneyPage = lazyPage(() => import('./pages/SmartMoneyPage'), 'SmartMoneyPage')
 const DCABots = lazyPage(() => import('./pages/DCABots'), 'DCABots')
@@ -509,6 +510,15 @@ export default function App() {
                     element={
                       <PageShell>
                         <BotsAI />
+                      </PageShell>
+                    }
+                  />
+                  {/* 市场条目详情（平台验证业绩） */}
+                  <Route
+                    path="/bots/ai/market/:id"
+                    element={
+                      <PageShell>
+                        <MarketListingDetail />
                       </PageShell>
                     }
                   />

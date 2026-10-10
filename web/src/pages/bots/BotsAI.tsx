@@ -4,11 +4,12 @@ import { SectionCard } from '@/components/ui/SectionCard'
 import { AIRobotPanel } from '@/components/bots/AIRobotPanel'
 import { MarketBoard } from '@/components/market/MarketBoard'
 import { MyListings } from '@/components/market/MyListings'
-import { BrainCircuit, Store, ClipboardList, Settings2 } from 'lucide-react'
+import { MySubscriptions } from '@/components/market/MySubscriptions'
+import { BrainCircuit, Store, ClipboardList, Settings2, BookmarkCheck } from 'lucide-react'
 import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
 
-type TabKey = 'config' | 'market' | 'my-listings'
+type TabKey = 'config' | 'market' | 'my-listings' | 'my-subs'
 
 export function BotsAI() {
   const { t } = useI18n()
@@ -17,6 +18,7 @@ export function BotsAI() {
   const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
     { key: 'market', label: t('market.board.tab'), icon: <Store className="h-3 w-3" /> },
     { key: 'my-listings', label: t('market.my.tab'), icon: <ClipboardList className="h-3 w-3" /> },
+    { key: 'my-subs', label: t('market.subs.tab'), icon: <BookmarkCheck className="h-3 w-3" /> },
     { key: 'config', label: t('market.page.tabConfig'), icon: <Settings2 className="h-3 w-3" /> },
   ]
 
@@ -51,6 +53,11 @@ export function BotsAI() {
         {tab === 'my-listings' && (
           <SectionCard title={t('market.my.tab')} className="w-full">
             <MyListings />
+          </SectionCard>
+        )}
+        {tab === 'my-subs' && (
+          <SectionCard title={t('market.subs.tab')} className="w-full">
+            <MySubscriptions />
           </SectionCard>
         )}
         {tab === 'config' && (

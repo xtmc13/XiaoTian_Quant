@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/xiaotian-quant/gateway/internal/marketplace"
 	"github.com/xiaotian-quant/gateway/internal/social"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
@@ -160,9 +161,14 @@ func billingMarkFailed(orderID, reason string) {
 }
 
 // billingGrantOrder 核验通过：按订单用途分发发放路径（平台套餐 / 市场订阅轨）。
+// purpose=market_subscription 再按 plan_id 分派：market_listing_sub → 市场
+// 条目（listing）订阅；其余（market_sub）→ 社交 provider 双轨订阅。
 // 返回是否本轮真正发放（granted=false = 已发放过的重复触发）。
 func billingGrantOrder(o *store.BillingOrder) bool {
 	if o.Purpose == store.BillingPurposeMarketSubscription {
+		if o.PlanID == billingListingSubPlanID {
+			return billingGrantListingSubscription(o)
+		}
 		return billingGrantMarketSubscription(o)
 	}
 	plan := findBillingPlan(o.PlanID)
@@ -196,6 +202,30 @@ func billingGrantMarketSubscription(o *store.BillingOrder) bool {
 	}
 	if granted {
 		log.Printf("[billing] order %s paid: user=%d market subscription provider=%d", o.ID, o.UserID, providerID)
+	}
+	return granted
+}
+
+// billingGrantListingSubscription 市场条目（listing）订阅发放：订单 paid +
+// 激活/顺延 ai_bot_subscriptions 中 ref_id 指向的订阅行（30 天/期），单事务保证。
+func billingGrantListingSubscription(o *store.BillingOrder) bool {
+	subID, err := strconv.ParseInt(o.RefID, 10, 64)
+	if err != nil || subID <= 0 {
+		billingMarkFailed(o.ID, "市场条目订阅订单缺少有效的订阅引用")
+		return false
+	}
+	sub := store.GetMarketSubscriptionByID(int(subID))
+	if sub == nil || sub.ListingID == "" {
+		billingMarkFailed(o.ID, "市场条目订阅不存在")
+		return false
+	}
+	granted, err := billingRepo.GrantListingSubscriptionTx(o.ID, o.UserID, subID, marketplace.SubscriptionPeriodDays, time.Now().Unix())
+	if err != nil {
+		log.Printf("[billing] grant listing subscription %s failed: %v", o.ID, err)
+		return false
+	}
+	if granted {
+		log.Printf("[billing] order %s paid: user=%d listing subscription=%d", o.ID, o.UserID, subID)
 	}
 	return granted
 }

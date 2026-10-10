@@ -1,4 +1,4 @@
-import { useState, memo, useCallback } from 'react'
+import { useState, memo, useCallback, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Users, Signal, TrendingUp, TrendingDown, Star, Plus, Trash2, Zap,
@@ -152,7 +152,6 @@ export function SocialTrading() {
   const addToast = useToastStore((s) => s.addToast)
   const followerId = useFollowerId()
   const [activeTab, setActiveTab] = useState<'providers' | 'signals' | 'following'>('providers')
-  const [following, setFollowing] = useState<Set<number>>(new Set())
   const [showPublishModal, setShowPublishModal] = useState(false)
   const [publishForm, setPublishForm] = useState({
     symbol: '', direction: 'buy', price: 0, stop_loss: 0, take_profit: 0,
@@ -175,11 +174,23 @@ export function SocialTrading() {
     refetchInterval: 30_000,
   })
 
+  // 我的关注：以 follower configs（GET /social/followers/configs，JWT 身份）为权威来源，
+  // follow/unfollow 成功后失效重取，刷新页面后保持。
+  const { data: followerConfigs = [] } = useQuery<{ provider_id: number }[]>({
+    queryKey: ['social-follower-configs'],
+    queryFn: () => socialApi.followerConfigs(followerId),
+    staleTime: 30_000,
+  })
+  const following = useMemo(
+    () => new Set<number>(followerConfigs.map((c) => Number(c.provider_id))),
+    [followerConfigs]
+  )
+
   /* ── Mutations ── */
   const followMut = useMutation({
     mutationFn: (providerId: number) => socialApi.follow(providerId, followerId),
-    onSuccess: (_, providerId) => {
-      setFollowing((prev) => new Set(prev).add(providerId))
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['social-follower-configs'] })
       addToast({ type: 'success', message: '关注成功', duration: 3000 })
     },
     onError: (err: Error) => addToast({ type: 'error', message: '关注失败: ' + err.message, duration: 5000 }),
@@ -187,12 +198,8 @@ export function SocialTrading() {
 
   const unfollowMut = useMutation({
     mutationFn: (providerId: number) => socialApi.unfollow(providerId, followerId),
-    onSuccess: (_, providerId) => {
-      setFollowing((prev) => {
-        const next = new Set(prev)
-        next.delete(providerId)
-        return next
-      })
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['social-follower-configs'] })
       addToast({ type: 'success', message: '已取消关注', duration: 3000 })
     },
     onError: (err: Error) => addToast({ type: 'error', message: '取消关注失败: ' + err.message, duration: 5000 }),
@@ -277,7 +284,7 @@ export function SocialTrading() {
           </div>
           {/* 开放信号市场已上架 provider（双轨订阅：月费/分成） */}
           <MarketProviders />
-          {/* 管理员：provider 入驻审核（按申请 ID 单条操作） */}
+          {/* 管理员：provider 入驻待审队列 */}
           <AdminProviderReview />
         </div>
       )}
@@ -302,10 +309,29 @@ export function SocialTrading() {
 
       {/* Following Tab */}
       {activeTab === 'following' && (
-        <div className="text-center py-12 text-muted-foreground text-sm">
-          <Star className="w-10 h-10 mx-auto mb-3 opacity-30" />
-          {following.size === 0 ? '暂无关注的信号源' : `已关注 ${following.size} 个信号源`}
-        </div>
+        following.size === 0 ? (
+          <div className="text-center py-12 text-muted-foreground text-sm">
+            <Star className="w-10 h-10 mx-auto mb-3 opacity-30" />
+            暂无关注的信号源
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="text-xs text-muted-foreground">已关注 {following.size} 个信号源</div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {providers
+                .filter((p) => following.has(p.provider_id))
+                .map((p) => (
+                  <ProviderCard
+                    key={p.provider_id}
+                    provider={p}
+                    isFollowing
+                    onToggleFollow={handleToggleFollow}
+                    isPending={isFollowPending}
+                  />
+                ))}
+            </div>
+          </div>
+        )
       )}
 
       {/* Publish Modal */}

@@ -36,13 +36,16 @@ type SignalRecord struct {
 	TP3Pct      float64 `json:"tp3_pct"`
 	RealizedPnL float64 `json:"realized_pnl"` // 整条信号最终盈亏（CLOSED 时回填）
 	ClosedAt    int64   `json:"closed_at"`
+
+	// ── 0057 用户归属（多用户越权隔离）──
+	UserID int `json:"user_id"` // 信号源属主 user_id；0=历史数据/默认源
 }
 
 type SignalRepo struct{ mu sync.RWMutex }
 
 func NewSignalRepo() *SignalRepo { return &SignalRepo{} }
 
-const signalCols = `id, symbol, direction, strength, strategy, reason, entry_price, stop_loss, take_profit, position_size, status, executed_order_id, created_at, source_id, margin_mode, tp1, tp2, tp3, tp1_pct, tp2_pct, tp3_pct, realized_pnl, closed_at`
+const signalCols = `id, symbol, direction, strength, strategy, reason, entry_price, stop_loss, take_profit, position_size, status, executed_order_id, created_at, source_id, margin_mode, tp1, tp2, tp3, tp1_pct, tp2_pct, tp3_pct, realized_pnl, closed_at, user_id`
 
 func (r *SignalRepo) Create(s *SignalRecord) error {
 	if s.Status == "" {
@@ -52,10 +55,10 @@ func (r *SignalRepo) Create(s *SignalRecord) error {
 		s.CreatedAt = time.Now().UnixMilli()
 	}
 	res, err := db.Exec(
-		`INSERT INTO xt_signals (symbol, direction, strength, strategy, reason, entry_price, stop_loss, take_profit, position_size, status, executed_order_id, created_at, source_id, margin_mode, tp1, tp2, tp3, tp1_pct, tp2_pct, tp3_pct, realized_pnl, closed_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO xt_signals (symbol, direction, strength, strategy, reason, entry_price, stop_loss, take_profit, position_size, status, executed_order_id, created_at, source_id, margin_mode, tp1, tp2, tp3, tp1_pct, tp2_pct, tp3_pct, realized_pnl, closed_at, user_id)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		s.Symbol, s.Direction, s.Strength, s.Strategy, s.Reason, s.EntryPrice, s.StopLoss, s.TakeProfit, s.PositionSize, s.Status, s.ExecutedOrderID, s.CreatedAt,
-		s.SourceID, s.MarginMode, s.TP1, s.TP2, s.TP3, s.TP1Pct, s.TP2Pct, s.TP3Pct, s.RealizedPnL, s.ClosedAt,
+		s.SourceID, s.MarginMode, s.TP1, s.TP2, s.TP3, s.TP1Pct, s.TP2Pct, s.TP3Pct, s.RealizedPnL, s.ClosedAt, s.UserID,
 	)
 	if err != nil {
 		return err
@@ -68,7 +71,7 @@ func (r *SignalRepo) Create(s *SignalRecord) error {
 func scanSignal(row interface{ Scan(...any) error }) (*SignalRecord, error) {
 	var s SignalRecord
 	err := row.Scan(&s.ID, &s.Symbol, &s.Direction, &s.Strength, &s.Strategy, &s.Reason, &s.EntryPrice, &s.StopLoss, &s.TakeProfit, &s.PositionSize, &s.Status, &s.ExecutedOrderID, &s.CreatedAt,
-		&s.SourceID, &s.MarginMode, &s.TP1, &s.TP2, &s.TP3, &s.TP1Pct, &s.TP2Pct, &s.TP3Pct, &s.RealizedPnL, &s.ClosedAt)
+		&s.SourceID, &s.MarginMode, &s.TP1, &s.TP2, &s.TP3, &s.TP1Pct, &s.TP2Pct, &s.TP3Pct, &s.RealizedPnL, &s.ClosedAt, &s.UserID)
 	if err != nil {
 		return nil, err
 	}
@@ -84,6 +87,7 @@ func (r *SignalRepo) List(filter map[string]any, limit int) ([]*SignalRecord, er
 	allowedCols := map[string]bool{
 		"id": true, "symbol": true, "direction": true, "strength": true, "strategy": true,
 		"status": true, "executed_order_id": true, "created_at": true, "source_id": true,
+		"user_id": true,
 	}
 	args, where := buildFilter(filter, allowedCols)
 	if where != "" {
@@ -114,6 +118,34 @@ func (r *SignalRepo) List(filter map[string]any, limit int) ([]*SignalRecord, er
 func (r *SignalRepo) ListSince(sinceMs int64, limit int) ([]*SignalRecord, error) {
 	query := `SELECT ` + signalCols + ` FROM xt_signals WHERE created_at>=? ORDER BY created_at ASC`
 	args := []any{sinceMs}
+	if limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, limit)
+	}
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []*SignalRecord
+	for rows.Next() {
+		s, err := scanSignal(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, s)
+	}
+	return result, nil
+}
+
+// ListSinceByUser 返回指定用户 created_at >= sinceMs 的信号（时间升序），
+// 供多用户统计按属主隔离；userID<=0 时退化为全量（与 ListSince 一致）。
+func (r *SignalRepo) ListSinceByUser(userID int, sinceMs int64, limit int) ([]*SignalRecord, error) {
+	if userID <= 0 {
+		return r.ListSince(sinceMs, limit)
+	}
+	query := `SELECT ` + signalCols + ` FROM xt_signals WHERE user_id=? AND created_at>=? ORDER BY created_at ASC`
+	args := []any{userID, sinceMs}
 	if limit > 0 {
 		query += " LIMIT ?"
 		args = append(args, limit)

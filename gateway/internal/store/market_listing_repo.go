@@ -15,7 +15,9 @@ type MarketListingRecord struct {
 	ID                 string  `json:"id"`
 	AuthorUserID       int64   `json:"author_user_id"`
 	BotInstanceID      string  `json:"bot_instance_id"`
-	Kind               string  `json:"kind"` // robot | signal（indicator 预留）
+	ObjectKind         string  `json:"object_kind"` // ai_bot | grid_bot（0058 通用上架对象）
+	ObjectID           string  `json:"object_id"`   // ai_bot=实例 id，grid_bot=grid_bots.id
+	Kind               string  `json:"kind"`        // robot | signal（indicator 预留）
 	Name               string  `json:"name"`
 	Description        string  `json:"description"`
 	FeeModel           string  `json:"fee_model"` // free | monthly | profit_share
@@ -31,6 +33,7 @@ type MarketListingRecord struct {
 	ReviewedAt         int64   `json:"reviewed_at"`
 	ListedAt           int64   `json:"listed_at"`
 	DelistReason       string  `json:"delist_reason"`
+	ProviderID         int64   `json:"provider_id"` // 作者在 xt_social_providers 的建档 id（0060；0=未建档）
 	CreatedAt          int64   `json:"created_at"`
 	UpdatedAt          int64   `json:"updated_at"`
 }
@@ -56,17 +59,17 @@ type MarketListingRepo struct{}
 
 func NewMarketListingRepo() *MarketListingRepo { return &MarketListingRepo{} }
 
-const marketListingColumns = `id, author_user_id, bot_instance_id, kind, name, description,
+const marketListingColumns = `id, author_user_id, bot_instance_id, object_kind, object_id, kind, name, description,
 	fee_model, fee_percent, monthly_fee, status, reject_reason,
 	probation_started_at, rule_min_days, rule_min_trades, rule_max_drawdown_pct,
-	reviewed_by, reviewed_at, listed_at, delist_reason, created_at, updated_at`
+	reviewed_by, reviewed_at, listed_at, delist_reason, provider_id, created_at, updated_at`
 
 func scanMarketListing(row interface{ Scan(...any) error }) (*MarketListingRecord, error) {
 	var r MarketListingRecord
-	err := row.Scan(&r.ID, &r.AuthorUserID, &r.BotInstanceID, &r.Kind, &r.Name, &r.Description,
+	err := row.Scan(&r.ID, &r.AuthorUserID, &r.BotInstanceID, &r.ObjectKind, &r.ObjectID, &r.Kind, &r.Name, &r.Description,
 		&r.FeeModel, &r.FeePercent, &r.MonthlyFee, &r.Status, &r.RejectReason,
 		&r.ProbationStartedAt, &r.RuleMinDays, &r.RuleMinTrades, &r.RuleMaxDrawdownPct,
-		&r.ReviewedBy, &r.ReviewedAt, &r.ListedAt, &r.DelistReason, &r.CreatedAt, &r.UpdatedAt)
+		&r.ReviewedBy, &r.ReviewedAt, &r.ListedAt, &r.DelistReason, &r.ProviderID, &r.CreatedAt, &r.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -86,11 +89,11 @@ func (r *MarketListingRepo) Create(rec *MarketListingRecord) error {
 		rec.UpdatedAt = rec.CreatedAt
 	}
 	_, err := db.Exec(`INSERT INTO xt_market_listings (`+marketListingColumns+`)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		rec.ID, rec.AuthorUserID, rec.BotInstanceID, rec.Kind, rec.Name, rec.Description,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		rec.ID, rec.AuthorUserID, rec.BotInstanceID, rec.ObjectKind, rec.ObjectID, rec.Kind, rec.Name, rec.Description,
 		rec.FeeModel, rec.FeePercent, rec.MonthlyFee, rec.Status, rec.RejectReason,
 		rec.ProbationStartedAt, rec.RuleMinDays, rec.RuleMinTrades, rec.RuleMaxDrawdownPct,
-		rec.ReviewedBy, rec.ReviewedAt, rec.ListedAt, rec.DelistReason, rec.CreatedAt, rec.UpdatedAt)
+		rec.ReviewedBy, rec.ReviewedAt, rec.ListedAt, rec.DelistReason, rec.ProviderID, rec.CreatedAt, rec.UpdatedAt)
 	return err
 }
 
@@ -101,15 +104,15 @@ func (r *MarketListingRepo) Update(rec *MarketListingRecord) error {
 	}
 	rec.UpdatedAt = time.Now().Unix()
 	_, err := db.Exec(`UPDATE xt_market_listings SET
-		author_user_id=?, bot_instance_id=?, kind=?, name=?, description=?,
+		author_user_id=?, bot_instance_id=?, object_kind=?, object_id=?, kind=?, name=?, description=?,
 		fee_model=?, fee_percent=?, monthly_fee=?, status=?, reject_reason=?,
 		probation_started_at=?, rule_min_days=?, rule_min_trades=?, rule_max_drawdown_pct=?,
-		reviewed_by=?, reviewed_at=?, listed_at=?, delist_reason=?, created_at=?, updated_at=?
+		reviewed_by=?, reviewed_at=?, listed_at=?, delist_reason=?, provider_id=?, created_at=?, updated_at=?
 		WHERE id=?`,
-		rec.AuthorUserID, rec.BotInstanceID, rec.Kind, rec.Name, rec.Description,
+		rec.AuthorUserID, rec.BotInstanceID, rec.ObjectKind, rec.ObjectID, rec.Kind, rec.Name, rec.Description,
 		rec.FeeModel, rec.FeePercent, rec.MonthlyFee, rec.Status, rec.RejectReason,
 		rec.ProbationStartedAt, rec.RuleMinDays, rec.RuleMinTrades, rec.RuleMaxDrawdownPct,
-		rec.ReviewedBy, rec.ReviewedAt, rec.ListedAt, rec.DelistReason, rec.CreatedAt, rec.UpdatedAt,
+		rec.ReviewedBy, rec.ReviewedAt, rec.ListedAt, rec.DelistReason, rec.ProviderID, rec.CreatedAt, rec.UpdatedAt,
 		rec.ID)
 	return err
 }
@@ -382,6 +385,53 @@ func GetAIBotTradesSince(botInstanceID string, since int64) []map[string]any {
 		})
 	}
 	return result
+}
+
+// ListBotTradesPage 条目关联实例的已平仓成交明细分页（closed_at 倒序），
+// 供市场详情页展示；返回当前页与总条数。
+func (r *MarketListingRepo) ListBotTradesPage(botInstanceID string, limit, offset int) ([]map[string]any, int) {
+	out := []map[string]any{}
+	if db == nil {
+		return out, 0
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	var total int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM ai_bot_trades WHERE bot_instance_id=? AND closed_at>0`,
+		botInstanceID).Scan(&total); err != nil {
+		return out, 0
+	}
+	rows, err := db.Query(`
+		SELECT id, bot_instance_id, symbol, side, entry_price, exit_price, quantity,
+		       pnl, pnl_pct, close_reason, opened_at, closed_at
+		FROM ai_bot_trades WHERE bot_instance_id=? AND closed_at>0
+		ORDER BY closed_at DESC, id DESC LIMIT ? OFFSET ?
+	`, botInstanceID, limit, offset)
+	if err != nil {
+		return out, 0
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int
+		var botID, symbol, side, closeReason string
+		var entryPrice, exitPrice, qty, pnl, pnlPct float64
+		var openedAt, closedAt int64
+		if err := rows.Scan(&id, &botID, &symbol, &side, &entryPrice, &exitPrice, &qty,
+			&pnl, &pnlPct, &closeReason, &openedAt, &closedAt); err != nil {
+			continue
+		}
+		out = append(out, map[string]any{
+			"id": id, "bot_instance_id": botID, "symbol": symbol, "side": side,
+			"entry_price": entryPrice, "exit_price": exitPrice, "quantity": qty,
+			"pnl": pnl, "pnl_pct": pnlPct, "close_reason": closeReason,
+			"opened_at": openedAt, "closed_at": closedAt,
+		})
+	}
+	return out, total
 }
 
 // ── 上架后的 ai_bot_catalog 同步（复用既有实例创建/订阅流） ──

@@ -1,6 +1,10 @@
 // Package marketplace 实现机器人/信号市场上架准入机制（对标 CryptoRobotics
-// 创作者市场）：作者提交自有 AI 机器人实例进入强制考核期（probation），
+// 创作者市场）：作者提交自有机器人对象进入强制考核期（probation），
 // 标准化统计达标后经人工审核方可上架出售；市场卡片展示统一的透明统计。
+//
+// 上架对象（0058 通用对象模型，object_kind）：
+//   - ai_bot   AI 机器人实例（ai_bot_instances，统计取 ai_bot_snapshots/ai_bot_trades）
+//   - grid_bot 网格机器人（grid_bots，统计取 grid_bot_snapshots/grid_bot_trades）
 //
 // 状态机：
 //
@@ -10,7 +14,7 @@
 //	                  │ draft                    rejected ──resubmit──┐    delisted
 //	                  └──────────────resubmit──────────────┴────────────┴──▶ probation
 //
-// 统计口径：权益曲线(ai_bot_snapshots)+已平仓交易(ai_bot_trades) →
+// 统计口径：权益曲线(snapshots)+已平仓交易(trades) →
 // backtest.MetricsFromEquity（与回测完全同口径的 Sharpe/回撤/胜率/盈亏比），
 // 不新造指标算法。月化/年化由总收益率按运行天数线性折算。
 package marketplace
@@ -56,6 +60,15 @@ func CanTransition(from, to string) bool {
 
 // ErrIllegalTransition 非法状态迁移（API 层映射 409）。
 var ErrIllegalTransition = errors.New("illegal listing status transition")
+
+// ── 上架对象类型（0058 通用对象模型）──
+
+const (
+	// ObjectKindAIBot AI 机器人实例（数据源 ai_bot_snapshots/ai_bot_trades）。
+	ObjectKindAIBot = "ai_bot"
+	// ObjectKindGridBot 网格机器人（数据源 grid_bot_snapshots/grid_bot_trades）。
+	ObjectKindGridBot = "grid_bot"
+)
 
 func transition(l *store.MarketListingRecord, to string) error {
 	if !CanTransition(l.Status, to) {
@@ -138,21 +151,43 @@ func SaveRules(r Rules) error {
 
 // Service 上架生命周期服务（无状态，直接走 store repo）。
 type Service struct {
-	repo *store.MarketListingRepo
+	repo     *store.MarketListingRepo
+	gridRepo *store.GridRepo
 }
 
 func NewService() *Service {
-	return &Service{repo: store.NewMarketListingRepo()}
+	return &Service{repo: store.NewMarketListingRepo(), gridRepo: store.NewGridRepo()}
 }
 
 // Repo 暴露底层 repo（handler 列表查询用）。
 func (s *Service) Repo() *store.MarketListingRepo { return s.repo }
 
-// Create 创建 draft 条目；instanceID 为考核关联的 paper/live 实例（必须属于作者）。
-func (s *Service) Create(authorUserID int64, instanceID, kind, name, description, feeModel string, feePercent, monthlyFee float64) (*store.MarketListingRecord, error) {
-	inst := store.GetAIBotInstanceByID(instanceID, int(authorUserID))
-	if inst == nil {
-		return nil, fmt.Errorf("probation instance not found or not owned by author")
+// Create 创建 draft 条目；objectKind 分派属主校验：ai_bot 查 ai_bot_instances、
+// grid_bot 查 grid_bots（均必须属于作者）；空 objectKind 兼容按 ai_bot 处理。
+func (s *Service) Create(authorUserID int64, objectKind, objectID, kind, name, description, feeModel string, feePercent, monthlyFee float64) (*store.MarketListingRecord, error) {
+	if objectKind == "" {
+		objectKind = ObjectKindAIBot
+	}
+	var botInstanceID, defaultName string
+	switch objectKind {
+	case ObjectKindAIBot:
+		inst := store.GetAIBotInstanceByID(objectID, int(authorUserID))
+		if inst == nil {
+			return nil, fmt.Errorf("probation instance not found or not owned by author")
+		}
+		botInstanceID = objectID
+		defaultName = getString(inst, "name", "Untitled")
+	case ObjectKindGridBot:
+		bot, err := s.gridRepo.GetByIDForUser(objectID, authorUserID)
+		if err != nil {
+			return nil, err
+		}
+		if bot == nil {
+			return nil, fmt.Errorf("probation grid bot not found or not owned by author")
+		}
+		defaultName = bot.Name
+	default:
+		return nil, fmt.Errorf("unsupported object_kind %q (want ai_bot|grid_bot)", objectKind)
 	}
 	if kind != "robot" && kind != "signal" {
 		kind = "robot"
@@ -163,19 +198,24 @@ func (s *Service) Create(authorUserID int64, instanceID, kind, name, description
 		feeModel = "free"
 	}
 	if name == "" {
-		name = getString(inst, "name", "Untitled")
+		name = defaultName
+	}
+	if name == "" {
+		name = "Untitled"
 	}
 	rec := &store.MarketListingRecord{
-		ID:           fmt.Sprintf("ml-%d", time.Now().UnixNano()/int64(time.Millisecond)),
-		AuthorUserID: authorUserID,
-		BotInstanceID: instanceID,
-		Kind:         kind,
-		Name:         name,
-		Description:  description,
-		FeeModel:     feeModel,
-		FeePercent:   feePercent,
-		MonthlyFee:   monthlyFee,
-		Status:       StatusDraft,
+		ID:            fmt.Sprintf("ml-%d", time.Now().UnixNano()/int64(time.Millisecond)),
+		AuthorUserID:  authorUserID,
+		BotInstanceID: botInstanceID,
+		ObjectKind:    objectKind,
+		ObjectID:      objectID,
+		Kind:          kind,
+		Name:          name,
+		Description:   description,
+		FeeModel:      feeModel,
+		FeePercent:    feePercent,
+		MonthlyFee:    monthlyFee,
+		Status:        StatusDraft,
 	}
 	if err := s.repo.Create(rec); err != nil {
 		return nil, err
@@ -208,7 +248,9 @@ func (s *Service) Cancel(l *store.MarketListingRecord) error {
 	return s.repo.Update(l)
 }
 
-// Approve 管理员通过：pending_review → listed，并同步 ai_bot_catalog（可订阅）。
+// Approve 管理员通过：pending_review → listed，同步 ai_bot_catalog（可订阅），
+// 并保证作者在 xt_social_providers 有建档（利润分成归因的收款方）；建档失败
+// 不阻断 approve，provider_id 留 0 由 Engine.RunOnce 小时级补建。
 func (s *Service) Approve(l *store.MarketListingRecord, reviewerID int64, now time.Time) error {
 	if err := transition(l, StatusListed); err != nil {
 		return err
@@ -218,12 +260,17 @@ func (s *Service) Approve(l *store.MarketListingRecord, reviewerID int64, now ti
 	l.ListedAt = now.Unix()
 	l.RejectReason = ""
 	strategyType, marketType := "", ""
-	if inst := store.GetAIBotInstanceByID(l.BotInstanceID, int(l.AuthorUserID)); inst != nil {
+	if l.ObjectKind == ObjectKindGridBot {
+		strategyType, marketType = "grid", "spot"
+	} else if inst := store.GetAIBotInstanceByID(l.BotInstanceID, int(l.AuthorUserID)); inst != nil {
 		strategyType = getString(inst, "strategy_type", "")
 		marketType = getString(inst, "market_type", "")
 	}
 	if err := store.UpsertMarketCatalogEntry(l, strategyType, marketType, now.Unix()); err != nil {
 		return err
+	}
+	if _, err := EnsureListingProvider(l); err != nil {
+		log.Printf("[marketplace] ERROR approve %s: provider ensure failed (retry on engine tick): %v", l.ID, err)
 	}
 	return s.repo.Update(l)
 }
@@ -264,47 +311,25 @@ func (s *Service) Delist(l *store.MarketListingRecord, reviewerID int64, reason 
 const maxProfitFactor = 999.0
 
 // Aggregate 计算条目考核窗口 [probation_started_at, now] 的标准化统计。
-// 数据源：ai_bot_snapshots（权益曲线）+ ai_bot_trades（已平仓交易）+
-// ai_bot_subscriptions（跟踪者数）。指标口径与 backtest.Runner 完全一致。
+// 数据源按 object_kind 分派：ai_bot → ai_bot_snapshots + ai_bot_trades；
+// grid_bot → grid_bot_snapshots + grid_bot_trades；跟踪者数取 ai_bot_subscriptions。
+// 指标口径与 backtest.Runner 完全一致（统一走 MetricsFromEquity）。
 func (s *Service) Aggregate(l *store.MarketListingRecord, now time.Time) (*store.MarketListingStatsRecord, error) {
-	inst := store.GetAIBotInstanceByID(l.BotInstanceID, int(l.AuthorUserID))
-	if inst == nil {
-		return nil, fmt.Errorf("probation instance %s not found", l.BotInstanceID)
-	}
-	initialBalance := getFloat(inst, "initial_balance", 10000)
-	if initialBalance <= 0 {
-		initialBalance = 10000
-	}
-	since := l.ProbationStartedAt
-	if since <= 0 {
-		since = getInt64(inst, "created_at", now.Unix())
-	}
-
-	// 权益曲线：窗口起点补 initial_balance 锚点，之后接快照（快照可能
-	// 与起点同秒——跳过，保证曲线严格递增且无重复锚点）。
-	equity := []backtest.EquityPoint{{Timestamp: since * 1000, Equity: initialBalance}}
-	for _, snap := range store.GetAIBotSnapshotsSince(l.BotInstanceID, since) {
-		ts := getInt64(snap, "timestamp", 0)
-		eq := getFloat(snap, "total_equity", 0)
-		if ts <= since || eq <= 0 {
-			continue
-		}
-		equity = append(equity, backtest.EquityPoint{Timestamp: ts * 1000, Equity: eq})
-	}
-
+	var initialBalance float64
+	var since int64 // 窗口起点（Unix 秒）
+	var equity []backtest.EquityPoint
 	var positions []backtest.Position
-	for _, t := range store.GetAIBotTradesSince(l.BotInstanceID, since) {
-		positions = append(positions, backtest.Position{
-			Symbol:      getString(t, "symbol", ""),
-			EntryPrice:  getFloat(t, "entry_price", 0),
-			ExitPrice:   getFloat(t, "exit_price", 0),
-			Quantity:    getFloat(t, "quantity", 0),
-			EntryTime:   getInt64(t, "opened_at", 0) * 1000,
-			ExitTime:    getInt64(t, "closed_at", 0) * 1000,
-			RealizedPnL: getFloat(t, "pnl", 0),
-			IsClosed:    true,
-			ExitReason:  getString(t, "close_reason", ""),
-		})
+	var err error
+	switch l.ObjectKind {
+	case "", ObjectKindAIBot:
+		initialBalance, since, equity, positions, err = s.aggregateAIBot(l, now)
+	case ObjectKindGridBot:
+		initialBalance, since, equity, positions, err = s.aggregateGrid(l)
+	default:
+		return nil, fmt.Errorf("unsupported object_kind %q", l.ObjectKind)
+	}
+	if err != nil {
+		return nil, err
 	}
 
 	res := backtest.MetricsFromEquity(equity, initialBalance, 0.02, positions, 0)
@@ -336,6 +361,109 @@ func (s *Service) Aggregate(l *store.MarketListingRecord, now time.Time) (*store
 		Followers:           s.repo.CountActiveFollowers(l.ID),
 		RunningDays:         runningDays,
 	}, nil
+}
+
+// aggregateAIBot 汇总 ai_bot 条目的考核窗口数据：ai_bot_snapshots 权益曲线
+// （秒级时间戳）+ ai_bot_trades 已平仓交易。
+func (s *Service) aggregateAIBot(l *store.MarketListingRecord, now time.Time) (initialBalance float64, since int64, equity []backtest.EquityPoint, positions []backtest.Position, err error) {
+	inst := store.GetAIBotInstanceByID(l.BotInstanceID, int(l.AuthorUserID))
+	if inst == nil {
+		return 0, 0, nil, nil, fmt.Errorf("probation instance %s not found", l.BotInstanceID)
+	}
+	initialBalance = getFloat(inst, "initial_balance", 10000)
+	if initialBalance <= 0 {
+		initialBalance = 10000
+	}
+	since = l.ProbationStartedAt
+	if since <= 0 {
+		since = getInt64(inst, "created_at", now.Unix())
+	}
+
+	// 权益曲线：窗口起点补 initial_balance 锚点，之后接快照（快照可能
+	// 与起点同秒——跳过，保证曲线严格递增且无重复锚点）。
+	equity = []backtest.EquityPoint{{Timestamp: since * 1000, Equity: initialBalance}}
+	for _, snap := range store.GetAIBotSnapshotsSince(l.BotInstanceID, since) {
+		ts := getInt64(snap, "timestamp", 0)
+		eq := getFloat(snap, "total_equity", 0)
+		if ts <= since || eq <= 0 {
+			continue
+		}
+		equity = append(equity, backtest.EquityPoint{Timestamp: ts * 1000, Equity: eq})
+	}
+
+	for _, t := range store.GetAIBotTradesSince(l.BotInstanceID, since) {
+		positions = append(positions, backtest.Position{
+			Symbol:      getString(t, "symbol", ""),
+			EntryPrice:  getFloat(t, "entry_price", 0),
+			ExitPrice:   getFloat(t, "exit_price", 0),
+			Quantity:    getFloat(t, "quantity", 0),
+			EntryTime:   getInt64(t, "opened_at", 0) * 1000,
+			ExitTime:    getInt64(t, "closed_at", 0) * 1000,
+			RealizedPnL: getFloat(t, "pnl", 0),
+			IsClosed:    true,
+			ExitReason:  getString(t, "close_reason", ""),
+		})
+	}
+	return initialBalance, since, equity, positions, nil
+}
+
+// aggregateGrid 汇总 grid_bot 条目的考核窗口数据：grid_bot_snapshots 权益曲线
+// + grid_bot_trades 成交（毫秒级时间戳）。网格成交是单格 fills，只有落袋盈亏
+// 的腿（pnl≠0，long 模式的 SELL / short 模式的 BUY）计入平仓口径。
+func (s *Service) aggregateGrid(l *store.MarketListingRecord) (initialBalance float64, since int64, equity []backtest.EquityPoint, positions []backtest.Position, err error) {
+	bot, err := s.gridRepo.GetByIDForUser(l.ObjectID, l.AuthorUserID)
+	if err != nil {
+		return 0, 0, nil, nil, err
+	}
+	if bot == nil {
+		return 0, 0, nil, nil, fmt.Errorf("probation grid bot %s not found", l.ObjectID)
+	}
+	initialBalance = bot.InitialEquity
+	if initialBalance <= 0 {
+		initialBalance = bot.Investment
+	}
+	if initialBalance <= 0 {
+		initialBalance = 10000
+	}
+	since = l.ProbationStartedAt
+	if since <= 0 {
+		since = bot.CreatedAt / 1000
+	}
+	sinceMs := since * 1000
+
+	equity = []backtest.EquityPoint{{Timestamp: sinceMs, Equity: initialBalance}}
+	snaps, err := s.gridRepo.GetSnapshotsAsc(l.ObjectID, sinceMs)
+	if err != nil {
+		return 0, 0, nil, nil, err
+	}
+	for _, snap := range snaps {
+		if snap.Ts <= sinceMs || snap.Equity <= 0 {
+			continue
+		}
+		equity = append(equity, backtest.EquityPoint{Timestamp: snap.Ts, Equity: snap.Equity})
+	}
+
+	trades, err := s.gridRepo.GetTradesSinceAsc(l.ObjectID, sinceMs)
+	if err != nil {
+		return 0, 0, nil, nil, err
+	}
+	for _, tr := range trades {
+		if tr.PnL == 0 {
+			continue
+		}
+		positions = append(positions, backtest.Position{
+			Symbol:      bot.Symbol,
+			EntryPrice:  tr.Price,
+			ExitPrice:   tr.Price,
+			Quantity:    tr.Quantity,
+			EntryTime:   tr.Ts,
+			ExitTime:    tr.Ts,
+			RealizedPnL: tr.PnL,
+			IsClosed:    true,
+			ExitReason:  tr.Leg,
+		})
+	}
+	return initialBalance, since, equity, positions, nil
 }
 
 // ProbationProgress 考核进度（作者视图 + 达标判定共用）。
@@ -446,6 +574,7 @@ func (e *Engine) loop() {
 
 // RunOnce 对 probation/pending_review/listed 条目：聚合当日统计快照；
 // probation 达标自动转 pending_review（待人工审核）。
+// 同时做市场条目订阅到期治理：expires_at 已过的 active 订阅置 expired。
 func (e *Engine) RunOnce(now time.Time) error {
 	var firstErr error
 	for _, status := range []string{StatusProbation, StatusPendingReview, StatusListed} {
@@ -467,7 +596,20 @@ func (e *Engine) RunOnce(now time.Time) error {
 					}
 				}
 			}
+			// listed 条目补建 provider 建档（approve 时失败的兜底重试）。
+			if l.Status == StatusListed && l.ProviderID == 0 {
+				if _, err := EnsureListingProvider(l); err != nil {
+					e.logf("[marketplace] listing %s provider ensure retry failed: %v", l.ID, err)
+				}
+			}
 		}
+	}
+	if n, err := e.svc.ExpireSubscriptions(now.Unix()); err != nil {
+		if firstErr == nil {
+			firstErr = err
+		}
+	} else if n > 0 {
+		e.logf("[marketplace] expired %d listing subscription(s)", n)
 	}
 	return firstErr
 }

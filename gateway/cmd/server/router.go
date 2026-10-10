@@ -1028,6 +1028,12 @@ func registerMarketListingRoutes(api *gin.RouterGroup) {
 		private.GET("/listings", handler.MarketListingList)
 		private.GET("/listings/:id/stats", handler.MarketListingStats)
 		private.GET("/rules", handler.MarketRulesGet)
+		// 订阅扣费链路（0059）：订阅/我的订阅/取消
+		private.POST("/listings/:id/subscribe", handler.MarketListingSubscribe)
+		private.GET("/my-subscriptions", handler.MarketMySubscriptions)
+		private.POST("/my-subscriptions/:id/cancel", handler.MarketSubscriptionCancel)
+		// 订阅实例化（0060）：克隆源对象配置为订阅者名下实例（归因溯源）
+		private.POST("/my-subscriptions/:id/instantiate", handler.MarketSubscriptionInstantiate)
 	}
 	adminM := api.Group("/admin/market")
 	adminM.Use(middleware.AdminRequired())

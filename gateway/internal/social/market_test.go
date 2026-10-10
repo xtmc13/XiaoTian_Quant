@@ -252,6 +252,56 @@ func TestMarket_ApplyValidationAndFeeMode(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }
 
+func TestMarket_AdminProviderPendingList(t *testing.T) {
+	env := setupMarketEnv(t)
+	w, resp := doJSON(t, env.router, "POST", "/api/social/providers/apply", env.providerToken,
+		map[string]any{"name": "PendingQueue", "description": "queue", "profit_share_pct": 15, "monthly_fee": 0})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	providerDBID := int64(resp["provider"].(map[string]any)["id"].(float64))
+
+	// 非 admin → 403（路由层 AdminRequired）
+	w, _ = doJSON(t, env.router, "GET", "/api/social/admin/providers", env.providerToken, nil)
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	// 未登录 → 401
+	w, _ = doJSON(t, env.router, "GET", "/api/social/admin/providers", "", nil)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	// 非法 status → 400
+	w, _ = doJSON(t, env.router, "GET", "/api/social/admin/providers?status=bogus", env.adminToken, nil)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	// admin 待审队列包含该申请
+	w, resp = doJSON(t, env.router, "GET", "/api/social/admin/providers?status=pending", env.adminToken, nil)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	found := false
+	for _, item := range resp["providers"].([]any) {
+		p := item.(map[string]any)
+		if int64(p["id"].(float64)) == providerDBID {
+			found = true
+			assert.Equal(t, ApplyPending, p["apply_status"])
+			assert.Equal(t, "PendingQueue", p["name"])
+		}
+	}
+	assert.True(t, found, "pending queue should contain the application")
+
+	// 通过后从 pending 消失、进入 approved
+	w, _ = doJSON(t, env.router, "POST", fmt.Sprintf("/api/social/providers/%d/approve", providerDBID), env.adminToken, nil)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	w, resp = doJSON(t, env.router, "GET", "/api/social/admin/providers?status=pending", env.adminToken, nil)
+	require.Equal(t, http.StatusOK, w.Code)
+	for _, item := range resp["providers"].([]any) {
+		assert.NotEqual(t, providerDBID, int64(item.(map[string]any)["id"].(float64)))
+	}
+	w, resp = doJSON(t, env.router, "GET", "/api/social/admin/providers?status=approved", env.adminToken, nil)
+	require.Equal(t, http.StatusOK, w.Code)
+	found = false
+	for _, item := range resp["providers"].([]any) {
+		if int64(item.(map[string]any)["id"].(float64)) == providerDBID {
+			found = true
+		}
+	}
+	assert.True(t, found, "approved queue should contain the provider")
+}
+
 // ── 分成结算 ─────────────────────────────────────────────────────
 
 func newSettlementEnv(t *testing.T) (*marketTestEnv, *SettlementEngine, int64) {

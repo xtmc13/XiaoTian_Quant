@@ -559,3 +559,59 @@ func TestRunnerContractModeRequiresExecutor(t *testing.T) {
 		}
 	}
 }
+
+// TestRunnerProfitableFillHook 盈利落袋腿回调（0060 市场订阅归因接线）：
+// SELL 落袋腿 pnl>0 时逐笔触发 OnProfitableFill，携带 bot 记录（含
+// origin_listing_id）；买入建仓腿（pnl=0）不触发。
+func TestRunnerProfitableFillHook(t *testing.T) {
+	repo := store.NewGridRepo()
+	src := &fakeSource{}
+	src.set(testStartPrice)
+	runner := newTestRunner(src.Price, repo)
+
+	type hookCall struct {
+		botID string
+		pnl   float64
+		leg   string
+	}
+	var (
+		mu    sync.Mutex
+		calls []hookCall
+	)
+	runner.OnProfitableFill = func(rec *store.GridBotRecord, f LegFill) {
+		mu.Lock()
+		defer mu.Unlock()
+		calls = append(calls, hookCall{botID: rec.ID, pnl: f.Pnl, leg: f.Leg})
+	}
+
+	rec := newBotRecord(t, repo, "bot-hook")
+	rec.OriginListingID = "ml-hook-test"
+	if err := repo.Update(rec); err != nil {
+		t.Fatalf("set origin_listing_id: %v", err)
+	}
+	if err := runner.StartBot(rec, testStartPrice); err != nil {
+		t.Fatalf("StartBot: %v", err)
+	}
+	defer runner.StopBot(rec.ID, "stopped")
+
+	feedPrices(src, 106, 107, 108, 109, 110)
+	waitFor(t, 3*time.Second, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(calls) == 5
+	}, "5 profitable fill hook calls")
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, c := range calls {
+		if c.botID != rec.ID {
+			t.Errorf("hook bot id = %s, want %s", c.botID, rec.ID)
+		}
+		if c.pnl <= 0 {
+			t.Errorf("hook pnl = %v, want > 0", c.pnl)
+		}
+		if c.leg != LegLong {
+			t.Errorf("hook leg = %s, want %s", c.leg, LegLong)
+		}
+	}
+}

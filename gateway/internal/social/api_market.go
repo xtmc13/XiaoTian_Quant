@@ -95,6 +95,30 @@ func (h *marketHandler) myProvider(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"provider": p})
 }
 
+// adminProviders 入驻审核队列：GET /api/social/admin/providers?status=pending（admin only）。
+// 路由层 AdminRequired + 此处角色复核双保险。
+func (h *marketHandler) adminProviders(c *gin.Context) {
+	if !requireAdminRole(c) {
+		return
+	}
+	status := strings.ToLower(strings.TrimSpace(c.DefaultQuery("status", ApplyPending)))
+	switch status {
+	case ApplyPending, ApplyApproved, ApplyRejected:
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid status filter"})
+		return
+	}
+	list, err := h.market.ListProvidersByStatus(status)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if list == nil {
+		list = []*ProviderApply{}
+	}
+	c.JSON(http.StatusOK, gin.H{"providers": list})
+}
+
 // approveProvider 管理员审核通过：POST /api/social/providers/:id/approve（admin only）。
 // 通过后 provider 以 offset id 注册进引擎，允许被订阅。
 func (h *marketHandler) approveProvider(c *gin.Context) {

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { DataTable } from '@/components/DataTable'
 import { AdminMarketReview } from '@/components/market/AdminMarketReview'
 import { AdminIndicatorReview } from '@/components/community/AdminIndicatorReview'
+import { AdminWithdrawalReview } from '@/components/social/AdminWithdrawalReview'
 import { useConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { adminApi, type AdminSummary, type AdminActivityItem, type AdminReferralRow } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -10,7 +11,7 @@ import type { AdminUser, AdminStats, AdminAuditLog } from '@/types'
 import {
   Users, UserCheck, Shield, Loader2, AlertCircle, CheckCircle,
   Edit3, X, RefreshCw, UserX, UserCog, FileText, Cpu, Activity,
-  Database, Zap, Clock, HardDrive, Gift
+  Database, Zap, Clock, HardDrive, Gift, ArrowDownToLine
 } from 'lucide-react'
 
 // activity 时间戳单位混用（秒/毫秒/字符串），防御性渲染
@@ -47,7 +48,7 @@ export function UserManage() {
   const [editActive, setEditActive] = useState(1)
   const [saving, setSaving] = useState(false)
   const [togglingId, setTogglingId] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<'users' | 'audit' | 'system' | 'market' | 'community' | 'referrals'>('users')
+  const [activeTab, setActiveTab] = useState<'users' | 'audit' | 'system' | 'market' | 'community' | 'referrals' | 'withdrawals'>('users')
   // Enhanced stats
   const [sysStats, setSysStats] = useState<AdminStats | null>(null)
   const [auditLog, setAuditLog] = useState<AdminAuditLog[]>([])
@@ -240,6 +241,7 @@ export function UserManage() {
           { k: 'audit' as const, label: '审计日志', icon: FileText },
           { k: 'system' as const, label: '系统监控', icon: Cpu },
           { k: 'market' as const, label: '上架审核', icon: Shield },
+          { k: 'withdrawals' as const, label: t('admin.tabs.withdrawals'), icon: ArrowDownToLine },
           { k: 'community' as const, label: t('admin.tabs.communityReview'), icon: CheckCircle },
           { k: 'referrals' as const, label: t('admin.tabs.referrals'), icon: Gift },
         ].map(t => (
@@ -253,6 +255,7 @@ export function UserManage() {
 
       {/* ── System Monitor Tab ── */}
       {activeTab === 'market' && <AdminMarketReview />}
+      {activeTab === 'withdrawals' && <AdminWithdrawalReview />}
       {activeTab === 'community' && <AdminIndicatorReview />}
       {activeTab === 'system' && sysStats?.system && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

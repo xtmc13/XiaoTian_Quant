@@ -36,10 +36,12 @@ type GridBotRecord struct {
 	QuoteBalance  float64 `json:"quote_balance"`
 	StateJSON     string  `json:"state_json"`
 	InitialEquity float64 `json:"initial_equity"`
-	CreatedAt     int64   `json:"created_at"`
-	UpdatedAt     int64   `json:"updated_at"`
-	StartedAt     int64   `json:"started_at"`
-	StoppedAt     int64   `json:"stopped_at"`
+	// OriginListingID 克隆来源的市场条目 id（0060 订阅实例化；'' = 非克隆）。
+	OriginListingID string `json:"origin_listing_id"`
+	CreatedAt       int64  `json:"created_at"`
+	UpdatedAt       int64  `json:"updated_at"`
+	StartedAt       int64  `json:"started_at"`
+	StoppedAt       int64  `json:"stopped_at"`
 }
 
 // GridTradeRecord is a single grid fill persisted in grid_bot_trades.
@@ -78,7 +80,7 @@ func NewGridRepo() *GridRepo { return &GridRepo{} }
 const gridBotColumns = `id, user_id, name, symbol, lower_price, upper_price, grid_count,
 	investment, status, exchange, fee_rate, mode, leverage, margin_mode,
 	realized_pnl, total_trades, base_qty,
-	quote_balance, state_json, initial_equity, created_at, updated_at, started_at, stopped_at`
+	quote_balance, state_json, initial_equity, origin_listing_id, created_at, updated_at, started_at, stopped_at`
 
 // Create inserts a new grid bot. It assigns ID/timestamps and status defaults if missing.
 func (r *GridRepo) Create(b *GridBotRecord) error {
@@ -119,11 +121,11 @@ func (r *GridRepo) Create(b *GridBotRecord) error {
 		b.StateJSON = "{}"
 	}
 	_, err := db.Exec(`INSERT INTO grid_bots (`+gridBotColumns+`)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		b.ID, b.UserID, b.Name, b.Symbol, b.LowerPrice, b.UpperPrice, b.GridCount,
 		b.Investment, b.Status, b.Exchange, b.FeeRate, b.Mode, b.Leverage, b.MarginMode,
 		b.RealizedPnL, b.TotalTrades,
-		b.BaseQty, b.QuoteBalance, b.StateJSON, b.InitialEquity, b.CreatedAt,
+		b.BaseQty, b.QuoteBalance, b.StateJSON, b.InitialEquity, b.OriginListingID, b.CreatedAt,
 		b.UpdatedAt, b.StartedAt, b.StoppedAt,
 	)
 	return err
@@ -201,11 +203,11 @@ func (r *GridRepo) Update(b *GridBotRecord) error {
 		upper_price=?, grid_count=?, investment=?, status=?, exchange=?, fee_rate=?,
 		mode=?, leverage=?, margin_mode=?,
 		realized_pnl=?, total_trades=?, base_qty=?, quote_balance=?, state_json=?,
-		initial_equity=?, created_at=?, updated_at=?, started_at=?, stopped_at=? WHERE id=?`,
+		initial_equity=?, origin_listing_id=?, created_at=?, updated_at=?, started_at=?, stopped_at=? WHERE id=?`,
 		b.UserID, b.Name, b.Symbol, b.LowerPrice, b.UpperPrice, b.GridCount,
 		b.Investment, b.Status, b.Exchange, b.FeeRate, b.Mode, b.Leverage, b.MarginMode,
 		b.RealizedPnL, b.TotalTrades,
-		b.BaseQty, b.QuoteBalance, b.StateJSON, b.InitialEquity, b.CreatedAt,
+		b.BaseQty, b.QuoteBalance, b.StateJSON, b.InitialEquity, b.OriginListingID, b.CreatedAt,
 		b.UpdatedAt, b.StartedAt, b.StoppedAt, b.ID,
 	)
 	return err
@@ -381,6 +383,94 @@ func (r *GridRepo) GetSnapshots(botID string, limit int, sinceTs int64) ([]*Grid
 	return result, rows.Err()
 }
 
+// GetSnapshotsAsc 取 ts >= sinceMs 的快照（时间升序），供市场考核窗口权益曲线。
+func (r *GridRepo) GetSnapshotsAsc(botID string, sinceMs int64) ([]*GridSnapshotRecord, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	rows, err := db.Query(`SELECT id, bot_id, equity, price, realized_pnl, open_orders, ts
+		FROM grid_bot_snapshots WHERE bot_id=? AND ts>=? ORDER BY ts ASC, id ASC`, botID, sinceMs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []*GridSnapshotRecord
+	for rows.Next() {
+		var s GridSnapshotRecord
+		if err := rows.Scan(&s.ID, &s.BotID, &s.Equity, &s.Price, &s.RealizedPnL,
+			&s.OpenOrders, &s.Ts); err != nil {
+			return nil, err
+		}
+		result = append(result, &s)
+	}
+	return result, rows.Err()
+}
+
+// GetTradesSinceAsc 取 ts >= sinceMs 的成交（时间升序），供市场考核窗口统计。
+func (r *GridRepo) GetTradesSinceAsc(botID string, sinceMs int64) ([]*GridTradeRecord, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	rows, err := db.Query(`SELECT id, bot_id, level_index, side, price, quantity, quote_qty, fee, pnl, leg, ts
+		FROM grid_bot_trades WHERE bot_id=? AND ts>=? ORDER BY ts ASC, id ASC`, botID, sinceMs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []*GridTradeRecord
+	for rows.Next() {
+		var t GridTradeRecord
+		if err := rows.Scan(&t.ID, &t.BotID, &t.Level, &t.Side, &t.Price, &t.Quantity,
+			&t.QuoteQty, &t.Fee, &t.PnL, &t.Leg, &t.Ts); err != nil {
+			return nil, err
+		}
+		result = append(result, &t)
+	}
+	return result, rows.Err()
+}
+
+// GetTradesPage 成交明细分页（ts 倒序）+ 总条数，供市场条目详情页展示。
+func (r *GridRepo) GetTradesPage(botID string, limit, offset int) ([]*GridTradeRecord, int, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if db == nil {
+		return nil, 0, fmt.Errorf("database not initialized")
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	var total int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM grid_bot_trades WHERE bot_id=?`, botID).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	rows, err := db.Query(`SELECT id, bot_id, level_index, side, price, quantity, quote_qty, fee, pnl, leg, ts
+		FROM grid_bot_trades WHERE bot_id=? ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?`, botID, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	result := []*GridTradeRecord{}
+	for rows.Next() {
+		var t GridTradeRecord
+		if err := rows.Scan(&t.ID, &t.BotID, &t.Level, &t.Side, &t.Price, &t.Quantity,
+			&t.QuoteQty, &t.Fee, &t.PnL, &t.Leg, &t.Ts); err != nil {
+			return nil, 0, err
+		}
+		result = append(result, &t)
+	}
+	return result, total, rows.Err()
+}
+
 // scanGridBot scans a single row into a GridBotRecord.
 func scanGridBot(scanner interface {
 	Scan(dest ...any) error
@@ -390,7 +480,7 @@ func scanGridBot(scanner interface {
 		&b.ID, &b.UserID, &b.Name, &b.Symbol, &b.LowerPrice, &b.UpperPrice, &b.GridCount,
 		&b.Investment, &b.Status, &b.Exchange, &b.FeeRate, &b.Mode, &b.Leverage, &b.MarginMode,
 		&b.RealizedPnL, &b.TotalTrades,
-		&b.BaseQty, &b.QuoteBalance, &b.StateJSON, &b.InitialEquity, &b.CreatedAt,
+		&b.BaseQty, &b.QuoteBalance, &b.StateJSON, &b.InitialEquity, &b.OriginListingID, &b.CreatedAt,
 		&b.UpdatedAt, &b.StartedAt, &b.StoppedAt,
 	)
 	if err == sql.ErrNoRows {
@@ -400,4 +490,17 @@ func scanGridBot(scanner interface {
 		return nil, err
 	}
 	return &b, nil
+}
+
+// GetByOrigin 查用户名下克隆自某市场条目的网格机器人（0060 订阅实例化幂等用）；
+// 无则返回 (nil, nil)。
+func (r *GridRepo) GetByOrigin(userID int64, listingID string) (*GridBotRecord, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	row := db.QueryRow(`SELECT `+gridBotColumns+` FROM grid_bots
+		WHERE user_id=? AND origin_listing_id=? ORDER BY created_at DESC LIMIT 1`, userID, listingID)
+	return scanGridBot(row)
 }

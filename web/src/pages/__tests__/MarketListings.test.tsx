@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import React from 'react'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { MemoryRouter } from 'react-router-dom'
 // 测试环境不经 main.tsx，需显式注册词条（默认语言 zh-CN）
 import '@/i18n/locales/zh-CN'
 import '@/i18n/locales/market'
@@ -110,7 +111,10 @@ function Wrapper({ children }: { children: React.ReactNode }) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
   return (
     <QueryClientProvider client={client}>
-      <I18nProvider>{children}</I18nProvider>
+      {/* 卡片点击跳详情用 useNavigate，需要 Router 上下文 */}
+      <MemoryRouter>
+        <I18nProvider>{children}</I18nProvider>
+      </MemoryRouter>
     </QueryClientProvider>
   )
 }

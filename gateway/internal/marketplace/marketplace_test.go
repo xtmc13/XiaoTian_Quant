@@ -84,7 +84,7 @@ func TestServiceIllegalTransitionsRejected(t *testing.T) {
 	svc := NewService()
 	now := time.Now()
 
-	rec, err := svc.Create(7, "aibot-sm-1", "robot", "t", "", "free", 0, 0)
+	rec, err := svc.Create(7, ObjectKindAIBot, "aibot-sm-1", "robot", "t", "", "free", 0, 0)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestServiceLifecycleHappyPath(t *testing.T) {
 	svc := NewService()
 	now := time.Now()
 
-	rec, err := svc.Create(8, "aibot-lc-1", "robot", "t", "", "profit_share", 20, 0)
+	rec, err := svc.Create(8, ObjectKindAIBot, "aibot-lc-1", "robot", "t", "", "profit_share", 20, 0)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestAggregateStats(t *testing.T) {
 	seedInstance(t, "aibot-ag-1", 9, 10000)
 	svc := NewService()
 
-	rec, err := svc.Create(9, "aibot-ag-1", "robot", "t", "", "free", 0, 0)
+	rec, err := svc.Create(9, ObjectKindAIBot, "aibot-ag-1", "robot", "t", "", "free", 0, 0)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -250,7 +250,7 @@ func TestAggregateProfitFactorCapped(t *testing.T) {
 	setupTestDB(t)
 	seedInstance(t, "aibot-pf-1", 10, 10000)
 	svc := NewService()
-	rec, err := svc.Create(10, "aibot-pf-1", "robot", "t", "", "free", 0, 0)
+	rec, err := svc.Create(10, ObjectKindAIBot, "aibot-pf-1", "robot", "t", "", "free", 0, 0)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -313,7 +313,7 @@ func TestEngineRunOnce(t *testing.T) {
 
 	now := time.Now()
 	// 条目1：31 天前提交，10 笔盈利交易 → 达标
-	rec1, _ := svc.Create(11, "aibot-cron-1", "robot", "pass", "", "free", 0, 0)
+	rec1, _ := svc.Create(11, ObjectKindAIBot, "aibot-cron-1", "robot", "pass", "", "free", 0, 0)
 	if err := svc.Submit(rec1, now.Add(-31*24*time.Hour)); err != nil {
 		t.Fatalf("submit rec1: %v", err)
 	}
@@ -324,7 +324,7 @@ func TestEngineRunOnce(t *testing.T) {
 		})
 	}
 	// 条目2：31 天前提交，但只有 3 笔交易 → 不达标
-	rec2, _ := svc.Create(12, "aibot-cron-2", "robot", "fail", "", "free", 0, 0)
+	rec2, _ := svc.Create(12, ObjectKindAIBot, "aibot-cron-2", "robot", "fail", "", "free", 0, 0)
 	if err := svc.Submit(rec2, now.Add(-31*24*time.Hour)); err != nil {
 		t.Fatalf("submit rec2: %v", err)
 	}

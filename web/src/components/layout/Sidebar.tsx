@@ -45,6 +45,7 @@ const navItems: NavItem[] = [
     icon: LayoutGrid,
     children: [
       { path: '/bots', labelKey: 'nav.bots-center' },
+      { path: '/bots/ai', labelKey: 'nav.ai-bot-market' },
       { path: '/bots/signal', labelKey: 'nav.signal-bots' },
       { path: '/bots/dca', labelKey: 'nav.dca-bots' },
       { path: '/bots/layered-martin', labelKey: 'nav.layered-martin' },

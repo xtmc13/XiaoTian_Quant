@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xiaotian-quant/gateway/internal/marketplace"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
@@ -164,6 +165,89 @@ func TestMarketListingPermissions(t *testing.T) {
 	assertEq(t, w.Code, http.StatusBadRequest, "create with others' instance should be 400")
 }
 
+func TestMarketListingStatsDetail(t *testing.T) {
+	if err := store.RunSQLMigrations(); err != nil {
+		t.Fatalf("migrations: %v", err)
+	}
+	// 规则是全局设置且会被其他用例改写，先重置为默认值保证确定性。
+	if err := marketplace.SaveRules(marketplace.DefaultRules()); err != nil {
+		t.Fatalf("reset rules: %v", err)
+	}
+	seedMarketInstance(t, "aibot-mkt-stats", 706)
+	author := marketTestRouter(706, "user")
+	id := createProbationListing(t, author, "aibot-mkt-stats")
+
+	// 平台侧数据源：日快照 + 已平仓成交（详情页「平台验证业绩」的出处）
+	now := time.Now()
+	repo := store.NewMarketListingRepo()
+	if err := repo.UpsertStats(&store.MarketListingStatsRecord{
+		ListingID: id, Date: now.UTC().Format("2006-01-02"),
+		TotalReturnPct: 12.5, AnnualizedReturnPct: 150, MaxDrawdownPct: 8.2,
+		WinRate: 66.7, ProfitFactor: 2.1, SharpeRatio: 1.5,
+		TotalTrades: 3, MonthlyReturnPct: 6.25, Followers: 0, RunningDays: 60,
+	}); err != nil {
+		t.Fatalf("upsert stats: %v", err)
+	}
+	for i, pnl := range []float64{10, -4, 21} {
+		ts := now.Unix() - int64(86400*(3-i))
+		if tid := store.SaveAIBotTrade(map[string]any{
+			"bot_instance_id": "aibot-mkt-stats", "symbol": "BTCUSDT", "side": "LONG",
+			"entry_price": 70000, "exit_price": 70100, "quantity": 0.01,
+			"pnl": pnl, "pnl_pct": 0.14, "close_reason": "take_profit",
+			"opened_at": ts - 3600, "closed_at": ts,
+		}); tid == 0 {
+			t.Fatalf("seed trade %d failed", i)
+		}
+	}
+
+	// 推进到 listed（考核达标路径由 marketplace 包覆盖，这里直接落库）
+	rec := repo.GetByID(id)
+	rec.Status = "listed"
+	if err := repo.Update(rec); err != nil {
+		t.Fatalf("force listed: %v", err)
+	}
+
+	// listed：其他登录用户可读，且响应含 series+trades+metric_source+考核快照
+	other := marketTestRouter(707, "user")
+	w, resp := marketDo(t, other, "GET", "/market/listings/"+id+"/stats", "")
+	assertEq(t, w.Code, http.StatusOK, "listed stats visible to others")
+	assertTrue(t, resp["metric_source"] == "platform_verified", "metric_source should be platform_verified")
+	series, ok := resp["series"].([]any)
+	assertTrue(t, ok && len(series) == 1, "series should have 1 snapshot")
+	trades, ok := resp["trades"].([]any)
+	assertTrue(t, ok && len(trades) == 3, "trades should have 3 rows")
+	assertTrue(t, resp["trades_total"].(float64) == 3, "trades_total should be 3")
+	first := trades[0].(map[string]any)
+	assertTrue(t, first["pnl"].(float64) == 21, "trades should be closed_at DESC (latest first)")
+	assertTrue(t, first["close_reason"] == "take_profit", "trade should carry close_reason")
+	probation, ok := resp["probation"].(map[string]any)
+	assertTrue(t, ok, "probation snapshot should be present")
+	assertTrue(t, probation["rule_min_days"].(float64) == 30, "rule snapshot min_days 30")
+	assertTrue(t, probation["rule_min_trades"].(float64) == 10, "rule snapshot min_trades 10")
+	assertTrue(t, probation["rule_max_drawdown_pct"].(float64) == 50, "rule snapshot max_drawdown 50")
+	assertTrue(t, probation["days_elapsed"].(float64) == 60, "achieved running days from latest snapshot")
+	assertTrue(t, probation["trades_in_window"].(float64) == 3, "achieved trades from latest snapshot")
+	assertTrue(t, probation["max_drawdown_pct"].(float64) == 8.2, "achieved drawdown from latest snapshot")
+
+	// 成交明细分页：trades_limit/trades_offset 生效，总数不变
+	w, resp = marketDo(t, other, "GET", "/market/listings/"+id+"/stats?trades_limit=2&trades_offset=2", "")
+	assertEq(t, w.Code, http.StatusOK, "paged trades")
+	trades, _ = resp["trades"].([]any)
+	assertTrue(t, len(trades) == 1, "page 2 with limit 2 should have 1 row")
+	assertTrue(t, resp["trades_total"].(float64) == 3, "trades_total ignores pagination")
+
+	// 不存在条目 → 404
+	w, _ = marketDo(t, other, "GET", "/market/listings/ml-no-such/stats", "")
+	assertEq(t, w.Code, http.StatusNotFound, "unknown listing should be 404")
+
+	// 清理：共享测试库，撤下 listed 状态避免污染公开列表断言（AdminReviewFlow）。
+	rec = repo.GetByID(id)
+	rec.Status = "delisted"
+	if err := repo.Update(rec); err != nil {
+		t.Fatalf("cleanup delist: %v", err)
+	}
+}
+
 func TestMarketAdminReviewFlow(t *testing.T) {
 	if err := store.RunSQLMigrations(); err != nil {
 		t.Fatalf("migrations: %v", err)
@@ -244,4 +328,80 @@ func TestMarketAdminReviewFlow(t *testing.T) {
 	assertTrue(t, resp["min_days"].(float64) == 7, "rules updated")
 	w, _ = marketDo(t, admin, "PUT", "/admin/market/rules", `{"min_days":0,"min_trades":3,"max_drawdown_pct":30}`)
 	assertEq(t, w.Code, http.StatusBadRequest, "invalid rules should be 400")
+}
+
+// TestMarketListingGridBotFlow 网格机器人上架：object_kind=grid_bot 创建
+// （属主校验）→ stats 端点成交明细按 grid_bot_trades 映射到统一响应形状。
+func TestMarketListingGridBotFlow(t *testing.T) {
+	if err := store.RunSQLMigrations(); err != nil {
+		t.Fatalf("migrations: %v", err)
+	}
+	gridRepo := store.NewGridRepo()
+	if err := gridRepo.Create(&store.GridBotRecord{
+		ID: "grid-mkt-1", UserID: 710, Name: "网格考核", Symbol: "ETHUSDT",
+		LowerPrice: 90, UpperPrice: 110, GridCount: 10, Investment: 10000, InitialEquity: 10000,
+	}); err != nil {
+		t.Fatalf("seed grid bot: %v", err)
+	}
+	author := marketTestRouter(710, "user")
+
+	// 属主创建并提交考核 → probation，object 字段随条目返回
+	w, resp := marketDo(t, author, "POST", "/market/listings",
+		`{"object_kind":"grid_bot","object_id":"grid-mkt-1","kind":"robot","fee_model":"free","submit":true}`)
+	assertEq(t, w.Code, http.StatusOK, "create grid listing")
+	assertTrue(t, resp["status"] == "probation", "status should be probation after submit")
+	assertTrue(t, resp["object_kind"] == "grid_bot", "object_kind should be grid_bot")
+	assertTrue(t, resp["object_id"] == "grid-mkt-1", "object_id should be grid-mkt-1")
+	assertTrue(t, resp["name"] == "网格考核", "name should default to grid bot name")
+	id, _ := resp["id"].(string)
+	assertTrue(t, id != "", "listing id")
+
+	// 非属主创建 → 400；非法 object_kind → 400
+	other := marketTestRouter(711, "user")
+	w, _ = marketDo(t, other, "POST", "/market/listings",
+		`{"object_kind":"grid_bot","object_id":"grid-mkt-1","submit":true}`)
+	assertEq(t, w.Code, http.StatusBadRequest, "create with others' grid bot should be 400")
+	w, _ = marketDo(t, author, "POST", "/market/listings",
+		`{"object_kind":"dca_bot","object_id":"grid-mkt-1","submit":true}`)
+	assertEq(t, w.Code, http.StatusBadRequest, "unsupported object_kind should be 400")
+
+	// 造网格成交（毫秒时间戳）并推进到 listed
+	nowMs := time.Now().UnixMilli()
+	for i, pnl := range []float64{12, -3, 21} {
+		if err := gridRepo.InsertTrade("grid-mkt-1", i, "SELL", 3000+float64(i), 0.01, 30, 0, pnl, "long", nowMs-int64(3600000*(3-i))); err != nil {
+			t.Fatalf("seed grid trade %d: %v", i, err)
+		}
+	}
+	repo := store.NewMarketListingRepo()
+	rec := repo.GetByID(id)
+	rec.Status = "listed"
+	if err := repo.Update(rec); err != nil {
+		t.Fatalf("force listed: %v", err)
+	}
+
+	// listed 后他人可读 stats：trades 来自 grid_bot_trades，映射统一形状
+	w, resp = marketDo(t, other, "GET", "/market/listings/"+id+"/stats", "")
+	assertEq(t, w.Code, http.StatusOK, "listed grid stats visible to others")
+	assertTrue(t, resp["metric_source"] == "platform_verified", "metric_source should be platform_verified")
+	card := resp["listing"].(map[string]any)
+	assertTrue(t, card["object_kind"] == "grid_bot", "listing card should carry object_kind")
+	trades, ok := resp["trades"].([]any)
+	assertTrue(t, ok && len(trades) == 3, "grid trades should have 3 rows")
+	assertTrue(t, resp["trades_total"].(float64) == 3, "trades_total should be 3")
+	first := trades[0].(map[string]any)
+	assertTrue(t, first["symbol"] == "ETHUSDT", "symbol from grid bot record")
+	assertTrue(t, first["side"] == "SELL", "side uppercased")
+	assertTrue(t, first["pnl"].(float64) == 21, "trades should be ts DESC (latest first)")
+	if _, exists := first["entry_price"]; exists {
+		t.Fatal("grid fill should not carry entry_price")
+	}
+	assertTrue(t, first["exit_price"].(float64) == 3002, "fill price mapped to exit_price")
+	assertTrue(t, first["closed_at"].(float64) > 1_000_000_000, "closed_at should be unix seconds")
+
+	// 清理：共享测试库，撤下 listed 状态避免污染公开列表断言。
+	rec = repo.GetByID(id)
+	rec.Status = "delisted"
+	if err := repo.Update(rec); err != nil {
+		t.Fatalf("cleanup delist: %v", err)
+	}
 }
