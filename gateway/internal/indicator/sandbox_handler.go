@@ -295,6 +295,15 @@ func chunkString(s string, size int) []string {
 	return chunks
 }
 
+// truncateRunes 截断到至多 n 个字符（rune 安全，短串原样返回，不 panic）。
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n])
+}
+
 func jsonEscape(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b[1 : len(b)-1])
@@ -492,7 +501,7 @@ output = {
         {'type': 'sell', 'text': 'S', 'data': [df['high'].iloc[i]*1.005 if df['sell'].iloc[i] else None for i in range(len(df))], 'color': '#FF5252'}
     ]
 }
-`, strings.ReplaceAll(prompt, "\n", " ")[:200])
+`, truncateRunes(strings.ReplaceAll(prompt, "\n", " "), 200))
 }
 
 // buildSystemPrompt returns the XiaoTianQuant indicator system prompt.
