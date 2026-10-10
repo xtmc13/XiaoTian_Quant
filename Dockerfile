@@ -43,6 +43,11 @@ RUN set -e; \
 # ── Stage 1: Web frontend builder ──────────────────────────────────
 FROM node:22-alpine AS web-builder
 
+# 构建期注入版本号（AppUpdateBanner 用它与服务端 /api/health 版本比对，
+# 不一致提示用户点击刷新——根治旧缓存包问题；设置页版本号显示同源）。
+ARG VERSION=dev
+ENV VITE_APP_VERSION=${VERSION}
+
 WORKDIR /src/web
 COPY web/package*.json ./
 RUN npm ci --silent

@@ -4,6 +4,7 @@ import { TopBar } from './TopBar'
 import { BottomNav } from './BottomNav'
 import { ToastContainer } from '@/components/ToastContainer'
 import { PWAInstallPrompt } from '@/components/PWAInstallPrompt'
+import { AppUpdateBanner } from '@/components/AppUpdateBanner'
 import { DesktopPet } from '@/components/agent/DesktopPet'
 
 export function Layout() {
@@ -26,6 +27,7 @@ export function Layout() {
       <BottomNav />
       <ToastContainer />
       <PWAInstallPrompt />
+      <AppUpdateBanner />
     </div>
   )
 }
