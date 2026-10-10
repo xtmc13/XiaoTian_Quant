@@ -483,11 +483,17 @@ func (s *BaseCRAStrategy) OnBar(bar model.Bar, bus *event.EventBus) (*model.Sign
 		nextOrder := st.PositionCount + st.PendingAddCount
 		cfg := p.AddPositionForOrder(nextOrder)
 		if cfg != nil {
-			// For contract, check per-order EMA switch and global add indicators.
-			if s.isContract && !s.addPositionConfirmed(cfg) {
-				return nil, nil
-			}
+			// 价格形态状态机逐根推进（挂起/回调触发），合约补仓指标闸只在触发时
+			// veto：MACD 金叉是末根事件型确认，闸若放在状态机之前，闸不过的 bar
+			// 不挂起、闸恰好通过的（金叉）bar 才首次挂起，反弹触发永不可达——
+			// 开启补仓 MACD 监测等于永久禁补（2026-10-10 参数矩阵实测发现）。
+			// veto 消耗本次触发后下一根差价仍达标会重新挂起，后续反弹与金叉同根
+			// 时放行。
 			if st.ShouldAddPosition(bar.Close, cfg) {
+				// For contract, check per-order EMA switch and global add indicators.
+				if s.isContract && !s.addPositionConfirmed(cfg) {
+					return nil, nil
+				}
 				st.PendingAddCount++
 				qty := RoundQty(s.entryQty(bar.Close, cfg.Multiplier))
 				s.logger.Info("cra add position", "symbol", s.symbol, "order", nextOrder, "price", bar.Close, "qty", qty)
