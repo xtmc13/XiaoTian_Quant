@@ -28,6 +28,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 凭证保险库健壮性（损坏 key 不再静默重建孤儿化凭证、env 轮换双 key 窗口）
 - 事件总线重入死锁（dispatch 锁内快照订阅、锁外调 handler）
 
+## [3.2.0] - 2026-10-10
+
+### Added
+- 机器人市场 MVP 全链路：通用上架对象（AI 机器人 + 网格机器人，迁移 0058）、市场条目详情页（平台验证业绩 metric_source=platform_verified）、订阅扣费（free/分成直达、月费走 USDT 链上核验激活，迁移 0059）、订阅实例化克隆与利润分成归因闭环（迁移 0060，接通 T+3 结算与提现）
+- admin 提现审核队列 UI、provider 入驻待审列表端点、"我的订阅"聚合页、市场 E2E 用例
+
+### Security
+- 信号/信号执行表补 user_id 归属（迁移 0057），执行统计按用户隔离；删除信号源无属主放宽洞与社交 follow 的 query 参数身份回退
+
 ## [Unreleased]
 
 ### Added
