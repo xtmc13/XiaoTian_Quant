@@ -226,10 +226,12 @@ func MarketListingList(c *gin.Context) {
 	})
 }
 
-// MarketListingStats 快照序列 + 成交明细分页 + 考核通过快照：
+// MarketListingStats 快照序列 + 成交明细分页 + 考核通过快照 + 回测对照：
 // listed 对所有人可见；其他状态仅作者/admin。
 // 全部指标由平台侧 ai_bot_snapshots/ai_bot_trades 聚合（作者不可篡改），
 // 顶层 metric_source=platform_verified 供前端打「平台验证业绩」标识。
+// grid_bot 条目附带 backtest_series（考核窗口同期的网格引擎重放曲线）与
+// deviation（实盘-回测偏差）；ai_bot 无确定性回测对照（null + note）。
 // GET /api/market/listings/:id/stats?limit=&trades_limit=&trades_offset=
 func MarketListingStats(c *gin.Context) {
 	l := marketSvc.Repo().GetByID(c.Param("id"))
@@ -266,14 +268,18 @@ func MarketListingStats(c *gin.Context) {
 		probation["trades_in_window"] = latest.TotalTrades
 		probation["max_drawdown_pct"] = latest.MaxDrawdownPct
 	}
-	c.JSON(http.StatusOK, gin.H{
+	resp := gin.H{
 		"listing":       listingCard(l),
 		"series":        series,
 		"trades":        trades,
 		"trades_total":  tradesTotal,
 		"probation":     probation,
 		"metric_source": "platform_verified",
-	})
+	}
+	// 回测对照曲线（回测 vs 实盘双曲线透明化）：grid_bot 同期重放，
+	// ai_bot 无对照（backtest_series=null + note），降级只挂 error 不 500。
+	attachBacktestCompare(resp, l, series)
+	c.JSON(http.StatusOK, resp)
 }
 
 // MarketRulesGet 当前考核规则（前端展示用，登录即可读）。

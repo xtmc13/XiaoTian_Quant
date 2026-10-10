@@ -318,12 +318,15 @@ func finalizeExecution(e *store.SignalExecution, repo *store.SignalExecutionRepo
 	}
 
 	// profit_share 分成：盈利时给该信号源的活跃订阅累计 pending_share
-	if e.RealizedPnL > 0 && e.SourceID != "" {
+	// （兼容字段，保持现状）；平仓盈亏均同步归因钱轨，亏损落负数行供结算冲抵。
+	if e.RealizedPnL != 0 && e.SourceID != "" {
 		srcRepo := store.NewSignalSourceRepo()
 		if src, err := srcRepo.GetByID(e.SourceID); err == nil && src != nil && src.FeeModel == "profit_share" && src.FeePercent > 0 {
-			share := e.RealizedPnL * src.FeePercent / 100
-			if err := srcRepo.AddPendingShare(e.SourceID, share); err != nil {
-				log.Printf("[executor] add pending share for source %s failed: %v", e.SourceID, err)
+			if e.RealizedPnL > 0 {
+				share := e.RealizedPnL * src.FeePercent / 100
+				if err := srcRepo.AddPendingShare(e.SourceID, share); err != nil {
+					log.Printf("[executor] add pending share for source %s failed: %v", e.SourceID, err)
+				}
 			}
 			// 归因钱轨收口（0060）：信号源属主已在 xt_social_providers 建档时，
 			// 同步落 xt_social_copy_pnl（结算/提现走 social 利润分成栈）；

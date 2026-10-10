@@ -560,10 +560,11 @@ func TestRunnerContractModeRequiresExecutor(t *testing.T) {
 	}
 }
 
-// TestRunnerProfitableFillHook 盈利落袋腿回调（0060 市场订阅归因接线）：
-// SELL 落袋腿 pnl>0 时逐笔触发 OnProfitableFill，携带 bot 记录（含
-// origin_listing_id）；买入建仓腿（pnl=0）不触发。
-func TestRunnerProfitableFillHook(t *testing.T) {
+// TestRunnerSettledFillHook 已实现盈亏腿回调（0060 市场订阅归因接线）：
+// 含已实现盈亏的成交腿（pnl≠0）逐笔触发 OnSettledFill，携带 bot 记录（含
+// origin_listing_id）；买入建仓腿（pnl=0）不触发；亏损腿（90% 费率使 SELL
+// 落袋净 pnl<0）同样逐笔触发，供结算冲抵。
+func TestRunnerSettledFillHook(t *testing.T) {
 	repo := store.NewGridRepo()
 	src := &fakeSource{}
 	src.set(testStartPrice)
@@ -578,12 +579,13 @@ func TestRunnerProfitableFillHook(t *testing.T) {
 		mu    sync.Mutex
 		calls []hookCall
 	)
-	runner.OnProfitableFill = func(rec *store.GridBotRecord, f LegFill) {
+	runner.OnSettledFill = func(rec *store.GridBotRecord, f LegFill) {
 		mu.Lock()
 		defer mu.Unlock()
 		calls = append(calls, hookCall{botID: rec.ID, pnl: f.Pnl, leg: f.Leg})
 	}
 
+	// 盈利腿：正常费率，单边上涨 SELL 落袋 pnl>0
 	rec := newBotRecord(t, repo, "bot-hook")
 	rec.OriginListingID = "ml-hook-test"
 	if err := repo.Update(rec); err != nil {
@@ -594,24 +596,47 @@ func TestRunnerProfitableFillHook(t *testing.T) {
 	}
 	defer runner.StopBot(rec.ID, "stopped")
 
+	// 亏损腿：90% 费率吃掉全部价差，SELL 落袋 pnl<0
+	neg := newBotRecord(t, repo, "bot-hook-neg")
+	neg.FeeRate = 0.9
+	if err := repo.Update(neg); err != nil {
+		t.Fatalf("set fee rate: %v", err)
+	}
+	if err := runner.StartBot(neg, testStartPrice); err != nil {
+		t.Fatalf("StartBot neg: %v", err)
+	}
+	defer runner.StopBot(neg.ID, "stopped")
+
 	feedPrices(src, 106, 107, 108, 109, 110)
 	waitFor(t, 3*time.Second, func() bool {
 		mu.Lock()
 		defer mu.Unlock()
-		return len(calls) == 5
-	}, "5 profitable fill hook calls")
+		return len(calls) == 10
+	}, "5 profitable + 5 losing settled fill hook calls")
 
 	mu.Lock()
 	defer mu.Unlock()
+	profitable, losing := 0, 0
 	for _, c := range calls {
-		if c.botID != rec.ID {
-			t.Errorf("hook bot id = %s, want %s", c.botID, rec.ID)
-		}
-		if c.pnl <= 0 {
-			t.Errorf("hook pnl = %v, want > 0", c.pnl)
-		}
 		if c.leg != LegLong {
 			t.Errorf("hook leg = %s, want %s", c.leg, LegLong)
 		}
+		switch c.botID {
+		case rec.ID:
+			if c.pnl <= 0 {
+				t.Errorf("profitable bot hook pnl = %v, want > 0", c.pnl)
+			}
+			profitable++
+		case neg.ID:
+			if c.pnl >= 0 {
+				t.Errorf("losing bot hook pnl = %v, want < 0", c.pnl)
+			}
+			losing++
+		default:
+			t.Errorf("unexpected hook bot id %s", c.botID)
+		}
+	}
+	if profitable != 5 || losing != 5 {
+		t.Errorf("hook calls: profitable=%d losing=%d, want 5/5", profitable, losing)
 	}
 }

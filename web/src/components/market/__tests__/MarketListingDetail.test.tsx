@@ -93,6 +93,8 @@ const mocks = vi.hoisted(() => ({
   mySubscriptions: vi.fn(),
   cancelSubscription: vi.fn(),
   instantiate: vi.fn(),
+  // ECharts setOption 调用记录（双曲线断言用）
+  chartOptions: [] as any[],
 }))
 
 vi.mock('@/lib/api', () => ({
@@ -106,10 +108,12 @@ vi.mock('@/lib/api', () => ({
   },
 }))
 
-// ECharts 懒加载打桩：jsdom 无 canvas，断言图表容器存在即可
+// ECharts 懒加载打桩：jsdom 无 canvas，记录 setOption 供双曲线断言
 vi.mock('@/lib/echarts', () => ({
   getEcharts: () =>
-    Promise.resolve({ init: () => ({ setOption: vi.fn(), dispose: vi.fn(), resize: vi.fn() }) }),
+    Promise.resolve({
+      init: () => ({ setOption: (o: any) => mocks.chartOptions.push(o), dispose: vi.fn(), resize: vi.fn() }),
+    }),
 }))
 
 vi.stubGlobal('ResizeObserver', class {
@@ -148,6 +152,7 @@ describe('MarketListingDetail（条目详情页）', () => {
     mocks.mySubscriptions.mockReset()
     mocks.mySubscriptions.mockResolvedValue([])
     mocks.instantiate.mockReset()
+    mocks.chartOptions.length = 0
   })
   afterEach(() => localStorage.removeItem('xt-locale'))
 
@@ -319,6 +324,87 @@ describe('MarketListingDetail（条目详情页）', () => {
     await waitFor(() => expect(screen.getByText('待支付')).toBeTruthy())
     expect(screen.queryByText('创建实例')).toBeNull()
     expect(screen.queryByText('查看实例')).toBeNull()
+  })
+
+  it('grid_bot 条目：叠加同期回测虚线，偏差卡正绿 + 口径说明', async () => {
+    ;(marketListingApi.stats as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ...statsResp,
+      listing: {
+        ...listedCard,
+        object_kind: 'grid_bot',
+        object_id: 'grid-1',
+        stats: { ...dayStats, date: '2026-10-09' },
+      },
+      backtest_series: [
+        { time: Date.parse('2026-10-08T00:00:00Z'), return_pct: 9.8 },
+        { time: Date.parse('2026-10-09T00:00:00Z'), return_pct: 10.1 },
+      ],
+      backtest_note: '回测对照：同一网格引擎在考核窗口同期 1h K线上重放（手续费 0.1%、无滑点）',
+      deviation: { live_return_pct: 12.5, backtest_return_pct: 10.1, diff_pct: 2.4, direction: 'higher' },
+    })
+    renderWithRouter(null, '/bots/ai/market/ml-1')
+    await waitFor(() => expect(screen.getByText('稳健网格 Pro')).toBeTruthy())
+    // 网格徽标
+    expect(screen.getByText('网格机器人')).toBeTruthy()
+    // 偏差卡：实盘-回测偏差 +2.40%（正绿）
+    const dev = screen.getByTestId('market-deviation')
+    expect(dev.textContent).toContain('+2.40%')
+    expect(dev.textContent).toContain('实盘-回测偏差')
+    expect(dev.querySelector('.text-quant-green')).toBeTruthy()
+    // 口径说明（后端 backtest_note 原文展示）
+    expect(screen.getByText(/同一网格引擎/)).toBeTruthy()
+    // 双曲线：初始化含 3 条 series（实盘实线 + 回撤 + 回测虚线），图例注明口径
+    const init = mocks.chartOptions.find((o) => Array.isArray(o?.series) && o.series.length === 3)
+    expect(init).toBeTruthy()
+    expect(init.legend.data.length).toBe(3)
+    expect(init.series[2].lineStyle.type).toBe('dashed')
+    // 数据更新带两个回测点
+    const update = mocks.chartOptions.find((o) => o?.series?.[2]?.data?.length === 2)
+    expect(update.series[2].data[0][1]).toBe(9.8)
+    expect(update.series[2].data[1][1]).toBe(10.1)
+  })
+
+  it('grid_bot 条目：实盘跑输回测时偏差卡负红', async () => {
+    ;(marketListingApi.stats as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ...statsResp,
+      listing: { ...listedCard, object_kind: 'grid_bot', object_id: 'grid-1', stats: { ...dayStats, date: '2026-10-09' } },
+      backtest_series: [{ time: Date.parse('2026-10-09T00:00:00Z'), return_pct: 13.8 }],
+      backtest_note: '回测对照：同一网格引擎重放',
+      deviation: { live_return_pct: 12.5, backtest_return_pct: 13.8, diff_pct: -1.3, direction: 'lower' },
+    })
+    renderWithRouter(null, '/bots/ai/market/ml-1')
+    await waitFor(() => expect(screen.getByTestId('market-deviation')).toBeTruthy())
+    const dev = screen.getByTestId('market-deviation')
+    expect(dev.textContent).toContain('-1.30%')
+    expect(dev.querySelector('.text-quant-red')).toBeTruthy()
+  })
+
+  it('ai_bot 条目：显示无回测对照说明，不显示偏差卡与虚线', async () => {
+    ;(marketListingApi.stats as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ...statsResp,
+      backtest_series: null,
+      backtest_note: 'AI 信号驱动策略无回测对照：信号由模型实时生成，历史行情无法确定性重放',
+    })
+    renderWithRouter(null, '/bots/ai/market/ml-1')
+    await waitFor(() => expect(screen.getByText(/AI 信号驱动策略无回测对照/)).toBeTruthy())
+    expect(screen.queryByTestId('market-deviation')).toBeNull()
+    // 图表保持两条 series（累计收益 + 回撤），无第三条虚线
+    await waitFor(() => expect(screen.getByTestId('market-return-chart')).toBeTruthy())
+    expect(mocks.chartOptions.some((o) => Array.isArray(o?.series) && o.series.length === 3)).toBe(false)
+  })
+
+  it('grid_bot 数据不足：显示降级说明，不显示偏差卡与虚线', async () => {
+    ;(marketListingApi.stats as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ...statsResp,
+      listing: { ...listedCard, object_kind: 'grid_bot', object_id: 'grid-x', stats: { ...dayStats, date: '2026-10-09' } },
+      backtest_series: null,
+      backtest_error: '本地 GRIDUSDT 1h K线数据不足（0 根），无法生成回测对照',
+    })
+    renderWithRouter(null, '/bots/ai/market/ml-1')
+    await waitFor(() => expect(screen.getByText(/K线数据不足/)).toBeTruthy())
+    expect(screen.queryByTestId('market-deviation')).toBeNull()
+    await waitFor(() => expect(screen.getByTestId('market-return-chart')).toBeTruthy())
+    expect(mocks.chartOptions.some((o) => Array.isArray(o?.series) && o.series.length === 3)).toBe(false)
   })
 })
 

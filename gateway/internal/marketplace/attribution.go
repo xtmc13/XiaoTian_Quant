@@ -11,9 +11,10 @@ import (
 // 三段接线共享的小模块：
 //   1. 建档：条目 approve 时作者在 xt_social_providers 无记录则自动建档
 //      （直接 approved——条目本身已过人工审核），provider_id 回写条目；
-//   2. 实例归因：订阅实例化克隆的机器人（origin_listing_id 非空）平仓盈利时，
+//   2. 实例归因：订阅实例化克隆的机器人（origin_listing_id 非空）平仓时，
 //      校验订阅者对该条目仍有 active profit_share 订阅，然后落
-//      xt_social_copy_pnl（结算引擎日窗汇总的数据源）；
+//      xt_social_copy_pnl（结算引擎日窗汇总的数据源；亏损落负数行，note 打
+//      loss 标，由结算引擎冲抵 pending 快照）；
 //   3. 信号源归因：executor 平仓计提 pending_share 处，属主已建档时同步落
 //      xt_social_copy_pnl（pending_share 字段保留兼容）。
 // 归因失败一律由调用方记日志，不阻断平仓主流程。分成金额由结算引擎按
@@ -82,11 +83,23 @@ func ensureShareTrack(mkt *social.MarketService, providerID, followerUserID int6
 	return mkt.UpsertSubscriptionTrack(providerID, followerUserID, social.TrackProfitShare, 0)
 }
 
-// AttributeListingPnL 把订阅者克隆实例的一笔已实现盈利归因到条目 provider 的
-// 钱轨。静默跳过：无溯源标记、条目未建档、订阅者无 active profit_share 订阅、
-// 非盈利。其余错误返回给调用方记日志。
+// lossNote 给亏损归因行的 note 打 loss 标（盈亏分流按 pnl 符号，note 仅供审计）。
+func lossNote(pnl float64, note string) string {
+	if pnl >= 0 {
+		return note
+	}
+	if note == "" {
+		return "loss"
+	}
+	return "loss:" + note
+}
+
+// AttributeListingPnL 把订阅者克隆实例的一笔已实现盈亏归因到条目 provider 的
+// 钱轨（亏损落负数行，结算引擎日窗汇总后冲抵 pending 快照）。静默跳过：
+// 无溯源标记、条目未建档、订阅者无 active profit_share 订阅、pnl=0。
+// 其余错误返回给调用方记日志。
 func AttributeListingPnL(listingID string, subscriberUserID int64, pnl float64, note string) error {
-	if listingID == "" || subscriberUserID <= 0 || pnl <= 0 {
+	if listingID == "" || subscriberUserID <= 0 || pnl == 0 {
 		return nil
 	}
 	l := store.NewMarketListingRepo().GetByID(listingID)
@@ -101,14 +114,15 @@ func AttributeListingPnL(listingID string, subscriberUserID int64, pnl float64, 
 	if err := ensureShareTrack(mkt, l.ProviderID, subscriberUserID); err != nil {
 		return err
 	}
-	return mkt.RecordCopyPnL(l.ProviderID, subscriberUserID, pnl, note)
+	return mkt.RecordCopyPnL(l.ProviderID, subscriberUserID, pnl, lossNote(pnl, note))
 }
 
 // AttributeSignalSourcePnL executor 孤岛收口：信号源属主在 xt_social_providers
-// 有 approved 建档时，把平仓盈利镜像到钱轨。覆盖范围与 AddPendingShare 一致
-// （该信号源全部 active profit_share 订阅者）；pending_share 计提保持不动。
+// 有 approved 建档时，把平仓盈亏镜像到钱轨（亏损落负数行供结算冲抵）。
+// 覆盖范围与 AddPendingShare 一致（该信号源全部 active profit_share 订阅者）；
+// pending_share 计提保持不动。
 func AttributeSignalSourcePnL(src *store.SignalSource, pnl float64, note string) error {
-	if src == nil || pnl <= 0 || src.FeeModel != "profit_share" || src.FeePercent <= 0 {
+	if src == nil || pnl == 0 || src.FeeModel != "profit_share" || src.FeePercent <= 0 {
 		return nil
 	}
 	mkt := social.NewMarketService()
@@ -133,7 +147,7 @@ func AttributeSignalSourcePnL(src *store.SignalSource, pnl float64, note string)
 		if err := ensureShareTrack(mkt, p.ID, int64(sub.UserID)); err != nil {
 			return err
 		}
-		if err := mkt.RecordCopyPnL(p.ID, int64(sub.UserID), pnl, note); err != nil {
+		if err := mkt.RecordCopyPnL(p.ID, int64(sub.UserID), pnl, lossNote(pnl, note)); err != nil {
 			return err
 		}
 	}

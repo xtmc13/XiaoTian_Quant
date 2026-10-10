@@ -138,9 +138,9 @@ func main() {
 	// 成交，live 进单前过 canPlaceLiveOrder 实盘安全闸）。执行器按机器人类型
 	// 打 client_oid 前缀（A8.2 成交恢复按前缀把补录成交路由回引擎回填）。
 	gridRunner := grid.NewRunner(priceSource, gridRepo, handler.NewKindOMSBotExecutor("grid"))
-	// 市场订阅归因（0060）：克隆网格（origin_listing_id 非空）盈利落袋腿进
-	// provider 钱轨；归因失败只记日志，不影响成交落库与状态持久化。
-	gridRunner.OnProfitableFill = func(rec *store.GridBotRecord, f grid.LegFill) {
+	// 市场订阅归因（0060）：克隆网格（origin_listing_id 非空）含已实现盈亏的
+	// 成交腿进 provider 钱轨（亏损腿供结算冲抵）；归因失败只记日志，不影响成交落库与状态持久化。
+	gridRunner.OnSettledFill = func(rec *store.GridBotRecord, f grid.LegFill) {
 		if err := marketplace.AttributeListingPnL(rec.OriginListingID, rec.UserID, f.Pnl, "grid_bot:"+rec.ID); err != nil {
 			log.Printf("grid runner: bot %s pnl attribution failed: %v", rec.ID, err)
 		}

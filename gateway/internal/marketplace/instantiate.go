@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
+	"strings"
 	"time"
 
 	"github.com/xiaotian-quant/gateway/internal/store"
@@ -64,6 +66,7 @@ func (s *Service) Instantiate(userID int64, sub *store.MarketSubscriptionRecord)
 
 func (s *Service) instantiateAIBot(userID int64, l *store.MarketListingRecord) (string, string, bool, error) {
 	if cur := store.FindAIBotInstanceByOrigin(int(userID), l.ID); cur != nil {
+		ensureAIScanSymbol(userID, getString(cur, "symbol", ""))
 		return ObjectKindAIBot, getString(cur, "id", ""), false, nil
 	}
 	objectID := l.ObjectID
@@ -75,13 +78,14 @@ func (s *Service) instantiateAIBot(userID int64, l *store.MarketListingRecord) (
 		return "", "", false, ErrSourceObjectMissing
 	}
 	now := time.Now().Unix()
+	symbol := getString(src, "symbol", "BTCUSDT")
 	inst := map[string]any{
 		"id":                instantiateID("aibot"),
 		"user_id":           int(userID),
 		"catalog_id":        l.ID, // catalog 条目与 listing 同 id（approve 时 upsert）
 		"name":              getString(src, "name", l.Name),
 		"strategy_type":     getString(src, "strategy_type", ""),
-		"symbol":            getString(src, "symbol", "BTCUSDT"),
+		"symbol":            symbol,
 		"market_type":       getString(src, "market_type", "spot"),
 		"status":            "stopped",
 		"execution_mode":    "paper", // 不继承作者的实盘/交易所绑定，订阅者自行切换
@@ -97,7 +101,64 @@ func (s *Service) instantiateAIBot(userID int64, l *store.MarketListingRecord) (
 	if got := store.GetAIBotInstanceByID(id, int(userID)); got == nil {
 		return "", "", false, fmt.Errorf("persist cloned ai bot instance failed")
 	}
+	ensureAIScanSymbol(userID, symbol)
 	return ObjectKindAIBot, id, true, nil
+}
+
+// ensureAIScanSymbol 把克隆实例的 symbol 并入订阅者自己的 AI 扫描 watchlist：
+// 克隆实例消费订阅者的 per-user 扫描信号（xt_ai_signals 按 user_id），watchlist
+// 不含该 symbol 时实例永不开仓。只动订阅者配置，其余扫描参数保留其现有值
+// （无配置时新建最小行，阈值等由读取方默认值兜底）。失败只记日志，不影响实例化。
+func ensureAIScanSymbol(userID int64, symbol string) {
+	if userID <= 0 || symbol == "" {
+		return
+	}
+	repo := store.NewAIRobotConfigRepo()
+	cfg, err := repo.Get(userID)
+	if err != nil {
+		log.Printf("[marketplace] load ai scan config for user %d failed: %v", userID, err)
+		return
+	}
+	if cfg == nil {
+		cfg = map[string]any{"user_id": userID}
+	}
+	watchlist := stringSliceOfAny(cfg["watchlist"])
+	if len(watchlist) == 0 {
+		watchlist = stringSliceOfAny(cfg["symbols"])
+	}
+	for _, s := range watchlist {
+		if strings.EqualFold(s, symbol) {
+			return
+		}
+	}
+	watchlist = append(watchlist, symbol)
+	cfg["watchlist"] = watchlist
+	cfg["symbols"] = watchlist
+	if err := repo.Save(userID, cfg); err != nil {
+		log.Printf("[marketplace] add %s to ai scan watchlist for user %d failed: %v", symbol, userID, err)
+	}
+}
+
+// stringSliceOfAny 把 any 规整成 []string（string/[]string/[]any 均可）。
+func stringSliceOfAny(v any) []string {
+	switch val := v.(type) {
+	case []string:
+		return val
+	case []any:
+		out := make([]string, 0, len(val))
+		for _, item := range val {
+			if s, ok := item.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case string:
+		if val == "" {
+			return nil
+		}
+		return []string{val}
+	}
+	return nil
 }
 
 func (s *Service) instantiateGridBot(userID int64, l *store.MarketListingRecord) (string, string, bool, error) {

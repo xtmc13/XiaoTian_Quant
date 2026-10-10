@@ -2803,6 +2803,20 @@ export interface MarketListingProbation {
   max_drawdown_pct?: number
 }
 
+/** 回测对照曲线点（grid_bot 条目；time 毫秒 + 累计收益%，与实盘 series 同口径基准）。 */
+export interface MarketBacktestPoint {
+  time: number
+  return_pct: number
+}
+
+/** 实盘 vs 回测偏差（两侧都有数据时返回；diff_pct 为百分点差值）。 */
+export interface MarketBacktestDeviation {
+  live_return_pct: number
+  backtest_return_pct: number
+  diff_pct: number
+  direction: 'higher' | 'lower' | 'flat'
+}
+
 export interface MarketListingStatsResponse {
   listing: MarketListing
   series: MarketListingStats[]
@@ -2810,6 +2824,14 @@ export interface MarketListingStatsResponse {
   trades_total: number
   probation?: MarketListingProbation
   metric_source: string
+  /** 回测对照曲线（object_kind=grid_bot 且有数据时；ai_bot/数据不足为 null）。 */
+  backtest_series?: MarketBacktestPoint[] | null
+  /** 回测口径说明（成功时的假设披露 / ai_bot 无对照说明）。 */
+  backtest_note?: string
+  /** 回测不可用原因（数据不足/回测失败降级，端点仍 200）。 */
+  backtest_error?: string
+  /** 实盘-回测偏差（仅双侧有数据时）。 */
+  deviation?: MarketBacktestDeviation | null
 }
 
 export interface MarketListingCreateRequest {

@@ -30,6 +30,8 @@ func setupExecutorAuthRouter(uid int, role string) *gin.Engine {
 	r.PUT("/executor/signal-sources/:id", ExecutorUpdateSignalSource)
 	r.DELETE("/executor/signal-sources/:id", ExecutorDeleteSignalSource)
 	r.GET("/executor/stats", ExecutorStats)
+	r.GET("/executor/status", ExecutorStatus)
+	r.GET("/executor/records", ExecutionRecords)
 	return r
 }
 
@@ -159,4 +161,81 @@ func TestExecutorStatsUserIsolation(t *testing.T) {
 	// 未注入用户：全量（单用户模式行为不变）
 	dataOpen := statsOf(t, setupExecutorAuthRouter(0, ""))
 	assertTrue(t, int(dataOpen["total_signals"].(float64)) >= 3, "uninjected sees all signals")
+}
+
+// TestExecutorStatusRecordsUserIsolation /executor/status 与 /executor/records
+// 越权收口：普通用户的执行记录聚合/流水只见自己 user_id；admin 与未注入用户
+// （单用户模式）保持全量。
+func TestExecutorStatusRecordsUserIsolation(t *testing.T) {
+	now := time.Now().UnixMilli()
+	sigRepo := store.NewSignalRepo()
+	execRepo := store.NewSignalExecutionRepo()
+	seed := func(uid int, symbol string, pnl float64, tp1, pending bool) {
+		sig := &store.SignalRecord{Symbol: symbol, Direction: "LONG", Strategy: "status-isolation", Status: "CLOSED", UserID: uid, CreatedAt: now}
+		if pending {
+			sig.Status = "PENDING"
+		}
+		if err := sigRepo.Create(sig); err != nil {
+			t.Fatalf("seed signal: %v", err)
+		}
+		exec := &store.SignalExecution{
+			SignalID: sig.ID, SourceID: "default", Symbol: symbol, Direction: "LONG",
+			Status: "closed", RealizedPnL: pnl, TP1Filled: tp1, UserID: uid, CreatedAt: now, ClosedAt: now,
+		}
+		if err := execRepo.Create(exec); err != nil {
+			t.Fatalf("seed execution: %v", err)
+		}
+	}
+	seed(9321, "STATAUSDT", 10, true, true)
+	seed(9321, "STATAUSDT", 5, false, false)
+	seed(9322, "STATBUSDT", -7, false, false)
+
+	statusOf := func(r *gin.Engine) map[string]any {
+		t.Helper()
+		w := execStatsGet(r, "/executor/status")
+		assertEq(t, w.Code, http.StatusOK, "status code")
+		var resp map[string]any
+		assertTrue(t, json.Unmarshal(w.Body.Bytes(), &resp) == nil, "status response should parse")
+		data, ok := resp["data"].(map[string]any)
+		assertTrue(t, ok, "status data payload")
+		return data
+	}
+	recordsOf := func(r *gin.Engine) []any {
+		t.Helper()
+		w := execStatsGet(r, "/executor/records")
+		assertEq(t, w.Code, http.StatusOK, "records code")
+		var resp map[string]any
+		assertTrue(t, json.Unmarshal(w.Body.Bytes(), &resp) == nil, "records response should parse")
+		recs, _ := resp["records"].([]any)
+		return recs
+	}
+
+	// 用户 A：今日 2 笔平仓、盈亏 15、tp1 一次、pending 信号 1 条；流水只有自己
+	rA := setupExecutorAuthRouter(9321, "user")
+	stA := statusOf(rA)
+	assertEq(t, int(stA["today_executed"].(float64)), 2, "A today_executed")
+	assertTrue(t, stA["today_pnl"].(float64) == 15, "A today_pnl must be 15")
+	assertEq(t, int(stA["tp1_executed"].(float64)), 1, "A tp1_executed")
+	assertEq(t, int(stA["pending_signals"].(float64)), 1, "A pending_signals")
+	recsA := recordsOf(rA)
+	assertEq(t, len(recsA), 2, "A records count")
+	for _, item := range recsA {
+		rec := item.(map[string]any)
+		assertTrue(t, rec["symbol"] == "STATAUSDT", "A must only see own records")
+	}
+
+	// 用户 B：1 笔平仓 -7、无 tp1、无 pending；流水 1 条
+	rB := setupExecutorAuthRouter(9322, "user")
+	stB := statusOf(rB)
+	assertEq(t, int(stB["today_executed"].(float64)), 1, "B today_executed")
+	assertTrue(t, stB["today_pnl"].(float64) == -7, "B today_pnl must be -7")
+	assertEq(t, int(stB["tp1_executed"].(float64)), 0, "B tp1_executed")
+	assertEq(t, len(recordsOf(rB)), 1, "B records count")
+
+	// admin 与未注入用户：全量（共享库含其它用例数据，用下限断言）
+	stAdmin := statusOf(setupExecutorAuthRouter(9323, "admin"))
+	assertTrue(t, int(stAdmin["today_executed"].(float64)) >= 3, "admin sees all executions")
+	assertTrue(t, len(recordsOf(setupExecutorAuthRouter(9323, "admin"))) >= 3, "admin sees all records")
+	stOpen := statusOf(setupExecutorAuthRouter(0, ""))
+	assertTrue(t, int(stOpen["today_executed"].(float64)) >= 3, "uninjected sees all executions")
 }

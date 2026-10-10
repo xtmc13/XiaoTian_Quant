@@ -3,6 +3,7 @@ package marketplace
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
@@ -181,5 +182,93 @@ func TestInstantiateAfterSubscribeFlow(t *testing.T) {
 	kind, id, created, err := svc.Instantiate(100, sub)
 	if err != nil || !created || kind != ObjectKindAIBot || id == "" {
 		t.Fatalf("instantiate after subscribe: kind=%s id=%s created=%v err=%v", kind, id, created, err)
+	}
+}
+
+// TestInstantiateAIBotEnsuresScanSymbol 克隆 AI 实例后把实例 symbol 并入订阅者
+// 自己的 AI 扫描 watchlist（克隆实例消费订阅者的 per-user 扫描信号，缺配置则
+// 永不开仓）：无配置订阅者新建最小行；已有配置并入且不重复、其余参数不动；
+// 作者配置不受影响。
+func TestInstantiateAIBotEnsuresScanSymbol(t *testing.T) {
+	setupTestDB(t)
+	now := time.Now().Unix()
+	store.SaveAIBotInstance(map[string]any{
+		"id": "aibot-src-scan", "user_id": 7, "catalog_id": "", "name": "源实例",
+		"strategy_type": "ai_alpha", "symbol": "SOLUSDT", "market_type": "spot",
+		"status": "running", "execution_mode": "paper", "config_json": "{}",
+		"initial_balance": 10000.0, "created_at": now, "updated_at": now,
+	})
+	rec := &store.MarketListingRecord{
+		ID: "ml-inst-scan", AuthorUserID: 7, ObjectKind: ObjectKindAIBot, ObjectID: "aibot-src-scan",
+		Kind: "robot", Name: "扫描条目", FeeModel: "profit_share", FeePercent: 20, Status: StatusListed,
+	}
+	if err := store.NewMarketListingRepo().Create(rec); err != nil {
+		t.Fatalf("seed listing: %v", err)
+	}
+	svc := NewService()
+	cfgRepo := store.NewAIRobotConfigRepo()
+	watchlistOf := func(userID int64) []string {
+		t.Helper()
+		cfg, err := cfgRepo.Get(userID)
+		if err != nil {
+			t.Fatalf("get config %d: %v", userID, err)
+		}
+		return stringSliceOfAny(cfg["watchlist"])
+	}
+
+	// 无配置订阅者：克隆后新建最小配置，watchlist 含实例 symbol
+	sub1 := seedActiveSub(t, 100, "ml-inst-scan", "profit_share", 20)
+	if _, _, created, err := svc.Instantiate(100, sub1); err != nil || !created {
+		t.Fatalf("instantiate 100: created=%v err=%v", created, err)
+	}
+	if wl := watchlistOf(100); len(wl) != 1 || wl[0] != "SOLUSDT" {
+		t.Fatalf("fresh subscriber watchlist: %v", wl)
+	}
+
+	// 已有配置订阅者：并入新 symbol，既有条目与扫描参数保留
+	if err := cfgRepo.Save(101, map[string]any{
+		"user_id": 101, "watchlist": []string{"BTCUSDT"}, "symbols": []string{"BTCUSDT"},
+		"confidence_threshold": 75.0,
+	}); err != nil {
+		t.Fatalf("seed config 101: %v", err)
+	}
+	sub2 := seedActiveSub(t, 101, "ml-inst-scan", "profit_share", 20)
+	if _, _, created, err := svc.Instantiate(101, sub2); err != nil || !created {
+		t.Fatalf("instantiate 101: created=%v err=%v", created, err)
+	}
+	cfg101, err := cfgRepo.Get(101)
+	if err != nil {
+		t.Fatalf("get config 101: %v", err)
+	}
+	if wl := stringSliceOfAny(cfg101["watchlist"]); len(wl) != 2 || wl[0] != "BTCUSDT" || wl[1] != "SOLUSDT" {
+		t.Fatalf("watchlist merge: %v", wl)
+	}
+	if getFloat(cfg101, "confidence_threshold", 0) != 75 {
+		t.Fatalf("existing scan params must survive: %+v", cfg101)
+	}
+
+	// watchlist 已含该 symbol：不重复添加
+	if err := cfgRepo.Save(102, map[string]any{"user_id": 102, "watchlist": []string{"SOLUSDT"}}); err != nil {
+		t.Fatalf("seed config 102: %v", err)
+	}
+	sub3 := seedActiveSub(t, 102, "ml-inst-scan", "profit_share", 20)
+	if _, _, created, err := svc.Instantiate(102, sub3); err != nil || !created {
+		t.Fatalf("instantiate 102: created=%v err=%v", created, err)
+	}
+	if wl := watchlistOf(102); len(wl) != 1 || wl[0] != "SOLUSDT" {
+		t.Fatalf("watchlist must not duplicate: %v", wl)
+	}
+
+	// 幂等重入（created=false）同样保证 watchlist 且不重复
+	if _, _, created, err := svc.Instantiate(100, sub1); err != nil || created {
+		t.Fatalf("re-instantiate: created=%v err=%v", created, err)
+	}
+	if wl := watchlistOf(100); len(wl) != 1 {
+		t.Fatalf("idempotent re-run must keep watchlist: %v", wl)
+	}
+
+	// 作者配置不受影响（从未保存过 → 仍无行）
+	if cfg, err := cfgRepo.Get(7); err != nil || cfg != nil {
+		t.Fatalf("author config must stay untouched: %+v err=%v", cfg, err)
 	}
 }

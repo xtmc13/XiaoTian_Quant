@@ -5,7 +5,7 @@ import { ArrowLeft, BadgeCheck, ChevronLeft, ChevronRight, History, LineChart, S
 import { getEcharts } from '@/lib/echarts'
 import type { EChartsType } from 'echarts'
 import { cn, formatCurrency } from '@/lib/utils'
-import { marketListingApi, type MarketListingStats, type MarketListingTrade } from '@/lib/api'
+import { marketListingApi, type MarketBacktestPoint, type MarketListingStats, type MarketListingTrade } from '@/lib/api'
 import { useI18n } from '@/i18n'
 import { SectionCard } from '@/components/ui/SectionCard'
 import { Skeleton } from '@/components/ui/Skeleton'
@@ -30,16 +30,52 @@ function fmtPrice(v?: number): string {
   return v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 6 })
 }
 
-/** 收益/回撤曲线（ECharts 懒加载，结构参考 charts/PerformanceChart）。 */
-function ReturnChart({ series, labels, height = 300 }: { series: MarketListingStats[]; labels: [string, string]; height?: number }) {
+/** 收益/回撤曲线（ECharts 懒加载，结构参考 charts/PerformanceChart）。
+ *  grid_bot 条目有 backtest 时叠加同期回测虚线（图例注明口径）。 */
+function ReturnChart({
+  series,
+  backtest,
+  labels,
+  height = 300,
+}: {
+  series: MarketListingStats[]
+  backtest?: MarketBacktestPoint[] | null
+  labels: string[]
+  height?: number
+}) {
   const ref = useRef<HTMLDivElement>(null)
   const chartRef = useRef<EChartsType | null>(null)
+  const hasBacktest = (backtest?.length ?? 0) > 0
+
+  const buildData = () => {
+    const toTs = (d: string) => Date.parse(`${d}T00:00:00Z`)
+    const retData = series.map((s) => [toTs(s.date), s.total_return_pct])
+    let peak = -Infinity
+    const ddData = series.map((s) => {
+      const eq = 1 + s.total_return_pct / 100
+      if (eq > peak) peak = eq
+      return [toTs(s.date), peak > 0 ? ((eq - peak) / peak) * 100 : 0]
+    })
+    const data: { data: number[][] }[] = [{ data: retData }, { data: ddData }]
+    if (hasBacktest) data.push({ data: (backtest ?? []).map((p) => [p.time, p.return_pct]) })
+    return data
+  }
 
   useEffect(() => {
     let disposed = false
     getEcharts().then((echarts) => {
       if (disposed || !ref.current) return
       chartRef.current = echarts.init(ref.current, 'dark')
+      const seriesDefs: Record<string, unknown>[] = [
+        { name: labels[0], type: 'line', data: [], smooth: true, symbol: 'none', lineStyle: { color: '#03A66D', width: 2 },
+          areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: 'rgba(3,166,109,0.12)' }, { offset: 1, color: 'rgba(3,166,109,0)' }] } } },
+        { name: labels[1], type: 'line', data: [], smooth: true, symbol: 'none', lineStyle: { color: '#ef4444', width: 1, opacity: 0.6 }, xAxisIndex: 1, yAxisIndex: 1,
+          areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: 'rgba(239,68,68,0.15)' }, { offset: 1, color: 'rgba(239,68,68,0)' }] } } },
+      ]
+      // 回测对照虚线：与实盘累计收益同轴（grid 0），不加面积
+      if (hasBacktest) {
+        seriesDefs.push({ name: labels[2], type: 'line', data: [], smooth: true, symbol: 'none', lineStyle: { color: '#F0B90B', width: 1.5, type: 'dashed', opacity: 0.9 } })
+      }
       chartRef.current.setOption({
         backgroundColor: 'transparent',
         legend: { data: labels, bottom: 0, textStyle: { color: '#888', fontSize: 10 }, itemWidth: 12, itemHeight: 8 },
@@ -63,32 +99,23 @@ function ReturnChart({ series, labels, height = 300 }: { series: MarketListingSt
           { type: 'value', axisLabel: { fontSize: 10, color: '#555555', formatter: '{value}%' }, splitLine: { lineStyle: { color: '#1c1c1c' } } },
           { type: 'value', gridIndex: 1, axisLabel: { fontSize: 9, color: '#555555', formatter: '{value}%' }, splitLine: { show: false }, max: 0 },
         ],
-        series: [
-          { name: labels[0], type: 'line', data: [], smooth: true, symbol: 'none', lineStyle: { color: '#03A66D', width: 2 },
-            areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: 'rgba(3,166,109,0.12)' }, { offset: 1, color: 'rgba(3,166,109,0)' }] } } },
-          { name: labels[1], type: 'line', data: [], smooth: true, symbol: 'none', lineStyle: { color: '#ef4444', width: 1, opacity: 0.6 }, xAxisIndex: 1, yAxisIndex: 1,
-            areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: 'rgba(239,68,68,0.15)' }, { offset: 1, color: 'rgba(239,68,68,0)' }] } } },
-        ],
+        series: seriesDefs,
       })
+      // echarts 懒加载是异步的：init 完成后立即补一次数据，避免更新 effect
+      // 在 chartRef 就绪前跳过导致的空图
+      chartRef.current.setOption({ series: buildData() })
       const ro = new ResizeObserver(() => chartRef.current?.resize())
       ro.observe(ref.current)
     })
     return () => { disposed = true; chartRef.current?.dispose() }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [labels[0], labels[1]])
+  }, [labels[0], labels[1], labels[2], hasBacktest])
 
   useEffect(() => {
     if (!chartRef.current) return
-    const toTs = (d: string) => Date.parse(`${d}T00:00:00Z`)
-    const retData = series.map((s) => [toTs(s.date), s.total_return_pct])
-    let peak = -Infinity
-    const ddData = series.map((s) => {
-      const eq = 1 + s.total_return_pct / 100
-      if (eq > peak) peak = eq
-      return [toTs(s.date), peak > 0 ? ((eq - peak) / peak) * 100 : 0]
-    })
-    chartRef.current.setOption({ series: [{ data: retData }, { data: ddData }] })
-  }, [series])
+    chartRef.current.setOption({ series: buildData() })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [series, backtest, hasBacktest])
 
   return <div ref={ref} className="w-full" style={{ height }} data-testid="market-return-chart" />
 }
@@ -183,6 +210,16 @@ export function MarketListingDetail() {
   const probation = data?.probation
   const verified = data?.metric_source === 'platform_verified'
   const pct = (v?: number) => `${(v ?? 0) >= 0 ? '+' : ''}${(v ?? 0).toFixed(2)}%`
+
+  // 回测对照（回测 vs 实盘双曲线）：grid_bot 有 backtest_series 时叠加虚线；
+  // 无对照/降级时只显示后端如实说明（note/error），不渲染空图。
+  const backtestSeries = data?.backtest_series ?? null
+  const hasBacktest = (backtestSeries?.length ?? 0) > 0
+  const deviation = data?.deviation ?? null
+  const backtestNoteText = data?.backtest_error || data?.backtest_note
+  const chartLabels = hasBacktest
+    ? [t('market.detail.chartLive'), t('market.detail.chartDrawdown'), t('market.detail.chartBacktest')]
+    : [t('market.detail.chartReturn'), t('market.detail.chartDrawdown')]
 
   // 收费模式三态：fee_model 权威；存量行缺省按金额字段回落。
   const feeModel =
@@ -341,12 +378,37 @@ export function MarketListingDetail() {
             </SectionCard>
           )}
 
-          {/* 收益/回撤曲线（日快照序列） */}
+          {/* 收益/回撤曲线（日快照序列；grid_bot 叠加同期回测虚线 + 偏差卡） */}
           <SectionCard title={t('market.detail.equityTitle')}>
+            {(deviation || backtestNoteText) && (
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                {deviation && (
+                  <span
+                    className="inline-flex items-baseline gap-1.5 px-2.5 py-1.5 bg-quant-bg rounded-lg"
+                    data-testid="market-deviation"
+                    title={backtestNoteText ?? undefined}
+                  >
+                    <span
+                      className={cn(
+                        'text-sm font-bold font-mono',
+                        deviation.diff_pct >= 0 ? 'text-quant-green' : 'text-quant-red'
+                      )}
+                    >
+                      {deviation.diff_pct >= 0 ? '+' : ''}
+                      {deviation.diff_pct.toFixed(2)}%
+                    </span>
+                    <span className="text-[10px] text-muted-foreground">{t('market.detail.deviation')}</span>
+                  </span>
+                )}
+                {backtestNoteText && (
+                  <span className="text-[10px] text-muted-foreground flex-1 min-w-[200px]">{backtestNoteText}</span>
+                )}
+              </div>
+            )}
             {series.length === 0 ? (
               <div className="flex h-40 items-center justify-center text-xs text-muted-foreground">{t('market.detail.noSeries')}</div>
             ) : (
-              <ReturnChart series={series} labels={[t('market.detail.chartReturn'), t('market.detail.chartDrawdown')]} />
+              <ReturnChart series={series} backtest={backtestSeries} labels={chartLabels} />
             )}
           </SectionCard>
 

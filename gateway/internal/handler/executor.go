@@ -131,12 +131,30 @@ func executionToRecord(e *store.SignalExecution) executionRecord {
 
 // ExecutorStatus godoc
 // GET /executor/status
+// 多用户隔离：执行记录聚合按 executor_stats 同款口径收口——普通用户只聚合
+// 自己 user_id 的执行/信号，admin 与未注入用户（单用户模式）保持全量。
 func ExecutorStatus(c *gin.Context) {
 	startTPSLLoop()
 	now := time.Now()
 	dayStart := todayStartMs()
 	sigRepo := store.NewSignalRepo()
 	execRepo := store.NewSignalExecutionRepo()
+
+	uid, injected := ctxUserID(c)
+	onlyOwn := injected && !ctxIsAdmin(c)
+	execsSince := func(sinceMs int64) []*store.SignalExecution {
+		var execs []*store.SignalExecution
+		var err error
+		if onlyOwn {
+			execs, err = execRepo.ListSinceByUser(uid, sinceMs, 0)
+		} else {
+			execs, err = execRepo.ListSince(sinceMs, 0)
+		}
+		if err != nil {
+			return nil
+		}
+		return execs
+	}
 
 	// 活跃持仓：组合持仓源（含 hedge 双腿 symbol-LONG/SHORT 双键）
 	activePositions := 0
@@ -151,30 +169,38 @@ func ExecutorStatus(c *gin.Context) {
 	// 今日成交的执行记录与盈亏
 	todayPnL := 0.0
 	todayExecuted := 0
-	if todayExecs, err := execRepo.ListSince(dayStart, 0); err == nil {
-		for _, e := range todayExecs {
-			if e.Status == "closed" {
-				todayExecuted++
-				todayPnL += e.RealizedPnL
-			}
+	for _, e := range execsSince(dayStart) {
+		if e.Status == "closed" {
+			todayExecuted++
+			todayPnL += e.RealizedPnL
 		}
 	}
 
 	// 阶梯 TP/SL 累计触发计数（执行记录表聚合）
 	tp1, tp2, tp3, sl := 0, 0, 0, 0
-	if execs, err := execRepo.ListSince(0, 0); err == nil {
-		for _, e := range execs {
-			if e.TP1Filled {
-				tp1++
-			}
-			if e.TP2Filled {
-				tp2++
-			}
-			if e.TP3Filled {
-				tp3++
-			}
-			if e.SLTriggered {
-				sl++
+	for _, e := range execsSince(0) {
+		if e.TP1Filled {
+			tp1++
+		}
+		if e.TP2Filled {
+			tp2++
+		}
+		if e.TP3Filled {
+			tp3++
+		}
+		if e.SLTriggered {
+			sl++
+		}
+	}
+
+	pendingSignals := sigRepo.CountByStatusSince("PENDING", 0)
+	if onlyOwn {
+		pendingSignals = 0
+		if sigs, err := sigRepo.ListSinceByUser(uid, 0, 0); err == nil {
+			for _, s := range sigs {
+				if s.Status == "PENDING" {
+					pendingSignals++
+				}
 			}
 		}
 	}
@@ -184,7 +210,7 @@ func ExecutorStatus(c *gin.Context) {
 		"data": executorStatusResp{
 			Status:          "running",
 			ActivePositions: activePositions,
-			PendingSignals:  sigRepo.CountByStatusSince("PENDING", 0),
+			PendingSignals:  pendingSignals,
 			TodayExecuted:   todayExecuted,
 			TodayPnL:        todayPnL,
 			Tp1Executed:     tp1,
@@ -257,9 +283,14 @@ func ExecutorPositions(c *gin.Context) {
 // ExecutionRecords godoc
 // GET /executor/records
 // 真实成交流水：信号执行记录（入场 + 每步 TP/SL 推进的终态）。
+// 多用户隔离：普通用户只见自己 user_id 的执行记录；admin 与未注入用户全量。
 func ExecutionRecords(c *gin.Context) {
 	records := []executionRecord{}
-	execs, err := store.NewSignalExecutionRepo().List(nil, 200)
+	filter := map[string]any{}
+	if uid, injected := ctxUserID(c); injected && !ctxIsAdmin(c) {
+		filter["user_id"] = uid
+	}
+	execs, err := store.NewSignalExecutionRepo().List(filter, 200)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": true, "records": records})
 		return
