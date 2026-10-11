@@ -502,6 +502,7 @@ func fillOrderAndUpdatePortfolio(order map[string]any) {
 	}
 
 	marketType := model.MarketType(getString(order, "market_type", "spot"))
+	exchange := getString(order, "exchange", "paper")
 	leverage := getFloat(order, "leverage", 1)
 	if leverage <= 0 {
 		leverage = 1
@@ -654,6 +655,7 @@ func fillOrderAndUpdatePortfolio(order map[string]any) {
 					UnrealizedPnL:    0,
 					RealizedPnL:      0,
 					OpenedAt:         time.Now().UnixMilli(),
+					Exchange:         exchange,
 					PositionSide:     positionSide,
 					Leverage:         leverage,
 					MarginMode:       marginMode,
@@ -778,6 +780,7 @@ func fillOrderAndUpdatePortfolio(order map[string]any) {
 					CurrentPrice:  price,
 					UnrealizedPnL: 0,
 					OpenedAt:      time.Now().UnixMilli(),
+					Exchange:      exchange,
 				}
 				mgr.UpdatePosition(newPos)
 			}

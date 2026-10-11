@@ -1117,6 +1117,7 @@ func (ctx *Context) updatePortfolioFromSpotFill(ord *model.OrderData, acct *mode
 			UnrealizedPnL: 0,
 			RealizedPnL:   realizedPnL,
 			OpenedAt:      time.Now().UnixMilli(),
+			Exchange:      ord.Exchange,
 		}
 		ctx.PortfolioManager.UpdatePosition(newPos)
 	}
@@ -1236,6 +1237,7 @@ func (ctx *Context) updatePortfolioFromContractFill(ord *model.OrderData, acct *
 				UnrealizedPnL:    0,
 				RealizedPnL:      0,
 				OpenedAt:         time.Now().UnixMilli(),
+				Exchange:         ord.Exchange,
 				PositionSide:     positionSide,
 				Leverage:         leverage,
 				MarginMode:       ord.MarginMode,
@@ -1527,15 +1529,18 @@ func (ctx *Context) buildRiskContext(req *order.Request) (*risk.Context, bool) {
 		bid, ask = price*0.9999, price*1.0001
 	}
 
-	// 权益/曝险基准按订单执行目标区分：paper 单用模拟账本权益做分母（否则
-	// 0.2U 真实权益会让 150U 名义的 paper 单曝险 70000%+ 被风控误杀）；
-	// 实盘单用真实权益。
+	// 权益/曝险/持仓数按订单执行目标分口径：实盘单只合计真实持仓、以真实
+	// 权益为分母；paper 单只合计 paper 持仓、以 paper 权益为分母（否则 0.2U
+	// 真实权益会让 paper 持仓曝险虚高几万倍被风控误杀，2026-09-16；反向
+	// 泄漏——paper 持仓推高实盘暴露误拒实盘单，2026-10-11）。
 	equity := ctx.PortfolioManager.TotalEquity()
 	netExposure := ctx.PortfolioManager.NetExposure()
-	if req.Exchange == "paper" {
+	positionCount := ctx.PortfolioManager.LivePositionCount()
+	if isPaperExchangeName(req.Exchange) {
 		if pe := ctx.PortfolioManager.PaperEquity(); pe > 0 {
 			equity = pe
-			netExposure = ctx.PortfolioManager.NetExposureAgainst(pe)
+			netExposure = ctx.PortfolioManager.PaperNetExposureAgainst(pe)
+			positionCount = ctx.PortfolioManager.PaperPositionCount()
 		}
 	}
 
@@ -1547,7 +1552,7 @@ func (ctx *Context) buildRiskContext(req *order.Request) (*risk.Context, bool) {
 		OrderSide:        req.Side,
 		TotalEquity:      equity,
 		AvailableBalance: ctx.PortfolioManager.AvailableBalance(),
-		PositionCount:    len(ctx.PortfolioManager.GetPositions()),
+		PositionCount:    positionCount,
 		NetExposure:      netExposure,
 		MaxDrawdownPct:   ctx.PortfolioManager.Drawdown(),
 		BidPrice:         bid,

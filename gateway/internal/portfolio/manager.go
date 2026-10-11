@@ -266,6 +266,7 @@ func (m *Manager) syncFuturesBalances(binance *adapter.BinanceAdapter, acct map[
 			AvgEntryPrice:  parseAnyFloat(p["entryPrice"]),
 			CurrentPrice:   parseAnyFloat(p["markPrice"]),
 			UnrealizedPnL:  parseAnyFloat(p["unrealizedProfit"]),
+			Exchange:       "binance",
 		}
 		posCount++
 	}
@@ -647,6 +648,9 @@ func (m *Manager) SeedPaperMirror(balances map[string]*model.Balance, positions 
 			continue
 		}
 		p := pos
+		if p.Exchange == "" {
+			p.Exchange = "paper"
+		}
 		m.positions[p.ID] = &p
 		acct.Positions[p.ID] = &p
 	}
@@ -890,19 +894,59 @@ func (m *Manager) NetExposure() float64 {
 	return m.NetExposureAgainst(m.TotalEquity())
 }
 
-// NetExposureAgainst 按指定权益基数计算曝险占比。paper 单必须用 paper 权益
-// 做分母，否则 0.2U 真实权益会让 paper 持仓曝险虚高几万倍被风控误杀（2026-09-16）。
+// NetExposureAgainst 按指定权益基数计算真实（非 paper）持仓曝险占比。
 func (m *Manager) NetExposureAgainst(equity float64) float64 {
+	return m.netExposureAgainst(equity, false)
+}
+
+// PaperNetExposureAgainst 按指定权益基数计算 paper 持仓曝险占比。paper 单
+// 必须用 paper 权益做分母，否则 0.2U 真实权益会让 paper 持仓曝险虚高几万倍
+// 被风控误杀（2026-09-16）。
+func (m *Manager) PaperNetExposureAgainst(equity float64) float64 {
+	return m.netExposureAgainst(equity, true)
+}
+
+func (m *Manager) netExposureAgainst(equity float64, paper bool) float64 {
 	if equity <= 0 {
 		return 0
 	}
 	totalExposure := 0.0
 	m.mu.RLock()
 	for _, pos := range m.positions {
+		if isPaperPosition(pos) != paper {
+			continue
+		}
 		totalExposure += math.Abs(pos.Quantity * pos.CurrentPrice)
 	}
 	m.mu.RUnlock()
 	return totalExposure / equity * 100
+}
+
+// LivePositionCount returns the number of real (non-paper) positions.
+func (m *Manager) LivePositionCount() int {
+	return m.positionCount(false)
+}
+
+// PaperPositionCount returns the number of paper positions.
+func (m *Manager) PaperPositionCount() int {
+	return m.positionCount(true)
+}
+
+func (m *Manager) positionCount(paper bool) int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	n := 0
+	for _, pos := range m.positions {
+		if isPaperPosition(pos) == paper {
+			n++
+		}
+	}
+	return n
+}
+
+// isPaperPosition：空/paper 视为模拟盘持仓（与 app 侧 isPaperExchangeName 同口径）。
+func isPaperPosition(pos *model.PositionData) bool {
+	return pos.Exchange == "" || pos.Exchange == "paper"
 }
 
 // Snapshot records an equity snapshot.
