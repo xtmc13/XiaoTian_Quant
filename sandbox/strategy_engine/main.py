@@ -26,7 +26,6 @@ app = FastAPI(title="XiaoTianQuant Python Strategy Engine", version="1.0.0")
 # ── Configuration ─────────────────────────────────────────────────
 
 MAX_TIMEOUT_SECONDS = 60
-MAX_MEMORY_MB = 512
 
 SAFE_MODULES = {
     "numpy", "np", "pandas", "pd", "talib", "math", "random", "json",
@@ -157,35 +156,6 @@ def timeout_context(seconds: int):
     return _Timeout()
 
 
-def apply_memory_limit(mb: int):
-    """Lower RLIMIT_AS for the duration of one exec call; returns the previous
-    (soft, hard) limits for restore_memory_limit(), or None when unchanged.
-
-    NOTE: RLIMIT_AS is process-wide, so the FastAPI host shares the lowered
-    ceiling while user code runs in-process. The proper fix is a subprocess
-    sandbox; until then the window is narrowed to the exec call and restored."""
-    try:
-        import resource
-        soft, hard = resource.getrlimit(resource.RLIMIT_AS)
-        limit_bytes = mb * 1024 * 1024
-        if soft > limit_bytes or soft == -1:
-            resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, hard))
-            return (soft, hard)
-    except (ImportError, OSError, ValueError):
-        pass
-    return None
-
-
-def restore_memory_limit(previous):
-    if previous is None:
-        return
-    try:
-        import resource
-        resource.setrlimit(resource.RLIMIT_AS, previous)
-    except (ImportError, OSError, ValueError):
-        pass
-
-
 # ═══════════════════════════════════════════════════════════════════
 # Request / Response Models
 # ═══════════════════════════════════════════════════════════════════
@@ -246,7 +216,7 @@ def run_indicator_strategy(req: IndicatorStrategyRequest):
         "__builtins__": build_safe_builtins(),
     }
 
-    prev_limits = apply_memory_limit(MAX_MEMORY_MB)
+    # 不再对宿主进程施加 RLIMIT_AS（同 executor.py：进程级限额会拖垮宿主且并发恢复会卡死限额）
     effective_timeout = min(req.timeout, MAX_TIMEOUT_SECONDS)
     try:
         with timeout_context(effective_timeout) as tctx:
@@ -257,8 +227,6 @@ def run_indicator_strategy(req: IndicatorStrategyRequest):
         raise HTTPException(status_code=408, detail=str(e) or f"Execution timed out after {effective_timeout} seconds")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Runtime error: {traceback.format_exc()}")
-    finally:
-        restore_memory_limit(prev_limits)
 
     result_df = exec_globals.get("df", df)
     if "buy" not in result_df.columns:
@@ -344,7 +312,6 @@ def run_script_strategy(req: ScriptStrategyRequest):
         "__builtins__": build_safe_builtins(),
     }
 
-    prev_limits = apply_memory_limit(MAX_MEMORY_MB)
     effective_timeout = min(req.timeout, MAX_TIMEOUT_SECONDS)
     try:
         with timeout_context(effective_timeout) as tctx:
@@ -355,8 +322,6 @@ def run_script_strategy(req: ScriptStrategyRequest):
         raise HTTPException(status_code=408, detail=str(e) or f"Execution timed out after {effective_timeout} seconds")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Runtime error: {traceback.format_exc()}")
-    finally:
-        restore_memory_limit(prev_limits)
 
     on_bar = exec_globals.get("on_bar")
     if not callable(on_bar):

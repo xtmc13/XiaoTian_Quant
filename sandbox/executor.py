@@ -19,7 +19,6 @@ import pandas as pd
 # ── Configuration ─────────────────────────────────────────────────
 
 MAX_TIMEOUT_SECONDS = 60
-MAX_MEMORY_MB = 512
 
 SAFE_MODULES = {
     "numpy", "np", "pandas", "pd", "talib", "math", "random", "json",
@@ -160,42 +159,6 @@ def build_safe_import():
         return real_import(name, globals, locals, fromlist, level)
 
     return safe_import
-
-
-# ── Memory Limit ─────────────────────────────────────────────────
-
-def apply_memory_limit(mb: int):
-    """Lower RLIMIT_AS for the duration of one exec call.
-
-    Returns the previous (soft, hard) limits so the caller can restore them
-    with restore_memory_limit(); returns None when nothing was changed.
-
-    NOTE: RLIMIT_AS is process-wide, so while user code runs in-process the
-    FastAPI host itself shares the lowered ceiling. The proper fix is running
-    user code in a subprocess (QuantDinger safe_exec_worker); until then we
-    narrow the limited window to the exec call and restore immediately after.
-    Silently skips on platforms without resource (Windows, etc.)."""
-    try:
-        import resource
-        soft, hard = resource.getrlimit(resource.RLIMIT_AS)
-        limit_bytes = mb * 1024 * 1024
-        if soft > limit_bytes or soft == -1:
-            resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, hard))
-            return (soft, hard)
-    except (ImportError, OSError, ValueError):
-        pass
-    return None
-
-
-def restore_memory_limit(previous):
-    """Restore limits captured by apply_memory_limit."""
-    if previous is None:
-        return
-    try:
-        import resource
-        resource.setrlimit(resource.RLIMIT_AS, previous)
-    except (ImportError, OSError, ValueError):
-        pass
 
 
 # ── Timeout Context Manager ───────────────────────────────────────
@@ -572,8 +535,9 @@ def safe_exec_with_validation(
         if col in exec_df.columns:
             exec_globals[col] = exec_df[col]
 
-    # 3. Execute with timeout and memory limit
-    prev_limits = apply_memory_limit(MAX_MEMORY_MB)
+    # 3. Execute with timeout（不再对宿主进程施加 RLIMIT_AS：进程级限额会让
+    # 整个 FastAPI 服务在 exec 窗口内 MemoryError，且并发恢复会把限额永久
+    # 卡死。真正的内存隔离需要子进程方案，见 QuantDinger safe_exec_worker）
     effective_timeout = min(timeout, MAX_TIMEOUT_SECONDS)
     try:
         with timeout_context(effective_timeout) as tctx:
@@ -604,8 +568,6 @@ def safe_exec_with_validation(
             "error": tb,
             "error_type": type(e).__name__,
         }
-    finally:
-        restore_memory_limit(prev_limits)
 
     # 4. Validate output
     output = exec_globals.get('output')
