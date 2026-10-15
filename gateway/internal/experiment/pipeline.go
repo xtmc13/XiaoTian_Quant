@@ -3,6 +3,7 @@ package experiment
 import (
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/xiaotian-quant/gateway/internal/backtest"
@@ -73,6 +74,14 @@ type ParamScore struct {
 	Score  float64        `json:"score"`
 }
 
+// BarsProvider 在请求未携带 klines 时提供行情数据（由 handler 层接线注入）。
+var BarsProvider func(symbol, interval string) ([]map[string]any, error)
+
+// SetBarsProvider 注入历史 K 线供给（可选；未注入且请求无 klines 时维持原报错）。
+func SetBarsProvider(p func(symbol, interval string) ([]map[string]any, error)) {
+	BarsProvider = p
+}
+
 // RunExperiment executes the full experiment pipeline.
 func RunExperiment(req ExperimentRequest) (*ExperimentResult, error) {
 	start := time.Now()
@@ -93,8 +102,15 @@ func RunExperiment(req ExperimentRequest) (*ExperimentResult, error) {
 		return nil, fmt.Errorf("no tunable parameters found")
 	}
 
-	// Parse klines to bars
+	// Parse klines to bars；未携带时走注入的行情供给（前端调参不再必须传全量 K 线）
 	bars := klinesToBars(req.Klines, req.Symbol, req.Interval)
+	if len(bars) == 0 && BarsProvider != nil {
+		ks, err := BarsProvider(req.Symbol, req.Interval)
+		if err != nil {
+			return nil, fmt.Errorf("no bar data provided: %w", err)
+		}
+		bars = klinesToBars(ks, req.Symbol, req.Interval)
+	}
 	if len(bars) == 0 {
 		return nil, fmt.Errorf("no bar data provided")
 	}
@@ -117,11 +133,15 @@ func RunExperiment(req ExperimentRequest) (*ExperimentResult, error) {
 		scoreCfg = DefaultScoreConfig()
 	}
 
-	// Fitness function with caching
+	// Fitness function with caching（evaluatePopulation 并行评估，map 访问必须加锁）
 	fitnessCache := make(map[string]float64)
+	var fitnessMu sync.Mutex
 	fitnessFn := func(params map[string]any) float64 {
 		key := paramsKey(params)
-		if cached, ok := fitnessCache[key]; ok {
+		fitnessMu.Lock()
+		cached, ok := fitnessCache[key]
+		fitnessMu.Unlock()
+		if ok {
 			return cached
 		}
 
@@ -131,7 +151,9 @@ func RunExperiment(req ExperimentRequest) (*ExperimentResult, error) {
 		} else {
 			score = FitnessFromIndicator(req.Code, req.Symbol, params, isBars, btCfg, scoreCfg)
 		}
+		fitnessMu.Lock()
 		fitnessCache[key] = score
+		fitnessMu.Unlock()
 		return score
 	}
 

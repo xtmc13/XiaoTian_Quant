@@ -909,6 +909,7 @@ func registerIndicatorRoutes(api *gin.RouterGroup) {
 }
 
 func registerExperimentRoutes(api *gin.RouterGroup) {
+	experiment.SetBarsProvider(handler.ExperimentBarsProvider)
 	experimentG := api.Group("/experiment")
 	experimentG.Use(middleware.AuthRequired())
 	{

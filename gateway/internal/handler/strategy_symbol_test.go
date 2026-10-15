@@ -30,3 +30,19 @@ func TestCanonicalEngineSymbol(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeCryptoSymbol(t *testing.T) {
+	cases := map[string]string{
+		"SOL":      "SOLUSDT",
+		"sol":      "SOLUSDT",
+		"SOLUSDT":  "SOLUSDT",
+		"btc/usdt": "BTCUSDT",
+		"ETHUSDC":  "ETHUSDC",
+		"":         "",
+	}
+	for in, want := range cases {
+		if got := normalizeCryptoSymbol(in); got != want {
+			t.Errorf("normalizeCryptoSymbol(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

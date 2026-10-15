@@ -137,6 +137,13 @@ func fetchBinanceKlines(symbol, interval string, limit int, fromMs, toMs int64) 
 	if err != nil {
 		return nil, err
 	}
+	if resp.StatusCode != http.StatusOK {
+		msg := string(body)
+		if len(msg) > 200 {
+			msg = msg[:200]
+		}
+		return nil, fmt.Errorf("binance klines status %d: %s", resp.StatusCode, msg)
+	}
 	var raw [][]any
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, err
@@ -153,6 +160,73 @@ func fetchBinanceKlines(symbol, interval string, limit int, fromMs, toMs int64) 
 		})
 	}
 	return klines, nil
+}
+
+// fetchBinanceKlinesRange 按日期范围分页拉取 K 线（每页 1000 根，最多 50 页），
+// 修复此前 from/to 区间被单次 limit=500 静默截断的问题。
+func fetchBinanceKlinesRange(symbol, interval string, fromMs, toMs int64) ([]map[string]any, error) {
+	const pageLimit = 1000
+	const maxPages = 50
+	var out []map[string]any
+	start := fromMs
+	for page := 0; page < maxPages; page++ {
+		batch, err := fetchBinanceKlines(symbol, interval, pageLimit, start, toMs)
+		if err != nil {
+			return nil, err
+		}
+		if len(batch) == 0 {
+			break
+		}
+		out = append(out, batch...)
+		if len(batch) < pageLimit {
+			break
+		}
+		lastTs, _ := batch[len(batch)-1]["timestamp"].(int64)
+		if lastTs <= start {
+			break
+		}
+		start = lastTs + 1
+	}
+	return out, nil
+}
+
+// normalizeCryptoSymbol 归一化币安交易对：大写去分隔符，无稳定币后缀时默认补
+// USDT（回测/行情等 USDT 计价路径专用；美股等非加密切口勿用）。
+func normalizeCryptoSymbol(symbol string) string {
+	s := strings.ToUpper(strings.TrimSpace(symbol))
+	s = strings.NewReplacer("/", "", "-", "", "_", "").Replace(s)
+	if s == "" {
+		return s
+	}
+	for _, q := range []string{"USDT", "USDC", "BUSD", "FDUSD", "TUSD", "DAI", "USDP"} {
+		if strings.HasSuffix(s, q) {
+			return s
+		}
+	}
+	return s + "USDT"
+}
+
+// ExperimentBarsProvider 为调参实验提供 K 线数据（本地缓存优先，缺失时拉取最近
+// 500 根），由 router 注入 experiment 包，修复实验请求不带 klines 时直接报
+// "no bar data provided" 的问题。
+func ExperimentBarsProvider(symbol, interval string) ([]map[string]any, error) {
+	symbol = normalizeCryptoSymbol(symbol)
+	if interval == "" {
+		interval = "1h"
+	}
+	if DataDownloader != nil {
+		if bars := DataDownloader.LoadBarsForBacktest(symbol, interval, 0, 0); len(bars) >= 50 {
+			out := make([]map[string]any, 0, len(bars))
+			for _, b := range bars {
+				out = append(out, map[string]any{
+					"timestamp": b.Time, "open": b.Open, "high": b.High,
+					"low": b.Low, "close": b.Close, "volume": b.Volume,
+				})
+			}
+			return out, nil
+		}
+	}
+	return fetchBinanceKlines(symbol, interval, 500, 0, 0)
 }
 
 func parseFloat(v any) float64 {
@@ -370,7 +444,7 @@ func RunBacktest(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
 		return
 	}
-	symbol := getString(body, "symbol", "BTCUSDT")
+	symbol := normalizeCryptoSymbol(getString(body, "symbol", "BTCUSDT"))
 	initialBalance := 100000.0
 	if ib, ok := body["initial_balance"].(map[string]any); ok {
 		if v, ok := ib["USDT"].(float64); ok {
@@ -402,10 +476,11 @@ func RunBacktest(c *gin.Context) {
 		numBars = min(max(numBars, 50), 1500)
 	}
 
-	// Try to load from local storage first
+	// Try to load from local storage first（仅限未指定日期范围：
+	// 本地缓存根数有限，无法保证覆盖 from/to 区间，指定范围时改为分页全量拉取）
 	var bars []model.Bar
 	useLocalData := false
-	if DataDownloader != nil {
+	if fromMs == 0 && toMs == 0 && DataDownloader != nil {
 		bars = DataDownloader.LoadBarsForBacktest(symbol, interval, fromMs, toMs)
 		if len(bars) >= 50 {
 			useLocalData = true
@@ -414,7 +489,13 @@ func RunBacktest(c *gin.Context) {
 
 	if !useLocalData {
 		// Fetch real historical klines from Binance
-		klines, err := fetchBinanceKlines(symbol, interval, numBars, fromMs, toMs)
+		var klines []map[string]any
+		var err error
+		if fromMs > 0 && toMs > fromMs {
+			klines, err = fetchBinanceKlinesRange(symbol, interval, fromMs, toMs)
+		} else {
+			klines, err = fetchBinanceKlines(symbol, interval, numBars, fromMs, toMs)
+		}
 		if err != nil {
 			c.JSON(http.StatusBadGateway, gin.H{
 				"error":  "无法获取历史数据",
