@@ -22,7 +22,7 @@ import (
 // Manager manages multi-account portfolio state.
 type Manager struct {
 	accounts  map[string]*model.AccountData
-	positions map[string]*model.PositionData // positionID -> position
+	positions map[string]*model.PositionData // PositionKey(exchange:positionID) -> position
 	snapshots []model.PortfolioSnapshot
 	peak      float64
 	mu        sync.RWMutex
@@ -651,8 +651,9 @@ func (m *Manager) SeedPaperMirror(balances map[string]*model.Balance, positions 
 		if p.Exchange == "" {
 			p.Exchange = "paper"
 		}
-		m.positions[p.ID] = &p
-		acct.Positions[p.ID] = &p
+		key := PositionKey(p.Exchange, p.ID)
+		m.positions[key] = &p
+		acct.Positions[key] = &p
 	}
 	log.Printf("[Portfolio] paper 镜像已随账户快照补注: 余额 %d 项, 持仓 %d 只", len(balances), len(positions))
 }
@@ -675,10 +676,14 @@ func (m *Manager) UpdateBalance(accountID, currency string, total, free, used fl
 
 // UpdatePosition updates or creates a position.
 func (m *Manager) UpdatePosition(pos model.PositionData) {
+	if pos.Exchange == "" {
+		pos.Exchange = "paper"
+	}
+	key := PositionKey(pos.Exchange, pos.ID)
 	m.mu.Lock()
-	m.positions[pos.ID] = &pos
+	m.positions[key] = &pos
 	if acct, ok := m.accounts["default"]; ok {
-		acct.Positions[pos.ID] = &pos
+		acct.Positions[key] = &pos
 	}
 	m.mu.Unlock()
 
@@ -687,12 +692,13 @@ func (m *Manager) UpdatePosition(pos model.PositionData) {
 	}
 }
 
-// RemovePosition removes a closed position.
-func (m *Manager) RemovePosition(positionID string) {
+// RemovePosition removes a closed position. key 为 PositionKey 形式
+// （exchange:posID）——调用方按成交/持仓所属账户构造。
+func (m *Manager) RemovePosition(key string) {
 	m.mu.Lock()
-	delete(m.positions, positionID)
+	delete(m.positions, key)
 	if acct, ok := m.accounts["default"]; ok {
-		delete(acct.Positions, positionID)
+		delete(acct.Positions, key)
 	}
 	m.mu.Unlock()
 }
@@ -942,6 +948,16 @@ func (m *Manager) positionCount(paper bool) int {
 		}
 	}
 	return n
+}
+
+// PositionKey 组合持仓的账户级键：exchange:posID。空 exchange 视同 paper
+// （与 isPaperPosition/app 侧 isPaperExchangeName 同口径）——同一 symbol+side
+// 的 paper 持仓与实盘持仓在镜像中并存，互不覆盖。
+func PositionKey(exchange, positionID string) string {
+	if exchange == "" {
+		exchange = "paper"
+	}
+	return exchange + ":" + positionID
 }
 
 // isPaperPosition：空/paper 视为模拟盘持仓（与 app 侧 isPaperExchangeName 同口径）。

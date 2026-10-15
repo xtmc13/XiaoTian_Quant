@@ -321,7 +321,10 @@ export function TradingContract() {
   const bestAsk = orderbook?.asks?.[0]?.[0] != null ? String(orderbook.asks[0][0]) : ''
 
   /* 当前合约持仓(用于图表持仓均价线)。find 返回的是 query 数据中的稳定引用 */
-  const currentPosition = positions.find((p) => p.symbol === symbol) ?? null
+  const currentPosition =
+    positions.find((p) => p.symbol === symbol && p.exchange && p.exchange !== 'paper') ??
+    positions.find((p) => p.symbol === symbol) ??
+    null
 
   /* 图表点价后的视觉反馈:输入框高亮闪烁 */
   const [priceFlash, setPriceFlash] = useState(false)

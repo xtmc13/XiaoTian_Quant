@@ -196,6 +196,8 @@ func PortfolioPositions(c *gin.Context) {
 	posList := make([]gin.H, 0, len(positions))
 	for _, p := range positions {
 		posList = append(posList, gin.H{
+			"id":                p.ID,
+			"exchange":          p.Exchange,
 			"symbol":            p.Symbol,
 			"quantity":          p.Quantity,
 			"avg_entry_price":   p.AvgEntryPrice,

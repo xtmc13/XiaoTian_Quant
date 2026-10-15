@@ -65,7 +65,7 @@ func TestSeedPaperMirrorTagsPaperOrigin(t *testing.T) {
 	m.SeedPaperMirror(nil, []model.PositionData{
 		{ID: "SOLUSDT-spot", Symbol: "SOLUSDT", Quantity: 16.82, AvgEntryPrice: 119.37, CurrentPrice: 119.37},
 	})
-	pos := m.GetAccount("default").Positions["SOLUSDT-spot"]
+	pos := m.GetAccount("default").Positions[PositionKey("paper", "SOLUSDT-spot")]
 	if pos == nil || pos.Exchange != "paper" {
 		t.Fatalf("paper 恢复持仓必须打标 paper: %+v", pos)
 	}

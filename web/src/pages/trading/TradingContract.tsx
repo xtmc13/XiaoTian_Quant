@@ -85,6 +85,7 @@ interface OrderPopupState {
 
 interface ContractPosition {
   symbol: string
+  exchange?: string
   quantity: number
   avg_entry_price: number
   current_price: number
@@ -199,10 +200,10 @@ export function TradingContract() {
     () => (contractPositionsData?.positions ?? []) as ContractPosition[],
     [contractPositionsData]
   )
-  const contractPos = useMemo(
-    () => contractPositions.find((p) => p.symbol === symbol && safeNumber(p.quantity) > 0) ?? null,
-    [contractPositions, symbol]
-  )
+  const contractPos = useMemo(() => {
+    const matches = contractPositions.filter((p) => p.symbol === symbol && safeNumber(p.quantity) > 0)
+    return matches.find((p) => p.exchange && p.exchange !== 'paper') ?? matches[0] ?? null
+  }, [contractPositions, symbol])
 
   /* websocket */
   const { on: wsOn } = useWebSocket('/ws', {

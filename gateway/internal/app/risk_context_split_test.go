@@ -19,8 +19,8 @@ func TestBuildRiskContextSplitsPaperAndLive(t *testing.T) {
 	mgr.UpdatePosition(model.PositionData{ID: "RCSPLIT-BTC-BUY", Symbol: "RCSPLITBTC", Quantity: 1, CurrentPrice: 100, Exchange: "binance"})
 	mgr.UpdatePosition(model.PositionData{ID: "RCSPLIT-SOL-spot", Symbol: "RCSPLITSOL", Quantity: 2, CurrentPrice: 100, Exchange: "paper"})
 	t.Cleanup(func() {
-		mgr.RemovePosition("RCSPLIT-BTC-BUY")
-		mgr.RemovePosition("RCSPLIT-SOL-spot")
+		mgr.RemovePosition(portfolio.PositionKey("binance", "RCSPLIT-BTC-BUY"))
+		mgr.RemovePosition(portfolio.PositionKey("paper", "RCSPLIT-SOL-spot"))
 	})
 
 	ctx := &Context{PortfolioManager: mgr}

@@ -51,7 +51,7 @@ func TestSeedPaperMirrorAlignsWithSnapshot(t *testing.T) {
 	if b := acct.Balances["SOL"]; b == nil || b.Free != 16.82 || b.Total != 16.82 {
 		t.Fatalf("SOL base 必须补注: %+v", b)
 	}
-	if pos := acct.Positions["SOLUSDT-spot"]; pos == nil || pos.Quantity != 16.82 {
+	if pos := acct.Positions[PositionKey("paper", "SOLUSDT-spot")]; pos == nil || pos.Quantity != 16.82 {
 		t.Fatalf("持仓必须补注进账户: %+v", pos)
 	}
 	found := false
@@ -107,10 +107,10 @@ func TestSeedPaperMirrorZeroChangeBoundaries(t *testing.T) {
 	if b := m2.GetAccount("default").Balances["USDT"]; b.Free != 100000 {
 		t.Fatalf("无余额键不得动余额: %+v", b)
 	}
-	if m2.GetAccount("default").Positions["BTCUSDT-spot"] == nil {
+	if m2.GetAccount("default").Positions[PositionKey("paper", "BTCUSDT-spot")] == nil {
 		t.Fatal("仅持仓快照必须注入持仓")
 	}
-	if m2.GetAccount("default").Positions["zero"] != nil {
+	if m2.GetAccount("default").Positions[PositionKey("paper", "zero")] != nil {
 		t.Fatal("零量持仓不得注入")
 	}
 }

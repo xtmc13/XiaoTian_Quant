@@ -119,7 +119,7 @@ export function ContractPositionsTab({
             const upnlPct = margin > 0 ? (upnl / margin) * 100 : 0
             const liqPx = Number(pos.liquidation_price || 0)
             return (
-              <tr key={String(pos.id || i)} className="border-b border-quant-border/40 hover:bg-white/[0.03]">
+              <tr key={String(pos.id ? `${pos.exchange ?? ''}:${pos.id}` : i)} className="border-b border-quant-border/40 hover:bg-white/[0.03]">
                 <td className="px-3 py-2.5 font-medium">{pos.symbol || '--'} 永续</td>
                 <td className="px-3 py-2.5">
                   <span

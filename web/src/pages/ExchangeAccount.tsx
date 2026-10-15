@@ -39,6 +39,8 @@ interface BalanceItem {
 
 interface PositionItem {
   symbol: string
+  exchange?: string
+  side?: string
   quantity: number
   avg_entry_price: number
   current_price?: number
@@ -150,6 +152,8 @@ export function ExchangeAccount() {
     const raw = positionsData?.positions || positionsData || []
     return (Array.isArray(raw) ? raw : []).map((p) => ({
       symbol: p.symbol || '',
+      exchange: p.exchange || 'paper',
+      side: p.side || '',
       quantity: Number(p.quantity ?? 0),
       avg_entry_price: Number(p.avg_entry_price ?? p.entry_price ?? 0),
       current_price: p.current_price != null ? Number(p.current_price) : prices[(p.symbol as string) || '']?.price,
@@ -429,6 +433,20 @@ export function ExchangeAccount() {
                       render: (p) => <span className="font-semibold text-foreground">{p.symbol}</span>,
                     },
                     {
+                      key: 'exchange',
+                      title: '账户',
+                      render: (p) => (
+                        <span
+                          className={cn(
+                            'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold',
+                            p.exchange === 'paper' ? 'bg-amber-400/10 text-amber-400' : 'bg-emerald-400/10 text-emerald-400'
+                          )}
+                        >
+                          {p.exchange === 'paper' ? '模拟' : p.exchange}
+                        </span>
+                      ),
+                    },
+                    {
                       key: 'quantity',
                       title: '持仓量',
                       render: (p) => <span className="font-mono">{p.quantity.toFixed(4)}</span>,
@@ -484,7 +502,7 @@ export function ExchangeAccount() {
                       ),
                     },
                   ]}
-                  keyExtractor={(p) => p.symbol}
+                  keyExtractor={(p) => `${p.exchange}:${p.symbol}:${p.side}`}
                 />
               ) : (
                 <EmptyState title="暂无持仓" description="当前没有持仓数据" />

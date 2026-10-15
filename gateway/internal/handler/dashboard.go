@@ -60,6 +60,7 @@ func DashboardSummary(c *gin.Context) {
 	positions := make([]map[string]any, 0, len(rawPositions))
 	for _, p := range rawPositions {
 		positions = append(positions, map[string]any{
+			"exchange":        p.Exchange,
 			"symbol":          p.Symbol,
 			"quantity":        p.Quantity,
 			"avg_entry_price": p.AvgEntryPrice,

@@ -67,6 +67,7 @@ export interface Balance {
 
 export interface PortfolioPosition {
   id?: string
+  exchange?: string
   symbol: string
   quantity: number
   avg_entry_price: number

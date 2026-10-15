@@ -47,9 +47,9 @@ func withMirrorState(t *testing.T) {
 	})
 }
 
-func keepPos(list []model.PositionData, id string) (*model.PositionData, bool) {
+func keepPos(list []model.PositionData, key string) (*model.PositionData, bool) {
 	for i := range list {
-		if list[i].ID == id {
+		if portfolio.PositionKey(list[i].Exchange, list[i].ID) == key {
 			return &list[i], true
 		}
 	}
@@ -100,7 +100,7 @@ func TestRestorePaperAccountSeedsMirror(t *testing.T) {
 	if b := acct.Balances["USDT"]; b == nil || b.Free != 96119 {
 		t.Fatalf("镜像 USDT 必须对齐 paper 真值（而非 config 初始 100000）: %+v", b)
 	}
-	pos := acct.Positions["SOLUSDT-spot"]
+	pos := acct.Positions[portfolio.PositionKey("paper", "SOLUSDT-spot")]
 	if pos == nil || pos.Quantity != 16.82 || pos.AvgEntryPrice != 119.37 {
 		t.Fatalf("镜像持仓必须随恢复补注: %+v", pos)
 	}

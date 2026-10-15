@@ -106,7 +106,7 @@ func (pyStratAccounts) Position(symbol string) (qty, avgPrice float64, side stri
 	}
 	symbol = normalizePyStratSymbol(symbol)
 	for _, suffix := range []string{"BUY", "LONG"} {
-		pos, exists := acct.Positions[symbol+"-"+suffix]
+		pos, exists := acct.Positions[portfolio.PositionKey("paper", symbol+"-"+suffix)]
 		if !exists || pos.Quantity <= 0 {
 			continue
 		}

@@ -553,7 +553,7 @@ func fillOrderAndUpdatePortfolio(order map[string]any) {
 		}
 
 		posID := symbol + "-" + string(positionSide)
-		existing := acct.Positions[posID]
+		existing := acct.Positions[portfolio.PositionKey(exchange, posID)]
 
 		if closePosition || (existing != nil && existing.Quantity > 0) {
 			// ── CLOSE / REDUCE position ──
@@ -675,7 +675,8 @@ func fillOrderAndUpdatePortfolio(order map[string]any) {
 		if side == "SELL" {
 			oppositeSide = "BUY"
 		}
-		oppositePos := acct.Positions[symbol+"-"+oppositeSide]
+		oppositeKey := portfolio.PositionKey(exchange, symbol+"-"+oppositeSide)
+		oppositePos := acct.Positions[oppositeKey]
 		if oppositePos != nil && oppositePos.Quantity > 0 {
 			closedQty = qty
 			if closedQty > oppositePos.Quantity {
@@ -694,7 +695,7 @@ func fillOrderAndUpdatePortfolio(order map[string]any) {
 			// 更新反向持仓（减少数量或删除）
 			oppositePos.Quantity -= closedQty
 			if oppositePos.Quantity <= 0 {
-				delete(acct.Positions, symbol+"-"+oppositeSide)
+				delete(acct.Positions, oppositeKey)
 			} else {
 				mgr.UpdatePosition(*oppositePos)
 			}
@@ -756,7 +757,7 @@ func fillOrderAndUpdatePortfolio(order map[string]any) {
 		remainingQty := qty - closedQty
 		if remainingQty > 0 {
 			posID := symbol + "-" + side
-			existing := acct.Positions[posID]
+			existing := acct.Positions[portfolio.PositionKey(exchange, posID)]
 			if existing != nil {
 				// Average down/up
 				totalQty := existing.Quantity + remainingQty

@@ -1062,7 +1062,8 @@ func (ctx *Context) updatePortfolioFromSpotFill(ord *model.OrderData, acct *mode
 	if ord.Side == model.SideSell {
 		oppositeSide = "BUY"
 	}
-	oppositePos := acct.Positions[ord.Symbol+"-"+oppositeSide]
+	oppositeKey := portfolio.PositionKey(ord.Exchange, ord.Symbol+"-"+oppositeSide)
+	oppositePos := acct.Positions[oppositeKey]
 	if oppositePos != nil && oppositePos.Quantity > 0 {
 		closeQty := qty
 		if closeQty > oppositePos.Quantity {
@@ -1075,8 +1076,8 @@ func (ctx *Context) updatePortfolioFromSpotFill(ord *model.OrderData, acct *mode
 		}
 		oppositePos.Quantity -= closeQty
 		if oppositePos.Quantity <= 0 {
-			delete(acct.Positions, ord.Symbol+"-"+oppositeSide)
-			ctx.PortfolioManager.RemovePosition(ord.Symbol + "-" + oppositeSide)
+			delete(acct.Positions, oppositeKey)
+			ctx.PortfolioManager.RemovePosition(oppositeKey)
 		} else {
 			ctx.PortfolioManager.UpdatePosition(*oppositePos)
 		}
@@ -1093,7 +1094,7 @@ func (ctx *Context) updatePortfolioFromSpotFill(ord *model.OrderData, acct *mode
 
 	// Update or create position
 	posID := ord.Symbol + "-" + string(ord.Side)
-	existing := acct.Positions[posID]
+	existing := acct.Positions[portfolio.PositionKey(ord.Exchange, posID)]
 	if existing != nil {
 		totalQty := existing.Quantity + qty
 		totalCost := existing.AvgEntryPrice*existing.Quantity + price*qty
@@ -1142,7 +1143,8 @@ func (ctx *Context) updatePortfolioFromContractFill(ord *model.OrderData, acct *
 	}
 
 	posID := ord.Symbol + "-" + string(positionSide)
-	existing := acct.Positions[posID]
+	posKey := portfolio.PositionKey(ord.Exchange, posID)
+	existing := acct.Positions[posKey]
 
 	if ord.ClosePosition || (existing != nil && existing.Quantity > 0) {
 		// ── CLOSE / REDUCE position ──
@@ -1180,8 +1182,8 @@ func (ctx *Context) updatePortfolioFromContractFill(ord *model.OrderData, acct *
 			existing.Quantity = 0
 			existing.Margin = 0
 			existing.UnrealizedPnL = 0
-			delete(acct.Positions, posID)
-			ctx.PortfolioManager.RemovePosition(posID)
+			delete(acct.Positions, posKey)
+			ctx.PortfolioManager.RemovePosition(posKey)
 		} else {
 			existing.CurrentPrice = price
 			if positionSide == model.PositionLong {
@@ -1669,7 +1671,7 @@ func (ctx *Context) wireStrategyEngine() {
 		}
 		sym := strings.ToUpper(strings.TrimSpace(symbol))
 		for _, side := range []model.PositionSide{model.PositionLong, model.PositionShort} {
-			pos := acct.Positions[sym+"-"+string(side)]
+			pos := acct.Positions[portfolio.PositionKey("paper", sym+"-"+string(side))]
 			if pos == nil || pos.Quantity <= 0 {
 				continue
 			}
@@ -2140,10 +2142,16 @@ func (ctx *Context) closePositionFromSignal(signal model.Signal) {
 // closeMirroredPositions 按本地组合镜像平仓（原 closePositionFromSignal 主路径）。
 func (ctx *Context) closeMirroredPositions(signal model.Signal, acct *model.AccountData) bool {
 	closed := false
+	exchange := ctx.resolveExchange(signal.Symbol)
+	if cfg := findStrategyConfigForSignal(signal); cfg != nil {
+		if em, _ := cfg["execution_mode"].(string); em != "live" {
+			exchange = "paper"
+		}
+	}
 	// Try both LONG and SHORT positions for this symbol
 	for _, side := range []model.PositionSide{model.PositionLong, model.PositionShort} {
-		posID := signal.Symbol + "-" + string(side)
-		pos := acct.Positions[posID]
+		posKey := portfolio.PositionKey(exchange, signal.Symbol+"-"+string(side))
+		pos := acct.Positions[posKey]
 		if pos == nil || pos.Quantity <= 0 {
 			continue
 		}
@@ -2166,7 +2174,7 @@ func (ctx *Context) closeMirroredPositions(signal model.Signal, acct *model.Acco
 			OrderType:     model.TypeMarket,
 			Price:         0,
 			Quantity:      closeQty,
-			Exchange:      ctx.resolveExchange(signal.Symbol),
+			Exchange:      exchange,
 			MarketType:    pos.MarketType,
 			PositionSide:  side,
 			Leverage:      pos.Leverage,

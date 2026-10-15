@@ -30,6 +30,8 @@ import {
 
 interface PositionItem {
   symbol: string
+  exchange?: string
+  side?: string
   quantity: number
   avg_entry_price: number
   current_price?: number
@@ -466,6 +468,8 @@ export function Portfolio() {
     const raw = positionsData?.positions || positionsData || []
     return (Array.isArray(raw) ? raw : []).map((p: any) => ({
       symbol: p.symbol || '',
+      exchange: p.exchange || 'paper',
+      side: p.side || '',
       quantity: p.quantity || 0,
       avg_entry_price: p.avg_entry_price || p.entry_price || 0,
       current_price: p.current_price || 0,
@@ -618,6 +622,12 @@ export function Portfolio() {
                   data={positions}
                   columns={[
                     { key: 'symbol', title: '币种', render: (p) => <span className="font-semibold text-foreground">{p.symbol}</span> },
+                    { key: 'exchange', title: '账户', render: (p) => (
+                      <span className={cn('inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold',
+                        p.exchange === 'paper' ? 'bg-amber-400/10 text-amber-400' : 'bg-emerald-400/10 text-emerald-400')}>
+                        {p.exchange === 'paper' ? '模拟' : p.exchange}
+                      </span>
+                    )},
                     { key: 'quantity', title: '持仓量', render: (p) => <span className="font-mono">{p.quantity.toFixed(4)}</span> },
                     { key: 'entry', title: '开仓价', render: (p) => <span className="font-mono text-muted-foreground">${formatCurrency(p.avg_entry_price)}</span> },
                     { key: 'current', title: '当前价', render: (p) => <span className="font-mono text-foreground">${formatCurrency(p.current_price || 0)}</span> },
@@ -636,7 +646,7 @@ export function Portfolio() {
                       </span>
                     )},
                   ]}
-                  keyExtractor={(p) => p.symbol}
+                  keyExtractor={(p) => `${p.exchange}:${p.symbol}:${p.side}`}
                 />
               </div>
             ) : (

@@ -6,6 +6,7 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/model"
 	"github.com/xiaotian-quant/gateway/internal/order"
 	"github.com/xiaotian-quant/gateway/internal/paper"
+	"github.com/xiaotian-quant/gateway/internal/portfolio"
 )
 
 // ── H2（2026-10-09）：PortfolioManager 内存镜像"锁定+成交"双重扣减修复 ──
@@ -162,7 +163,7 @@ func TestMirrorContractOpenCloseNoDoubleDeduct(t *testing.T) {
 		t.Fatalf("开仓成交后 USDT free/used = %v/%v, want %v/%v（保证金不得锁+扣两次）",
 			free, used, freeBefore-40, usedBefore)
 	}
-	pos := ctx.PortfolioManager.GetAccount("default").Positions["H2CUSDT-LONG"]
+	pos := ctx.PortfolioManager.GetAccount("default").Positions[portfolio.PositionKey("binance", "H2CUSDT-LONG")]
 	if pos == nil || pos.Quantity != 2 || pos.Margin != 40 {
 		t.Fatalf("开仓后镜像持仓不符: %+v", pos)
 	}
@@ -194,7 +195,7 @@ func TestMirrorContractOpenCloseNoDoubleDeduct(t *testing.T) {
 	if want := freeBefore - 40 + 44 + 20; free != want {
 		t.Fatalf("平仓成交后 USDT free = %v, want %v", free, want)
 	}
-	if pos := ctx.PortfolioManager.GetAccount("default").Positions["H2CUSDT-LONG"]; pos != nil {
+	if pos := ctx.PortfolioManager.GetAccount("default").Positions[portfolio.PositionKey("binance", "H2CUSDT-LONG")]; pos != nil {
 		t.Fatalf("全平后镜像持仓应删除: %+v", pos)
 	}
 }
@@ -243,7 +244,7 @@ func TestMirrorFillDuplicateReportSettlesOnce(t *testing.T) {
 	if want := freeBefore - 50 - 100; freeAfterDup != want {
 		t.Fatalf("终态 USDT free = %v, want %v", freeAfterDup, want)
 	}
-	pos := ctx.PortfolioManager.GetAccount("default").Positions["H2DUPUSDT-BUY"]
+	pos := ctx.PortfolioManager.GetAccount("default").Positions[portfolio.PositionKey("binance", "H2DUPUSDT-BUY")]
 	if pos == nil || pos.Quantity != 1 {
 		t.Fatalf("重复回报不得重复加仓: %+v", pos)
 	}

@@ -8,6 +8,7 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/model"
 	"github.com/xiaotian-quant/gateway/internal/order"
 	"github.com/xiaotian-quant/gateway/internal/paper"
+	"github.com/xiaotian-quant/gateway/internal/portfolio"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
@@ -92,10 +93,10 @@ func TestClosePositionFromSignalShortAfterRestore(t *testing.T) {
 	// 幻影镜像仓回归：BUY+SHORT 的平仓成交不得在 PortfolioManager 镜像里
 	// 造出新空仓（否则下一次 CLOSE 会把幻影再"平"一次 → 真翻多）。
 	acct := ctx.PortfolioManager.GetAccount("default")
-	if pos := acct.Positions["SOLUSDT-SHORT"]; pos != nil && pos.Quantity > 0 {
+	if pos := acct.Positions[portfolio.PositionKey("paper", "SOLUSDT-SHORT")]; pos != nil && pos.Quantity > 0 {
 		t.Fatalf("平空成交不得造出 phantom SHORT 镜像仓: %+v", pos)
 	}
-	if pos := acct.Positions["SOLUSDT-LONG"]; pos != nil && pos.Quantity > 0 {
+	if pos := acct.Positions[portfolio.PositionKey("paper", "SOLUSDT-LONG")]; pos != nil && pos.Quantity > 0 {
 		t.Fatalf("平空成交不得造出 phantom LONG 镜像仓: %+v", pos)
 	}
 }
@@ -141,7 +142,7 @@ func TestContractFillMismatchedOpenNoPhantom(t *testing.T) {
 		Filled: 5, AvgFillPrice: 120, MarketType: model.MarketSwap,
 		PositionSide: model.PositionLong, Leverage: 5,
 	})
-	if pos := acct.Positions["ADAUSDT-LONG"]; pos != nil && pos.Quantity > 0 {
+	if pos := acct.Positions[portfolio.PositionKey("paper", "ADAUSDT-LONG")]; pos != nil && pos.Quantity > 0 {
 		t.Fatalf("SELL+LONG 无持仓不得造幻影多仓: %+v", pos)
 	}
 	// BUY + SHORT 键、无 SHORT 持仓：不得开 SHORT 幻影仓，保证金也不得扣。
@@ -150,7 +151,7 @@ func TestContractFillMismatchedOpenNoPhantom(t *testing.T) {
 		Filled: 5, AvgFillPrice: 120, MarketType: model.MarketSwap,
 		PositionSide: model.PositionShort, Leverage: 5,
 	})
-	if pos := acct.Positions["ADAUSDT-SHORT"]; pos != nil && pos.Quantity > 0 {
+	if pos := acct.Positions[portfolio.PositionKey("paper", "ADAUSDT-SHORT")]; pos != nil && pos.Quantity > 0 {
 		t.Fatalf("BUY+SHORT 无持仓不得造幻影空仓: %+v", pos)
 	}
 	if got := acct.Balances["USDT"].Free; got != usdtBefore {
@@ -168,11 +169,11 @@ func TestContractFillMismatchedOpenNoPhantom(t *testing.T) {
 		Filled: 2, AvgFillPrice: 121, MarketType: model.MarketSwap,
 		PositionSide: model.PositionShort, Leverage: 5,
 	})
-	if pos := acct.Positions["ADAUSDT-LONG"]; pos == nil || pos.Quantity != 1 {
-		t.Fatalf("BUY+LONG 必须正常开多: %+v", acct.Positions["ADAUSDT-LONG"])
+	if pos := acct.Positions[portfolio.PositionKey("paper", "ADAUSDT-LONG")]; pos == nil || pos.Quantity != 1 {
+		t.Fatalf("BUY+LONG 必须正常开多: %+v", acct.Positions[portfolio.PositionKey("paper", "ADAUSDT-LONG")])
 	}
-	if pos := acct.Positions["ADAUSDT-SHORT"]; pos == nil || pos.Quantity != 2 {
-		t.Fatalf("SELL+SHORT 必须正常开空: %+v", acct.Positions["ADAUSDT-SHORT"])
+	if pos := acct.Positions[portfolio.PositionKey("paper", "ADAUSDT-SHORT")]; pos == nil || pos.Quantity != 2 {
+		t.Fatalf("SELL+SHORT 必须正常开空: %+v", acct.Positions[portfolio.PositionKey("paper", "ADAUSDT-SHORT")])
 	}
 	// 反向减仓照常：SELL+LONG 平掉多仓。
 	ctx.updatePortfolioFromFill(&model.OrderData{
@@ -180,7 +181,7 @@ func TestContractFillMismatchedOpenNoPhantom(t *testing.T) {
 		Filled: 1, AvgFillPrice: 122, MarketType: model.MarketSwap,
 		PositionSide: model.PositionLong, Leverage: 5,
 	})
-	if pos := acct.Positions["ADAUSDT-LONG"]; pos != nil && pos.Quantity > 0 {
+	if pos := acct.Positions[portfolio.PositionKey("paper", "ADAUSDT-LONG")]; pos != nil && pos.Quantity > 0 {
 		t.Fatalf("SELL+LONG 有持仓必须减仓: %+v", pos)
 	}
 }
