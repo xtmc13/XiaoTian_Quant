@@ -275,6 +275,7 @@ func GetStrategyRuntime(c *gin.Context) {
 			sym = strings.ToUpper(coin) + "USDT"
 		}
 	}
+	sym = canonicalEngineSymbol(sym, item)
 	var ws freshPricer
 	if appCtx := app.Get(); appCtx != nil && appCtx.BinanceWS != nil {
 		ws = appCtx.BinanceWS
@@ -302,7 +303,6 @@ func GetStrategyRuntime(c *gin.Context) {
 	if status != nil {
 		if _, ok := status["position_qty"]; !ok {
 			if mode := strings.ToLower(getString(item, "execution_mode", getString(item, "mode", ""))); mode == "paper" {
-				sym := getString(item, "symbol", "")
 				if sym != "" {
 					if net, _, err := store.NetFilledByStrategy(id, sym); err == nil && (net > 1e-12 || net < -1e-12) {
 						if net < 0 {
