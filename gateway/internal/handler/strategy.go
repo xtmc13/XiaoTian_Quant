@@ -1406,7 +1406,7 @@ func startStrategyInEngine(id string, item map[string]any) error {
 	// engine subscription topic, the strategy symbol, and the K线供给管
 	// publish topic all agree.
 	if sym, ok := params["symbol"].(string); ok {
-		params["symbol"] = strings.ToUpper(strings.TrimSpace(sym))
+		params["symbol"] = canonicalEngineSymbol(sym, params)
 	}
 
 	// Filter params to only those accepted by the strategy's parameter registry.
@@ -1716,6 +1716,29 @@ func stopStrategyInEngine(id string) {
 	}
 	_ = eng.Stop(id)
 	_ = eng.Unregister(id)
+}
+
+// canonicalEngineSymbol 归一化引擎订阅用的交易对：大写、去分隔符；
+// 配置只给裸币名（如 "SOL" 且与 coin 字段一致）时补 USDT 成对——否则
+// 币安 K 线/行情订阅会以 Invalid symbol 失败，策略收不到任何 bar。
+// 非加密切口（无 coin 字段，如美股代码）保持原样，不擅自补后缀。
+func canonicalEngineSymbol(symbol string, params map[string]any) string {
+	s := strings.ToUpper(strings.TrimSpace(symbol))
+	s = strings.NewReplacer("/", "", "-", "", "_", "").Replace(s)
+	if s == "" {
+		return s
+	}
+	for _, q := range []string{"USDT", "USDC", "BUSD", "FDUSD", "TUSD", "DAI", "USDP"} {
+		if strings.HasSuffix(s, q) {
+			return s
+		}
+	}
+	coin, _ := params["coin"].(string)
+	coin = strings.ToUpper(strings.TrimSpace(coin))
+	if coin != "" && s == coin {
+		return s + "USDT"
+	}
+	return s
 }
 
 // buildStrategyParams extracts strategy parameters from a config item.
