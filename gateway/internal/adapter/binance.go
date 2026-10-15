@@ -236,6 +236,18 @@ func (b *BinanceAdapter) GetKlines(symbol, interval string, limit int) ([][]any,
 // GetKlinesRange fetches Binance klines in a time range.
 // startMs and endMs are unix milliseconds; pass 0 to ignore the bound.
 func (b *BinanceAdapter) GetKlinesRange(symbol, interval string, startMs, endMs int64, limit int) ([][]any, error) {
+	return b.getKlinesRange(b.baseURL(), "/klines", symbol, interval, startMs, endMs, limit)
+}
+
+func (b *BinanceAdapter) GetFuturesKlines(symbol, interval string, limit int) ([][]any, error) {
+	return b.GetFuturesKlinesRange(symbol, interval, 0, 0, limit)
+}
+
+func (b *BinanceAdapter) GetFuturesKlinesRange(symbol, interval string, startMs, endMs int64, limit int) ([][]any, error) {
+	return b.getKlinesRange(b.fapiBaseURL(), "/fapi/v1/klines", symbol, interval, startMs, endMs, limit)
+}
+
+func (b *BinanceAdapter) getKlinesRange(baseURL, path, symbol, interval string, startMs, endMs int64, limit int) ([][]any, error) {
 	params := url.Values{}
 	params.Set("symbol", symbol)
 	params.Set("interval", interval)
@@ -249,7 +261,7 @@ func (b *BinanceAdapter) GetKlinesRange(symbol, interval string, startMs, endMs 
 		params.Set("endTime", fmt.Sprintf("%d", endMs))
 	}
 
-	u, _ := url.Parse(b.baseURL() + "/klines")
+	u, _ := url.Parse(baseURL + path)
 	u.RawQuery = params.Encode()
 
 	resp, err := b.httpClient.Get(u.String())

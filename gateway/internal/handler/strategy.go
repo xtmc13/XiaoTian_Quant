@@ -29,7 +29,7 @@ import (
 var (
 	klineFeeder  *market.KlineFeeder
 	klineFeedsMu sync.Mutex
-	klineFeeds   = map[string][2]string{} // configID -> {symbol, interval}
+	klineFeeds   = map[string][3]string{} // configID -> {symbol, interval, marketType}
 )
 
 // SetKlineFeeder 注入 K 线供给管（参考 SetGridService，main 启动时接线）。
@@ -44,7 +44,7 @@ func KlineFeederForEngine() *market.KlineFeeder { return klineFeeder }
 // symbol 用引擎实际订阅的 wrapped.Symbol()，保证事件 topic 与策略订阅一致。
 // 返回供给管是否新起轮询（true=bus 侧即将回补历史 K 线；false=供给管已在跑，
 // 需要调用方直接暖机策略，否则新策略要等下一根新闭合 K 线，最长一个周期）。
-func ensureKlineFeed(id, symbol, timeframe string) bool {
+func ensureKlineFeed(id, symbol, timeframe, marketType string) bool {
 	if klineFeeder == nil || symbol == "" {
 		return false
 	}
@@ -53,9 +53,9 @@ func ensureKlineFeed(id, symbol, timeframe string) bool {
 		interval = "15m"
 	}
 	klineFeedsMu.Lock()
-	klineFeeds[id] = [2]string{symbol, interval}
+	klineFeeds[id] = [3]string{symbol, interval, marketType}
 	klineFeedsMu.Unlock()
-	return klineFeeder.EnsureSymbol(symbol, interval)
+	return klineFeeder.EnsureSymbol(symbol, interval, marketType)
 }
 
 // releaseKlineFeed 停掉配置 id 的 K 线轮询（幂等）。
@@ -67,7 +67,7 @@ func releaseKlineFeed(id string) {
 	}
 	klineFeedsMu.Unlock()
 	if ok && klineFeeder != nil {
-		klineFeeder.ReleaseSymbol(key[0], key[1])
+		klineFeeder.ReleaseSymbol(key[0], key[1], key[2])
 	}
 }
 
@@ -1514,23 +1514,27 @@ func startStrategyInEngine(id string, item map[string]any) error {
 		_ = eng.Unregister(id) // Unregister 一并释放策略级 protection manager
 		return fmt.Errorf("start strategy: %w", err)
 	}
+	marketType := "spot"
+	if strategyContractCapable(factoryName, item) {
+		marketType = "swap"
+	}
 	// 实时行情订阅随策略扩展：WS 启动列表只覆盖少数硬编码币种，其余 symbol
 	// 的 tick 永不到达——CRA 防瀑布（OnTick）与运行面板现价对它们失效。
 	// 启动时确保策略 symbol 已订阅（连接中动态 SUBSCRIBE，断线并入重连订阅表）。
 	if a := app.Get(); a != nil && a.BinanceWS != nil {
-		a.BinanceWS.EnsureSymbol(wrapped.Symbol())
+		a.BinanceWS.EnsureSymbol(wrapped.Symbol(), marketType)
 	}
 	// 引擎订阅的 topic 是 wrapped.Symbol()（Start 应用参数后的值），
 	// K 线供给管必须按同一 symbol 发布，策略的 OnBar 才收得到。
 	timeframe, _ := item["timeframe"].(string)
-	if fresh := ensureKlineFeed(id, wrapped.Symbol(), timeframe); !fresh {
+	if fresh := ensureKlineFeed(id, wrapped.Symbol(), timeframe, marketType); !fresh {
 		// 供给管已在运行（其他策略共用），不会有历史回补推给本策略。
 		// 直接喂最近 100 根已闭合 K 线暖机（H4 统一口径）：实现 Warmupper
 		// 的策略只养指标序列、不动持仓状态（虚持仓/PendingAddCount 虚挂
 		// 修复——此前直调 OnBar 丢弃信号但状态已迁移）；未实现的策略维持
 		// 原样直调 OnBar，信号丢弃，实盘信号等下一根真实 K 线。
 		if klineFeeder != nil {
-			if bars, err := klineFeeder.RecentClosedBars(wrapped.Symbol(), timeframe, 100); err == nil && len(bars) > 0 {
+			if bars, err := klineFeeder.RecentClosedBars(wrapped.Symbol(), timeframe, 100, marketType); err == nil && len(bars) > 0 {
 				w, isWarmupper := strategy.UnwrapStrategy(wrapped).(strategy.Warmupper)
 				for _, b := range bars {
 					if isWarmupper {

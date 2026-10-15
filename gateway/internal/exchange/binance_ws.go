@@ -19,14 +19,16 @@ import (
 // BinanceWSStream connects to Binance WebSocket for real-time market data.
 // Publishes tick/bar data to the event bus for strategy consumption.
 type BinanceWSStream struct {
-	symbols   []string
-	bus       *event.EventBus
-	conn      *websocket.Conn
-	mu        sync.RWMutex
-	writeMu   sync.Mutex // gorilla conn 单写者纪律（keepalive ping / 动态 SUBSCRIBE 共用）
-	running   bool
-	stopCh    chan struct{}
-	reconnect chan struct{}
+	symbols        []string
+	futuresSymbols []string
+	bus            *event.EventBus
+	conn           *websocket.Conn
+	futuresConn    *websocket.Conn
+	mu             sync.RWMutex
+	writeMu        sync.Mutex // gorilla conn 单写者纪律（keepalive ping / 动态 SUBSCRIBE 共用）
+	running        bool
+	stopCh         chan struct{}
+	reconnect      chan struct{}
 
 	// Last prices for bar building
 	prices   map[string]float64
@@ -57,6 +59,16 @@ func NewBinanceWSStream(symbols []string, bus *event.EventBus) *BinanceWSStream 
 	}
 }
 
+func wsMarketType(marketType []string) string {
+	if len(marketType) > 0 {
+		switch strings.ToLower(strings.TrimSpace(marketType[0])) {
+		case "swap", "futures", "margin", "contract":
+			return "swap"
+		}
+	}
+	return "spot"
+}
+
 // Start connects to Binance and begins streaming.
 func (s *BinanceWSStream) Start() error {
 	s.mu.Lock()
@@ -71,7 +83,8 @@ func (s *BinanceWSStream) Start() error {
 	}
 	s.mu.Unlock()
 
-	go s.connect()
+	go s.connect("spot")
+	go s.connect("swap")
 	go s.keepalive()
 
 	log.Printf("[binance_ws] started: %v", s.symbols)
@@ -90,10 +103,14 @@ func (s *BinanceWSStream) Stop() {
 	if s.conn != nil {
 		s.conn.Close()
 	}
+	if s.futuresConn != nil {
+		s.futuresConn.Close()
+	}
 	log.Printf("[binance_ws] stopped")
 }
 
-func (s *BinanceWSStream) connect() {
+func (s *BinanceWSStream) connect(marketType ...string) {
+	market := wsMarketType(marketType)
 	dialer := wsDialer()
 
 	for {
@@ -103,10 +120,24 @@ func (s *BinanceWSStream) connect() {
 		default:
 		}
 
+		if market == "swap" {
+			s.mu.RLock()
+			empty := len(s.futuresSymbols) == 0
+			s.mu.RUnlock()
+			if empty {
+				select {
+				case <-s.stopCh:
+					return
+				case <-time.After(time.Second):
+				}
+				continue
+			}
+		}
+
 		// 每次拨号按当前订阅表重建 URL：运行期经 EnsureSymbol 加入的
 		// symbol 在断线重连后依然保持订阅（连接中的动态 SUBSCRIBE 只覆盖
 		// 当前连接生命周期）。
-		url := s.streamURL()
+		url := s.streamURL(market)
 		log.Printf("[binance_ws] connecting to %s...", url)
 		conn, _, err := dialer.Dial(url, nil)
 		if err != nil {
@@ -120,10 +151,14 @@ func (s *BinanceWSStream) connect() {
 		}
 
 		s.mu.Lock()
-		s.conn = conn
+		if market == "swap" {
+			s.futuresConn = conn
+		} else {
+			s.conn = conn
+		}
 		s.mu.Unlock()
 
-		log.Printf("[binance_ws] connected")
+		log.Printf("[binance_ws] connected: %s", market)
 		s.readLoop(conn)
 
 		// Connection lost — reconnect
@@ -131,7 +166,7 @@ func (s *BinanceWSStream) connect() {
 		case <-s.stopCh:
 			return
 		case <-time.After(3 * time.Second):
-			log.Printf("[binance_ws] reconnecting...")
+			log.Printf("[binance_ws] reconnecting: %s", market)
 		}
 	}
 }
@@ -387,12 +422,14 @@ func (s *BinanceWSStream) keepalive() {
 			return
 		case <-ticker.C:
 			s.mu.RLock()
-			conn := s.conn
+			conns := []*websocket.Conn{s.conn, s.futuresConn}
 			s.mu.RUnlock()
-			if conn != nil {
-				s.writeMu.Lock()
-				conn.WriteMessage(websocket.PingMessage, nil)
-				s.writeMu.Unlock()
+			for _, conn := range conns {
+				if conn != nil {
+					s.writeMu.Lock()
+					conn.WriteMessage(websocket.PingMessage, nil)
+					s.writeMu.Unlock()
+				}
 			}
 		}
 	}
@@ -409,13 +446,20 @@ func symbolStreams(sym string) []string {
 }
 
 // streamURL 按当前订阅表构建 combined stream URL。
-func (s *BinanceWSStream) streamURL() string {
+func (s *BinanceWSStream) streamURL(marketType ...string) string {
+	market := wsMarketType(marketType)
 	s.mu.RLock()
 	syms := append([]string(nil), s.symbols...)
+	if market == "swap" {
+		syms = append([]string(nil), s.futuresSymbols...)
+	}
 	s.mu.RUnlock()
 	var streams []string
 	for _, sym := range syms {
 		streams = append(streams, symbolStreams(sym)...)
+	}
+	if market == "swap" {
+		return fmt.Sprintf("wss://fstream.binance.com/stream?streams=%s", strings.Join(streams, "/"))
 	}
 	return fmt.Sprintf("wss://stream.binance.com:9443/stream?streams=%s", strings.Join(streams, "/"))
 }
@@ -424,20 +468,26 @@ func (s *BinanceWSStream) streamURL() string {
 // 之外的 symbol 的 tick 此前永不到达，CRA 防瀑布与运行面板现价对它们失效）。
 // 已订阅去重；连接中立即发 SUBSCRIBE 帧，未连接/断线时只并入订阅表，下次
 // （重）连拨号统一带上（connect 每次拨号重建 URL）。
-func (s *BinanceWSStream) EnsureSymbol(symbol string) {
+func (s *BinanceWSStream) EnsureSymbol(symbol string, marketType ...string) {
 	sym := strings.ToLower(strings.TrimSpace(symbol))
 	if sym == "" {
 		return
 	}
+	market := wsMarketType(marketType)
 	s.mu.Lock()
-	for _, existing := range s.symbols {
+	syms := &s.symbols
+	conn := s.conn
+	if market == "swap" {
+		syms = &s.futuresSymbols
+		conn = s.futuresConn
+	}
+	for _, existing := range *syms {
 		if existing == sym {
 			s.mu.Unlock()
 			return
 		}
 	}
-	s.symbols = append(s.symbols, sym)
-	conn := s.conn
+	*syms = append(*syms, sym)
 	s.mu.Unlock()
 
 	if conn == nil {
@@ -533,7 +583,7 @@ func (s *BinanceWSStream) IsRunning() bool {
 func (s *BinanceWSStream) SymbolCount() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return len(s.symbols)
+	return len(s.symbols) + len(s.futuresSymbols)
 }
 
 func parseFloat(s string) float64 {

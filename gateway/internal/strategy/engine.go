@@ -400,7 +400,7 @@ func (e *Engine) Start(name string, params map[string]any) error {
 	// 参数应用后 symbol 可能与注册时的默认不同：校正事件订阅 topic。
 	e.resubscribeIfSymbolChanged(name, s)
 	// 多周期供给 / 计划调度 / 动态 universe 的启用与资源记账
-	e.setupExtensions(name, s)
+	e.setupExtensions(name, s, strategyFeedMarketType(s, params))
 	return nil
 }
 

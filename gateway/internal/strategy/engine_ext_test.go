@@ -80,8 +80,16 @@ func TestParseScheduleCompatAliases(t *testing.T) {
 // fakeFeeder 记录 Ensure/Release 调用（线程安全接口的测试替身）。
 type fakeFeeder struct{ ensured, released []string }
 
-func (f *fakeFeeder) EnsureSymbol(symbol, interval string) bool {
+func fakeFeedKey(symbol, interval string, marketType []string) string {
 	key := symbol + "|" + interval
+	if len(marketType) > 0 && marketType[0] != "" && marketType[0] != "spot" {
+		key += "|" + marketType[0]
+	}
+	return key
+}
+
+func (f *fakeFeeder) EnsureSymbol(symbol, interval string, marketType ...string) bool {
+	key := fakeFeedKey(symbol, interval, marketType)
 	for _, k := range f.ensured {
 		if k == key {
 			return false
@@ -90,8 +98,8 @@ func (f *fakeFeeder) EnsureSymbol(symbol, interval string) bool {
 	f.ensured = append(f.ensured, key)
 	return true
 }
-func (f *fakeFeeder) ReleaseSymbol(symbol, interval string) {
-	f.released = append(f.released, symbol+"|"+interval)
+func (f *fakeFeeder) ReleaseSymbol(symbol, interval string, marketType ...string) {
+	f.released = append(f.released, fakeFeedKey(symbol, interval, marketType))
 }
 
 // mtStrategy 实现多周期 + 主周期过滤的策略测试替身。
@@ -138,6 +146,30 @@ func newTestEngine() *Engine {
 		feedHolds:  make(map[string][]feedHold),
 		universes:  make(map[string]*universeState),
 		scheduled:  make(map[string]*scheduledEntry),
+	}
+}
+
+func TestEngineMultiTimeframeUsesStrategyMarket(t *testing.T) {
+	e := newTestEngine()
+	defer e.bus.Close()
+	f := &fakeFeeder{}
+	e.SetKlineFeeder(f)
+
+	s := &mtStrategy{name: "mt-swap", symbol: "BTCUSDT", tf: "1h", extraTF: []string{"4h"}}
+	if err := e.Register(WrapStrategy("cfg-mt-swap", s)); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Start("cfg-mt-swap", map[string]any{"market_type": "swap"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.ensured) != 1 || f.ensured[0] != "BTCUSDT|4h|swap" {
+		t.Fatalf("ensured = %v, want swap feed", f.ensured)
+	}
+	if err := e.Unregister("cfg-mt-swap"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.released) != 1 || f.released[0] != "BTCUSDT|4h|swap" {
+		t.Fatalf("released = %v, want swap feed", f.released)
 	}
 }
 

@@ -193,6 +193,56 @@ func TestKlineFeederReleaseStopsFeed(t *testing.T) {
 	}
 }
 
+func TestKlineFeederMarketRouting(t *testing.T) {
+	tests := []struct {
+		name       string
+		marketType string
+		wantPath   string
+	}{
+		{name: "default spot", wantPath: "/api/v3/klines"},
+		{name: "explicit spot", marketType: "spot", wantPath: "/api/v3/klines"},
+		{name: "swap", marketType: "swap", wantPath: "/fapi/v1/klines"},
+		{name: "futures alias", marketType: "futures", wantPath: "/fapi/v1/klines"},
+		{name: "margin alias", marketType: "margin", wantPath: "/fapi/v1/klines"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			requests := make(chan string, 4)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests <- r.URL.Path
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, `[
+					[1700000000000, "100", "110", "90", "105", "10"],
+					[1700000900000, "200", "220", "190", "210", "20"],
+					[1700001800000, "300", "310", "290", "305", "5"]
+				]`)
+			}))
+			defer srv.Close()
+
+			feeder := NewKlineFeeder(nil)
+			feeder.BaseURL = srv.URL + "/api/v3"
+			feeder.FuturesBaseURL = srv.URL
+			feeder.Interval = time.Hour
+			args := []string{}
+			if tc.marketType != "" {
+				args = append(args, tc.marketType)
+			}
+			if !feeder.EnsureSymbol("BTCUSDT", "15m", args...) {
+				t.Fatal("feed did not start")
+			}
+			select {
+			case got := <-requests:
+				if got != tc.wantPath {
+					t.Fatalf("request path = %q, want %q", got, tc.wantPath)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("no kline request")
+			}
+			feeder.Stop()
+		})
+	}
+}
+
 func TestKlineFeederSurvivesHTTPErrors(t *testing.T) {
 	const t1 = int64(1700000000000)
 

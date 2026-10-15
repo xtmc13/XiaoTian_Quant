@@ -20,6 +20,7 @@ import (
 // defaultBinanceRestURL matches adapter.BinanceRestURL. Like the adapter,
 // BINANCE_REST_URL env overrides it (TUN/proxy deployments).
 const defaultBinanceRestURL = "https://api.binance.com/api/v3"
+const defaultBinanceFuturesRestURL = "https://fapi.binance.com"
 
 // DefaultKlineFeedInterval is how often a symbol+interval pair is polled.
 const DefaultKlineFeedInterval = 20 * time.Second
@@ -37,7 +38,8 @@ type KlineFeeder struct {
 	Bus *event.EventBus
 	// BaseURL is the Binance REST base, e.g. https://api.binance.com/api/v3.
 	// Defaults to BINANCE_REST_URL env or the mainnet URL.
-	BaseURL string
+	BaseURL        string
+	FuturesBaseURL string
 	// Interval is the poll period per symbol+interval. Defaults to
 	// DefaultKlineFeedInterval.
 	Interval time.Duration
@@ -45,7 +47,7 @@ type KlineFeeder struct {
 	httpClient *http.Client
 
 	mu      sync.Mutex
-	running map[string]*feedEntry // key: SYMBOL|interval -> entry
+	running map[string]*feedEntry // key: SYMBOL|interval|market -> entry
 }
 
 type feedEntry struct {
@@ -74,6 +76,16 @@ func (f *KlineFeeder) baseURL() string {
 	return defaultBinanceRestURL
 }
 
+func (f *KlineFeeder) fapiBaseURL() string {
+	if f.FuturesBaseURL != "" {
+		return f.FuturesBaseURL
+	}
+	if env := os.Getenv("BINANCE_FAPI_URL"); env != "" {
+		return env
+	}
+	return defaultBinanceFuturesRestURL
+}
+
 func (f *KlineFeeder) interval() time.Duration {
 	if f.Interval > 0 {
 		return f.Interval
@@ -81,8 +93,18 @@ func (f *KlineFeeder) interval() time.Duration {
 	return DefaultKlineFeedInterval
 }
 
-func feedKey(symbol, interval string) string {
-	return symbol + "|" + interval
+func feedMarketType(marketType []string) string {
+	if len(marketType) > 0 {
+		switch strings.ToLower(strings.TrimSpace(marketType[0])) {
+		case "swap", "futures", "margin", "contract":
+			return "swap"
+		}
+	}
+	return "spot"
+}
+
+func feedKey(symbol, interval string, marketType ...string) string {
+	return symbol + "|" + interval + "|" + feedMarketType(marketType)
 }
 
 // EnsureSymbol starts (or refs) a poll loop for symbol+interval. Idempotent:
@@ -94,7 +116,7 @@ func feedKey(symbol, interval string) string {
 // （2026-10-10 H4）：实现 Warmupper 的策略只养指标不下单；未实现的照旧。
 // 返回值 started 表示本次是否新起了轮询 goroutine：false 说明供给管已在跑、
 // 不会再有历史回补——新启动的策略需要调用方自行暖机（否则要等下一根新 K 线）。
-func (f *KlineFeeder) EnsureSymbol(symbol, interval string) (started bool) {
+func (f *KlineFeeder) EnsureSymbol(symbol, interval string, marketType ...string) (started bool) {
 	symbol = normalizeFeedSymbol(symbol)
 	if symbol == "" {
 		return false
@@ -103,8 +125,8 @@ func (f *KlineFeeder) EnsureSymbol(symbol, interval string) (started bool) {
 	if interval == "" {
 		interval = "15m"
 	}
-
-	key := feedKey(symbol, interval)
+	market := feedMarketType(marketType)
+	key := feedKey(symbol, interval, market)
 
 	f.mu.Lock()
 	if e, ok := f.running[key]; ok {
@@ -116,32 +138,32 @@ func (f *KlineFeeder) EnsureSymbol(symbol, interval string) (started bool) {
 	f.running[key] = e
 	f.mu.Unlock()
 
-	go f.run(symbol, interval, e)
+	go f.run(symbol, interval, market, e)
 	return true
 }
 
 // RecentClosedBars returns the most recently closed bars (oldest→newest) for
 // direct strategy warmup when the feed loop is already running and will not
 // replay its backfill.
-func (f *KlineFeeder) RecentClosedBars(symbol, interval string, limit int) ([]model.Bar, error) {
+func (f *KlineFeeder) RecentClosedBars(symbol, interval string, limit int, marketType ...string) ([]model.Bar, error) {
 	symbol = normalizeFeedSymbol(symbol)
 	interval = strings.ToLower(strings.TrimSpace(interval))
 	if interval == "" {
 		interval = "15m"
 	}
-	return f.fetchClosedBars(symbol, interval, limit)
+	return f.fetchClosedBars(symbol, interval, limit, marketType...)
 }
 
 // ReleaseSymbol drops one ref for symbol+interval; the poll loop stops when
 // the last ref is released. Blocks until the goroutine has fully exited, so
 // no further events for the pair are published once it returns.
-func (f *KlineFeeder) ReleaseSymbol(symbol, interval string) {
+func (f *KlineFeeder) ReleaseSymbol(symbol, interval string, marketType ...string) {
 	symbol = normalizeFeedSymbol(symbol)
 	interval = strings.ToLower(strings.TrimSpace(interval))
 	if interval == "" {
 		interval = "15m"
 	}
-	key := feedKey(symbol, interval)
+	key := feedKey(symbol, interval, marketType...)
 
 	f.mu.Lock()
 	e, ok := f.running[key]
@@ -186,7 +208,7 @@ func (f *KlineFeeder) ActiveFeeds() int {
 	return len(f.running)
 }
 
-func (f *KlineFeeder) run(symbol, interval string, e *feedEntry) {
+func (f *KlineFeeder) run(symbol, interval, marketType string, e *feedEntry) {
 	defer close(e.done)
 
 	ticker := time.NewTicker(f.interval())
@@ -200,7 +222,7 @@ func (f *KlineFeeder) run(symbol, interval string, e *feedEntry) {
 		default:
 		}
 
-		bar, err := f.fetchClosedBar(symbol, interval)
+		bar, err := f.fetchClosedBar(symbol, interval, marketType)
 		if err != nil {
 			log.Printf("[KlineFeeder] fetch %s %s failed: %v", symbol, interval, err)
 		} else {
@@ -210,7 +232,7 @@ func (f *KlineFeeder) run(symbol, interval string, e *feedEntry) {
 				// 指标暖机回补：启动时发布最近最多 100 根已闭合历史 K 线
 				// （旧→新），让 MACD 等指标策略立刻有完整计算窗口，不必
 				// 等数小时收齐；基线设为最新一根，之后只发新闭合 K 线。
-				bars, berr := f.fetchClosedBars(symbol, interval, 100)
+				bars, berr := f.fetchClosedBars(symbol, interval, 100, marketType)
 				if berr != nil {
 					log.Printf("[KlineFeeder] backfill %s %s failed: %v", symbol, interval, berr)
 					e.lastOpen = bar.Time
@@ -260,8 +282,8 @@ func (f *KlineFeeder) run(symbol, interval string, e *feedEntry) {
 
 // fetchClosedBar fetches the last 3 klines and converts the second-to-last
 // one (the newest fully closed bar; the last element is still forming).
-func (f *KlineFeeder) fetchClosedBar(symbol, interval string) (*model.Bar, error) {
-	bars, err := f.fetchClosedBars(symbol, interval, 3)
+func (f *KlineFeeder) fetchClosedBar(symbol, interval string, marketType ...string) (*model.Bar, error) {
+	bars, err := f.fetchClosedBars(symbol, interval, 3, marketType...)
 	if err != nil {
 		return nil, err
 	}
@@ -274,13 +296,19 @@ func (f *KlineFeeder) fetchClosedBar(symbol, interval string) (*model.Bar, error
 // fetchClosedBars fetches up to limit klines and returns all fully closed
 // ones in chronological order; the newest fetched row is still forming and
 // is excluded.
-func (f *KlineFeeder) fetchClosedBars(symbol, interval string, limit int) ([]model.Bar, error) {
+func (f *KlineFeeder) fetchClosedBars(symbol, interval string, limit int, marketType ...string) ([]model.Bar, error) {
 	params := url.Values{}
 	params.Set("symbol", symbol)
 	params.Set("interval", interval)
 	params.Set("limit", strconv.Itoa(limit))
 
-	u, _ := url.Parse(f.baseURL() + "/klines")
+	baseURL := f.baseURL()
+	path := "/klines"
+	if feedMarketType(marketType) == "swap" {
+		baseURL = f.fapiBaseURL()
+		path = "/fapi/v1/klines"
+	}
+	u, _ := url.Parse(baseURL + path)
 	u.RawQuery = params.Encode()
 
 	resp, err := f.httpClient.Get(u.String())

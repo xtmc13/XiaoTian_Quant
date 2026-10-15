@@ -72,19 +72,20 @@ func NewUniverseContext(t time.Time, symbols []string, barIndex int, provider Ba
 // SymbolFeeder 是引擎对 K 线供给管的最小依赖（market.KlineFeeder 满足该
 // 接口；接口化便于测试替身）。Ensure/Release 引用计数、线程安全。
 type SymbolFeeder interface {
-	EnsureSymbol(symbol, interval string) bool
-	ReleaseSymbol(symbol, interval string)
+	EnsureSymbol(symbol, interval string, marketType ...string) bool
+	ReleaseSymbol(symbol, interval string, marketType ...string)
 }
 
 // feedHold 记录引擎为某策略持有的 feeder 引用（释放在 Unregister）。
-type feedHold struct{ symbol, interval string }
+type feedHold struct{ symbol, interval, marketType string }
 
 // universeState 跟踪每个策略的动态 universe。
 type universeState struct {
-	current  map[string]bool                 // 当前 universe（含主 symbol）
-	subs     map[string]event.SubscriptionID // 引擎为 universe 追加的订阅（不含 Register 的主订阅）
-	barCount int
-	refresh  int // 每 N 根主周期 K 线刷新一次
+	current    map[string]bool                 // 当前 universe（含主 symbol）
+	subs       map[string]event.SubscriptionID // 引擎为 universe 追加的订阅（不含 Register 的主订阅）
+	barCount   int
+	refresh    int // 每 N 根主周期 K 线刷新一次
+	marketType string
 }
 
 // scheduledEntry 是调度器里的一条注册。
@@ -121,13 +122,31 @@ func strategyPrimaryTF(s Strategy) string {
 	return "15m"
 }
 
+func strategyFeedMarketType(s Strategy, params map[string]any) string {
+	if UnwrapStrategy(s).Name() == "cra_contract" {
+		return "swap"
+	}
+	for _, key := range []string{"market_type", "category"} {
+		value, _ := params[key].(string)
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "swap", "futures", "margin", "contract":
+			return "swap"
+		}
+	}
+	return "spot"
+}
+
 // setupExtensions 在策略 Start 成功后启用多周期/调度/universe（幂等，可重入）。
 // 注意：s 可能是 NamedStrategy 包装，所有可选接口断言都用解包后的 core。
-func (e *Engine) setupExtensions(name string, s Strategy) {
+func (e *Engine) setupExtensions(name string, s Strategy, marketType ...string) {
 	// 幂等：重复 Start 前先清掉旧的 feeder 持有与调度注册
 	e.teardownExtensions(name)
 
 	core := UnwrapStrategy(s)
+	market := "spot"
+	if len(marketType) > 0 && marketType[0] != "" {
+		market = marketType[0]
+	}
 
 	e.mu.Lock()
 	feeder := e.feeder
@@ -147,10 +166,10 @@ func (e *Engine) setupExtensions(name string, s Strategy) {
 			if tf == "" || tf == strategyPrimaryTF(core) {
 				continue
 			}
-			if feeder.EnsureSymbol(sym, tf) {
+			if feeder.EnsureSymbol(sym, tf, market) {
 				log.Printf("[StrategyEngine] strategy %s multi-timeframe feed %s %s started", name, sym, tf)
 			}
-			e.addFeedHold(name, feedHold{sym, tf})
+			e.addFeedHold(name, feedHold{symbol: sym, interval: tf, marketType: market})
 		}
 	}
 
@@ -163,8 +182,8 @@ func (e *Engine) setupExtensions(name string, s Strategy) {
 			if w == "" || w == sym {
 				continue
 			}
-			feeder.EnsureSymbol(w, tf)
-			e.addFeedHold(name, feedHold{w, tf})
+			feeder.EnsureSymbol(w, tf, market)
+			e.addFeedHold(name, feedHold{symbol: w, interval: tf, marketType: market})
 		}
 	}
 
@@ -180,9 +199,10 @@ func (e *Engine) setupExtensions(name string, s Strategy) {
 		st := e.universes[name]
 		if st == nil {
 			st = &universeState{
-				current: map[string]bool{strings.ToUpper(s.Symbol()): true},
-				subs:    make(map[string]event.SubscriptionID),
-				refresh: refresh,
+				current:    map[string]bool{strings.ToUpper(s.Symbol()): true},
+				subs:       make(map[string]event.SubscriptionID),
+				refresh:    refresh,
+				marketType: market,
 			}
 			e.universes[name] = st
 		}
@@ -225,7 +245,7 @@ func (e *Engine) teardownExtensions(name string) {
 	e.mu.Unlock()
 	if feeder != nil {
 		for _, h := range holds {
-			feeder.ReleaseSymbol(h.symbol, h.interval)
+			feeder.ReleaseSymbol(h.symbol, h.interval, h.marketType)
 		}
 	}
 
@@ -341,7 +361,7 @@ func (e *Engine) applyUniverse(s, core Strategy, primary string, next []string) 
 
 	for _, sym := range add {
 		if feeder != nil {
-			feeder.EnsureSymbol(sym, tf)
+			feeder.EnsureSymbol(sym, tf, st.marketType)
 		}
 		subSym := sym
 		subID := e.bus.Subscribe(subSym, event.PrioNormal, func(evt event.Event) {
@@ -370,7 +390,7 @@ func (e *Engine) applyUniverse(s, core Strategy, primary string, next []string) 
 			e.bus.Unsubscribe(subID)
 		}
 		if feeder != nil {
-			feeder.ReleaseSymbol(sym, tf)
+			feeder.ReleaseSymbol(sym, tf, st.marketType)
 		}
 		log.Printf("[StrategyEngine] universe strategy %s removed %s", name, sym)
 	}
@@ -491,7 +511,8 @@ func (e *Engine) ManualAction(name string, req map[string]any) (map[string]any, 
 
 // emitSignal 是 dispatch 信号出口的复用：策略名覆盖、风控检查、
 // OnSignal / 广播通知。dispatch 与调度回调共用。
-func (e *Engine) emitSignal(s Strategy, signal *model.Signal, err error) {	if err != nil || signal == nil {
+func (e *Engine) emitSignal(s Strategy, signal *model.Signal, err error) {
+	if err != nil || signal == nil {
 		return
 	}
 	// 用包装后的策略名（=配置 id，如 7bb9a9a6）覆盖策略内部名（如

@@ -512,7 +512,11 @@ func GridBotStart(c *gin.Context) {
 	// 网格运行依赖实时价（gridPriceSource=WS 缓存）：WS 启动列表外的 symbol
 	// 需要动态订阅，否则启动后现价断流。
 	if a := app.Get(); a != nil && a.BinanceWS != nil {
-		a.BinanceWS.EnsureSymbol(rec.Symbol)
+		marketType := "spot"
+		if mode != grid.ModeLong {
+			marketType = "swap"
+		}
+		a.BinanceWS.EnsureSymbol(rec.Symbol, marketType)
 	}
 	if err := GridSvc.StartBot(rec, price); err != nil {
 		gridBotError(c, http.StatusInternalServerError, err.Error())

@@ -239,6 +239,85 @@ func TestBinanceWSEnsureSymbolLiveSubscribe(t *testing.T) {
 	}
 }
 
+func TestBinanceWSMarketStreamURLs(t *testing.T) {
+	s := NewBinanceWSStream([]string{"btcusdt"}, nil)
+	s.EnsureSymbol("SOLUSDT", "swap")
+
+	spotURL := s.streamURL("spot")
+	if !strings.HasPrefix(spotURL, "wss://stream.binance.com:9443/stream?streams=") {
+		t.Fatalf("spot stream URL = %q", spotURL)
+	}
+	if !strings.Contains(spotURL, "btcusdt@trade") || strings.Contains(spotURL, "solusdt@trade") {
+		t.Fatalf("spot stream URL has wrong symbols: %q", spotURL)
+	}
+
+	futuresURL := s.streamURL("swap")
+	if !strings.HasPrefix(futuresURL, "wss://fstream.binance.com/stream?streams=") {
+		t.Fatalf("futures stream URL = %q", futuresURL)
+	}
+	for _, want := range []string{"solusdt@trade", "solusdt@ticker", "solusdt@markPrice@1s"} {
+		if !strings.Contains(futuresURL, want) {
+			t.Fatalf("futures stream URL missing %s: %s", want, futuresURL)
+		}
+	}
+	if strings.Contains(futuresURL, "btcusdt@trade") {
+		t.Fatalf("futures stream URL contains spot symbol: %q", futuresURL)
+	}
+}
+
+func TestBinanceWSEnsureFuturesSymbolLiveSubscribe(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	type frame struct {
+		Method string   `json:"method"`
+		Params []string `json:"params"`
+	}
+	got := make(chan frame, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		var f frame
+		if err := conn.ReadJSON(&f); err == nil {
+			got <- f
+		}
+	}))
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	client, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial test server: %v", err)
+	}
+	defer client.Close()
+
+	s := NewBinanceWSStream([]string{"btcusdt"}, nil)
+	s.mu.Lock()
+	s.futuresConn = client
+	s.mu.Unlock()
+	defer s.Stop()
+
+	s.EnsureSymbol("DOGEUSDT", "swap")
+	select {
+	case f := <-got:
+		if f.Method != "SUBSCRIBE" {
+			t.Fatalf("method = %q, want SUBSCRIBE", f.Method)
+		}
+		want := map[string]bool{"dogeusdt@trade": true, "dogeusdt@ticker": true, "dogeusdt@markPrice@1s": true}
+		if len(f.Params) != len(want) {
+			t.Fatalf("params = %v", f.Params)
+		}
+		for _, p := range f.Params {
+			if !want[p] {
+				t.Fatalf("unexpected stream %q in %v", p, f.Params)
+			}
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("server did not receive futures SUBSCRIBE frame")
+	}
+}
+
 // ── 价格缓存新鲜度（2026-10-10 运行面板陈旧价根修）──
 // 生产实证：运行面板"现价"经 GetPrice 读 WS 缓存，SOLUSDT 策略引擎按
 // K 线收盘价 120.1 开出首单时，面板显示数小时前的残留值 108.72——

@@ -1,6 +1,8 @@
 package adapter
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/xiaotian-quant/gateway/internal/model"
@@ -66,6 +68,55 @@ func TestBinanceGetKlines(t *testing.T) {
 	// May error due to no network; just assert no panic
 	_ = klines
 	_ = err
+}
+
+func TestBinanceGetFuturesKlines(t *testing.T) {
+	type request struct {
+		host, path, symbol, interval, limit, start, end string
+	}
+	requests := make(chan request, 2)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		requests <- request{
+			host: r.Host, path: r.URL.Path, symbol: q.Get("symbol"), interval: q.Get("interval"),
+			limit: q.Get("limit"), start: q.Get("startTime"), end: q.Get("endTime"),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[
+			[1700000000000, "100.0", "110.0", "95.0", "105.0", "10.0"],
+			[1700000900000, "200.0", "220.0", "190.0", "210.0", "20.0"]
+		]`))
+	}))
+	defer srv.Close()
+	t.Setenv("BINANCE_FAPI_URL", srv.URL)
+
+	b := NewBinanceAdapter("key", "secret", false)
+	rows, err := b.GetFuturesKlines("BTCUSDT", "15m", 25)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := <-requests
+	if req.host != srv.Listener.Addr().String() || req.path != "/fapi/v1/klines" {
+		t.Fatalf("request endpoint = %s%s", req.host, req.path)
+	}
+	if req.symbol != "BTCUSDT" || req.interval != "15m" || req.limit != "25" || req.start != "" || req.end != "" {
+		t.Fatalf("unexpected request: %+v", req)
+	}
+	if len(rows) != 2 || len(rows[1]) != 6 || rows[1][0] != float64(1700000900000) || rows[1][1] != "200.0" || rows[1][5] != "20.0" {
+		t.Fatalf("unexpected klines: %#v", rows)
+	}
+
+	rangeRows, err := b.GetFuturesKlinesRange("ETHUSDT", "1h", 1700000000000, 1700003600000, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rangeRows) != 2 {
+		t.Fatalf("range rows = %d, want 2", len(rangeRows))
+	}
+	req = <-requests
+	if req.path != "/fapi/v1/klines" || req.symbol != "ETHUSDT" || req.interval != "1h" || req.limit != "100" || req.start != "1700000000000" || req.end != "1700003600000" {
+		t.Fatalf("unexpected range request: %+v", req)
+	}
 }
 
 /* ── REST — GetTicker ────────────────────────────────────────── */
