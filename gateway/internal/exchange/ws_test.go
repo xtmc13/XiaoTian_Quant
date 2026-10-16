@@ -390,3 +390,24 @@ func TestBinanceWSHandlersStampFreshness(t *testing.T) {
 		t.Fatalf("markPrice write must be fresh: got %v", p)
 	}
 }
+
+// 回归：币安 futures @trade 心跳帧（p="0", q="0", st=1）与畸形零价帧不得
+// 污染价格缓存也不得进总线（曾把防瀑布检测器打成 100% 跌幅狂闪，2026-10-15）。
+func TestBinanceWSZeroPriceFramesIgnored(t *testing.T) {
+	s := NewBinanceWSStream([]string{"solusdt"}, nil)
+
+	s.handleTrade(json.RawMessage(`{"s":"SOLUSDT","p":"106.5","q":"1","T":1720000000000,"m":true}`), "solusdt@trade")
+	if p := s.GetPriceFresh("SOLUSDT", time.Minute); p != 106.5 {
+		t.Fatalf("seed price: got %v", p)
+	}
+
+	s.handleTrade(json.RawMessage(`{"s":"SOLUSDT","p":"0","q":"0","X":"NA","m":true,"st":1,"T":1720000001000}`), "solusdt@trade")
+	if p := s.GetPriceFresh("SOLUSDT", time.Minute); p != 106.5 {
+		t.Fatalf("zero-price heartbeat must not overwrite cache: got %v", p)
+	}
+
+	s.handleTicker(json.RawMessage(`{"s":"SOLUSDT","c":"0","o":"0","h":"0","l":"0","v":"0"}`), "solusdt@ticker")
+	if p := s.GetPriceFresh("SOLUSDT", time.Minute); p != 106.5 {
+		t.Fatalf("zero-price ticker must not overwrite cache: got %v", p)
+	}
+}

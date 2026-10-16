@@ -288,6 +288,13 @@ func (s *BinanceWSStream) handleTrade(data json.RawMessage, stream string) {
 	price := parseFloat(trade.Price)
 	qty := parseFloat(trade.Qty)
 
+	// 币安 futures @trade 周期性推送心跳事件（p="0", q="0", st=1）：
+	// 零价 tick 进缓存会污染 GetPrice、进总线会把防瀑布检测器打成"100% 跌幅"
+	// 狂闪并间歇性拦截开仓/补仓（2026-10-15 生产实证）。
+	if price <= 0 {
+		return
+	}
+
 	s.pricesMu.Lock()
 	s.prices[trade.Symbol] = price
 	s.pricesTs[trade.Symbol] = time.Now().UnixMilli()
@@ -343,6 +350,11 @@ func (s *BinanceWSStream) handleTicker(data json.RawMessage, stream string) {
 	vol := parseFloat(ticker.Volume)
 	_ = parseFloat(ticker.BidPrice)
 	_ = parseFloat(ticker.AskPrice)
+
+	// 同上：零价/负价事件不得污染价格缓存（防御与 @trade 心跳同类的畸形帧）。
+	if last <= 0 {
+		return
+	}
 
 	s.pricesMu.Lock()
 	s.prices[ticker.Symbol] = last

@@ -49,13 +49,18 @@ func NewFlashCrashDetectorWithParams(window time.Duration, threshold float64) *F
 }
 
 // AddPrice adds a new price point to the history. It automatically evicts
-// points that fall outside the detection window.
+// points that fall outside the detection window. Non-positive prices are
+// ignored (exchange heartbeat/heartbeat-like frames with p=0 would otherwise
+// read as a 100% crash).
 func (d *FlashCrashDetector) AddPrice(price float64, timestamp int64) {
+	if price <= 0 {
+		return
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
 	// Evict old points outside the window
-	cutoff := timestamp - int64(d.Window.Seconds())
+	cutoff := timestamp - d.Window.Milliseconds()
 	idx := 0
 	for i, p := range d.history {
 		if p.Timestamp >= cutoff {
