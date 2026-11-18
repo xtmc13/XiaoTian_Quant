@@ -35,7 +35,7 @@ if ! command -v go >/dev/null 2>&1 && [ -x /usr/local/go/bin/go ]; then
   export PATH="$PATH:/usr/local/go/bin"
 fi
 if ! command -v go >/dev/null 2>&1; then
-  fail "未找到 go，请先安装 Go 1.25+ 或 export PATH=\$PATH:/usr/local/go/bin"
+  fail "未找到 go，请先安装 Go 1.26+ 或 export PATH=\$PATH:/usr/local/go/bin"
   exit 1
 fi
 

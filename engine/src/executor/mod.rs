@@ -250,7 +250,8 @@ impl SignalExecutor {
         };
 
         if let Some(pm) = positions_guard.get_mut(symbol) {
-            let open_pids: Vec<String> = pm.all_open_positions()
+            let open_pids: Vec<String> = pm
+                .all_open_positions()
                 .iter()
                 .map(|p| p.position_id.clone())
                 .collect();
@@ -311,10 +312,7 @@ impl SignalExecutor {
         match self.positions.lock() {
             Ok(guard) => {
                 if let Some(pm) = guard.get(symbol) {
-                    pm.all_open_positions()
-                        .into_iter()
-                        .cloned()
-                        .collect()
+                    pm.all_open_positions().into_iter().cloned().collect()
                 } else {
                     Vec::new()
                 }
@@ -322,10 +320,7 @@ impl SignalExecutor {
             Err(poisoned) => {
                 let guard = poisoned.into_inner();
                 if let Some(pm) = guard.get(symbol) {
-                    pm.all_open_positions()
-                        .into_iter()
-                        .cloned()
-                        .collect()
+                    pm.all_open_positions().into_iter().cloned().collect()
                 } else {
                     Vec::new()
                 }
@@ -358,6 +353,11 @@ mod tests {
     use super::*;
 
     fn test_signal() -> Signal {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+
         Signal {
             id: "sig-001".to_string(),
             bot_id: "bot-001".to_string(),
@@ -383,8 +383,8 @@ mod tests {
             max_stake_pct: 0.1,
             confidence: 0.85,
             ai_reason: "test".to_string(),
-            timestamp: 1700000000000,
-            expire_at: 1700003600000,
+            timestamp,
+            expire_at: timestamp + 3_600_000,
         }
     }
 
@@ -446,8 +446,8 @@ mod tests {
     fn test_close_position() {
         let mut executor = SignalExecutor::new();
         let signal = test_signal();
-        let record = executor.execute_signal(signal.clone(), 10000.0).unwrap();
-        let pos_id = format!("BTCUSDT-sig-001");
+        executor.execute_signal(signal, 10000.0).unwrap();
+        let pos_id = "BTCUSDT-sig-001".to_string();
 
         assert!(executor
             .close_position(&pos_id, "BTCUSDT", "manual_close")

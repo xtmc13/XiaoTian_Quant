@@ -92,7 +92,7 @@ brew install git curl wget sqlite redis
 
 # 安装 Go (推荐通过官方安装器)
 # arm64 机器（ARM 服务器 / Apple Silicon 虚拟机）将 linux-amd64 换成 linux-arm64
-curl -L https://go.dev/dl/go1.25.linux-amd64.tar.gz | sudo tar -C /usr/local -xzf -
+curl -L https://go.dev/dl/go1.26.11.linux-amd64.tar.gz | sudo tar -C /usr/local -xzf -
 echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
 
 # 安装 Rust

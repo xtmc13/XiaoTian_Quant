@@ -1,4 +1,5 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use std::hint::black_box;
 use xt_matching::matching::MatchingEngine;
 use xt_matching::orderbook::{Order, OrderType, Side};
 

@@ -1,6 +1,6 @@
 # 小天量化 XiaoTianQuant v3.0
 
-> AI 驱动的多资产量化交易平台 — Go 网关 + React 前端 + 内置撮合引擎（纯 Go 主链路；Rust 引擎已弃用，仅作基准），事件驱动，回测实盘一体。
+> AI 驱动的多资产量化交易平台 — 目标架构为 Go 网关/账户 + Rust 撮合 + TypeScript 前端。**当前生产撮合仍由 Go 实现；Rust 引擎尚未接入主链路，正在按阶段迁移。**
 >
 > **v3.0 新增**: 三机器体系(策略/信号/AI) · ML 预测管线(Go 原生推理 + Python CLI 训练) · 配置API · 纯 Go 本地推理 · 社交交易 · 链上数据 · 高级订单(OCO/冰山/跟踪) · 套利监控 · Hyperopt 参数优化 · Protection 风控 · Pairlist 交易对筛选 · 策略社区 · Admin 面板 · Indicator IDE · Telegram/Discord Bot · 10 交易所适配器 · i18n 多语言 · OAuth 登录 · MFA 两步验证 · Billing 会员(USDT 链上核验 + Stripe) · 凭证加密 · TensorBoard 可视化
 
@@ -22,9 +22,9 @@
 │          交易所适配器 (Binance 深度 + 9 家基础 REST)         │
 │              SQLite · Redis (可选)                            │
 └───────────────────────────┬─────────────────────────────────┘
-                            │ 纯 Go 撮合（唯一主链路）
+                            │ Go 撮合（当前生产实现；迁移中）
 ┌───────────────────────────▼─────────────────────────────────┐
-│             Rust 撮合引擎（已弃用，仅作基准参照）              │
+│                  Rust 撮合引擎（目标架构）                     │
 │         价格-时间优先订单簿 · 限价/市价/部分成交              │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -32,8 +32,8 @@
 | 层 | 语言 | 职责 |
 |---|------|------|
 | **Web 前端** | React 19 + TypeScript + Vite | 仪表盘、K 线图表、AI 策略生成、回测面板、交易下单、资产管理、三机器管理 |
-| **Go 网关** | Go 1.25 + Gin 框架 | REST API（526 条运行期路由，契约基线 docs/api/openapi.yaml 由 `go run ./cmd/apidump` 自动生成，CI 漂移检查守护）、策略引擎、交易所适配、回测、风控、WebSocket 推送、通知、配置API |
-| **Rust 引擎**（已弃用） | Rust (cdylib) | 仅作撮合性能基准参照，不进主链路；不参与默认构建（build.sh 需显式 `BUILD_RUST=1`） |
+| **Go 网关** | Go 1.26 + Gin 框架 | REST API（526 条运行期路由，契约基线 docs/api/openapi.yaml 由 `go run ./cmd/apidump` 自动生成，CI 漂移检查守护）、策略引擎、交易所适配、回测、风控、WebSocket 推送、通知、配置API |
+| **Rust 引擎**（迁移中） | Rust (cdylib) | 目标为撮合执行；当前尚未接入生产主链路，默认构建仍使用 Go 撮合 |
 
 **辅助工具 (Python CLI)**：模型训练 (`sandbox/train.py`) 和指标沙箱执行 (`sandbox/main.py`)，非常驻服务，手动触发。
 
@@ -57,10 +57,10 @@
 - **图标**: Lucide React
 
 ### 撮合引擎 (engine/)
-- **状态**: 已弃用 — 纯 Go 撮合（`gateway/internal/adapter/matching.go`）为唯一主链路；Rust 引擎仅保留作性能基准参照
+- **状态**: 迁移中 — 当前生产撮合是 Go（`gateway/internal/adapter/matching.go`）；Rust FFI 尚未接入主链路
 - **语言**: Rust (edition 2021)
 - **序列化**: Serde + serde_json
-- **编译**: cdylib + rlib, LTO 优化（默认不构建，`BUILD_RUST=1 bash build.sh` 才编译）
+- **编译**: cdylib + rlib, LTO 优化（当前需显式 `BUILD_RUST=1` 构建，不代表已用于生产）
 
 ## 项目结构
 
@@ -81,7 +81,7 @@ xiaotian_quant/
 │   │   │   ├── alpaca.go           #   Alpaca (基础 REST)
 │   │   │   ├── ibkr.go             #   IBKR (基础 REST)
 │   │   │   ├── matching.go         #   纯 Go 撮合引擎（主链路，价格-时间优先）
-│   │   │   ├── cgo_bridge.go       #   CGo 动态库加载（可选 Rust FFI，已弃用）
+│   │   │   ├── cgo_bridge.go       #   CGo 动态库加载（Rust 迁移中的 opt-in 路径）
 │   │   │   └── helpers.go          #   通用辅助函数 (stubError 等)
 │   │   ├── bot/                    # Telegram/Discord 通知机器人
 │   │   ├── data/                   # 配置文件 (markets.json · indices.json)
@@ -152,7 +152,7 @@ xiaotian_quant/
 │   │   └── lib/                    #   工具函数 · API 客户端
 │   ├── package.json
 │   └── vite.config.js
-├── engine/                         # Rust 撮合引擎（已弃用，仅作基准参照）
+├── engine/                         # Rust 撮合引擎（迁移中，当前未接入生产链路）
 │   ├── Cargo.toml
 │   └── src/
 │       ├── lib.rs                  #   库入口
@@ -211,7 +211,7 @@ curl -fsSL .../install.sh | bash -s -- --version v3.0.0
 
 - **Go** 1.25+ (仅源码构建时需要)
 - **Node.js** 20+ (仅源码构建时需要)
-- **Rust** (不需要 — 撮合引擎已弃用仅作基准，默认构建不含)
+- **Rust** (当前生产构建暂不需要；Rust 撮合接入完成前，主链路仍由 Go 撮合)
 - **Docker** (可选, 容器化部署)
 
 ### 方式一：本地构建
@@ -344,7 +344,7 @@ REDIS_URL=redis://localhost:6379
 - **信号机器人**: 接收外部信号(Webhook/API/IDE)，阶梯止盈/止损自动执行
 - **AI 机器人市场**: 目录订阅 + 实例生命周期（对标 CryptoRobotics 的机器人商店）
 - **社交跟单**: 信号提供商广播，跟随者自动跟单
-- **统一执行层**: 纯 Go 执行器统一处理仓位/止盈/止损（Rust SignalExecutor 已弃用，仅作基准，不进主链路）
+- **统一执行层**: 当前 Go OMS/执行器处理仓位、止盈止损和交易所委托；Rust 撮合迁移完成前不承担生产执行
 
 ### 回测系统
 - **事件驱动**: 精准模拟交易所行为

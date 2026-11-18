@@ -797,7 +797,7 @@ func TestCRAMatrixWaterfallParams(t *testing.T) {
 		}
 		// 恢复（旧点出窗、新窗跌幅<阈值一半）：同形态重新挂起并触发补仓 #1。
 		for i, p := range []float64{97, 97.2, 97.1} {
-			if _, err := s.OnTick(model.Tick{Symbol: "BTCUSDT", Last: p, Timestamp: int64(1200 + i*10)}, nil); err != nil {
+			if _, err := s.OnTick(model.Tick{Symbol: "BTCUSDT", Last: p, Timestamp: int64(61_200 + i*10)}, nil); err != nil {
 				t.Fatalf("ontick resume: %v", err)
 			}
 		}

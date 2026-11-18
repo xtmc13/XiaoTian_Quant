@@ -3,7 +3,6 @@
 /// Go calls these functions via cgo.
 ///
 /// Memory management: Rust allocates, Go frees via `free_*` functions.
-
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 
@@ -22,6 +21,10 @@ fn get_engines() -> &'static Mutex<HashMap<String, MatchingEngine>> {
 
 fn to_c_string(s: String) -> *mut c_char {
     CString::new(s).unwrap_or_default().into_raw()
+}
+
+fn json_error(message: impl AsRef<str>) -> String {
+    serde_json::json!({ "error": message.as_ref() }).to_string()
 }
 
 unsafe fn from_c_str(ptr: *const c_char) -> String {
@@ -47,8 +50,11 @@ macro_rules! lock_engines {
 }
 
 /// Create a new matching engine for a symbol. Returns the symbol as confirmation.
+///
+/// # Safety
+/// `symbol` must be null or point to a readable, null-terminated C string.
 #[no_mangle]
-pub extern "C" fn engine_create(symbol: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn engine_create(symbol: *const c_char) -> *mut c_char {
     let sym = unsafe { from_c_str(symbol) };
     let engine = MatchingEngine::new(sym.clone());
     lock_engines!().insert(sym.clone(), engine);
@@ -56,8 +62,11 @@ pub extern "C" fn engine_create(symbol: *const c_char) -> *mut c_char {
 }
 
 /// Delete a matching engine.
+///
+/// # Safety
+/// `symbol` must be null or point to a readable, null-terminated C string.
 #[no_mangle]
-pub extern "C" fn engine_destroy(symbol: *const c_char) {
+pub unsafe extern "C" fn engine_destroy(symbol: *const c_char) {
     let sym = unsafe { from_c_str(symbol) };
     lock_engines!().remove(&sym);
 }
@@ -67,29 +76,57 @@ pub extern "C" fn engine_destroy(symbol: *const c_char) {
 /// Submit a limit order. JSON input, JSON output.
 /// Input: {"symbol":"BTCUSDT","side":"buy","price":68000,"quantity":0.1,"user_id":1}
 /// Output: {"order_id":1,"status":"filled","trades":[...]}
+///
+/// # Safety
+/// `json_ptr` must be null or point to a readable, null-terminated C string.
 #[no_mangle]
-pub extern "C" fn engine_submit_order(json_ptr: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn engine_submit_order(json_ptr: *const c_char) -> *mut c_char {
     let json = unsafe { from_c_str(json_ptr) };
+
     let parsed: serde_json::Value = match serde_json::from_str(&json) {
         Ok(v) => v,
-        Err(e) => return to_c_string(format!("{{\"error\":\"{}\"}}", e)),
+        Err(e) => return to_c_string(json_error(format!("JSON parse: {e}"))),
     };
 
-    let symbol = parsed["symbol"].as_str().unwrap_or("BTCUSDT");
-    let side_str = parsed["side"].as_str().unwrap_or("buy");
+    let symbol = match parsed.get("symbol").and_then(serde_json::Value::as_str) {
+        Some(symbol) if !symbol.trim().is_empty() => symbol,
+        _ => return to_c_string(json_error("missing or empty symbol")),
+    };
+    let side_str = match parsed.get("side").and_then(serde_json::Value::as_str) {
+        Some(side) => side,
+        None => return to_c_string(json_error("missing side")),
+    };
     let price = parsed["price"].as_f64().unwrap_or(0.0);
     let quantity = parsed["quantity"].as_f64().unwrap_or(0.0);
-    let user_id = parsed["user_id"].as_u64().unwrap_or(0);
+    if !quantity.is_finite() || quantity <= 0.0 {
+        return to_c_string(json_error("quantity must be finite and greater than zero"));
+    }
+    let user_id = match parsed.get("user_id") {
+        None => 0,
+        Some(value) => match value.as_u64() {
+            Some(user_id) => user_id,
+            None => return to_c_string(json_error("user_id must be a non-negative integer")),
+        },
+    };
     let order_type_str = parsed["order_type"].as_str().unwrap_or("limit");
 
     let side = match side_str.to_lowercase().as_str() {
         "buy" => Side::Buy,
         "sell" => Side::Sell,
-        _ => Side::Buy,
+        _ => return to_c_string(json_error("side must be buy or sell")),
     };
     let order_type = match order_type_str.to_lowercase().as_str() {
         "market" => OrderType::Market,
-        _ => OrderType::Limit,
+        "limit" => OrderType::Limit,
+        _ => return to_c_string(json_error("order_type must be limit or market")),
+    };
+    if !price.is_finite()
+        || (order_type == OrderType::Limit && price <= 0.0)
+        || (order_type == OrderType::Market && price < 0.0)
+    {
+        return to_c_string(json_error(
+            "price must be finite and positive for limit orders, and non-negative for market orders",
+        ));
     };
 
     let order = Order::new(0, price, quantity, side, order_type, user_id);
@@ -112,7 +149,7 @@ pub extern "C" fn engine_submit_order(json_ptr: *const c_char) -> *mut c_char {
             })
             .to_string()
         }
-        None => format!("{{\"error\":\"engine not found for {}\"}}", symbol),
+        None => json_error(format!("engine not found for {symbol}")),
     };
 
     to_c_string(result)
@@ -120,8 +157,10 @@ pub extern "C" fn engine_submit_order(json_ptr: *const c_char) -> *mut c_char {
 
 // ═══════════════════════════════════════════ Cancel Order ═══════════════════════════════════════
 
+/// # Safety
+/// `symbol` must be null or point to a readable, null-terminated C string.
 #[no_mangle]
-pub extern "C" fn engine_cancel_order(symbol: *const c_char, order_id: u64) -> *mut c_char {
+pub unsafe extern "C" fn engine_cancel_order(symbol: *const c_char, order_id: u64) -> *mut c_char {
     let sym = unsafe { from_c_str(symbol) };
     let result = match lock_engines!().get_mut(&sym) {
         Some(engine) => match engine.cancel_order(order_id) {
@@ -135,8 +174,10 @@ pub extern "C" fn engine_cancel_order(symbol: *const c_char, order_id: u64) -> *
 
 // ═══════════════════════════════════════════ Snapshot / Query ═══════════════════════════════════════
 
+/// # Safety
+/// `symbol` must be null or point to a readable, null-terminated C string.
 #[no_mangle]
-pub extern "C" fn engine_snapshot(symbol: *const c_char, depth: u32) -> *mut c_char {
+pub unsafe extern "C" fn engine_snapshot(symbol: *const c_char, depth: u32) -> *mut c_char {
     let sym = unsafe { from_c_str(symbol) };
     let result = match lock_engines!().get(&sym) {
         Some(engine) => {
@@ -156,8 +197,10 @@ pub extern "C" fn engine_snapshot(symbol: *const c_char, depth: u32) -> *mut c_c
     to_c_string(result)
 }
 
+/// # Safety
+/// `symbol` must be null or point to a readable, null-terminated C string.
 #[no_mangle]
-pub extern "C" fn engine_trade_count(symbol: *const c_char) -> u64 {
+pub unsafe extern "C" fn engine_trade_count(symbol: *const c_char) -> u64 {
     let sym = unsafe { from_c_str(symbol) };
     match lock_engines!().get(&sym) {
         Some(engine) => engine.book.trade_count,
@@ -165,22 +208,28 @@ pub extern "C" fn engine_trade_count(symbol: *const c_char) -> u64 {
     }
 }
 
-/// Get trades as JSON array
+/// Get trades as JSON array.
+///
+/// # Safety
+/// `symbol` must be null or point to a readable, null-terminated C string.
 #[no_mangle]
-pub extern "C" fn engine_get_trades(symbol: *const c_char, limit: u32) -> *mut c_char {
+pub unsafe extern "C" fn engine_get_trades(symbol: *const c_char, limit: u32) -> *mut c_char {
     let sym = unsafe { from_c_str(symbol) };
     let result = match lock_engines!().get(&sym) {
         Some(engine) => {
             let trades = engine.get_trades(limit as usize);
-            serde_json::json!(trades.iter().map(|t| {
-                serde_json::json!({
-                    "id": t.id,
-                    "price": t.price,
-                    "quantity": t.quantity,
-                    "buy_order_id": t.buy_order_id,
-                    "sell_order_id": t.sell_order_id,
+            serde_json::json!(trades
+                .iter()
+                .map(|t| {
+                    serde_json::json!({
+                        "id": t.id,
+                        "price": t.price,
+                        "quantity": t.quantity,
+                        "buy_order_id": t.buy_order_id,
+                        "sell_order_id": t.sell_order_id,
+                    })
                 })
-            }).collect::<Vec<_>>())
+                .collect::<Vec<_>>())
             .to_string()
         }
         None => "[]".to_string(),
@@ -191,8 +240,11 @@ pub extern "C" fn engine_get_trades(symbol: *const c_char, limit: u32) -> *mut c
 // ═══════════════════════════════════════════ Memory Management ═══════════════════════════════════════
 
 /// Free a string allocated by Rust. Must be called from Go for every non-null return value.
+///
+/// # Safety
+/// `ptr` must be null or a string pointer returned by this library that has not been freed.
 #[no_mangle]
-pub extern "C" fn free_string(ptr: *mut c_char) {
+pub unsafe extern "C" fn free_string(ptr: *mut c_char) {
     if ptr.is_null() {
         return;
     }
@@ -203,8 +255,8 @@ pub extern "C" fn free_string(ptr: *mut c_char) {
 
 // ═══════════════════════════════════════════ Signal Executor FFI ═══════════════════════════════════════
 
-use crate::executor::{SignalExecutor, actions_to_json};
 use crate::executor::signal::Signal;
+use crate::executor::{actions_to_json, SignalExecutor};
 
 static SIGNAL_EXECUTOR: OnceLock<Mutex<SignalExecutor>> = OnceLock::new();
 
@@ -247,8 +299,11 @@ fn get_signal_executor() -> &'static Mutex<SignalExecutor> {
 ///
 /// # Returns
 /// JSON string of `ExecutionRecord` or error message.
+///
+/// # Safety
+/// `json_ptr` must be null or point to a readable, null-terminated C string.
 #[no_mangle]
-pub extern "C" fn engine_execute_signal(json_ptr: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn engine_execute_signal(json_ptr: *const c_char) -> *mut c_char {
     let json = unsafe { from_c_str(json_ptr) };
 
     let parsed: serde_json::Value = match serde_json::from_str(&json) {
@@ -291,8 +346,11 @@ pub extern "C" fn engine_execute_signal(json_ptr: *const c_char) -> *mut c_char 
 ///
 /// # Returns
 /// JSON array of `TPAction` objects.
+///
+/// # Safety
+/// `json_ptr` must be null or point to a readable, null-terminated C string.
 #[no_mangle]
-pub extern "C" fn engine_update_price(json_ptr: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn engine_update_price(json_ptr: *const c_char) -> *mut c_char {
     let json = unsafe { from_c_str(json_ptr) };
 
     let parsed: serde_json::Value = match serde_json::from_str(&json) {

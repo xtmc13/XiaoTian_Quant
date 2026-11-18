@@ -107,7 +107,6 @@ function PortfolioEquityChart({ result }: { result: PortfolioBacktestResult }) {
 }
 
 /* ── 页面 ─────────────────────────────────────────────────────────── */
-let legSeq = 0
 
 export function PortfolioBacktest() {
   const navigate = useNavigate()

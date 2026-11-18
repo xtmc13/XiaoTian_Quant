@@ -1,4 +1,4 @@
-# XiaoTian_Quant 行动清单（2026-09-15 重整）
+# XiaoTian_Quant 行动清单
 
 > ## 产品方向（2026-09-15 定）
 >
@@ -9,8 +9,30 @@
 > 路线：P0 打通可用 → 网格机器人一个做到底（真实行情+7×24 paper+真实权益曲线）
 > → 市场 MVP（发布/订阅/分成跑通一个类型）。
 >
-> **明确不做**（防开新坑）：Rust FFI 接入主链路（纯 Go 为正式路径）、AI/ML 价格预测、
+> **当时决定暂缓**：Rust FFI 接入主链路（纯 Go 为正式路径）、AI/ML 价格预测、
 > 链上模块、社区/论坛、多券商接入。
+
+> ## 架构方向更新（2026-11-18）
+>
+> 用户将目标明确为 **Go（网关/账户）+ Rust（撮合）+ TypeScript（前端）**；
+> 此决定覆盖 2026-09-15 的“Rust 不进主链路”结论。当前生产撮合仍是 Go，
+> Rust FFI 尚未接入生产主链路。迁移必须分阶段完成，不得在余额校验、
+> OMS 成交回写、撤单和重启恢复未验证前切换真实交易。
+>
+> **Rust 撮合迁移计划**
+> 1. **基线与口径**：Go 测试全绿；明确当前 Go 撮合行为和 Go/Rust 数据契约。✅
+> 2. **Rust 核心正确性**：校验非法订单输入与数值边界；补撮合状态、优先级、部分成交、
+>    撤单、并发与 FFI 错误路径测试。⬜
+> 3. **Go/Rust 业务边界**：Go 保留 OMS、账户余额、风控和持久化；Rust 只负责确定性的
+>    订单簿撮合。补资金预留/成交回报/取消的幂等接口及跨语言契约测试。⬜
+> 4. **持久化与恢复**：重启后从持久化订单事实源恢复撮合状态；覆盖挂单、部分成交、
+>    成交回写和取消恢复，避免内存订单簿与 OMS 分叉。⬜
+> 5. **影子对比和构建门禁**：使用相同输入比较 Go/Rust 的成交结果；Rust 构建、测试、
+>    lint 成为必过 CI，不允许静默回退到 Go。⬜
+> 6. **分阶段切换**：先仅 paper 运行 Rust 并验证回滚，再决定何时将 Rust 设为正式撮合；
+>    同步更新 Docker、发布构建、健康状态、运行手册与支持平台矩阵。⬜
+>
+> **本轮基线验证**：修正防瀑布测试的毫秒时间单位，Go 内部包测试全绿；修复 Rust 执行器测试的过期固定时间戳和 TP1/移动止损重复动作后，Rust 全套 121 项测试通过。前端类型检查、616 项测试、生产构建及 lint 通过（lint 尚有 300 条警告）。Rust 严格 Clippy 仍被既有 lint 阻塞，仓库级 `cargo fmt --check` 也报告既有格式差异；race 检查受当前环境 ThreadSanitizer `unsupported VMA range` 阻塞。README、ARCHITECTURE、gateway README 和 IMPLEMENTATION_PLAN 已如实区分目标架构与当前运行实现。Rust 仍未切入生产撮合。
 
 > 规则：做完一条，勾一条，立即 `commit + push`。
 > 不再生成任何新的宏观审计报告；项目真实状态只以本文件为准
@@ -31,7 +53,7 @@
 - [x] 5. **交易主链路 E2E 测试补全**：9 个用例 7 个标 `fixme`，含下单流程。✅ 2026-09-25 复核：web/e2e/ 全目录 `grep fixme` 为 0（7 个 fixme 已在补齐清单 C1.1 补全）；现共 30 个 Playwright 用例，仅 gate-status.spec.ts 1 条带条件跳过（需 `E2E_LIVE_BACKEND=1` 真实后端），与补齐清单完成记录"29 过/0 失败"口径一致。
 - [x] 6. **前端路由缺口复核**：`/api/experiments` 无列表路由、`/api/onchain/*` 未注册（对照 `cmd/server/router.go` 逐条核对）。✅ 2026-09-25 复核：两缺口均已闭环——`GET /api/experiments` 已注册（router.go:697 → `internal/experiment/handler.go:178` 真实实现，按属主过滤）；`/api/onchain/*` 已注册（router.go:71 `registerOnChainRoutes` → `internal/onchain/api.go` 6 条 GET，handler+client 真实实现并带单测，数据源依赖外部 API 与 `ONCHAIN_API_KEY`，未做实机联调）。
 - [x] 7. **仓库卫生**：清理根目录 `tmp_*.tsx`、`login-filled.yaml`（疑似含凭据）、`sandbox.log`、`gateway/gateway` 二进制入 `.gitignore`；29 份过期报告归档到 `docs/audits-20260827/`。✅ 2026-09-25 复核：四类垃圾文件均已不存在；`.gitignore` 已含 `gateway/gateway`（第 114 行）；过期报告实际归档于 `docs/archive/`（20 份，路径与本条原文不同，以实际为准）。
-- [x] 8. **决定 Rust 引擎定位**：补 FFI 桥接接入 Go 主链路，或正式宣布 Go 执行路径为正式版、Rust 为实验分支（写进 README，消除"计划中"的幻觉）。✅ 已决策并全面落地：纯 Go 为唯一主链路、Rust 引擎弃用仅作基准——TODO 文首"明确不做"、IMPLEMENTATION_PLAN.md 文首状态说明、`build.sh`（默认跳过，需 `BUILD_RUST=1`）、CI `rust-build` 为 `continue-on-error`；2026-09-25 README/ARCHITECTURE/docs 口径已同步修正。
+- [x] 8. **决定 Rust 引擎定位**：历史决策（2026-09-25）曾确定纯 Go 为正式路径；2026-11-18 用户已更新方向，按本文“架构方向更新”迁移 Rust 撮合至生产主链路。
 
 ## P2 —— 质量
 

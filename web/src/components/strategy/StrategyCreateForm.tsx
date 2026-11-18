@@ -216,7 +216,6 @@ export function useStrategyCreateForm(
     if (editId || !options?.initialIndicator) return null
     const ind = options.initialIndicator
     return INDICATOR_STRAT_SHORTCUTS.some((s) => s.indicator === ind) ? (ind as OpenIndicatorKey) : null
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editId, options?.initialIndicator])
   const withPresetIndicator = (p: CRAParams): CRAParams =>
     presetIndicator

@@ -34,12 +34,11 @@ XiaoTianQuant is an AI-powered quantitative trading platform with an event-drive
 │              ┌───────────────┼───────────────┐                   │
 │              │               │               │                   │
 │         ┌────▼────┐   ┌─────▼──────┐   ┌────▼─────┐             │
-│         │  SQLite  │   │  Pure-Go   │   │   Redis   │             │
-│         │  (WAL)   │   │  Matching  │   │  (cache)  │             │
+│         │  SQLite  │   │ Go matching│   │   Redis   │             │
+│         │  (WAL)   │   │ (current)  │   │  (cache)  │             │
 │         └─────────┘   │  Engine    │   └──────────┘             │
 │                       └────────────┘                             │
-│              (Rust engine deprecated — benchmark only,           │
-│               not in the main path; build with BUILD_RUST=1)     │
+│             Target: migrate matching to Rust                     │
 └──────────────────────────────┼───────────────────────────────────┘
                                │
               ┌────────────────┼────────────────┐
@@ -64,7 +63,7 @@ Single-page application with 60 routes (68 page components under `web/src/pages/
 - **Routing**: React Router 7 with lazy loading
 - **PWA**: Service worker, manifest, offline support
 
-### 2. Gateway Layer (Go 1.25)
+### 2. Gateway Layer (Go 1.26)
 
 The core business service — handles all API requests, business logic, and orchestration.
 
@@ -74,7 +73,7 @@ Each `internal/` package is a bounded context:
 
 | Package | Responsibility |
 |---------|---------------|
-| `adapter/` | Exchange API abstraction + pure-Go matching engine (Rust CGo bridge deprecated) |
+| `adapter/` | Exchange API abstraction + current Go matcher; Rust CGo path is migration-in-progress |
 | `ai/` | Multi-model AI strategy generation and voting |
 | `arbitrage/` | Cross-exchange arbitrage detection and execution |
 | `backtest/` | Event-driven backtesting engine |
@@ -105,17 +104,17 @@ Each `internal/` package is a bounded context:
 | `watchdog/` | Health checks and system monitoring |
 | `ws/` | WebSocket hub for real-time broadcasting |
 
-### 3. Matching Engine (pure Go; Rust deprecated)
+### 3. Matching Engine (current: Go; target: Rust)
 
-The production matching engine is **pure Go** (`gateway/internal/adapter/matching.go`): price-time priority order book, limit/market orders, partial fills. It is the only matching path in the main chain (default builds use `CGO_ENABLED=0`).
+The current production matching engine is **pure Go** (`gateway/internal/adapter/matching.go`): price-time priority order book, limit/market orders, partial fills. The target architecture moves matching to Rust while Go retains the OMS, accounts, risk controls, and exchange adapters.
 
-The Rust engine (`engine/`, cdylib) is **deprecated** and kept as a benchmark reference only:
+The Rust engine (`engine/`, cdylib) exists but is **not yet connected to the production path**:
 
 - **OrderBook**: BTreeMap for price-level sorting, HashMap for O(1) ID lookup
 - **Matching**: Price-time priority, limit and market orders
-- **FFI**: C ABI exports for Go CGo integration (unused in the main path; `cgo_bridge.go` is behind the `cgo` build tag)
-- **Build**: excluded from default builds — `build.sh` only compiles it with `BUILD_RUST=1`; CI builds it with `continue-on-error`
-- **Performance**: > 10,000 TPS per symbol (benchmark figures)
+- **FFI**: C ABI exports for Go CGo integration (`cgo_bridge.go` requires `cgo` and the `xtengine` build tag)
+- **Build**: excluded from default builds — `build.sh` only compiles it with `BUILD_RUST=1`
+- **Migration gates**: Rust must pass parity tests for balance checks, fill write-back, cancellation, and restart recovery before becoming the production matcher
 
 ### 4. Data Layer
 
@@ -208,7 +207,7 @@ gateway:8080  ← sandbox:9000  ← ml_server:8001  ← ccxt_bridge:8002  ← re
 | Layer | Technology | Purpose |
 |-------|-----------|---------|
 | Frontend | React 19, TypeScript 5.7, Vite 6, TailwindCSS | User interface |
-| Backend | Go 1.25, Gin, SQLite, Redis | Core business logic |
-| Engine | Pure Go (matching); Rust 2021 deprecated, benchmark only | Order matching |
+| Backend | Go 1.26, Gin, SQLite, Redis | Core business logic |
+| Engine | Go matching currently; Rust 2021 is the target matcher, not yet in production | Order matching |
 | ML | Python 3.12, LightGBM, XGBoost, Ray RLlib | Machine learning |
 | Infra | Docker, Nginx, GitHub Actions | Deployment & CI/CD |

@@ -15,9 +15,10 @@ use std::os::raw::c_char;
 
 // Re-export types for use in tests
 use crate::ffi::{
-    engine_create, engine_destroy, engine_submit_order,
-    engine_cancel_order, engine_snapshot, engine_trade_count,
-    engine_get_trades, free_string,
+    engine_cancel_order as ffi_engine_cancel_order, engine_create as ffi_engine_create,
+    engine_destroy as ffi_engine_destroy, engine_get_trades as ffi_engine_get_trades,
+    engine_snapshot as ffi_engine_snapshot, engine_submit_order as ffi_engine_submit_order,
+    engine_trade_count as ffi_engine_trade_count, free_string as ffi_free_string,
 };
 
 // ── Test Helpers ───────────────────────────────────────────────────────────────
@@ -25,6 +26,38 @@ use crate::ffi::{
 /// Helper: convert a Rust String to a C string pointer.
 fn to_c_char(s: &str) -> *const c_char {
     CString::new(s).unwrap().into_raw() as *const c_char
+}
+
+fn engine_create(symbol: *const c_char) -> *mut c_char {
+    unsafe { ffi_engine_create(symbol) }
+}
+
+fn engine_destroy(symbol: *const c_char) {
+    unsafe { ffi_engine_destroy(symbol) }
+}
+
+fn engine_submit_order(json: *const c_char) -> *mut c_char {
+    unsafe { ffi_engine_submit_order(json) }
+}
+
+fn engine_cancel_order(symbol: *const c_char, order_id: u64) -> *mut c_char {
+    unsafe { ffi_engine_cancel_order(symbol, order_id) }
+}
+
+fn engine_snapshot(symbol: *const c_char, depth: u32) -> *mut c_char {
+    unsafe { ffi_engine_snapshot(symbol, depth) }
+}
+
+fn engine_trade_count(symbol: *const c_char) -> u64 {
+    unsafe { ffi_engine_trade_count(symbol) }
+}
+
+fn engine_get_trades(symbol: *const c_char, limit: u32) -> *mut c_char {
+    unsafe { ffi_engine_get_trades(symbol, limit) }
+}
+
+fn free_string(ptr: *mut c_char) {
+    unsafe { ffi_free_string(ptr) }
 }
 
 /// Helper: convert a C string pointer back to a Rust String and free it.
@@ -43,7 +76,7 @@ fn from_c_char(ptr: *mut c_char) -> String {
 
 /// Helper: parse a JSON response from FFI.
 fn parse_json(response: &str) -> serde_json::Value {
-    serde_json::from_str(response).expect(&format!("Expected valid JSON: {}", response))
+    serde_json::from_str(response).unwrap_or_else(|_| panic!("Expected valid JSON: {}", response))
 }
 
 // ── Engine Lifecycle Tests ─────────────────────────────────────────────────────
@@ -75,7 +108,9 @@ fn test_ffi_engine_create_and_destroy() {
     engine_destroy(to_c_char(symbol));
 
     // Should return error on further operations
-    let ptr2 = engine_submit_order(to_c_char(r#"{"symbol":"FFI_TEST_DESTROY","side":"buy","price":100,"quantity":1}"#));
+    let ptr2 = engine_submit_order(to_c_char(
+        r#"{"symbol":"FFI_TEST_DESTROY","side":"buy","price":100,"quantity":1}"#,
+    ));
     let response = from_c_char(ptr2);
     assert!(response.contains("engine not found"));
 }
@@ -104,9 +139,14 @@ fn test_ffi_engine_create_multiple_engines() {
     engine_destroy(to_c_char("FFI_MULTI_2"));
 
     // Others should still work
-    let ptr = engine_submit_order(to_c_char(r#"{"symbol":"FFI_MULTI_0","side":"buy","price":100,"quantity":1}"#));
+    let ptr = engine_submit_order(to_c_char(
+        r#"{"symbol":"FFI_MULTI_0","side":"buy","price":100,"quantity":1}"#,
+    ));
     let response = from_c_char(ptr);
-    assert!(!response.contains("engine not found"), "FFI_MULTI_0 should still exist");
+    assert!(
+        !response.contains("engine not found"),
+        "FFI_MULTI_0 should still exist"
+    );
 
     // Clean up
     for i in [0, 1, 3, 4] {
@@ -166,22 +206,28 @@ fn test_ffi_submit_order_immediate_match() {
     engine_create(to_c_char(symbol));
 
     // Place a sell first
-    engine_submit_order(to_c_char(&serde_json::json!({
-        "symbol": symbol,
-        "side": "sell",
-        "price": 68000.0,
-        "quantity": 0.5,
-        "user_id": 1,
-    }).to_string()));
+    engine_submit_order(to_c_char(
+        &serde_json::json!({
+            "symbol": symbol,
+            "side": "sell",
+            "price": 68000.0,
+            "quantity": 0.5,
+            "user_id": 1,
+        })
+        .to_string(),
+    ));
 
     // Place a buy that should immediately match
-    let ptr = engine_submit_order(to_c_char(&serde_json::json!({
-        "symbol": symbol,
-        "side": "buy",
-        "price": 68000.0,
-        "quantity": 0.3,
-        "user_id": 2,
-    }).to_string()));
+    let ptr = engine_submit_order(to_c_char(
+        &serde_json::json!({
+            "symbol": symbol,
+            "side": "buy",
+            "price": 68000.0,
+            "quantity": 0.3,
+            "user_id": 2,
+        })
+        .to_string(),
+    ));
     let response = from_c_char(ptr);
 
     let json = parse_json(&response);
@@ -200,22 +246,28 @@ fn test_ffi_submit_order_partial_fill() {
     engine_create(to_c_char(symbol));
 
     // Sell 1.0 at 100
-    engine_submit_order(to_c_char(&serde_json::json!({
-        "symbol": symbol,
-        "side": "sell",
-        "price": 100.0,
-        "quantity": 1.0,
-        "user_id": 1,
-    }).to_string()));
+    engine_submit_order(to_c_char(
+        &serde_json::json!({
+            "symbol": symbol,
+            "side": "sell",
+            "price": 100.0,
+            "quantity": 1.0,
+            "user_id": 1,
+        })
+        .to_string(),
+    ));
 
     // Buy 3.0 at 100 — should partially fill
-    let ptr = engine_submit_order(to_c_char(&serde_json::json!({
-        "symbol": symbol,
-        "side": "buy",
-        "price": 100.0,
-        "quantity": 3.0,
-        "user_id": 2,
-    }).to_string()));
+    let ptr = engine_submit_order(to_c_char(
+        &serde_json::json!({
+            "symbol": symbol,
+            "side": "buy",
+            "price": 100.0,
+            "quantity": 3.0,
+            "user_id": 2,
+        })
+        .to_string(),
+    ));
     let response = from_c_char(ptr);
 
     let json = parse_json(&response);
@@ -238,22 +290,31 @@ fn test_ffi_submit_market_order() {
     engine_create(to_c_char(symbol));
 
     // Seed asks
-    engine_submit_order(to_c_char(&serde_json::json!({
-        "symbol": symbol, "side": "sell", "price": 100.0, "quantity": 1.0, "user_id": 1,
-    }).to_string()));
-    engine_submit_order(to_c_char(&serde_json::json!({
-        "symbol": symbol, "side": "sell", "price": 101.0, "quantity": 1.0, "user_id": 2,
-    }).to_string()));
+    engine_submit_order(to_c_char(
+        &serde_json::json!({
+            "symbol": symbol, "side": "sell", "price": 100.0, "quantity": 1.0, "user_id": 1,
+        })
+        .to_string(),
+    ));
+    engine_submit_order(to_c_char(
+        &serde_json::json!({
+            "symbol": symbol, "side": "sell", "price": 101.0, "quantity": 1.0, "user_id": 2,
+        })
+        .to_string(),
+    ));
 
     // Market buy
-    let ptr = engine_submit_order(to_c_char(&serde_json::json!({
-        "symbol": symbol,
-        "side": "buy",
-        "order_type": "market",
-        "price": 0.0,
-        "quantity": 1.5,
-        "user_id": 3,
-    }).to_string()));
+    let ptr = engine_submit_order(to_c_char(
+        &serde_json::json!({
+            "symbol": symbol,
+            "side": "buy",
+            "order_type": "market",
+            "price": 0.0,
+            "quantity": 1.5,
+            "user_id": 3,
+        })
+        .to_string(),
+    ));
     let response = from_c_char(ptr);
 
     let json = parse_json(&response);
@@ -261,6 +322,27 @@ fn test_ffi_submit_market_order() {
     assert_eq!(trades.len(), 2, "Market buy should sweep both asks");
     assert_eq!(trades[0]["price"], 100.0);
     assert_eq!(trades[1]["price"], 101.0);
+
+    engine_destroy(to_c_char(symbol));
+}
+
+#[test]
+fn test_ffi_rejects_invalid_order_fields() {
+    let symbol = "FFI_INVALID_ORDER_FIELDS";
+    let created = from_c_char(engine_create(to_c_char(symbol)));
+    assert_eq!(parse_json(&created)["status"], "ok");
+
+    let orders = [
+        r#"{"symbol":"FFI_INVALID_ORDER_FIELDS","side":"hold","price":100,"quantity":1}"#,
+        r#"{"symbol":"FFI_INVALID_ORDER_FIELDS","price":100,"quantity":1}"#,
+        r#"{"symbol":"FFI_INVALID_ORDER_FIELDS","side":"buy","price":100,"quantity":0}"#,
+        r#"{"symbol":"FFI_INVALID_ORDER_FIELDS","side":"buy","price":-1,"quantity":1}"#,
+        r#"{"symbol":"FFI_INVALID_ORDER_FIELDS","side":"sell","price":100,"quantity":1,"order_type":"stop"}"#,
+    ];
+    for order in orders {
+        let response = from_c_char(engine_submit_order(to_c_char(order)));
+        assert!(parse_json(&response).get("error").is_some(), "{response}");
+    }
 
     engine_destroy(to_c_char(symbol));
 }
@@ -281,12 +363,15 @@ fn test_ffi_submit_invalid_json() {
 
 #[test]
 fn test_ffi_submit_order_engine_not_found() {
-    let ptr = engine_submit_order(to_c_char(&serde_json::json!({
-        "symbol": "NONEXISTENT_SYMBOL",
-        "side": "buy",
-        "price": 100.0,
-        "quantity": 1.0,
-    }).to_string()));
+    let ptr = engine_submit_order(to_c_char(
+        &serde_json::json!({
+            "symbol": "NONEXISTENT_SYMBOL",
+            "side": "buy",
+            "price": 100.0,
+            "quantity": 1.0,
+        })
+        .to_string(),
+    ));
     let response = from_c_char(ptr);
 
     assert!(response.contains("engine not found"));
@@ -298,14 +383,20 @@ fn test_ffi_submit_order_no_cross() {
     engine_create(to_c_char(symbol));
 
     // Sell at 150
-    engine_submit_order(to_c_char(&serde_json::json!({
-        "symbol": symbol, "side": "sell", "price": 150.0, "quantity": 1.0, "user_id": 1,
-    }).to_string()));
+    engine_submit_order(to_c_char(
+        &serde_json::json!({
+            "symbol": symbol, "side": "sell", "price": 150.0, "quantity": 1.0, "user_id": 1,
+        })
+        .to_string(),
+    ));
 
     // Buy at 140 — prices don't cross, should go on book
-    let ptr = engine_submit_order(to_c_char(&serde_json::json!({
-        "symbol": symbol, "side": "buy", "price": 140.0, "quantity": 1.0, "user_id": 2,
-    }).to_string()));
+    let ptr = engine_submit_order(to_c_char(
+        &serde_json::json!({
+            "symbol": symbol, "side": "buy", "price": 140.0, "quantity": 1.0, "user_id": 2,
+        })
+        .to_string(),
+    ));
     let response = from_c_char(ptr);
 
     let json = parse_json(&response);
@@ -328,21 +419,30 @@ fn test_ffi_submit_order_multiple_fills() {
 
     // Seed3 asks at different prices
     for (price, qty) in [(100.0, 0.5), (101.0, 0.3), (102.0, 0.2)] {
-        engine_submit_order(to_c_char(&serde_json::json!({
-            "symbol": symbol, "side": "sell", "price": price, "quantity": qty, "user_id": 1,
-        }).to_string()));
+        engine_submit_order(to_c_char(
+            &serde_json::json!({
+                "symbol": symbol, "side": "sell", "price": price, "quantity": qty, "user_id": 1,
+            })
+            .to_string(),
+        ));
     }
 
     // Buy 1.0 — should fill all 3
-    let ptr = engine_submit_order(to_c_char(&serde_json::json!({
-        "symbol": symbol, "side": "buy", "price": 200.0, "quantity": 1.0, "user_id": 2,
-    }).to_string()));
+    let ptr = engine_submit_order(to_c_char(
+        &serde_json::json!({
+            "symbol": symbol, "side": "buy", "price": 200.0, "quantity": 1.0, "user_id": 2,
+        })
+        .to_string(),
+    ));
     let response = from_c_char(ptr);
 
     let json = parse_json(&response);
     let trades = json["trades"].as_array().unwrap();
     assert_eq!(trades.len(), 3);
-    let total_qty: f64 = trades.iter().map(|t| t["quantity"].as_f64().unwrap()).sum::<f64>();
+    let total_qty: f64 = trades
+        .iter()
+        .map(|t| t["quantity"].as_f64().unwrap())
+        .sum::<f64>();
     assert!((total_qty - 1.0).abs() < 1e-9);
 
     engine_destroy(to_c_char(symbol));
@@ -356,9 +456,12 @@ fn test_ffi_cancel_order_existing() {
     engine_create(to_c_char(symbol));
 
     // Submit a limit order (no match, goes on book)
-    let ptr = engine_submit_order(to_c_char(&serde_json::json!({
-        "symbol": symbol, "side": "buy", "price": 50000.0, "quantity": 1.0, "user_id": 1,
-    }).to_string()));
+    let ptr = engine_submit_order(to_c_char(
+        &serde_json::json!({
+            "symbol": symbol, "side": "buy", "price": 50000.0, "quantity": 1.0, "user_id": 1,
+        })
+        .to_string(),
+    ));
     let json = parse_json(&from_c_char(ptr));
     let order_id = json["order_id"].as_u64().unwrap();
 
@@ -422,15 +525,21 @@ fn test_ffi_snapshot_with_orders() {
 
     // Add bids
     for price in [100.0, 101.0, 102.0] {
-        engine_submit_order(to_c_char(&serde_json::json!({
-            "symbol": symbol, "side": "buy", "price": price, "quantity": 1.0, "user_id": 1,
-        }).to_string()));
+        engine_submit_order(to_c_char(
+            &serde_json::json!({
+                "symbol": symbol, "side": "buy", "price": price, "quantity": 1.0, "user_id": 1,
+            })
+            .to_string(),
+        ));
     }
     // Add asks
     for price in [103.0, 104.0, 105.0] {
-        engine_submit_order(to_c_char(&serde_json::json!({
-            "symbol": symbol, "side": "sell", "price": price, "quantity": 1.0, "user_id": 2,
-        }).to_string()));
+        engine_submit_order(to_c_char(
+            &serde_json::json!({
+                "symbol": symbol, "side": "sell", "price": price, "quantity": 1.0, "user_id": 2,
+            })
+            .to_string(),
+        ));
     }
 
     let ptr = engine_snapshot(to_c_char(symbol), 10);
@@ -486,19 +595,28 @@ fn test_ffi_trade_count() {
     assert_eq!(engine_trade_count(to_c_char(symbol)), 0);
 
     // Seed ask and buy
-    engine_submit_order(to_c_char(&serde_json::json!({
-        "symbol": symbol, "side": "sell", "price": 100.0, "quantity": 1.0, "user_id": 1,
-    }).to_string()));
-    engine_submit_order(to_c_char(&serde_json::json!({
-        "symbol": symbol, "side": "buy", "price": 100.0, "quantity": 0.5, "user_id": 2,
-    }).to_string()));
+    engine_submit_order(to_c_char(
+        &serde_json::json!({
+            "symbol": symbol, "side": "sell", "price": 100.0, "quantity": 1.0, "user_id": 1,
+        })
+        .to_string(),
+    ));
+    engine_submit_order(to_c_char(
+        &serde_json::json!({
+            "symbol": symbol, "side": "buy", "price": 100.0, "quantity": 0.5, "user_id": 2,
+        })
+        .to_string(),
+    ));
 
     assert_eq!(engine_trade_count(to_c_char(symbol)), 1);
 
     // Another trade
-    engine_submit_order(to_c_char(&serde_json::json!({
-        "symbol": symbol, "side": "buy", "price": 100.0, "quantity": 0.5, "user_id": 3,
-    }).to_string()));
+    engine_submit_order(to_c_char(
+        &serde_json::json!({
+            "symbol": symbol, "side": "buy", "price": 100.0, "quantity": 0.5, "user_id": 3,
+        })
+        .to_string(),
+    ));
     assert_eq!(engine_trade_count(to_c_char(symbol)), 2);
 
     engine_destroy(to_c_char(symbol));
@@ -529,12 +647,18 @@ fn test_ffi_get_trades_after_matches() {
     engine_create(to_c_char(symbol));
 
     // Create a trade
-    engine_submit_order(to_c_char(&serde_json::json!({
-        "symbol": symbol, "side": "sell", "price": 50000.0, "quantity": 1.0, "user_id": 1,
-    }).to_string()));
-    engine_submit_order(to_c_char(&serde_json::json!({
-        "symbol": symbol, "side": "buy", "price": 50000.0, "quantity": 0.7, "user_id": 2,
-    }).to_string()));
+    engine_submit_order(to_c_char(
+        &serde_json::json!({
+            "symbol": symbol, "side": "sell", "price": 50000.0, "quantity": 1.0, "user_id": 1,
+        })
+        .to_string(),
+    ));
+    engine_submit_order(to_c_char(
+        &serde_json::json!({
+            "symbol": symbol, "side": "buy", "price": 50000.0, "quantity": 0.7, "user_id": 2,
+        })
+        .to_string(),
+    ));
 
     let ptr = engine_get_trades(to_c_char(symbol), 10);
     let response = from_c_char(ptr);
@@ -612,9 +736,12 @@ fn test_ffi_side_case_insensitive() {
     engine_create(to_c_char(symbol));
 
     for &side in &["BUY", "Sell", "Buy", "SELL"] {
-        let ptr = engine_submit_order(to_c_char(&serde_json::json!({
-            "symbol": symbol, "side": side, "price": 100.0, "quantity": 0.1, "user_id": 1,
-        }).to_string()));
+        let ptr = engine_submit_order(to_c_char(
+            &serde_json::json!({
+                "symbol": symbol, "side": side, "price": 100.0, "quantity": 0.1, "user_id": 1,
+            })
+            .to_string(),
+        ));
         let json = parse_json(&from_c_char(ptr));
         assert_eq!(json["status"], "ok", "Side '{}' should be accepted", side);
     }
@@ -627,9 +754,12 @@ fn test_ffi_order_type_market() {
     let symbol = "FFI_TEST_ORDER_TYPE";
     engine_create(to_c_char(symbol));
 
-    engine_submit_order(to_c_char(&serde_json::json!({
-        "symbol": symbol, "side": "sell", "price": 100.0, "quantity": 1.0, "user_id": 1,
-    }).to_string()));
+    engine_submit_order(to_c_char(
+        &serde_json::json!({
+            "symbol": symbol, "side": "sell", "price": 100.0, "quantity": 1.0, "user_id": 1,
+        })
+        .to_string(),
+    ));
 
     let ptr = engine_submit_order(to_c_char(&serde_json::json!({
         "symbol": symbol, "side": "buy", "order_type": "market", "price": 0.0, "quantity": 1.0, "user_id": 2,
@@ -645,13 +775,18 @@ fn test_ffi_zero_quantity() {
     let symbol = "FFI_TEST_ZERO_QTY";
     engine_create(to_c_char(symbol));
 
-    let ptr = engine_submit_order(to_c_char(&serde_json::json!({
-        "symbol": symbol, "side": "buy", "price": 100.0, "quantity": 0.0, "user_id": 1,
-    }).to_string()));
+    let ptr = engine_submit_order(to_c_char(
+        &serde_json::json!({
+            "symbol": symbol, "side": "buy", "price": 100.0, "quantity": 0.0, "user_id": 1,
+        })
+        .to_string(),
+    ));
     let response = from_c_char(ptr);
     let json = parse_json(&response);
-    // Should be processed (filled immediately since qty=0 means no remaining)
-    assert_eq!(json["status"], "ok");
+    assert_eq!(
+        json["error"],
+        "quantity must be finite and greater than zero"
+    );
 
     engine_destroy(to_c_char(symbol));
 }

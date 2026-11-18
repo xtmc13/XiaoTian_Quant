@@ -4,7 +4,7 @@ Go 后端网关——量化交易系统的核心业务中枢。
 
 ## 技术栈
 
-- **语言**: Go 1.25
+- **语言**: Go 1.26
 - **Web 框架**: Gin
 - **数据库**: SQLite (modernc.org/sqlite, pure Go)
 - **缓存**: Redis (可选)
@@ -18,7 +18,7 @@ Go 后端网关——量化交易系统的核心业务中枢。
 gateway/
 ├── cmd/server/          # 服务入口、路由注册
 ├── internal/
-│   ├── adapter/         # 交易所适配器 (Binance/OKX/Bybit/...) + Rust CGo bridge
+│   ├── adapter/         # 交易所适配器 (Binance/OKX/Bybit/...) + 当前 Go 撮合实现
 │   ├── ai/              # AI 策略生成、多模型投票
 │   ├── arbitrage/       # 套利引擎
 │   ├── backtest/        # 事件驱动回测引擎
@@ -59,19 +59,16 @@ gateway/
 ## 快速开始
 
 ```bash
-# 1. 前置依赖：Rust 撮合引擎
-cd ../engine
-cargo build --release          # 生成 libxt_matching.so / .dll
-cd ../gateway
-
-# 2. 配置
+# 1. 配置
 cp ../.env.example .env        # 修改你的配置
 # 或创建 config.yaml (支持 ${ENV_VAR} 语法)
 
-# 3. 运行
+# 2. 运行（当前生产撮合路径为 Go，无需 Rust）
 go run ./cmd/server/
 
-# 4. 带 Rust 引擎构建（需先完成步骤 1 的 cargo build --release）
+# 可选：构建 Rust 撮合引擎（当前尚未接入生产主链路）
+cd ../engine && cargo build --release
+cd ../gateway
 go build -tags xtengine -o gateway-server ./cmd/server/
 ```
 

@@ -43,8 +43,13 @@ EOF
   if check_cmd go; then
     log_info "Go 已安装: $(go version | awk '{print $3}')"
   else
-    log_step "安装 Go 1.25..."
-    curl -fsSL "https://go.dev/dl/go1.24.4.linux-amd64.tar.gz" | sudo tar -C /usr/local -xzf -
+    case "$(uname -m)" in
+      x86_64) go_arch=amd64 ;;
+      aarch64|arm64) go_arch=arm64 ;;
+      *) log_error "不支持的 Go 安装架构: $(uname -m)"; exit 1 ;;
+    esac
+    log_step "安装 Go 1.26.11 (${go_arch})..."
+    curl -fsSL "https://go.dev/dl/go1.26.11.linux-${go_arch}.tar.gz" | sudo tar -C /usr/local -xzf -
     echo 'export PATH=/usr/local/go/bin:$PATH' >> ~/.bashrc
     export PATH=/usr/local/go/bin:$PATH
     log_info "Go 安装完成: $(go version)"

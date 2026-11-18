@@ -63,7 +63,7 @@ RUN npx vite build --base=/ \
  && sed -i "s/const CACHE_VERSION = 'v4'/const CACHE_VERSION = 'v$(date +%s)'/" dist/sw.js
 
 # ── Stage 2: Go backend builder (CGO enabled to link Rust cdylib) ──
-FROM golang:1.25-alpine AS go-builder
+FROM golang:1.26.11-alpine AS go-builder
 
 RUN apk add --no-cache git ca-certificates tzdata musl-dev gcc g++
 

@@ -23,7 +23,7 @@ import (
 )
 
 // MatchingEngine is a pure-Go order matching engine (price-time priority).
-// Used when the Rust engine is not available (non-cgo builds).
+// Used unless the Rust engine is explicitly enabled with cgo and xtengine.
 type MatchingEngine struct {
 	symbol string
 	mu     sync.Mutex

@@ -16,8 +16,8 @@ import (
 )
 
 // MatchingService provides order matching across multiple symbols.
-// Uses the Rust matching engine via CGo when built with cgo tags,
-// otherwise falls back to an in-memory Go implementation.
+// The production path currently uses the Go matching engine; the Rust CGo
+// implementation is opt-in via the cgo and xtengine build tags.
 type MatchingService struct {
 	engines map[string]*adapter.MatchingEngine
 	mu      sync.RWMutex

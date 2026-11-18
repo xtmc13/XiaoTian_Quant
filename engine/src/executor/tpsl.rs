@@ -118,8 +118,8 @@ pub struct TPConfig {
     pub tp1_triggered: bool,
     /// 追踪止盈最高价记录
     pub trailing_tp_high: f64,
-    /// 追踪止损最低价记录
-    pub trailing_sl_low: f64,
+    /// 多仓记录最高价，空仓记录最低价
+    pub trailing_sl_extreme: f64,
     /// 移动止损是否已激活
     pub move_sl_activated: bool,
     /// 尾单止盈模式：只平最后一仓
@@ -179,7 +179,7 @@ impl TPConfig {
             closed_qty: 0.0,
             tp1_triggered: false,
             trailing_tp_high: entry_price,
-            trailing_sl_low: entry_price,
+            trailing_sl_extreme: entry_price,
             move_sl_activated: false,
             tail_only,
             head_tail,
@@ -325,7 +325,7 @@ fn check_stop_loss(cfg: &mut TPConfig, price: f64) -> Option<TPAction> {
     None
 }
 
-/// 检查追踪止损更新（更新最低价/最高价记录）
+/// 检查追踪止损更新（多仓跟踪高点，空仓跟踪低点）
 fn check_trailing_sl_update(cfg: &mut TPConfig, price: f64) -> Option<TPAction> {
     if cfg.trailing_sl_pct <= 0.0 {
         return None;
@@ -334,21 +334,19 @@ fn check_trailing_sl_update(cfg: &mut TPConfig, price: f64) -> Option<TPAction> 
     let mut updated = false;
 
     if is_long {
-        // 多仓：追踪最低价，更新 SL = price * (1 + trailing_sl_pct)
-        if price < cfg.trailing_sl_low {
-            cfg.trailing_sl_low = price;
-            let new_sl = price * (1.0 + cfg.trailing_sl_pct);
-            if new_sl < cfg.current_sl {
+        if price > cfg.trailing_sl_extreme {
+            cfg.trailing_sl_extreme = price;
+            let new_sl = price * (1.0 - cfg.trailing_sl_pct);
+            if new_sl > cfg.current_sl {
                 cfg.current_sl = new_sl;
                 updated = true;
             }
         }
     } else {
-        // 空仓：追踪最高价，更新 SL = price * (1 - trailing_sl_pct)
-        if price > cfg.trailing_sl_low {
-            cfg.trailing_sl_low = price;
-            let new_sl = price * (1.0 - cfg.trailing_sl_pct);
-            if new_sl > cfg.current_sl {
+        if price < cfg.trailing_sl_extreme {
+            cfg.trailing_sl_extreme = price;
+            let new_sl = price * (1.0 + cfg.trailing_sl_pct);
+            if new_sl < cfg.current_sl {
                 cfg.current_sl = new_sl;
                 updated = true;
             }
@@ -431,6 +429,18 @@ fn check_trailing_tp_trigger(cfg: &mut TPConfig, price: f64) -> Option<TPAction>
     None
 }
 
+fn tighten_stop_loss(cfg: &mut TPConfig, candidate: f64) -> bool {
+    let is_tighter = if cfg.is_long() {
+        candidate > cfg.current_sl
+    } else {
+        candidate < cfg.current_sl
+    };
+    if is_tighter {
+        cfg.current_sl = candidate;
+    }
+    is_tighter
+}
+
 /// 检查移动止损激活
 fn check_move_sl_activation(cfg: &mut TPConfig, price: f64) -> Option<TPAction> {
     if cfg.move_sl_activated || cfg.move_sl_after <= 0.0 {
@@ -445,11 +455,12 @@ fn check_move_sl_activation(cfg: &mut TPConfig, price: f64) -> Option<TPAction> 
 
     if activated {
         cfg.move_sl_activated = true;
-        cfg.current_sl = cfg.move_sl_to;
-        return Some(TPAction::MoveStopLoss {
-            position_id: cfg.position_id.clone(),
-            new_sl_price: cfg.current_sl,
-        });
+        if tighten_stop_loss(cfg, cfg.move_sl_to) {
+            return Some(TPAction::MoveStopLoss {
+                position_id: cfg.position_id.clone(),
+                new_sl_price: cfg.current_sl,
+            });
+        }
     }
     None
 }
@@ -468,7 +479,11 @@ fn check_take_profits(
             continue;
         }
         let tp_price = cfg.tp_levels[i].price;
-        let triggered = if is_long { price >= tp_price } else { price <= tp_price };
+        let triggered = if is_long {
+            price >= tp_price
+        } else {
+            price <= tp_price
+        };
 
         if triggered {
             cfg.tp_levels[i].triggered = true;
@@ -481,11 +496,12 @@ fn check_take_profits(
             // TP1 触发后移动止损到入场价
             if label == "TP1" && !cfg.tp1_triggered {
                 cfg.tp1_triggered = true;
-                cfg.current_sl = cfg.entry_price;
-                actions.push(TPAction::MoveStopLoss {
-                    position_id: cfg.position_id.clone(),
-                    new_sl_price: cfg.entry_price,
-                });
+                if tighten_stop_loss(cfg, cfg.entry_price) {
+                    actions.push(TPAction::MoveStopLoss {
+                        position_id: cfg.position_id.clone(),
+                        new_sl_price: cfg.current_sl,
+                    });
+                }
             }
 
             // 记录已触发
@@ -656,17 +672,58 @@ mod tests {
         cfg.trailing_sl_pct = 0.015; // 1.5% 追踪止损
         cfg.stop_loss = 60000.0; // 初始 SL 很远
         cfg.current_sl = 60000.0;
+        cfg.move_sl_after = 0.0;
+        cfg.tp_levels.clear();
         tm.add_config(cfg);
 
-        // 价格上涨，追踪止损应上移
+        // 多仓价格上涨时，追踪止损应按回撤比例上移。
         let actions = tm.on_price_update("BTCUSDT", 75000.0);
 
         let tsl: Vec<_> = actions
             .iter()
             .filter(|a| matches!(a, TPAction::TrailingStopLoss { .. }))
             .collect();
-        // 至少应该有追踪止损更新或固定止损触发
-        assert!(!actions.is_empty() || !tm.is_empty());
+        assert_eq!(tsl.len(), 1);
+        assert!(matches!(
+            tsl[0],
+            TPAction::TrailingStopLoss { new_sl_price, .. }
+                if (new_sl_price - 73875.0).abs() < 1e-9
+        ));
+
+        // 回撤触及更新后的止损时，应平掉剩余仓位。
+        let actions = tm.on_price_update("BTCUSDT", 73875.0);
+        assert!(actions
+            .iter()
+            .any(|action| matches!(action, TPAction::StopLoss { .. })));
+    }
+
+    #[test]
+    fn test_trailing_sl_is_not_weakened_by_other_stop_rules() {
+        let mut tm = TPSLManager::new();
+        let mut cfg = create_test_config();
+        cfg.trailing_sl_pct = 0.015;
+        cfg.stop_loss = 60000.0;
+        cfg.current_sl = 60000.0;
+        tm.add_config(cfg);
+
+        let actions = tm.on_price_update("BTCUSDT", 75000.0);
+        assert!(actions.iter().any(|action| matches!(
+            action,
+            TPAction::TrailingStopLoss { new_sl_price, .. }
+                if (new_sl_price - 73875.0).abs() < 1e-9
+        )));
+        assert!(!actions.iter().any(|action| matches!(
+            action,
+            TPAction::MoveStopLoss {
+                new_sl_price,
+                ..
+            } if *new_sl_price < 73875.0
+        )));
+
+        let actions = tm.on_price_update("BTCUSDT", 73875.0);
+        assert!(actions
+            .iter()
+            .any(|action| matches!(action, TPAction::StopLoss { .. })));
     }
 
     #[test]
@@ -685,10 +742,14 @@ mod tests {
                 _ => None,
             })
             .sum();
+        assert_eq!(tp_qty, 0.0);
 
         // 尾单模式下，TP1 和 TP2 不应产生平仓
         for a in &actions {
-            if let TPAction::TakeProfit { level, quantity, .. } = a {
+            if let TPAction::TakeProfit {
+                level, quantity, ..
+            } = a
+            {
                 if level == "TP1" || level == "TP2" {
                     assert_eq!(*quantity, 0.0);
                 }

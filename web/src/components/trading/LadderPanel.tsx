@@ -104,7 +104,6 @@ export function LadderCreateForm({ symbol, currentPrice, pricePrecision, onCreat
         return { price: Math.max(p, 0).toFixed(pricePrecision), pct: String(pct) }
       })
     )
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetCount, rangeLow, rangeHigh, side, pricePrecision])
 
   const pctSum = useMemo(() => targets.reduce((s, t) => s + (parseFloat(t.pct) || 0), 0), [targets])

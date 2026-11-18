@@ -59,9 +59,9 @@ func TestCRAWaterfallBlocksFirstOrderAnySymbol(t *testing.T) {
 		t.Fatal("waterfall pause must not open first order")
 	}
 
-	// 恢复：旧高点被窗口驱逐（时间戳推进 200 > 60），新窗内跌幅 < 阈值一半。
+	// 恢复：旧高点被 1 分钟窗口驱逐，新窗内跌幅 < 阈值一半。
 	for i, p := range []float64{97, 97.2, 97.1} {
-		if _, err := s.OnTick(tick(p, int64(1200+i*10)), nil); err != nil {
+		if _, err := s.OnTick(tick(p, int64(61_200+i*10)), nil); err != nil {
 			t.Fatalf("ontick resume: %v", err)
 		}
 	}
