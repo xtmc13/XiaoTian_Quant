@@ -1,6 +1,7 @@
 package order
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/xiaotian-quant/gateway/internal/model"
@@ -81,6 +82,7 @@ func TestRecordFillSkipsTerminalOrders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PlaceOrder: %v", err)
 	}
+
 	if _, err := om.CancelOrder(ord.ID, ord.Symbol); err != nil {
 		t.Fatalf("CancelOrder: %v", err)
 	}
@@ -96,5 +98,84 @@ func TestRecordFillSkipsTerminalOrders(t *testing.T) {
 	}
 	if err := om.RecordFill(ord.ID, 0, 100); err == nil {
 		t.Fatal("non-positive qty must error")
+	}
+}
+
+func TestConcurrentRecordFillAndStaleOrderWriteDoNotRegress(t *testing.T) {
+	om := GetOrderManager()
+	ord, err := om.PlaceOrder(&Request{
+		Symbol: "FILLRACEUSDT", Side: model.SideBuy, OrderType: model.TypeLimit,
+		Price: 100, Quantity: 1, Exchange: "paper",
+	})
+	if err != nil {
+		t.Fatalf("PlaceOrder: %v", err)
+	}
+
+	om.orderMu.RLock()
+	stale := *om.orders[ord.ID]
+	om.orderMu.RUnlock()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		if err := om.RecordFill(ord.ID, 0.4, 100); err != nil {
+			t.Errorf("partial RecordFill: %v", err)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		if err := om.RecordFill(ord.ID, 1, 101); err != nil {
+			t.Errorf("final RecordFill: %v", err)
+		}
+	}()
+	wg.Wait()
+
+	stale.Status = model.StatusNew
+	om.storeOrder(&stale)
+	got := om.GetOrder(ord.ID)
+	if got.Status != model.StatusFilled || got.Filled != 1 || got.AvgFillPrice != 101 {
+		t.Fatalf("stale update regressed concurrent fills: status=%s filled=%v avg=%v", got.Status, got.Filled, got.AvgFillPrice)
+	}
+}
+
+func TestCancelPreservesFillArrivingDuringExchangeRequest(t *testing.T) {
+	om := GetOrderManager()
+	ord, err := om.PlaceOrder(&Request{
+		Symbol: "FILLCANCELRACEUSDT", Side: model.SideBuy, OrderType: model.TypeLimit,
+		Price: 100, Quantity: 1, Exchange: "paper",
+	})
+	if err != nil {
+		t.Fatalf("PlaceOrder: %v", err)
+	}
+
+	originalCancel := om.CancelOnExchange
+	defer func() { om.CancelOnExchange = originalCancel }()
+	cancelEntered := make(chan struct{})
+	continueCancel := make(chan struct{})
+	om.CancelOnExchange = func(*model.OrderData) error {
+		close(cancelEntered)
+		<-continueCancel
+		return nil
+	}
+	cancelResult := make(chan error, 1)
+	go func() {
+		_, err := om.CancelOrder(ord.ID, ord.Symbol)
+		cancelResult <- err
+	}()
+
+	<-cancelEntered
+	fillErr := om.RecordFill(ord.ID, 0.4, 100)
+	close(continueCancel)
+	if fillErr != nil {
+		t.Fatalf("RecordFill during exchange cancel: %v", fillErr)
+	}
+	if err := <-cancelResult; err != nil {
+		t.Fatalf("CancelOrder: %v", err)
+	}
+
+	got := om.GetOrder(ord.ID)
+	if got.Status != model.StatusCancelled || got.Filled != 0.4 || got.AvgFillPrice != 100 {
+		t.Fatalf("cancel/fill race lost accumulated fill: status=%s filled=%v avg=%v", got.Status, got.Filled, got.AvgFillPrice)
 	}
 }

@@ -1,7 +1,9 @@
 package service
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -9,15 +11,25 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	_ = os.Setenv("DB_PATH", "./data/test_service.db")
+	testDir, err := os.MkdirTemp("", "xiaotian-service-tests-*")
+	if err != nil {
+		panic(err)
+	}
+	if err := os.Setenv("DB_PATH", filepath.Join(testDir, "gateway.db")); err != nil {
+		panic(err)
+	}
 	_ = os.Setenv("SECRET_KEY", "test-secret-key-for-unit-tests")
 	if err := store.InitDB(); err != nil {
 		panic(err)
 	}
 	code := m.Run()
-	_ = os.Remove("./data/test_service.db")
-	_ = os.Remove("./data/test_service.db-shm")
-	_ = os.Remove("./data/test_service.db-wal")
+	store.CloseDB()
+	if err := os.RemoveAll(testDir); err != nil {
+		fmt.Fprintf(os.Stderr, "remove service test directory: %v\n", err)
+		if code == 0 {
+			code = 1
+		}
+	}
 	os.Exit(code)
 }
 
@@ -97,5 +109,26 @@ func TestMatchingServiceCancelOrder(t *testing.T) {
 
 	if err := ms.CancelOrder(symbol, storeOrderID); err != nil {
 		t.Fatalf("CancelOrder failed: %v", err)
+	}
+}
+
+func TestRemoveOrderFromBookKeepsOMSStateSeparate(t *testing.T) {
+	ms := GetMatchingService()
+	symbol := "PAPER_BOOK_CLEANUP"
+	t.Cleanup(func() { ms.GetEngine(symbol).Destroy() })
+
+	if _, err := ms.PlaceOrder(symbol, "buy", "limit", 100, 1, 1, "cleanup-order"); err != nil {
+		t.Fatalf("PlaceOrder: %v", err)
+	}
+	if err := ms.RemoveOrderFromBook(symbol, "cleanup-order"); err != nil {
+		t.Fatalf("RemoveOrderFromBook: %v", err)
+	}
+
+	snapshot, err := ms.GetOrderBook(symbol, 5)
+	if err != nil {
+		t.Fatalf("GetOrderBook: %v", err)
+	}
+	if bids := snapshot["bids"].([][]float64); len(bids) != 0 {
+		t.Fatalf("book entry remains after external paper fill: %v", bids)
 	}
 }

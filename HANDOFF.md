@@ -1,7 +1,8 @@
-# HANDOFF — 会话交接文档（2026-09-16 建立，2026-09-29 刷新）
+# HANDOFF — 会话交接文档（历史记录，2026-11-19 更新状态提示）
 
-> 本文档供新会话（尤其是服务器上的 Kimi Code CLI 实例）快速接手。
-> 规则：读完本文 + TODO.md 即可继续工作；工作过程中持续更新这两份文档。
+> **重要：**下文的分支、部署拓扑和操作记录停留在 2026-09-29，可能已失效，不应当作当前操作指引。
+> 当前架构与进度以 [TODO.md](TODO.md)、[README.md](README.md) 和 [ARCHITECTURE.md](ARCHITECTURE.md) 为准。
+> 默认源码、Docker 和 Release 构建现已启用 Rust CGo 撮合；订单簿重启恢复仍未实现。
 
 ## 一句话现状
 
@@ -24,14 +25,13 @@ XiaoTian_Quant（小天量化 v3.0）已完成"从用不了到全链路真实数
 - 重启网关（SSH 易断，必须用 setsid）：`setsid ~/restart-gw.sh < /dev/null > /dev/null 2>&1 &`
 - 服务器已装：Go 1.25.3（~/go）、nginx、Claude Code（Kimi K2.8）、lanyuncodingui(:3000)
 
-## 项目方向（已定，勿偏离）
+## 项目方向
 
-**中文用户、单二进制自托管、模拟盘即开即用、机器人订阅分成的量化平台。**
-- P0 全部完成（TODO.md 第 1-4 条已勾）。下一阶段：网格机器人做成市场 MVP。
-- **明确不做**：Rust FFI 接入、AI/ML 价格预测、链上、社区、多券商。
-- 安全红线：一切下单默认 paper（`execution_mode=paper`）；`config.yaml` 的
-  `risk.position_limit_pct: 2500` 是 paper 时期的放宽值，**开实盘前必须回调**；
-  `dry_run` 开关同理。
+**当前目标：Go（网关/OMS/账户）+ Rust（本地撮合）+ TypeScript（前端）。**
+Docker、默认源码构建和 Release 构建启用 Rust CGo 撮合；Go 纯撮合是显式开发回退。
+Rust 订单簿仍为进程内状态，重启恢复尚未实现；准确进度见 [TODO.md](TODO.md)。
+
+文档后续的部署和开发记录均为历史信息，使用前先核对当前配置与分支。
 
 ## 用户偏好与约定
 

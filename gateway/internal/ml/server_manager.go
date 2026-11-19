@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/xiaotian-quant/gateway/internal/notify"
@@ -43,7 +42,7 @@ type ServerManagerConfig struct {
 func LoadServerManagerConfig() ServerManagerConfig {
 	return ServerManagerConfig{
 		Enabled:        mlEnvBool("ML_SERVER_MANAGED", false),
-		PythonBin:      envOr("ML_SERVER_PYTHON", "python3"),
+		PythonBin:      envOr("ML_SERVER_PYTHON", defaultMLPythonExecutable()),
 		ScriptPath:     os.Getenv("ML_SERVER_SCRIPT"),
 		Host:           envOr("ML_SERVER_HOST", "127.0.0.1"),
 		Port:           mlEnvInt("ML_SERVER_PORT", 8001),
@@ -93,7 +92,7 @@ type ServerManager struct {
 // NewServerManager 创建托管器（notifier 可为 nil）。
 func NewServerManager(cfg ServerManagerConfig, notifier NotifySender) *ServerManager {
 	if cfg.PythonBin == "" {
-		cfg.PythonBin = "python3"
+		cfg.PythonBin = defaultMLPythonExecutable()
 	}
 	if cfg.Host == "" {
 		cfg.Host = "127.0.0.1"
@@ -161,16 +160,14 @@ func (m *ServerManager) Stop() {
 
 	<-done
 	if !adopted && cmd != nil && cmd.Process != nil {
-		pid := cmd.Process.Pid
-		// 整组发信号（Setpgid 拉起）；组不存在时回退单进程信号
-		if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil {
-			_ = cmd.Process.Signal(syscall.SIGTERM)
+		if err := terminateManagedProcess(cmd); err != nil {
+			log.Printf("[ml-server] graceful stop signal failed: %v", err)
 		}
-		// 进程退出由 spawn 的 Wait goroutine 认领（Process.Wait 不可与 Cmd.Wait 并发，
-		// 这里只轮询 procRunning 标志），5s 未退再整组 SIGKILL。
+		// Process.Wait is owned by spawn's goroutine; poll its state and force-stop
+		// the process after the grace period.
 		if !m.waitProcExit(5 * time.Second) {
-			if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil {
-				_ = cmd.Process.Kill()
+			if err := killManagedProcess(cmd); err != nil {
+				log.Printf("[ml-server] force stop failed: %v", err)
 			}
 			m.waitProcExit(2 * time.Second)
 		}
@@ -225,9 +222,7 @@ func (m *ServerManager) spawn() error {
 	cmd := exec.Command(argv[0], argv[1:]...) // #nosec G204 -- 命令行来自配置/测试注入，非用户输入
 	cmd.Stdout = &prefixWriter{prefix: "[ml-server] "}
 	cmd.Stderr = &prefixWriter{prefix: "[ml-server] "}
-	// 独立进程组：Stop 时整组 SIGTERM/SIGKILL。子进程 shell 可能再 fork
-	// （孙进程继承 stdout 管道），只杀主进程会让 Cmd.Wait 等管道 EOF 而卡死。
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	configureManagedProcess(cmd)
 	if len(m.cfg.Command) == 0 && m.cfg.ScriptPath != "" {
 		cmd.Dir = filepath.Dir(m.cfg.ScriptPath)
 	}

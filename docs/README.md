@@ -1,6 +1,6 @@
 # XiaoTianQuant v3.0 文档
 
-> AI 驱动的多资产量化交易平台 — Go 网关（单二进制主链路） + React 前端；撮合为纯 Go 实现，Rust 引擎已弃用仅作基准
+> AI 驱动的多资产量化交易平台 — Go 网关/账户 + Rust CGo 撮合 + React/TypeScript 前端
 
 ## 快速导航
 
@@ -14,12 +14,14 @@
 
 ## 项目简介
 
-XiaoTianQuant 是一个全栈量化交易平台，采用两层主架构（Rust 撮合引擎已弃用，仅作基准参照，不进主链路）：
+XiaoTianQuant 是一个全栈量化交易平台，采用 Go 网关/账户、Rust 本地撮合和 TypeScript 前端的三层架构：
 
 ```
 Web 前端 (React 19 + TypeScript)
        │ HTTP REST + WebSocket
-Go 网关 (Gin) — 含纯 Go 撮合引擎（价格-时间优先订单簿，唯一主链路）
+Go 网关 (Gin) — OMS、账户、风控、持久化和 Rust CGo 桥接
+       │ C ABI
+Rust 撮合引擎 — 价格-时间优先订单簿
 ```
 
 ### 核心特性
@@ -39,4 +41,4 @@ Go 网关 (Gin) — 含纯 Go 撮合引擎（价格-时间优先订单簿，唯�
 |----|------|
 | 前端 | React 19, TypeScript, Vite, TailwindCSS, ECharts, Zustand |
 | 网关 | Go, Gin, SQLite, JWT, WebSocket |
-| 引擎 | 纯 Go 撮合（主链路）；Rust/Serde/cdylib（已弃用，仅基准） |
+| 引擎 | Rust/Serde/cdylib（默认生产构建）；Go 撮合为显式开发回退 |

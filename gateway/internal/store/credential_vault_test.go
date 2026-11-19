@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -47,8 +48,11 @@ func TestVaultLocalKeyGeneratedThenReusedAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("key file must exist after first boot: %v", err)
 	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Fatalf("key file perm = %o, want 0600", perm)
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Fatalf("key file perm = %o, want 0600", info.Mode().Perm())
+	}
+	if err := checkVaultKeyFileSecure(VaultKeyPath); err != nil {
+		t.Fatalf("key file permissions are not secure: %v", err)
 	}
 	keyData, err := os.ReadFile(VaultKeyPath)
 	if err != nil {
@@ -162,8 +166,11 @@ func TestVaultKeyFilePermSelfHeal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Fatalf("perm after self-heal = %o, want 0600", perm)
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Fatalf("perm after self-heal = %o, want 0600", info.Mode().Perm())
+	}
+	if err := checkVaultKeyFileSecure(VaultKeyPath); err != nil {
+		t.Fatalf("permissions after self-heal are not secure: %v", err)
 	}
 }
 

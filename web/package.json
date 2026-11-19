@@ -9,7 +9,7 @@
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && cp -r dist/* ../gateway/spa/ 2>/dev/null || true",
+    "build": "vite build && node scripts/copy-spa.mjs",
     "build:analyze": "vite build --mode analyze",
     "type-check": "tsc --noEmit",
     "preview": "vite preview",

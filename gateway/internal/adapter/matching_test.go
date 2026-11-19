@@ -4,6 +4,7 @@ package adapter
 
 import (
 	"fmt"
+	"math"
 	"testing"
 )
 
@@ -94,6 +95,78 @@ func TestLimitOrderNoCross(t *testing.T) {
 	snap, _ := eng.Snapshot(5)
 	assertEq(t, len(snap["bids"].([][]float64)), 1, "1 bid level present")
 	assertEq(t, len(snap["asks"].([][]float64)), 1, "1 ask level present")
+}
+
+func TestSubmitOrderReturnsParityStatusAndFillUpdates(t *testing.T) {
+	eng := newTest()
+	maker, err := eng.SubmitOrder("sell", "limit", 100, 0.4, 1)
+	if err != nil {
+		t.Fatalf("maker order: %v", err)
+	}
+
+	taker, err := eng.SubmitOrder("buy", "limit", 100, 1, 2)
+	if err != nil {
+		t.Fatalf("taker order: %v", err)
+	}
+	assertEq(t, taker["status"].(string), "PARTIALLY_FILLED", "limit order status")
+	assertFloat(t, taker["filled"].(float64), 0.4, "taker filled quantity")
+
+	fills := taker["fills"].([]any)
+	assertEq(t, len(fills), 2, "both maker and taker receive fill updates")
+	makerID := getID(maker)
+	foundMakerFill := false
+	for _, raw := range fills {
+		fill := raw.(map[string]any)
+		if fill["order_id"].(uint64) == makerID {
+			foundMakerFill = true
+			assertFloat(t, fill["filled_qty"].(float64), 0.4, "maker cumulative fill")
+			assertFloat(t, fill["avg_price"].(float64), 100, "maker average fill price")
+		}
+	}
+	assert(t, foundMakerFill, "maker fill update must be included")
+}
+
+func TestSubmitOrderRejectsInvalidInputs(t *testing.T) {
+	eng := newTest()
+	cases := []struct {
+		side, orderType string
+		price, quantity float64
+	}{
+		{"hold", "limit", 100, 1},
+		{"buy", "stop", 100, 1},
+		{"buy", "limit", 0, 1},
+		{"buy", "market", 0, float64(0)},
+	}
+	for _, tc := range cases {
+		if _, err := eng.SubmitOrder(tc.side, tc.orderType, tc.price, tc.quantity, 1); err == nil {
+			t.Errorf("expected invalid order to fail: %+v", tc)
+		}
+	}
+	assertEq(t, int(eng.TradeCount()), 0, "invalid orders must not trade")
+}
+
+type nanBalanceProvider struct{}
+
+func (nanBalanceProvider) Available(uint64, string) float64 { return math.NaN() }
+
+func TestSubmitOrderRejectsNaNAvailableBalance(t *testing.T) {
+	eng := newTest()
+	eng.SetBalanceProvider(nanBalanceProvider{})
+	cases := []struct {
+		side, orderType string
+		price, quantity float64
+	}{
+		{"buy", "limit", 100, 1},
+		{"sell", "limit", 100, 1},
+		{"buy", "market", 0, 1},
+		{"sell", "market", 0, 1},
+	}
+	for _, tc := range cases {
+		if _, err := eng.SubmitOrder(tc.side, tc.orderType, tc.price, tc.quantity, 1); err == nil {
+			t.Errorf("expected invalid available balance to reject order: %+v", tc)
+		}
+	}
+	assertEq(t, int(eng.TradeCount()), 0, "invalid balances must not trade")
 }
 
 func TestLimitOrderMultiLevel(t *testing.T) {

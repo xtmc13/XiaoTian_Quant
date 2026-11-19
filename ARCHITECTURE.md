@@ -34,11 +34,9 @@ XiaoTianQuant is an AI-powered quantitative trading platform with an event-drive
 │              ┌───────────────┼───────────────┐                   │
 │              │               │               │                   │
 │         ┌────▼────┐   ┌─────▼──────┐   ┌────▼─────┐             │
-│         │  SQLite  │   │ Go matching│   │   Redis   │             │
-│         │  (WAL)   │   │ (current)  │   │  (cache)  │             │
-│         └─────────┘   │  Engine    │   └──────────┘             │
-│                       └────────────┘                             │
-│             Target: migrate matching to Rust                     │
+│         │  SQLite  │   │ Rust matching│  │   Redis   │            │
+│         │  (WAL)   │   │ (via CGo)    │  │  (cache)  │            │
+│         └─────────┘   └───────────────┘  └───────────┘            │
 └──────────────────────────────┼───────────────────────────────────┘
                                │
               ┌────────────────┼────────────────┐
@@ -73,7 +71,7 @@ Each `internal/` package is a bounded context:
 
 | Package | Responsibility |
 |---------|---------------|
-| `adapter/` | Exchange API abstraction + current Go matcher; Rust CGo path is migration-in-progress |
+| `adapter/` | Exchange API abstraction, Rust CGo matcher, and explicit Go development fallback |
 | `ai/` | Multi-model AI strategy generation and voting |
 | `arbitrage/` | Cross-exchange arbitrage detection and execution |
 | `backtest/` | Event-driven backtesting engine |
@@ -104,17 +102,16 @@ Each `internal/` package is a bounded context:
 | `watchdog/` | Health checks and system monitoring |
 | `ws/` | WebSocket hub for real-time broadcasting |
 
-### 3. Matching Engine (current: Go; target: Rust)
+### 3. Matching Engine (Rust via CGo)
 
-The current production matching engine is **pure Go** (`gateway/internal/adapter/matching.go`): price-time priority order book, limit/market orders, partial fills. The target architecture moves matching to Rust while Go retains the OMS, accounts, risk controls, and exchange adapters.
-
-The Rust engine (`engine/`, cdylib) exists but is **not yet connected to the production path**:
+Docker, the default native build, and release builds enable the Rust `cdylib` through Go CGo (`-tags xtengine`). It provides price-time priority order-book matching for limit/market orders and partial fills. Go retains the OMS, account and balance ledger, risk controls, persistence, and exchange adapters; the Go implementation in `gateway/internal/adapter/matching.go` is a development/test fallback.
 
 - **OrderBook**: BTreeMap for price-level sorting, HashMap for O(1) ID lookup
 - **Matching**: Price-time priority, limit and market orders
-- **FFI**: C ABI exports for Go CGo integration (`cgo_bridge.go` requires `cgo` and the `xtengine` build tag)
-- **Build**: excluded from default builds — `build.sh` only compiles it with `BUILD_RUST=1`
-- **Migration gates**: Rust must pass parity tests for balance checks, fill write-back, cancellation, and restart recovery before becoming the production matcher
+- **FFI**: C ABI exports for Go CGo integration; Go passes available balance limits and consumes cumulative fill updates
+- **Build**: `build.sh`, Docker, CI, and release workflows select the Rust path; `BUILD_RUST=0` is an explicit development fallback
+- **Platform targets**: Linux amd64/arm64, macOS amd64/arm64, and Windows amd64 are configured in CI/release workflows; the matrix still needs successful hosted-runner validation
+- **Known gap**: the order book is process-local and active orders are not restored after restart
 
 ### 4. Data Layer
 
@@ -150,7 +147,7 @@ Clock → Strategy.OnTick/OnBar → Signal emitted
   ├─> Contract hooks (v1.2: CustomStakeAmount / ConfirmTradeEntry / ConfirmTradeExit)
   ├─> Risk check
   ├─> Order placement
-  ├─> Matching engine (pure Go)
+  ├─> Local/paper matching (Rust via CGo; Go fallback for development)
   └─> Fill notification → Portfolio update
 ```
 

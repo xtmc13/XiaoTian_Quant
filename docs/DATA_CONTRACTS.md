@@ -1,6 +1,6 @@
 # XiaoTianQuant 数据契约与分层边界
 
-> **状态说明（2026-09-25）**：Rust 撮合引擎已弃用（仅作基准，不进主链路，撮合为 `gateway/internal/adapter/matching.go` 纯 Go 实现）。本文涉及的 Rust 层与 FFI 边界内容仅对基准组件有效，Go/TypeScript 两侧的数据契约仍然适用。
+> **状态说明（2026-11-19）**：默认生产构建通过 CGo 调用 Rust 撮合引擎。Go 仍负责账户账本、OMS、持久化和风险校验；余额限额及累计成交更新通过 FFI 传递。
 
 > 本文档定义 Rust(撮合) / Go(网关/账户) / TypeScript(前端) 三层之间的数据结构边界。
 > 目标：每层只持有自己应该持有的数据形态，禁止跨层类型泄漏。
@@ -38,13 +38,13 @@ engine/src/
 - `Order` 必须包含：id, side, price, quantity, order_type, status, timestamp。
 - `Position` 使用枚举（`Side`, `PositionStatus`），禁止用 `String` 表示枚举字段。
 - `Signal` 只描述"开/平/调仓"意图，不包含 UI 展示字段（如颜色、标签、AI reason 等）。
-- **禁止**：Rust 层出现用户 ID、API 密钥、账户余额、前端路由状态。
+- Rust 不持有账户账本或 API 密钥。`user_id` 仅作订单关联标识，Go 可按单传递可用 base/quote 限额供撮合约束。
 
 ### 2.3 FFI 边界
 
-- FFI 只传递标量、数组和简单结构体。
-- Go 层负责把 Rust 返回的原始数据转换为业务 DTO。
-- Rust 不直接序列化为 JSON；Go 用 `C.GoString` 接收后再解析。
+- 当前 C ABI 以 JSON 字符串传递下单/撤单请求和结果；Go 用 `C.GoString` 接收后解析为业务 DTO。
+- Rust 返回订单状态、成交记录和双方累计成交量/VWAP；Go 负责 OMS 幂等回写与持久化。
+- 余额由 Go 账户账本读取，仅以可用 base/quote 限额传入单次撮合，不把余额账本迁入 Rust。
 
 ---
 

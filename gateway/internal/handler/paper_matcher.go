@@ -19,6 +19,7 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/model"
 	"github.com/xiaotian-quant/gateway/internal/order"
 	"github.com/xiaotian-quant/gateway/internal/portfolio"
+	"github.com/xiaotian-quant/gateway/internal/service"
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
@@ -82,9 +83,16 @@ func matchPaperOrders() {
 			continue
 		}
 		// 1) OMS 状态翻转 + 持久化（幂等：RecordFill 对已终态单直接跳过）
-		if err := om.RecordFill(o.ID, fill, o.Price); err != nil {
+		changed, err := om.RecordFillIfActive(o.ID, fill, o.Price)
+		if err != nil {
 			log.Printf("[paper-match] RecordFill %s 失败: %v", o.ID, err)
 			continue
+		}
+		if !changed {
+			continue
+		}
+		if err := service.GetMatchingService().RemoveOrderFromBook(o.Symbol, o.ID); err != nil {
+			log.Printf("[paper-match] internal order-book cleanup %s failed: %v", o.ID, err)
 		}
 		// 1b) 展示层订单表同步（GetOrders 读 store 内存表，不同步会永远停在 NEW）
 		store.UpdateOrderFill(o.ID, o.Quantity, o.Price, string(model.StatusFilled))

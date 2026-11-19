@@ -106,31 +106,20 @@ docker compose -f docker-compose.prod.yml --profile nginx up -d
 ### 方案 B：手动二进制部署
 
 ```bash
-# 1. 构建前端
-cd web
-npm ci
-npm run build
+# 从仓库根目录构建前端、Rust 动态库和 Go 网关
+bash build.sh
 
-# 2. 复制前端产物到 gateway spa 目录
-cp dist/index.html ../gateway/spa/
-cp -r dist/assets ../gateway/spa/
-
-# 3. 构建 Go 二进制
-cd ../gateway
-CGO_ENABLED=0 go build -ldflags="-s -w" -o xiaotian-gateway ./cmd/server
-
-# 4. 运行
+# 运行（Rust 动态库已由 build.sh 放入 dist）
 export PORT=8080
 export GIN_MODE=release
-./xiaotian-gateway
+./dist/gateway
 ```
 
-> **arm64 服务器**：Go 后端为 `CGO_ENABLED=0` 纯静态二进制，可直接交叉编译：
+> **arm64 服务器**：生产网关使用 CGo，必须同时构建匹配架构的 Rust 动态库和 Go 二进制。推荐使用对应架构的机器执行 `bash build.sh`，或下载 Release 页面提供的 `linux-arm64` 包；不能使用下方纯 Go 回退命令代替生产构建。
 >
 > ```bash
-> # 在 x86_64 机器上为 arm64 服务器构建（前端产物与架构无关，无需重复构建）
-> cd gateway
-> CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o xiaotian-gateway ./cmd/server
+> # 仅限本地开发/排障：明确关闭 Rust 时使用 Go 撮合回退
+> BUILD_RUST=0 bash build.sh
 > ```
 >
 > Release 页面同时提供 `xiaotianquant-<版本>-linux-arm64.tar.gz` 预编译包；

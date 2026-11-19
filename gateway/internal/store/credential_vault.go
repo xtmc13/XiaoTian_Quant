@@ -102,7 +102,7 @@ func resolveVaultMasterKey() string {
 }
 
 // loadLocalVaultKey 读取本机随机保险库密钥文件。文件存在但内容为空视为损坏
-// （ErrVaultKeyCorrupted）；权限宽于 0600 时自愈回收。
+// （ErrVaultKeyCorrupted）；读取前确保文件权限仅限当前用户。
 func loadLocalVaultKey() (string, error) {
 	data, err := os.ReadFile(VaultKeyPath)
 	if err != nil {
@@ -112,10 +112,8 @@ func loadLocalVaultKey() (string, error) {
 	if key == "" {
 		return "", fmt.Errorf("%w: %s 内容为空；请从备份恢复，或确认无有效凭证后删除该文件重启以生成新密钥（旧密文将无法解密）", ErrVaultKeyCorrupted, VaultKeyPath)
 	}
-	if info, statErr := os.Stat(VaultKeyPath); statErr == nil && info.Mode().Perm() != 0o600 {
-		if chErr := os.Chmod(VaultKeyPath, 0o600); chErr == nil {
-			log.Printf("[vault] 密钥文件权限已纠正为 0600: %s", VaultKeyPath)
-		}
+	if err := secureVaultKeyFile(VaultKeyPath); err != nil {
+		return "", fmt.Errorf("secure vault key file %s: %w", VaultKeyPath, err)
 	}
 	return key, nil
 }
@@ -141,6 +139,9 @@ func ensureLocalVaultKey() (string, error) {
 	}
 	if err := os.WriteFile(VaultKeyPath, []byte(key), 0o600); err != nil {
 		return "", err
+	}
+	if err := secureVaultKeyFile(VaultKeyPath); err != nil {
+		return "", fmt.Errorf("secure new vault key file %s: %w", VaultKeyPath, err)
 	}
 	return key, nil
 }

@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -189,6 +190,28 @@ func (ms *MatchingService) CancelOrder(symbol string, storeOrderID string) error
 	// 展示层事实源（OMS/xt_orders）同步置 CANCELLED；镜像已不落库，
 	// 纯引擎单/已清理记录查不到不算错误。
 	_ = store.CancelOrder(storeOrderID)
+	return nil
+}
+
+// RemoveOrderFromBook removes the internal resting order without changing its
+// OMS state. The paper price-feed matcher uses this after it fills an order.
+func (ms *MatchingService) RemoveOrderFromBook(symbol, storeOrderID string) error {
+	ms.orderIDsMu.Lock()
+	engineID, ok := ms.orderIDs[storeOrderID]
+	if ok {
+		delete(ms.orderIDs, storeOrderID)
+		delete(ms.engineToStoreIDs[symbol], engineID)
+	}
+	ms.orderIDsMu.Unlock()
+	if !ok {
+		return nil
+	}
+
+	if err := ms.GetEngine(symbol).CancelOrder(engineID); err != nil &&
+		!strings.Contains(err.Error(), "not found") &&
+		!strings.Contains(err.Error(), "already filled") {
+		return err
+	}
 	return nil
 }
 

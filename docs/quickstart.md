@@ -4,13 +4,13 @@
 
 - **Go** 1.25+
 - **Node.js** 20+ (仅构建前端)
-- **Rust** (不需要 — 撮合引擎已弃用仅作基准，默认构建不含)
+- **Rust** + C/C++ toolchain (默认源码生产构建需要)
 - **Docker** (可选, 容器化部署)
 
 ## 方式一：一键构建
 
 ```bash
-# 构建前端 + Go 网关 → dist/gateway
+# 构建前端 + Rust 撮合库 + Go 网关 → dist/gateway
 bash build.sh
 
 # 配置环境变量
@@ -42,10 +42,12 @@ docker compose up -d
 cd web && npm install && npm run dev
 # → http://localhost:5173
 
-# 终端 2: 后端
+# 终端 2: 后端（Go 撮合仅为开发回退）
 cd gateway && go run ./cmd/server
 # → http://localhost:8080
 ```
+
+`bash build.sh` 和 Docker 默认启用 Rust CGo 撮合。`BUILD_RUST=0` 仅用于本地开发回退，不应用于生产发布。
 
 ## 配置
 

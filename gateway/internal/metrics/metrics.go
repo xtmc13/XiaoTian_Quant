@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 )
 
@@ -503,8 +502,7 @@ func runtimeMetrics() string {
 	return b.String()
 }
 
-// diskMetrics 采样 SQLite 数据目录所在文件系统的磁盘用量（DB_PATH 环境变量，
-// 缺省取工作目录）。statfs 失败（如路径不存在）时输出为空，不产生误报。
+// diskMetrics samples the filesystem containing the SQLite data directory.
 func diskMetrics() string {
 	dir := os.Getenv("DB_PATH")
 	if dir == "" {
@@ -512,17 +510,17 @@ func diskMetrics() string {
 	} else {
 		dir = filepath.Dir(dir)
 	}
-	var st syscall.Statfs_t
-	if err := syscall.Statfs(dir, &st); err != nil {
+	total, available, err := filesystemUsage(dir)
+	if err != nil {
 		return ""
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "# HELP gateway_disk_total_bytes Filesystem total bytes of the gateway data volume\n")
 	fmt.Fprintf(&b, "# TYPE gateway_disk_total_bytes gauge\n")
-	fmt.Fprintf(&b, "gateway_disk_total_bytes{path=%q} %d\n", dir, st.Blocks*uint64(st.Bsize))
+	fmt.Fprintf(&b, "gateway_disk_total_bytes{path=%q} %d\n", dir, total)
 	fmt.Fprintf(&b, "# HELP gateway_disk_avail_bytes Filesystem bytes available to unprivileged users\n")
 	fmt.Fprintf(&b, "# TYPE gateway_disk_avail_bytes gauge\n")
-	fmt.Fprintf(&b, "gateway_disk_avail_bytes{path=%q} %d\n", dir, st.Bavail*uint64(st.Bsize))
+	fmt.Fprintf(&b, "gateway_disk_avail_bytes{path=%q} %d\n", dir, available)
 	return b.String()
 }
 

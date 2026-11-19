@@ -1,9 +1,9 @@
 //go:build !cgo || !xtengine
 // +build !cgo !xtengine
 
-// Pure-Go matching engine (price-time priority) — the production path.
+// Pure-Go matching engine (price-time priority) — the development/test fallback.
 // Activated whenever the xtengine tag is absent (with or without CGO);
-// the Rust FFI bridge (cgo_bridge.go) only takes over with
+// production builds select the Rust FFI bridge (cgo_bridge.go) with
 // `-tags xtengine` + CGO_ENABLED=1 + a prebuilt libxt_matching.
 // Behavior is aligned with the Rust FFI version
 // (gateway/internal/adapter/../engine/src/ffi.rs): identical
@@ -17,13 +17,12 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"strings"
 	"sync"
 	"sync/atomic"
 )
 
 // MatchingEngine is a pure-Go order matching engine (price-time priority).
-// Used unless the Rust engine is explicitly enabled with cgo and xtengine.
+// It is used by development builds unless the Rust bridge is enabled.
 type MatchingEngine struct {
 	symbol string
 	mu     sync.Mutex
@@ -91,19 +90,6 @@ type BalanceProvider interface {
 	Available(userID uint64, asset string) float64
 }
 
-// quoteAssets 从交易对推导 base/quote 的后缀表（长后缀优先，避免 BTC 吃掉 BTCUSDT）。
-var quoteAssets = []string{"USDT", "USDC", "FDUSD", "TUSD", "BUSD", "DAI", "EUR", "GBP", "ETH", "BTC", "BNB"}
-
-func splitSymbolAssets(symbol string) (base, quote string) {
-	s := strings.ToUpper(symbol)
-	for _, q := range quoteAssets {
-		if strings.HasSuffix(s, q) && len(s) > len(q) {
-			return s[:len(s)-len(q)], q
-		}
-	}
-	return s, "USDT"
-}
-
 var (
 	engines   = make(map[string]*MatchingEngine)
 	enginesMu sync.Mutex
@@ -124,8 +110,7 @@ func NewMatchingEngine(symbol string) *MatchingEngine {
 	return eng
 }
 
-// SubmitOrder submits an order and returns the result in Rust FFI format:
-// {"status":"ok","order_id":<id>,"trades":[...]}
+// SubmitOrder submits an order and returns the shared Go/Rust result shape.
 //
 // 资金校验（注入 BalanceProvider 后生效，行为对齐真实交易所）：
 //   - 限价卖出 / 市价卖出：可用 base 持仓不足 → 拒绝（-2010 式）
@@ -135,8 +120,19 @@ func (e *MatchingEngine) SubmitOrder(side, orderType string, price, quantity flo
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	if quantity <= 0 {
+	if math.IsNaN(quantity) || math.IsInf(quantity, 0) || quantity <= 0 {
 		return nil, fmt.Errorf("quantity must be positive")
+	}
+	if math.IsNaN(price) || math.IsInf(price, 0) ||
+		(orderType == "limit" && price <= 0) ||
+		(orderType == "market" && price < 0) {
+		return nil, fmt.Errorf("invalid price for %s order", orderType)
+	}
+	if side != "buy" && side != "sell" {
+		return nil, fmt.Errorf("side must be buy or sell")
+	}
+	if orderType != "limit" && orderType != "market" {
+		return nil, fmt.Errorf("order_type must be limit or market")
 	}
 
 	base, quote := splitSymbolAssets(e.symbol)
@@ -145,18 +141,32 @@ func (e *MatchingEngine) SubmitOrder(side, orderType string, price, quantity flo
 	if orderType == "market" {
 		if side == "sell" {
 			// 市价卖出：持仓为零直接拒绝；不足部分撮合时截断（部分成交）。
-			if avail := e.available(userID, base); avail <= 0 {
+			avail := e.available(userID, base)
+			if err := validateAvailableBalance(base, avail); err != nil {
+				return nil, err
+			}
+			if avail <= 0 {
 				return nil, fmt.Errorf("insufficient balance: no %s available to sell", base)
 			}
+		} else if err := validateAvailableBalance(quote, e.available(userID, quote)); err != nil {
+			return nil, err
 		}
 	} else {
 		if side == "sell" {
-			if avail := e.available(userID, base); quantity > avail {
+			avail := e.available(userID, base)
+			if err := validateAvailableBalance(base, avail); err != nil {
+				return nil, err
+			}
+			if quantity > avail {
 				return nil, fmt.Errorf("insufficient balance: need %.8f %s, available %.8f", quantity, base, math.Max(avail, 0))
 			}
 		} else {
 			cost := price * quantity
-			if avail := e.available(userID, quote); cost > avail {
+			avail := e.available(userID, quote)
+			if err := validateAvailableBalance(quote, avail); err != nil {
+				return nil, err
+			}
+			if cost > avail {
 				return nil, fmt.Errorf("insufficient balance: need %.8f %s, available %.8f", cost, quote, math.Max(avail, 0))
 			}
 		}
@@ -176,23 +186,26 @@ func (e *MatchingEngine) SubmitOrder(side, orderType string, price, quantity flo
 	// trades produced by this order only.
 	preTradeSeq := e.tradeSeq
 
+	orderFills := make([]any, 0)
 	if orderType == "market" {
-		e.matchMarket(ord)
+		orderFills = e.matchMarket(ord)
 	} else {
 		e.addToBook(ord)
-		e.matchLimit(ord)
+		orderFills = e.matchLimit(ord)
 	}
 
 	// Collect trades produced by this order submission.
-	var orderTrades []map[string]any
+	orderTrades := make([]any, 0)
 	if e.tradeSeq > preTradeSeq {
 		newCount := int(e.tradeSeq - preTradeSeq)
 		start := len(e.trades) - newCount
 		if start < 0 {
 			start = 0
 		}
-		orderTrades = make([]map[string]any, newCount)
-		copy(orderTrades, e.trades[start:])
+		orderTrades = make([]any, newCount)
+		for i, trade := range e.trades[start:] {
+			orderTrades[i] = trade
+		}
 	}
 
 	// Result mirrors the Rust FFI format: status/side/price/quantity/filled
@@ -209,13 +222,15 @@ func (e *MatchingEngine) SubmitOrder(side, orderType string, price, quantity flo
 	}
 
 	result := map[string]any{
-		"status":   status,
-		"order_id": id,
-		"side":     side,
-		"price":    price,
-		"quantity": quantity,
-		"filled":   ord.Filled,
-		"trades":   orderTrades,
+		"status":     status,
+		"order_id":   id,
+		"side":       side,
+		"order_type": orderType,
+		"price":      price,
+		"quantity":   quantity,
+		"filled":     ord.Filled,
+		"trades":     orderTrades,
+		"fills":      orderFills,
 	}
 
 	return result, nil
@@ -243,14 +258,15 @@ func (e *MatchingEngine) addToBook(ord *order) {
 	}
 }
 
-func (e *MatchingEngine) matchLimit(taker *order) {
-	e.matchAll()
+func (e *MatchingEngine) matchLimit(taker *order) []any {
+	return e.matchAll()
 }
 
-func (e *MatchingEngine) matchMarket(maker *order) {
+func (e *MatchingEngine) matchMarket(maker *order) []any {
 	base, quote := splitSymbolAssets(e.symbol)
 	var spentQuote float64 // 市价买入：按可用 quote 截断，杜绝负余额
 	var soldBase float64   // 市价卖出：按可用 base 截断（部分成交）
+	var fills []any
 
 	if maker.Side == "buy" {
 		for len(e.asks) > 0 && maker.Filled < maker.Quantity {
@@ -275,7 +291,7 @@ func (e *MatchingEngine) matchMarket(maker *order) {
 			maker.Filled += fillQty
 			counter.Filled += fillQty
 			spentQuote += tradePrice * fillQty
-			e.recordTrade(maker, counter, tradePrice, fillQty)
+			fills = append(fills, e.recordTrade(maker, counter, tradePrice, fillQty)...)
 			if counter.Filled >= counter.Quantity {
 				e.asks[0].Orders = e.asks[0].Orders[1:]
 			}
@@ -306,7 +322,7 @@ func (e *MatchingEngine) matchMarket(maker *order) {
 			maker.Filled += fillQty
 			counter.Filled += fillQty
 			soldBase += fillQty
-			e.recordTrade(maker, counter, tradePrice, fillQty)
+			fills = append(fills, e.recordTrade(maker, counter, tradePrice, fillQty)...)
 			if counter.Filled >= counter.Quantity {
 				e.bids[0].Orders = e.bids[0].Orders[1:]
 			}
@@ -315,9 +331,11 @@ func (e *MatchingEngine) matchMarket(maker *order) {
 			}
 		}
 	}
+	return fills
 }
 
-func (e *MatchingEngine) matchAll() {
+func (e *MatchingEngine) matchAll() []any {
+	var fills []any
 	for {
 		if len(e.bids) == 0 || len(e.asks) == 0 {
 			break
@@ -339,7 +357,7 @@ func (e *MatchingEngine) matchAll() {
 		tradePrice := e.asks[0].Price // price-time priority: earlier order sets price
 		buyer.Filled += fillQty
 		seller.Filled += fillQty
-		e.recordTrade(buyer, seller, tradePrice, fillQty)
+		fills = append(fills, e.recordTrade(buyer, seller, tradePrice, fillQty)...)
 		if buyer.Filled >= buyer.Quantity {
 			e.bids[0].Orders = e.bids[0].Orders[1:]
 		}
@@ -353,10 +371,11 @@ func (e *MatchingEngine) matchAll() {
 			e.asks = e.asks[1:]
 		}
 	}
+	return fills
 }
 
 // recordTrade records a trade using Rust FFI compatible field names.
-func (e *MatchingEngine) recordTrade(buyer, seller *order, price, qty float64) {
+func (e *MatchingEngine) recordTrade(buyer, seller *order, price, qty float64) []any {
 	e.tradeSeq++
 	trade := map[string]any{
 		"id":            e.tradeSeq,
@@ -370,12 +389,22 @@ func (e *MatchingEngine) recordTrade(buyer, seller *order, price, qty float64) {
 		e.trades = e.trades[len(e.trades)-1000:]
 	}
 	// Fill 回写钩子：向双方推送累计成交量/VWAP（绝对量语义，OMS 端幂等收敛）。
+	fills := make([]any, 0, 2)
 	for _, ord := range []*order{buyer, seller} {
 		ord.notional += price * qty
-		if e.onFill != nil && ord.Filled > 0 {
-			e.onFill(ord.ID, ord.Filled, ord.notional/ord.Filled)
+		if ord.Filled > 0 {
+			avgPrice := ord.notional / ord.Filled
+			fills = append(fills, map[string]any{
+				"order_id":   ord.ID,
+				"filled_qty": ord.Filled,
+				"avg_price":  avgPrice,
+			})
+			if e.onFill != nil {
+				e.onFill(ord.ID, ord.Filled, avgPrice)
+			}
 		}
 	}
+	return fills
 }
 
 func (e *MatchingEngine) CancelOrder(orderID uint64) error {

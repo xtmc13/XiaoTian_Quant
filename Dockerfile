@@ -93,7 +93,7 @@ ARG TARGETARCH=amd64
 RUN CGO_ENABLED=1 \
     CGO_LDFLAGS="-L/engine-dist -lxt_matching -lstdc++ -ldl -lm" \
     GOOS=linux GOARCH=${TARGETARCH} \
-    go build \
+    go build -tags xtengine \
     -ldflags="-s -w -X main.version=${VERSION} -X main.buildTime=${BUILD_TIME}" \
     -trimpath \
     -o /gateway ./cmd/server

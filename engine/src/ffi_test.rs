@@ -116,14 +116,11 @@ fn test_ffi_engine_create_and_destroy() {
 }
 
 #[test]
-fn test_ffi_engine_create_empty_symbol() {
-    // Empty string should still create (symbol becomes "")
+fn test_ffi_engine_create_rejects_empty_symbol() {
     let ptr = engine_create(to_c_char(""));
     let response = from_c_char(ptr);
     let json = parse_json(&response);
-    assert_eq!(json["status"], "ok");
-    assert_eq!(json["symbol"], "");
-    engine_destroy(to_c_char(""));
+    assert_eq!(json["error"], "missing or empty symbol");
 }
 
 #[test]
@@ -172,9 +169,10 @@ fn test_ffi_submit_limit_order_buy() {
     let response = from_c_char(ptr);
 
     let json = parse_json(&response);
-    assert_eq!(json["status"], "ok");
+    assert_eq!(json["status"], "NEW");
     assert!(json["order_id"].is_number());
     assert!(json["trades"].is_array());
+    assert_eq!(json["filled"], 0.0);
 
     engine_destroy(to_c_char(symbol));
 }
@@ -195,7 +193,7 @@ fn test_ffi_submit_limit_order_sell() {
     let response = from_c_char(ptr);
 
     let json = parse_json(&response);
-    assert_eq!(json["status"], "ok");
+    assert_eq!(json["status"], "NEW");
 
     engine_destroy(to_c_char(symbol));
 }
@@ -231,11 +229,12 @@ fn test_ffi_submit_order_immediate_match() {
     let response = from_c_char(ptr);
 
     let json = parse_json(&response);
-    assert_eq!(json["status"], "ok");
+    assert_eq!(json["status"], "FILLED");
     let trades = json["trades"].as_array().unwrap();
     assert_eq!(trades.len(), 1);
     assert_eq!(trades[0]["price"], 68000.0);
     assert_eq!(trades[0]["quantity"], 0.3);
+    assert_eq!(json["fills"].as_array().unwrap().len(), 2);
 
     engine_destroy(to_c_char(symbol));
 }
@@ -271,6 +270,8 @@ fn test_ffi_submit_order_partial_fill() {
     let response = from_c_char(ptr);
 
     let json = parse_json(&response);
+    assert_eq!(json["status"], "PARTIALLY_FILLED");
+    assert_eq!(json["filled"], 1.0);
     let trades = json["trades"].as_array().unwrap();
     assert_eq!(trades.len(), 1);
     assert_eq!(trades[0]["quantity"], 1.0);
@@ -280,6 +281,67 @@ fn test_ffi_submit_order_partial_fill() {
     let bids = snap["bids"].as_array().unwrap();
     assert_eq!(bids.len(), 1);
     assert_eq!(bids[0][1], 2.0);
+
+    engine_destroy(to_c_char(symbol));
+}
+
+#[test]
+fn test_ffi_balance_limits_reject_and_cap_orders() {
+    let symbol = "FFI_BALANCE_LIMITS";
+    engine_create(to_c_char(symbol));
+
+    let insufficient = engine_submit_order(to_c_char(
+        &serde_json::json!({
+            "symbol": symbol,
+            "side": "buy",
+            "price": 100.0,
+            "quantity": 2.0,
+            "user_id": 7,
+            "available_quote": 150.0,
+        })
+        .to_string(),
+    ));
+    assert!(parse_json(&from_c_char(insufficient))["error"]
+        .as_str()
+        .unwrap()
+        .contains("insufficient balance"));
+
+    engine_submit_order(to_c_char(
+        &serde_json::json!({
+            "symbol": symbol,
+            "side": "sell",
+            "price": 100.0,
+            "quantity": 1.0,
+            "user_id": 1,
+        })
+        .to_string(),
+    ));
+    engine_submit_order(to_c_char(
+        &serde_json::json!({
+            "symbol": symbol,
+            "side": "sell",
+            "price": 200.0,
+            "quantity": 1.0,
+            "user_id": 1,
+        })
+        .to_string(),
+    ));
+
+    let capped = engine_submit_order(to_c_char(
+        &serde_json::json!({
+            "symbol": symbol,
+            "side": "buy",
+            "order_type": "market",
+            "price": 0.0,
+            "quantity": 2.0,
+            "user_id": 7,
+            "available_quote": 150.0,
+        })
+        .to_string(),
+    ));
+    let result = parse_json(&from_c_char(capped));
+    assert_eq!(result["status"], "FILLED");
+    assert!((result["filled"].as_f64().unwrap() - 1.25).abs() < 1e-12);
 
     engine_destroy(to_c_char(symbol));
 }
@@ -743,7 +805,15 @@ fn test_ffi_side_case_insensitive() {
             .to_string(),
         ));
         let json = parse_json(&from_c_char(ptr));
-        assert_eq!(json["status"], "ok", "Side '{}' should be accepted", side);
+        assert!(
+            matches!(
+                json["status"].as_str(),
+                Some("NEW" | "PARTIALLY_FILLED" | "FILLED")
+            ),
+            "Side '{}' should be accepted: {}",
+            side,
+            json
+        );
     }
 
     engine_destroy(to_c_char(symbol));
@@ -765,7 +835,7 @@ fn test_ffi_order_type_market() {
         "symbol": symbol, "side": "buy", "order_type": "market", "price": 0.0, "quantity": 1.0, "user_id": 2,
     }).to_string()));
     let json = parse_json(&from_c_char(ptr));
-    assert_eq!(json["status"], "ok");
+    assert_eq!(json["status"], "FILLED");
 
     engine_destroy(to_c_char(symbol));
 }

@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strconv"
 	"testing"
 	"time"
@@ -38,7 +39,7 @@ func TestServerManagerDisabled(t *testing.T) {
 // TestServerManagerLifecycle 长驻命令拉起 → Running，Stop 后退出。
 func TestServerManagerLifecycle(t *testing.T) {
 	// 健康端口指向一个必失败的空闲端口即可——本用例只验证进程生命周期
-	mgr := ml.NewServerManager(managedTestConfig([]string{"sh", "-c", "sleep 30"}, 18990), nil)
+	mgr := ml.NewServerManager(managedTestConfig(serverManagerHelperCommand(t, "wait"), 18990), nil)
 	mgr.Start()
 	defer mgr.Stop()
 
@@ -53,7 +54,7 @@ func TestServerManagerLifecycle(t *testing.T) {
 
 // TestServerManagerCrashRestart 立即退出的命令触发自动重启计数。
 func TestServerManagerCrashRestart(t *testing.T) {
-	mgr := ml.NewServerManager(managedTestConfig([]string{"sh", "-c", "exit 1"}, 18991), nil)
+	mgr := ml.NewServerManager(managedTestConfig(serverManagerHelperCommand(t, "exit"), 18991), nil)
 	mgr.Start()
 	defer mgr.Stop()
 
@@ -81,5 +82,20 @@ func TestServerManagerAdoptExisting(t *testing.T) {
 	}, "adopted healthy external instance")
 	if st := mgr.Status(); st.PID != 0 {
 		t.Fatalf("adopted instance must not spawn process: %+v", st)
+	}
+}
+
+func serverManagerHelperCommand(t *testing.T, mode string) []string {
+	t.Helper()
+	t.Setenv("XIAOTIAN_SERVER_MANAGER_HELPER", mode)
+	return []string{os.Args[0], "-test.run=^TestServerManagerProcessHelper$"}
+}
+
+func TestServerManagerProcessHelper(t *testing.T) {
+	switch os.Getenv("XIAOTIAN_SERVER_MANAGER_HELPER") {
+	case "wait":
+		select {}
+	case "exit":
+		os.Exit(1)
 	}
 }

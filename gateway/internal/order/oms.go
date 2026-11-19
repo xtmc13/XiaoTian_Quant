@@ -314,10 +314,13 @@ func (om *OrderManager) handleAdvancedOrder(order *model.OrderData) (*model.Orde
 
 // CancelOrder cancels an active order.
 func (om *OrderManager) CancelOrder(orderID, symbol string) (*model.OrderData, error) {
-	om.orderMu.Lock()
-	order, ok := om.orders[orderID]
-	om.orderMu.Unlock()
-
+	om.orderMu.RLock()
+	current, ok := om.orders[orderID]
+	var order model.OrderData
+	if ok {
+		order = *current
+	}
+	om.orderMu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("order %s not found", orderID)
 	}
@@ -327,23 +330,38 @@ func (om *OrderManager) CancelOrder(orderID, symbol string) (*model.OrderData, e
 
 	// Try to cancel on exchange if applicable
 	if om.CancelOnExchange != nil {
-		if err := om.CancelOnExchange(order); err != nil {
+		if err := om.CancelOnExchange(&order); err != nil {
 			return nil, fmt.Errorf("exchange cancel: %w", err)
 		}
 	}
 
+	om.orderMu.Lock()
+	current, ok = om.orders[orderID]
+	if !ok {
+		om.orderMu.Unlock()
+		return nil, fmt.Errorf("order %s not found", orderID)
+	}
+	if current.IsDone() {
+		status := current.Status
+		om.orderMu.Unlock()
+		return nil, fmt.Errorf("order %s already %s", orderID, status)
+	}
+	order = *current
 	order.Status = model.StatusCancelled
 	order.UpdatedAt = time.Now().UnixMilli()
-	om.storeOrder(order)
+	om.storeOrderLocked(&order)
+	unlockBalance := om.UnlockBalance
+	onOrderUpdate := om.OnOrderUpdate
+	om.orderMu.Unlock()
 
-	if om.UnlockBalance != nil {
-		om.UnlockBalance(order)
+	if unlockBalance != nil {
+		unlockBalance(&order)
 	}
-	if om.OnOrderUpdate != nil {
-		om.OnOrderUpdate(order)
+	if onOrderUpdate != nil {
+		onOrderUpdate(&order)
 	}
 
-	return order, nil
+	return &order, nil
 }
 
 // GetOrder returns an order by ID.
@@ -413,42 +431,55 @@ func (om *OrderManager) HandleOrderUpdate(orderData *model.OrderData) {
 // 已终态（撤/拒/过期）的订单不回写——撤单与成交竞态时撤单赢。
 // 状态/数量实际变化时触发 OnOrderUpdate（走与主动成交相同的组合更新管线）。
 func (om *OrderManager) RecordFill(orderID string, filledQty, avgPrice float64) error {
+	_, err := om.RecordFillIfActive(orderID, filledQty, avgPrice)
+	return err
+}
+
+// RecordFillIfActive atomically applies cumulative fill data and reports whether
+// the order changed. The boolean lets external fill loops avoid settling the same
+// order again after a cancellation or a duplicate fill event.
+func (om *OrderManager) RecordFillIfActive(orderID string, filledQty, avgPrice float64) (bool, error) {
 	if filledQty <= 0 {
-		return fmt.Errorf("filled qty must be positive")
+		return false, fmt.Errorf("filled qty must be positive")
 	}
-	om.orderMu.RLock()
+	om.orderMu.Lock()
 	ord, ok := om.orders[orderID]
-	om.orderMu.RUnlock()
 	if !ok {
-		return fmt.Errorf("order %s not found", orderID)
+		om.orderMu.Unlock()
+		return false, fmt.Errorf("order %s not found", orderID)
 	}
 	if ord.Status == model.StatusCancelled || ord.Status == model.StatusRejected ||
 		ord.Status == model.StatusExpired {
-		return nil
+		om.orderMu.Unlock()
+		return false, nil
 	}
 	if filledQty <= ord.Filled {
-		return nil // 重复/旧事件：幂等跳过，不回退
+		om.orderMu.Unlock()
+		return false, nil // 重复/旧事件：幂等跳过，不回退
 	}
 	if filledQty > ord.Quantity {
 		filledQty = ord.Quantity // 防御：不得超成
 	}
 
-	ord.Filled = filledQty
+	updated := *ord
+	updated.Filled = filledQty
 	if avgPrice > 0 {
-		ord.AvgFillPrice = avgPrice
+		updated.AvgFillPrice = avgPrice
 	}
-	if ord.Filled >= ord.Quantity {
-		ord.Status = model.StatusFilled
+	if updated.Filled >= updated.Quantity {
+		updated.Status = model.StatusFilled
 	} else {
-		ord.Status = model.StatusPartiallyFilled
+		updated.Status = model.StatusPartiallyFilled
 	}
-	ord.UpdatedAt = time.Now().UnixMilli()
-	om.storeOrder(ord)
+	updated.UpdatedAt = time.Now().UnixMilli()
+	om.storeOrderLocked(&updated)
+	onOrderUpdate := om.OnOrderUpdate
+	om.orderMu.Unlock()
 
-	if om.OnOrderUpdate != nil {
-		om.OnOrderUpdate(ord)
+	if onOrderUpdate != nil {
+		onOrderUpdate(&updated)
 	}
-	return nil
+	return true, nil
 }
 
 // ── Internal ──
@@ -472,35 +503,55 @@ func (om *OrderManager) fireOrderUpdate(o *model.OrderData) {
 func (om *OrderManager) storeOrder(order *model.OrderData) {
 	om.orderMu.Lock()
 	defer om.orderMu.Unlock()
+	om.storeOrderLocked(order)
+}
+
+func (om *OrderManager) storeOrderLocked(order *model.OrderData) {
 	// Make a copy
 	copy_ := *order
+	if current := om.orders[order.ID]; current != nil {
+		if current.Filled > copy_.Filled {
+			copy_.Filled = current.Filled
+			copy_.AvgFillPrice = current.AvgFillPrice
+		}
+		if current.IsDone() {
+			copy_.Status = current.Status
+		} else if current.Status == model.StatusPartiallyFilled &&
+			(copy_.Status == model.StatusCreated || copy_.Status == model.StatusPending || copy_.Status == model.StatusNew) {
+			copy_.Status = model.StatusPartiallyFilled
+		} else if copy_.Filled > current.Filled && copy_.Filled < copy_.Quantity &&
+			(copy_.Status == model.StatusCreated || copy_.Status == model.StatusPending || copy_.Status == model.StatusNew) {
+			copy_.Status = model.StatusPartiallyFilled
+		}
+	}
+	*order = copy_
 	om.orders[order.ID] = &copy_
 
 	// Persist to database via OrderRepo (upsert pattern)
 	rec := &store.OrderRecord{
-		ID:            copy_.ID,
-		Symbol:        copy_.Symbol,
-		Side:          string(copy_.Side),
-		OrderType:     string(copy_.OrderType),
-		Price:         copy_.Price,
-		StopPrice:     copy_.StopPrice,
-		Quantity:      copy_.Quantity,
-		Filled:        copy_.Filled,
-		Status:        string(copy_.Status),
-		Exchange:      copy_.Exchange,
-		UserID:        copy_.UserID,
-		ClientOID:     copy_.ClientOID,
+		ID:              copy_.ID,
+		Symbol:          copy_.Symbol,
+		Side:            string(copy_.Side),
+		OrderType:       string(copy_.OrderType),
+		Price:           copy_.Price,
+		StopPrice:       copy_.StopPrice,
+		Quantity:        copy_.Quantity,
+		Filled:          copy_.Filled,
+		Status:          string(copy_.Status),
+		Exchange:        copy_.Exchange,
+		UserID:          copy_.UserID,
+		ClientOID:       copy_.ClientOID,
 		ExchangeOrderID: copy_.ExchangeOrderID,
-		AvgFillPrice:  copy_.AvgFillPrice,
-		CreatedAt:     copy_.CreatedAt,
-		UpdatedAt:     copy_.UpdatedAt,
-		MarketType:    string(copy_.MarketType),
-		PositionSide:  string(copy_.PositionSide),
-		Leverage:      copy_.Leverage,
-		MarginMode:    string(copy_.MarginMode),
-		TPPrice:       copy_.TPPrice,
-		SLPrice:       copy_.SLPrice,
-		ClosePosition: copy_.ClosePosition,
+		AvgFillPrice:    copy_.AvgFillPrice,
+		CreatedAt:       copy_.CreatedAt,
+		UpdatedAt:       copy_.UpdatedAt,
+		MarketType:      string(copy_.MarketType),
+		PositionSide:    string(copy_.PositionSide),
+		Leverage:        copy_.Leverage,
+		MarginMode:      string(copy_.MarginMode),
+		TPPrice:         copy_.TPPrice,
+		SLPrice:         copy_.SLPrice,
+		ClosePosition:   copy_.ClosePosition,
 	}
 
 	// 首写插入、状态翻转更新，一次调用完成（原 Update 命中 0 行不报错，

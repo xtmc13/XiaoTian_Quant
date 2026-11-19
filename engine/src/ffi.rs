@@ -6,17 +6,25 @@
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 
-use crate::matching::MatchingEngine;
+use crate::matching::{BalanceLimits, MatchingEngine};
 use crate::orderbook::{Order, OrderType, Side};
 
 // ── Global engine registry ──
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
-static ENGINES: OnceLock<Mutex<HashMap<String, MatchingEngine>>> = OnceLock::new();
+type SharedEngine = Arc<Mutex<MatchingEngine>>;
 
-fn get_engines() -> &'static Mutex<HashMap<String, MatchingEngine>> {
+static ENGINES: OnceLock<Mutex<HashMap<String, SharedEngine>>> = OnceLock::new();
+
+fn get_engines() -> &'static Mutex<HashMap<String, SharedEngine>> {
     ENGINES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn lock_engine(engine: &SharedEngine) -> std::sync::MutexGuard<'_, MatchingEngine> {
+    engine
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn to_c_string(s: String) -> *mut c_char {
@@ -25,6 +33,28 @@ fn to_c_string(s: String) -> *mut c_char {
 
 fn json_error(message: impl AsRef<str>) -> String {
     serde_json::json!({ "error": message.as_ref() }).to_string()
+}
+
+fn optional_balance(value: Option<&serde_json::Value>, field: &str) -> Result<Option<f64>, String> {
+    match value {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(value) => match value.as_f64() {
+            Some(amount) if amount.is_finite() && amount >= 0.0 => Ok(Some(amount)),
+            _ => Err(format!(
+                "{field} must be a finite non-negative number or null"
+            )),
+        },
+    }
+}
+
+fn status_name(status: crate::orderbook::OrderStatus) -> &'static str {
+    match status {
+        crate::orderbook::OrderStatus::New => "NEW",
+        crate::orderbook::OrderStatus::PartiallyFilled => "PARTIALLY_FILLED",
+        crate::orderbook::OrderStatus::Filled => "FILLED",
+        crate::orderbook::OrderStatus::Cancelled => "CANCELLED",
+        crate::orderbook::OrderStatus::Rejected => "REJECTED",
+    }
 }
 
 unsafe fn from_c_str(ptr: *const c_char) -> String {
@@ -49,6 +79,10 @@ macro_rules! lock_engines {
     };
 }
 
+fn get_engine(symbol: &str) -> Option<SharedEngine> {
+    lock_engines!().get(symbol).cloned()
+}
+
 /// Create a new matching engine for a symbol. Returns the symbol as confirmation.
 ///
 /// # Safety
@@ -56,9 +90,12 @@ macro_rules! lock_engines {
 #[no_mangle]
 pub unsafe extern "C" fn engine_create(symbol: *const c_char) -> *mut c_char {
     let sym = unsafe { from_c_str(symbol) };
-    let engine = MatchingEngine::new(sym.clone());
+    if sym.trim().is_empty() {
+        return to_c_string(json_error("missing or empty symbol"));
+    }
+    let engine = Arc::new(Mutex::new(MatchingEngine::new(sym.clone())));
     lock_engines!().insert(sym.clone(), engine);
-    to_c_string(format!("{{\"status\":\"ok\",\"symbol\":\"{}\"}}", sym))
+    to_c_string(serde_json::json!({ "status": "ok", "symbol": sym }).to_string())
 }
 
 /// Delete a matching engine.
@@ -75,7 +112,7 @@ pub unsafe extern "C" fn engine_destroy(symbol: *const c_char) {
 
 /// Submit a limit order. JSON input, JSON output.
 /// Input: {"symbol":"BTCUSDT","side":"buy","price":68000,"quantity":0.1,"user_id":1}
-/// Output: {"order_id":1,"status":"filled","trades":[...]}
+/// Output includes order status, cumulative fill, trades, and per-order fill updates.
 ///
 /// # Safety
 /// `json_ptr` must be null or point to a readable, null-terminated C string.
@@ -129,25 +166,47 @@ pub unsafe extern "C" fn engine_submit_order(json_ptr: *const c_char) -> *mut c_
         ));
     };
 
+    let limits = match (
+        optional_balance(parsed.get("available_base"), "available_base"),
+        optional_balance(parsed.get("available_quote"), "available_quote"),
+    ) {
+        (Ok(base), Ok(quote)) => BalanceLimits { base, quote },
+        (Err(err), _) | (_, Err(err)) => return to_c_string(json_error(err)),
+    };
     let order = Order::new(0, price, quantity, side, order_type, user_id);
 
-    let result = match lock_engines!().get_mut(symbol) {
+    let result = match get_engine(symbol) {
         Some(engine) => {
-            let (order_id, trades) = engine.submit_order(order);
-            serde_json::json!({
-                "status": "ok",
-                "order_id": order_id,
-                "trades": trades.iter().map(|t| {
-                    serde_json::json!({
-                        "id": t.id,
-                        "price": t.price,
-                        "quantity": t.quantity,
-                        "buy_order_id": t.buy_order_id,
-                        "sell_order_id": t.sell_order_id,
-                    })
-                }).collect::<Vec<_>>(),
-            })
-            .to_string()
+            let result = lock_engine(&engine).submit_order_with_limits(order, limits);
+            match result {
+                Ok(result) => serde_json::json!({
+                    "status": status_name(result.status),
+                    "order_id": result.order_id,
+                    "side": side_str.to_lowercase(),
+                    "order_type": order_type_str.to_lowercase(),
+                    "price": price,
+                    "quantity": quantity,
+                    "filled": result.filled,
+                    "trades": result.trades.iter().map(|t| {
+                        serde_json::json!({
+                            "id": t.id,
+                            "price": t.price,
+                            "quantity": t.quantity,
+                            "buy_order_id": t.buy_order_id,
+                            "sell_order_id": t.sell_order_id,
+                        })
+                    }).collect::<Vec<_>>(),
+                    "fills": result.fills.iter().map(|fill| {
+                        serde_json::json!({
+                            "order_id": fill.order_id,
+                            "filled_qty": fill.filled_qty,
+                            "avg_price": fill.avg_price,
+                        })
+                    }).collect::<Vec<_>>(),
+                })
+                .to_string(),
+                Err(err) => json_error(err),
+            }
         }
         None => json_error(format!("engine not found for {symbol}")),
     };
@@ -162,12 +221,12 @@ pub unsafe extern "C" fn engine_submit_order(json_ptr: *const c_char) -> *mut c_
 #[no_mangle]
 pub unsafe extern "C" fn engine_cancel_order(symbol: *const c_char, order_id: u64) -> *mut c_char {
     let sym = unsafe { from_c_str(symbol) };
-    let result = match lock_engines!().get_mut(&sym) {
-        Some(engine) => match engine.cancel_order(order_id) {
-            Some(_) => format!("{{\"status\":\"ok\",\"order_id\":{}}}", order_id),
-            None => format!("{{\"error\":\"order {} not found\"}}", order_id),
+    let result = match get_engine(&sym) {
+        Some(engine) => match lock_engine(&engine).cancel_order(order_id) {
+            Some(_) => serde_json::json!({ "status": "ok", "order_id": order_id }).to_string(),
+            None => json_error(format!("order {order_id} not found")),
         },
-        None => format!("{{\"error\":\"engine not found for {}\"}}", sym),
+        None => json_error(format!("engine not found for {sym}")),
     };
     to_c_string(result)
 }
@@ -179,8 +238,9 @@ pub unsafe extern "C" fn engine_cancel_order(symbol: *const c_char, order_id: u6
 #[no_mangle]
 pub unsafe extern "C" fn engine_snapshot(symbol: *const c_char, depth: u32) -> *mut c_char {
     let sym = unsafe { from_c_str(symbol) };
-    let result = match lock_engines!().get(&sym) {
+    let result = match get_engine(&sym) {
         Some(engine) => {
+            let engine = lock_engine(&engine);
             let (bids, asks) = engine.snapshot(depth as usize);
             serde_json::json!({
                 "symbol": sym,
@@ -192,7 +252,7 @@ pub unsafe extern "C" fn engine_snapshot(symbol: *const c_char, depth: u32) -> *
             })
             .to_string()
         }
-        None => format!("{{\"error\":\"engine not found for {}\"}}", sym),
+        None => json_error(format!("engine not found for {sym}")),
     };
     to_c_string(result)
 }
@@ -202,8 +262,8 @@ pub unsafe extern "C" fn engine_snapshot(symbol: *const c_char, depth: u32) -> *
 #[no_mangle]
 pub unsafe extern "C" fn engine_trade_count(symbol: *const c_char) -> u64 {
     let sym = unsafe { from_c_str(symbol) };
-    match lock_engines!().get(&sym) {
-        Some(engine) => engine.book.trade_count,
+    match get_engine(&sym) {
+        Some(engine) => lock_engine(&engine).book.trade_count,
         None => 0,
     }
 }
@@ -215,8 +275,9 @@ pub unsafe extern "C" fn engine_trade_count(symbol: *const c_char) -> u64 {
 #[no_mangle]
 pub unsafe extern "C" fn engine_get_trades(symbol: *const c_char, limit: u32) -> *mut c_char {
     let sym = unsafe { from_c_str(symbol) };
-    let result = match lock_engines!().get(&sym) {
+    let result = match get_engine(&sym) {
         Some(engine) => {
+            let engine = lock_engine(&engine);
             let trades = engine.get_trades(limit as usize);
             serde_json::json!(trades
                 .iter()

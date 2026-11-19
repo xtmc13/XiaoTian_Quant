@@ -1,8 +1,8 @@
 # 小天量化 v3.1 补齐计划
 ## 目标: 补齐所有功能差距(除CRA商业功能外)
 
-> **状态说明（2026-11-18）**: 本文档整体为历史计划存档，条目勾选状态不代表当前代码真实进度；当前进度以 TODO.md 为准。
-> 2026-09-25 曾决定 Rust 不进主链路、仅作基准；该决定已被用户更新的 **Go（网关/账户）+ Rust（撮合）+ TypeScript（前端）** 目标覆盖。当前生产撮合仍由 Go 承担，Rust 撮合尚未接入生产主链路；必须完成业务契约、账户校验边界、成交回写和重启恢复验证后，才能逐步切换。本文的 Rust SignalExecutor 计划是旧设计，不代表当前迁移范围。
+> **状态说明（2026-11-19）**: 本文档整体为历史计划存档，条目勾选状态不代表当前代码真实进度；当前进度以 TODO.md 为准。
+> 默认源码、Docker 和发布构建已切换为 **Go（网关/账户）+ Rust（撮合）+ TypeScript（前端）**；Go 负责 OMS、余额、风险及持久化，Rust 经 CGo 执行本地订单簿撮合。跨平台工作流已配置但尚未由 hosted runners 验证；订单簿重启恢复仍未实现。本文的 Rust SignalExecutor 计划是旧设计，不代表当前迁移范围。
 > Phase 2-6 中：Phase 2 的 martin/wallstreet/flashcrash/indicators/contract、Phase 3 的 config_dynamic、Phase 6 的 install.sh/GHCR 均已落地；Phase 4 的 `internal/mcp`、`internal/audit` 目录未建（MCP 能力由 `internal/agent/` 承担）。
 
 ---

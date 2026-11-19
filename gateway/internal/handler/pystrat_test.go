@@ -2,6 +2,8 @@ package handler
 
 import (
 	"errors"
+	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -196,6 +198,7 @@ func TestPyStratOwnership(t *testing.T) {
 
 // validate：静态校验报行号 + 沙箱错误通道。
 func TestPyStratValidateEndpoint(t *testing.T) {
+	requirePythonRuntime(t)
 	r, _ := setupPyStratRouter(t)
 	tok := gridToken(t, 303)
 
@@ -235,6 +238,23 @@ func TestPyStratValidateEndpoint(t *testing.T) {
 	if w.Code != 200 || resp["valid"] != true {
 		t.Fatalf("expected valid=true: %d %v", w.Code, resp)
 	}
+}
+
+func requirePythonRuntime(t *testing.T) {
+	t.Helper()
+	candidates := []string{"python3", "python"}
+	if runtime.GOOS == "windows" {
+		candidates = []string{"python", "python3"}
+	}
+	for _, candidate := range candidates {
+		if _, err := exec.LookPath(candidate); err != nil {
+			continue
+		}
+		if err := exec.Command(candidate, "--version").Run(); err == nil {
+			return
+		}
+	}
+	t.Skip("Python 3 runtime not available, skipping sandbox-backed validation test")
 }
 
 // start/stop 生命周期 + 运行中 409 + 启动失败回写 error。

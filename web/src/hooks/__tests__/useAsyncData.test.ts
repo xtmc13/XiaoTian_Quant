@@ -59,17 +59,24 @@ describe('useAsyncData', () => {
 })
 
 describe('useDebounce', () => {
-  it('delays value update', async () => {
-    const { result, rerender } = renderHook(({ value }) => useDebounce(value, 100), {
-      initialProps: { value: 'a' },
-    })
+  it('delays value update', () => {
+    vi.useFakeTimers()
+    try {
+      const { result, rerender } = renderHook(({ value }) => useDebounce(value, 100), {
+        initialProps: { value: 'a' },
+      })
 
-    expect(result.current).toBe('a')
+      expect(result.current).toBe('a')
 
-    rerender({ value: 'b' })
-    expect(result.current).toBe('a') // still old value
-
-    await waitFor(() => expect(result.current).toBe('b'), { timeout: 200 })
+      rerender({ value: 'b' })
+      expect(result.current).toBe('a')
+      act(() => vi.advanceTimersByTime(99))
+      expect(result.current).toBe('a')
+      act(() => vi.advanceTimersByTime(1))
+      expect(result.current).toBe('b')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

@@ -12,6 +12,7 @@ export default defineConfig(({ mode }) => ({
     environment: 'jsdom',
     globals: true,
     include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    setupFiles: ['./src/test/setup.ts'],
     // 低内存机器上 forks worker 并发启动会超时（worker respond timeout），
     // 限制并发数以换取稳定；单文件调试不受影响。
     maxWorkers: 4,
@@ -57,15 +58,15 @@ export default defineConfig(({ mode }) => ({
           // Core React ecosystem — loaded on every page
           'react-vendor': ['react', 'react-dom', 'react-router-dom'],
           // Data fetching — loaded on most pages
-          'query': ['@tanstack/react-query'],
+          query: ['@tanstack/react-query'],
           // State management
-          'state': ['zustand'],
+          state: ['zustand'],
           // Charts — only loaded on trading/backtest pages
-          'echarts': ['echarts'],
-          'klinecharts': ['klinecharts', '@klinecharts/pro'],
+          echarts: ['echarts'],
+          klinecharts: ['klinecharts', '@klinecharts/pro'],
           'lightweight-charts': ['lightweight-charts'],
           // Code editor — only loaded on indicator IDE
-          'codemirror': [
+          codemirror: [
             'codemirror',
             '@codemirror/lang-python',
             '@codemirror/theme-one-dark',
@@ -77,7 +78,7 @@ export default defineConfig(({ mode }) => ({
           // Date utilities
           'date-fns': ['date-fns'],
           // HTTP client
-          'axios': ['axios'],
+          axios: ['axios'],
           // UI utilities
           'ui-utils': ['class-variance-authority', 'clsx', 'tailwind-merge'],
         },

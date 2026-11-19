@@ -137,33 +137,58 @@ func Resolve(root, path string) (string, string, error) {
 	if path == "" {
 		return "", "", fmt.Errorf("path 不能为空")
 	}
+	if strings.IndexByte(path, 0) >= 0 {
+		return "", "", fmt.Errorf("path 包含无效字符")
+	}
+	raw := filepath.ToSlash(path)
+	if strings.HasPrefix(raw, "//") || hasDrivePrefix(raw) {
+		return "", "", fmt.Errorf("不允许使用卷标或网络绝对路径: %s", path)
+	}
 	// 前导 / 视为根内绝对写法；Clean 后仍以 .. 开头即试图逃逸，直接拒绝。
-	raw := strings.TrimPrefix(filepath.ToSlash(path), "/")
+	raw = strings.TrimLeft(raw, "/")
 	cleaned := pathpkg.Clean(raw)
 	if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
 		return "", "", fmt.Errorf("路径越出沙箱根目录: %s", path)
 	}
-	rel := filepath.FromSlash(cleaned)
-	abs := filepath.Join(root, rel)
-	if abs != root && !strings.HasPrefix(abs, root+string(filepath.Separator)) {
+	rel := cleaned
+	abs := filepath.Join(root, filepath.FromSlash(rel))
+	if !pathWithinRoot(root, abs) {
 		return "", "", fmt.Errorf("路径越出沙箱根目录: %s", path)
 	}
 	// 符号链接防逃逸：目标存在时校验真实路径；不存在时校验最近存在的祖先目录。
 	target := abs
 	for {
 		if real, err := filepath.EvalSymlinks(target); err == nil {
-			if real != root && !strings.HasPrefix(real, root+string(filepath.Separator)) {
+			if !pathWithinRoot(root, real) {
 				return "", "", fmt.Errorf("路径经符号链接越出沙箱根目录: %s", path)
 			}
 			break
 		}
 		parent := filepath.Dir(target)
-		if parent == target || !strings.HasPrefix(parent, root) {
+		if parent == target || !pathWithinRoot(root, parent) {
 			break
 		}
 		target = parent
 	}
-	return abs, rel, nil
+	return abs, filepath.ToSlash(rel), nil
+}
+
+func hasDrivePrefix(path string) bool {
+	if len(path) < 2 || path[1] != ':' {
+		return false
+	}
+	return path[0] >= 'a' && path[0] <= 'z' || path[0] >= 'A' && path[0] <= 'Z'
+}
+
+func pathWithinRoot(root, candidate string) bool {
+	rel, err := filepath.Rel(root, candidate)
+	if err != nil {
+		return false
+	}
+	if rel == "." {
+		return true
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
 // Info 插件元信息。
@@ -431,10 +456,10 @@ func (p *Plugin) listFiles(tc *agent.ToolContext, _ context.Context, args map[st
 		limit = 200
 	}
 	type entry struct {
-		Path string `json:"path"`
-		Type string `json:"type"`
-		Size int64  `json:"size"`
-		Mtime int64 `json:"mtime"`
+		Path  string `json:"path"`
+		Type  string `json:"type"`
+		Size  int64  `json:"size"`
+		Mtime int64  `json:"mtime"`
 	}
 	entries := []entry{}
 	walkErr := filepath.WalkDir(abs, func(path string, d os.DirEntry, err error) error {

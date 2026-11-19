@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/xiaotian-quant/gateway/internal/agentprofiles"
@@ -45,8 +46,10 @@ func (r *Repo) db() (*sql.DB, error) {
 }
 
 // NewID 生成看板卡 id。
+var nextID uint64
+
 func NewID() string {
-	return fmt.Sprintf("kb_%d", time.Now().UnixNano())
+	return fmt.Sprintf("kb_%d_%d", time.Now().UnixNano(), atomic.AddUint64(&nextID, 1))
 }
 
 var validColumns = map[string]bool{"todo": true, "doing": true, "done": true}

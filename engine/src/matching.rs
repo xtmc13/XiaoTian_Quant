@@ -1,5 +1,29 @@
 use crate::orderbook::{Order, OrderBook, OrderStatus, OrderType, Side, Trade};
 
+const MAX_RECENT_TRADES: usize = 1000;
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BalanceLimits {
+    pub base: Option<f64>,
+    pub quote: Option<f64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FillUpdate {
+    pub order_id: u64,
+    pub filled_qty: f64,
+    pub avg_price: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct SubmissionResult {
+    pub order_id: u64,
+    pub status: OrderStatus,
+    pub filled: f64,
+    pub trades: Vec<Trade>,
+    pub fills: Vec<FillUpdate>,
+}
+
 /// Matching engine — price-time priority
 pub struct MatchingEngine {
     pub book: OrderBook,
@@ -15,22 +39,95 @@ impl MatchingEngine {
     }
 
     /// Submit a limit order and match immediately
-    pub fn submit_order(&mut self, mut order: Order) -> (u64, Vec<Trade>) {
+    pub fn submit_order(&mut self, order: Order) -> (u64, Vec<Trade>) {
+        let result = self
+            .submit_order_with_limits(order, BalanceLimits::default())
+            .expect("unbounded matching must accept a valid order");
+        (result.order_id, result.trades)
+    }
+
+    pub fn submit_order_with_limits(
+        &mut self,
+        mut order: Order,
+        limits: BalanceLimits,
+    ) -> Result<SubmissionResult, String> {
+        if order.user_id != 0 {
+            match (order.order_type, order.side) {
+                (OrderType::Limit, Side::Buy) => {
+                    if let Some(available) = limits.quote {
+                        let required = order.price * order.quantity;
+                        if required > available {
+                            return Err(format!(
+                                "insufficient balance: need {:.8} quote, available {:.8}",
+                                required,
+                                available.max(0.0)
+                            ));
+                        }
+                    }
+                }
+                (OrderType::Limit, Side::Sell) => {
+                    if let Some(available) = limits.base {
+                        if order.quantity > available {
+                            return Err(format!(
+                                "insufficient balance: need {:.8} base, available {:.8}",
+                                order.quantity,
+                                available.max(0.0)
+                            ));
+                        }
+                    }
+                }
+                (OrderType::Market, Side::Sell) => {
+                    if limits
+                        .base
+                        .map(|available| available <= 0.0)
+                        .unwrap_or(false)
+                    {
+                        return Err("insufficient balance: no base available to sell".into());
+                    }
+                }
+                _ => {}
+            }
+        }
+
         // Always allocate an order ID first, even if the order is fully matched.
         // This ensures filled orders have correct IDs in trade records.
         self.book.order_count += 1;
         order.id = self.book.order_count;
-        let new_trades = self.match_order(&mut order);
+        let (new_trades, fills) = self.match_order(&mut order, limits);
         let order_id = order.id;
+        let filled = order.filled;
+        let quantity = order.quantity;
+        let is_market = order.order_type == OrderType::Market;
+        let status = if is_market || filled >= quantity {
+            OrderStatus::Filled
+        } else if filled > 0.0 {
+            OrderStatus::PartiallyFilled
+        } else {
+            OrderStatus::New
+        };
         if !order.is_done() {
             self.book.add_order(order);
         }
-        (order_id, new_trades)
+
+        Ok(SubmissionResult {
+            order_id,
+            status,
+            filled,
+            trades: new_trades,
+            fills,
+        })
     }
 
     /// Match an incoming order against the book
-    fn match_order(&mut self, taker: &mut Order) -> Vec<Trade> {
+    fn match_order(
+        &mut self,
+        taker: &mut Order,
+        limits: BalanceLimits,
+    ) -> (Vec<Trade>, Vec<FillUpdate>) {
         let mut trades = Vec::new();
+        let mut fills = Vec::new();
+        let mut remaining_base = limits.base.unwrap_or(f64::INFINITY);
+        let mut remaining_quote = limits.quote.unwrap_or(f64::INFINITY);
 
         loop {
             if taker.remaining() <= 0.0 {
@@ -67,6 +164,8 @@ impl MatchingEngine {
                 break;
             }
 
+            let trades_before_match = trades.len();
+
             // Execute trade against maker orders at this price level
             let maker_orders = match taker.side {
                 Side::Buy => {
@@ -79,6 +178,7 @@ impl MatchingEngine {
                 }
             };
 
+            let mut filled_order_ids = Vec::new();
             if let Some(maker_orders) = maker_orders {
                 let mut to_remove = Vec::new();
                 for (idx, maker) in maker_orders.iter_mut().enumerate() {
@@ -86,12 +186,27 @@ impl MatchingEngine {
                         break;
                     }
 
-                    let trade_qty = f64::min(taker.remaining(), maker.remaining());
+                    let mut trade_qty = f64::min(taker.remaining(), maker.remaining());
+                    match taker.side {
+                        Side::Buy => {
+                            trade_qty = trade_qty.min(remaining_quote / maker_price);
+                        }
+                        Side::Sell => {
+                            trade_qty = trade_qty.min(remaining_base);
+                        }
+                    }
+                    if trade_qty <= 0.0 {
+                        break;
+                    }
+
                     maker.filled += trade_qty;
                     taker.filled += trade_qty;
+                    maker.notional += maker_price * trade_qty;
+                    taker.notional += maker_price * trade_qty;
 
                     if maker.remaining() <= 0.0 {
                         maker.status = OrderStatus::Filled;
+                        filled_order_ids.push(maker.id);
                         to_remove.push(idx);
                     }
 
@@ -112,20 +227,40 @@ impl MatchingEngine {
                         quantity: trade_qty,
                         timestamp: std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
+                            .unwrap_or_default()
                             .as_nanos() as u64,
                     };
-                    trades.push(trade);
+                    trades.push(trade.clone());
+                    fills.push(FillUpdate {
+                        order_id: maker.id,
+                        filled_qty: maker.filled,
+                        avg_price: maker.notional / maker.filled,
+                    });
+                    fills.push(FillUpdate {
+                        order_id: taker.id,
+                        filled_qty: taker.filled,
+                        avg_price: taker.notional / taker.filled,
+                    });
+                    match taker.side {
+                        Side::Buy => remaining_quote -= maker_price * trade_qty,
+                        Side::Sell => remaining_base -= trade_qty,
+                    }
                 }
 
-                // Remove filled maker orders
-                for &idx in to_remove.iter().rev() {
+                // Remove filled makers from the level and the O(1) cancellation index.
+                for idx in to_remove.into_iter().rev() {
                     maker_orders.remove(idx);
                 }
+            }
+            for id in filled_order_ids {
+                self.book.remove_order_index(id);
             }
 
             // Clean up empty levels
             self.book.cleanup();
+            if trades.len() == trades_before_match {
+                break;
+            }
         }
 
         // Handle unfilled market orders — they just cancel
@@ -133,8 +268,12 @@ impl MatchingEngine {
             taker.status = OrderStatus::Cancelled;
         }
 
-        self.trades.extend(trades.clone());
-        trades
+        self.trades.extend(trades.iter().cloned());
+        if self.trades.len() > MAX_RECENT_TRADES {
+            let excess = self.trades.len() - MAX_RECENT_TRADES;
+            self.trades.drain(..excess);
+        }
+        (trades, fills)
     }
 
     /// Cancel an order
@@ -223,6 +362,85 @@ mod tests {
         assert_eq!(trades.len(), 1);
         assert_eq!(trades[0].quantity, 1.0);
         assert_eq!(engine.book.best_bid(), Some(600.0));
+    }
+
+    #[test]
+    fn filled_makers_are_removed_from_cancel_index() {
+        let mut engine = MatchingEngine::new("INDEX_CLEANUP".into());
+
+        for _ in 0..100 {
+            engine.submit_order(Order::new(0, 100.0, 1.0, Side::Sell, OrderType::Limit, 1));
+            engine.submit_order(Order::new(0, 100.0, 1.0, Side::Buy, OrderType::Limit, 2));
+        }
+
+        assert_eq!(engine.book.indexed_order_count(), 0);
+    }
+
+    #[test]
+    fn recent_trade_history_is_bounded() {
+        let mut engine = MatchingEngine::new("TRADE_HISTORY".into());
+
+        for _ in 0..1001 {
+            engine.submit_order(Order::new(0, 100.0, 1.0, Side::Sell, OrderType::Limit, 1));
+            engine.submit_order(Order::new(0, 100.0, 1.0, Side::Buy, OrderType::Limit, 2));
+        }
+
+        assert_eq!(engine.trades.len(), MAX_RECENT_TRADES);
+        assert_eq!(engine.trades[0].id, 2);
+        assert_eq!(engine.trades.last().unwrap().id, 1001);
+        assert_eq!(engine.book.trade_count, 1001);
+    }
+
+    #[test]
+    fn market_buy_is_capped_by_available_quote() {
+        let mut engine = MatchingEngine::new("BALANCE_LIMIT".into());
+        engine
+            .book
+            .add_order(Order::new(0, 100.0, 1.0, Side::Sell, OrderType::Limit, 1));
+        engine
+            .book
+            .add_order(Order::new(0, 200.0, 1.0, Side::Sell, OrderType::Limit, 1));
+
+        let result = engine
+            .submit_order_with_limits(
+                Order::new(0, 0.0, 2.0, Side::Buy, OrderType::Market, 7),
+                BalanceLimits {
+                    base: None,
+                    quote: Some(150.0),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(result.status, OrderStatus::Filled);
+        assert!((result.filled - 1.25).abs() < 1e-12);
+        assert_eq!(result.trades.len(), 2);
+    }
+
+    #[test]
+    fn fill_updates_report_cumulative_vwap_for_both_sides() {
+        let mut engine = MatchingEngine::new("FILL_UPDATES".into());
+        engine
+            .book
+            .add_order(Order::new(0, 100.0, 1.0, Side::Sell, OrderType::Limit, 1));
+        engine
+            .book
+            .add_order(Order::new(0, 110.0, 1.0, Side::Sell, OrderType::Limit, 2));
+
+        let result = engine
+            .submit_order_with_limits(
+                Order::new(0, 0.0, 1.5, Side::Buy, OrderType::Market, 3),
+                BalanceLimits::default(),
+            )
+            .unwrap();
+        let taker_fill = result
+            .fills
+            .iter()
+            .filter(|fill| fill.order_id == result.order_id)
+            .last()
+            .unwrap();
+
+        assert!((taker_fill.filled_qty - 1.5).abs() < 1e-12);
+        assert!((taker_fill.avg_price - (100.0 + 55.0) / 1.5).abs() < 1e-12);
     }
 
     // ── Stress Tests ─────────────────────────────────────────────

@@ -4,6 +4,7 @@ package adapter
 
 import (
 	"fmt"
+	"math"
 	"testing"
 )
 
@@ -47,9 +48,9 @@ func TestCGOLimitOrderGoesToBook(t *testing.T) {
 
 	result, err := eng.SubmitOrder("buy", "limit", 50000.0, 1.0, 1)
 	assertCGO(t, err == nil, "SubmitOrder should not error")
-	assertEqCGO(t, result["status"].(string), "ok", "Rust engine returns ok")
-	orderID, ok := result["order_id"].(float64)
-	assertCGO(t, ok, "order_id should be a number")
+	assertEqCGO(t, result["status"].(string), "NEW", "new order status")
+	orderID, ok := result["order_id"].(uint64)
+	assertCGO(t, ok, "order_id should be normalized to uint64")
 	assertEqCGO(t, orderID > 0, true, "order_id should be positive")
 
 	snap, err := eng.Snapshot(5)
@@ -64,6 +65,7 @@ func TestCGOLimitOrderCrossingMatch(t *testing.T) {
 	eng.SubmitOrder("sell", "limit", 50000.0, 0.5, 1)
 	result, err := eng.SubmitOrder("buy", "limit", 50000.0, 0.5, 2)
 	assertCGO(t, err == nil, "SubmitOrder should not error")
+	assertEqCGO(t, result["status"].(string), "FILLED", "crossing order status")
 
 	trades := result["trades"].([]interface{})
 	assertEqCGO(t, len(trades), 1, "1 trade should be generated")
@@ -81,6 +83,7 @@ func TestCGOMarketBuyFillsBestAsk(t *testing.T) {
 	eng.SubmitOrder("sell", "limit", 50000.0, 1.0, 1)
 	result, err := eng.SubmitOrder("buy", "market", 0, 0.5, 2)
 	assertCGO(t, err == nil, "market order should not error")
+	assertEqCGO(t, result["status"].(string), "FILLED", "market order status")
 
 	trades := result["trades"].([]interface{})
 	assertEqCGO(t, len(trades), 1, "1 trade")
@@ -90,10 +93,10 @@ func TestCGOCancelOrder(t *testing.T) {
 	eng := newCGOTest(t)
 
 	result, _ := eng.SubmitOrder("buy", "limit", 50000.0, 1.0, 1)
-	orderID, ok := result["order_id"].(float64)
-	assertCGO(t, ok, "order_id should be a number")
+	orderID, ok := result["order_id"].(uint64)
+	assertCGO(t, ok, "order_id should be normalized to uint64")
 
-	err := eng.CancelOrder(uint64(orderID))
+	err := eng.CancelOrder(orderID)
 	assertCGO(t, err == nil, "cancel should succeed")
 
 	snap, _ := eng.Snapshot(5)
@@ -141,4 +144,49 @@ func TestCGOTradeCount(t *testing.T) {
 	eng.SubmitOrder("buy", "limit", 50000.0, 1.0, 2)
 
 	assertEqCGO(t, int(eng.TradeCount()), 1, "1 trade")
+}
+
+type cgoStaticBalance struct {
+	values map[string]float64
+}
+
+func (b cgoStaticBalance) Available(userID uint64, asset string) float64 {
+	return b.values[asset]
+}
+
+func TestCGOBalanceProviderCapsMarketBuy(t *testing.T) {
+	eng := newCGOTest(t)
+	eng.SetBalanceProvider(cgoStaticBalance{values: map[string]float64{"USDT": 10000}})
+	if _, err := eng.SubmitOrder("sell", "limit", 50000, 1, 0); err != nil {
+		t.Fatalf("seed ask: %v", err)
+	}
+
+	result, err := eng.SubmitOrder("buy", "market", 0, 1, 2)
+	if err != nil {
+		t.Fatalf("market buy: %v", err)
+	}
+	assertFloatCGO(t, result["filled"].(float64), 0.2, "filled quantity capped by quote balance")
+}
+
+type cgoNaNBalance struct{}
+
+func (cgoNaNBalance) Available(uint64, string) float64 { return math.NaN() }
+
+func TestCGORejectsNaNAvailableBalance(t *testing.T) {
+	eng := newCGOTest(t)
+	eng.SetBalanceProvider(cgoNaNBalance{})
+	cases := []struct {
+		side, orderType string
+		price, quantity float64
+	}{
+		{"buy", "limit", 100, 1},
+		{"sell", "limit", 100, 1},
+		{"buy", "market", 0, 1},
+		{"sell", "market", 0, 1},
+	}
+	for _, tc := range cases {
+		if _, err := eng.SubmitOrder(tc.side, tc.orderType, tc.price, tc.quantity, 1); err == nil {
+			t.Errorf("expected invalid available balance to reject order: %+v", tc)
+		}
+	}
 }

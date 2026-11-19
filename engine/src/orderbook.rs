@@ -34,6 +34,7 @@ pub struct Order {
     pub price: f64,
     pub quantity: f64,
     pub filled: f64,
+    pub notional: f64,
     pub side: Side,
     pub order_type: OrderType,
     pub status: OrderStatus,
@@ -42,12 +43,20 @@ pub struct Order {
 }
 
 impl Order {
-    pub fn new(id: u64, price: f64, quantity: f64, side: Side, order_type: OrderType, user_id: u64) -> Self {
+    pub fn new(
+        id: u64,
+        price: f64,
+        quantity: f64,
+        side: Side,
+        order_type: OrderType,
+        user_id: u64,
+    ) -> Self {
         Order {
             id,
             price,
             quantity,
             filled: 0.0,
+            notional: 0.0,
             side,
             order_type,
             status: OrderStatus::New,
@@ -61,7 +70,10 @@ impl Order {
     }
 
     pub fn is_done(&self) -> bool {
-        matches!(self.status, OrderStatus::Filled | OrderStatus::Cancelled | OrderStatus::Rejected)
+        matches!(
+            self.status,
+            OrderStatus::Filled | OrderStatus::Cancelled | OrderStatus::Rejected
+        )
     }
 }
 
@@ -111,11 +123,7 @@ impl OrderedFloat {
     /// Panics if the price is NaN, infinite, or negative (for Sell side checks
     /// are done by the caller via can_match in the matching engine).
     pub fn from_price(price: f64, side: Side) -> Self {
-        assert!(
-            price.is_finite(),
-            "price must be finite, got {}",
-            price
-        );
+        assert!(price.is_finite(), "price must be finite, got {}", price);
         let fixed = (price.abs() * PRICE_PRECISION as f64).round() as i64;
         // For buys: negate so higher price = smaller key → iterates first (descending).
         // For sells: keep as-is so higher price = larger key → iterates first (ascending).
@@ -191,11 +199,23 @@ impl OrderBook {
         // Clean up empty price level
         if orders.is_empty() {
             match side {
-                Side::Buy => { self.bids.remove(&key); }
-                Side::Sell => { self.asks.remove(&key); }
+                Side::Buy => {
+                    self.bids.remove(&key);
+                }
+                Side::Sell => {
+                    self.asks.remove(&key);
+                }
             }
         }
         Some(order)
+    }
+
+    pub fn remove_order_index(&mut self, order_id: u64) {
+        self.order_index.remove(&order_id);
+    }
+
+    pub fn indexed_order_count(&self) -> usize {
+        self.order_index.len()
     }
 
     /// Get best bid price (skips empty levels)
@@ -224,7 +244,8 @@ impl OrderBook {
 
     /// Get total quantity at bid/ask levels
     pub fn depth(&self, levels: usize) -> (Vec<(f64, f64)>, Vec<(f64, f64)>) {
-        let bids: Vec<(f64, f64)> = self.bids
+        let bids: Vec<(f64, f64)> = self
+            .bids
             .iter()
             .take(levels)
             .map(|(k, orders)| {
@@ -234,7 +255,8 @@ impl OrderBook {
             })
             .collect();
 
-        let asks: Vec<(f64, f64)> = self.asks
+        let asks: Vec<(f64, f64)> = self
+            .asks
             .iter()
             .take(levels)
             .map(|(k, orders)| {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -55,7 +56,7 @@ func TestResolve_RootConfinement(t *testing.T) {
 		t.Fatalf("resolve 根内绝对写法: rel=%q err=%v", rel, err)
 	}
 	// .. 逃逸必须拒绝
-	for _, bad := range []string{"../outside.txt", "a/../../outside.txt", "/../../etc/passwd"} {
+	for _, bad := range []string{"../outside.txt", "a/../../outside.txt", "/../../etc/passwd", "C:/outside.txt", "//server/share"} {
 		if _, _, err := p.resolve(bad); err == nil {
 			t.Errorf("resolve(%q) 应拒绝逃逸", bad)
 		}
@@ -72,6 +73,10 @@ func TestResolve_RootConfinement(t *testing.T) {
 	}
 	link := filepath.Join(p.Root, "link.txt")
 	if err := os.Symlink(outside, link); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Logf("skip symlink confinement check: creating symlinks requires elevated privileges: %v", err)
+			return
+		}
 		t.Fatal(err)
 	}
 	if _, _, err := p.resolve("link.txt"); err == nil {

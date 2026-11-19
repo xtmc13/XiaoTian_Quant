@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -124,10 +125,26 @@ type SubprocessSandbox struct {
 // NewSubprocessSandbox 创建沙箱（不启动子进程；首次 Load 时才拉进程）。
 func NewSubprocessSandbox() *SubprocessSandbox {
 	return &SubprocessSandbox{
-		PythonBin:   "python3",
+		PythonBin:   defaultPythonExecutable(),
 		CallTimeout: DefaultCallTimeout,
 		MemoryMB:    DefaultMemoryLimitMB,
 	}
+}
+
+func defaultPythonExecutable() string {
+	for _, candidate := range pythonExecutableCandidates() {
+		if _, err := exec.LookPath(candidate); err == nil {
+			return candidate
+		}
+	}
+	return pythonExecutableCandidates()[0]
+}
+
+func pythonExecutableCandidates() []string {
+	if runtime.GOOS == "windows" {
+		return []string{"python", "python3"}
+	}
+	return []string{"python3", "python"}
 }
 
 // ensureStarted 惰性拉起 worker 子进程并把 worker.py 落到临时文件。
@@ -151,7 +168,7 @@ func (s *SubprocessSandbox) ensureStarted() error {
 
 	bin := s.PythonBin
 	if bin == "" {
-		bin = "python3"
+		bin = defaultPythonExecutable()
 	}
 	// -I 隔离模式：忽略用户 site-packages 与环境污染，进一步收窄导入面。
 	cmd := exec.Command(bin, "-I", scriptPath)

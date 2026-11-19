@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -22,6 +23,7 @@ import (
 // 临时 SQLite + 全量迁移（含 0017），真实 JWT（AdminRequired 走完整鉴权链）。
 
 var marketTestOnce sync.Once
+var marketTestDir string
 
 type marketTestEnv struct {
 	router *gin.Engine
@@ -49,7 +51,12 @@ func setupMarketEnv(t *testing.T) *marketTestEnv {
 	t.Helper()
 	marketTestOnce.Do(func() {
 		gin.SetMode(gin.TestMode)
-		t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "gateway.db"))
+		var err error
+		marketTestDir, err = os.MkdirTemp("", "social-market-tests-*")
+		if err != nil {
+			t.Fatalf("create market test directory: %v", err)
+		}
+		t.Setenv("DB_PATH", filepath.Join(marketTestDir, "gateway.db"))
 		t.Setenv("SECRET_KEY", "test-secret-key-social-market")
 		if err := store.InitDB(); err != nil {
 			t.Fatalf("init db: %v", err)
@@ -77,6 +84,20 @@ func setupMarketEnv(t *testing.T) *marketTestEnv {
 		sharedEnv = env
 	})
 	return sharedEnv
+}
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	store.CloseDB()
+	if marketTestDir != "" {
+		if err := os.RemoveAll(marketTestDir); err != nil {
+			fmt.Fprintf(os.Stderr, "remove social test directory: %v\n", err)
+			if code == 0 {
+				code = 1
+			}
+		}
+	}
+	os.Exit(code)
 }
 
 func mustCreateUser(t *testing.T, username, role string) int {

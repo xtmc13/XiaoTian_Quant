@@ -18,7 +18,7 @@ Go 后端网关——量化交易系统的核心业务中枢。
 gateway/
 ├── cmd/server/          # 服务入口、路由注册
 ├── internal/
-│   ├── adapter/         # 交易所适配器 (Binance/OKX/Bybit/...) + 当前 Go 撮合实现
+│   ├── adapter/         # 交易所适配器 + Rust CGo 撮合桥接（Go 实现仅作开发回退）
 │   ├── ai/              # AI 策略生成、多模型投票
 │   ├── arbitrage/       # 套利引擎
 │   ├── backtest/        # 事件驱动回测引擎
@@ -63,13 +63,14 @@ gateway/
 cp ../.env.example .env        # 修改你的配置
 # 或创建 config.yaml (支持 ${ENV_VAR} 语法)
 
-# 2. 运行（当前生产撮合路径为 Go，无需 Rust）
-go run ./cmd/server/
+# 2. 生产构建（从仓库根目录；需要 Rust 和 C/C++ toolchain）
+cd ..
+bash build.sh
+./dist/gateway
 
-# 可选：构建 Rust 撮合引擎（当前尚未接入生产主链路）
-cd ../engine && cargo build --release
-cd ../gateway
-go build -tags xtengine -o gateway-server ./cmd/server/
+# 仅本地开发时可显式选择 Go 撮合回退
+cd gateway
+CGO_ENABLED=0 go run ./cmd/server/
 ```
 
 ## API

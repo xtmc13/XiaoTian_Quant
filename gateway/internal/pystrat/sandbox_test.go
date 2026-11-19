@@ -11,12 +11,18 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/model"
 )
 
-// requirePython3 跳过无 python3 的环境。
+// requirePython3 skips subprocess integration tests when no usable Python is installed.
 func requirePython3(t *testing.T) {
 	t.Helper()
-	if _, err := exec.LookPath("python3"); err != nil {
-		t.Skip("python3 not available, skipping subprocess smoke test")
+	for _, candidate := range pythonExecutableCandidates() {
+		if _, err := exec.LookPath(candidate); err != nil {
+			continue
+		}
+		if err := exec.Command(candidate, "--version").Run(); err == nil {
+			return
+		}
 	}
+	t.Skip("Python 3 runtime not available, skipping subprocess integration test")
 }
 
 // 端到端冒烟：真实子进程 load + on_bar + 动作回收 + 超时被杀。
