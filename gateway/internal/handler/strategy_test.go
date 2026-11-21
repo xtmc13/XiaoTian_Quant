@@ -1042,11 +1042,11 @@ func TestGetStrategyRuntimeNonWSSymbolPriceFallback(t *testing.T) {
 
 	orig := runtimePriceSource
 	t.Cleanup(func() { runtimePriceSource = orig })
-	var queried string
-	runtimePriceSource = func(symbol string) float64 {
-		queried = symbol
-		if symbol == "PEPEUSDT" {
-			return 0.5
+	var queriedSymbol, queriedMarket string
+	runtimePriceSource = func(symbol, marketType string) float64 {
+		queriedSymbol, queriedMarket = symbol, marketType
+		if symbol == "龙虾USDT" && marketType == "swap" {
+			return 0.01513
 		}
 		return 0
 	}
@@ -1055,8 +1055,8 @@ func TestGetStrategyRuntimeNonWSSymbolPriceFallback(t *testing.T) {
 	r.GET("/strategies/configs/:id/runtime", GetStrategyRuntime)
 
 	store.SetStrategyConfig("runtime-fallback-1", map[string]any{
-		"id": "runtime-fallback-1", "name": "非WS币种", "strategy_type": "cra_spot",
-		"symbol": "PEPEUSDT", "status": "stopped",
+		"id": "runtime-fallback-1", "name": "非WS币种", "strategy_type": "cra_contract",
+		"symbol": "龙虾USDT", "market_type": "swap", "status": "stopped",
 	})
 	t.Cleanup(func() { store.DeleteStrategyConfig("runtime-fallback-1") })
 
@@ -1066,6 +1066,7 @@ func TestGetStrategyRuntimeNonWSSymbolPriceFallback(t *testing.T) {
 	assertEq(t, w.Code, http.StatusOK, "runtime status code")
 	var payload map[string]any
 	assertTrue(t, json.Unmarshal(w.Body.Bytes(), &payload) == nil, "runtime response JSON")
-	assertTrue(t, queried == "PEPEUSDT", "price source must be queried with the strategy symbol")
-	assertTrue(t, payload["price"] == 0.5, "price must come from REST fallback")
+	assertTrue(t, queriedSymbol == "龙虾USDT", "price source must use the strategy symbol")
+	assertTrue(t, queriedMarket == "swap", "price source must use the strategy market type")
+	assertTrue(t, payload["price"] == 0.01513, "price must come from futures REST fallback")
 }

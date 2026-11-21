@@ -544,11 +544,18 @@ export const paperAccountApi = {
 
 // ── Market ──
 export const marketApi = {
-  klines: (symbol: string, interval = '1h', limit = 200, from?: number, to?: number) =>
+  klines: (
+    symbol: string,
+    interval = '1h',
+    limit = 200,
+    from?: number,
+    to?: number,
+    marketType: 'spot' | 'swap' = 'spot',
+  ) =>
     api
       .get<
         { klines: KlineBar[] } & Record<string, unknown>
-      >('/market/klines', { params: { symbol, interval, limit, from, to } })
+      >('/market/klines', { params: { symbol, interval, limit, from, to, market_type: marketType } })
       .then((d) => {
         const klines = d?.klines ?? (d?.data as Record<string, unknown>)?.klines ?? (Array.isArray(d) ? d : [])
         return Array.isArray(klines) ? klines : []

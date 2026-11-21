@@ -118,13 +118,13 @@ export function TradingContract() {
   const chartRef = useRef<HTMLDivElement>(null)
   const chartApiRef = useRef<ChartApi | null>(null)
   const klineProRef = useRef<unknown>(null)
-  const datafeed = useMemo(() => createBackendDatafeed(), [])
+  const datafeed = useMemo(() => createBackendDatafeed('swap'), [])
   const queryClient = useQueryClient()
 
   /* queries */
   const { data: klines } = useQuery({
-    queryKey: ['klines', symbol, interval],
-    queryFn: () => marketApi.klines(symbol, interval, 1000),
+    queryKey: ['klines', symbol, interval, 'swap'],
+    queryFn: () => marketApi.klines(symbol, interval, 1000, undefined, undefined, 'swap'),
     refetchInterval: 5000,
   })
   const { data: orderbook, isLoading: obLoading } = useQuery({

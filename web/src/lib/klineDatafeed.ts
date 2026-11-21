@@ -63,6 +63,7 @@ function toKLineData(raw: unknown): KLineData {
 interface SubEntry {
   symbol: SymbolInfo
   period: Period
+  marketType: 'spot' | 'swap'
   callbacks: Set<DatafeedSubscribeCallback>
   lastBarTimestamp: number
   liveBar: KLineData | null
@@ -77,8 +78,8 @@ const PUSH_THROTTLE_MS = 200
 
 const subscriptions = new Map<string, SubEntry>()
 
-function wsSubKey(symbol: SymbolInfo, period: Period): string {
-  return `${symbol.ticker}:${periodKey(period)}`
+function wsSubKey(symbol: SymbolInfo, period: Period, marketType: 'spot' | 'swap'): string {
+  return `${symbol.ticker}:${marketType}:${periodKey(period)}`
 }
 
 /* ── Gap detection & backfill ── */
@@ -107,7 +108,7 @@ async function backfillGap(entry: SubEntry): Promise<void> {
     const interval = toInterval(entry.period)
     const limit = Math.min(Math.ceil((gap.to - gap.from) / periodMs(entry.period)) + 10, MAX_BACKFILL_BARS)
     const data: unknown = await api.get('/market/klines', {
-      params: { symbol: entry.symbol.ticker, interval, limit, from: gap.from, to: gap.to },
+      params: { symbol: entry.symbol.ticker, interval, limit, from: gap.from, to: gap.to, market_type: entry.marketType },
     })
     const klines = extractArray<unknown>(data, 'klines')
     if (klines.length === 0) return
@@ -237,7 +238,7 @@ export function handlePriceTick(symbol: string, lastPrice: number, volume: numbe
 }
 
 /* ── Exported Datafeed ── */
-export function createBackendDatafeed(): Datafeed {
+export function createBackendDatafeed(marketType: 'spot' | 'swap' = 'spot'): Datafeed {
   return {
     async searchSymbols(search?: string): Promise<SymbolInfo[]> {
       try {
@@ -266,7 +267,7 @@ export function createBackendDatafeed(): Datafeed {
         })
 
         const data: unknown = await api.get('/market/klines', {
-          params: { symbol: symbol.ticker, interval, limit, from: fromMs, to: toMs },
+          params: { symbol: symbol.ticker, interval, limit, from: fromMs, to: toMs, market_type: marketType },
         })
 
         const klines = extractArray<unknown>(data, 'klines')
@@ -296,11 +297,11 @@ export function createBackendDatafeed(): Datafeed {
     },
 
     subscribe(symbol: SymbolInfo, period: Period, callback: DatafeedSubscribeCallback): void {
-      const key = wsSubKey(symbol, period)
+      const key = wsSubKey(symbol, period, marketType)
       let entry = subscriptions.get(key)
       if (!entry) {
         entry = {
-          symbol, period, callbacks: new Set(),
+          symbol, period, marketType, callbacks: new Set(),
           lastBarTimestamp: 0, liveBar: null, historyLastBar: null,
           lastPushTs: 0, pendingBar: null, pushTimer: null,
         }
@@ -310,7 +311,7 @@ export function createBackendDatafeed(): Datafeed {
     },
 
     unsubscribe(symbol: SymbolInfo, period: Period): void {
-      const key = wsSubKey(symbol, period)
+      const key = wsSubKey(symbol, period, marketType)
       const entry = subscriptions.get(key)
       if (!entry) return
       if (entry.pushTimer) { clearTimeout(entry.pushTimer); entry.pushTimer = null }

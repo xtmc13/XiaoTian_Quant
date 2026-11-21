@@ -6,6 +6,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -1417,7 +1418,17 @@ func syntheticPriceFor(symbol string) float64 {
 
 // priceRestProbe 是二级价格探针（短超时 REST），抽成包级变量以便测试替换。
 var priceRestProbe = func(norm string) (float64, bool) {
-	resp, err := shortTimeoutHTTPClient.Get("https://api.binance.com/api/v3/ticker/price?symbol=" + norm)
+	return binancePriceRestProbe("https://api.binance.com/api/v3/ticker/price", norm)
+}
+
+var futuresPriceRestProbe = func(norm string) (float64, bool) {
+	return binancePriceRestProbe("https://fapi.binance.com/fapi/v1/ticker/price", norm)
+}
+
+func binancePriceRestProbe(endpoint, norm string) (float64, bool) {
+	query := url.Values{}
+	query.Set("symbol", norm)
+	resp, err := shortTimeoutHTTPClient.Get(endpoint + "?" + query.Encode())
 	if err != nil {
 		return 0, false
 	}
@@ -1483,6 +1494,20 @@ func LastPriceForDisplay(symbol string) float64 {
 // 当新价重新透出。
 func LastPriceViaREST(symbol string) float64 {
 	if p, ok := priceRestProbe(normalizeMarketSymbol(symbol)); ok {
+		return p
+	}
+	return 0
+}
+
+// LastPriceViaRESTForMarket probes the matching Binance market endpoint without
+// using cached or synthetic prices.
+func LastPriceViaRESTForMarket(symbol, marketType string) float64 {
+	probe := priceRestProbe
+	switch strings.ToLower(strings.TrimSpace(marketType)) {
+	case "swap", "futures", "contract":
+		probe = futuresPriceRestProbe
+	}
+	if p, ok := probe(normalizeMarketSymbol(symbol)); ok {
 		return p
 	}
 	return 0

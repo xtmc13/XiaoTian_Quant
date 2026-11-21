@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +19,9 @@ import (
 )
 
 var binanceClient = &http.Client{Timeout: 10 * time.Second}
+
+var binanceSpotKlinesURL = "https://api.binance.com/api/v3/klines"
+var binanceFuturesKlinesURL = "https://fapi.binance.com/fapi/v1/klines"
 
 // fapiPremiumURL 资金费率/标记价上游端点（包级变量，测试可指向 httptest）。
 var fapiPremiumURL = "https://fapi.binance.com/fapi/v1/premiumIndex"
@@ -118,12 +122,32 @@ func fetchBinanceTradesAPI(symbol string, limit int) ([]map[string]any, error) {
 }
 
 func fetchBinanceKlines(symbol, interval string, limit int, fromMs, toMs int64) ([]map[string]any, error) {
-	url := fmt.Sprintf("https://api.binance.com/api/v3/klines?symbol=%s&interval=%s&limit=%d",
-		symbol, interval, limit)
-	if fromMs > 0 && toMs > fromMs {
-		url += fmt.Sprintf("&startTime=%d&endTime=%d", fromMs, toMs)
+	return fetchBinanceKlinesForMarket(symbol, interval, limit, fromMs, toMs, "spot")
+}
+
+func isFuturesMarketType(marketType string) bool {
+	switch strings.ToLower(strings.TrimSpace(marketType)) {
+	case "swap", "futures", "contract":
+		return true
+	default:
+		return false
 	}
-	req, err := http.NewRequest("GET", url, nil)
+}
+
+func fetchBinanceKlinesForMarket(symbol, interval string, limit int, fromMs, toMs int64, marketType string) ([]map[string]any, error) {
+	endpoint := binanceSpotKlinesURL
+	if isFuturesMarketType(marketType) {
+		endpoint = binanceFuturesKlinesURL
+	}
+	query := url.Values{}
+	query.Set("symbol", symbol)
+	query.Set("interval", interval)
+	query.Set("limit", strconv.Itoa(limit))
+	if fromMs > 0 && toMs > fromMs {
+		query.Set("startTime", strconv.FormatInt(fromMs, 10))
+		query.Set("endTime", strconv.FormatInt(toMs, 10))
+	}
+	req, err := http.NewRequest("GET", endpoint+"?"+query.Encode(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -304,6 +328,16 @@ func MarketKlines(c *gin.Context) {
 	interval := c.DefaultQuery("interval", "1h")
 	limitStr := c.DefaultQuery("limit", "200")
 	limit, _ := strconv.Atoi(limitStr)
+	marketType := strings.ToLower(strings.TrimSpace(c.DefaultQuery("market_type", "spot")))
+	switch marketType {
+	case "spot", "margin":
+		marketType = "spot"
+	case "swap", "futures", "contract":
+		marketType = "swap"
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported market_type"})
+		return
+	}
 
 	var fromMs, toMs int64
 	if v, err := strconv.ParseInt(c.Query("from"), 10, 64); err == nil {
@@ -315,8 +349,11 @@ func MarketKlines(c *gin.Context) {
 
 	// Cache simple requests without date range
 	useCache := fromMs == 0 && toMs == 0
+	cacheKey := market.KLinesKey(symbol, interval)
+	if marketType == "swap" {
+		cacheKey += "|swap"
+	}
 	if useCache {
-		cacheKey := market.KLinesKey(symbol, interval)
 		if cached, ok := market.GetCache().Get(cacheKey); ok {
 			if klines, ok := cached.([]map[string]any); ok {
 				c.JSON(http.StatusOK, gin.H{"klines": klines, "symbol": symbol})
@@ -325,7 +362,7 @@ func MarketKlines(c *gin.Context) {
 		}
 	}
 
-	klines, err := fetchBinanceKlines(symbol, interval, limit, fromMs, toMs)
+	klines, err := fetchBinanceKlinesForMarket(symbol, interval, limit, fromMs, toMs, marketType)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to fetch market data", "detail": err.Error()})
 		return
@@ -335,7 +372,7 @@ func MarketKlines(c *gin.Context) {
 	}
 
 	if useCache {
-		market.GetCache().Set(market.KLinesKey(symbol, interval), klines, market.KLinesTTL)
+		market.GetCache().Set(cacheKey, klines, market.KLinesTTL)
 	}
 	c.JSON(http.StatusOK, gin.H{"klines": klines, "symbol": symbol})
 }

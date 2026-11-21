@@ -116,3 +116,31 @@ func TestLastPriceForDisplay(t *testing.T) {
 		t.Fatalf("display price = %v, want 0 (synthetic never displayed)", p)
 	}
 }
+
+func TestLastPriceViaRESTForSwapUsesFuturesProbe(t *testing.T) {
+	origSpot, origFutures := priceRestProbe, futuresPriceRestProbe
+	t.Cleanup(func() {
+		priceRestProbe, futuresPriceRestProbe = origSpot, origFutures
+	})
+
+	spotCalled := false
+	priceRestProbe = func(string) (float64, bool) {
+		spotCalled = true
+		return 0, false
+	}
+	var queried string
+	futuresPriceRestProbe = func(symbol string) (float64, bool) {
+		queried = symbol
+		return 0.01513, true
+	}
+
+	if got := LastPriceViaRESTForMarket("龙虾USDT", "swap"); got != 0.01513 {
+		t.Fatalf("swap REST price = %v, want 0.01513", got)
+	}
+	if queried != "龙虾USDT" {
+		t.Fatalf("futures probe symbol = %q, want 龙虾USDT", queried)
+	}
+	if spotCalled {
+		t.Fatal("swap REST price must not use the spot probe")
+	}
+}

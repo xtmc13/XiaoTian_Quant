@@ -233,13 +233,13 @@ func GetStrategyConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, normalizeStrategyConfig(result))
 }
 
-// runtimePriceSource 运行面板现价的第三级来源（生产 = app.LastPriceViaREST：
+// runtimePriceSource 运行面板现价的第三级来源（生产 = app.LastPriceViaRESTForMarket：
 // REST 短超时探针，不读 WS 缓存、不用合成假价）；抽成包级变量以便测试替换
 // （与 gridPriceSource 同模式）。WS 新鲜缓存与 K 线收盘两档由
 // resolveRuntimePrice 先行裁决，本档只在两者皆无时触发（典型=订阅表外
 // symbol 的未运行策略）。
-var runtimePriceSource = func(symbol string) float64 {
-	return app.LastPriceViaREST(symbol)
+var runtimePriceSource = func(symbol, marketType string) float64 {
+	return app.LastPriceViaRESTForMarket(symbol, marketType)
 }
 
 // GetStrategyRuntime 返回运行中策略的实时状态（运行面板数据源）：
@@ -291,7 +291,7 @@ func GetStrategyRuntime(c *gin.Context) {
 		// 第三级兜底（M6 REST 探针）：WS 无新鲜缓存且引擎无该 symbol K 线时
 		// （典型=订阅表外 symbol 的未运行策略），REST 短超时探针取交易所现价，
 		// 取不到维持 0（合成假价绝不上面板）。
-		if p := runtimePriceSource(sym); p > 0 {
+		if p := runtimePriceSource(sym, getString(item, "market_type", "spot")); p > 0 {
 			price, priceSrc = p, "rest"
 		}
 	}
