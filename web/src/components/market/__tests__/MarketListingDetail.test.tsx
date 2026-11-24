@@ -346,6 +346,8 @@ describe('MarketListingDetail（条目详情页）', () => {
     await waitFor(() => expect(screen.getByText('稳健网格 Pro')).toBeTruthy())
     // 网格徽标
     expect(screen.getByText('网格机器人')).toBeTruthy()
+    // 网格条目不展示 AI 扫描信号来源提示
+    expect(screen.queryByText(/开仓信号由你本人的 AI 扫描/)).toBeNull()
     // 偏差卡：实盘-回测偏差 +2.40%（正绿）
     const dev = screen.getByTestId('market-deviation')
     expect(dev.textContent).toContain('+2.40%')
@@ -387,6 +389,8 @@ describe('MarketListingDetail（条目详情页）', () => {
     })
     renderWithRouter(null, '/bots/ai/market/ml-1')
     await waitFor(() => expect(screen.getByText(/AI 信号驱动策略无回测对照/)).toBeTruthy())
+    // AI 条目：提示克隆实例的开仓信号来自订阅者本人扫描
+    expect(screen.getByText(/开仓信号由你本人的 AI 扫描/)).toBeTruthy()
     expect(screen.queryByTestId('market-deviation')).toBeNull()
     // 图表保持两条 series（累计收益 + 回撤），无第三条虚线
     await waitFor(() => expect(screen.getByTestId('market-return-chart')).toBeTruthy())

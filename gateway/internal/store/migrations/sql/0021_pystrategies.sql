@@ -15,20 +15,20 @@
 
 CREATE TABLE IF NOT EXISTS xt_pystrategies (
     id TEXT PRIMARY KEY,
-    user_id INTEGER NOT NULL DEFAULT 0,
+    user_id BIGINT NOT NULL DEFAULT 0,
     name TEXT NOT NULL DEFAULT '',
     symbol TEXT NOT NULL DEFAULT '',
     interval TEXT NOT NULL DEFAULT '15m',
     direction TEXT NOT NULL DEFAULT 'long',
     params_json TEXT NOT NULL DEFAULT '{}',
     code TEXT NOT NULL DEFAULT '',
-    version INTEGER NOT NULL DEFAULT 0,
+    version BIGINT NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'draft',
     error TEXT NOT NULL DEFAULT '',
-    paper INTEGER NOT NULL DEFAULT 1,
+    paper BIGINT NOT NULL DEFAULT 1,
     bot_id TEXT NOT NULL DEFAULT '',
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_pystrategies_user ON xt_pystrategies(user_id, updated_at);

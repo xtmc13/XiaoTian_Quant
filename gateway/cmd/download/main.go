@@ -32,7 +32,7 @@ func main() {
 
 	store := data.NewStorage()
 	if store == nil {
-		log.Fatal("数据库未初始化，请先启动 gateway 或设置 DB_PATH 环境变量")
+		log.Fatal("数据库未初始化，请先启动 gateway（PostgreSQL 连接由 DATABASE_URL/POSTGRES_* 配置）")
 	}
 
 	downloader := data.NewDownloader(store)

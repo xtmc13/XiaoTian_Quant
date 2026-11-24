@@ -17,18 +17,18 @@
 
 CREATE TABLE IF NOT EXISTS billing_orders (
 	id TEXT PRIMARY KEY,
-	user_id INTEGER NOT NULL,
+	user_id BIGINT NOT NULL,
 	plan_id TEXT NOT NULL,
 	chain TEXT NOT NULL,
 	address TEXT DEFAULT '',
-	amount_usdt INTEGER NOT NULL,
+	amount_usdt BIGINT NOT NULL,
 	tx_hash TEXT DEFAULT '',
 	status TEXT DEFAULT 'pending',
 	fail_reason TEXT DEFAULT '',
-	attempts INTEGER DEFAULT 0,
-	created_at INTEGER NOT NULL,
-	updated_at INTEGER NOT NULL,
-	confirmed_at INTEGER DEFAULT 0
+	attempts BIGINT DEFAULT 0,
+	created_at BIGINT NOT NULL,
+	updated_at BIGINT NOT NULL,
+	confirmed_at BIGINT DEFAULT 0
 );
 
 -- ── 列表/核验轮询索引 ──
@@ -38,5 +38,5 @@ CREATE INDEX IF NOT EXISTS idx_billing_orders_tx ON billing_orders(tx_hash);
 
 -- ── 用户套餐/积分（发放目标列）──
 ALTER TABLE xt_users ADD COLUMN plan TEXT DEFAULT '';
-ALTER TABLE xt_users ADD COLUMN vip_expires_at INTEGER DEFAULT 0;
-ALTER TABLE xt_users ADD COLUMN credits INTEGER DEFAULT 0;
+ALTER TABLE xt_users ADD COLUMN vip_expires_at BIGINT DEFAULT 0;
+ALTER TABLE xt_users ADD COLUMN credits BIGINT DEFAULT 0;

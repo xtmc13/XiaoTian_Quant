@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,22 +21,21 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/model"
 )
 
-
 const (
-	BybitRestURL    = "https://api.bybit.com/v5"
+	BybitRestURL     = "https://api.bybit.com/v5"
 	BybitWsPublicURL = "wss://stream.bybit.com/v5/public/spot"
-	BybitTestURL    = "https://api-testnet.bybit.com/v5"
+	BybitTestURL     = "https://api-testnet.bybit.com/v5"
 )
 
 // BybitAdapter provides Bybit exchange integration (REST + WebSocket).
 // Bybit uses HMAC-SHA256 signing similar to Binance but with different
 // parameter ordering and timestamp format.
 type BybitAdapter struct {
-	apiKey    string
-	secretKey string
-	testnet   bool
+	apiKey     string
+	secretKey  string
+	testnet    bool
 	httpClient *http.Client
-	mu        sync.RWMutex
+	mu         sync.RWMutex
 
 	streamHub   *exchange.StreamHub
 	wsConnected bool
@@ -220,7 +220,7 @@ func (b *BybitAdapter) GetKlines(symbol, interval string, limit int) ([][]any, e
 		}
 		// Map to Binance-compatible format: [time, open, high, low, close, volume]
 		klines[len(list)-1-i] = []any{
-			parseBybitInt(arr[0]), // timestamp
+			parseBybitInt(arr[0]),   // timestamp
 			parseBybitFloat(arr[1]), // open
 			parseBybitFloat(arr[2]), // high
 			parseBybitFloat(arr[3]), // low
@@ -282,7 +282,7 @@ func (b *BybitAdapter) GetBalance() ([]map[string]any, error) {
 }
 
 // PlaceFuturesOrder places a USDT-M perpetual futures order on Bybit.
-func (b *BybitAdapter) PlaceFuturesOrder(symbol, side, orderType string, price, quantity, leverage float64, positionSide string) (map[string]any, error) {
+func (b *BybitAdapter) PlaceFuturesOrder(symbol, side, orderType string, price, quantity, leverage float64, positionSide string, clientOrderID ...string) (map[string]any, error) {
 	qtyStr, priceStr, err := b.normalizeBybitOrder(symbol, orderType, price, quantity, true)
 	if err != nil {
 		return nil, err
@@ -293,6 +293,9 @@ func (b *BybitAdapter) PlaceFuturesOrder(symbol, side, orderType string, price, 
 		"side":      strings.ToUpper(side),
 		"orderType": strings.ToUpper(orderType),
 		"qty":       qtyStr,
+	}
+	if id := firstClientOrderID(clientOrderID); id != "" {
+		body["orderLinkId"] = id
 	}
 
 	if strings.ToUpper(orderType) == "LIMIT" {
@@ -328,6 +331,26 @@ func (b *BybitAdapter) PlaceFuturesOrder(symbol, side, orderType string, price, 
 		"type":    orderType,
 		"status":  orderResult["orderStatus"],
 	}, nil
+}
+
+// SetLeverage applies the same leverage to both sides of a linear symbol.
+// Bybit requires buyLeverage and sellLeverage as decimal strings.
+func (b *BybitAdapter) SetLeverage(symbol string, leverage int) error {
+	symbol = strings.ToUpper(strings.TrimSpace(symbol))
+	if symbol == "" {
+		return fmt.Errorf("symbol is required")
+	}
+	if leverage < 1 || leverage > 125 {
+		return fmt.Errorf("leverage must be between 1 and 125")
+	}
+	lev := strconv.Itoa(leverage)
+	_, err := b.signedPost("/position/set-leverage", map[string]any{
+		"category":     "linear",
+		"symbol":       symbol,
+		"buyLeverage":  lev,
+		"sellLeverage": lev,
+	})
+	return err
 }
 
 func (b *BybitAdapter) GetPositions() ([]map[string]any, error) {
@@ -413,9 +436,9 @@ func (b *BybitAdapter) StartUserStream() error {
 	}
 
 	wsClient := exchange.NewWSClient(exchange.WSConfig{
-		URL:          wsURL,
-		PingInterval: 30 * time.Second,
-		PongTimeout:  10 * time.Second,
+		URL:            wsURL,
+		PingInterval:   30 * time.Second,
+		PongTimeout:    10 * time.Second,
 		ReconnectDelay: 5 * time.Second,
 		OnMessage: func(msg []byte) {
 			// Parse user stream events (execution, position, etc.)
@@ -461,17 +484,20 @@ func (b *BybitAdapter) SubscribeKline(symbol, interval string, callback func(bar
 
 // ── Orders ─────────────────────────────────────────────────────
 
-func (b *BybitAdapter) PlaceOrder(symbol, side, orderType string, price, quantity float64) (map[string]any, error) {
+func (b *BybitAdapter) PlaceOrder(symbol, side, orderType string, price, quantity float64, clientOrderID ...string) (map[string]any, error) {
 	qtyStr, priceStr, err := b.normalizeBybitOrder(symbol, orderType, price, quantity, false)
 	if err != nil {
 		return nil, err
 	}
 	body := map[string]any{
-		"category": "spot",
-		"symbol":   symbol,
-		"side":     strings.ToUpper(side),
+		"category":  "spot",
+		"symbol":    symbol,
+		"side":      strings.ToUpper(side),
 		"orderType": strings.ToUpper(orderType),
-		"qty":      qtyStr,
+		"qty":       qtyStr,
+	}
+	if id := firstClientOrderID(clientOrderID); id != "" {
+		body["orderLinkId"] = id
 	}
 
 	if strings.ToUpper(orderType) == "LIMIT" {
@@ -489,13 +515,13 @@ func (b *BybitAdapter) PlaceOrder(symbol, side, orderType string, price, quantit
 	}
 
 	order := map[string]any{
-		"order_id":  orderResult["orderId"],
-		"symbol":    symbol,
-		"side":      side,
-		"type":      orderType,
-		"price":     orderResult["price"],
-		"quantity":  orderResult["qty"],
-		"status":    orderResult["orderStatus"],
+		"order_id": orderResult["orderId"],
+		"symbol":   symbol,
+		"side":     side,
+		"type":     orderType,
+		"price":    orderResult["price"],
+		"quantity": orderResult["qty"],
+		"status":   orderResult["orderStatus"],
 	}
 
 	return order, nil

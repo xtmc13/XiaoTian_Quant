@@ -128,29 +128,34 @@ func InitOMSPipeline() {
 		var result map[string]any
 		side := strings.ToUpper(string(ord.Side))
 		orderType := strings.ToUpper(string(ord.OrderType))
+		// Deterministic venue-side id: a re-submit of the same order is
+		// deduplicated by the exchange instead of creating a second order.
+		clientOID := adapter.ExchangeClientOID(ord.ID)
 
 		switch exName {
 		case "binance":
 			exch := adapter.NewBinanceAdapter(apiKey, secret, false)
-			result, err = exch.PlaceOrder(ord.Symbol, side, orderType, ord.Price, ord.Quantity)
+			result, err = exch.PlaceOrder(ord.Symbol, side, orderType, ord.Price, ord.Quantity, clientOID)
 		case "bybit":
 			exch := adapter.NewBybitAdapter(apiKey, secret, false)
-			result, err = exch.PlaceOrder(ord.Symbol, side, orderType, ord.Price, ord.Quantity)
+			result, err = exch.PlaceOrder(ord.Symbol, side, orderType, ord.Price, ord.Quantity, clientOID)
 		case "kraken":
 			exch := adapter.NewKrakenAdapter(apiKey, secret)
 			result, err = exch.PlaceOrder(ord.Symbol, side, orderType, ord.Price, ord.Quantity)
 		case "mexc":
 			exch := adapter.NewMEXCAdapter(apiKey, secret)
-			result, err = exch.PlaceOrder(ord.Symbol, side, orderType, ord.Price, ord.Quantity)
+			result, err = exch.PlaceOrder(ord.Symbol, side, orderType, ord.Price, ord.Quantity, clientOID)
 		case "bitget":
 			_, secret, passphrase := adapter.GetCredential(exName)
 			exch := adapter.NewBitgetAdapter(apiKey, secret, passphrase)
-			result, err = exch.PlaceOrder(ord.Symbol, side, orderType, ord.Price, ord.Quantity)
+			result, err = exch.PlaceOrder(ord.Symbol, side, orderType, ord.Price, ord.Quantity, clientOID)
 		case "okx":
 			_, secret, passphrase := adapter.GetCredential(exName)
 			exch := adapter.NewOKXAdapter(apiKey, secret, passphrase, false)
-			result, err = exch.PlaceOrder(ord.Symbol, side, orderType, ord.Price, ord.Quantity)
+			result, err = exch.PlaceOrder(ord.Symbol, side, orderType, ord.Price, ord.Quantity, clientOID)
 		case "gate", "gateio":
+			// Gate spot has no idempotent client-order field (only a free-form
+			// `text` tag); pass the id as a trace tag, not as a dedup key.
 			exch := adapter.NewGateIOAdapter(apiKey, secret)
 			result, err = exch.PlaceOrder(ord.Symbol, side, orderType, ord.Price, ord.Quantity)
 		case "coinbase":
@@ -274,6 +279,9 @@ func isPaperExchange(exchange string) bool {
 }
 
 // canPlaceLiveOrder checks safety gates before allowing a real-exchange order.
+// 口径：本闸只约束入场/加仓方向；平仓、止盈止损、减仓等降风险动作必须始终
+// 可下单（总闸关闭时也要能退出仓位，防止故障锁死持仓），降风险豁免见
+// canPlaceLiveOrderForRequest 与 aigate.ClassifyEntry 同一分类。
 func canPlaceLiveOrder(exchange string, confirmed bool) error {
 	if isPaperExchange(exchange) {
 		return nil
@@ -285,6 +293,21 @@ func canPlaceLiveOrder(exchange string, confirmed bool) error {
 		return fmt.Errorf("实盘交易需要二次确认。请在请求中包含 confirmed=true")
 	}
 	return nil
+}
+
+// canPlaceLiveOrderForRequest 实盘总闸的请求感知版本：先按 aigate.ClassifyEntry
+// 分类，平仓/保护/减仓/现货卖出等降风险单直接放行（不经过实盘总闸与二次确认），
+// 仅入场/加仓单走 canPlaceLiveOrder。现货卖出在本平台被归为减持方向（无做空），
+// 与合约减仓同口径豁免；req 为 nil 时退回原口径（不做分类豁免）。
+func canPlaceLiveOrderForRequest(exchange string, confirmed bool, req *order.Request) error {
+	if req != nil {
+		if entry, why := aigate.ClassifyEntry(req); !entry {
+			log.Printf("[trading-safety] 降风险单不经实盘总闸: %s %s %s (%s)",
+				req.Symbol, req.Side, req.OrderType, why)
+			return nil
+		}
+	}
+	return canPlaceLiveOrder(exchange, confirmed)
 }
 
 func PlaceOrder(c *gin.Context) {
@@ -312,12 +335,13 @@ func PlaceOrder(c *gin.Context) {
 		TPPrice:       getFloat(body, "tp_price", 0),
 		SLPrice:       getFloat(body, "sl_price", 0),
 		ClosePosition: getBool(body, "close_position", false),
+		ReduceOnly:    getBool(body, "reduce_only", false),
 
 		// ── A2.2 limit-then-market ──
 		LimitTimeoutMs: getInt64(body, "limit_timeout_ms", 0),
 	}
 
-	if err := canPlaceLiveOrder(req.Exchange, getBool(body, "confirmed", false)); err != nil {
+	if err := canPlaceLiveOrderForRequest(req.Exchange, getBool(body, "confirmed", false), req); err != nil {
 		c.JSON(http.StatusForbidden, gin.H{"status": "error", "detail": err.Error()})
 		return
 	}
@@ -513,6 +537,11 @@ func fillOrderAndUpdatePortfolio(order map[string]any) {
 
 	base, quote := parseSymbolPair(symbol)
 	cost := price * qty
+	// 可选手续费：paper 撮合等路径传入，统一从计价币余额扣除；live 路径不传则保持 0。
+	fee := getFloat(order, "fee", 0)
+	if fee < 0 {
+		fee = 0
+	}
 
 	mgr := portfolio.GetManager()
 	if mgr == nil {
@@ -585,8 +614,8 @@ func fillOrderAndUpdatePortfolio(order map[string]any) {
 			if quoteBal == nil {
 				quoteBal = &model.Balance{Currency: quote, Total: 0, Free: 0, Used: 0}
 			}
-			quoteBal.Free += releasedMargin + realizedPnL
-			quoteBal.Total += releasedMargin + realizedPnL
+			quoteBal.Free += releasedMargin + realizedPnL - fee
+			quoteBal.Total += releasedMargin + realizedPnL - fee
 			if quoteBal.Free < 0 {
 				quoteBal.Free = 0
 			}
@@ -618,9 +647,10 @@ func fillOrderAndUpdatePortfolio(order map[string]any) {
 			if quoteBal == nil {
 				quoteBal = &model.Balance{Currency: quote, Total: 0, Free: 0, Used: 0}
 			}
-			// Deduct margin
-			quoteBal.Free -= margin
+			// Deduct margin and fee
+			quoteBal.Free -= margin + fee
 			quoteBal.Used += margin
+			quoteBal.Total -= fee
 			if quoteBal.Free < 0 {
 				quoteBal.Free = 0
 			}
@@ -714,8 +744,8 @@ func fillOrderAndUpdatePortfolio(order map[string]any) {
 
 		if side == "BUY" {
 			// Deduct quote, add base
-			quoteBal.Free -= cost
-			quoteBal.Total -= cost
+			quoteBal.Free -= cost + fee
+			quoteBal.Total -= cost + fee
 			if quoteBal.Free < 0 {
 				quoteBal.Free = 0
 			}
@@ -740,8 +770,8 @@ func fillOrderAndUpdatePortfolio(order map[string]any) {
 			if baseBal.Total < 0 {
 				baseBal.Total = 0
 			}
-			quoteBal.Free += cost
-			quoteBal.Total += cost
+			quoteBal.Free += cost - fee
+			quoteBal.Total += cost - fee
 
 			// 如果是平仓操作，将 PnL 加到 quote 余额中
 			if closedQty > 0 {

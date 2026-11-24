@@ -16,14 +16,20 @@ import (
 // 降级为 backtest_series=null + backtest_error，绝不编造曲线，端点不因此 500。
 // ai_bot：AI 信号驱动无确定性回测对照，backtest_series=null + backtest_note 说明。
 
-// aiBotBacktestNote AI 信号驱动条目无回测对照的如实说明。
-const aiBotBacktestNote = "AI 信号驱动策略无回测对照：信号由模型实时生成，历史行情无法确定性重放"
+// aiBotBacktestNote AI 信号驱动条目无回测对照的如实说明：与 grid 对照同口径
+// 披露"对照是否可用 + 边界"，信号为模型实时生成、历史行情无法确定性重放，
+// 业绩以平台实盘快照为准，不提供历史回放曲线，也不下发偏差指标。
+const aiBotBacktestNote = "AI 信号驱动策略无回测对照：信号由模型实时生成，历史行情无法确定性重放；本条目业绩以平台实盘快照为准，不提供历史回放对照"
 
 // attachBacktestCompare 把回测对照字段挂到 stats 响应（按 object_kind 分派）。
+// 字段集与 grid 分支保持一致：backtest_series / backtest_note / backtest_error /
+// backtest_assumptions / deviation；不可用项显式置 nil，避免消费方把缺键误判为故障。
 func attachBacktestCompare(resp gin.H, l *store.MarketListingRecord, series []*store.MarketListingStatsRecord) {
 	if l.ObjectKind != marketplace.ObjectKindGridBot {
 		resp["backtest_series"] = nil
 		resp["backtest_note"] = aiBotBacktestNote
+		resp["backtest_assumptions"] = nil
+		resp["deviation"] = nil
 		return
 	}
 	attachGridBacktestCompare(resp, l, series)
@@ -33,6 +39,8 @@ func attachGridBacktestCompare(resp gin.H, l *store.MarketListingRecord, series 
 	fail := func(msg string) {
 		resp["backtest_series"] = nil
 		resp["backtest_error"] = msg
+		resp["backtest_assumptions"] = nil
+		resp["deviation"] = nil
 	}
 	bot, err := gridBotRepo.GetByID(l.ObjectID)
 	if err != nil || bot == nil {

@@ -17,10 +17,10 @@ CREATE TABLE IF NOT EXISTS xt_exchange_health_checks (
     exchange TEXT NOT NULL,
     job_id TEXT NOT NULL DEFAULT '',
     overall TEXT NOT NULL DEFAULT '',
-    configured INTEGER NOT NULL DEFAULT 0,
-    duration_ms INTEGER NOT NULL DEFAULT 0,
+    configured BIGINT NOT NULL DEFAULT 0,
+    duration_ms BIGINT NOT NULL DEFAULT 0,
     result_json TEXT NOT NULL DEFAULT '{}',
-    created_at INTEGER NOT NULL
+    created_at BIGINT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_exchange_health_ex_created ON xt_exchange_health_checks(exchange, created_at);

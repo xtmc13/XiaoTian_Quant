@@ -12,6 +12,6 @@
 
 ALTER TABLE xt_pystrategies ADD COLUMN market TEXT NOT NULL DEFAULT 'spot';
 
-ALTER TABLE xt_pystrategies ADD COLUMN leverage INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE xt_pystrategies ADD COLUMN leverage BIGINT NOT NULL DEFAULT 1;
 
 ALTER TABLE xt_pystrategies ADD COLUMN margin_mode TEXT NOT NULL DEFAULT 'cross';

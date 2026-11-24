@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xiaotian-quant/gateway/internal/adapter"
 	"github.com/xiaotian-quant/gateway/internal/ai"
 	"github.com/xiaotian-quant/gateway/internal/store"
 	"github.com/xiaotian-quant/gateway/internal/strategy"
@@ -55,22 +56,6 @@ var defaultIndices = map[string]any{
 		{"symbol": "N225", "name": "日经225", "region": "JP"},
 		{"symbol": "FTSE", "name": "富时100", "region": "UK"},
 		{"symbol": "DAX", "name": "DAX 40", "region": "DE"},
-	},
-}
-
-var defaultExchanges = map[string]any{
-	"exchanges": []map[string]any{
-		{"key": "binance", "label": "Binance", "status": "active", "supports": []string{"spot", "futures", "margin"}},
-		{"key": "okx", "label": "OKX", "status": "active", "supports": []string{"spot", "futures", "margin"}},
-		{"key": "bybit", "label": "Bybit", "status": "active", "supports": []string{"spot", "futures"}},
-		{"key": "coinbase", "label": "Coinbase", "status": "stub", "supports": []string{"spot"}},
-		{"key": "gate", "label": "Gate.io", "status": "stub", "supports": []string{"spot", "futures"}},
-		{"key": "mexc", "label": "MEXC", "status": "stub", "supports": []string{"spot"}},
-		{"key": "bitget", "label": "Bitget", "status": "stub", "supports": []string{"spot", "futures"}},
-		{"key": "kucoin", "label": "KuCoin", "status": "stub", "supports": []string{"spot", "futures"}},
-		{"key": "htx", "label": "HTX", "status": "stub", "supports": []string{"spot"}},
-		{"key": "phemex", "label": "Phemex", "status": "stub", "supports": []string{"spot", "futures"}},
-		{"key": "deribit", "label": "Deribit", "status": "stub", "supports": []string{"futures"}},
 	},
 }
 
@@ -210,47 +195,89 @@ func GetIndices(c *gin.Context) {
 	c.JSON(http.StatusOK, data)
 }
 
-// GetExchanges returns supported exchange list with status.
+// GetExchanges returns the supported exchange list. Capabilities come from
+// the adapter registry; per-user enabled/credential flags come from config.
 func GetExchanges(c *gin.Context) {
 	cfg := store.GetConfig()
 	exchanges, _ := cfg["exchanges"].(map[string]any)
 
 	result := make(map[string]any)
-	for _, ex := range defaultExchanges["exchanges"].([]map[string]any) {
-		key := ex["key"].(string)
-		item := map[string]any{
-			"enabled":         false,
-			"has_credentials": false,
-			"testnet":         false,
-			"futures":         false,
+	for _, capability := range adapter.ExchangeCapabilityList() {
+		item := exchangeItem(capability.Status, capability.Supports)
+		item["label"] = capability.Label
+		item["asset_class"] = capability.AssetClass
+		item["websocket"] = capability.WebSocket
+		item["transfer"] = capability.Transfer
+		item["leverage"] = capability.Leverage
+		item["set_margin_mode"] = capability.SetMarginMode
+		item["set_position_mode"] = capability.SetPositionMode
+		item["order_types"] = capability.OrderTypes
+		item["certified"] = capability.Certified
+		applyExchangeConfig(item, exchanges[capability.Key], capability.Key)
+		result[capability.Key] = item
+	}
+
+	// A venue present in config but absent from the registry is unknown to
+	// the gateway: expose it as stub so it cannot be presented as tradeable.
+	for key, raw := range exchanges {
+		if _, known := result[key]; known {
+			continue
 		}
-		if raw, ok := exchanges[key]; ok {
-			if m, ok := raw.(map[string]any); ok {
-				if v, ok := m["enabled"].(bool); ok {
-					item["enabled"] = v
-				}
-				if v, ok := m["testnet"].(bool); ok {
-					item["testnet"] = v
-				}
-				apiKey, _ := m["api_key"].(string)
-				secret, _ := m["secret"].(string)
-				item["has_credentials"] = apiKey != "" && secret != ""
-				// P0-1：明文已迁移进保险库——以 vault 为准回显"已配置"。
-				if !item["has_credentials"].(bool) {
-					_, _, _, verr := store.GetVault().GetOrReload(key)
-					item["has_credentials"] = verr == nil
-					// 区分"未配置"与"已配置但解密失败"（主密钥不匹配/密钥轮换后
-					// 旧密文未迁移）——后者必须显式报错引导用户重新录入。
-					if verr != nil && errors.Is(verr, store.ErrVaultDecrypt) {
-						item["credential_error"] = "保险库解密失败：主密钥不匹配或密文损坏（疑似密钥轮换），请重新录入该交易所 API 凭证"
-					}
-				}
-			}
-		}
+		item := exchangeItem("stub", []string{})
+		item["label"] = key
+		item["asset_class"] = "unknown"
+		item["certified"] = false
+		applyExchangeConfig(item, raw, key)
 		result[key] = item
 	}
 
 	c.JSON(http.StatusOK, result)
+}
+
+func exchangeItem(status string, supports []string) map[string]any {
+	return map[string]any{
+		"enabled":         false,
+		"has_credentials": false,
+		"testnet":         false,
+		"futures":         containsString(supports, "futures"),
+		"status":          status,
+		"supports":        supports,
+	}
+}
+
+func containsString(list []string, want string) bool {
+	for _, v := range list {
+		if v == want {
+			return true
+		}
+	}
+	return false
+}
+
+func applyExchangeConfig(item map[string]any, raw any, key string) {
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return
+	}
+	if v, ok := m["enabled"].(bool); ok {
+		item["enabled"] = v
+	}
+	if v, ok := m["testnet"].(bool); ok {
+		item["testnet"] = v
+	}
+	apiKey, _ := m["api_key"].(string)
+	secret, _ := m["secret"].(string)
+	item["has_credentials"] = apiKey != "" && secret != ""
+	// P0-1：明文已迁移进保险库——以 vault 为准回显"已配置"。
+	if !item["has_credentials"].(bool) {
+		_, _, _, verr := store.GetVault().GetOrReload(key)
+		item["has_credentials"] = verr == nil
+		// 区分"未配置"与"已配置但解密失败"（主密钥不匹配/密钥轮换后
+		// 旧密文未迁移）——后者必须显式报错引导用户重新录入。
+		if verr != nil && errors.Is(verr, store.ErrVaultDecrypt) {
+			item["credential_error"] = "保险库解密失败：主密钥不匹配或密文损坏（疑似密钥轮换），请重新录入该交易所 API 凭证"
+		}
+	}
 }
 
 // GetAIModels returns available AI model list.

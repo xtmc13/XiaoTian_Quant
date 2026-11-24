@@ -515,10 +515,14 @@ func (r *ReconcileRepo) ListAudit(limit int) ([]*ReconcileAuditRecord, error) {
 	return out, nil
 }
 
-// isUniqueConflict 判断 SQLite 唯一约束冲突（modernc.org/sqlite 错误信息含 "UNIQUE constraint failed"）。
+// isUniqueConflict 判断唯一约束冲突：兼容 SQLite（UNIQUE constraint failed）
+// 与 PostgreSQL（duplicate key value violates unique constraint / SQLSTATE 23505）。
 func isUniqueConflict(err error) bool {
 	if err == nil {
 		return false
 	}
-	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
+	msg := err.Error()
+	return strings.Contains(msg, "UNIQUE constraint failed") ||
+		strings.Contains(msg, "duplicate key value violates unique constraint") ||
+		strings.Contains(msg, "23505")
 }

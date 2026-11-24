@@ -35,10 +35,11 @@ var GridSvc GridService
 func SetGridService(s GridService) { GridSvc = s }
 
 // gridPriceSource 取 symbol 实时价；生产为 BinanceWS 内存价（零网络），
-// 测试可用 SetGridPriceSource 换成假源。返回 <=0 表示行情未就绪。
+// 测试可用 SetGridPriceSource 换成假源。GetPriceFresh 带新鲜度窗：缓存冻结
+// （超窗未更新）返回 0，避免读到陈旧价。返回 <=0 表示行情未就绪。
 var gridPriceSource = func(symbol string) float64 {
 	if a := app.Get(); a != nil && a.BinanceWS != nil {
-		return a.BinanceWS.GetPrice(symbol)
+		return a.BinanceWS.GetPriceFresh(symbol, wsPriceMaxStale)
 	}
 	return 0
 }

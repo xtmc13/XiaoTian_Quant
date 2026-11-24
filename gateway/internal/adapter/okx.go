@@ -63,16 +63,16 @@ func NewOKXAdapter(apiKey, secret, passphrase string, testnet bool) *OKXAdapter 
 	}
 }
 
-func (o *OKXAdapter) Name() string    { return "okx" }
-func (o *OKXAdapter) Start() error    { return nil }
-func (o *OKXAdapter) Stop() error     { o.streamHub.CloseAll(); return nil }
+func (o *OKXAdapter) Name() string { return "okx" }
+func (o *OKXAdapter) Start() error { return nil }
+func (o *OKXAdapter) Stop() error  { o.streamHub.CloseAll(); return nil }
 func (o *OKXAdapter) IsConnected() bool {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
 	return o.wsConnected
 }
 
-func (o *OKXAdapter) OnTicker(fn func(tick model.Tick))          { o.onTicker = fn }
+func (o *OKXAdapter) OnTicker(fn func(tick model.Tick))           { o.onTicker = fn }
 func (o *OKXAdapter) OnOrderBook(fn func(ob model.OrderBookData)) { o.onOrderBook = fn }
 func (o *OKXAdapter) OnTrade(fn func(trade model.TradeData))      { o.onTrade = fn }
 func (o *OKXAdapter) OnKline(fn func(bar model.Bar))              { o.onKline = fn }
@@ -188,7 +188,7 @@ func (o *OKXAdapter) GetTicker(symbol string) (map[string]any, error) {
 
 // ── REST Trading ──
 
-func (o *OKXAdapter) PlaceOrder(symbol, side, orderType string, price, quantity float64) (map[string]any, error) {
+func (o *OKXAdapter) PlaceOrder(symbol, side, orderType string, price, quantity float64, clientOrderID ...string) (map[string]any, error) {
 	instID := toOKXInstID(symbol)
 	szStr, pxStr, err := o.normalizeOKXSpotOrder(instID, orderType, price, quantity)
 	if err != nil {
@@ -201,6 +201,9 @@ func (o *OKXAdapter) PlaceOrder(symbol, side, orderType string, price, quantity 
 		"ordType": strings.ToLower(orderType),
 		"sz":      szStr,
 	}
+	if id := firstClientOrderID(clientOrderID); id != "" {
+		body["clOrdId"] = id
+	}
 	if strings.ToLower(orderType) == "limit" {
 		body["px"] = pxStr
 	} else {
@@ -212,7 +215,7 @@ func (o *OKXAdapter) PlaceOrder(symbol, side, orderType string, price, quantity 
 // PlaceFuturesOrder places a futures (swap) order on OKX.
 // 注意：SWAP 合约的 sz 单位是张（contracts），quantity（币数量）在
 // normalizeOKXSwapOrder 内按 ctVal 换算为张数后取整。
-func (o *OKXAdapter) PlaceFuturesOrder(symbol, side, orderType string, price, quantity, leverage float64, positionSide string) (map[string]any, error) {
+func (o *OKXAdapter) PlaceFuturesOrder(symbol, side, orderType string, price, quantity, leverage float64, positionSide string, clientOrderID ...string) (map[string]any, error) {
 	instID := toOKXInstID(symbol)
 	szStr, pxStr, err := o.normalizeOKXSwapOrder(instID, orderType, price, quantity)
 	if err != nil {
@@ -231,6 +234,9 @@ func (o *OKXAdapter) PlaceFuturesOrder(symbol, side, orderType string, price, qu
 		"ordType":  strings.ToLower(orderType),
 		"sz":       szStr,
 		"lever":    fmt.Sprintf("%.0f", leverage),
+	}
+	if id := firstClientOrderID(clientOrderID); id != "" {
+		body["clOrdId"] = id
 	}
 
 	// Position side for hedge mode

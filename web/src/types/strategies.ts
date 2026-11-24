@@ -186,6 +186,7 @@ export interface BacktestRequest {
   timeframe?: string
   interval?: string
   strategy_type?: string
+  market_type?: 'spot' | 'swap'
   script_code?: string
   from?: string
   to?: string

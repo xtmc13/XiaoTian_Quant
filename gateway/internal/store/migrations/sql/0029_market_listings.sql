@@ -17,26 +17,26 @@
 
 CREATE TABLE IF NOT EXISTS xt_market_listings (
     id TEXT PRIMARY KEY,
-    author_user_id INTEGER NOT NULL DEFAULT 0,
+    author_user_id BIGINT NOT NULL DEFAULT 0,
     bot_instance_id TEXT NOT NULL DEFAULT '',
     kind TEXT NOT NULL DEFAULT 'robot',
     name TEXT NOT NULL DEFAULT '',
     description TEXT NOT NULL DEFAULT '',
     fee_model TEXT NOT NULL DEFAULT 'free',
-    fee_percent REAL NOT NULL DEFAULT 0,
-    monthly_fee REAL NOT NULL DEFAULT 0,
+    fee_percent DOUBLE PRECISION NOT NULL DEFAULT 0,
+    monthly_fee DOUBLE PRECISION NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'draft',
     reject_reason TEXT NOT NULL DEFAULT '',
-    probation_started_at INTEGER NOT NULL DEFAULT 0,
-    rule_min_days INTEGER NOT NULL DEFAULT 30,
-    rule_min_trades INTEGER NOT NULL DEFAULT 10,
-    rule_max_drawdown_pct REAL NOT NULL DEFAULT 50,
-    reviewed_by INTEGER NOT NULL DEFAULT 0,
-    reviewed_at INTEGER NOT NULL DEFAULT 0,
-    listed_at INTEGER NOT NULL DEFAULT 0,
+    probation_started_at BIGINT NOT NULL DEFAULT 0,
+    rule_min_days BIGINT NOT NULL DEFAULT 30,
+    rule_min_trades BIGINT NOT NULL DEFAULT 10,
+    rule_max_drawdown_pct DOUBLE PRECISION NOT NULL DEFAULT 50,
+    reviewed_by BIGINT NOT NULL DEFAULT 0,
+    reviewed_at BIGINT NOT NULL DEFAULT 0,
+    listed_at BIGINT NOT NULL DEFAULT 0,
     delist_reason TEXT NOT NULL DEFAULT '',
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_market_listings_author ON xt_market_listings(author_user_id, updated_at);
@@ -44,20 +44,20 @@ CREATE INDEX IF NOT EXISTS idx_market_listings_author ON xt_market_listings(auth
 CREATE INDEX IF NOT EXISTS idx_market_listings_status ON xt_market_listings(status, updated_at);
 
 CREATE TABLE IF NOT EXISTS xt_market_listing_stats (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     listing_id TEXT NOT NULL,
     date TEXT NOT NULL,
-    total_return_pct REAL NOT NULL DEFAULT 0,
-    annualized_return_pct REAL NOT NULL DEFAULT 0,
-    max_drawdown_pct REAL NOT NULL DEFAULT 0,
-    win_rate REAL NOT NULL DEFAULT 0,
-    profit_factor REAL NOT NULL DEFAULT 0,
-    sharpe_ratio REAL NOT NULL DEFAULT 0,
-    total_trades INTEGER NOT NULL DEFAULT 0,
-    monthly_return_pct REAL NOT NULL DEFAULT 0,
-    followers INTEGER NOT NULL DEFAULT 0,
-    running_days INTEGER NOT NULL DEFAULT 0,
-    created_at INTEGER NOT NULL,
+    total_return_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
+    annualized_return_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
+    max_drawdown_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
+    win_rate DOUBLE PRECISION NOT NULL DEFAULT 0,
+    profit_factor DOUBLE PRECISION NOT NULL DEFAULT 0,
+    sharpe_ratio DOUBLE PRECISION NOT NULL DEFAULT 0,
+    total_trades BIGINT NOT NULL DEFAULT 0,
+    monthly_return_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
+    followers BIGINT NOT NULL DEFAULT 0,
+    running_days BIGINT NOT NULL DEFAULT 0,
+    created_at BIGINT NOT NULL,
     UNIQUE(listing_id, date)
 );
 
@@ -66,5 +66,5 @@ CREATE INDEX IF NOT EXISTS idx_market_listing_stats_listing ON xt_market_listing
 CREATE TABLE IF NOT EXISTS xt_market_settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL DEFAULT '',
-    updated_at INTEGER NOT NULL
+    updated_at BIGINT NOT NULL
 );

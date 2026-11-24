@@ -15,8 +15,8 @@
 -- 注意: 语句内不要出现分号(字符串/注释里也不行)——迁移按分号切分执行。
 
 CREATE TABLE IF NOT EXISTS xt_ml_training_runs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    job_id INTEGER DEFAULT 0,
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    job_id BIGINT DEFAULT 0,
     model_name TEXT NOT NULL,
     trigger_src TEXT DEFAULT '',
     trainer TEXT DEFAULT 'python',
@@ -24,14 +24,14 @@ CREATE TABLE IF NOT EXISTS xt_ml_training_runs (
     error TEXT DEFAULT '',
     symbol TEXT DEFAULT '',
     interval TEXT DEFAULT '',
-    bars_loaded INTEGER DEFAULT 0,
-    train_samples INTEGER DEFAULT 0,
-    test_samples INTEGER DEFAULT 0,
-    feature_count INTEGER DEFAULT 0,
+    bars_loaded BIGINT DEFAULT 0,
+    train_samples BIGINT DEFAULT 0,
+    test_samples BIGINT DEFAULT 0,
+    feature_count BIGINT DEFAULT 0,
     metrics_json TEXT DEFAULT '',
     model_version TEXT DEFAULT '',
-    duration_ms INTEGER DEFAULT 0,
-    created_at INTEGER NOT NULL
+    duration_ms BIGINT DEFAULT 0,
+    created_at BIGINT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_ml_training_runs_model ON xt_ml_training_runs(model_name, created_at);

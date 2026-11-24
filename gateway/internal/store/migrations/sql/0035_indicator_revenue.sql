@@ -15,14 +15,14 @@
 -- 注意: 语句内不要出现分号(字符串/注释里也不行)——迁移按分号切分执行。
 
 CREATE TABLE IF NOT EXISTS indicator_revenue (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	indicator_id INTEGER NOT NULL,
-	buyer_id INTEGER NOT NULL,
-	seller_id INTEGER NOT NULL,
-	price REAL DEFAULT 0,
-	author_share REAL DEFAULT 0,
-	platform_share REAL DEFAULT 0,
-	created_at INTEGER NOT NULL
+	id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+	indicator_id BIGINT NOT NULL,
+	buyer_id BIGINT NOT NULL,
+	seller_id BIGINT NOT NULL,
+	price DOUBLE PRECISION DEFAULT 0,
+	author_share DOUBLE PRECISION DEFAULT 0,
+	platform_share DOUBLE PRECISION DEFAULT 0,
+	created_at BIGINT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_revenue_seller ON indicator_revenue(seller_id);
 CREATE INDEX IF NOT EXISTS idx_revenue_indicator ON indicator_revenue(indicator_id);

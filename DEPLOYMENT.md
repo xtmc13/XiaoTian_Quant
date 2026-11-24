@@ -103,6 +103,30 @@ docker compose -f docker-compose.prod.yml up -d
 docker compose -f docker-compose.prod.yml --profile nginx up -d
 ```
 
+### 方案 D：CI/CD 自动部署（GitHub Actions → SSH Compose 重建）
+
+`.github/workflows/ci.yml` 的 `deploy` job 在 `main` 分支推送、且配置了生产 Secrets 后，
+通过 SSH 登录生产目录执行 `git reset --hard origin/main` 并以生产 compose 文件重建容器；
+未配置 `DEPLOY_HOST` 时该 job 自动跳过，不影响 PR/分支 CI。
+
+在 GitHub 仓库 **Settings → Secrets and variables → Actions**（或 `production` Environment）配置：
+
+| Secret | 说明 | 默认值 |
+|--------|------|--------|
+| `DEPLOY_HOST` | 生产服务器 IP 或域名（不配置则跳过自动部署） | — |
+| `DEPLOY_SSH_KEY` | 可登录生产的 SSH 私钥（PEM 全文） | — |
+| `DEPLOY_USER` | SSH 登录用户 | `root` |
+| `DEPLOY_PORT` | SSH 端口 | `22` |
+| `DEPLOY_PATH` | 生产仓库目录（须含 `.env` 与 compose 文件） | — |
+| `DEPLOY_COMPOSE_FILE` | compose 文件路径 | `docker-compose.prod.yml` |
+
+部署口径（已固化在 workflow 步骤中）：
+
+- 容器启动**必须**显式带 `--env-file .env`；不加载 `.env` 时 `SECRET_KEY` 等插值为空，数据库迁移不会正常执行、JWT 签名瘫痪。
+- 部署前在生产侧校验：`.env` 存在且 `SECRET_KEY` 为非空字符串；不满足则中止，不会重建容器。
+- `.env`（含交易所 API Key、Vault 主密钥等）只保留在生产侧，不随 git 下发、不进镜像。
+- 重建后自动对 `http://127.0.0.1:8080/api/health` 做最多 60 秒健康检查；超时则 job 失败并保留远程日志可排查。
+
 ### 方案 B：手动二进制部署
 
 ```bash
@@ -391,6 +415,7 @@ docker compose exec gateway sh
 3. **启用 HTTPS** — 通过 Nginx/Caddy 配置 SSL 证书
 4. **定期更新基础镜像** — `docker compose pull && docker compose up -d`
 5. **非 root 运行** — 容器内已配置 `USER xiaotian` (UID 1000)
+6. **实盘总闸只拦入场/加仓** — 平仓、止盈止损、减仓、现货卖出等降风险方向不经过实盘总闸与二次确认，总闸关闭时仍可退出/兑现仓位，防止故障锁死持仓；入场单才受 `LIVE_TRADING_ENABLED` 与解锁状态约束
 
 ---
 

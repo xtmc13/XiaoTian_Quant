@@ -87,7 +87,7 @@ func main() {
 		if isFatalInitErr(err) {
 			log.Fatalf("FATAL: %v", err)
 		}
-		log.Printf("WARNING: SQLite init skipped: %v", err)
+		log.Printf("WARNING: database init skipped: %v", err)
 	}
 	store.LoadConfig()
 	// 启动即应用设置页保存的 AI 配置（api_key/model/base_url）到 provider 注册表，
@@ -313,6 +313,11 @@ func main() {
 		notify.GetNotificationStore().Add("limit-then-market 执行异常", msg, "WARN", "order")
 	})
 	ltmTracker.Start()
+	// OMS 重启恢复：把重启前仍处中间态的 paper 挂单回填进内存 OrderManager，
+	// 须在 ltm/ladder 等引擎子单回填之前，避免覆盖既有挂单。
+	if n := order.GetOrderManager().RestoreActiveOrders(); n > 0 {
+		log.Printf("[oms] 重启恢复 %d 个 paper 挂单", n)
+	}
 	// 重启恢复：扫描 xt_orders 中挂在中间态的 ltm 订单，重建状态机继续执行
 	// （原 limit_timeout_ms 未持久化，统一给一个宽限窗口后进入超时→市价补单）。
 	if n := ltmTracker.RestoreFromStore(order.DefaultLMRecoveryGrace); n > 0 {
@@ -353,9 +358,17 @@ func main() {
 	// ── Register strategy factories for combo engine ──
 	registerStrategyFactories()
 
-	// ── K线供给管：轮询币安 REST，新闭合 K 线发布 model.Bar 事件到总线，
-	// 让吃 K 线（OnBar）的策略在实盘能收到真实 K 线。 ──
-	handler.SetKlineFeeder(market.NewKlineFeeder(appCtx.EventBus))
+	// ── K线供给管：WS 收盘 K 线为主，REST 轮询兜底/补缺。 ──
+	feeder := market.NewKlineFeeder(appCtx.EventBus)
+	if appCtx.BinanceWS != nil {
+		// WS bars go through the feeder so WS and REST share one
+		// (symbol, interval, openTime) dedupe ledger.
+		appCtx.BinanceWS.SetOnKline(feeder.HandleWSKline)
+		feeder.WSSubscribe = func(symbol, interval, market string) {
+			appCtx.BinanceWS.EnsureKline(symbol, interval, market)
+		}
+	}
+	handler.SetKlineFeeder(feeder)
 
 	// ── 策略引擎接线：同一供给管注入引擎，供多周期（A7.1）/动态 universe（A7.3）
 	// 动态增删 symbol 的 K 线订阅（feeder 引用计数，与 handler 侧独立记账）。 ──

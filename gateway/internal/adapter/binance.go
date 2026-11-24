@@ -129,47 +129,100 @@ func (b *BinanceAdapter) sign(params url.Values) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
+// sapiBaseURL returns the SAPI host. BINANCE_SAPI_REST_URL exists so tests
+// and private gateways can point at a stub without touching the spot/futures
+// endpoints used by the order path.
+func (b *BinanceAdapter) sapiBaseURL() string {
+	if env := os.Getenv("BINANCE_SAPI_REST_URL"); env != "" {
+		return env
+	}
+	return BinanceSapiRestURL
+}
+
 // TransferFromFuturesToFunding 盈利保护划转：U 本位合约账户 → 资金账户
 // （sapi POST /sapi/v1/asset/transfer, type=UMFUTURE_MAIN）。签名与 fapi 同法
 // （HMAC-SHA256 + X-MBX-APIKEY）；检查响应 status=="OK"。
 func (b *BinanceAdapter) TransferFromFuturesToFunding(amount float64) error {
+	_, err := b.TransferAsset("futures", "funding", "USDT", amount)
+	return err
+}
+
+// binanceTransferTypes maps the wallet pair exposed by the UI to Binance's
+// universal-transfer type. Unsupported pairs must fail loudly rather than
+// silently doing nothing.
+var binanceTransferTypes = map[string]string{
+	"spot>futures":    "MAIN_UMFUTURE",
+	"futures>spot":    "UMFUTURE_MAIN",
+	"spot>funding":    "MAIN_FUNDING",
+	"funding>spot":    "FUNDING_MAIN",
+	"futures>funding": "UMFUTURE_FUNDING",
+	"funding>futures": "FUNDING_UMFUTURE",
+}
+
+// TransferAsset moves funds between Binance wallets through the universal
+// transfer endpoint. It returns the exchange transfer id (tranId) so callers
+// can trace the movement. A nil error means the exchange accepted the
+// transfer; local balances must then be refreshed from the exchange rather
+// than adjusted in memory.
+func (b *BinanceAdapter) TransferAsset(fromWallet, toWallet, asset string, amount float64) (int64, error) {
 	if amount <= 0 {
-		return fmt.Errorf("transfer amount must be positive")
+		return 0, fmt.Errorf("transfer amount must be positive")
 	}
 	if b.apiKey == "" || b.secretKey == "" {
-		return fmt.Errorf("binance credentials not configured")
+		return 0, fmt.Errorf("binance credentials not configured")
 	}
+	from := strings.ToLower(strings.TrimSpace(fromWallet))
+	to := strings.ToLower(strings.TrimSpace(toWallet))
+	transferType, ok := binanceTransferTypes[from+">"+to]
+	if !ok {
+		return 0, fmt.Errorf("unsupported binance transfer route: %s → %s", from, to)
+	}
+	asset = strings.ToUpper(strings.TrimSpace(asset))
+	if asset == "" {
+		return 0, fmt.Errorf("transfer asset is required")
+	}
+
 	params := url.Values{}
-	params.Set("type", "UMFUTURE_MAIN")
-	params.Set("asset", "USDT")
-	params.Set("amount", strconv.FormatFloat(amount, 'f', 6, 64))
+	params.Set("type", transferType)
+	params.Set("asset", asset)
+	params.Set("amount", strconv.FormatFloat(amount, 'f', -1, 64))
 	params.Set("timestamp", fmt.Sprintf("%d", time.Now().UnixMilli()))
 	params.Set("recvWindow", "5000")
 	params.Set("signature", b.sign(params))
 
-	req, err := http.NewRequest("POST", BinanceSapiRestURL+"/sapi/v1/asset/transfer", strings.NewReader(params.Encode()))
+	req, err := http.NewRequest("POST", b.sapiBaseURL()+"/sapi/v1/asset/transfer", strings.NewReader(params.Encode()))
 	if err != nil {
-		return err
+		return 0, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("X-MBX-APIKEY", b.apiKey)
 
 	resp, err := b.httpClient.Do(req)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
+
 	var result struct {
+		TranID int64  `json:"tranId"`
 		Status string `json:"status"`
+		Code   int    `json:"code"`
+		Msg    string `json:"msg"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
-		return fmt.Errorf("transfer response parse: %v (%s)", err, string(body))
+		return 0, fmt.Errorf("transfer response parse: %v (%s)", err, string(body))
 	}
-	if result.Status != "OK" {
-		return fmt.Errorf("transfer rejected: %s", string(body))
+	if result.Code != 0 {
+		return 0, fmt.Errorf("transfer rejected [%d]: %s", result.Code, result.Msg)
 	}
-	return nil
+	if result.Status != "" && result.Status != "OK" {
+		return 0, fmt.Errorf("transfer rejected: %s", string(body))
+	}
+	if result.TranID == 0 {
+		return 0, fmt.Errorf("transfer accepted without tranId: %s", string(body))
+	}
+	return result.TranID, nil
 }
 
 // ── REST ──
@@ -293,7 +346,7 @@ func (b *BinanceAdapter) GetTicker(symbol string) (map[string]any, error) {
 
 // ── Trading REST ──
 
-func (b *BinanceAdapter) PlaceOrder(symbol, side, orderType string, price, quantity float64) (map[string]any, error) {
+func (b *BinanceAdapter) PlaceOrder(symbol, side, orderType string, price, quantity float64, clientOrderID ...string) (map[string]any, error) {
 	qtyStr, priceStr, err := b.normalizeBinanceOrder(symbol, orderType, price, quantity, false)
 	if err != nil {
 		return nil, err
@@ -303,6 +356,9 @@ func (b *BinanceAdapter) PlaceOrder(symbol, side, orderType string, price, quant
 	params.Set("side", side)
 	params.Set("type", orderType)
 	params.Set("quantity", qtyStr)
+	if id := firstClientOrderID(clientOrderID); id != "" {
+		params.Set("newClientOrderId", id)
+	}
 	if orderType == "LIMIT" {
 		params.Set("price", priceStr)
 		params.Set("timeInForce", "GTC")
@@ -311,7 +367,7 @@ func (b *BinanceAdapter) PlaceOrder(symbol, side, orderType string, price, quant
 }
 
 // PlaceFuturesOrder places a USDT-M futures order on Binance.
-func (b *BinanceAdapter) PlaceFuturesOrder(symbol, side, orderType string, price, quantity, leverage float64, positionSide string) (map[string]any, error) {
+func (b *BinanceAdapter) PlaceFuturesOrder(symbol, side, orderType string, price, quantity, leverage float64, positionSide string, clientOrderID ...string) (map[string]any, error) {
 	qtyStr, priceStr, err := b.normalizeBinanceOrder(symbol, orderType, price, quantity, true)
 	if err != nil {
 		return nil, err
@@ -321,6 +377,9 @@ func (b *BinanceAdapter) PlaceFuturesOrder(symbol, side, orderType string, price
 	params.Set("side", side)
 	params.Set("type", orderType)
 	params.Set("quantity", qtyStr)
+	if id := firstClientOrderID(clientOrderID); id != "" {
+		params.Set("newClientOrderId", id)
+	}
 	if positionSide != "" {
 		params.Set("positionSide", positionSide)
 	}
@@ -329,6 +388,24 @@ func (b *BinanceAdapter) PlaceFuturesOrder(symbol, side, orderType string, price
 		params.Set("timeInForce", "GTC")
 	}
 	return b.futuresRequest("POST", "/fapi/v1/order", params)
+}
+
+// SetLeverage changes the leverage of an existing USDT-M futures symbol.
+// Binance only allows this for symbols already in the account; the exchange
+// rejects out-of-range values, so the local check is just a sanity bound.
+func (b *BinanceAdapter) SetLeverage(symbol string, leverage int) error {
+	symbol = strings.ToUpper(strings.TrimSpace(symbol))
+	if symbol == "" {
+		return fmt.Errorf("symbol is required")
+	}
+	if leverage < 1 || leverage > 125 {
+		return fmt.Errorf("leverage must be between 1 and 125")
+	}
+	params := url.Values{}
+	params.Set("symbol", symbol)
+	params.Set("leverage", strconv.Itoa(leverage))
+	_, err := b.futuresRequest("POST", "/fapi/v1/leverage", params)
+	return err
 }
 
 func (b *BinanceAdapter) CancelOrder(symbol, orderID string) (map[string]any, error) {

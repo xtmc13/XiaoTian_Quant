@@ -9,54 +9,54 @@
 
 CREATE TABLE IF NOT EXISTS grid_bots (
     id TEXT PRIMARY KEY,
-    user_id INTEGER DEFAULT 0,
+    user_id BIGINT DEFAULT 0,
     name TEXT,
     symbol TEXT,
-    lower_price REAL,
-    upper_price REAL,
-    grid_count INTEGER,
-    investment REAL,
+    lower_price DOUBLE PRECISION,
+    upper_price DOUBLE PRECISION,
+    grid_count BIGINT,
+    investment DOUBLE PRECISION,
     status TEXT DEFAULT 'stopped',
     exchange TEXT DEFAULT 'paper',
-    fee_rate REAL DEFAULT 0.001,
-    realized_pnl REAL DEFAULT 0,
-    total_trades INTEGER DEFAULT 0,
-    base_qty REAL DEFAULT 0,
-    quote_balance REAL DEFAULT 0,
+    fee_rate DOUBLE PRECISION DEFAULT 0.001,
+    realized_pnl DOUBLE PRECISION DEFAULT 0,
+    total_trades BIGINT DEFAULT 0,
+    base_qty DOUBLE PRECISION DEFAULT 0,
+    quote_balance DOUBLE PRECISION DEFAULT 0,
     state_json TEXT DEFAULT '{}',
-    initial_equity REAL DEFAULT 0,
-    created_at INTEGER,
-    updated_at INTEGER,
-    started_at INTEGER DEFAULT 0,
-    stopped_at INTEGER DEFAULT 0
+    initial_equity DOUBLE PRECISION DEFAULT 0,
+    created_at BIGINT,
+    updated_at BIGINT,
+    started_at BIGINT DEFAULT 0,
+    stopped_at BIGINT DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_grid_bots_user_status ON grid_bots(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_grid_bots_symbol_status ON grid_bots(symbol, status);
 
 CREATE TABLE IF NOT EXISTS grid_bot_trades (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     bot_id TEXT,
-    level_index INTEGER,
+    level_index BIGINT,
     side TEXT,
-    price REAL,
-    quantity REAL,
-    quote_qty REAL,
-    fee REAL,
-    pnl REAL DEFAULT 0,
-    ts INTEGER
+    price DOUBLE PRECISION,
+    quantity DOUBLE PRECISION,
+    quote_qty DOUBLE PRECISION,
+    fee DOUBLE PRECISION,
+    pnl DOUBLE PRECISION DEFAULT 0,
+    ts BIGINT
 );
 
 CREATE INDEX IF NOT EXISTS idx_grid_bot_trades_bot_ts ON grid_bot_trades(bot_id, ts);
 
 CREATE TABLE IF NOT EXISTS grid_bot_snapshots (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     bot_id TEXT,
-    equity REAL,
-    price REAL,
-    realized_pnl REAL,
-    open_orders INTEGER,
-    ts INTEGER
+    equity DOUBLE PRECISION,
+    price DOUBLE PRECISION,
+    realized_pnl DOUBLE PRECISION,
+    open_orders BIGINT,
+    ts BIGINT
 );
 
 CREATE INDEX IF NOT EXISTS idx_grid_bot_snapshots_bot_ts ON grid_bot_snapshots(bot_id, ts);

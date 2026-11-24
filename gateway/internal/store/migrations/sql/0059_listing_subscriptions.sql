@@ -14,6 +14,6 @@
 
 ALTER TABLE ai_bot_subscriptions ADD COLUMN listing_id TEXT NOT NULL DEFAULT '';
 
-ALTER TABLE ai_bot_subscriptions ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE ai_bot_subscriptions ADD COLUMN expires_at BIGINT NOT NULL DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS idx_aibot_sub_listing ON ai_bot_subscriptions(listing_id);

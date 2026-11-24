@@ -43,6 +43,9 @@ services:
       # Cache
       - CACHE_ENABLED=${CACHE_ENABLED:-true}
       - REDIS_URL=redis://redis:6379/0
+      # Database (PostgreSQL)
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-xtquant}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-xtquant}?sslmode=disable
+      - DATA_DIR=/app/data
       # Internal services
       - SANDBOX_URL=http://sandbox:9000
       - ML_SERVER_URL=http://ml_server:8001
@@ -58,6 +61,8 @@ services:
       retries: 3
       start_period: 15s
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_started
       ml_server:
@@ -154,6 +159,33 @@ services:
         max-size: "20m"
         max-file: "3"
 
+  # ── PostgreSQL ────────────────────────────────────────────────
+  postgres:
+    image: postgres:18-alpine
+    container_name: xiaotian-postgres
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-xtquant}
+      - POSTGRES_USER=${POSTGRES_USER:-xtquant}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      - TZ=${TZ:-Asia/Shanghai}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-xtquant} -d ${POSTGRES_DB:-xtquant}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - xiaotian
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   # ── Redis ─────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
@@ -197,6 +229,7 @@ services:
 
 volumes:
   gateway_data:
+  pg_data:
   redis_data:
   ml_models:
   tensorboard_logs:

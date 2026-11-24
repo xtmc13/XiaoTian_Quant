@@ -31,12 +31,12 @@ type BitgetAdapter struct {
 	httpClient *http.Client
 	mu         sync.RWMutex
 
-	streamHub     *exchange.StreamHub
-	wsConnected   bool
-	onTicker      func(tick model.Tick)
-	onOrderBook   func(ob model.OrderBookData)
-	onTrade       func(trade model.TradeData)
-	onKline       func(bar model.Bar)
+	streamHub   *exchange.StreamHub
+	wsConnected bool
+	onTicker    func(tick model.Tick)
+	onOrderBook func(ob model.OrderBookData)
+	onTrade     func(trade model.TradeData)
+	onKline     func(bar model.Bar)
 
 	orders    map[string]map[string]any
 	positions map[string]map[string]any
@@ -54,11 +54,11 @@ func NewBitgetAdapter(apiKey, secretKey, passphrase string) *BitgetAdapter {
 	}
 }
 
-func (b *BitgetAdapter) OnTicker(fn func(tick model.Tick))          { b.onTicker = fn }
+func (b *BitgetAdapter) OnTicker(fn func(tick model.Tick))           { b.onTicker = fn }
 func (b *BitgetAdapter) OnOrderBook(fn func(ob model.OrderBookData)) { b.onOrderBook = fn }
 
-func (b *BitgetAdapter) Name() string     { return "bitget" }
-func (b *BitgetAdapter) Start() error     { return nil }
+func (b *BitgetAdapter) Name() string { return "bitget" }
+func (b *BitgetAdapter) Start() error { return nil }
 
 // ── Auth ───────────────────────────────────────────────────────
 
@@ -140,11 +140,11 @@ func (b *BitgetAdapter) GetKlines(symbol, interval string, limit int) ([][]any, 
 		}
 		klines = append(klines, []any{
 			int64(parseFloatSafe(arr[0])), // timestamp
-			parseFloatSafe(arr[1]),         // open
-			parseFloatSafe(arr[2]),         // high
-			parseFloatSafe(arr[3]),         // low
-			parseFloatSafe(arr[4]),         // close
-			parseFloatSafe(arr[5]),         // volume
+			parseFloatSafe(arr[1]),        // open
+			parseFloatSafe(arr[2]),        // high
+			parseFloatSafe(arr[3]),        // low
+			parseFloatSafe(arr[4]),        // close
+			parseFloatSafe(arr[5]),        // volume
 		})
 	}
 	return klines, nil
@@ -194,7 +194,7 @@ func (b *BitgetAdapter) GetBalance() ([]map[string]any, error) {
 
 // ── Orders ─────────────────────────────────────────────────────
 
-func (b *BitgetAdapter) PlaceOrder(symbol, side, orderType string, price, quantity float64) (map[string]any, error) {
+func (b *BitgetAdapter) PlaceOrder(symbol, side, orderType string, price, quantity float64, clientOrderID ...string) (map[string]any, error) {
 	qtyStr, priceStr, err := b.normalizeBitgetOrder(symbol, orderType, price, quantity, false)
 	if err != nil {
 		return nil, err
@@ -205,6 +205,9 @@ func (b *BitgetAdapter) PlaceOrder(symbol, side, orderType string, price, quanti
 		"orderType": strings.ToLower(orderType),
 		"force":     "gtc",
 		"quantity":  qtyStr,
+	}
+	if id := firstClientOrderID(clientOrderID); id != "" {
+		body["clientOid"] = id
 	}
 	if strings.ToLower(orderType) == "limit" {
 		body["price"] = priceStr

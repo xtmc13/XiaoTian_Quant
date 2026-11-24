@@ -15,8 +15,8 @@ CREATE TABLE IF NOT EXISTS xt_dataprovider_cache (
     source TEXT NOT NULL,
     cache_key TEXT NOT NULL DEFAULT 'default',
     payload TEXT NOT NULL,
-    fetched_at INTEGER NOT NULL,
-    expires_at INTEGER NOT NULL,
+    fetched_at BIGINT NOT NULL,
+    expires_at BIGINT NOT NULL,
     PRIMARY KEY (source, cache_key)
 );
 

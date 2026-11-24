@@ -17,20 +17,20 @@
 -- 注意: 语句内不要出现分号(字符串/注释里也不行)——迁移按分号切分执行。
 
 CREATE TABLE IF NOT EXISTS xt_reported_pnl_checks (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	user_id INTEGER DEFAULT 0,
+	id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+	user_id BIGINT DEFAULT 0,
 	credential_id TEXT NOT NULL DEFAULT '',
 	exchange TEXT NOT NULL,
 	symbol TEXT DEFAULT '',
-	window_start INTEGER NOT NULL,
-	window_end INTEGER NOT NULL,
-	local_pnl REAL DEFAULT 0,
-	reported_pnl REAL DEFAULT 0,
-	diff REAL DEFAULT 0,
-	diff_pct REAL DEFAULT 0,
+	window_start BIGINT NOT NULL,
+	window_end BIGINT NOT NULL,
+	local_pnl DOUBLE PRECISION DEFAULT 0,
+	reported_pnl DOUBLE PRECISION DEFAULT 0,
+	diff DOUBLE PRECISION DEFAULT 0,
+	diff_pct DOUBLE PRECISION DEFAULT 0,
 	status TEXT DEFAULT 'ok',
 	detail TEXT DEFAULT '',
-	checked_at INTEGER NOT NULL
+	checked_at BIGINT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_reported_pnl_status ON xt_reported_pnl_checks(status, checked_at);

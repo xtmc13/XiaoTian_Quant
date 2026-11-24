@@ -16,15 +16,15 @@
 
 CREATE TABLE IF NOT EXISTS xt_ladder_orders (
     id TEXT PRIMARY KEY,
-    user_id INTEGER NOT NULL DEFAULT 0,
+    user_id BIGINT NOT NULL DEFAULT 0,
     symbol TEXT NOT NULL DEFAULT '',
     side TEXT NOT NULL DEFAULT 'BUY',
     exchange TEXT NOT NULL DEFAULT 'paper',
     status TEXT NOT NULL DEFAULT 'active',
     spec_json TEXT NOT NULL DEFAULT '{}',
     state_json TEXT NOT NULL DEFAULT '{}',
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_ladder_orders_user ON xt_ladder_orders(user_id, status, updated_at);

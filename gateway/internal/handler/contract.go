@@ -3,8 +3,10 @@ package handler
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xiaotian-quant/gateway/internal/adapter"
 )
 
 // ── Types ──
@@ -50,15 +52,73 @@ func ContractLeverageGet(c *gin.Context) {
 
 // ContractLeverageSet godoc
 // POST /contract/leverage
+//
+// The leverage is applied on the exchange itself. A 200 response means the
+// venue acknowledged the change; nothing is persisted locally, so GET
+// /contract/leverage intentionally keeps returning null.
 func ContractLeverageSet(c *gin.Context) {
 	var req struct {
 		Leverage float64 `json:"leverage" binding:"required,min=1,max=125"`
+		Symbol   string  `json:"symbol"`
+		Exchange string  `json:"exchange"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"success": true})
+
+	req.Symbol = strings.ToUpper(strings.TrimSpace(req.Symbol))
+	req.Exchange = strings.ToLower(strings.TrimSpace(req.Exchange))
+	if req.Exchange == "" {
+		req.Exchange = "binance"
+	}
+	if req.Symbol == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "symbol 必填（如 BTCUSDT）"})
+		return
+	}
+	leverage := int(req.Leverage)
+	if float64(leverage) != req.Leverage {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "leverage 必须为整数"})
+		return
+	}
+
+	switch req.Exchange {
+	case "binance", "bybit":
+		apiKey, secret, _ := adapter.GetCredential(req.Exchange)
+		if apiKey == "" || secret == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": req.Exchange + " API Key 未配置"})
+			return
+		}
+		var err error
+		if req.Exchange == "binance" {
+			err = adapter.NewBinanceAdapter(apiKey, secret, false).SetLeverage(req.Symbol, leverage)
+		} else {
+			err = adapter.NewBybitAdapter(apiKey, secret, false).SetLeverage(req.Symbol, leverage)
+		}
+		if err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"success": false, "message": "设置杠杆失败: " + err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"success":  true,
+			"exchange": req.Exchange,
+			"symbol":   req.Symbol,
+			"leverage": leverage,
+			"message":  "杠杆已在交易所生效",
+		})
+	case "okx":
+		// OKX carries lever on each order; accepting a global setting here
+		// without persisting it would be another fake success.
+		c.JSON(http.StatusNotImplemented, gin.H{
+			"success": false,
+			"message": "OKX 杠杆随下单参数生效，暂不支持账户级预设",
+		})
+	default:
+		c.JSON(http.StatusNotImplemented, gin.H{
+			"success": false,
+			"message": req.Exchange + " 暂不支持应用内设置杠杆",
+		})
+	}
 }
 
 // ContractMarginInfo godoc

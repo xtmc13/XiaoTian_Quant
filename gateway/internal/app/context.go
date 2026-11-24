@@ -540,6 +540,9 @@ func (ctx *Context) wireOrderManager() {
 		if ord.Exchange != "paper" {
 			var result map[string]any
 			var err error
+			// Same order id → same venue-side id, so a retry after a timeout
+			// cannot create a second position.
+			clientOID := adapter.ExchangeClientOID(ord.ID)
 
 			switch ord.Exchange {
 			case "binance":
@@ -547,9 +550,9 @@ func (ctx *Context) wireOrderManager() {
 				if apiKey != "" && secret != "" {
 					binance := adapter.NewBinanceAdapter(apiKey, secret, false)
 					if ord.MarketType == model.MarketSwap {
-						result, err = binance.PlaceFuturesOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity, ord.Leverage, string(ord.PositionSide))
+						result, err = binance.PlaceFuturesOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity, ord.Leverage, string(ord.PositionSide), clientOID)
 					} else {
-						result, err = binance.PlaceOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity)
+						result, err = binance.PlaceOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity, clientOID)
 					}
 				}
 			case "okx":
@@ -557,9 +560,9 @@ func (ctx *Context) wireOrderManager() {
 				if apiKey != "" && secret != "" {
 					okx := adapter.NewOKXAdapter(apiKey, secret, passphrase, false)
 					if ord.MarketType == model.MarketSwap {
-						result, err = okx.PlaceFuturesOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity, ord.Leverage, string(ord.PositionSide))
+						result, err = okx.PlaceFuturesOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity, ord.Leverage, string(ord.PositionSide), clientOID)
 					} else {
-						result, err = okx.PlaceOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity)
+						result, err = okx.PlaceOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity, clientOID)
 					}
 				}
 			case "bybit":
@@ -567,9 +570,9 @@ func (ctx *Context) wireOrderManager() {
 				if apiKey != "" && secret != "" {
 					bybit := adapter.NewBybitAdapter(apiKey, secret, false)
 					if ord.MarketType == model.MarketSwap {
-						result, err = bybit.PlaceFuturesOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity, ord.Leverage, string(ord.PositionSide))
+						result, err = bybit.PlaceFuturesOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity, ord.Leverage, string(ord.PositionSide), clientOID)
 					} else {
-						result, err = bybit.PlaceOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity)
+						result, err = bybit.PlaceOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity, clientOID)
 					}
 				}
 			case "gate", "gateio":
@@ -582,13 +585,13 @@ func (ctx *Context) wireOrderManager() {
 				apiKey, secret, _ := adapter.GetCredential("mexc")
 				if apiKey != "" && secret != "" {
 					mexc := adapter.NewMEXCAdapter(apiKey, secret)
-					result, err = mexc.PlaceOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity)
+					result, err = mexc.PlaceOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity, clientOID)
 				}
 			case "bitget":
 				apiKey, secret, passphrase := adapter.GetCredential("bitget")
 				if apiKey != "" && secret != "" {
 					bitget := adapter.NewBitgetAdapter(apiKey, secret, passphrase)
-					result, err = bitget.PlaceOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity)
+					result, err = bitget.PlaceOrder(ord.Symbol, string(ord.Side), string(ord.OrderType), ord.Price, ord.Quantity, clientOID)
 				}
 			case "coinbase":
 				apiKey, secret, _ := adapter.GetCredential("coinbase")
@@ -1454,9 +1457,10 @@ func binancePriceRestProbe(endpoint, norm string) (float64, bool) {
 func getLastPriceSource(symbol string) (float64, bool) {
 	norm := normalizeMarketSymbol(symbol)
 
-	// Tier 1: in-memory WS price cache.
+	// Tier 1: in-memory WS price cache（带新鲜度窗：缓存冻结时不命中，
+	// 落到 Tier2 REST 探测，避免读到超窗陈旧价）。
 	if appCtx := Get(); appCtx != nil && appCtx.BinanceWS != nil {
-		if p := appCtx.BinanceWS.GetPrice(norm); p > 0 {
+		if p := appCtx.BinanceWS.GetPriceFresh(norm, 2*time.Minute); p > 0 {
 			markMarketDataOK()
 			return p, false
 		}
@@ -2060,6 +2064,8 @@ func (ctx *Context) resolveExchange(symbol string) string {
 }
 
 // closePositionFromSignal closes the opposite position when a CLOSE signal is received.
+// 平仓属降风险动作：整条路径不经 signalLiveGate 实盘总闸（与入场单分开），
+// 总闸关闭/未解锁时也必须能退出仓位，防止故障锁死持仓。
 func (ctx *Context) closePositionFromSignal(signal model.Signal) {
 	acct := ctx.PortfolioManager.GetAccount("default")
 	closedAny := false

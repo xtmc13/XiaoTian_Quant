@@ -18,30 +18,30 @@
 -- 注意: 语句内不要出现分号(字符串/注释里也不行)——迁移按分号切分执行。
 
 -- ── 推荐关系（加列方式对齐 0006 对 xt_users 的 ALTER）──
-ALTER TABLE xt_users ADD COLUMN referred_by INTEGER;
+ALTER TABLE xt_users ADD COLUMN referred_by BIGINT;
 
 -- ── 推荐码表（一人一个码）──
 CREATE TABLE IF NOT EXISTS xt_referral_codes (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	user_id INTEGER NOT NULL UNIQUE,
+	id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+	user_id BIGINT NOT NULL UNIQUE,
 	code TEXT NOT NULL UNIQUE,
-	commission_pct INTEGER NOT NULL DEFAULT 10,
-	active INTEGER NOT NULL DEFAULT 1,
-	created_at INTEGER NOT NULL
+	commission_pct BIGINT NOT NULL DEFAULT 10,
+	active BIGINT NOT NULL DEFAULT 1,
+	created_at BIGINT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_referral_codes_user ON xt_referral_codes(user_id);
 
 -- ── 佣金入账记录（order_id 唯一 = 幂等键）──
 CREATE TABLE IF NOT EXISTS xt_referral_earnings (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	referrer_user_id INTEGER NOT NULL,
-	referred_user_id INTEGER NOT NULL,
+	id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+	referrer_user_id BIGINT NOT NULL,
+	referred_user_id BIGINT NOT NULL,
 	order_id TEXT NOT NULL UNIQUE,
-	order_amount INTEGER NOT NULL,
-	credits INTEGER NOT NULL,
+	order_amount BIGINT NOT NULL,
+	credits BIGINT NOT NULL,
 	status TEXT NOT NULL DEFAULT 'credited',
-	created_at INTEGER NOT NULL
+	created_at BIGINT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_referral_earnings_referrer ON xt_referral_earnings(referrer_user_id, created_at);

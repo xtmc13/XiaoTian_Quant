@@ -6,7 +6,7 @@ Go 后端网关——量化交易系统的核心业务中枢。
 
 - **语言**: Go 1.26
 - **Web 框架**: Gin
-- **数据库**: SQLite (modernc.org/sqlite, pure Go)
+- **数据库**: PostgreSQL (pgx/v5, pure Go 驱动)
 - **缓存**: Redis (可选)
 - **认证**: JWT (golang-jwt)
 - **WebSocket**: Gorilla WebSocket

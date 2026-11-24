@@ -44,6 +44,11 @@ type KlineFeeder struct {
 	// DefaultKlineFeedInterval.
 	Interval time.Duration
 
+	// WSSubscribe optionally registers a symbol+interval on the exchange
+	// WebSocket kline stream. When set, bars normally arrive on candle close in
+	// milliseconds; the REST loop below becomes the fallback/gap filler.
+	WSSubscribe func(symbol, interval, market string)
+
 	httpClient *http.Client
 
 	mu      sync.Mutex
@@ -51,10 +56,16 @@ type KlineFeeder struct {
 }
 
 type feedEntry struct {
-	stop     chan struct{}
-	done     chan struct{}
-	refs     int
-	lastOpen int64 // openTime (ms) of the newest closed bar already published
+	stop chan struct{}
+	done chan struct{}
+	refs int
+
+	// stateMu guards lastOpen/wsSeen: the REST loop and the WS callback
+	// publish from different goroutines, and both must agree on what has
+	// already reached the bus.
+	stateMu  sync.Mutex
+	lastOpen int64          // openTime (ms) of the newest closed bar already published
+	wsSeen   map[int64]bool // WS-published bars, used to suppress REST duplicates
 }
 
 // NewKlineFeeder creates a feeder publishing to bus.
@@ -134,15 +145,48 @@ func (f *KlineFeeder) EnsureSymbol(symbol, interval string, marketType ...string
 		f.mu.Unlock()
 		return false
 	}
-	e := &feedEntry{stop: make(chan struct{}), done: make(chan struct{}), refs: 1}
+	e := &feedEntry{stop: make(chan struct{}), done: make(chan struct{}), refs: 1, wsSeen: make(map[int64]bool)}
 	f.running[key] = e
 	f.mu.Unlock()
 
 	go f.run(symbol, interval, market, e)
+	if f.WSSubscribe != nil {
+		f.WSSubscribe(symbol, interval, market)
+	}
 	return true
 }
 
-// RecentClosedBars returns the most recently closed bars (oldest→newest) for
+// HandleWSKline is the WebSocket closed-bar entry point. It applies the same
+// (symbol, interval, openTime) dedupe ledger as the REST fallback, so a bar
+// delivered first by WS is not published again by the next poll.
+func (f *KlineFeeder) HandleWSKline(bar model.Bar, market string) {
+	symbol := normalizeFeedSymbol(bar.Symbol)
+	interval := strings.ToLower(strings.TrimSpace(bar.Interval))
+	if symbol == "" || interval == "" {
+		return
+	}
+	key := feedKey(symbol, interval, market)
+
+	f.mu.Lock()
+	e, ok := f.running[key]
+	f.mu.Unlock()
+	if !ok {
+		return // nobody consumes this stream
+	}
+
+	e.stateMu.Lock()
+	defer e.stateMu.Unlock()
+	if bar.Time <= e.lastOpen {
+		return
+	}
+	e.lastOpen = bar.Time
+	e.wsSeen[bar.Time] = true
+	if f.Bus != nil {
+		bar.Symbol = symbol
+		f.Bus.PublishSync(event.Event{Type: event.TypeBar, Symbol: symbol, Data: bar})
+	}
+}
+
 // direct strategy warmup when the feed loop is already running and will not
 // replay its backfill.
 func (f *KlineFeeder) RecentClosedBars(symbol, interval string, limit int, marketType ...string) ([]model.Bar, error) {
@@ -222,12 +266,11 @@ func (f *KlineFeeder) run(symbol, interval, marketType string, e *feedEntry) {
 		default:
 		}
 
-		bar, err := f.fetchClosedBar(symbol, interval, marketType)
-		if err != nil {
-			log.Printf("[KlineFeeder] fetch %s %s failed: %v", symbol, interval, err)
-		} else {
-			// Entry state (lastOpen/first) is single-goroutine; no lock needed.
-			if first {
+		if first {
+			bar, err := f.fetchClosedBar(symbol, interval, marketType)
+			if err != nil {
+				log.Printf("[KlineFeeder] fetch %s %s failed: %v", symbol, interval, err)
+			} else {
 				first = false
 				// 指标暖机回补：启动时发布最近最多 100 根已闭合历史 K 线
 				// （旧→新），让 MACD 等指标策略立刻有完整计算窗口，不必
@@ -235,9 +278,13 @@ func (f *KlineFeeder) run(symbol, interval, marketType string, e *feedEntry) {
 				bars, berr := f.fetchClosedBars(symbol, interval, 100, marketType)
 				if berr != nil {
 					log.Printf("[KlineFeeder] backfill %s %s failed: %v", symbol, interval, berr)
+					e.stateMu.Lock()
 					e.lastOpen = bar.Time
+					e.stateMu.Unlock()
 				} else if len(bars) == 0 {
+					e.stateMu.Lock()
 					e.lastOpen = bar.Time
+					e.stateMu.Unlock()
 				} else {
 					for _, b := range bars {
 						select {
@@ -245,20 +292,50 @@ func (f *KlineFeeder) run(symbol, interval, marketType string, e *feedEntry) {
 							return
 						default:
 						}
+						e.stateMu.Lock()
+						if e.wsSeen[b.Time] {
+							delete(e.wsSeen, b.Time)
+							e.stateMu.Unlock()
+							continue
+						}
+						if b.Time > e.lastOpen {
+							e.lastOpen = b.Time
+						}
 						if f.Bus != nil {
 							// PublishSync 保证回补序列按旧→新顺序送达
 							// （Publish 的多 worker 队列会并发乱序完成）。
+							// 持锁发布，避免 WS 回调插入导致乱序。
 							f.Bus.PublishSync(event.Event{Type: event.TypeBar, Symbol: symbol, Data: b})
 						}
+						e.stateMu.Unlock()
 					}
-					e.lastOpen = bars[len(bars)-1].Time
+					e.stateMu.Lock()
+					if bars[len(bars)-1].Time > e.lastOpen {
+						e.lastOpen = bars[len(bars)-1].Time
+					}
+					baseline := e.lastOpen
+					e.stateMu.Unlock()
 					log.Printf("[KlineFeeder] backfilled %d bars for %s %s (baseline openTime=%d)",
-						len(bars), symbol, interval, e.lastOpen)
+						len(bars), symbol, interval, baseline)
 				}
-			} else if bar.Time > e.lastOpen {
+			}
+		} else {
+			// 兜底/补缺：一次取回最近 3 根已闭合 K 线，把基线之后的所有
+			// 缺失柱按旧→新补发。WS 断线或漏帧时不会跳过中间柱。
+			bars, err := f.fetchClosedBars(symbol, interval, 3, marketType)
+			if err != nil {
+				log.Printf("[KlineFeeder] fetch %s %s failed: %v", symbol, interval, err)
+			}
+			for _, bar := range bars {
+				e.stateMu.Lock()
+				if bar.Time <= e.lastOpen {
+					e.stateMu.Unlock()
+					continue
+				}
 				e.lastOpen = bar.Time
 				select {
 				case <-e.stop:
+					e.stateMu.Unlock()
 					return
 				default:
 				}
@@ -266,9 +343,10 @@ func (f *KlineFeeder) run(symbol, interval, marketType string, e *feedEntry) {
 					f.Bus.PublishSync(event.Event{
 						Type:   event.TypeBar,
 						Symbol: symbol,
-						Data:   *bar,
+						Data:   bar,
 					})
 				}
+				e.stateMu.Unlock()
 			}
 		}
 

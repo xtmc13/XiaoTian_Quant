@@ -209,16 +209,16 @@ func (e *MatchingEngine) SubmitOrder(side, orderType string, price, quantity flo
 	}
 
 	// Result mirrors the Rust FFI format: status/side/price/quantity/filled
-	// alongside order_id/trades.
+	// alongside order_id/trades. Status follows the actual fill volume: a
+	// market order that meets an empty/thin book is CANCELLED or
+	// PARTIALLY_FILLED, never FILLED with zero quantity.
 	status := "NEW"
-	if orderType == "market" {
-		// Market orders always report FILLED (possibly with 0 quantity when
-		// the book is empty), matching the Rust engine contract.
-		status = "FILLED"
-	} else if ord.Filled >= ord.Quantity {
+	if ord.Filled >= ord.Quantity {
 		status = "FILLED"
 	} else if ord.Filled > 0 {
 		status = "PARTIALLY_FILLED"
+	} else if orderType == "market" {
+		status = "CANCELLED"
 	}
 
 	result := map[string]any{

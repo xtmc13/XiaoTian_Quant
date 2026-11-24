@@ -27,7 +27,7 @@
 ALTER TABLE xt_social_providers ADD COLUMN pricing_model TEXT NOT NULL DEFAULT '';
 
 ALTER TABLE xt_social_subscriptions ADD COLUMN track TEXT NOT NULL DEFAULT '';
-ALTER TABLE xt_social_subscriptions ADD COLUMN track_expires_at INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE xt_social_subscriptions ADD COLUMN track_expires_at BIGINT NOT NULL DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS idx_social_subs_track ON xt_social_subscriptions(track, status);
 

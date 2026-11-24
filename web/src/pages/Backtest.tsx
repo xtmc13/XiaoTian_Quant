@@ -740,6 +740,7 @@ export function Backtest() {
     symbol,
     interval,
     strategy_type: strategyType,
+    market_type: (isContractStrategy ? 'swap' : 'spot') as 'spot' | 'swap',
     initial_balance: { USDT: initialBalance },
     from: fromDate,
     to: toDate,

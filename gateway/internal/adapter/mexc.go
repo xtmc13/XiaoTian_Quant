@@ -57,16 +57,16 @@ func NewMEXCAdapter(apiKey, secret string) *MEXCAdapter {
 	}
 }
 
-func (mx *MEXCAdapter) Name() string    { return "mexc" }
-func (mx *MEXCAdapter) Start() error     { return nil }
-func (mx *MEXCAdapter) Stop() error      { mx.streamHub.CloseAll(); return nil }
+func (mx *MEXCAdapter) Name() string { return "mexc" }
+func (mx *MEXCAdapter) Start() error { return nil }
+func (mx *MEXCAdapter) Stop() error  { mx.streamHub.CloseAll(); return nil }
 func (mx *MEXCAdapter) IsConnected() bool {
 	mx.mu.RLock()
 	defer mx.mu.RUnlock()
 	return mx.wsConnected
 }
 
-func (mx *MEXCAdapter) OnTicker(fn func(tick model.Tick))          { mx.onTicker = fn }
+func (mx *MEXCAdapter) OnTicker(fn func(tick model.Tick))           { mx.onTicker = fn }
 func (mx *MEXCAdapter) OnOrderBook(fn func(ob model.OrderBookData)) { mx.onOrderBook = fn }
 func (mx *MEXCAdapter) OnTrade(fn func(trade model.TradeData))      { mx.onTrade = fn }
 func (mx *MEXCAdapter) OnKline(fn func(bar model.Bar))              { mx.onKline = fn }
@@ -177,7 +177,7 @@ func (mx *MEXCAdapter) GetTicker(symbol string) (map[string]any, error) {
 
 // ── REST Trading ──
 
-func (mx *MEXCAdapter) PlaceOrder(symbol, side, orderType string, price, quantity float64) (map[string]any, error) {
+func (mx *MEXCAdapter) PlaceOrder(symbol, side, orderType string, price, quantity float64, clientOrderID ...string) (map[string]any, error) {
 	qtyStr, priceStr, err := mx.normalizeMEXCSpotOrder(symbol, orderType, price, quantity)
 	if err != nil {
 		return nil, err
@@ -187,6 +187,9 @@ func (mx *MEXCAdapter) PlaceOrder(symbol, side, orderType string, price, quantit
 	params.Set("side", strings.ToUpper(side))
 	params.Set("type", strings.ToUpper(orderType))
 	params.Set("quantity", qtyStr)
+	if id := firstClientOrderID(clientOrderID); id != "" {
+		params.Set("newClientOrderId", id)
+	}
 	if strings.ToUpper(orderType) == "LIMIT" {
 		params.Set("price", priceStr)
 	}

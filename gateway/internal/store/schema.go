@@ -32,6 +32,18 @@ type dbTx struct {
 	exec func(query string, args ...any) error
 }
 
+// isDuplicateColumnErr 判断"列已存在"错误：兼容 SQLite（duplicate column）
+// 与 PostgreSQL（already exists / SQLSTATE 42703）文案。
+func isDuplicateColumnErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "duplicate column") ||
+		strings.Contains(msg, "already exists") ||
+		strings.Contains(msg, "42703")
+}
+
 // RunMigrations applies any pending schema migrations.
 func RunMigrations() error {
 	if db == nil {
@@ -39,7 +51,7 @@ func RunMigrations() error {
 	}
 
 	// Ensure version tracking table
-	db.Exec(`CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY)`)
+	db.Exec(`CREATE TABLE IF NOT EXISTS schema_version (version BIGINT PRIMARY KEY)`)
 
 	var currentVersion int
 	row := db.QueryRow("SELECT COALESCE(MAX(version), 0) FROM schema_version")
@@ -70,7 +82,7 @@ func RunMigrations() error {
 			return err
 		}
 
-		if _, err := tx.Exec("INSERT OR REPLACE INTO schema_version (version) VALUES (?)", v); err != nil {
+		if _, err := tx.Exec("INSERT INTO schema_version (version) VALUES ($1) ON CONFLICT (version) DO UPDATE SET version = excluded.version", v); err != nil {
 			tx.Rollback()
 			return err
 		}
@@ -84,8 +96,62 @@ func RunMigrations() error {
 	return RunSQLMigrations()
 }
 
-// migrateV1 creates the initial tables (already in InitDB).
+// migrateV1 creates the core tables (users, orders) on PostgreSQL.
+// 后续 V3/V5/0003/0006/0020/0034 等迁移以 ALTER 补列，故这里按终态列建表。
 func migrateV1(tx *dbTx) error {
+	core := []string{
+		`CREATE TABLE IF NOT EXISTS xt_users (
+			id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+			username TEXT UNIQUE NOT NULL,
+			password_hash TEXT NOT NULL,
+			nickname TEXT DEFAULT '',
+			email TEXT DEFAULT '',
+			role TEXT DEFAULT 'user',
+			token_version BIGINT DEFAULT 1,
+			is_active BIGINT DEFAULT 1,
+			created_at TEXT DEFAULT '',
+			email_verified BIGINT DEFAULT 0,
+			totp_secret TEXT DEFAULT '',
+			totp_enabled BIGINT DEFAULT 0,
+			mfa_backup_codes TEXT DEFAULT '',
+			must_change_password BIGINT DEFAULT 0,
+			last_login_ip TEXT DEFAULT '',
+			plan TEXT DEFAULT '',
+			vip_expires_at BIGINT DEFAULT 0,
+			credits BIGINT DEFAULT 0,
+			referred_by BIGINT
+		)`,
+		`CREATE TABLE IF NOT EXISTS xt_orders (
+			id TEXT PRIMARY KEY,
+			symbol TEXT NOT NULL,
+			side TEXT NOT NULL,
+			order_type TEXT NOT NULL,
+			price DOUBLE PRECISION,
+			stop_price DOUBLE PRECISION DEFAULT 0,
+			quantity DOUBLE PRECISION,
+			filled DOUBLE PRECISION DEFAULT 0,
+			status TEXT DEFAULT 'NEW',
+			exchange TEXT DEFAULT 'BINANCE',
+			user_id BIGINT DEFAULT 0,
+			client_oid TEXT DEFAULT '',
+			avg_fill_price DOUBLE PRECISION DEFAULT 0,
+			created_at DOUBLE PRECISION,
+			updated_at DOUBLE PRECISION,
+			market_type TEXT DEFAULT 'spot',
+			position_side TEXT DEFAULT '',
+			leverage DOUBLE PRECISION DEFAULT 0,
+			margin_mode TEXT DEFAULT 'cross',
+			tp_price DOUBLE PRECISION DEFAULT 0,
+			sl_price DOUBLE PRECISION DEFAULT 0,
+			close_position BIGINT DEFAULT 0,
+			exchange_order_id TEXT DEFAULT ''
+		)`,
+	}
+	for _, ddl := range core {
+		if err := tx.exec(ddl); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -98,12 +164,12 @@ func migrateV2(tx *dbTx) error {
 			order_id TEXT NOT NULL,
 			symbol TEXT NOT NULL,
 			side TEXT NOT NULL,
-			price REAL NOT NULL,
-			quantity REAL NOT NULL,
-			fee REAL DEFAULT 0,
+			price DOUBLE PRECISION NOT NULL,
+			quantity DOUBLE PRECISION NOT NULL,
+			fee DOUBLE PRECISION DEFAULT 0,
 			fee_currency TEXT DEFAULT 'USDT',
 			exchange TEXT DEFAULT '',
-			created_at INTEGER NOT NULL
+			created_at BIGINT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol)`,
 		`CREATE INDEX IF NOT EXISTS idx_trades_order ON trades(order_id)`,
@@ -114,36 +180,36 @@ func migrateV2(tx *dbTx) error {
 			id TEXT PRIMARY KEY,
 			symbol TEXT NOT NULL,
 			side TEXT NOT NULL,
-			quantity REAL NOT NULL DEFAULT 0,
-			avg_entry_price REAL NOT NULL DEFAULT 0,
-			current_price REAL DEFAULT 0,
-			unrealized_pnl REAL DEFAULT 0,
-			realized_pnl REAL DEFAULT 0,
-			cost_basis REAL DEFAULT 0,
+			quantity DOUBLE PRECISION NOT NULL DEFAULT 0,
+			avg_entry_price DOUBLE PRECISION NOT NULL DEFAULT 0,
+			current_price DOUBLE PRECISION DEFAULT 0,
+			unrealized_pnl DOUBLE PRECISION DEFAULT 0,
+			realized_pnl DOUBLE PRECISION DEFAULT 0,
+			cost_basis DOUBLE PRECISION DEFAULT 0,
 			exchange TEXT DEFAULT '',
 			status TEXT DEFAULT 'OPEN',
-			opened_at INTEGER NOT NULL,
-			closed_at INTEGER DEFAULT 0,
-			updated_at INTEGER NOT NULL
+			opened_at BIGINT NOT NULL,
+			closed_at BIGINT DEFAULT 0,
+			updated_at BIGINT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_positions_symbol ON positions(symbol)`,
 		`CREATE INDEX IF NOT EXISTS idx_positions_status ON positions(status)`,
 
 		// ── Signals ──
 		`CREATE TABLE IF NOT EXISTS xt_signals (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
 			symbol TEXT NOT NULL,
 			direction TEXT NOT NULL,
-			strength REAL DEFAULT 0,
+			strength DOUBLE PRECISION DEFAULT 0,
 			strategy TEXT NOT NULL,
 			reason TEXT DEFAULT '',
-			entry_price REAL DEFAULT 0,
-			stop_loss REAL DEFAULT 0,
-			take_profit REAL DEFAULT 0,
-			position_size REAL DEFAULT 0,
+			entry_price DOUBLE PRECISION DEFAULT 0,
+			stop_loss DOUBLE PRECISION DEFAULT 0,
+			take_profit DOUBLE PRECISION DEFAULT 0,
+			position_size DOUBLE PRECISION DEFAULT 0,
 			status TEXT DEFAULT 'PENDING',
 			executed_order_id TEXT DEFAULT '',
-			created_at INTEGER NOT NULL
+			created_at BIGINT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_signals_symbol ON xt_signals(symbol)`,
 		`CREATE INDEX IF NOT EXISTS idx_signals_strategy ON xt_signals(strategy)`,
@@ -151,27 +217,27 @@ func migrateV2(tx *dbTx) error {
 
 		// ── Risk Events ──
 		`CREATE TABLE IF NOT EXISTS risk_events (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
 			level TEXT NOT NULL,
 			check_name TEXT NOT NULL,
 			message TEXT NOT NULL,
 			symbol TEXT DEFAULT '',
 			context_json TEXT DEFAULT '{}',
-			timestamp INTEGER NOT NULL
+			timestamp BIGINT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_riskevents_time ON risk_events(timestamp)`,
 
 		// ── Market Bars ──
 		`CREATE TABLE IF NOT EXISTS market_bars (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
 			symbol TEXT NOT NULL,
 			interval TEXT NOT NULL,
-			open REAL NOT NULL,
-			high REAL NOT NULL,
-			low REAL NOT NULL,
-			close REAL NOT NULL,
-			volume REAL NOT NULL DEFAULT 0,
-			timestamp INTEGER NOT NULL,
+			open DOUBLE PRECISION NOT NULL,
+			high DOUBLE PRECISION NOT NULL,
+			low DOUBLE PRECISION NOT NULL,
+			close DOUBLE PRECISION NOT NULL,
+			volume DOUBLE PRECISION NOT NULL DEFAULT 0,
+			timestamp BIGINT NOT NULL,
 			UNIQUE(symbol, interval, timestamp)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_bars_symbol_interval ON market_bars(symbol, interval, timestamp)`,
@@ -183,23 +249,23 @@ func migrateV2(tx *dbTx) error {
 			symbol TEXT NOT NULL,
 			config_json TEXT NOT NULL DEFAULT '{}',
 			compiled_code TEXT DEFAULT '',
-			is_enabled INTEGER DEFAULT 0,
-			is_running INTEGER DEFAULT 0,
-			created_at INTEGER NOT NULL,
-			updated_at INTEGER NOT NULL
+			is_enabled BIGINT DEFAULT 0,
+			is_running BIGINT DEFAULT 0,
+			created_at BIGINT NOT NULL,
+			updated_at BIGINT NOT NULL
 		)`,
 
 		// ── Portfolio Snapshots ──
 		`CREATE TABLE IF NOT EXISTS xt_portfolio_snapshots (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			total_equity REAL NOT NULL,
-			available_balance REAL NOT NULL,
-			margin_used REAL DEFAULT 0,
-			drawdown REAL DEFAULT 0,
-			net_exposure REAL DEFAULT 0,
+			id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+			total_equity DOUBLE PRECISION NOT NULL,
+			available_balance DOUBLE PRECISION NOT NULL,
+			margin_used DOUBLE PRECISION DEFAULT 0,
+			drawdown DOUBLE PRECISION DEFAULT 0,
+			net_exposure DOUBLE PRECISION DEFAULT 0,
 			positions_json TEXT DEFAULT '[]',
 			balances_json TEXT DEFAULT '[]',
-			timestamp INTEGER NOT NULL
+			timestamp BIGINT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_port_snap_time ON xt_portfolio_snapshots(timestamp)`,
 
@@ -209,42 +275,42 @@ func migrateV2(tx *dbTx) error {
 			name TEXT NOT NULL,
 			strategy TEXT NOT NULL,
 			symbol TEXT NOT NULL,
-			start_time INTEGER NOT NULL,
-			end_time INTEGER NOT NULL,
-			duration_ms INTEGER DEFAULT 0,
+			start_time BIGINT NOT NULL,
+			end_time BIGINT NOT NULL,
+			duration_ms BIGINT DEFAULT 0,
 			status TEXT DEFAULT 'PENDING',
 			report_json TEXT DEFAULT '{}',
-			created_at INTEGER NOT NULL,
-			completed_at INTEGER DEFAULT 0
+			created_at BIGINT NOT NULL,
+			completed_at BIGINT DEFAULT 0
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_backtests_status ON xt_backtests(status)`,
 
 		// ── Agent Tokens ──
 		`CREATE TABLE IF NOT EXISTS agent_tokens (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
 			name TEXT NOT NULL,
 			token_hash TEXT UNIQUE NOT NULL,
 			token_prefix TEXT NOT NULL,
 			scopes TEXT DEFAULT 'read',
-			rate_limit_rps INTEGER DEFAULT 10,
-			is_active INTEGER DEFAULT 1,
-			expires_at INTEGER DEFAULT 0,
-			last_used_at INTEGER DEFAULT 0,
-			created_at INTEGER NOT NULL
+			rate_limit_rps BIGINT DEFAULT 10,
+			is_active BIGINT DEFAULT 1,
+			expires_at BIGINT DEFAULT 0,
+			last_used_at BIGINT DEFAULT 0,
+			created_at BIGINT NOT NULL
 		)`,
 
 		// ── Agent Audit Log ──
 		`CREATE TABLE IF NOT EXISTS agent_audit_log (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			token_id INTEGER,
+			id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+			token_id BIGINT,
 			name TEXT DEFAULT '',
 			endpoint TEXT NOT NULL,
 			method TEXT DEFAULT 'POST',
 			params_summary TEXT DEFAULT '',
-			status_code INTEGER DEFAULT 200,
+			status_code BIGINT DEFAULT 200,
 			ip TEXT DEFAULT '',
 			user_agent TEXT DEFAULT '',
-			timestamp INTEGER NOT NULL
+			timestamp BIGINT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_token ON agent_audit_log(token_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_time ON agent_audit_log(timestamp)`,
@@ -262,20 +328,20 @@ func migrateV2(tx *dbTx) error {
 // migrateV3 adds email verification support.
 func migrateV3(tx *dbTx) error {
 	// Add email_verified column to xt_users (ignore error if column already exists)
-	tx.exec("ALTER TABLE xt_users ADD COLUMN email_verified INTEGER DEFAULT 0")
+	tx.exec("ALTER TABLE xt_users ADD COLUMN email_verified BIGINT DEFAULT 0")
 
 	// Verification codes table
 	tables := []string{
 		`CREATE TABLE IF NOT EXISTS xt_verification_codes (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
 			email TEXT NOT NULL,
 			code TEXT NOT NULL,
 			code_type TEXT NOT NULL,
-			expires_at INTEGER NOT NULL,
-			used_at INTEGER DEFAULT 0,
-			attempts INTEGER DEFAULT 0,
+			expires_at BIGINT NOT NULL,
+			used_at BIGINT DEFAULT 0,
+			attempts BIGINT DEFAULT 0,
 			ip_address TEXT DEFAULT '',
-			created_at INTEGER NOT NULL
+			created_at BIGINT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_vcode_email_type ON xt_verification_codes(email, code_type)`,
 	}
@@ -293,16 +359,16 @@ func migrateV3(tx *dbTx) error {
 func migrateV4(tx *dbTx) error {
 	tables := []string{
 		`CREATE TABLE IF NOT EXISTS indicator_codes (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			user_id INTEGER NOT NULL,
+			id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+			user_id BIGINT NOT NULL,
 			name TEXT NOT NULL,
 			description TEXT DEFAULT '',
 			code TEXT NOT NULL,
 			params_json TEXT DEFAULT '{}',
 			strategy_json TEXT DEFAULT '{}',
-			is_encrypted INTEGER DEFAULT 0,
-			created_at INTEGER NOT NULL,
-			updated_at INTEGER NOT NULL
+			is_encrypted BIGINT DEFAULT 0,
+			created_at BIGINT NOT NULL,
+			updated_at BIGINT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_indicator_user ON indicator_codes(user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_indicator_updated ON indicator_codes(updated_at)`,
@@ -321,19 +387,19 @@ func migrateV6(tx *dbTx) error {
 		// Social trading signals
 		`CREATE TABLE IF NOT EXISTS social_signals (
 			id TEXT PRIMARY KEY,
-			provider_id INTEGER NOT NULL,
+			provider_id BIGINT NOT NULL,
 			provider_name TEXT DEFAULT '',
 			symbol TEXT NOT NULL,
 			direction TEXT NOT NULL,
-			price REAL DEFAULT 0,
-			stop_loss REAL DEFAULT 0,
-			take_profit REAL DEFAULT 0,
-			size REAL DEFAULT 0,
-			confidence REAL DEFAULT 0,
+			price DOUBLE PRECISION DEFAULT 0,
+			stop_loss DOUBLE PRECISION DEFAULT 0,
+			take_profit DOUBLE PRECISION DEFAULT 0,
+			size DOUBLE PRECISION DEFAULT 0,
+			confidence DOUBLE PRECISION DEFAULT 0,
 			strategy TEXT DEFAULT '',
 			reason TEXT DEFAULT '',
-			timestamp INTEGER NOT NULL,
-			expires_at INTEGER DEFAULT 0
+			timestamp BIGINT NOT NULL,
+			expires_at BIGINT DEFAULT 0
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_social_signals_provider ON social_signals(provider_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_social_signals_symbol ON social_signals(symbol)`,
@@ -341,15 +407,15 @@ func migrateV6(tx *dbTx) error {
 
 		// Copy trades execution log
 		`CREATE TABLE IF NOT EXISTS copy_trades (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			follower_id INTEGER NOT NULL,
+			id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+			follower_id BIGINT NOT NULL,
 			signal_id TEXT NOT NULL,
-			provider_id INTEGER NOT NULL,
+			provider_id BIGINT NOT NULL,
 			symbol TEXT NOT NULL,
 			direction TEXT NOT NULL,
-			executed INTEGER DEFAULT 0,
+			executed BIGINT DEFAULT 0,
 			reason TEXT DEFAULT '',
-			created_at INTEGER NOT NULL
+			created_at BIGINT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_copy_trades_follower ON copy_trades(follower_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_copy_trades_provider ON copy_trades(provider_id)`,
@@ -365,17 +431,17 @@ func migrateV6(tx *dbTx) error {
 func migrateV5(tx *dbTx) error {
 	tables := []string{
 		// Extend indicator_codes with community fields
-		`ALTER TABLE indicator_codes ADD COLUMN publish_to_community INTEGER DEFAULT 0`,
+		`ALTER TABLE indicator_codes ADD COLUMN publish_to_community BIGINT DEFAULT 0`,
 		`ALTER TABLE indicator_codes ADD COLUMN pricing_type TEXT DEFAULT 'free'`,
-		`ALTER TABLE indicator_codes ADD COLUMN price REAL DEFAULT 0`,
+		`ALTER TABLE indicator_codes ADD COLUMN price DOUBLE PRECISION DEFAULT 0`,
 		`ALTER TABLE indicator_codes ADD COLUMN review_status TEXT DEFAULT 'pending'`,
 		`ALTER TABLE indicator_codes ADD COLUMN review_note TEXT DEFAULT ''`,
-		`ALTER TABLE indicator_codes ADD COLUMN reviewed_by INTEGER DEFAULT 0`,
-		`ALTER TABLE indicator_codes ADD COLUMN purchase_count INTEGER DEFAULT 0`,
-		`ALTER TABLE indicator_codes ADD COLUMN avg_rating REAL DEFAULT 0`,
-		`ALTER TABLE indicator_codes ADD COLUMN rating_count INTEGER DEFAULT 0`,
-		`ALTER TABLE indicator_codes ADD COLUMN view_count INTEGER DEFAULT 0`,
-		`ALTER TABLE indicator_codes ADD COLUMN source_indicator_id INTEGER DEFAULT 0`,
+		`ALTER TABLE indicator_codes ADD COLUMN reviewed_by BIGINT DEFAULT 0`,
+		`ALTER TABLE indicator_codes ADD COLUMN purchase_count BIGINT DEFAULT 0`,
+		`ALTER TABLE indicator_codes ADD COLUMN avg_rating DOUBLE PRECISION DEFAULT 0`,
+		`ALTER TABLE indicator_codes ADD COLUMN rating_count BIGINT DEFAULT 0`,
+		`ALTER TABLE indicator_codes ADD COLUMN view_count BIGINT DEFAULT 0`,
+		`ALTER TABLE indicator_codes ADD COLUMN source_indicator_id BIGINT DEFAULT 0`,
 		`ALTER TABLE indicator_codes ADD COLUMN source_language TEXT DEFAULT ''`,
 		`ALTER TABLE indicator_codes ADD COLUMN name_i18n TEXT DEFAULT ''`,
 		`ALTER TABLE indicator_codes ADD COLUMN description_i18n TEXT DEFAULT ''`,
@@ -387,12 +453,12 @@ func migrateV5(tx *dbTx) error {
 
 		// Purchases table
 		`CREATE TABLE IF NOT EXISTS indicator_purchases (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			indicator_id INTEGER NOT NULL,
-			buyer_id INTEGER NOT NULL,
-			seller_id INTEGER NOT NULL,
-			price REAL DEFAULT 0,
-			created_at INTEGER NOT NULL
+			id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+			indicator_id BIGINT NOT NULL,
+			buyer_id BIGINT NOT NULL,
+			seller_id BIGINT NOT NULL,
+			price DOUBLE PRECISION DEFAULT 0,
+			created_at BIGINT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_purchases_buyer ON indicator_purchases(buyer_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_purchases_indicator ON indicator_purchases(indicator_id)`,
@@ -400,15 +466,15 @@ func migrateV5(tx *dbTx) error {
 
 		// Comments / ratings table
 		`CREATE TABLE IF NOT EXISTS indicator_comments (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			indicator_id INTEGER NOT NULL,
-			user_id INTEGER NOT NULL,
-			rating INTEGER DEFAULT 5,
+			id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+			indicator_id BIGINT NOT NULL,
+			user_id BIGINT NOT NULL,
+			rating BIGINT DEFAULT 5,
 			content TEXT DEFAULT '',
-			parent_id INTEGER DEFAULT 0,
-			is_deleted INTEGER DEFAULT 0,
-			created_at INTEGER NOT NULL,
-			updated_at INTEGER NOT NULL
+			parent_id BIGINT DEFAULT 0,
+			is_deleted BIGINT DEFAULT 0,
+			created_at BIGINT NOT NULL,
+			updated_at BIGINT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_comments_indicator ON indicator_comments(indicator_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_comments_user ON indicator_comments(user_id)`,
@@ -425,15 +491,15 @@ func migrateV5(tx *dbTx) error {
 func migrateV8(tx *dbTx) error {
 	tables := []string{
 		`CREATE TABLE IF NOT EXISTS strategy_overfit (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			strategy_id INTEGER NOT NULL UNIQUE,
-			score REAL DEFAULT 0,
+			id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+			strategy_id BIGINT NOT NULL UNIQUE,
+			score DOUBLE PRECISION DEFAULT 0,
 			risk_level TEXT DEFAULT 'low',
-			in_sample_return REAL DEFAULT 0,
-			out_sample_return REAL DEFAULT 0,
-			return_ratio REAL DEFAULT 0,
-			stability_score REAL DEFAULT 0,
-			updated_at INTEGER NOT NULL
+			in_sample_return DOUBLE PRECISION DEFAULT 0,
+			out_sample_return DOUBLE PRECISION DEFAULT 0,
+			return_ratio DOUBLE PRECISION DEFAULT 0,
+			stability_score DOUBLE PRECISION DEFAULT 0,
+			updated_at BIGINT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_overfit_strategy ON strategy_overfit(strategy_id)`,
 	}
@@ -489,14 +555,14 @@ func migrateV9(tx *dbTx) error {
 			market_type TEXT DEFAULT 'spot',
 			risk_level TEXT DEFAULT 'medium',
 			fee_model TEXT DEFAULT 'free',
-			fee_percent REAL DEFAULT 0,
-			monthly_fee REAL DEFAULT 0,
+			fee_percent DOUBLE PRECISION DEFAULT 0,
+			monthly_fee DOUBLE PRECISION DEFAULT 0,
 			performance_json TEXT DEFAULT '{}',
 			config_json TEXT DEFAULT '{}',
-			is_builtin INTEGER DEFAULT 1,
-			is_active INTEGER DEFAULT 1,
-			created_at INTEGER NOT NULL,
-			updated_at INTEGER NOT NULL
+			is_builtin BIGINT DEFAULT 1,
+			is_active BIGINT DEFAULT 1,
+			created_at BIGINT NOT NULL,
+			updated_at BIGINT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_aibot_catalog_type ON ai_bot_catalog(strategy_type)`,
 		`CREATE INDEX IF NOT EXISTS idx_aibot_catalog_risk ON ai_bot_catalog(risk_level)`,
@@ -505,7 +571,7 @@ func migrateV9(tx *dbTx) error {
 		// ── AI Bot Instances (user-deployed bots) ──
 		`CREATE TABLE IF NOT EXISTS ai_bot_instances (
 			id TEXT PRIMARY KEY,
-			user_id INTEGER NOT NULL,
+			user_id BIGINT NOT NULL,
 			catalog_id TEXT DEFAULT '',
 			name TEXT NOT NULL,
 			strategy_type TEXT NOT NULL,
@@ -515,17 +581,17 @@ func migrateV9(tx *dbTx) error {
 			execution_mode TEXT DEFAULT 'paper',
 			config_json TEXT DEFAULT '{}',
 			exchange_id TEXT DEFAULT '',
-			unrealized_pnl REAL DEFAULT 0,
-			realized_pnl REAL DEFAULT 0,
-			total_return_pct REAL DEFAULT 0,
-			max_drawdown_pct REAL DEFAULT 0,
-			sharpe_ratio REAL DEFAULT 0,
-			win_rate REAL DEFAULT 0,
-			total_trades INTEGER DEFAULT 0,
-			created_at INTEGER NOT NULL,
-			updated_at INTEGER NOT NULL,
-			started_at INTEGER DEFAULT 0,
-			stopped_at INTEGER DEFAULT 0
+			unrealized_pnl DOUBLE PRECISION DEFAULT 0,
+			realized_pnl DOUBLE PRECISION DEFAULT 0,
+			total_return_pct DOUBLE PRECISION DEFAULT 0,
+			max_drawdown_pct DOUBLE PRECISION DEFAULT 0,
+			sharpe_ratio DOUBLE PRECISION DEFAULT 0,
+			win_rate DOUBLE PRECISION DEFAULT 0,
+			total_trades BIGINT DEFAULT 0,
+			created_at BIGINT NOT NULL,
+			updated_at BIGINT NOT NULL,
+			started_at BIGINT DEFAULT 0,
+			stopped_at BIGINT DEFAULT 0
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_aibot_inst_user ON ai_bot_instances(user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_aibot_inst_status ON ai_bot_instances(status)`,
@@ -533,28 +599,28 @@ func migrateV9(tx *dbTx) error {
 
 		// ── AI Bot Subscriptions (profit-sharing / monthly fee) ──
 		`CREATE TABLE IF NOT EXISTS ai_bot_subscriptions (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			user_id INTEGER NOT NULL,
+			id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+			user_id BIGINT NOT NULL,
 			bot_instance_id TEXT NOT NULL,
 			fee_type TEXT DEFAULT 'profit_share',
-			fee_percent REAL DEFAULT 0,
-			monthly_fee REAL DEFAULT 0,
-			next_billing_at INTEGER DEFAULT 0,
+			fee_percent DOUBLE PRECISION DEFAULT 0,
+			monthly_fee DOUBLE PRECISION DEFAULT 0,
+			next_billing_at BIGINT DEFAULT 0,
 			status TEXT DEFAULT 'active',
-			created_at INTEGER NOT NULL
+			created_at BIGINT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_aibot_sub_user ON ai_bot_subscriptions(user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_aibot_sub_bot ON ai_bot_subscriptions(bot_instance_id)`,
 
 		// ── AI Bot Performance Snapshots (for analytics charts) ──
 		`CREATE TABLE IF NOT EXISTS ai_bot_snapshots (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
 			bot_instance_id TEXT NOT NULL,
-			total_equity REAL DEFAULT 0,
-			unrealized_pnl REAL DEFAULT 0,
-			realized_pnl REAL DEFAULT 0,
-			total_return_pct REAL DEFAULT 0,
-			timestamp INTEGER NOT NULL
+			total_equity DOUBLE PRECISION DEFAULT 0,
+			unrealized_pnl DOUBLE PRECISION DEFAULT 0,
+			realized_pnl DOUBLE PRECISION DEFAULT 0,
+			total_return_pct DOUBLE PRECISION DEFAULT 0,
+			timestamp BIGINT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_aibot_snap_bot ON ai_bot_snapshots(bot_instance_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_aibot_snap_time ON ai_bot_snapshots(timestamp)`,
@@ -571,25 +637,25 @@ func migrateV9(tx *dbTx) error {
 func migrateV10(tx *dbTx) error {
 	tables := []string{
 		// Track initial balance per bot instance for realistic paper trading equity.
-		`ALTER TABLE ai_bot_instances ADD COLUMN initial_balance REAL DEFAULT 10000`,
+		`ALTER TABLE ai_bot_instances ADD COLUMN initial_balance DOUBLE PRECISION DEFAULT 10000`,
 		`ALTER TABLE ai_bot_instances ADD COLUMN error_message TEXT DEFAULT ''`,
 
 		// AI Bot trade history (entry/exit, TP/SL, PnL).
 		`CREATE TABLE IF NOT EXISTS ai_bot_trades (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
 			bot_instance_id TEXT NOT NULL,
 			symbol TEXT NOT NULL,
 			side TEXT NOT NULL,
-			entry_price REAL DEFAULT 0,
-			exit_price REAL DEFAULT 0,
-			quantity REAL DEFAULT 0,
-			pnl REAL DEFAULT 0,
-			pnl_pct REAL DEFAULT 0,
-			tp_price REAL DEFAULT 0,
-			sl_price REAL DEFAULT 0,
+			entry_price DOUBLE PRECISION DEFAULT 0,
+			exit_price DOUBLE PRECISION DEFAULT 0,
+			quantity DOUBLE PRECISION DEFAULT 0,
+			pnl DOUBLE PRECISION DEFAULT 0,
+			pnl_pct DOUBLE PRECISION DEFAULT 0,
+			tp_price DOUBLE PRECISION DEFAULT 0,
+			sl_price DOUBLE PRECISION DEFAULT 0,
 			close_reason TEXT DEFAULT '',
-			opened_at INTEGER NOT NULL,
-			closed_at INTEGER DEFAULT 0
+			opened_at BIGINT NOT NULL,
+			closed_at BIGINT DEFAULT 0
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_aibot_trades_bot ON ai_bot_trades(bot_instance_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_aibot_trades_time ON ai_bot_trades(closed_at)`,
@@ -609,17 +675,17 @@ func migrateV11(tx *dbTx) error {
 			symbol TEXT NOT NULL,
 			buy_exchange TEXT NOT NULL,
 			sell_exchange TEXT NOT NULL,
-			buy_price REAL NOT NULL,
-			sell_price REAL NOT NULL,
-			quantity REAL NOT NULL,
+			buy_price DOUBLE PRECISION NOT NULL,
+			sell_price DOUBLE PRECISION NOT NULL,
+			quantity DOUBLE PRECISION NOT NULL,
 			buy_order_id TEXT DEFAULT '',
 			sell_order_id TEXT DEFAULT '',
-			gross_profit REAL DEFAULT 0,
-			net_profit REAL DEFAULT 0,
-			fees REAL DEFAULT 0,
+			gross_profit DOUBLE PRECISION DEFAULT 0,
+			net_profit DOUBLE PRECISION DEFAULT 0,
+			fees DOUBLE PRECISION DEFAULT 0,
 			status TEXT DEFAULT 'pending',
-			opened_at INTEGER NOT NULL,
-			closed_at INTEGER DEFAULT 0
+			opened_at BIGINT NOT NULL,
+			closed_at BIGINT DEFAULT 0
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_arb_trades_symbol ON arbitrage_trades(symbol)`,
 		`CREATE INDEX IF NOT EXISTS idx_arb_trades_status ON arbitrage_trades(status)`,
@@ -637,13 +703,13 @@ func migrateV11(tx *dbTx) error {
 func migrateV12(tx *dbTx) error {
 	tables := []string{
 		`CREATE TABLE IF NOT EXISTS notifications (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
 			title TEXT NOT NULL,
 			content TEXT NOT NULL,
 			level TEXT NOT NULL,
 			category TEXT NOT NULL,
-			read INTEGER DEFAULT 0,
-			created_at INTEGER NOT NULL
+			read BIGINT DEFAULT 0,
+			created_at BIGINT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(read)`,
@@ -653,8 +719,8 @@ func migrateV12(tx *dbTx) error {
 			events TEXT NOT NULL,
 			levels TEXT NOT NULL,
 			channels TEXT NOT NULL,
-			enabled INTEGER DEFAULT 1,
-			min_return_pct REAL DEFAULT 0
+			enabled BIGINT DEFAULT 1,
+			min_return_pct DOUBLE PRECISION DEFAULT 0
 		)`,
 	}
 	for _, ddl := range tables {
@@ -674,14 +740,14 @@ func migrateV13(tx *dbTx) error {
 			cycle_json TEXT NOT NULL DEFAULT '[]',
 			legs_json TEXT NOT NULL DEFAULT '[]',
 			start_asset TEXT NOT NULL,
-			start_qty REAL NOT NULL,
-			end_qty REAL DEFAULT 0,
-			gross_profit REAL DEFAULT 0,
-			net_profit REAL DEFAULT 0,
-			total_fees REAL DEFAULT 0,
+			start_qty DOUBLE PRECISION NOT NULL,
+			end_qty DOUBLE PRECISION DEFAULT 0,
+			gross_profit DOUBLE PRECISION DEFAULT 0,
+			net_profit DOUBLE PRECISION DEFAULT 0,
+			total_fees DOUBLE PRECISION DEFAULT 0,
 			status TEXT DEFAULT 'pending',
-			opened_at INTEGER NOT NULL,
-			closed_at INTEGER DEFAULT 0
+			opened_at BIGINT NOT NULL,
+			closed_at BIGINT DEFAULT 0
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_triangular_trades_exchange ON triangular_trades(exchange)`,
 		`CREATE INDEX IF NOT EXISTS idx_triangular_trades_status ON triangular_trades(status)`,
@@ -698,17 +764,17 @@ func migrateV13(tx *dbTx) error {
 // migrateV14 adds realized fill columns to arbitrage_trades.
 func migrateV14(tx *dbTx) error {
 	columns := []string{
-		`ALTER TABLE arbitrage_trades ADD COLUMN buy_filled_qty REAL DEFAULT 0`,
-		`ALTER TABLE arbitrage_trades ADD COLUMN buy_avg_price REAL DEFAULT 0`,
-		`ALTER TABLE arbitrage_trades ADD COLUMN buy_fee REAL DEFAULT 0`,
-		`ALTER TABLE arbitrage_trades ADD COLUMN sell_filled_qty REAL DEFAULT 0`,
-		`ALTER TABLE arbitrage_trades ADD COLUMN sell_avg_price REAL DEFAULT 0`,
-		`ALTER TABLE arbitrage_trades ADD COLUMN sell_fee REAL DEFAULT 0`,
+		`ALTER TABLE arbitrage_trades ADD COLUMN buy_filled_qty DOUBLE PRECISION DEFAULT 0`,
+		`ALTER TABLE arbitrage_trades ADD COLUMN buy_avg_price DOUBLE PRECISION DEFAULT 0`,
+		`ALTER TABLE arbitrage_trades ADD COLUMN buy_fee DOUBLE PRECISION DEFAULT 0`,
+		`ALTER TABLE arbitrage_trades ADD COLUMN sell_filled_qty DOUBLE PRECISION DEFAULT 0`,
+		`ALTER TABLE arbitrage_trades ADD COLUMN sell_avg_price DOUBLE PRECISION DEFAULT 0`,
+		`ALTER TABLE arbitrage_trades ADD COLUMN sell_fee DOUBLE PRECISION DEFAULT 0`,
 	}
 	for _, ddl := range columns {
 		if err := tx.exec(ddl); err != nil {
-			// SQLite does not support IF NOT EXISTS for ADD COLUMN; ignore duplicate column errors.
-			if !strings.Contains(err.Error(), "duplicate column") {
+			// ADD COLUMN 不支持 IF NOT EXISTS；忽略列已存在错误（SQLite/PG 兼容）。
+			if !isDuplicateColumnErr(err) {
 				return err
 			}
 		}
@@ -720,7 +786,7 @@ func migrateV14(tx *dbTx) error {
 func migrateV15(tx *dbTx) error {
 	addColumn := func(ddl string) error {
 		if err := tx.exec(ddl); err != nil {
-			if strings.Contains(err.Error(), "duplicate column") {
+			if isDuplicateColumnErr(err) {
 				return nil
 			}
 			return err
@@ -729,20 +795,20 @@ func migrateV15(tx *dbTx) error {
 	}
 
 	columns := []string{
-		`ALTER TABLE strategy_configs ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE strategy_configs ADD COLUMN user_id BIGINT NOT NULL DEFAULT 0`,
 		`ALTER TABLE strategy_configs ADD COLUMN category TEXT NOT NULL DEFAULT 'spot'`,
 		`ALTER TABLE strategy_configs ADD COLUMN strategy_type TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE strategy_configs ADD COLUMN coin TEXT DEFAULT ''`,
 		`ALTER TABLE strategy_configs ADD COLUMN direction TEXT DEFAULT 'long'`,
-		`ALTER TABLE strategy_configs ADD COLUMN leverage REAL DEFAULT 1`,
+		`ALTER TABLE strategy_configs ADD COLUMN leverage DOUBLE PRECISION DEFAULT 1`,
 		`ALTER TABLE strategy_configs ADD COLUMN market_type TEXT DEFAULT 'spot'`,
 		`ALTER TABLE strategy_configs ADD COLUMN margin_mode TEXT DEFAULT 'cross'`,
 		`ALTER TABLE strategy_configs ADD COLUMN timeframe TEXT DEFAULT '15m'`,
 		`ALTER TABLE strategy_configs ADD COLUMN execution_mode TEXT DEFAULT 'signal'`,
-		`ALTER TABLE strategy_configs ADD COLUMN initial_capital REAL DEFAULT 0`,
-		`ALTER TABLE strategy_configs ADD COLUMN current_equity REAL DEFAULT 0`,
-		`ALTER TABLE strategy_configs ADD COLUMN total_pnl REAL DEFAULT 0`,
-		`ALTER TABLE strategy_configs ADD COLUMN total_pnl_percent REAL DEFAULT 0`,
+		`ALTER TABLE strategy_configs ADD COLUMN initial_capital DOUBLE PRECISION DEFAULT 0`,
+		`ALTER TABLE strategy_configs ADD COLUMN current_equity DOUBLE PRECISION DEFAULT 0`,
+		`ALTER TABLE strategy_configs ADD COLUMN total_pnl DOUBLE PRECISION DEFAULT 0`,
+		`ALTER TABLE strategy_configs ADD COLUMN total_pnl_percent DOUBLE PRECISION DEFAULT 0`,
 		`ALTER TABLE strategy_configs ADD COLUMN status TEXT DEFAULT 'stopped'`,
 		`ALTER TABLE strategy_configs ADD COLUMN notification_config TEXT DEFAULT '{}'`,
 	}
@@ -767,14 +833,14 @@ func migrateV15(tx *dbTx) error {
 	tables := []string{
 		`CREATE TABLE IF NOT EXISTS strategy_templates (
 			id TEXT PRIMARY KEY,
-			user_id INTEGER NOT NULL,
+			user_id BIGINT NOT NULL,
 			name TEXT NOT NULL,
 			category TEXT NOT NULL,
 			strategy_type TEXT DEFAULT '',
 			description TEXT DEFAULT '',
 			default_config_json TEXT NOT NULL,
-			created_at INTEGER NOT NULL,
-			updated_at INTEGER NOT NULL
+			created_at BIGINT NOT NULL,
+			updated_at BIGINT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_strattpl_user_category ON strategy_templates(user_id, category)`,
 	}

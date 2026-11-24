@@ -190,7 +190,6 @@ export function BotCreateModal({
           follow_trend_max: Number(form.follow_trend_max) || 5,
           burn_cut: (form.burn_cut as { enabled: boolean; dual_burn_start: number; global_burn_start: number } | boolean | undefined) || { enabled: false, dual_burn_start: 3, global_burn_start: 5 },
           custom_reduce: !!form.custom_reduce,
-          online_order_limit: Number(form.online_order_limit) || 10,
           profit_protection: !!form.profit_protection,
           close_add_position: !!form.close_add_position,
         },

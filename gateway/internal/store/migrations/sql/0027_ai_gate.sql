@@ -17,31 +17,31 @@
 
 CREATE TABLE IF NOT EXISTS xt_ai_gate_decisions (
     id TEXT PRIMARY KEY,
-    user_id INTEGER NOT NULL DEFAULT 0,
+    user_id BIGINT NOT NULL DEFAULT 0,
     source TEXT NOT NULL DEFAULT '',
     symbol TEXT NOT NULL DEFAULT '',
     side TEXT NOT NULL DEFAULT '',
     order_type TEXT NOT NULL DEFAULT '',
     market_type TEXT NOT NULL DEFAULT 'spot',
     position_side TEXT NOT NULL DEFAULT '',
-    quantity REAL NOT NULL DEFAULT 0,
-    ref_price REAL NOT NULL DEFAULT 0,
-    notional REAL NOT NULL DEFAULT 0,
+    quantity DOUBLE PRECISION NOT NULL DEFAULT 0,
+    ref_price DOUBLE PRECISION NOT NULL DEFAULT 0,
+    notional DOUBLE PRECISION NOT NULL DEFAULT 0,
     decision TEXT NOT NULL DEFAULT '',
-    allowed INTEGER NOT NULL DEFAULT 1,
-    confidence REAL NOT NULL DEFAULT 0,
+    allowed BIGINT NOT NULL DEFAULT 1,
+    confidence DOUBLE PRECISION NOT NULL DEFAULT 0,
     reasons_json TEXT NOT NULL DEFAULT '[]',
     provider TEXT NOT NULL DEFAULT '',
     model TEXT NOT NULL DEFAULT '',
-    latency_ms INTEGER NOT NULL DEFAULT 0,
-    fail_open INTEGER NOT NULL DEFAULT 0,
+    latency_ms BIGINT NOT NULL DEFAULT 0,
+    fail_open BIGINT NOT NULL DEFAULT 0,
     degrade_reason TEXT NOT NULL DEFAULT '',
     request_hash TEXT NOT NULL DEFAULT '',
     context_json TEXT NOT NULL DEFAULT '',
     order_id TEXT NOT NULL DEFAULT '',
-    executed INTEGER NOT NULL DEFAULT 0,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    executed BIGINT NOT NULL DEFAULT 0,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_ai_gate_decisions_user ON xt_ai_gate_decisions(user_id, created_at);

@@ -17,59 +17,59 @@
 -- 注意: 语句内不要出现分号(字符串/注释里也不行)——迁移按分号切分执行。
 
 CREATE TABLE IF NOT EXISTS xt_social_providers (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	user_id INTEGER NOT NULL,
+	id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+	user_id BIGINT NOT NULL,
 	name TEXT NOT NULL DEFAULT '',
 	description TEXT NOT NULL DEFAULT '',
-	monthly_fee REAL NOT NULL DEFAULT 0,
-	profit_share_pct REAL,
+	monthly_fee DOUBLE PRECISION NOT NULL DEFAULT 0,
+	profit_share_pct DOUBLE PRECISION,
 	fee_mode TEXT NOT NULL DEFAULT 'profit_share',
 	apply_status TEXT NOT NULL DEFAULT 'pending',
 	apply_note TEXT NOT NULL DEFAULT '',
-	approved_at INTEGER,
-	is_public INTEGER NOT NULL DEFAULT 1,
-	created_at INTEGER NOT NULL,
-	updated_at INTEGER NOT NULL
+	approved_at BIGINT,
+	is_public BIGINT NOT NULL DEFAULT 1,
+	created_at BIGINT NOT NULL,
+	updated_at BIGINT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_social_providers_user ON xt_social_providers(user_id, apply_status);
 CREATE INDEX IF NOT EXISTS idx_social_providers_status ON xt_social_providers(apply_status);
 
 CREATE TABLE IF NOT EXISTS xt_social_subscriptions (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	provider_id INTEGER NOT NULL,
-	follower_user_id INTEGER NOT NULL,
+	id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+	provider_id BIGINT NOT NULL,
+	follower_user_id BIGINT NOT NULL,
 	fee_mode TEXT NOT NULL DEFAULT 'profit_share',
 	status TEXT NOT NULL DEFAULT 'active',
-	created_at INTEGER NOT NULL,
-	cancelled_at INTEGER
+	created_at BIGINT NOT NULL,
+	cancelled_at BIGINT
 );
 
 CREATE INDEX IF NOT EXISTS idx_social_subs_provider ON xt_social_subscriptions(provider_id, status);
 CREATE INDEX IF NOT EXISTS idx_social_subs_follower ON xt_social_subscriptions(follower_user_id, status);
 
 CREATE TABLE IF NOT EXISTS xt_social_copy_pnl (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	provider_id INTEGER NOT NULL,
-	follower_user_id INTEGER NOT NULL,
-	pnl REAL NOT NULL DEFAULT 0,
+	id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+	provider_id BIGINT NOT NULL,
+	follower_user_id BIGINT NOT NULL,
+	pnl DOUBLE PRECISION NOT NULL DEFAULT 0,
 	note TEXT NOT NULL DEFAULT '',
-	created_at INTEGER NOT NULL
+	created_at BIGINT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_social_copy_pnl_attr ON xt_social_copy_pnl(provider_id, follower_user_id, created_at);
 
 CREATE TABLE IF NOT EXISTS xt_social_profit_snapshots (
 	id TEXT PRIMARY KEY,
-	provider_id INTEGER NOT NULL,
-	follower_user_id INTEGER NOT NULL,
+	provider_id BIGINT NOT NULL,
+	follower_user_id BIGINT NOT NULL,
 	window_date TEXT NOT NULL,
-	copied_pnl REAL NOT NULL DEFAULT 0,
-	share_pct REAL NOT NULL DEFAULT 0,
-	share_amount REAL NOT NULL DEFAULT 0,
+	copied_pnl DOUBLE PRECISION NOT NULL DEFAULT 0,
+	share_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
+	share_amount DOUBLE PRECISION NOT NULL DEFAULT 0,
 	status TEXT NOT NULL DEFAULT 'pending',
-	locked_until INTEGER NOT NULL DEFAULT 0,
-	created_at INTEGER NOT NULL
+	locked_until BIGINT NOT NULL DEFAULT 0,
+	created_at BIGINT NOT NULL
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_social_profit_snap_uq ON xt_social_profit_snapshots(provider_id, follower_user_id, window_date);
@@ -78,15 +78,15 @@ CREATE INDEX IF NOT EXISTS idx_social_profit_snap_provider ON xt_social_profit_s
 
 CREATE TABLE IF NOT EXISTS xt_social_withdrawals (
 	id TEXT PRIMARY KEY,
-	provider_user_id INTEGER NOT NULL,
-	amount REAL NOT NULL DEFAULT 0,
+	provider_user_id BIGINT NOT NULL,
+	amount DOUBLE PRECISION NOT NULL DEFAULT 0,
 	chain TEXT NOT NULL DEFAULT '',
 	address TEXT NOT NULL DEFAULT '',
 	tx_hash TEXT NOT NULL DEFAULT '',
 	status TEXT NOT NULL DEFAULT 'pending',
 	admin_note TEXT NOT NULL DEFAULT '',
-	created_at INTEGER NOT NULL,
-	processed_at INTEGER
+	created_at BIGINT NOT NULL,
+	processed_at BIGINT
 );
 
 CREATE INDEX IF NOT EXISTS idx_social_withdrawals_user ON xt_social_withdrawals(provider_user_id, status);

@@ -22,8 +22,8 @@ import (
 )
 
 const (
-	KrakenRestURL  = "https://api.kraken.com"
-	KrakenWsURL    = "wss://ws.kraken.com/v2"
+	KrakenRestURL = "https://api.kraken.com"
+	KrakenWsURL   = "wss://ws.kraken.com/v2"
 )
 
 // ── Pair Name Mapping ──────────────────────────────────────────
@@ -96,18 +96,18 @@ func fromKrakenPair(kp string) string {
 // ── KrakenAdapter ──────────────────────────────────────────────
 
 type KrakenAdapter struct {
-	apiKey    string
-	secretKey string
+	apiKey     string
+	secretKey  string
 	httpClient *http.Client
-	nonce     int64
-	mu        sync.RWMutex
+	nonce      int64
+	mu         sync.RWMutex
 
-	streamHub     *exchange.StreamHub
-	wsConnected   bool
-	onTicker      func(tick model.Tick)
-	onOrderBook   func(ob model.OrderBookData)
-	onTrade       func(trade model.TradeData)
-	onKline       func(bar model.Bar)
+	streamHub   *exchange.StreamHub
+	wsConnected bool
+	onTicker    func(tick model.Tick)
+	onOrderBook func(ob model.OrderBookData)
+	onTrade     func(trade model.TradeData)
+	onKline     func(bar model.Bar)
 
 	orders    map[string]map[string]any
 	positions map[string]map[string]any
@@ -125,11 +125,11 @@ func NewKrakenAdapter(apiKey, secret string) *KrakenAdapter {
 	}
 }
 
-func (k *KrakenAdapter) OnTicker(fn func(tick model.Tick))          { k.onTicker = fn }
+func (k *KrakenAdapter) OnTicker(fn func(tick model.Tick))           { k.onTicker = fn }
 func (k *KrakenAdapter) OnOrderBook(fn func(ob model.OrderBookData)) { k.onOrderBook = fn }
 
-func (k *KrakenAdapter) Name() string  { return "kraken" }
-func (k *KrakenAdapter) Start() error  { return nil }
+func (k *KrakenAdapter) Name() string { return "kraken" }
+func (k *KrakenAdapter) Start() error { return nil }
 
 // ── Auth ───────────────────────────────────────────────────────
 
@@ -265,11 +265,11 @@ func (k *KrakenAdapter) GetKlines(symbol, interval string, limit int) ([][]any, 
 		// Kraken format: [time, open, high, low, close, vwap, volume, count]
 		klines = append(klines, []any{
 			int64(arr[0].(float64)), // timestamp
-			parseFloatSafe(arr[1]),   // open
-			parseFloatSafe(arr[2]),   // high
-			parseFloatSafe(arr[3]),   // low
-			parseFloatSafe(arr[4]),   // close
-			parseFloatSafe(arr[6]),   // volume
+			parseFloatSafe(arr[1]),  // open
+			parseFloatSafe(arr[2]),  // high
+			parseFloatSafe(arr[3]),  // low
+			parseFloatSafe(arr[4]),  // close
+			parseFloatSafe(arr[6]),  // volume
 		})
 	}
 
@@ -338,9 +338,9 @@ func (k *KrakenAdapter) GetBalance() ([]map[string]any, error) {
 
 // ── Orders ─────────────────────────────────────────────────────
 
-func (k *KrakenAdapter) PlaceOrder(symbol, side, orderType string, price, quantity float64) (map[string]any, error) {
+func (k *KrakenAdapter) PlaceOrder(symbol, side, orderType string, price, quantity float64, _ ...string) (map[string]any, error) {
 	krakenPair := toKrakenPair(symbol)
-	krakenSide := strings.ToLower(side)  // "buy" or "sell"
+	krakenSide := strings.ToLower(side)      // "buy" or "sell"
 	krakenType := strings.ToLower(orderType) // "limit" or "market"
 
 	// 下单前按 AssetPairs 规则规整精度；本地规则拒绝（*OrderConstraintError）直接中止。
@@ -448,14 +448,14 @@ func (k *KrakenAdapter) GetPositions() ([]map[string]any, error) {
 		}
 		symbol := fromKrakenPair(getString(p, "pair", ""))
 		positions = append(positions, map[string]any{
-			"symbol":       symbol,
-			"positionAmt":  parseFloatStr(p, "vol"),
-			"entryPrice":   parseFloatStr(p, "cost"),
-			"markPrice":    parseFloatStr(p, "value"),
-			"positionSide": "LONG",
-			"leverage":     parseFloatStr(p, "margin"),
+			"symbol":        symbol,
+			"positionAmt":   parseFloatStr(p, "vol"),
+			"entryPrice":    parseFloatStr(p, "cost"),
+			"markPrice":     parseFloatStr(p, "value"),
+			"positionSide":  "LONG",
+			"leverage":      parseFloatStr(p, "margin"),
 			"unrealizedPnl": parseFloatStr(p, "net"),
-			"orderId":      posID,
+			"orderId":       posID,
 		})
 	}
 	return positions, nil
@@ -557,10 +557,10 @@ func (k *KrakenAdapter) handleMarketMessage(msg []byte) {
 	// Kraken ticker format: [close, volume, high, low, open, bids, asks, ...]
 	if k.onTicker != nil {
 		k.onTicker(model.Tick{
-			Last:     dataArray[0].(float64),
-			Volume:   dataArray[1].(float64),
-			Bid:      dataArray[5].(float64),
-			Ask:      dataArray[6].(float64),
+			Last:      dataArray[0].(float64),
+			Volume:    dataArray[1].(float64),
+			Bid:       dataArray[5].(float64),
+			Ask:       dataArray[6].(float64),
 			Timestamp: time.Now().UnixMilli(),
 		})
 	}
@@ -598,15 +598,24 @@ func toKrakenInterval(interval string) string {
 
 func krakenIntervalMinutes(interval string) int {
 	switch interval {
-	case "1": return 1
-	case "5": return 5
-	case "15": return 15
-	case "30": return 30
-	case "60": return 60
-	case "240": return 240
-	case "1440": return 1440
-	case "10080": return 10080
-	default: return 60
+	case "1":
+		return 1
+	case "5":
+		return 5
+	case "15":
+		return 15
+	case "30":
+		return 30
+	case "60":
+		return 60
+	case "240":
+		return 240
+	case "1440":
+		return 1440
+	case "10080":
+		return 10080
+	default:
+		return 60
 	}
 }
 

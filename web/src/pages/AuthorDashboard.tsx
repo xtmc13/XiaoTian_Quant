@@ -362,7 +362,7 @@ export function AuthorDashboard() {
             <div className="text-[10px] text-muted-foreground mb-1.5"
             >{t('author.revenue.detailTitle')}</div
             >
-            {revenue.details.length === 0 ? (
+            {(revenue.details ?? []).length === 0 ? (
               <div className="text-xs text-muted-foreground py-2"
               >{t('author.revenue.empty')}</div
               >
@@ -375,7 +375,7 @@ export function AuthorDashboard() {
                   <span className="w-16 text-right">{t('author.revenue.salesCol')}</span>
                   <span className="w-24 text-right">{t('author.revenue.revenueCol')}</span>
                 </div>
-                {revenue.details.map((d) => (
+                {(revenue.details ?? []).map((d) => (
                   <div
                     key={d.indicator_id}
                     className="flex items-center rounded-lg border border-quant-border bg-quant-card px-2 py-1.5 text-xs"

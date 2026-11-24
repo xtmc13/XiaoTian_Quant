@@ -2191,7 +2191,7 @@ func normalizeStrategyConfig(it map[string]any) map[string]any {
 		if sym := getString(it, "symbol", ""); sym != "" {
 			mark := 0.0
 			if appCtx := app.Get(); appCtx != nil && appCtx.BinanceWS != nil {
-				mark = appCtx.BinanceWS.GetPrice(sym)
+				mark = appCtx.BinanceWS.GetPriceFresh(sym, wsPriceMaxStale)
 			}
 			// 合约（swap/futures）策略允许双向：空单盈亏按 (开空价−现价) 计。
 			_mt := strings.ToLower(getString(it, "market_type", ""))

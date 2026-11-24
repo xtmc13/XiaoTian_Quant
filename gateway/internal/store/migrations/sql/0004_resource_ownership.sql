@@ -15,23 +15,23 @@
 -- 注意: 语句内不要出现分号(字符串/注释里也不行)——迁移按分号切分执行。
 
 -- ── 现货网格机器人子表（主表 grid_bots.user_id 已存在）──
-ALTER TABLE grid_bot_trades ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE grid_bot_snapshots ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE grid_bot_trades ADD COLUMN user_id BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE grid_bot_snapshots ADD COLUMN user_id BIGINT NOT NULL DEFAULT 0;
 
 -- ── 订单成交 / 持仓 / 组合快照 ──
-ALTER TABLE trades ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE positions ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE xt_portfolio_snapshots ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE trades ADD COLUMN user_id BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE positions ADD COLUMN user_id BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE xt_portfolio_snapshots ADD COLUMN user_id BIGINT NOT NULL DEFAULT 0;
 
 -- ── 回测记录 ──
-ALTER TABLE xt_backtests ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE xt_backtests ADD COLUMN user_id BIGINT NOT NULL DEFAULT 0;
 
 -- ── 套利任务（跨所 + 三角）──
-ALTER TABLE arbitrage_trades ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE triangular_trades ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE arbitrage_trades ADD COLUMN user_id BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE triangular_trades ADD COLUMN user_id BIGINT NOT NULL DEFAULT 0;
 
 -- ── 通知路由规则：0=系统规则(所有人可见, 仅 admin 可改)，新规则记属主 ──
-ALTER TABLE notification_routes ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE notification_routes ADD COLUMN user_id BIGINT NOT NULL DEFAULT 0;
 
 -- ── 回填：存量行归到最早创建的 admin（notification_routes 保持 0=系统）──
 -- 网格机器人子表随主表属主。

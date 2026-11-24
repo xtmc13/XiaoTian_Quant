@@ -32,11 +32,21 @@ const (
 	TriggerOCO      TriggerType = "OCO"              // One-Cancels-Other
 )
 
+// priceStaleWindow 价格缓存新鲜度窗：WS 断流后喂价回调不再触发，缓存残留
+// 陈旧价；超过该窗未更新即视为冻结，GetPrice 返回 0（跳过本轮回调）。
+const priceStaleWindow = 2 * time.Minute
+
+// cachedPrice 记录最后一次喂价与时间戳，用于新鲜度判定。
+type cachedPrice struct {
+	price float64
+	at    time.Time
+}
+
 // ConditionalEngine monitors market prices and triggers conditional orders.
 type ConditionalEngine struct {
 	orders      map[string]*ConditionalOrder
 	mu          sync.RWMutex
-	priceCache  map[string]float64
+	priceCache  map[string]cachedPrice
 	priceMu     sync.RWMutex
 	running     bool
 	stopCh      chan struct{}
@@ -56,7 +66,7 @@ func GetConditionalEngine() *ConditionalEngine {
 	condEngineOnce.Do(func() {
 		condEngine = &ConditionalEngine{
 			orders:     make(map[string]*ConditionalOrder),
-			priceCache: make(map[string]float64),
+			priceCache: make(map[string]cachedPrice),
 			stopCh:     make(chan struct{}),
 		}
 	})
@@ -86,18 +96,26 @@ func (ce *ConditionalEngine) Stop() {
 	close(ce.stopCh)
 }
 
-// UpdatePrice updates the latest market price for a symbol.
+// UpdatePrice updates the latest market price for a symbol, stamping the receive time.
 func (ce *ConditionalEngine) UpdatePrice(symbol string, price float64) {
 	ce.priceMu.Lock()
-	ce.priceCache[symbol] = price
+	ce.priceCache[symbol] = cachedPrice{price: price, at: time.Now()}
 	ce.priceMu.Unlock()
 }
 
-// GetPrice returns the cached price for a symbol.
+// GetPrice returns the cached price for a symbol; returns 0 when there is no
+// cache or the cached price is stale (feed frozen beyond priceStaleWindow).
 func (ce *ConditionalEngine) GetPrice(symbol string) float64 {
 	ce.priceMu.RLock()
 	defer ce.priceMu.RUnlock()
-	return ce.priceCache[symbol]
+	cp, ok := ce.priceCache[symbol]
+	if !ok {
+		return 0
+	}
+	if time.Since(cp.at) > priceStaleWindow {
+		return 0
+	}
+	return cp.price
 }
 
 // RegisterTPSL registers Take-Profit and Stop-Loss orders for a position.

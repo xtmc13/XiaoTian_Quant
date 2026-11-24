@@ -83,12 +83,17 @@ func DefaultRoot(cfg map[string]any) (string, error) {
 		}
 	}
 	if root == "" {
-		// 默认落 DB 目录（/app/data 卷），重建容器不丢沙箱文件。
-		runtimeDir := "runtime"
-		if db := os.Getenv("DB_PATH"); db != "" {
-			if dir := filepath.Dir(db); dir != "" && dir != "." {
-				runtimeDir = dir
+		// 默认落运行时目录（/app/data 卷），重建容器不丢沙箱文件。
+		runtimeDir := os.Getenv("DATA_DIR")
+		if runtimeDir == "" {
+			if db := os.Getenv("DB_PATH"); db != "" {
+				if dir := filepath.Dir(db); dir != "" && dir != "." {
+					runtimeDir = dir
+				}
 			}
+		}
+		if runtimeDir == "" {
+			runtimeDir = "runtime"
 		}
 		cwd, err := os.Getwd()
 		if err != nil {

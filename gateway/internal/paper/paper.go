@@ -9,25 +9,29 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xiaotian-quant/gateway/internal/execution"
 	"github.com/xiaotian-quant/gateway/internal/model"
 )
 
 // PaperConfig configures the paper trading exchange.
 type PaperConfig struct {
-	InitialBalance float64       `json:"initial_balance"`
-	FeeRate        float64       `json:"fee_rate"`
-	Slippage       float64       `json:"slippage"`
-	MinLatency     time.Duration `json:"min_latency"`
-	MaxLatency     time.Duration `json:"max_latency"`
+	InitialBalance float64 `json:"initial_balance"`
+	FeeRate        float64 `json:"fee_rate"`
+	Slippage       float64 `json:"slippage"`
+	// PartialFillRate 每次触价可成交的剩余比例，(0,1]；1 表示整单成交。
+	PartialFillRate float64       `json:"partial_fill_rate"`
+	MinLatency      time.Duration `json:"min_latency"`
+	MaxLatency      time.Duration `json:"max_latency"`
 }
 
 func DefaultPaperConfig() PaperConfig {
 	return PaperConfig{
-		InitialBalance: 100000.0,
-		FeeRate:        0.001,
-		Slippage:       0.0005,
-		MinLatency:     50 * time.Millisecond,
-		MaxLatency:     300 * time.Millisecond,
+		InitialBalance:  100000.0,
+		FeeRate:         0.001,
+		Slippage:        0.0005,
+		PartialFillRate: 1.0,
+		MinLatency:      50 * time.Millisecond,
+		MaxLatency:      300 * time.Millisecond,
 	}
 }
 
@@ -390,6 +394,22 @@ func (pe *PaperExchange) FeeRate() float64 {
 	return pe.config.FeeRate
 }
 
+// ExecutionConfig 返回模拟盘的执行成本参数，供共享执行模型与 OMS 撮合使用。
+func (pe *PaperExchange) ExecutionConfig() execution.Config {
+	pe.mu.RLock()
+	defer pe.mu.RUnlock()
+	return pe.executionConfigLocked()
+}
+
+// executionConfigLocked 供已持锁的成交路径复用，避免自锁。
+func (pe *PaperExchange) executionConfigLocked() execution.Config {
+	return execution.Normalize(execution.Config{
+		FeeRate:         pe.config.FeeRate,
+		Slippage:        pe.config.Slippage,
+		PartialFillRate: pe.config.PartialFillRate,
+	})
+}
+
 // ApplySimulatedFill 把一笔 OMS 模拟成交记入账户：持仓（AddTrade）+ 资金
 // 结算 + 状态变更通知。策略/手动 paper 单不经 PlaceOrder 撮合——
 // app.simulatePaperFill 对市价单直接成交、限价单走撮合引擎后经 OMS
@@ -409,7 +429,7 @@ func (pe *PaperExchange) ApplySimulatedFill(orderID string, trade model.TradeDat
 	}
 	trade.Quantity -= applied
 	pe.filledApplied[orderID] = applied + trade.Quantity
-	fee := trade.Price * trade.Quantity * pe.config.FeeRate
+	fee := execution.Fee(trade.Price*trade.Quantity, pe.executionConfigLocked())
 	pe.updatePosition(trade)
 	pe.settleSimulatedFill(trade, fee)
 	pe.mu.Unlock()
@@ -1146,7 +1166,7 @@ func (pe *PaperExchange) UnlockOrderFunds(symbol string, side model.OrderSide, p
 //   - 卖出：Free 增加 成交额-手续费；锁定 base（限价/市价卖出均已锁）→ 释放 Used
 func (pe *PaperExchange) settleFill(f paperFill) {
 	trade := f.trade
-	fee := trade.Price * trade.Quantity * pe.config.FeeRate
+	fee := execution.Fee(trade.Price*trade.Quantity, pe.executionConfigLocked())
 	baseCur := pe.getBaseCurrency(trade.Symbol)
 
 	quote, ok := pe.balances["USDT"]

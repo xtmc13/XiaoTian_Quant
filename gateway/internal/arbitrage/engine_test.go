@@ -27,7 +27,7 @@ func (m *mockClient) Name() string { return m.name }
 func (m *mockClient) GetTicker(symbol string) (map[string]any, error) {
 	return map[string]any{"lastPrice": m.price}, nil
 }
-func (m *mockClient) PlaceOrder(symbol, side, orderType string, price, quantity float64) (map[string]any, error) {
+func (m *mockClient) PlaceOrder(symbol, side, orderType string, price, quantity float64, clientOrderID ...string) (map[string]any, error) {
 	return map[string]any{"order_id": "mock-" + side}, nil
 }
 func (m *mockClient) GetBalance() ([]map[string]any, error) {
@@ -456,7 +456,7 @@ type failingSellClient struct {
 	mockClient
 }
 
-func (f *failingSellClient) PlaceOrder(symbol, side, orderType string, price, quantity float64) (map[string]any, error) {
+func (f *failingSellClient) PlaceOrder(symbol, side, orderType string, price, quantity float64, clientOrderID ...string) (map[string]any, error) {
 	if side == "SELL" {
 		return nil, fmt.Errorf("sell rejected")
 	}
@@ -756,7 +756,7 @@ type fillMockClient struct {
 	sellResponse map[string]any
 }
 
-func (f *fillMockClient) PlaceOrder(symbol, side, orderType string, price, quantity float64) (map[string]any, error) {
+func (f *fillMockClient) PlaceOrder(symbol, side, orderType string, price, quantity float64, clientOrderID ...string) (map[string]any, error) {
 	if side == "BUY" && f.buyResponse != nil {
 		return f.buyResponse, nil
 	}
@@ -786,11 +786,11 @@ func TestExecuteUsesActualFillPrice(t *testing.T) {
 	sellClient := &fillMockClient{
 		mockClient: mockClient{name: "b", price: 102},
 		sellResponse: map[string]any{
-			"order_id":    "sell-1",
-			"status":      "FILLED",
+			"order_id":     "sell-1",
+			"status":       "FILLED",
 			"filled_total": "1019.5",
-			"amount":      "10",
-			"fee":         "0.2",
+			"amount":       "10",
+			"fee":          "0.2",
 		},
 	}
 
@@ -841,7 +841,7 @@ type flakySellClient struct {
 	failCount int
 }
 
-func (f *flakySellClient) PlaceOrder(symbol, side, orderType string, price, quantity float64) (map[string]any, error) {
+func (f *flakySellClient) PlaceOrder(symbol, side, orderType string, price, quantity float64, clientOrderID ...string) (map[string]any, error) {
 	if side == "SELL" {
 		if f.failCount > 0 {
 			f.failCount--
@@ -1115,7 +1115,7 @@ type slowMockClient struct {
 	delay time.Duration
 }
 
-func (s *slowMockClient) PlaceOrder(symbol, side, orderType string, price, quantity float64) (map[string]any, error) {
+func (s *slowMockClient) PlaceOrder(symbol, side, orderType string, price, quantity float64, clientOrderID ...string) (map[string]any, error) {
 	time.Sleep(s.delay)
 	return s.mockClient.PlaceOrder(symbol, side, orderType, price, quantity)
 }

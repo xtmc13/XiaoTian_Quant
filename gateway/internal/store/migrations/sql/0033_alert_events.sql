@@ -15,7 +15,7 @@
 -- 注意: 语句内不要出现分号(字符串/注释里也不行)——迁移按分号切分执行。
 
 CREATE TABLE IF NOT EXISTS xt_alert_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     fingerprint TEXT NOT NULL,
     alertname TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT '',
@@ -24,14 +24,14 @@ CREATE TABLE IF NOT EXISTS xt_alert_events (
     description TEXT NOT NULL DEFAULT '',
     labels_json TEXT NOT NULL DEFAULT '',
     annotations_json TEXT NOT NULL DEFAULT '',
-    starts_at INTEGER NOT NULL DEFAULT 0,
-    ends_at INTEGER NOT NULL DEFAULT 0,
-    notified_firing INTEGER NOT NULL DEFAULT 0,
-    notified_resolved INTEGER NOT NULL DEFAULT 0,
-    first_seen INTEGER NOT NULL DEFAULT 0,
-    last_seen INTEGER NOT NULL DEFAULT 0,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    starts_at BIGINT NOT NULL DEFAULT 0,
+    ends_at BIGINT NOT NULL DEFAULT 0,
+    notified_firing BIGINT NOT NULL DEFAULT 0,
+    notified_resolved BIGINT NOT NULL DEFAULT 0,
+    first_seen BIGINT NOT NULL DEFAULT 0,
+    last_seen BIGINT NOT NULL DEFAULT 0,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_alert_events_fp ON xt_alert_events(fingerprint);

@@ -8,7 +8,7 @@
 -- mode 默认 'long' 兼容存量机器人；grid_bot_trades.leg 默认 'long' 兼容存量成交。
 
 ALTER TABLE grid_bots ADD COLUMN mode TEXT NOT NULL DEFAULT 'long';
-ALTER TABLE grid_bots ADD COLUMN leverage REAL NOT NULL DEFAULT 1;
+ALTER TABLE grid_bots ADD COLUMN leverage DOUBLE PRECISION NOT NULL DEFAULT 1;
 ALTER TABLE grid_bots ADD COLUMN margin_mode TEXT NOT NULL DEFAULT 'cross';
 
 ALTER TABLE grid_bot_trades ADD COLUMN leg TEXT NOT NULL DEFAULT 'long';

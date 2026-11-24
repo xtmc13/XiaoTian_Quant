@@ -127,6 +127,31 @@ func (r *OrderRepo) List(filter map[string]any, limit int) ([]*OrderRecord, erro
 	return result, nil
 }
 
+// ListActive 返回所有仍处中间态（未终结）的订单：NEW/PENDING/PARTIALLY_FILLED/CREATED，
+// 按创建时间升序。OMS 重启恢复扫描用。
+func (r *OrderRepo) ListActive() ([]*OrderRecord, error) {
+	rows, err := db.Query(`SELECT id, symbol, side, order_type, price, stop_price, quantity, filled, status, exchange, user_id, client_oid, exchange_order_id, avg_fill_price, created_at, updated_at, market_type, position_side, leverage, margin_mode, tp_price, sl_price, close_position
+		FROM xt_orders WHERE status IN ('NEW','PENDING','PARTIALLY_FILLED','CREATED') ORDER BY created_at ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []*OrderRecord
+	for rows.Next() {
+		var o OrderRecord
+		var createdF, updatedF float64
+		if err := rows.Scan(&o.ID, &o.Symbol, &o.Side, &o.OrderType, &o.Price, &o.StopPrice, &o.Quantity, &o.Filled, &o.Status, &o.Exchange,
+			&o.UserID, &o.ClientOID, &o.ExchangeOrderID, &o.AvgFillPrice, &createdF, &updatedF,
+			&o.MarketType, &o.PositionSide, &o.Leverage, &o.MarginMode, &o.TPPrice, &o.SLPrice, &o.ClosePosition); err != nil {
+			return nil, err
+		}
+		o.CreatedAt = int64(createdF)
+		o.UpdatedAt = int64(updatedF)
+		result = append(result, &o)
+	}
+	return result, nil
+}
+
 // ListActiveByClientOIDPrefix 返回 client_oid 带指定前缀且仍在活动状态
 // （NEW/PENDING/PARTIALLY_FILLED）的订单，按创建时间升序。
 // ltm 重启恢复扫描用：父单前缀 "ltm-"，市价补单前缀 "ltm-mkt:<parentID>"。

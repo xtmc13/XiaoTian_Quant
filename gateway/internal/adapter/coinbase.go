@@ -54,16 +54,16 @@ func NewCoinbaseAdapter(apiKey, secret string) *CoinbaseAdapter {
 	}
 }
 
-func (cb *CoinbaseAdapter) Name() string    { return "coinbase" }
-func (cb *CoinbaseAdapter) Start() error     { return nil }
-func (cb *CoinbaseAdapter) Stop() error      { cb.streamHub.CloseAll(); return nil }
+func (cb *CoinbaseAdapter) Name() string { return "coinbase" }
+func (cb *CoinbaseAdapter) Start() error { return nil }
+func (cb *CoinbaseAdapter) Stop() error  { cb.streamHub.CloseAll(); return nil }
 func (cb *CoinbaseAdapter) IsConnected() bool {
 	cb.mu.RLock()
 	defer cb.mu.RUnlock()
 	return cb.wsConnected
 }
 
-func (cb *CoinbaseAdapter) OnTicker(fn func(tick model.Tick))          { cb.onTicker = fn }
+func (cb *CoinbaseAdapter) OnTicker(fn func(tick model.Tick))           { cb.onTicker = fn }
 func (cb *CoinbaseAdapter) OnOrderBook(fn func(ob model.OrderBookData)) { cb.onOrderBook = fn }
 func (cb *CoinbaseAdapter) OnTrade(fn func(trade model.TradeData))      { cb.onTrade = fn }
 func (cb *CoinbaseAdapter) OnKline(fn func(bar model.Bar))              { cb.onKline = fn }
@@ -163,15 +163,15 @@ func (cb *CoinbaseAdapter) GetTicker(symbol string) (map[string]any, error) {
 
 // ── REST Trading ──
 
-func (cb *CoinbaseAdapter) PlaceOrder(symbol, side, orderType string, price, quantity float64) (map[string]any, error) {
+func (cb *CoinbaseAdapter) PlaceOrder(symbol, side, orderType string, price, quantity float64, _ ...string) (map[string]any, error) {
 	// 下单前按 products 规则规整精度；本地规则拒绝（*OrderConstraintError）直接中止。
 	qtyStr, priceStr, err := cb.normalizeCoinbaseOrder(symbol, orderType, price, quantity)
 	if err != nil {
 		return nil, err
 	}
 	body := map[string]any{
-		"product_id":    symbol,
-		"side":          strings.ToUpper(side),
+		"product_id": symbol,
+		"side":       strings.ToUpper(side),
 		"order_configuration": map[string]any{
 			strings.ToLower(orderType) + "_gtc": map[string]any{
 				"base_size":   qtyStr,

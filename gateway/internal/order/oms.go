@@ -45,6 +45,8 @@ type Request struct {
 	TPPrice       float64            `json:"tp_price,omitempty"`
 	SLPrice       float64            `json:"sl_price,omitempty"`
 	ClosePosition bool               `json:"close_position,omitempty"`
+	// ReduceOnly=true 表示减仓方向单（不新开仓），与 ClosePosition 同属降风险动作。
+	ReduceOnly bool `json:"reduce_only,omitempty"`
 
 	// ── AI 决策门（aigate） ──
 	// Source 标记订单来源（"signal:<strategy>" 等）；空时由决策门从
@@ -557,6 +559,67 @@ func (om *OrderManager) storeOrderLocked(order *model.OrderData) {
 	// 首写插入、状态翻转更新，一次调用完成（原 Update 命中 0 行不报错，
 	// 首写永远落不了库）。
 	_ = store.GetOrderRepo().Upsert(rec)
+}
+
+// recordToOrder 把持久化订单记录反向映射为内存订单对象。
+func recordToOrder(rec *store.OrderRecord) *model.OrderData {
+	return &model.OrderData{
+		ID:              rec.ID,
+		Symbol:          rec.Symbol,
+		Side:            model.OrderSide(rec.Side),
+		OrderType:       model.OrderType(rec.OrderType),
+		Price:           rec.Price,
+		StopPrice:       rec.StopPrice,
+		Quantity:        rec.Quantity,
+		Filled:          rec.Filled,
+		Status:          model.OrderStatus(rec.Status),
+		Exchange:        rec.Exchange,
+		UserID:          rec.UserID,
+		ClientOID:       rec.ClientOID,
+		ExchangeOrderID: rec.ExchangeOrderID,
+		AvgFillPrice:    rec.AvgFillPrice,
+		CreatedAt:       rec.CreatedAt,
+		UpdatedAt:       rec.UpdatedAt,
+		MarketType:      model.MarketType(rec.MarketType),
+		PositionSide:    model.PositionSide(rec.PositionSide),
+		Leverage:        rec.Leverage,
+		MarginMode:      model.MarginMode(rec.MarginMode),
+		TPPrice:         rec.TPPrice,
+		SLPrice:         rec.SLPrice,
+		ClosePosition:   rec.ClosePosition,
+	}
+}
+
+// RestoreActiveOrders 从持久化仓库重建重启前仍处中间态的 paper 挂单到内存。
+//
+// 安全边界：仅重建本地 paper 撮合订单（账本与挂单都在本机，可完整恢复）；
+// live 交易所挂单以交易所侧真实状态为准，不在本地盲目重建，留给对账流程校正。
+// 恢复只回填内存视图，不重复触发余额锁/解锁与下单 ACK（账本由 RestorePaperAccount
+// 独立恢复）。返回实际重建的 paper 挂单数量。
+func (om *OrderManager) RestoreActiveOrders() int {
+	recs, err := store.GetOrderRepo().ListActive()
+	if err != nil {
+		return 0
+	}
+	om.orderMu.Lock()
+	defer om.orderMu.Unlock()
+	n := 0
+	for _, rec := range recs {
+		// live/外部交易所挂单不在本地重建。
+		if rec.Exchange != "" && !strings.EqualFold(rec.Exchange, "paper") {
+			continue
+		}
+		ord := recordToOrder(rec)
+		if !ord.IsActive() {
+			continue
+		}
+		if om.orders[ord.ID] != nil {
+			continue // 内存已有，不覆盖
+		}
+		om.orders[ord.ID] = ord
+		n++
+	}
+	return n
 }
 
 func (om *OrderManager) generateID() string {

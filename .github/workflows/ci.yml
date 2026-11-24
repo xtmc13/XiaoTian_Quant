@@ -205,16 +205,46 @@ jobs:
           node-version: '22'
       - run: cd web && npm audit --omit=dev --audit-level=moderate
 
-  # ── Deploy (manual trigger only) ──
+  # ── Deploy (main 推送；SSH 到生产目录 Compose 重建) ──
+  # 前置：在 GitHub Environment(production) 或仓库 Secrets 配置：
+  #   DEPLOY_HOST      生产 IP/域名（未配置则整个 deploy job 跳过，不报错）
+  #   DEPLOY_SSH_KEY   可登录生产的 SSH 私钥（PEM）
+  #   DEPLOY_USER      SSH 用户，缺省 root
+  #   DEPLOY_PORT      SSH 端口，缺省 22
+  #   DEPLOY_PATH      生产仓库目录（含 .env 与 compose 文件）
+  #   DEPLOY_COMPOSE_FILE  compose 文件，缺省 docker-compose.prod.yml
+  # .env 由生产侧保留、不随 git 下发；必须含非空 SECRET_KEY（空密钥会跳过迁移、JWT 瘫痪）。
   deploy:
     runs-on: ubuntu-latest
     needs: [go-build, rust-build, web-build, docker]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && secrets.DEPLOY_HOST != ''
     environment: production
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER || 'root' }}
+      DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
+      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+      DEPLOY_COMPOSE_FILE: ${{ secrets.DEPLOY_COMPOSE_FILE || 'docker-compose.prod.yml' }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Deploy to production
+      - name: Configure SSH
         run: |
-          echo "Deploying to production..."
-          # Add your deployment script here
-          # e.g. ssh, kubectl, or cloud provider CLI
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          install -m 600 /dev/null ~/.ssh/deploy_key
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          ssh-keyscan -p "${DEPLOY_PORT}" "${DEPLOY_HOST}" >> ~/.ssh/known_hosts 2>/dev/null
+      - name: Deploy over SSH
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/deploy_key -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "set -euo pipefail; cd '${DEPLOY_PATH}'; \
+             test -f .env || { echo '生产目录缺 .env，中止部署'; exit 1; }; \
+             grep -q '^SECRET_KEY=.\+' .env || { echo '.env 未设置非空 SECRET_KEY，中止（空密钥会跳过迁移、JWT 瘫痪）'; exit 1; }; \
+             git fetch --force origin main; git reset --hard origin/main; \
+             docker compose --env-file .env -f '${DEPLOY_COMPOSE_FILE}' up -d --build; \
+             docker compose --env-file .env -f '${DEPLOY_COMPOSE_FILE}' ps"
+      - name: Health check
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/deploy_key -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            'for i in $(seq 1 30); do if curl -fsS http://127.0.0.1:8080/api/health; then echo; exit 0; fi; sleep 2; done; echo "health check timed out"; exit 1'

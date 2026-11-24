@@ -10,26 +10,26 @@
 
 CREATE TABLE IF NOT EXISTS xt_portfolio_backtests (
 	id TEXT PRIMARY KEY,
-	user_id INTEGER NOT NULL DEFAULT 0,
+	user_id BIGINT NOT NULL DEFAULT 0,
 	name TEXT NOT NULL DEFAULT '',
 	timeframe TEXT NOT NULL DEFAULT '1h',
 	rebalance TEXT NOT NULL DEFAULT 'none',
-	start_time INTEGER NOT NULL DEFAULT 0,
-	end_time INTEGER NOT NULL DEFAULT 0,
-	initial_capital REAL NOT NULL DEFAULT 0,
-	final_equity REAL NOT NULL DEFAULT 0,
-	total_return_pct REAL NOT NULL DEFAULT 0,
-	max_drawdown_pct REAL NOT NULL DEFAULT 0,
-	sharpe_ratio REAL NOT NULL DEFAULT 0,
-	sortino_ratio REAL NOT NULL DEFAULT 0,
-	calmar_ratio REAL NOT NULL DEFAULT 0,
-	win_rate REAL NOT NULL DEFAULT 0,
-	profit_factor REAL NOT NULL DEFAULT 0,
-	total_trades INTEGER NOT NULL DEFAULT 0,
+	start_time BIGINT NOT NULL DEFAULT 0,
+	end_time BIGINT NOT NULL DEFAULT 0,
+	initial_capital DOUBLE PRECISION NOT NULL DEFAULT 0,
+	final_equity DOUBLE PRECISION NOT NULL DEFAULT 0,
+	total_return_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
+	max_drawdown_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
+	sharpe_ratio DOUBLE PRECISION NOT NULL DEFAULT 0,
+	sortino_ratio DOUBLE PRECISION NOT NULL DEFAULT 0,
+	calmar_ratio DOUBLE PRECISION NOT NULL DEFAULT 0,
+	win_rate DOUBLE PRECISION NOT NULL DEFAULT 0,
+	profit_factor DOUBLE PRECISION NOT NULL DEFAULT 0,
+	total_trades BIGINT NOT NULL DEFAULT 0,
 	legs_json TEXT NOT NULL DEFAULT '',
 	result_json TEXT NOT NULL DEFAULT '',
-	duration_ms INTEGER NOT NULL DEFAULT 0,
-	created_at INTEGER NOT NULL
+	duration_ms BIGINT NOT NULL DEFAULT 0,
+	created_at BIGINT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_portfolio_bt_user ON xt_portfolio_backtests(user_id, created_at);

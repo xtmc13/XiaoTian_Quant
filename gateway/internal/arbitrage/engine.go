@@ -24,7 +24,7 @@ import (
 type ExchangeClient interface {
 	Name() string
 	GetTicker(symbol string) (map[string]any, error)
-	PlaceOrder(symbol, side, orderType string, price, quantity float64) (map[string]any, error)
+	PlaceOrder(symbol, side, orderType string, price, quantity float64, clientOrderID ...string) (map[string]any, error)
 	GetBalance() ([]map[string]any, error)
 	StartMarketStream(symbols []string) error
 	StopStream() error
@@ -38,8 +38,8 @@ type Opportunity struct {
 	Symbol              string  `json:"symbol"`
 	BuyExchange         string  `json:"buy_exchange"`
 	SellExchange        string  `json:"sell_exchange"`
-	BuyPrice            float64 `json:"buy_price"`             // best ask (surface)
-	SellPrice           float64 `json:"sell_price"`            // best bid (surface)
+	BuyPrice            float64 `json:"buy_price"`  // best ask (surface)
+	SellPrice           float64 `json:"sell_price"` // best bid (surface)
 	SpreadPct           float64 `json:"spread_pct"`
 	SpreadAbs           float64 `json:"spread_abs"`
 	ExecutableBuyPrice  float64 `json:"executable_buy_price"`  // avg fill after walking asks
@@ -485,17 +485,17 @@ func (e *Engine) GetStats() map[string]any {
 	}
 
 	return map[string]any{
-		"running":         e.running,
-		"exchanges":       len(e.clients),
-		"active_pairs":    len(e.positions),
-		"total_trades":    len(e.history),
-		"total_profit":    round(totalProfit, 4),
-		"total_fees":      round(totalFees, 4),
-		"win_count":       wins,
-		"loss_count":      losses,
-		"win_rate":        winRate(wins, losses),
-		"checks":          e.scanCount.Load(),
-		"executions":      e.executionCount.Load(),
+		"running":      e.running,
+		"exchanges":    len(e.clients),
+		"active_pairs": len(e.positions),
+		"total_trades": len(e.history),
+		"total_profit": round(totalProfit, 4),
+		"total_fees":   round(totalFees, 4),
+		"win_count":    wins,
+		"loss_count":   losses,
+		"win_rate":     winRate(wins, losses),
+		"checks":       e.scanCount.Load(),
+		"executions":   e.executionCount.Load(),
 		"last_spread_pct": func() float64 {
 			if e.lastOpp != nil {
 				return e.lastOpp.SpreadPct
@@ -626,7 +626,7 @@ func (e *Engine) ClosePosition(id string, sellPrice float64) error {
 		pair.Status = "completed"
 		pair.ClosedAt = time.Now().UnixMilli()
 		pair.GrossProfit = (pair.SellPrice - pair.BuyPrice) * pair.Quantity
-		pair.Fees = (pair.BuyPrice*pair.Quantity*e.config.FeeA) + (pair.SellPrice*pair.Quantity*e.config.FeeB)
+		pair.Fees = (pair.BuyPrice * pair.Quantity * e.config.FeeA) + (pair.SellPrice * pair.Quantity * e.config.FeeB)
 		pair.NetProfit = pair.GrossProfit - pair.Fees
 		e.recordPairLocked(pair)
 		if e.OnTrade != nil {
@@ -679,7 +679,7 @@ func (e *Engine) ClosePosition(id string, sellPrice float64) error {
 	}
 	pair.Fees = pair.BuyFee + pair.SellFee
 	if pair.Fees <= 0 {
-		pair.Fees = (pair.BuyPrice*pair.Quantity*e.config.FeeA) + (pair.SellPrice*pair.Quantity*e.config.FeeB)
+		pair.Fees = (pair.BuyPrice * pair.Quantity * e.config.FeeA) + (pair.SellPrice * pair.Quantity * e.config.FeeB)
 	}
 	pair.NetProfit = pair.GrossProfit - pair.Fees
 
@@ -1538,8 +1538,10 @@ type BinanceClient struct {
 }
 
 func (b *BinanceClient) Name() string { return "binance" }
-func (b *BinanceClient) StartMarketStream(symbols []string) error { return b.BinanceAdapter.StartMarketStream(symbols) }
-func (b *BinanceClient) StopStream() error                       { return b.BinanceAdapter.Stop() }
+func (b *BinanceClient) StartMarketStream(symbols []string) error {
+	return b.BinanceAdapter.StartMarketStream(symbols)
+}
+func (b *BinanceClient) StopStream() error { return b.BinanceAdapter.Stop() }
 func (b *BinanceClient) WireToEventBus(bus *event.EventBus) {
 	b.OnTicker(func(tick model.Tick) {
 		tick.Exchange = b.Name()
@@ -1557,8 +1559,10 @@ type OKXClient struct {
 }
 
 func (o *OKXClient) Name() string { return "okx" }
-func (o *OKXClient) StartMarketStream(symbols []string) error { return o.OKXAdapter.StartMarketStream(symbols) }
-func (o *OKXClient) StopStream() error                       { return o.OKXAdapter.Stop() }
+func (o *OKXClient) StartMarketStream(symbols []string) error {
+	return o.OKXAdapter.StartMarketStream(symbols)
+}
+func (o *OKXClient) StopStream() error { return o.OKXAdapter.Stop() }
 func (o *OKXClient) WireToEventBus(bus *event.EventBus) {
 	o.OnTicker(func(tick model.Tick) {
 		tick.Exchange = o.Name()
@@ -1576,8 +1580,10 @@ type MEXCClient struct {
 }
 
 func (m *MEXCClient) Name() string { return "mexc" }
-func (m *MEXCClient) StartMarketStream(symbols []string) error { return m.MEXCAdapter.StartMarketStream(symbols) }
-func (m *MEXCClient) StopStream() error                       { return m.MEXCAdapter.Stop() }
+func (m *MEXCClient) StartMarketStream(symbols []string) error {
+	return m.MEXCAdapter.StartMarketStream(symbols)
+}
+func (m *MEXCClient) StopStream() error { return m.MEXCAdapter.Stop() }
 func (m *MEXCClient) WireToEventBus(bus *event.EventBus) {
 	m.OnTicker(func(tick model.Tick) {
 		tick.Exchange = m.Name()
@@ -1595,8 +1601,10 @@ type GateIOClient struct {
 }
 
 func (g *GateIOClient) Name() string { return "gateio" }
-func (g *GateIOClient) StartMarketStream(symbols []string) error { return g.GateIOAdapter.StartMarketStream(symbols) }
-func (g *GateIOClient) StopStream() error                       { return g.GateIOAdapter.Stop() }
+func (g *GateIOClient) StartMarketStream(symbols []string) error {
+	return g.GateIOAdapter.StartMarketStream(symbols)
+}
+func (g *GateIOClient) StopStream() error { return g.GateIOAdapter.Stop() }
 func (g *GateIOClient) WireToEventBus(bus *event.EventBus) {
 	g.OnTicker(func(tick model.Tick) {
 		tick.Exchange = g.Name()
@@ -1614,8 +1622,10 @@ type BybitClient struct {
 }
 
 func (b *BybitClient) Name() string { return "bybit" }
-func (b *BybitClient) StartMarketStream(symbols []string) error { return b.BybitAdapter.StartMarketStream(symbols) }
-func (b *BybitClient) StopStream() error                       { return b.BybitAdapter.Stop() }
+func (b *BybitClient) StartMarketStream(symbols []string) error {
+	return b.BybitAdapter.StartMarketStream(symbols)
+}
+func (b *BybitClient) StopStream() error { return b.BybitAdapter.Stop() }
 func (b *BybitClient) WireToEventBus(bus *event.EventBus) {
 	b.OnTicker(func(tick model.Tick) {
 		tick.Exchange = b.Name()
@@ -1633,8 +1643,10 @@ type CoinbaseClient struct {
 }
 
 func (c *CoinbaseClient) Name() string { return "coinbase" }
-func (c *CoinbaseClient) StartMarketStream(symbols []string) error { return c.CoinbaseAdapter.StartMarketStream(symbols) }
-func (c *CoinbaseClient) StopStream() error                       { return c.CoinbaseAdapter.Stop() }
+func (c *CoinbaseClient) StartMarketStream(symbols []string) error {
+	return c.CoinbaseAdapter.StartMarketStream(symbols)
+}
+func (c *CoinbaseClient) StopStream() error { return c.CoinbaseAdapter.Stop() }
 func (c *CoinbaseClient) WireToEventBus(bus *event.EventBus) {
 	c.OnTicker(func(tick model.Tick) {
 		tick.Exchange = c.Name()
@@ -1652,8 +1664,10 @@ type KrakenClient struct {
 }
 
 func (k *KrakenClient) Name() string { return "kraken" }
-func (k *KrakenClient) StartMarketStream(symbols []string) error { return k.KrakenAdapter.StartMarketStream(symbols) }
-func (k *KrakenClient) StopStream() error                       { return k.KrakenAdapter.Stop() }
+func (k *KrakenClient) StartMarketStream(symbols []string) error {
+	return k.KrakenAdapter.StartMarketStream(symbols)
+}
+func (k *KrakenClient) StopStream() error { return k.KrakenAdapter.Stop() }
 func (k *KrakenClient) WireToEventBus(bus *event.EventBus) {
 	k.OnTicker(func(tick model.Tick) {
 		tick.Exchange = k.Name()
@@ -1671,8 +1685,10 @@ type BitgetClient struct {
 }
 
 func (b *BitgetClient) Name() string { return "bitget" }
-func (b *BitgetClient) StartMarketStream(symbols []string) error { return b.BitgetAdapter.StartMarketStream(symbols) }
-func (b *BitgetClient) StopStream() error                       { return b.BitgetAdapter.Stop() }
+func (b *BitgetClient) StartMarketStream(symbols []string) error {
+	return b.BitgetAdapter.StartMarketStream(symbols)
+}
+func (b *BitgetClient) StopStream() error { return b.BitgetAdapter.Stop() }
 func (b *BitgetClient) WireToEventBus(bus *event.EventBus) {
 	b.OnTicker(func(tick model.Tick) {
 		tick.Exchange = b.Name()

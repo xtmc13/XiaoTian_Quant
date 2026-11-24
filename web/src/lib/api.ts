@@ -2500,14 +2500,21 @@ export const communityApi = {
   authorRevenue: () =>
     api
       .get<{ code: number; msg: string; data: AuthorRevenueData }>('/community/author/revenue')
-      .then((d) => d?.data ?? { total_sales: 0, total_revenue: 0, details: [] }),
+      .then((d) => {
+        const data = d?.data
+        return {
+          total_sales: data?.total_sales ?? 0,
+          total_revenue: data?.total_revenue ?? 0,
+          details: Array.isArray(data?.details) ? data.details : [],
+        }
+      }),
 }
 
 // 社区指标收益/审核返回结构（gateway community handler）
 export interface AuthorRevenueData {
   total_sales: number
   total_revenue: number
-  details: { indicator_id: number; sales: number; revenue: number }[]
+  details: { indicator_id: number; sales: number; revenue: number }[] | null
 }
 export interface PendingReviewItem {
   id: number
@@ -2675,7 +2682,12 @@ export const aiRobotApi = {
 export const contractApi = {
   // 杠杆无持久化/账户数据源：可能为 null（显示 "--"）
   getLeverage: () => axiosInstance.get<{ leverage: number | null }>('/contract/leverage'),
-  setLeverage: (leverage: number) => axiosInstance.post<{ success: boolean }>('/contract/leverage', { leverage }),
+  // 设置杠杆会真实调用交易所（Binance /fapi/v1/leverage、Bybit /v5/position/set-leverage）。
+  setLeverage: (params: { leverage: number; symbol: string; exchange?: string }) =>
+    axiosInstance.post<{ success: boolean; exchange?: string; symbol?: string; leverage?: number; message?: string }>(
+      '/contract/leverage',
+      params
+    ),
   getMarginInfo: () => axiosInstance.get<ContractMarginInfo>('/contract/margin'),
   getLiquidationPrice: (params: { entry_price: number; side: string; leverage: number }) =>
     axiosInstance.get<LiquidationPriceResult>('/contract/liquidation-price', { params }),
@@ -2825,6 +2837,16 @@ export interface MarketBacktestDeviation {
   direction: 'higher' | 'lower' | 'flat'
 }
 
+/** 回测口径假设（仅 grid_bot 有对照时下发；ai_bot/数据不足降级为 null）。 */
+export interface MarketBacktestAssumptions {
+  interval: string
+  fee_rate: number
+  slippage: number
+  window_days: number
+  truncated: boolean
+  bars: number
+}
+
 export interface MarketListingStatsResponse {
   listing: MarketListing
   series: MarketListingStats[]
@@ -2838,7 +2860,9 @@ export interface MarketListingStatsResponse {
   backtest_note?: string
   /** 回测不可用原因（数据不足/回测失败降级，端点仍 200）。 */
   backtest_error?: string
-  /** 实盘-回测偏差（仅双侧有数据时）。 */
+  /** 回测口径假设（仅 grid_bot 有对照时；其余显式 null）。 */
+  backtest_assumptions?: MarketBacktestAssumptions | null
+  /** 实盘-回测偏差（仅双侧有数据时；其余显式 null）。 */
   deviation?: MarketBacktestDeviation | null
 }
 

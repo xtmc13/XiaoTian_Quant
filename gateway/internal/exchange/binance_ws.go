@@ -38,9 +38,17 @@ type BinanceWSStream struct {
 	// （断连/未订阅/流失效），与载荷时钟偏移无关。
 	pricesTs map[string]int64
 
+	// Kline subscriptions and per-stream dedupe state. Keys are
+	// "market|symbol|interval"; klineLast stores the openTime (ms) of the
+	// last closed bar already published.
+	klineMu   sync.Mutex
+	klineSubs map[string]bool
+	klineLast map[string]int64
+
 	// Callbacks
 	onTick      func(tick model.Tick)
 	onBar       func(bar model.Bar)
+	onKline     func(bar model.Bar, market string)
 	onRealPrice func(symbol string, price float64)
 }
 
@@ -56,6 +64,8 @@ func NewBinanceWSStream(symbols []string, bus *event.EventBus) *BinanceWSStream 
 		reconnect: make(chan struct{}, 1),
 		prices:    make(map[string]float64),
 		pricesTs:  make(map[string]int64),
+		klineSubs: make(map[string]bool),
+		klineLast: make(map[string]int64),
 	}
 }
 
@@ -159,7 +169,7 @@ func (s *BinanceWSStream) connect(marketType ...string) {
 		s.mu.Unlock()
 
 		log.Printf("[binance_ws] connected: %s", market)
-		s.readLoop(conn)
+		s.readLoop(conn, market)
 
 		// Connection lost — reconnect
 		select {
@@ -236,7 +246,7 @@ func testProxy(proxyURL string) bool {
 	return true
 }
 
-func (s *BinanceWSStream) readLoop(conn *websocket.Conn) {
+func (s *BinanceWSStream) readLoop(conn *websocket.Conn, market string) {
 	for {
 		select {
 		case <-s.stopCh:
@@ -250,11 +260,11 @@ func (s *BinanceWSStream) readLoop(conn *websocket.Conn) {
 			return
 		}
 
-		s.handleMessage(msg)
+		s.handleMessage(msg, market)
 	}
 }
 
-func (s *BinanceWSStream) handleMessage(msg []byte) {
+func (s *BinanceWSStream) handleMessage(msg []byte, market string) {
 	var envelope struct {
 		Stream string          `json:"stream"`
 		Data   json.RawMessage `json:"data"`
@@ -264,6 +274,8 @@ func (s *BinanceWSStream) handleMessage(msg []byte) {
 	}
 
 	switch {
+	case strings.Contains(envelope.Stream, "@kline_"):
+		s.handleKline(envelope.Data, envelope.Stream, market)
 	case strings.HasSuffix(envelope.Stream, "@trade"):
 		s.handleTrade(envelope.Data, envelope.Stream)
 	case strings.HasSuffix(envelope.Stream, "@ticker"):
@@ -324,6 +336,79 @@ func (s *BinanceWSStream) handleTrade(data json.RawMessage, stream string) {
 	// Feed real price to frontend WS
 	if s.onRealPrice != nil {
 		s.onRealPrice(trade.Symbol, price)
+	}
+}
+
+func (s *BinanceWSStream) handleKline(data json.RawMessage, stream string, market string) {
+	var payload struct {
+		Symbol string `json:"s"`
+		Kline  struct {
+			OpenTime  int64  `json:"t"`
+			CloseTime int64  `json:"T"`
+			Symbol    string `json:"s"`
+			Interval  string `json:"i"`
+			Open      string `json:"o"`
+			Close     string `json:"c"`
+			High      string `json:"h"`
+			Low       string `json:"l"`
+			Volume    string `json:"v"`
+			Closed    bool   `json:"x"`
+		} `json:"k"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return
+	}
+	// Only closed bars reach strategies; forming bars would make OnBar fire
+	// repeatedly for the same timestamp and corrupt indicators.
+	if !payload.Kline.Closed {
+		return
+	}
+	symbol := strings.ToUpper(payload.Symbol)
+	if symbol == "" {
+		symbol = strings.ToUpper(payload.Kline.Symbol)
+	}
+	interval := strings.ToLower(payload.Kline.Interval)
+	closePrice := parseFloat(payload.Kline.Close)
+	if symbol == "" || interval == "" || closePrice <= 0 {
+		return
+	}
+
+	dedupeKey := symbol + "|" + interval
+	s.klineMu.Lock()
+	if payload.Kline.OpenTime <= s.klineLast[dedupeKey] {
+		s.klineMu.Unlock()
+		return
+	}
+	s.klineLast[dedupeKey] = payload.Kline.OpenTime
+	s.klineMu.Unlock()
+
+	bar := model.Bar{
+		Symbol:   symbol,
+		Open:     parseFloat(payload.Kline.Open),
+		High:     parseFloat(payload.Kline.High),
+		Low:      parseFloat(payload.Kline.Low),
+		Close:    closePrice,
+		Volume:   parseFloat(payload.Kline.Volume),
+		Interval: interval,
+		Time:     payload.Kline.OpenTime,
+	}
+
+	// A closed bar is also the freshest price we have for the symbol.
+	s.pricesMu.Lock()
+	s.prices[symbol] = closePrice
+	s.pricesTs[symbol] = time.Now().UnixMilli()
+	s.pricesMu.Unlock()
+
+	if s.onKline != nil {
+		s.onKline(bar, market)
+	} else if s.bus != nil {
+		// Standalone streams (tests or future non-feeder consumers) still
+		// publish; production routes through onKline so the feeder owns
+		// cross-source dedupe.
+		s.bus.PublishBlocking(event.Event{Type: event.TypeBar, Symbol: symbol, Data: bar})
+	}
+	if s.onBar != nil {
+		s.onBar(bar)
 	}
 }
 
@@ -470,6 +555,19 @@ func (s *BinanceWSStream) streamURL(marketType ...string) string {
 	for _, sym := range syms {
 		streams = append(streams, symbolStreams(sym)...)
 	}
+	s.klineMu.Lock()
+	prefix := market + "|"
+	for key := range s.klineSubs {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		parts := strings.SplitN(strings.TrimPrefix(key, prefix), "|", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		streams = append(streams, fmt.Sprintf("%s@kline_%s", parts[0], parts[1]))
+	}
+	s.klineMu.Unlock()
 	if market == "swap" {
 		return fmt.Sprintf("wss://fstream.binance.com/stream?streams=%s", strings.Join(streams, "/"))
 	}
@@ -513,6 +611,49 @@ func (s *BinanceWSStream) EnsureSymbol(symbol string, marketType ...string) {
 		"id":     time.Now().UnixMilli(),
 	}); err != nil {
 		log.Printf("[binance_ws] dynamic subscribe %s failed: %v（已入订阅表，重连后生效）", sym, err)
+	}
+}
+
+// EnsureKline subscribes to a closed-bar kline stream for symbol+interval.
+// Strategies call this through KlineFeeder so OnBar receives a bar within
+// milliseconds of the candle close instead of waiting for the 20s REST poll.
+// Subscriptions persist across reconnects (streamURL rebuilds from them).
+func (s *BinanceWSStream) EnsureKline(symbol, interval string, marketType ...string) {
+	sym := strings.ToLower(strings.TrimSpace(symbol))
+	iv := strings.ToLower(strings.TrimSpace(interval))
+	if sym == "" || iv == "" {
+		return
+	}
+	market := wsMarketType(marketType)
+	key := market + "|" + sym + "|" + iv
+
+	s.klineMu.Lock()
+	if s.klineSubs[key] {
+		s.klineMu.Unlock()
+		return
+	}
+	s.klineSubs[key] = true
+	s.klineMu.Unlock()
+
+	s.mu.RLock()
+	conn := s.conn
+	if market == "swap" {
+		conn = s.futuresConn
+	}
+	s.mu.RUnlock()
+	if conn == nil {
+		return
+	}
+
+	stream := fmt.Sprintf("%s@kline_%s", sym, iv)
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := conn.WriteJSON(map[string]any{
+		"method": "SUBSCRIBE",
+		"params": []string{stream},
+		"id":     time.Now().UnixMilli(),
+	}); err != nil {
+		log.Printf("[binance_ws] kline subscribe %s failed: %v（已入订阅表，重连后生效）", stream, err)
 	}
 }
 
@@ -566,6 +707,14 @@ func (s *BinanceWSStream) SetOnRealPrice(fn func(symbol string, price float64)) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onRealPrice = fn
+}
+
+// SetOnKline registers the closed-bar callback. Production points it at
+// market.KlineFeeder.HandleWSKline so WS/REST bars share one dedupe ledger.
+func (s *BinanceWSStream) SetOnKline(fn func(bar model.Bar, market string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onKline = fn
 }
 
 // SetOnPrice sets a generic price callback (used by conditional order engine).

@@ -13,20 +13,20 @@
 
 CREATE TABLE IF NOT EXISTS xt_ai_review_reports (
     id TEXT PRIMARY KEY,
-    user_id INTEGER NOT NULL DEFAULT 0,
+    user_id BIGINT NOT NULL DEFAULT 0,
     scope_type TEXT NOT NULL DEFAULT 'strategy',
     scope_id TEXT NOT NULL DEFAULT '',
-    period_start INTEGER NOT NULL DEFAULT 0,
-    period_end INTEGER NOT NULL DEFAULT 0,
-    trades_count INTEGER NOT NULL DEFAULT 0,
-    total_pnl REAL NOT NULL DEFAULT 0,
-    win_rate REAL NOT NULL DEFAULT 0,
-    max_drawdown REAL NOT NULL DEFAULT 0,
+    period_start BIGINT NOT NULL DEFAULT 0,
+    period_end BIGINT NOT NULL DEFAULT 0,
+    trades_count BIGINT NOT NULL DEFAULT 0,
+    total_pnl DOUBLE PRECISION NOT NULL DEFAULT 0,
+    win_rate DOUBLE PRECISION NOT NULL DEFAULT 0,
+    max_drawdown DOUBLE PRECISION NOT NULL DEFAULT 0,
     report_text TEXT NOT NULL DEFAULT '',
     model TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'pending',
     error TEXT NOT NULL DEFAULT '',
-    created_at INTEGER NOT NULL
+    created_at BIGINT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_ai_review_user ON xt_ai_review_reports(user_id, created_at);

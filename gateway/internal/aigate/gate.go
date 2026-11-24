@@ -225,6 +225,9 @@ func ClassifyEntry(req *order.Request) (entry bool, bypassReason string) {
 	if req.ClosePosition {
 		return false, "close_position"
 	}
+	if req.ReduceOnly {
+		return false, "reduce_only"
+	}
 	switch req.OrderType {
 	case model.TypeStopLoss, model.TypeTakeProfit, model.TypeStopLossLimit,
 		model.TypeTakeProfitLimit, model.TypeTrailingStop:
@@ -240,7 +243,8 @@ func ClassifyEntry(req *order.Request) (entry bool, bypassReason string) {
 		}
 		return true, ""
 	}
-	// 现货无做空：卖出即减持/出场。
+	// 现货无做空：卖出即减持/出场（含套利兑现利润的卖出腿），归为降风险方向，
+	// 与合约减仓同口径豁免实盘总闸——总闸关闭时也要能退出/兑现仓位。
 	if req.Side == model.SideSell {
 		return false, "spot_sell_reduces"
 	}

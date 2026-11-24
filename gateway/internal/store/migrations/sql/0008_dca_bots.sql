@@ -10,43 +10,43 @@
 
 CREATE TABLE IF NOT EXISTS dca_bots (
     id TEXT PRIMARY KEY,
-    user_id INTEGER DEFAULT 0,
+    user_id BIGINT DEFAULT 0,
     name TEXT,
     symbol TEXT,
     exchange TEXT DEFAULT 'paper',
-    quote_amount REAL,
-    interval_minutes INTEGER,
-    max_orders INTEGER DEFAULT 0,
-    period_budget REAL DEFAULT 0,
-    take_profit_pct REAL DEFAULT 0,
-    stop_loss_pct REAL DEFAULT 0,
-    trailing_enabled INTEGER DEFAULT 0,
+    quote_amount DOUBLE PRECISION,
+    interval_minutes BIGINT,
+    max_orders BIGINT DEFAULT 0,
+    period_budget DOUBLE PRECISION DEFAULT 0,
+    take_profit_pct DOUBLE PRECISION DEFAULT 0,
+    stop_loss_pct DOUBLE PRECISION DEFAULT 0,
+    trailing_enabled BIGINT DEFAULT 0,
     status TEXT DEFAULT 'stopped',
-    filled_orders INTEGER DEFAULT 0,
-    total_invested REAL DEFAULT 0,
-    base_qty REAL DEFAULT 0,
-    avg_price REAL DEFAULT 0,
-    realized_pnl REAL DEFAULT 0,
-    last_buy_at INTEGER DEFAULT 0,
-    highest_price REAL DEFAULT 0,
-    created_at INTEGER,
-    updated_at INTEGER,
-    started_at INTEGER DEFAULT 0,
-    stopped_at INTEGER DEFAULT 0
+    filled_orders BIGINT DEFAULT 0,
+    total_invested DOUBLE PRECISION DEFAULT 0,
+    base_qty DOUBLE PRECISION DEFAULT 0,
+    avg_price DOUBLE PRECISION DEFAULT 0,
+    realized_pnl DOUBLE PRECISION DEFAULT 0,
+    last_buy_at BIGINT DEFAULT 0,
+    highest_price DOUBLE PRECISION DEFAULT 0,
+    created_at BIGINT,
+    updated_at BIGINT,
+    started_at BIGINT DEFAULT 0,
+    stopped_at BIGINT DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_dca_bots_user_status ON dca_bots(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_dca_bots_symbol_status ON dca_bots(symbol, status);
 
 CREATE TABLE IF NOT EXISTS dca_bot_orders (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     bot_id TEXT,
     side TEXT,
-    price REAL,
-    quantity REAL,
-    quote_qty REAL,
+    price DOUBLE PRECISION,
+    quantity DOUBLE PRECISION,
+    quote_qty DOUBLE PRECISION,
     reason TEXT DEFAULT '',
-    ts INTEGER
+    ts BIGINT
 );
 
 CREATE INDEX IF NOT EXISTS idx_dca_bot_orders_bot_ts ON dca_bot_orders(bot_id, ts);

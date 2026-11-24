@@ -10,59 +10,59 @@
 
 CREATE TABLE IF NOT EXISTS layered_martin_bots (
     id TEXT PRIMARY KEY,
-    user_id INTEGER DEFAULT 0,
+    user_id BIGINT DEFAULT 0,
     name TEXT,
     symbol TEXT,
     exchange TEXT DEFAULT 'paper',
-    price_deviation_pct REAL DEFAULT 0.03,
-    take_profit_pct REAL DEFAULT 0,
-    stop_loss_pct REAL DEFAULT 0,
-    trailing_enabled INTEGER DEFAULT 0,
+    price_deviation_pct DOUBLE PRECISION DEFAULT 0.03,
+    take_profit_pct DOUBLE PRECISION DEFAULT 0,
+    stop_loss_pct DOUBLE PRECISION DEFAULT 0,
+    trailing_enabled BIGINT DEFAULT 0,
     status TEXT DEFAULT 'stopped',
-    realized_pnl REAL DEFAULT 0,
-    total_trades INTEGER DEFAULT 0,
-    created_at INTEGER,
-    updated_at INTEGER,
-    started_at INTEGER DEFAULT 0,
-    stopped_at INTEGER DEFAULT 0
+    realized_pnl DOUBLE PRECISION DEFAULT 0,
+    total_trades BIGINT DEFAULT 0,
+    created_at BIGINT,
+    updated_at BIGINT,
+    started_at BIGINT DEFAULT 0,
+    stopped_at BIGINT DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_layered_martin_bots_user_status ON layered_martin_bots(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_layered_martin_bots_symbol_status ON layered_martin_bots(symbol, status);
 
 CREATE TABLE IF NOT EXISTS layered_martin_groups (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     bot_id TEXT,
-    group_index INTEGER,
-    quote_amount REAL,
-    multiplier REAL DEFAULT 2,
-    max_layers INTEGER DEFAULT 5,
-    budget_cap REAL DEFAULT 0,
-    layer INTEGER DEFAULT 0,
-    total_invested REAL DEFAULT 0,
-    base_qty REAL DEFAULT 0,
-    avg_price REAL DEFAULT 0,
-    entry_price REAL DEFAULT 0,
-    highest_price REAL DEFAULT 0,
-    pending_layer INTEGER DEFAULT 0,
+    group_index BIGINT,
+    quote_amount DOUBLE PRECISION,
+    multiplier DOUBLE PRECISION DEFAULT 2,
+    max_layers BIGINT DEFAULT 5,
+    budget_cap DOUBLE PRECISION DEFAULT 0,
+    layer BIGINT DEFAULT 0,
+    total_invested DOUBLE PRECISION DEFAULT 0,
+    base_qty DOUBLE PRECISION DEFAULT 0,
+    avg_price DOUBLE PRECISION DEFAULT 0,
+    entry_price DOUBLE PRECISION DEFAULT 0,
+    highest_price DOUBLE PRECISION DEFAULT 0,
+    pending_layer BIGINT DEFAULT 0,
     status TEXT DEFAULT 'idle',
-    created_at INTEGER,
-    updated_at INTEGER
+    created_at BIGINT,
+    updated_at BIGINT
 );
 
 CREATE INDEX IF NOT EXISTS idx_layered_martin_groups_bot ON layered_martin_groups(bot_id, group_index);
 
 CREATE TABLE IF NOT EXISTS layered_martin_orders (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     bot_id TEXT,
-    group_index INTEGER,
+    group_index BIGINT,
     side TEXT,
-    layer INTEGER DEFAULT 0,
-    price REAL,
-    quantity REAL,
-    quote_qty REAL,
+    layer BIGINT DEFAULT 0,
+    price DOUBLE PRECISION,
+    quantity DOUBLE PRECISION,
+    quote_qty DOUBLE PRECISION,
     reason TEXT DEFAULT '',
-    ts INTEGER
+    ts BIGINT
 );
 
 CREATE INDEX IF NOT EXISTS idx_layered_martin_orders_bot_ts ON layered_martin_orders(bot_id, ts);

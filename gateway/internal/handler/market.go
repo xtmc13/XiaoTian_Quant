@@ -125,6 +125,12 @@ func fetchBinanceKlines(symbol, interval string, limit int, fromMs, toMs int64) 
 	return fetchBinanceKlinesForMarket(symbol, interval, limit, fromMs, toMs, "spot")
 }
 
+// fetchBinanceKlinesMarket 按市场类型取 K 线：swap/futures/contract 走 fapi，
+// 其余走现货 REST。供回测等需要区分行情口径的链路使用。
+func fetchBinanceKlinesMarket(symbol, interval string, limit int, fromMs, toMs int64, marketType string) ([]map[string]any, error) {
+	return fetchBinanceKlinesForMarket(symbol, interval, limit, fromMs, toMs, marketType)
+}
+
 func isFuturesMarketType(marketType string) bool {
 	switch strings.ToLower(strings.TrimSpace(marketType)) {
 	case "swap", "futures", "contract":
@@ -132,6 +138,34 @@ func isFuturesMarketType(marketType string) bool {
 	default:
 		return false
 	}
+}
+
+// contractBacktestStrategyTypes 是回测页归入合约（swap）口径的内置策略类型，
+// 与前端 CONTRACT_CRA_STRATEGIES 集合保持一致；仅在请求未显式传 market_type 时兜底使用。
+var contractBacktestStrategyTypes = map[string]bool{
+	"trend_long":       true,
+	"trend_short":      true,
+	"counter_stable":   true,
+	"head_tail_arb":    true,
+	"dual_burn":        true,
+	"global_burn":      true,
+	"macd_death_short": true,
+	"ema_counter_trend": true,
+}
+
+// normalizeBacktestMarketType 归一化回测行情口径：显式 market_type 优先，
+// 未传时按策略类型兜底；margin 属现货保证金，K 线归现货。
+func normalizeBacktestMarketType(marketType, strategyType string) string {
+	switch strings.ToLower(strings.TrimSpace(marketType)) {
+	case "swap", "futures", "contract":
+		return "swap"
+	case "spot", "margin":
+		return "spot"
+	}
+	if contractBacktestStrategyTypes[strings.ToLower(strings.TrimSpace(strategyType))] {
+		return "swap"
+	}
+	return "spot"
 }
 
 func fetchBinanceKlinesForMarket(symbol, interval string, limit int, fromMs, toMs int64, marketType string) ([]map[string]any, error) {
@@ -187,14 +221,14 @@ func fetchBinanceKlinesForMarket(symbol, interval string, limit int, fromMs, toM
 }
 
 // fetchBinanceKlinesRange 按日期范围分页拉取 K 线（每页 1000 根，最多 50 页），
-// 修复此前 from/to 区间被单次 limit=500 静默截断的问题。
-func fetchBinanceKlinesRange(symbol, interval string, fromMs, toMs int64) ([]map[string]any, error) {
+// 修复此前 from/to 区间被单次 limit=500 静默截断的问题。marketType 决定现货/fapi 口径。
+func fetchBinanceKlinesRange(symbol, interval string, fromMs, toMs int64, marketType string) ([]map[string]any, error) {
 	const pageLimit = 1000
 	const maxPages = 50
 	var out []map[string]any
 	start := fromMs
 	for page := 0; page < maxPages; page++ {
-		batch, err := fetchBinanceKlines(symbol, interval, pageLimit, start, toMs)
+		batch, err := fetchBinanceKlinesMarket(symbol, interval, pageLimit, start, toMs, marketType)
 		if err != nil {
 			return nil, err
 		}
@@ -493,6 +527,12 @@ func RunBacktest(c *gin.Context) {
 	interval := getString(body, "interval", "1h")
 	strategyType := getString(body, "strategy_type", "sma_cross")
 
+	// 行情口径：显式 market_type 优先（兼容 market/category 别名），未传按策略类型兜底。
+	marketType := normalizeBacktestMarketType(
+		getString(body, "market_type", getString(body, "market", getString(body, "category", ""))),
+		strategyType,
+	)
+
 	// Parse date range: "from" / "to" in ISO format (e.g. "2024-01-01")
 	// If not provided, use num_bars to determine lookback
 	var fromMs, toMs int64
@@ -514,10 +554,11 @@ func RunBacktest(c *gin.Context) {
 	}
 
 	// Try to load from local storage first（仅限未指定日期范围：
-	// 本地缓存根数有限，无法保证覆盖 from/to 区间，指定范围时改为分页全量拉取）
+	// 本地缓存根数有限，无法保证覆盖 from/to 区间，指定范围时改为分页全量拉取）。
+	// 本地缓存未按市场类型分键：swap 口径跳过现货缓存，避免混读现货 K 线。
 	var bars []model.Bar
 	useLocalData := false
-	if fromMs == 0 && toMs == 0 && DataDownloader != nil {
+	if fromMs == 0 && toMs == 0 && marketType == "spot" && DataDownloader != nil {
 		bars = DataDownloader.LoadBarsForBacktest(symbol, interval, fromMs, toMs)
 		if len(bars) >= 50 {
 			useLocalData = true
@@ -525,13 +566,13 @@ func RunBacktest(c *gin.Context) {
 	}
 
 	if !useLocalData {
-		// Fetch real historical klines from Binance
+		// Fetch real historical klines from Binance（swap 走 fapi，spot 走现货 REST）
 		var klines []map[string]any
 		var err error
 		if fromMs > 0 && toMs > fromMs {
-			klines, err = fetchBinanceKlinesRange(symbol, interval, fromMs, toMs)
+			klines, err = fetchBinanceKlinesRange(symbol, interval, fromMs, toMs, marketType)
 		} else {
-			klines, err = fetchBinanceKlines(symbol, interval, numBars, fromMs, toMs)
+			klines, err = fetchBinanceKlinesMarket(symbol, interval, numBars, fromMs, toMs, marketType)
 		}
 		if err != nil {
 			c.JSON(http.StatusBadGateway, gin.H{

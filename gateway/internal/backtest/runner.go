@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/xiaotian-quant/gateway/internal/data"
+	"github.com/xiaotian-quant/gateway/internal/execution"
 	"github.com/xiaotian-quant/gateway/internal/model"
 )
 
@@ -43,16 +44,16 @@ type Runner struct {
 
 // Position during backtest.
 type Position struct {
-	Symbol        string
-	Side          model.OrderSide
-	Quantity      float64
-	EntryPrice    float64
-	ExitPrice     float64
-	EntryTime     int64
-	ExitTime      int64
-	RealizedPnL   float64
-	IsClosed      bool
-	ExitReason    string
+	Symbol      string
+	Side        model.OrderSide
+	Quantity    float64
+	EntryPrice  float64
+	ExitPrice   float64
+	EntryTime   int64
+	ExitTime    int64
+	RealizedPnL float64
+	IsClosed    bool
+	ExitReason  string
 	// Adjustments 是持仓期间的加仓/减仓总次数（v1.2：含 PositionAdjuster
 	// 钩子产生的调整单与信号驱动的同向加仓），回测报告据此统计平均加仓次数。
 	Adjustments int `json:"adjustments,omitempty"`
@@ -106,10 +107,10 @@ type OrderLedgerEntry struct {
 // RunnerConfig configures the backtest runner.
 type RunnerConfig struct {
 	InitialBalance  float64 `json:"initial_balance"`
-	Commission      float64 `json:"commission"`       // e.g., 0.001 for 0.1%
-	Slippage        float64 `json:"slippage"`         // e.g., 0.0005 for 0.05%
+	Commission      float64 `json:"commission"` // e.g., 0.001 for 0.1%
+	Slippage        float64 `json:"slippage"`   // e.g., 0.0005 for 0.05%
 	LatencyMs       int64   `json:"latency_ms"`
-	StartTime       int64   `json:"start_time"`       // unix ms, 0 = all data
+	StartTime       int64   `json:"start_time"` // unix ms, 0 = all data
 	EndTime         int64   `json:"end_time"`
 	PositionSizePct float64 `json:"position_size_pct"` // position size as % of balance, e.g. 0.02 = 2%
 	RiskFreeRate    float64 `json:"risk_free_rate"`    // annual risk-free rate, e.g. 0.02 = 2%
@@ -146,19 +147,19 @@ func NewRunner(cfg RunnerConfig) *Runner {
 		seed = time.Now().UnixNano()
 	}
 	return &Runner{
-		initialBalance:  cfg.InitialBalance,
-		commission:      cfg.Commission,
-		slippage:        cfg.Slippage,
-		latencyMs:       cfg.LatencyMs,
-		startTime:       cfg.StartTime,
-		endTime:         cfg.EndTime,
-		positionSizePct: cfg.PositionSizePct,
-		riskFreeRate:    cfg.RiskFreeRate,
+		initialBalance:         cfg.InitialBalance,
+		commission:             cfg.Commission,
+		slippage:               cfg.Slippage,
+		latencyMs:              cfg.LatencyMs,
+		startTime:              cfg.StartTime,
+		endTime:                cfg.EndTime,
+		positionSizePct:        cfg.PositionSizePct,
+		riskFreeRate:           cfg.RiskFreeRate,
 		maxPositionAdjustments: cfg.MaxPositionAdjustments,
-		rng:             rand.New(rand.NewSource(seed)),
-		bars:            make(map[string][]model.Bar),
-		ticks:           make(map[string][]model.Tick),
-		equityPeak:      cfg.InitialBalance,
+		rng:                    rand.New(rand.NewSource(seed)),
+		bars:                   make(map[string][]model.Bar),
+		ticks:                  make(map[string][]model.Tick),
+		equityPeak:             cfg.InitialBalance,
 	}
 }
 
@@ -242,52 +243,52 @@ type MaxPositionAdjustmentsProvider interface {
 
 // StrategyState provides current state to the strategy during backtest.
 type StrategyState struct {
-	Cash            float64
-	Position        *Position
-	Equity          float64
-	BarIndex        int
-	Bars            []model.Bar
-	Indicators      map[string]float64
-	TradeCount      int
+	Cash       float64
+	Position   *Position
+	Equity     float64
+	BarIndex   int
+	Bars       []model.Bar
+	Indicators map[string]float64
+	TradeCount int
 }
 
 // ── Run ──
 
 // RunResult holds the output of a backtest run.
 type RunResult struct {
-	TotalReturn    float64         `json:"total_return"`
-	TotalReturnPct float64         `json:"total_return_pct"`
-	MaxDrawdown    float64         `json:"max_drawdown"`
-	MaxDrawdownPct float64         `json:"max_drawdown_pct"`
-	SharpeRatio    float64         `json:"sharpe_ratio"`
-	SortinoRatio   float64         `json:"sortino_ratio"`
-	CalmarRatio    float64         `json:"calmar_ratio"`
-	WinRate        float64         `json:"win_rate"`
-	ProfitFactor   float64         `json:"profit_factor"`
-	TotalTrades    int             `json:"total_trades"`
-	WinningTrades  int             `json:"winning_trades"`
-	LosingTrades   int             `json:"losing_trades"`
-	AvgWin         float64         `json:"avg_win"`
-	AvgLoss        float64         `json:"avg_loss"`
-	BestTrade      float64         `json:"best_trade"`
-	WorstTrade     float64         `json:"worst_trade"`
-	EquityCurve    []EquityPoint   `json:"equity_curve"`
-	Trades         []Position      `json:"trades"`
+	TotalReturn    float64           `json:"total_return"`
+	TotalReturnPct float64           `json:"total_return_pct"`
+	MaxDrawdown    float64           `json:"max_drawdown"`
+	MaxDrawdownPct float64           `json:"max_drawdown_pct"`
+	SharpeRatio    float64           `json:"sharpe_ratio"`
+	SortinoRatio   float64           `json:"sortino_ratio"`
+	CalmarRatio    float64           `json:"calmar_ratio"`
+	WinRate        float64           `json:"win_rate"`
+	ProfitFactor   float64           `json:"profit_factor"`
+	TotalTrades    int               `json:"total_trades"`
+	WinningTrades  int               `json:"winning_trades"`
+	LosingTrades   int               `json:"losing_trades"`
+	AvgWin         float64           `json:"avg_win"`
+	AvgLoss        float64           `json:"avg_loss"`
+	BestTrade      float64           `json:"best_trade"`
+	WorstTrade     float64           `json:"worst_trade"`
+	EquityCurve    []EquityPoint     `json:"equity_curve"`
+	Trades         []Position        `json:"trades"`
 	Orders         []model.OrderData `json:"orders"`
-	DurationMs     int64           `json:"duration_ms"`
+	DurationMs     int64             `json:"duration_ms"`
 	// v1.2 加仓统计：TotalAdjustments 是所有已平仓持仓的加/减仓总次数，
 	// AvgAdjustmentsPerTrade 是平均每笔交易的调整次数（DCA 密集度）。
 	TotalAdjustments       int     `json:"total_adjustments"`
 	AvgAdjustmentsPerTrade float64 `json:"avg_adjustments_per_trade"`
 
 	// ── QuantDinger 对齐字段（v1.3）──
-	AnnualizedReturn     float64 `json:"annualized_return,omitempty"`     // 年化收益 %（复合，区间 <1 天为 0）
-	AnnualizedVolatility float64 `json:"annualized_volatility,omitempty"` // 年化波动率 %（按 K 线间隔推断年化因子）
-	TotalCommission      float64 `json:"total_commission,omitempty"`      // 全部成交的手续费合计
-	MaxDrawdownPeakTime  int64   `json:"max_drawdown_peak_time,omitempty"`
-	MaxDrawdownTroughTime int64  `json:"max_drawdown_trough_time,omitempty"`
-	Executions           []Execution        `json:"executions,omitempty"`
-	OrderLedger          []OrderLedgerEntry `json:"order_ledger,omitempty"`
+	AnnualizedReturn      float64            `json:"annualized_return,omitempty"`     // 年化收益 %（复合，区间 <1 天为 0）
+	AnnualizedVolatility  float64            `json:"annualized_volatility,omitempty"` // 年化波动率 %（按 K 线间隔推断年化因子）
+	TotalCommission       float64            `json:"total_commission,omitempty"`      // 全部成交的手续费合计
+	MaxDrawdownPeakTime   int64              `json:"max_drawdown_peak_time,omitempty"`
+	MaxDrawdownTroughTime int64              `json:"max_drawdown_trough_time,omitempty"`
+	Executions            []Execution        `json:"executions,omitempty"`
+	OrderLedger           []OrderLedgerEntry `json:"order_ledger,omitempty"`
 	// ResultStatus 三态（QuantDinger resultStatus）：no_signals=无任何成交；
 	// open_position_only=有成交但无信号驱动的完整回合（仅 end_of_test 强制平仓）；
 	// completed_trades=至少一笔信号驱动的完整回合。
@@ -591,7 +592,7 @@ func (r *Runner) fillPending(strategy BacktestStrategy, signal *model.Signal, si
 			if pos.Side == side && signal.Qty > 0 {
 				// Add to existing position
 				addNotional := signal.Qty * execPrice
-				commissionCost := addNotional * r.commission
+				commissionCost := execution.Fee(addNotional, r.execConfig())
 				if addNotional+commissionCost > *cash {
 					r.appendLedger(OrderLedgerEntry{
 						SignalTime: signalTime, Direction: signal.Direction,
@@ -634,7 +635,7 @@ func (r *Runner) fillPending(strategy BacktestStrategy, signal *model.Signal, si
 			qty = stake / execPrice
 		}
 		notional := qty * execPrice
-		commissionCost := notional * r.commission
+		commissionCost := execution.Fee(notional, r.execConfig())
 		if notional+commissionCost > *cash {
 			r.appendLedger(OrderLedgerEntry{
 				SignalTime: signalTime, Direction: signal.Direction,
@@ -692,7 +693,7 @@ func (r *Runner) closePosition(position *Position, execPrice float64, t int64, s
 	closeNotional := position.Quantity * execPrice
 	closeCommission := 0.0
 	if chargeCommission {
-		closeCommission = closeNotional * r.commission
+		closeCommission = execution.Fee(closeNotional, r.execConfig())
 		closeLegPnL -= closeCommission
 	}
 	// v1.2：减仓调整已落袋的盈亏并入展示口径；现金只记平仓腿
@@ -766,7 +767,7 @@ func (r *Runner) applyPositionAdjustment(position *Position, amt float64, bar mo
 		}
 		addQty := amt / execPrice
 		addNotional := addQty * execPrice
-		commissionCost := addNotional * r.commission
+		commissionCost := execution.Fee(addNotional, r.execConfig())
 		*cash -= addNotional + commissionCost
 		totalCost := position.Quantity*position.EntryPrice + addQty*execPrice
 		position.Quantity += addQty
@@ -799,7 +800,7 @@ func (r *Runner) applyPositionAdjustment(position *Position, amt float64, bar mo
 		legPnL = reduceQty * (position.EntryPrice - execPrice)
 		execSide = "buy"
 	}
-	reduceCommission := reduceNotional * r.commission
+	reduceCommission := execution.Fee(reduceNotional, r.execConfig())
 	legPnL -= reduceCommission
 	*cash += reduceNotional + legPnL
 	position.partialPnL += legPnL
@@ -824,14 +825,13 @@ func (r *Runner) applyPositionAdjustment(position *Position, amt float64, bar mo
 	}
 }
 
+// execConfig 把 Runner 的费率字段适配到共享执行模型，避免两处公式漂移。
+func (r *Runner) execConfig() execution.Config {
+	return execution.Config{FeeRate: r.commission, Slippage: r.slippage}
+}
+
 func (r *Runner) applySlippage(price float64, direction string) float64 {
-	slipFactor := 1.0
-	if direction == "LONG" {
-		slipFactor = 1.0 + r.slippage + r.rng.Float64()*r.slippage*2
-	} else if direction == "SHORT" || direction == "CLOSE" {
-		slipFactor = 1.0 - r.slippage - r.rng.Float64()*r.slippage*2
-	}
-	return price * slipFactor
+	return execution.ApplySlippage(price, direction, r.execConfig(), r.rng.Float64())
 }
 
 // MetricsFromEquity 从权益曲线 + 成交明细构建完整指标（不依赖 Runner 实例，

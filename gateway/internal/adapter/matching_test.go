@@ -278,7 +278,7 @@ func TestMarketOrderEmptyBook(t *testing.T) {
 
 	result, _ := eng.SubmitOrder("buy", "market", 0, 1.0, 1)
 
-	assertEq(t, result["status"].(string), "FILLED", "status is FILLED")
+	assertEq(t, result["status"].(string), "CANCELLED", "empty book cancels, never FILLED")
 	assertFloat(t, result["filled"].(float64), 0.0, "filled 0 (no liquidity)")
 	assertEq(t, int(eng.TradeCount()), 0, "no trades")
 }
@@ -291,6 +291,7 @@ func TestMarketOrderLargeSize(t *testing.T) {
 	result, _ := eng.SubmitOrder("buy", "market", 0, 2.0, 3)
 
 	assertFloat(t, result["filled"].(float64), 0.8, "filled only available 0.8")
+	assertEq(t, result["status"].(string), "PARTIALLY_FILLED", "thin book leaves remainder unfilled")
 	assertEq(t, int(eng.TradeCount()), 2, "2 trades")
 
 	snap, _ := eng.Snapshot(5)

@@ -24,18 +24,18 @@
 
 CREATE TABLE IF NOT EXISTS xt_indicator_alerts (
     id TEXT PRIMARY KEY,
-    user_id INTEGER NOT NULL DEFAULT 0,
+    user_id BIGINT NOT NULL DEFAULT 0,
     name TEXT NOT NULL DEFAULT '',
     symbol TEXT NOT NULL DEFAULT '',
     interval TEXT NOT NULL DEFAULT '1h',
     condition_expr TEXT NOT NULL DEFAULT '',
     message TEXT NOT NULL DEFAULT '',
-    cooldown_minutes INTEGER NOT NULL DEFAULT 60,
-    last_triggered_at INTEGER NOT NULL DEFAULT 0,
-    last_value REAL NOT NULL DEFAULT 0,
-    active INTEGER NOT NULL DEFAULT 1,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    cooldown_minutes BIGINT NOT NULL DEFAULT 60,
+    last_triggered_at BIGINT NOT NULL DEFAULT 0,
+    last_value DOUBLE PRECISION NOT NULL DEFAULT 0,
+    active BIGINT NOT NULL DEFAULT 1,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_indicator_alerts_user ON xt_indicator_alerts(user_id, active, updated_at);

@@ -163,13 +163,18 @@ func TestMarketListingStatsAIBotBacktestNote(t *testing.T) {
 	other := marketTestRouter(794, "user")
 	w, resp := marketDo(t, other, "GET", "/market/listings/"+id+"/stats", "")
 	assertEq(t, w.Code, http.StatusOK, "ai_bot stats")
-	// AI 信号驱动：无回测对照（显式 null + 如实说明），不下发偏差
+	// AI 信号驱动：无回测对照（显式 null + 如实说明），字段集与 grid 对齐
 	v, exists := resp["backtest_series"]
 	assertTrue(t, exists && v == nil, "backtest_series should be explicit null")
 	note, ok := resp["backtest_note"].(string)
 	assertTrue(t, ok && strings.Contains(note, "AI 信号驱动策略无回测对照"), "ai_bot note")
-	if _, exists := resp["deviation"]; exists {
-		t.Fatal("ai_bot should not carry deviation")
+	assertTrue(t, strings.Contains(note, "平台实盘快照"), "ai_bot note discloses live-snapshot basis")
+	// assumptions / deviation 显式置 null，不编造曲线或偏差
+	if a, exists := resp["backtest_assumptions"]; !exists || a != nil {
+		t.Fatal("ai_bot should carry explicit null assumptions")
+	}
+	if d, exists := resp["deviation"]; !exists || d != nil {
+		t.Fatal("ai_bot should carry explicit null deviation")
 	}
 	if _, exists := resp["backtest_error"]; exists {
 		t.Fatal("ai_bot should not carry backtest_error")
@@ -207,8 +212,11 @@ func TestMarketListingStatsGridBacktestNoData(t *testing.T) {
 	assertTrue(t, resp["backtest_series"] == nil, "no series without bars")
 	errMsg, ok := resp["backtest_error"].(string)
 	assertTrue(t, ok && strings.Contains(errMsg, "K线数据不足"), "backtest_error explains insufficiency")
-	if _, exists := resp["deviation"]; exists {
-		t.Fatal("no deviation without backtest series")
+	if d, exists := resp["deviation"]; !exists || d != nil {
+		t.Fatal("no deviation without backtest series (explicit null)")
+	}
+	if a, exists := resp["backtest_assumptions"]; !exists || a != nil {
+		t.Fatal("no assumptions without backtest series (explicit null)")
 	}
 }
 

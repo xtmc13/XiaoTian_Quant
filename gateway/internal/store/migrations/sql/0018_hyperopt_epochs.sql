@@ -4,17 +4,17 @@
 
 CREATE TABLE IF NOT EXISTS xt_hyperopt_epochs (
     id TEXT PRIMARY KEY,
-    user_id INTEGER NOT NULL DEFAULT 0,
+    user_id BIGINT NOT NULL DEFAULT 0,
     job_id TEXT NOT NULL,
     strategy_id TEXT NOT NULL DEFAULT '',
-    trial_id INTEGER NOT NULL DEFAULT 0,
+    trial_id BIGINT NOT NULL DEFAULT 0,
     params TEXT NOT NULL DEFAULT '{}',
     metrics TEXT NOT NULL DEFAULT '{}',
-    loss REAL,
+    loss DOUBLE PRECISION,
     loss_name TEXT NOT NULL DEFAULT '',
-    applied INTEGER NOT NULL DEFAULT 0,
-    applied_at INTEGER,
-    created_at INTEGER NOT NULL
+    applied BIGINT NOT NULL DEFAULT 0,
+    applied_at BIGINT,
+    created_at BIGINT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_hyperopt_epochs_job ON xt_hyperopt_epochs(job_id, created_at);

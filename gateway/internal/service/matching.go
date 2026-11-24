@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -267,10 +268,37 @@ func (ms *MatchingService) SimulateTrading(symbol string, price float64) {
 	}()
 }
 
+// demoLiquidityEnabled reports whether the paper book should be seeded with
+// simulated market-making levels. Default false: a paper account should only
+// trade against the real book, otherwise fills are an artifact of fake depth.
+func demoLiquidityEnabled() bool {
+	if v := strings.TrimSpace(os.Getenv("PAPER_DEMO_LIQUIDITY")); v != "" {
+		if enabled, err := strconv.ParseBool(v); err == nil {
+			return enabled
+		}
+	}
+	cfg := store.GetConfig()
+	for _, section := range []string{"paper", "paper_trading"} {
+		m, _ := cfg[section].(map[string]any)
+		if m == nil {
+			continue
+		}
+		if enabled, ok := m["demo_liquidity"].(bool); ok {
+			return enabled
+		}
+	}
+	return false
+}
+
 // StartDataFeed begins periodic simulated trading for configured symbols.
 // Prices are fetched from Binance public API; hard-coded fake prices are no
-// longer used. Symbols without a real price are skipped.
+// longer used. Symbols without a real price are skipped. Disabled unless
+// paper.demo_liquidity is explicitly enabled.
 func (ms *MatchingService) StartDataFeed() {
+	if !demoLiquidityEnabled() {
+		log.Printf("[Matching] demo liquidity disabled (paper.demo_liquidity=false); real book only")
+		return
+	}
 	symbols := []string{"BTCUSDT", "ETHUSDT", "SOLUSDT"}
 	lastPrices := make(map[string]float64)
 	var priceMu sync.Mutex

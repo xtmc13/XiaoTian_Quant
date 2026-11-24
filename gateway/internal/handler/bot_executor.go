@@ -37,9 +37,6 @@ func NewKindOMSBotExecutor(kind string) *OMSBotExecutor { return &OMSBotExecutor
 // BuySpot 按约 quoteAmount（计价币）买入现货：数量按参考价换算，
 // 市价单进 OMS；返回确认成交量（0=未成交，调用方不得推进状态）。
 func (e *OMSBotExecutor) BuySpot(botID, symbol, exchange string, userID int64, quoteAmount, refPrice float64) (float64, float64, error) {
-	if err := canPlaceLiveOrder(exchange, true); err != nil {
-		return 0, 0, err
-	}
 	qty := quoteAmount
 	if refPrice > 0 {
 		qty = quoteAmount / refPrice
@@ -53,6 +50,9 @@ func (e *OMSBotExecutor) BuySpot(botID, symbol, exchange string, userID int64, q
 		Exchange:  exchange,
 		UserID:    uint64(userID),
 		ClientOID: e.botClientOID(botID),
+	}
+	if err := canPlaceLiveOrderForRequest(exchange, true, req); err != nil {
+		return 0, 0, err
 	}
 	ord, err := order.GetOrderManager().PlaceOrder(req)
 	if err != nil {
@@ -74,9 +74,6 @@ func (e *OMSBotExecutor) BuySpot(botID, symbol, exchange string, userID int64, q
 
 // SellSpot 卖出 baseQty 个现货（市价单），返回确认成交量与均价。
 func (e *OMSBotExecutor) SellSpot(botID, symbol, exchange string, userID int64, baseQty, refPrice float64) (float64, float64, error) {
-	if err := canPlaceLiveOrder(exchange, true); err != nil {
-		return 0, 0, err
-	}
 	req := &order.Request{
 		Symbol:    symbol,
 		Side:      model.SideSell,
@@ -86,6 +83,9 @@ func (e *OMSBotExecutor) SellSpot(botID, symbol, exchange string, userID int64, 
 		Exchange:  exchange,
 		UserID:    uint64(userID),
 		ClientOID: e.botClientOID(botID),
+	}
+	if err := canPlaceLiveOrderForRequest(exchange, true, req); err != nil {
+		return 0, 0, err
 	}
 	ord, err := order.GetOrderManager().PlaceOrder(req)
 	if err != nil {
@@ -111,9 +111,6 @@ func (e *OMSBotExecutor) SellSpot(botID, symbol, exchange string, userID int64, 
 // 委托对前端经现有订单查询/WS 可见，成交回报经订单事件（client_oid
 // "pystrat:<id>"）回推策略 on_order。live 进单前过 canPlaceLiveOrder 安全闸。
 func (e *OMSBotExecutor) BuySpotLimit(botID, symbol, exchange string, userID int64, quoteAmount, price float64) (string, error) {
-	if err := canPlaceLiveOrder(exchange, true); err != nil {
-		return "", err
-	}
 	if price <= 0 {
 		return "", fmt.Errorf("limit buy requires a positive price")
 	}
@@ -128,6 +125,9 @@ func (e *OMSBotExecutor) BuySpotLimit(botID, symbol, exchange string, userID int
 		UserID:    uint64(userID),
 		ClientOID: e.botClientOID(botID),
 	}
+	if err := canPlaceLiveOrderForRequest(exchange, true, req); err != nil {
+		return "", err
+	}
 	ord, err := order.GetOrderManager().PlaceOrder(req)
 	if err != nil {
 		return "", err
@@ -138,9 +138,6 @@ func (e *OMSBotExecutor) BuySpotLimit(botID, symbol, exchange string, userID int
 // SellSpotLimit 是 pystrat v1.1 的限价卖出：挂现货 LIMIT 单，返回订单 ID。
 // 语义同 BuySpotLimit（未成交不等于错误，成交回报走订单事件）。
 func (e *OMSBotExecutor) SellSpotLimit(botID, symbol, exchange string, userID int64, baseQty, price float64) (string, error) {
-	if err := canPlaceLiveOrder(exchange, true); err != nil {
-		return "", err
-	}
 	if price <= 0 {
 		return "", fmt.Errorf("limit sell requires a positive price")
 	}
@@ -154,6 +151,9 @@ func (e *OMSBotExecutor) SellSpotLimit(botID, symbol, exchange string, userID in
 		UserID:    uint64(userID),
 		ClientOID: e.botClientOID(botID),
 	}
+	if err := canPlaceLiveOrderForRequest(exchange, true, req); err != nil {
+		return "", err
+	}
 	ord, err := order.GetOrderManager().PlaceOrder(req)
 	if err != nil {
 		return "", err
@@ -163,13 +163,10 @@ func (e *OMSBotExecutor) SellSpotLimit(botID, symbol, exchange string, userID in
 
 // PlaceContract 执行合约腿下单（grid.Runner 的 ContractExecutor 生产实现）：
 // 合约市价单走现有 OMS 合约链路（market_type=swap + position_side +
-// leverage/margin_mode）。paper 即时成交回报；live 进单前过
-// canPlaceLiveOrder 安全闸（confirmed=true——机器人是用户显式配置+启动的
-// 自动化通道，不逐单人工确认，但绝不绕过实盘总闸）。返回确认成交量。
+// leverage/margin_mode）。paper 即时成交回报；live 入场腿过 canPlaceLiveOrder
+// 安全闸（confirmed=true——机器人是用户显式配置+启动的自动化通道，不逐单人工
+// 确认，但绝不绕过实盘总闸）；减仓/平仓腿按分类豁免总闸。返回确认成交量。
 func (e *OMSBotExecutor) PlaceContract(botID, symbol, exchange string, userID int64, side string, qty, price, leverage float64, marginMode, positionSide string) (float64, float64, error) {
-	if err := canPlaceLiveOrder(exchange, true); err != nil {
-		return 0, 0, err
-	}
 	orderSide := model.SideBuy
 	if side == string(model.SideSell) {
 		orderSide = model.SideSell
@@ -195,6 +192,9 @@ func (e *OMSBotExecutor) PlaceContract(botID, symbol, exchange string, userID in
 		Leverage:     leverage,
 		MarginMode:   mm,
 		ClientOID:    e.botClientOID(botID),
+	}
+	if err := canPlaceLiveOrderForRequest(exchange, true, req); err != nil {
+		return 0, 0, err
 	}
 	ord, err := order.GetOrderManager().PlaceOrder(req)
 	if err != nil {

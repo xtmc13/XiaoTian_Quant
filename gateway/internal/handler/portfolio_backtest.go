@@ -31,6 +31,7 @@ type portfolioBacktestRequest struct {
 		StrategyType string         `json:"strategy_type"`
 		Symbol       string         `json:"symbol"`
 		Weight       float64        `json:"weight"`
+		MarketType   string         `json:"market_type"`
 		Params       map[string]any `json:"params"`
 	} `json:"legs"`
 }
@@ -109,6 +110,7 @@ func RunPortfolioBacktest(c *gin.Context) {
 	}
 
 	legs := make([]backtest.PortfolioLeg, len(req.Legs))
+	legMarkets := make(map[string]string, len(req.Legs))
 	for i, l := range req.Legs {
 		legs[i] = backtest.PortfolioLeg{
 			StrategyType: l.StrategyType,
@@ -116,6 +118,8 @@ func RunPortfolioBacktest(c *gin.Context) {
 			Weight:       l.Weight,
 			Params:       l.Params,
 		}
+		// 每腿行情口径：显式 market_type 优先，否则按策略类型兜底。
+		legMarkets[l.Symbol] = normalizeBacktestMarketType(l.MarketType, l.StrategyType)
 	}
 
 	result, err := backtest.RunPortfolio(backtest.PortfolioConfig{
@@ -129,7 +133,7 @@ func RunPortfolioBacktest(c *gin.Context) {
 	}, func(leg backtest.PortfolioLeg) (backtest.BacktestStrategy, error) {
 		return newBacktestStrategy(leg.StrategyType, leg.Symbol), nil
 	}, func(symbol, interval string, from, to int64) ([]model.Bar, error) {
-		bars, _, err := loadResearchBars(symbol, interval, 1500, from, to)
+		bars, _, err := loadResearchBars(symbol, interval, 1500, from, to, legMarkets[symbol])
 		return bars, err
 	})
 	if err != nil {

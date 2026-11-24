@@ -309,7 +309,7 @@ func (s *Service) GetAuthorRevenueDetails(authorID int) ([]IndicatorRevenue, err
 	}
 	defer rows.Close()
 
-	var result []IndicatorRevenue
+	result := []IndicatorRevenue{}
 	for rows.Next() {
 		var r IndicatorRevenue
 		rows.Scan(&r.IndicatorID, &r.Sales, &r.Revenue)

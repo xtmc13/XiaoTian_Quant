@@ -11,12 +11,12 @@
 
 CREATE TABLE IF NOT EXISTS xt_strategy_versions (
 	id TEXT PRIMARY KEY,
-	user_id INTEGER NOT NULL DEFAULT 0,
+	user_id BIGINT NOT NULL DEFAULT 0,
 	strategy_id TEXT NOT NULL,
-	version INTEGER NOT NULL DEFAULT 0,
+	version BIGINT NOT NULL DEFAULT 0,
 	payload TEXT NOT NULL DEFAULT '',
 	note TEXT NOT NULL DEFAULT '',
-	created_at INTEGER NOT NULL
+	created_at BIGINT NOT NULL
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_strategy_versions_strategy_version ON xt_strategy_versions(strategy_id, version);

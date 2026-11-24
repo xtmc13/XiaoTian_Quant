@@ -71,16 +71,16 @@ func toGateIOPair(symbol string) string {
 	return s
 }
 
-func (g *GateIOAdapter) Name() string    { return "gateio" }
-func (g *GateIOAdapter) Start() error     { return nil }
-func (g *GateIOAdapter) Stop() error      { g.streamHub.CloseAll(); return nil }
+func (g *GateIOAdapter) Name() string { return "gateio" }
+func (g *GateIOAdapter) Start() error { return nil }
+func (g *GateIOAdapter) Stop() error  { g.streamHub.CloseAll(); return nil }
 func (g *GateIOAdapter) IsConnected() bool {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	return g.wsConnected
 }
 
-func (g *GateIOAdapter) OnTicker(fn func(tick model.Tick))          { g.onTicker = fn }
+func (g *GateIOAdapter) OnTicker(fn func(tick model.Tick))           { g.onTicker = fn }
 func (g *GateIOAdapter) OnOrderBook(fn func(ob model.OrderBookData)) { g.onOrderBook = fn }
 func (g *GateIOAdapter) OnTrade(fn func(trade model.TradeData))      { g.onTrade = fn }
 func (g *GateIOAdapter) OnKline(fn func(bar model.Bar))              { g.onKline = fn }
@@ -214,7 +214,7 @@ func (g *GateIOAdapter) GetTicker(symbol string) (map[string]any, error) {
 
 // ── REST Trading ──
 
-func (g *GateIOAdapter) PlaceOrder(symbol, side, orderType string, price, quantity float64) (map[string]any, error) {
+func (g *GateIOAdapter) PlaceOrder(symbol, side, orderType string, price, quantity float64, _ ...string) (map[string]any, error) {
 	pair := toGateIOPair(symbol)
 	amountStr, priceStr, err := g.normalizeGateSpotOrder(pair, orderType, price, quantity)
 	if err != nil {

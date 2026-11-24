@@ -167,10 +167,12 @@ func TradingViewWebhook(c *gin.Context) {
 		Source:    "webhook",
 		ClientOID: "webhook:tv",
 		// 合约字段转发（旧直发路径支持 market_type=swap，保持能力平价）
-		MarketType:   model.MarketType(getString(body, "market_type", "spot")),
-		PositionSide: model.PositionSide(getString(body, "position_side", "")),
-		Leverage:     getFloat(body, "leverage", 0),
-		MarginMode:   model.MarginMode(getString(body, "margin_mode", "cross")),
+		MarketType:    model.MarketType(getString(body, "market_type", "spot")),
+		PositionSide:  model.PositionSide(getString(body, "position_side", "")),
+		Leverage:      getFloat(body, "leverage", 0),
+		MarginMode:    model.MarginMode(getString(body, "margin_mode", "cross")),
+		ClosePosition: getBool(body, "close_position", false),
+		ReduceOnly:    getBool(body, "reduce_only", false),
 	}
 	ord, ok := placeWebhookEntryViaOMS(c, req, getBool(body, "confirmed", false))
 	if !ok {
@@ -195,7 +197,7 @@ func TradingViewWebhook(c *gin.Context) {
 // 豁免列表（grid/dca/lmartin）不含 webhook，门对该源生效。
 // 被拒/失败时写好错误响应并返回 ok=false；成功时落展示层 store 并返回订单。
 func placeWebhookEntryViaOMS(c *gin.Context, req *order.Request, confirmed bool) (*model.OrderData, bool) {
-	if err := canPlaceLiveOrder(req.Exchange, confirmed); err != nil {
+	if err := canPlaceLiveOrderForRequest(req.Exchange, confirmed, req); err != nil {
 		c.JSON(http.StatusForbidden, gin.H{"status": "error", "detail": err.Error()})
 		return nil, false
 	}

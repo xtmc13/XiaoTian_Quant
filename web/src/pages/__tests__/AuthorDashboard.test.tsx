@@ -6,8 +6,9 @@ import '@/i18n/locales/zh-CN'
 import '@/i18n/locales/community'
 import { I18nProvider } from '@/i18n'
 import { AuthorDashboard } from '../../pages/AuthorDashboard'
+import type { AuthorRevenueData } from '@/lib/api'
 
-const authorRevenue = vi.fn(() =>
+const authorRevenue = vi.fn<() => Promise<AuthorRevenueData>>(() =>
   Promise.resolve({
     total_sales: 6,
     total_revenue: 210.5,
@@ -65,5 +66,17 @@ describe('AuthorDashboard（作者收益卡）', () => {
     // 分指标明细：indicator_id 映射为指标名
     await waitFor(() => expect(screen.getAllByText('我的指标A').length).toBeGreaterThan(0))
     expect(screen.getByText('分指标明细')).toBeTruthy()
+  })
+
+  it('does not crash when revenue details is null (backend returns null slice)', async () => {
+    authorRevenue.mockResolvedValueOnce({
+      total_sales: 0,
+      total_revenue: 0,
+      details: null,
+    })
+    render(<AuthorDashboard />, { wrapper: Wrapper })
+    await waitFor(() => expect(screen.getByText('作者收益')).toBeTruthy())
+    // 空明细兜底为「暂无收益记录」，而不是读取 null.length 崩溃
+    await waitFor(() => expect(screen.getByText('暂无收益记录')).toBeTruthy())
   })
 })

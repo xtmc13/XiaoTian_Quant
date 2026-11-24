@@ -19,16 +19,16 @@
 
 -- ── 重训任务 ──
 CREATE TABLE IF NOT EXISTS xt_ml_retrain_jobs (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	user_id INTEGER DEFAULT 0,
+	id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+	user_id BIGINT DEFAULT 0,
 	model_name TEXT NOT NULL,
 	feature_set TEXT DEFAULT '',
-	interval_minutes INTEGER NOT NULL DEFAULT 1440,
-	last_run_at INTEGER DEFAULT 0,
+	interval_minutes BIGINT NOT NULL DEFAULT 1440,
+	last_run_at BIGINT DEFAULT 0,
 	last_status TEXT DEFAULT '',
 	last_error TEXT DEFAULT '',
-	created_at INTEGER NOT NULL,
-	active INTEGER DEFAULT 1
+	created_at BIGINT NOT NULL,
+	active BIGINT DEFAULT 1
 );
 
 CREATE INDEX IF NOT EXISTS idx_ml_retrain_jobs_active ON xt_ml_retrain_jobs(active);
@@ -36,26 +36,26 @@ CREATE INDEX IF NOT EXISTS idx_ml_retrain_jobs_user ON xt_ml_retrain_jobs(user_i
 
 -- ── 重训运行记录 ──
 CREATE TABLE IF NOT EXISTS xt_ml_retrain_runs (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	job_id INTEGER NOT NULL,
+	id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+	job_id BIGINT NOT NULL,
 	status TEXT NOT NULL,
 	error TEXT DEFAULT '',
-	duration_ms INTEGER DEFAULT 0,
-	created_at INTEGER NOT NULL
+	duration_ms BIGINT DEFAULT 0,
+	created_at BIGINT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_ml_retrain_runs_job ON xt_ml_retrain_runs(job_id, created_at);
 
 -- ── 预测缓存 ──
 CREATE TABLE IF NOT EXISTS xt_ml_predictions (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	job_id INTEGER DEFAULT 0,
+	id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+	job_id BIGINT DEFAULT 0,
 	model_name TEXT NOT NULL,
 	symbol TEXT NOT NULL,
-	bar_time INTEGER NOT NULL,
+	bar_time BIGINT NOT NULL,
 	features_hash TEXT NOT NULL,
-	prediction REAL NOT NULL,
-	created_at INTEGER NOT NULL,
+	prediction DOUBLE PRECISION NOT NULL,
+	created_at BIGINT NOT NULL,
 	UNIQUE(model_name, symbol, bar_time, features_hash)
 );
 
@@ -66,5 +66,5 @@ CREATE INDEX IF NOT EXISTS idx_ml_predictions_model ON xt_ml_predictions(model_n
 CREATE TABLE IF NOT EXISTS ml_settings (
 	key TEXT PRIMARY KEY,
 	value TEXT NOT NULL,
-	updated_at INTEGER NOT NULL
+	updated_at BIGINT NOT NULL
 );

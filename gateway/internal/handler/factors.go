@@ -21,14 +21,16 @@ import (
 
 // loadResearchBars 为因子研究/组合回测加载 K 线：优先本地存储，
 // 不足时从 Binance REST 拉取并落本地（与 RunBacktest 同一口径）。
-// 返回 bars 与数据来源标识。
-func loadResearchBars(symbol, interval string, numBars int, fromMs, toMs int64) ([]model.Bar, string, error) {
-	if DataDownloader != nil {
+// marketType 决定现货/fapi 口径（spot/swap）；本地缓存未按市场分键，
+// swap 口径跳过本地缓存避免混读现货。返回 bars 与数据来源标识。
+func loadResearchBars(symbol, interval string, numBars int, fromMs, toMs int64, marketType string) ([]model.Bar, string, error) {
+	marketType = normalizeBacktestMarketType(marketType, "")
+	if DataDownloader != nil && marketType == "spot" {
 		if bars := DataDownloader.LoadBarsForBacktest(symbol, interval, fromMs, toMs); len(bars) >= 50 {
 			return bars, "local_storage", nil
 		}
 	}
-	klines, err := fetchBinanceKlines(symbol, interval, numBars, fromMs, toMs)
+	klines, err := fetchBinanceKlinesMarket(symbol, interval, numBars, fromMs, toMs, marketType)
 	if err != nil {
 		return nil, "", fmt.Errorf("从 Binance 获取 %s %s K线失败: %w", symbol, interval, err)
 	}
@@ -144,7 +146,7 @@ func GetFactorValues(c *gin.Context) {
 		_ = json.Unmarshal([]byte(raw), &params)
 	}
 
-	bars, source, err := loadResearchBars(symbol, tf, limit, fromMs, toMs)
+	bars, source, err := loadResearchBars(symbol, tf, limit, fromMs, toMs, "spot")
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "无法获取历史数据", "detail": err.Error()})
 		return
@@ -268,7 +270,7 @@ func EvaluateFactor(c *gin.Context) {
 		return
 	}
 	fromMs, toMs := req.window()
-	bars, source, err := loadResearchBars(req.Symbol, req.TF, req.Limit, fromMs, toMs)
+	bars, source, err := loadResearchBars(req.Symbol, req.TF, req.Limit, fromMs, toMs, "spot")
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "无法获取历史数据", "detail": err.Error()})
 		return
@@ -330,7 +332,7 @@ func FactorLayers(c *gin.Context) {
 		return
 	}
 	fromMs, toMs := req.window()
-	bars, source, err := loadResearchBars(req.Symbol, req.TF, req.Limit, fromMs, toMs)
+	bars, source, err := loadResearchBars(req.Symbol, req.TF, req.Limit, fromMs, toMs, "spot")
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "无法获取历史数据", "detail": err.Error()})
 		return

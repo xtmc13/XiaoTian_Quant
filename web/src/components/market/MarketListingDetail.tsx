@@ -343,6 +343,11 @@ export function MarketListingDetail() {
               )}
             </div>
             {listing.description && <p className="mt-1.5 text-xs text-muted-foreground">{listing.description}</p>}
+            {(listing.object_kind ?? 'ai_bot') !== 'grid_bot' && (
+              <p className="mt-1.5 text-[11px] leading-relaxed text-quant-gold/80">
+                {t('market.detail.signalSourceNote')}
+              </p>
+            )}
           </div>
 
           {/* 关键指标卡（最新日快照） */}

@@ -17,23 +17,23 @@
 
 -- ── 对账差异 ──
 CREATE TABLE IF NOT EXISTS reconcile_diffs (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	user_id INTEGER DEFAULT 0,
+	id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+	user_id BIGINT DEFAULT 0,
 	exchange TEXT NOT NULL,
 	symbol TEXT NOT NULL,
 	diff_type TEXT NOT NULL,
-	local_qty REAL DEFAULT 0,
-	exchange_qty REAL DEFAULT 0,
-	local_entry_price REAL DEFAULT 0,
-	exchange_entry_price REAL DEFAULT 0,
+	local_qty DOUBLE PRECISION DEFAULT 0,
+	exchange_qty DOUBLE PRECISION DEFAULT 0,
+	local_entry_price DOUBLE PRECISION DEFAULT 0,
+	exchange_entry_price DOUBLE PRECISION DEFAULT 0,
 	asset TEXT DEFAULT '',
-	amount REAL DEFAULT 0,
+	amount DOUBLE PRECISION DEFAULT 0,
 	detail TEXT DEFAULT '',
 	status TEXT DEFAULT 'open',
 	resolution TEXT DEFAULT '',
 	resolved_by TEXT DEFAULT '',
-	created_at INTEGER NOT NULL,
-	resolved_at INTEGER DEFAULT 0
+	created_at BIGINT NOT NULL,
+	resolved_at BIGINT DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_reconcile_diffs_status ON reconcile_diffs(status, created_at);
@@ -42,20 +42,20 @@ CREATE INDEX IF NOT EXISTS idx_reconcile_diffs_exch ON reconcile_diffs(exchange,
 
 -- ── 实盘偏差 ──
 CREATE TABLE IF NOT EXISTS reconcile_deviations (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
 	order_id TEXT NOT NULL,
-	user_id INTEGER DEFAULT 0,
+	user_id BIGINT DEFAULT 0,
 	symbol TEXT NOT NULL,
 	exchange TEXT DEFAULT '',
 	kind TEXT NOT NULL,
-	expected_price REAL DEFAULT 0,
-	avg_price REAL DEFAULT 0,
-	slippage_pct REAL DEFAULT 0,
+	expected_price DOUBLE PRECISION DEFAULT 0,
+	avg_price DOUBLE PRECISION DEFAULT 0,
+	slippage_pct DOUBLE PRECISION DEFAULT 0,
 	detail TEXT DEFAULT '',
 	status TEXT DEFAULT 'open',
 	resolved_by TEXT DEFAULT '',
-	created_at INTEGER NOT NULL,
-	resolved_at INTEGER DEFAULT 0
+	created_at BIGINT NOT NULL,
+	resolved_at BIGINT DEFAULT 0
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_reconcile_dev_ord_kind ON reconcile_deviations(order_id, kind);
@@ -64,16 +64,16 @@ CREATE INDEX IF NOT EXISTS idx_reconcile_dev_user ON reconcile_deviations(user_i
 
 -- ── 资金费流水本地镜像 ──
 CREATE TABLE IF NOT EXISTS reconcile_funding (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
 	exchange TEXT NOT NULL,
 	symbol TEXT NOT NULL,
 	income_type TEXT NOT NULL,
 	asset TEXT DEFAULT '',
-	amount REAL NOT NULL,
-	income_time INTEGER NOT NULL,
+	amount DOUBLE PRECISION NOT NULL,
+	income_time BIGINT NOT NULL,
 	extra TEXT DEFAULT '',
-	notified INTEGER DEFAULT 0,
-	created_at INTEGER NOT NULL,
+	notified BIGINT DEFAULT 0,
+	created_at BIGINT NOT NULL,
 	UNIQUE(exchange, symbol, income_type, income_time, amount)
 );
 
@@ -83,18 +83,18 @@ CREATE INDEX IF NOT EXISTS idx_reconcile_funding_time ON reconcile_funding(excha
 CREATE TABLE IF NOT EXISTS reconcile_settings (
 	key TEXT PRIMARY KEY,
 	value TEXT NOT NULL,
-	updated_at INTEGER NOT NULL
+	updated_at BIGINT NOT NULL
 );
 
 -- ── 自动修正审计日志 ──
 CREATE TABLE IF NOT EXISTS reconcile_audit (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
 	action TEXT NOT NULL,
 	exchange TEXT DEFAULT '',
 	symbol TEXT DEFAULT '',
-	user_id INTEGER DEFAULT 0,
+	user_id BIGINT DEFAULT 0,
 	detail TEXT DEFAULT '',
-	created_at INTEGER NOT NULL
+	created_at BIGINT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_reconcile_audit_time ON reconcile_audit(created_at);
@@ -104,16 +104,16 @@ CREATE TABLE IF NOT EXISTS billing_verification (
 	order_id TEXT PRIMARY KEY,
 	chain TEXT DEFAULT '',
 	tx_hash TEXT DEFAULT '',
-	found INTEGER DEFAULT 0,
-	valid INTEGER DEFAULT 0,
-	confirmed INTEGER DEFAULT 0,
-	confirmations INTEGER DEFAULT 0,
-	required_confirmations INTEGER DEFAULT 0,
-	block_number INTEGER DEFAULT 0,
-	received_micro INTEGER DEFAULT 0,
-	expected_micro INTEGER DEFAULT 0,
+	found BIGINT DEFAULT 0,
+	valid BIGINT DEFAULT 0,
+	confirmed BIGINT DEFAULT 0,
+	confirmations BIGINT DEFAULT 0,
+	required_confirmations BIGINT DEFAULT 0,
+	block_number BIGINT DEFAULT 0,
+	received_micro BIGINT DEFAULT 0,
+	expected_micro BIGINT DEFAULT 0,
 	fail_reason TEXT DEFAULT '',
-	checked_at INTEGER NOT NULL
+	checked_at BIGINT NOT NULL
 );
 
 -- ── 成交执行阶段（A2.2 limit-then-market 区分两部分）──

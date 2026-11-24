@@ -11,7 +11,7 @@
 --
 -- 注意: 语句内不要出现分号(字符串/注释里也不行)——迁移按分号切分执行。
 
-ALTER TABLE xt_market_listings ADD COLUMN provider_id INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE xt_market_listings ADD COLUMN provider_id BIGINT NOT NULL DEFAULT 0;
 
 ALTER TABLE ai_bot_instances ADD COLUMN origin_listing_id TEXT NOT NULL DEFAULT '';
 

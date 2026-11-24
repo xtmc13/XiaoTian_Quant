@@ -23,7 +23,6 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v3"
-	_ "modernc.org/sqlite"
 )
 
 var (
@@ -56,92 +55,20 @@ var (
 func GetStrategyTemplateRepo() *StrategyTemplateRepo { return strategyTemplateRepo }
 
 func InitDB() error {
-	dbPath := os.Getenv("DB_PATH")
-	if dbPath == "" {
-		dbPath = "./runtime/gateway.db"
-	}
-	// Ensure runtime directory exists
-	dataDir := dbPath[:len(dbPath)-len("/gateway.db")]
-	if dataDir == dbPath {
-		dataDir = "./runtime"
-	}
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
-		return fmt.Errorf("failed to create data directory: %w", err)
-	}
-	// modernc.org/sqlite 的 DSN 参数走 _pragma=...（mattn 风格的 _journal_mode/
-	// _busy_timeout 会被静默忽略，等于裸跑 DELETE 日志 + 无 busy timeout，
-	// 并发写直接 SQLITE_BUSY）。
-	var err error
-	db, err = sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
-	if err != nil {
+	// 运行时文件持久化目录（JSON 配置/日志/模板/沙箱文件），对应数据卷。
+	if _, err := EnsureRuntimeDir(); err != nil {
 		return err
 	}
-	// WAL mode allows concurrent reads; set reasonable pool limits.
-	// Writes are still serialized by SQLite, but reads can overlap.
-	db.SetMaxOpenConns(10)
-	db.SetMaxIdleConns(5)
-	db.SetConnMaxLifetime(time.Hour)
-	_, err = db.Exec(`
-		CREATE TABLE IF NOT EXISTS xt_users (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			username TEXT UNIQUE NOT NULL,
-			password_hash TEXT NOT NULL,
-			nickname TEXT DEFAULT '',
-			email TEXT DEFAULT '',
-			role TEXT DEFAULT 'user',
-			token_version INTEGER DEFAULT 1,
-			is_active INTEGER DEFAULT 1,
-			created_at TEXT DEFAULT (datetime('now'))
-		);
-		CREATE TABLE IF NOT EXISTS xt_orders (
-			id TEXT PRIMARY KEY,
-			symbol TEXT NOT NULL,
-			side TEXT NOT NULL,
-			order_type TEXT NOT NULL,
-			price REAL,
-			stop_price REAL DEFAULT 0,
-			quantity REAL,
-			filled REAL DEFAULT 0,
-			status TEXT DEFAULT 'NEW',
-			exchange TEXT DEFAULT 'BINANCE',
-			user_id INTEGER DEFAULT 0,
-			client_oid TEXT DEFAULT '',
-			avg_fill_price REAL DEFAULT 0,
-			created_at REAL,
-			updated_at REAL,
-			market_type TEXT DEFAULT 'spot',
-			position_side TEXT DEFAULT '',
-			leverage REAL DEFAULT 0,
-			margin_mode TEXT DEFAULT 'cross',
-			tp_price REAL DEFAULT 0,
-			sl_price REAL DEFAULT 0,
-			close_position INTEGER DEFAULT 0
-		);
-	`)
+
+	// PostgreSQL 连接（DATABASE_URL 或 POSTGRES_* 环境变量）。
+	var err error
+	db, err = openPostgres()
 	if err != nil {
 		return err
 	}
 
-	// Ensure default admin user with a random password (printed to logs on first boot)
-	var count int
-	if err := db.QueryRow("SELECT COUNT(*) FROM xt_users WHERE username='admin'").Scan(&count); err != nil {
-		return fmt.Errorf("failed to check admin user: %w", err)
-	}
-	adminCreated := false
-	if count == 0 {
-		adminPass := randomHex(8)
-		hash := HashPassword(adminPass)
-		if _, err := db.Exec("INSERT INTO xt_users (username, password_hash, nickname, role) VALUES (?, ?, ?, ?)",
-			"admin", hash, "Admin", "admin"); err != nil {
-			return fmt.Errorf("failed to create admin user: %w", err)
-		}
-		adminCreated = true
-		fmt.Fprintf(os.Stderr, "\n╔══════════════════════════════════════════════════════════╗\n")
-		fmt.Fprintf(os.Stderr, "║  Default admin created:  username=admin                  ║\n")
-		fmt.Fprintf(os.Stderr, "║  Temporary password:     %s               ║\n", adminPass)
-		fmt.Fprintf(os.Stderr, "║  CHANGE THIS PASSWORD IMMEDIATELY after first login.     ║\n")
-		fmt.Fprintf(os.Stderr, "╚══════════════════════════════════════════════════════════╝\n\n")
-	}
+	// 初始表结构由迁移基线负责（RunMigrations / migrations 目录）；
+	// 默认 admin 用户在迁移建表之后再检查/创建。
 
 	// 路径默认值必须先于 SECRET_KEY 检查设置：SECRET_KEY 缺失时此处会
 	// return，但数据库与运行时路径仍应就位，否则 LoadConfig 读到空路径
@@ -149,13 +76,8 @@ func InitDB() error {
 	if configPath == "" {
 		configPath = defaultConfigPath()
 	}
-	// 运行时 JSON 一律落到 DB 目录（/app/data 卷）：重建容器不丢策略配置/日志/模板/agent_tokens。
-	runtimeDir := "./runtime"
-	if db := os.Getenv("DB_PATH"); db != "" {
-		if dir := filepath.Dir(db); dir != "" && dir != "." {
-			runtimeDir = dir
-		}
-	}
+	// 运行时 JSON 一律落到运行时目录（/app/data 卷）：重建容器不丢策略配置/日志/模板/agent_tokens。
+	runtimeDir := RuntimeDir()
 	if strategyConfigsPath == "" {
 		strategyConfigsPath = filepath.Join(runtimeDir, "strategy_configs.json")
 	}
@@ -180,6 +102,27 @@ func InitDB() error {
 	// Run schema migrations
 	if err := RunMigrations(); err != nil {
 		return fmt.Errorf("migration: %w", err)
+	}
+
+	// Ensure default admin user with a random password (printed to logs on first boot)
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM xt_users WHERE username='admin'").Scan(&count); err != nil {
+		return fmt.Errorf("failed to check admin user: %w", err)
+	}
+	adminCreated := false
+	if count == 0 {
+		adminPass := randomHex(8)
+		hash := HashPassword(adminPass)
+		if _, err := db.Exec("INSERT INTO xt_users (username, password_hash, nickname, role) VALUES ($1, $2, $3, $4)",
+			"admin", hash, "Admin", "admin"); err != nil {
+			return fmt.Errorf("failed to create admin user: %w", err)
+		}
+		adminCreated = true
+		fmt.Fprintf(os.Stderr, "\n╔══════════════════════════════════════════════════════════╗\n")
+		fmt.Fprintf(os.Stderr, "║  Default admin created:  username=admin                  ║\n")
+		fmt.Fprintf(os.Stderr, "║  Temporary password:     %s               ║\n", adminPass)
+		fmt.Fprintf(os.Stderr, "║  CHANGE THIS PASSWORD IMMEDIATELY after first login.     ║\n")
+		fmt.Fprintf(os.Stderr, "╚══════════════════════════════════════════════════════════╝\n\n")
 	}
 
 	// A3.4: 初始管理员首次登录强制改密（must_change_password 列由上面的
@@ -394,16 +337,14 @@ func deepCopySlice(s []any) []any {
 
 // defaultConfigPath 解析配置文件落盘位置：
 // 1) CONFIG_PATH 环境变量显式指定（最高优先）；
-// 2) DB_PATH 所在目录（/app/data 卷，随数据库持久化——修复重建容器丢配置）；
+// 2) 运行时目录 DATA_DIR（/app/data 卷，随数据卷持久化——修复重建容器丢配置）；
 // 3) 兜底 ./config/config.yaml。
 func defaultConfigPath() string {
 	if p := os.Getenv("CONFIG_PATH"); p != "" {
 		return p
 	}
-	if db := os.Getenv("DB_PATH"); db != "" {
-		if dir := filepath.Dir(db); dir != "" && dir != "." {
-			return filepath.Join(dir, "config.yaml")
-		}
+	if dir := RuntimeDir(); dir != "" && dir != "." {
+		return filepath.Join(dir, "config.yaml")
 	}
 	return "./config/config.yaml"
 }
@@ -1251,18 +1192,18 @@ func GetTriangularTradeRepo() *TriangularTradeRepo {
 func migrateXTOrders() error {
 	// Try to add columns one by one (SQLite ALTER TABLE ignores errors for existing columns)
 	columns := []string{
-		"stop_price REAL DEFAULT 0",
-		"user_id INTEGER DEFAULT 0",
+		"stop_price DOUBLE PRECISION DEFAULT 0",
+		"user_id BIGINT DEFAULT 0",
 		"client_oid TEXT DEFAULT ''",
-		"avg_fill_price REAL DEFAULT 0",
-		"updated_at REAL",
+		"avg_fill_price DOUBLE PRECISION DEFAULT 0",
+		"updated_at DOUBLE PRECISION",
 		"market_type TEXT DEFAULT 'spot'",
 		"position_side TEXT DEFAULT ''",
-		"leverage REAL DEFAULT 0",
+		"leverage DOUBLE PRECISION DEFAULT 0",
 		"margin_mode TEXT DEFAULT 'cross'",
-		"tp_price REAL DEFAULT 0",
-		"sl_price REAL DEFAULT 0",
-		"close_position INTEGER DEFAULT 0",
+		"tp_price DOUBLE PRECISION DEFAULT 0",
+		"sl_price DOUBLE PRECISION DEFAULT 0",
+		"close_position BIGINT DEFAULT 0",
 	}
 	for _, col := range columns {
 		// Split on first space to get column name

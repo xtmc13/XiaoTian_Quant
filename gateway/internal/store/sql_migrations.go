@@ -31,7 +31,7 @@ func RunSQLMigrations() error {
 
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS sql_migrations (
 		name TEXT PRIMARY KEY,
-		applied_at INTEGER NOT NULL
+		applied_at BIGINT NOT NULL
 	)`); err != nil {
 		return fmt.Errorf("sql migrations: create tracking table: %w", err)
 	}
@@ -51,7 +51,7 @@ func RunSQLMigrations() error {
 
 	for _, name := range names {
 		var applied int
-		if err := db.QueryRow("SELECT COUNT(*) FROM sql_migrations WHERE name = ?", name).Scan(&applied); err != nil {
+		if err := db.QueryRow("SELECT COUNT(*) FROM sql_migrations WHERE name = $1", name).Scan(&applied); err != nil {
 			return err
 		}
 		if applied > 0 {
@@ -75,7 +75,7 @@ func RunSQLMigrations() error {
 			}
 		}
 
-		if _, err := tx.Exec("INSERT INTO sql_migrations (name, applied_at) VALUES (?, ?)",
+		if _, err := tx.Exec("INSERT INTO sql_migrations (name, applied_at) VALUES ($1, $2)",
 			name, time.Now().UnixMilli()); err != nil {
 			tx.Rollback()
 			return err

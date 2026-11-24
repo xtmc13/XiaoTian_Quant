@@ -9,8 +9,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xiaotian-quant/gateway/internal/event"
 	"github.com/xiaotian-quant/gateway/internal/marketplace"
+	"github.com/xiaotian-quant/gateway/internal/model"
 	"github.com/xiaotian-quant/gateway/internal/store"
+	"github.com/xiaotian-quant/gateway/internal/strategy"
 )
 
 // ── 信号机器人阶梯 TP/SL 管理器（Go 版，对齐 THREE_BOTS_DESIGN.md 3.4 节）──
@@ -42,10 +45,14 @@ type tpslAction struct {
 type signalTPSLManager struct {
 	mu     sync.Mutex
 	active map[string]*store.SignalExecution // execID -> 执行记录
+	locks  map[string]*sync.Mutex            // execID -> 单飞锁，避免多 worker 双触发
 	loaded bool
 }
 
-var sigTPSLManager = &signalTPSLManager{active: make(map[string]*store.SignalExecution)}
+var sigTPSLManager = &signalTPSLManager{
+	active: make(map[string]*store.SignalExecution),
+	locks:  make(map[string]*sync.Mutex),
+}
 
 // attachTPSL 挂接一条活跃执行记录（信号成交后调用）。
 func (m *signalTPSLManager) attach(e *store.SignalExecution) {
@@ -59,6 +66,28 @@ func (m *signalTPSLManager) detach(execID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.active, execID)
+	delete(m.locks, execID)
+}
+
+// lockFor returns the single-flight mutex for one execution, creating it on
+// first use. Serialising per execution (not globally) keeps a slow DB write
+// on one symbol from blocking ticks on every other symbol.
+func (m *signalTPSLManager) lockFor(execID string) *sync.Mutex {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if mu, ok := m.locks[execID]; ok {
+		return mu
+	}
+	mu := &sync.Mutex{}
+	m.locks[execID] = mu
+	return mu
+}
+
+func (m *signalTPSLManager) isActive(execID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.active[execID]
+	return ok
 }
 
 // ensureLoaded 首次使用时从库里恢复未平仓的执行记录（重启续接）。
@@ -189,10 +218,18 @@ func TickExecutorTPSL(symbol string, price float64) int {
 		if e.Symbol != symbol {
 			continue
 		}
+		mu := sigTPSLManager.lockFor(e.ID)
+		mu.Lock()
+		// Re-check after acquiring: a concurrent tick may have closed it.
+		if !sigTPSLManager.isActive(e.ID) {
+			mu.Unlock()
+			continue
+		}
 		for _, act := range evalTPSL(e, price) {
 			applyTPSLAction(e, act)
 			n++
 		}
+		mu.Unlock()
 	}
 	return n
 }
@@ -344,15 +381,28 @@ func finalizeExecution(e *store.SignalExecution, repo *store.SignalExecutionRepo
 var tpslLoopOnce sync.Once
 
 // startTPSLLoop 懒启动阶梯监控循环（executor 读接口首次调用时触发）。
+// 有事件总线时由 TypeTick 驱动（毫秒级），5 秒 REST 轮询降级为 30 秒兜底；
+// 总线不可用时保留 5 秒轮询，避免完全没有价格源。
 func startTPSLLoop() {
 	tpslLoopOnce.Do(func() {
 		sigTPSLManager.ensureLoaded()
-		go tpslPriceLoop()
+		fallback := 5 * time.Second
+		if bus := strategy.GetEngine(nil).Bus(); bus != nil {
+			bus.Subscribe("", event.PrioHigh, func(evt event.Event) {
+				tick, ok := evt.Data.(model.Tick)
+				if !ok || tick.Last <= 0 {
+					return
+				}
+				TickExecutorTPSL(tick.Symbol, tick.Last)
+			}, event.TypeTick)
+			fallback = 30 * time.Second
+		}
+		go tpslPriceLoop(fallback)
 	})
 }
 
-func tpslPriceLoop() {
-	ticker := time.NewTicker(5 * time.Second)
+func tpslPriceLoop(fallbackInterval time.Duration) {
+	ticker := time.NewTicker(fallbackInterval)
 	defer ticker.Stop()
 	lastBarCloseAt := map[string]int64{} // key=symbol|interval，上次已判定的收盘时间
 	for range ticker.C {

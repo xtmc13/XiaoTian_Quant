@@ -9,7 +9,7 @@
 ALTER TABLE agent_audit_log ADD COLUMN actor TEXT NOT NULL DEFAULT '';
 ALTER TABLE agent_audit_log ADD COLUMN action TEXT NOT NULL DEFAULT '';
 ALTER TABLE agent_audit_log ADD COLUMN detail TEXT NOT NULL DEFAULT '';
-ALTER TABLE agent_audit_log ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE agent_audit_log ADD COLUMN created_at BIGINT NOT NULL DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS idx_audit_actor ON agent_audit_log(actor);
 CREATE INDEX IF NOT EXISTS idx_audit_created ON agent_audit_log(created_at);

@@ -97,11 +97,16 @@ impl MatchingEngine {
         let order_id = order.id;
         let filled = order.filled;
         let quantity = order.quantity;
-        let is_market = order.order_type == OrderType::Market;
-        let status = if is_market || filled >= quantity {
+        // Status is determined by what actually filled. A market order is not
+        // "filled" just because of its type: an empty book cancels it, and a
+        // thin book leaves a partial fill. Reproducing the unfilled remainder
+        // as Filled would make paper positions diverge from cash.
+        let status = if filled >= quantity {
             OrderStatus::Filled
         } else if filled > 0.0 {
             OrderStatus::PartiallyFilled
+        } else if order.status == OrderStatus::Cancelled {
+            OrderStatus::Cancelled
         } else {
             OrderStatus::New
         };
@@ -411,7 +416,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(result.status, OrderStatus::Filled);
+        assert_eq!(result.status, OrderStatus::PartiallyFilled);
         assert!((result.filled - 1.25).abs() < 1e-12);
         assert_eq!(result.trades.len(), 2);
     }
@@ -721,6 +726,55 @@ mod tests {
             trades.is_empty(),
             "Market order with no liquidity should not trade"
         );
+    }
+
+    // ── Market order status reflects actual fills (R-04) ─────────────
+
+    #[test]
+    fn test_market_order_empty_book_is_cancelled_not_filled() {
+        let mut engine = MatchingEngine::new("EMPTY".into());
+        let result = engine
+            .submit_order_with_limits(
+                Order::new(0, 0.0, 1.0, Side::Buy, OrderType::Market, 1),
+                BalanceLimits::default(),
+            )
+            .expect("valid order");
+
+        assert_eq!(result.status, OrderStatus::Cancelled);
+        assert_eq!(result.filled, 0.0, "nothing traded, nothing filled");
+    }
+
+    #[test]
+    fn test_market_order_partial_book_is_partially_filled() {
+        let mut engine = MatchingEngine::new("THIN".into());
+        engine.submit_order(Order::new(0, 100.0, 1.0, Side::Sell, OrderType::Limit, 2));
+
+        let result = engine
+            .submit_order_with_limits(
+                Order::new(0, 0.0, 2.0, Side::Buy, OrderType::Market, 3),
+                BalanceLimits::default(),
+            )
+            .expect("valid order");
+
+        assert_eq!(result.status, OrderStatus::PartiallyFilled);
+        assert_eq!(result.filled, 1.0);
+        assert_eq!(result.trades.len(), 1);
+    }
+
+    #[test]
+    fn test_market_order_full_book_is_filled() {
+        let mut engine = MatchingEngine::new("DEEP".into());
+        engine.submit_order(Order::new(0, 100.0, 1.0, Side::Sell, OrderType::Limit, 2));
+
+        let result = engine
+            .submit_order_with_limits(
+                Order::new(0, 0.0, 1.0, Side::Buy, OrderType::Market, 3),
+                BalanceLimits::default(),
+            )
+            .expect("valid order");
+
+        assert_eq!(result.status, OrderStatus::Filled);
+        assert_eq!(result.filled, 1.0);
     }
 
     // ── Additional Benchmarks ────────────────────────────────────

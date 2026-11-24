@@ -340,7 +340,7 @@ fn test_ffi_balance_limits_reject_and_cap_orders() {
         .to_string(),
     ));
     let result = parse_json(&from_c_char(capped));
-    assert_eq!(result["status"], "FILLED");
+    assert_eq!(result["status"], "PARTIALLY_FILLED");
     assert!((result["filled"].as_f64().unwrap() - 1.25).abs() < 1e-12);
 
     engine_destroy(to_c_char(symbol));

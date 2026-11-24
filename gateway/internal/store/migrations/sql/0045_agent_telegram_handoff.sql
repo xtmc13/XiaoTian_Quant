@@ -4,9 +4,9 @@ ALTER TABLE xt_agent_telegram_links ADD COLUMN conversation_id TEXT NOT NULL DEF
 -- 移交验证码：一次性，10 分钟有效（网页端生成 → TG /handoff <code> 消费）
 CREATE TABLE IF NOT EXISTS xt_agent_handoff_codes (
     code TEXT PRIMARY KEY,
-    user_id INTEGER NOT NULL,
+    user_id BIGINT NOT NULL,
     conversation_id TEXT NOT NULL,
-    created_at INTEGER NOT NULL,
-    expires_at INTEGER NOT NULL,
-    used_at INTEGER DEFAULT 0
+    created_at BIGINT NOT NULL,
+    expires_at BIGINT NOT NULL,
+    used_at BIGINT DEFAULT 0
 );

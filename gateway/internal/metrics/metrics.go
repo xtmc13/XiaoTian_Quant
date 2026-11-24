@@ -502,13 +502,16 @@ func runtimeMetrics() string {
 	return b.String()
 }
 
-// diskMetrics samples the filesystem containing the SQLite data directory.
+// diskMetrics samples the filesystem containing the gateway data volume.
 func diskMetrics() string {
-	dir := os.Getenv("DB_PATH")
+	dir := os.Getenv("DATA_DIR")
+	if dir == "" {
+		if db := os.Getenv("DB_PATH"); db != "" {
+			dir = filepath.Dir(db)
+		}
+	}
 	if dir == "" {
 		dir = "."
-	} else {
-		dir = filepath.Dir(dir)
 	}
 	total, available, err := filesystemUsage(dir)
 	if err != nil {

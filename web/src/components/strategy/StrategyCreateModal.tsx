@@ -313,6 +313,7 @@ export function StrategyCreateModal({
         symbol,
         interval: inferTimeframeFromCRAParams(craParams),
         strategy_type: strategyType,
+        market_type: market === 'contract' ? 'swap' : 'spot',
         initial_balance: { USDT: backtestCapital },
         from: new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0],
         to: new Date().toISOString().split('T')[0],

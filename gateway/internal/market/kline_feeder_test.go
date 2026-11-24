@@ -155,6 +155,46 @@ func TestKlineFeederPublishesOnlyNewClosedBars(t *testing.T) {
 	}
 }
 
+func TestKlineFeederDedupeWSAndREST(t *testing.T) {
+	const t1 = int64(1700000000000)
+	const t2 = t1 + 900000
+
+	fake := newFakeBinanceKlines(t1)
+	defer fake.close()
+
+	bus := event.NewEventBus(1000, 2)
+	defer bus.Close()
+	col := &barCollector{}
+	bus.Subscribe("BTCUSDT", event.PrioNormal, col.handler, event.TypeBar)
+
+	feeder := NewKlineFeeder(bus)
+	feeder.BaseURL = fake.srv.URL + "/api/v3"
+	feeder.Interval = 30 * time.Millisecond
+	feeder.EnsureSymbol("BTCUSDT", "15m")
+	defer feeder.Stop()
+
+	if !waitFor(func() bool { return col.count() == 2 }, 2*time.Second) {
+		t.Fatalf("expected backfill, got %d", col.count())
+	}
+
+	// WS delivers the newly closed candle first.
+	fake.setClosed(t2)
+	feeder.HandleWSKline(model.Bar{
+		Symbol: "BTCUSDT", Interval: "15m", Time: t2,
+		Open: 200, High: 220, Low: 190, Close: 210, Volume: 20,
+	}, "spot")
+
+	if !waitFor(func() bool { return col.count() == 3 }, time.Second) {
+		t.Fatalf("WS bar not published, got %d", col.count())
+	}
+
+	// The REST fallback must not publish the same (symbol, interval, openTime).
+	time.Sleep(200 * time.Millisecond)
+	if got := col.count(); got != 3 {
+		t.Fatalf("REST duplicated a WS bar: got %d events, want 3", got)
+	}
+}
+
 func TestKlineFeederReleaseStopsFeed(t *testing.T) {
 	const t1 = int64(1700000000000)
 

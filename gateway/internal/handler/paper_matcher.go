@@ -16,8 +16,10 @@ import (
 	"log"
 	"time"
 
+	"github.com/xiaotian-quant/gateway/internal/execution"
 	"github.com/xiaotian-quant/gateway/internal/model"
 	"github.com/xiaotian-quant/gateway/internal/order"
+	"github.com/xiaotian-quant/gateway/internal/paper"
 	"github.com/xiaotian-quant/gateway/internal/portfolio"
 	"github.com/xiaotian-quant/gateway/internal/service"
 	"github.com/xiaotian-quant/gateway/internal/store"
@@ -54,6 +56,7 @@ func matchPaperOrders() {
 		return
 	}
 	priceCache := map[string]float64{}
+	execCfg := paper.GetPaperExchange().ExecutionConfig()
 	for _, o := range om.GetOpenOrders("") {
 		if !isPaperExchange(o.Exchange) {
 			continue
@@ -78,10 +81,14 @@ func matchPaperOrders() {
 		if !crossed {
 			continue
 		}
-		fill := o.Quantity - o.Filled
-		if fill <= 0 {
+		plan, ok := planPaperFill(o, execCfg)
+		if !ok {
 			continue
 		}
+		fill := plan.fill
+		fee := plan.fee
+		filledNow := plan.filled
+		status := plan.status
 		// 1) OMS 状态翻转 + 持久化（幂等：RecordFill 对已终态单直接跳过）
 		changed, err := om.RecordFillIfActive(o.ID, fill, o.Price)
 		if err != nil {
@@ -91,24 +98,55 @@ func matchPaperOrders() {
 		if !changed {
 			continue
 		}
-		if err := service.GetMatchingService().RemoveOrderFromBook(o.Symbol, o.ID); err != nil {
-			log.Printf("[paper-match] internal order-book cleanup %s failed: %v", o.ID, err)
+		// 只在整单成交后撤掉内部订单簿残留；部分成交仍是活动单。
+		if status == model.StatusFilled {
+			if err := service.GetMatchingService().RemoveOrderFromBook(o.Symbol, o.ID); err != nil {
+				log.Printf("[paper-match] internal order-book cleanup %s failed: %v", o.ID, err)
+			}
 		}
 		// 1b) 展示层订单表同步（GetOrders 读 store 内存表，不同步会永远停在 NEW）
-		store.UpdateOrderFill(o.ID, o.Quantity, o.Price, string(model.StatusFilled))
+		store.UpdateOrderFill(o.ID, filledNow, o.Price, string(status))
 		// 2) 组合余额/持仓更新（spot 扣加余额，swap 开/平仓位与保证金）
 		fillOrderAndUpdatePortfolio(map[string]any{
 			"symbol":         o.Symbol,
 			"side":           string(o.Side),
 			"price":          o.Price,
 			"quantity":       fill,
+			"fee":            fee,
 			"market_type":    string(o.MarketType),
 			"leverage":       o.Leverage,
 			"margin_mode":    string(o.MarginMode),
 			"position_side":  string(o.PositionSide),
 			"close_position": o.ClosePosition,
 		})
-		log.Printf("[paper-match] %s %s %s LIMIT %.8f @ %.4f 成交（市价 %.4f）",
-			o.Symbol, o.Side, o.ID, fill, o.Price, px)
+		log.Printf("[paper-match] %s %s %s LIMIT %.8f/%.8f @ %.4f 成交 %.8f（市价 %.4f，费 %.6f）",
+			o.Symbol, o.Side, o.ID, filledNow, o.Quantity, o.Price, fill, px, fee)
 	}
+}
+
+// paperFillPlan 是一次触价后的成交计划，抽成纯函数便于用统一模型做单测。
+type paperFillPlan struct {
+	fill   float64
+	fee    float64
+	filled float64
+	status model.OrderStatus
+}
+
+// planPaperFill 按共享执行模型计算本次成交量、手续费和订单状态。
+// 限价单成交价取限价（不额外滑点），成交量按 PartialFillRate 拆分。
+func planPaperFill(o *model.OrderData, cfg execution.Config) (paperFillPlan, bool) {
+	plan, ok := execution.PlanLimitFill(o.Price, o.Quantity, o.Filled, cfg)
+	if !ok {
+		return paperFillPlan{}, false
+	}
+	status := model.StatusPartiallyFilled
+	if plan.Full {
+		status = model.StatusFilled
+	}
+	return paperFillPlan{
+		fill:   plan.Fill,
+		fee:    plan.Fee,
+		filled: plan.Filled,
+		status: status,
+	}, true
 }

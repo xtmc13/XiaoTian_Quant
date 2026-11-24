@@ -9,19 +9,19 @@
 -- 注意: 语句内不要出现分号(字符串/注释里也不行)——迁移按分号切分执行。
 
 CREATE TABLE IF NOT EXISTS factors_evaluations (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	user_id INTEGER NOT NULL DEFAULT 0,
+	id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+	user_id BIGINT NOT NULL DEFAULT 0,
 	kind TEXT NOT NULL DEFAULT 'ic',
 	factor_name TEXT NOT NULL,
-	factor_version INTEGER NOT NULL DEFAULT 1,
+	factor_version BIGINT NOT NULL DEFAULT 1,
 	category TEXT DEFAULT '',
 	symbol TEXT NOT NULL,
 	tf TEXT NOT NULL DEFAULT '1h',
-	forward_bars INTEGER NOT NULL DEFAULT 1,
+	forward_bars BIGINT NOT NULL DEFAULT 1,
 	params_json TEXT DEFAULT '',
-	samples INTEGER NOT NULL DEFAULT 0,
+	samples BIGINT NOT NULL DEFAULT 0,
 	result_json TEXT NOT NULL DEFAULT '',
-	created_at INTEGER NOT NULL
+	created_at BIGINT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_factors_eval_user ON factors_evaluations(user_id, created_at);
