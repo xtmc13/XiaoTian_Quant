@@ -146,10 +146,10 @@ xiaotian-quant/
     .env.example          # 环境变量模板（可提交）
     .env                  # 凭据（.gitignore）
   runtime/
-    gateway.db
     logs/
     strategy_configs.json
     strategy_logs.json
+  # 业务库在 PostgreSQL（见 DATABASE_URL），不在 runtime 落 .db 文件
     strategy_templates.json
     agent_tokens.json
   user_data/

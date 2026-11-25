@@ -52,7 +52,7 @@ func seedEpoch(t *testing.T, id, strategyID string, userID int64, params string)
 		t.Fatalf("seed epoch: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = store.GetDB().Exec(`DELETE FROM xt_hyperopt_epochs WHERE id = ?`, id)
+		_, _ = store.GetDB().Exec(`DELETE FROM xt_hyperopt_epochs WHERE id = $1`, id)
 	})
 	return rec
 }
@@ -215,7 +215,7 @@ func TestListHyperoptEpochsFilter(t *testing.T) {
 			t.Fatalf("seed %s: %v", e.id, err)
 		}
 		t.Cleanup(func() {
-			_, _ = store.GetDB().Exec(`DELETE FROM xt_hyperopt_epochs WHERE id = ?`, e.id)
+			_, _ = store.GetDB().Exec(`DELETE FROM xt_hyperopt_epochs WHERE id = $1`, e.id)
 		})
 	}
 

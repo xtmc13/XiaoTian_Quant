@@ -85,10 +85,10 @@
 # Ubuntu / Debian
 sudo apt update && sudo apt install -y \
   git curl wget build-essential pkg-config \
-  libssl-dev sqlite3 redis-tools
+  libssl-dev postgresql-client redis-tools
 
 # macOS
-brew install git curl wget sqlite redis
+brew install git curl wget postgresql redis
 
 # 安装 Go (推荐通过官方安装器)
 # arm64 机器（ARM 服务器 / Apple Silicon 虚拟机）将 linux-amd64 换成 linux-arm64
@@ -241,15 +241,16 @@ CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
 ```bash
 cd gateway
 
-# 自动初始化（首次启动时自动创建）
+# 自动初始化（首次启动时网关按 DATABASE_URL 自动执行迁移台账建表）
 ./bin/gateway
 
-# 手动初始化（如需重置）
-rm -f data/xiaotian.db
-./bin/gateway -init-db
+# 手动重置数据库（如需清空重来；先确保 PG 已启动并已配置 DATABASE_URL）
+dropdb "$PGUSER" 2>/dev/null || true
+createdb "$PGDB" OWNER "$PGUSER"
 
 # 查看表结构
-sqlite3 data/xiaotian.db ".schema"
+psql "$DATABASE_URL" -c "\dt"
+psql "$DATABASE_URL" -c "\d billing_orders"
 ```
 
 ### 4.5 systemd 服务配置
@@ -371,10 +372,12 @@ server:
   write_timeout: 30s
   max_header_bytes: 1048576
 
-# ── 数据库 ──
+# ── 数据库（PostgreSQL）──
+# 连接串走环境变量 DATABASE_URL（或拆分 POSTGRES_HOST/PORT/USER/PASSWORD/DB）；
+# 下方 driver/dsn 仅为历史配置占位，生产以环境变量为准。
 database:
-  driver: "sqlite"
-  dsn: "data/xiaotian.db"
+  driver: "postgres"
+  dsn: "postgresql://xtquant:***@127.0.0.1:5432/xtquant?sslmode=disable"
   max_open_conns: 25
   max_idle_conns: 5
   conn_max_lifetime: 1h
@@ -582,18 +585,23 @@ cat logs/gateway.log | jq -r '.path' | grep '/api/orders' | sort | uniq -c | sor
 
 ## 8. 备份与恢复
 
-### 8.1 SQLite 备份
+### 8.1 PostgreSQL 备份
 
 ```bash
-# 热备份（SQLite 支持在线备份）
-sqlite3 data/xiaotian.db ".backup '/backup/xiaotian_$(date +%Y%m%d_%H%M%S).db'"
+# 逻辑备份（custom 格式，压缩 + 支持并行恢复）
+pg_dump -h 127.0.0.1 -U xtquant -d xtquant -Fc \
+  -f "/backup/xtquant_$(date +%Y%m%d_%H%M%S).dump"
+
+# 纯 SQL 文本备份（便于跨版本审阅/迁移）
+pg_dump -h 127.0.0.1 -U xtquant -d xtquant \
+  -f "/backup/xtquant_$(date +%Y%m%d_%H%M%S).sql"
 
 # 自动备份脚本 (crontab -e)
 # 每天 3:00 备份
 0 3 * * * /opt/xiaotian_quant/scripts/backup-db.sh
 
 # 保留最近 14 天
-find /backup -name "xiaotian_*.db" -mtime +14 -delete
+find /backup \( -name "xtquant_*.dump" -o -name "xtquant_*.sql" \) -mtime +14 -delete
 ```
 
 ### 8.2 配置文件备份
@@ -612,8 +620,11 @@ git commit -m "config backup $(date)"
 # 1. 停止服务
 sudo systemctl stop xiaotian-gateway
 
-# 2. 恢复数据库
-cp /backup/xiaotian_20260606_030000.db gateway/data/xiaotian.db
+# 2. 恢复数据库（custom 格式）
+sudo -u postgres dropdb xtquant 2>/dev/null || true
+sudo -u postgres createdb xtquant OWNER xtquant
+pg_restore -h 127.0.0.1 -U xtquant -d xtquant /backup/xtquant_20260606_030000.dump
+# 文本备份则用: psql -h 127.0.0.1 -U xtquant -d xtquant -f /backup/xtquant_20260606_030000.sql
 
 # 3. 恢复配置
 git checkout gateway/config.yaml
@@ -694,15 +705,16 @@ nm -D /opt/xiaotian_quant/engine/target/release/libxt_matching.so | grep engine_
 ### 9.5 数据库锁定
 
 ```bash
-# SQLite 并发写入可能导致 database is locked
-# 解决方案：
-# 1. 检查是否有其他进程占用
-fuser gateway/data/xiaotian.db
+# PostgreSQL 连接/锁排障
+# 1. 查看当前连接与长事务
+psql -h 127.0.0.1 -U xtquant -d xtquant -c \
+  "SELECT pid, state, wait_event, query, xact_start FROM pg_stat_activity WHERE datname='xtquant' ORDER BY xact_start;"
 
-# 2. 增加 busy_timeout
-sqlite3 gateway/data/xiaotian.db "PRAGMA busy_timeout = 5000;"
+# 2. 查看阻塞锁等待
+psql -h 127.0.0.1 -U xtquant -d xtquant -c \
+  "SELECT blocked_locks.pid AS blocked_pid, blocking_locks.pid AS blocking_pid, blocking_locks.query FROM pg_locks blocked_locks JOIN pg_stat_activity blocked_locks ON blocked_locks.pid=blocked_locks.pid, pg_locks blocking_locks JOIN pg_stat_activity blocking_locks ON blocking_locks.pid=blocking_locks.pid WHERE NOT blocked_locks.granted AND blocking_locks.granted;"
 
-# 3. 长期方案：迁移到 PostgreSQL（配置中修改 driver）
+# 3. 连接数不足时调大 PG max_connections 或网关连接池 DB_POOL_MAX
 ```
 
 ---
@@ -772,7 +784,9 @@ mv bin/gateway-old bin/gateway
 sudo systemctl start xiaotian-gateway
 
 # 数据库回滚（如有备份）
-cp /backup/xiaotian_pre_upgrade.db data/xiaotian.db
+sudo -u postgres dropdb xtquant 2>/dev/null || true
+sudo -u postgres createdb xtquant OWNER xtquant
+pg_restore -h 127.0.0.1 -U xtquant -d xtquant /backup/xtquant_pre_upgrade.dump
 ```
 
 ---
@@ -837,9 +851,9 @@ sudo systemctl reload xiaotian-gateway
 curl http://localhost:8080/debug/pprof/goroutine
 curl http://localhost:8080/debug/pprof/heap
 
-# 数据库维护
-sqlite3 data/xiaotian.db "VACUUM;"
-sqlite3 data/xiaotian.db "REINDEX;"
+# 数据库维护（PG）
+psql -h 127.0.0.1 -U xtquant -d xtquant -c "VACUUM ANALYZE;"
+psql -h 127.0.0.1 -U xtquant -d xtquant -c "REINDEX DATABASE xtquant;"
 
 # Redis 清理
 redis-cli FLUSHDB

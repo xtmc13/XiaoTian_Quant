@@ -111,7 +111,7 @@ func (c *PredictionCache) Predict(p *Predictor, key PredictionKey, features map[
 		return 0, err
 	}
 	if c.repo != nil {
-		// 落库失败不影响预测结果（INSERT OR IGNORE，唯一约束去重）。
+		// 落库失败不影响预测结果（ON CONFLICT DO NOTHING，唯一约束去重）。
 		_ = c.repo.Insert(key.ModelName, key.Symbol, key.BarTimeMs, hash, v)
 	}
 	c.memSet(ck, v)

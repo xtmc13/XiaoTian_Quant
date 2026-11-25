@@ -36,7 +36,7 @@ func (r *AgentUserAIRepo) Get(userID int64) (*AgentUserAIRecord, error) {
 		return nil, err
 	}
 	var rec AgentUserAIRecord
-	err = db.QueryRow(`SELECT user_id, provider, model, api_key, updated_at FROM xt_agent_user_ai WHERE user_id = ?`, userID).
+	err = db.QueryRow(`SELECT user_id, provider, model, api_key, updated_at FROM xt_agent_user_ai WHERE user_id = $1`, userID).
 		Scan(&rec.UserID, &rec.Provider, &rec.Model, &rec.APIKey, &rec.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -54,7 +54,7 @@ func (r *AgentUserAIRepo) Upsert(rec *AgentUserAIRecord) error {
 		return err
 	}
 	rec.UpdatedAt = time.Now().Unix()
-	_, err = db.Exec(`INSERT INTO xt_agent_user_ai (user_id, provider, model, api_key, updated_at) VALUES (?,?,?,?,?)
+	_, err = db.Exec(`INSERT INTO xt_agent_user_ai (user_id, provider, model, api_key, updated_at) VALUES ($1,$2,$3,$4,$5)
 		ON CONFLICT(user_id) DO UPDATE SET provider = excluded.provider, model = excluded.model, api_key = excluded.api_key, updated_at = excluded.updated_at`,
 		rec.UserID, rec.Provider, rec.Model, rec.APIKey, rec.UpdatedAt)
 	return err
@@ -66,6 +66,6 @@ func (r *AgentUserAIRepo) Delete(userID int64) error {
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec(`DELETE FROM xt_agent_user_ai WHERE user_id = ?`, userID)
+	_, err = db.Exec(`DELETE FROM xt_agent_user_ai WHERE user_id = $1`, userID)
 	return err
 }

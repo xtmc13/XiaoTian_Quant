@@ -121,7 +121,7 @@ func (r *GridRepo) Create(b *GridBotRecord) error {
 		b.StateJSON = "{}"
 	}
 	_, err := db.Exec(`INSERT INTO grid_bots (`+gridBotColumns+`)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)`,
 		b.ID, b.UserID, b.Name, b.Symbol, b.LowerPrice, b.UpperPrice, b.GridCount,
 		b.Investment, b.Status, b.Exchange, b.FeeRate, b.Mode, b.Leverage, b.MarginMode,
 		b.RealizedPnL, b.TotalTrades,
@@ -138,7 +138,7 @@ func (r *GridRepo) GetByID(id string) (*GridBotRecord, error) {
 	if db == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
-	row := db.QueryRow(`SELECT `+gridBotColumns+` FROM grid_bots WHERE id=?`, id)
+	row := db.QueryRow(`SELECT `+gridBotColumns+` FROM grid_bots WHERE id=$1`, id)
 	return scanGridBot(row)
 }
 
@@ -150,7 +150,7 @@ func (r *GridRepo) GetByIDForUser(id string, userID int64) (*GridBotRecord, erro
 	if db == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
-	row := db.QueryRow(`SELECT `+gridBotColumns+` FROM grid_bots WHERE id=? AND user_id=?`, id, userID)
+	row := db.QueryRow(`SELECT `+gridBotColumns+` FROM grid_bots WHERE id=$1 AND user_id=$2`, id, userID)
 	return scanGridBot(row)
 }
 
@@ -165,13 +165,13 @@ func (r *GridRepo) List(filter map[string]any, limit int) ([]*GridBotRecord, err
 	allowedCols := map[string]bool{
 		"id": true, "user_id": true, "status": true, "symbol": true, "exchange": true,
 	}
-	args, where := buildFilter(filter, allowedCols)
+	args, where, next := buildFilter(filter, allowedCols, 1)
 	if where != "" {
 		query += " WHERE " + where
 	}
 	query += " ORDER BY updated_at DESC"
 	if limit > 0 {
-		query += " LIMIT ?"
+		query += fmt.Sprintf(" LIMIT $%d", next)
 		args = append(args, limit)
 	}
 	rows, err := db.Query(query, args...)
@@ -199,11 +199,11 @@ func (r *GridRepo) Update(b *GridBotRecord) error {
 		return fmt.Errorf("database not initialized")
 	}
 	b.UpdatedAt = time.Now().UnixMilli()
-	_, err := db.Exec(`UPDATE grid_bots SET user_id=?, name=?, symbol=?, lower_price=?,
-		upper_price=?, grid_count=?, investment=?, status=?, exchange=?, fee_rate=?,
-		mode=?, leverage=?, margin_mode=?,
-		realized_pnl=?, total_trades=?, base_qty=?, quote_balance=?, state_json=?,
-		initial_equity=?, origin_listing_id=?, created_at=?, updated_at=?, started_at=?, stopped_at=? WHERE id=?`,
+	_, err := db.Exec(`UPDATE grid_bots SET user_id=$1, name=$2, symbol=$3, lower_price=$4,
+		upper_price=$5, grid_count=$6, investment=$7, status=$8, exchange=$9, fee_rate=$10,
+		mode=$11, leverage=$12, margin_mode=$13,
+		realized_pnl=$14, total_trades=$15, base_qty=$16, quote_balance=$17, state_json=$18,
+		initial_equity=$19, origin_listing_id=$20, created_at=$21, updated_at=$22, started_at=$23, stopped_at=$24 WHERE id=$25`,
 		b.UserID, b.Name, b.Symbol, b.LowerPrice, b.UpperPrice, b.GridCount,
 		b.Investment, b.Status, b.Exchange, b.FeeRate, b.Mode, b.Leverage, b.MarginMode,
 		b.RealizedPnL, b.TotalTrades,
@@ -220,7 +220,7 @@ func (r *GridRepo) Delete(id string) error {
 	if db == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	_, err := db.Exec("DELETE FROM grid_bots WHERE id=?", id)
+	_, err := db.Exec("DELETE FROM grid_bots WHERE id=$1", id)
 	return err
 }
 
@@ -231,7 +231,7 @@ func (r *GridRepo) DeleteForUser(id string, userID int64) error {
 	if db == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	res, err := db.Exec("DELETE FROM grid_bots WHERE id=? AND user_id=?", id, userID)
+	res, err := db.Exec("DELETE FROM grid_bots WHERE id=$1 AND user_id=$2", id, userID)
 	if err != nil {
 		return err
 	}
@@ -249,8 +249,8 @@ func (r *GridRepo) UpdateState(id string, stateJSON string, baseQty, quoteBalanc
 	if db == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	_, err := db.Exec(`UPDATE grid_bots SET state_json=?, base_qty=?, quote_balance=?,
-		realized_pnl=?, total_trades=?, updated_at=? WHERE id=?`,
+	_, err := db.Exec(`UPDATE grid_bots SET state_json=$1, base_qty=$2, quote_balance=$3,
+		realized_pnl=$4, total_trades=$5, updated_at=$6 WHERE id=$7`,
 		stateJSON, baseQty, quoteBalance, realizedPnL, totalTrades, time.Now().UnixMilli(), id,
 	)
 	return err
@@ -265,17 +265,20 @@ func (r *GridRepo) UpdateStatus(id string, status string) error {
 		return fmt.Errorf("database not initialized")
 	}
 	now := time.Now().UnixMilli()
-	query := `UPDATE grid_bots SET status=?, updated_at=?`
+	query := `UPDATE grid_bots SET status=$1, updated_at=$2`
 	args := []any{status, now}
+	next := 3
 	switch status {
 	case "running":
-		query += `, started_at=?`
+		query += fmt.Sprintf(`, started_at=$%d`, next)
 		args = append(args, now)
+		next++
 	case "stopped", "finished":
-		query += `, stopped_at=?`
+		query += fmt.Sprintf(`, stopped_at=$%d`, next)
 		args = append(args, now)
+		next++
 	}
-	query += ` WHERE id=?`
+	query += fmt.Sprintf(` WHERE id=$%d`, next)
 	args = append(args, id)
 	_, err := db.Exec(query, args...)
 	return err
@@ -293,7 +296,7 @@ func (r *GridRepo) InsertTrade(botID string, level int, side string, price, qty,
 	}
 	_, err := db.Exec(`INSERT INTO grid_bot_trades
 		(bot_id, level_index, side, price, quantity, quote_qty, fee, pnl, leg, ts)
-		VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
 		botID, level, side, price, qty, quoteQty, fee, pnl, leg, ts,
 	)
 	return err
@@ -307,7 +310,7 @@ func (r *GridRepo) InsertSnapshot(botID string, equity, price, realized float64,
 		return fmt.Errorf("database not initialized")
 	}
 	_, err := db.Exec(`INSERT INTO grid_bot_snapshots
-		(bot_id, equity, price, realized_pnl, open_orders, ts) VALUES (?,?,?,?,?,?)`,
+		(bot_id, equity, price, realized_pnl, open_orders, ts) VALUES ($1,$2,$3,$4,$5,$6)`,
 		botID, equity, price, realized, openOrders, ts,
 	)
 	return err
@@ -321,10 +324,10 @@ func (r *GridRepo) GetTrades(botID string, limit int) ([]*GridTradeRecord, error
 		return nil, fmt.Errorf("database not initialized")
 	}
 	query := `SELECT id, bot_id, level_index, side, price, quantity, quote_qty, fee, pnl, leg, ts
-		FROM grid_bot_trades WHERE bot_id=? ORDER BY ts DESC, id DESC`
+		FROM grid_bot_trades WHERE bot_id=$1 ORDER BY ts DESC, id DESC`
 	args := []any{botID}
 	if limit > 0 {
-		query += " LIMIT ?"
+		query += " LIMIT $2"
 		args = append(args, limit)
 	}
 	rows, err := db.Query(query, args...)
@@ -354,15 +357,15 @@ func (r *GridRepo) GetSnapshots(botID string, limit int, sinceTs int64) ([]*Grid
 		return nil, fmt.Errorf("database not initialized")
 	}
 	query := `SELECT id, bot_id, equity, price, realized_pnl, open_orders, ts
-		FROM grid_bot_snapshots WHERE bot_id=?`
+		FROM grid_bot_snapshots WHERE bot_id=$1`
 	args := []any{botID}
 	if sinceTs > 0 {
-		query += " AND ts>=?"
+		query += fmt.Sprintf(" AND ts>=$%d", len(args)+1)
 		args = append(args, sinceTs)
 	}
 	query += " ORDER BY ts DESC, id DESC"
 	if limit > 0 {
-		query += " LIMIT ?"
+		query += fmt.Sprintf(" LIMIT $%d", len(args)+1)
 		args = append(args, limit)
 	}
 	rows, err := db.Query(query, args...)
@@ -391,7 +394,7 @@ func (r *GridRepo) GetSnapshotsAsc(botID string, sinceMs int64) ([]*GridSnapshot
 		return nil, fmt.Errorf("database not initialized")
 	}
 	rows, err := db.Query(`SELECT id, bot_id, equity, price, realized_pnl, open_orders, ts
-		FROM grid_bot_snapshots WHERE bot_id=? AND ts>=? ORDER BY ts ASC, id ASC`, botID, sinceMs)
+		FROM grid_bot_snapshots WHERE bot_id=$1 AND ts>=$2 ORDER BY ts ASC, id ASC`, botID, sinceMs)
 	if err != nil {
 		return nil, err
 	}
@@ -417,7 +420,7 @@ func (r *GridRepo) GetTradesSinceAsc(botID string, sinceMs int64) ([]*GridTradeR
 		return nil, fmt.Errorf("database not initialized")
 	}
 	rows, err := db.Query(`SELECT id, bot_id, level_index, side, price, quantity, quote_qty, fee, pnl, leg, ts
-		FROM grid_bot_trades WHERE bot_id=? AND ts>=? ORDER BY ts ASC, id ASC`, botID, sinceMs)
+		FROM grid_bot_trades WHERE bot_id=$1 AND ts>=$2 ORDER BY ts ASC, id ASC`, botID, sinceMs)
 	if err != nil {
 		return nil, err
 	}
@@ -449,11 +452,11 @@ func (r *GridRepo) GetTradesPage(botID string, limit, offset int) ([]*GridTradeR
 		offset = 0
 	}
 	var total int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM grid_bot_trades WHERE bot_id=?`, botID).Scan(&total); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM grid_bot_trades WHERE bot_id=$1`, botID).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	rows, err := db.Query(`SELECT id, bot_id, level_index, side, price, quantity, quote_qty, fee, pnl, leg, ts
-		FROM grid_bot_trades WHERE bot_id=? ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?`, botID, limit, offset)
+		FROM grid_bot_trades WHERE bot_id=$1 ORDER BY ts DESC, id DESC LIMIT $2 OFFSET $3`, botID, limit, offset)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -501,6 +504,6 @@ func (r *GridRepo) GetByOrigin(userID int64, listingID string) (*GridBotRecord, 
 		return nil, fmt.Errorf("database not initialized")
 	}
 	row := db.QueryRow(`SELECT `+gridBotColumns+` FROM grid_bots
-		WHERE user_id=? AND origin_listing_id=? ORDER BY created_at DESC LIMIT 1`, userID, listingID)
+		WHERE user_id=$1 AND origin_listing_id=$2 ORDER BY created_at DESC LIMIT 1`, userID, listingID)
 	return scanGridBot(row)
 }

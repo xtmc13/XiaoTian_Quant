@@ -27,7 +27,7 @@ func (r *MLPredictionRepo) Get(modelName, symbol string, barTimeMs int64, featur
 	}
 	var v float64
 	err := db.QueryRow(`SELECT prediction FROM xt_ml_predictions
-		WHERE model_name=? AND symbol=? AND bar_time=? AND features_hash=?`,
+		WHERE model_name=$1 AND symbol=$2 AND bar_time=$3 AND features_hash=$4`,
 		modelName, symbol, barTimeMs, featuresHash).Scan(&v)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -38,16 +38,17 @@ func (r *MLPredictionRepo) Get(modelName, symbol string, barTimeMs int64, featur
 	return v, true, nil
 }
 
-// Insert 落一条预测（INSERT OR IGNORE：并发/重复写不报错，靠唯一约束去重）。
+// Insert 落一条预测（ON CONFLICT DO NOTHING：并发/重复写不报错，靠唯一约束去重）。
 func (r *MLPredictionRepo) Insert(modelName, symbol string, barTimeMs int64, featuresHash string, prediction float64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if db == nil {
 		return nil
 	}
-	_, err := db.Exec(`INSERT OR IGNORE INTO xt_ml_predictions
+	_, err := db.Exec(`INSERT INTO xt_ml_predictions
 		(job_id, model_name, symbol, bar_time, features_hash, prediction, created_at)
-		VALUES (0,?,?,?,?,?,?)`,
+		VALUES (0,$1,$2,$3,$4,$5,$6)
+		ON CONFLICT DO NOTHING`,
 		modelName, symbol, barTimeMs, featuresHash, prediction, time.Now().UnixMilli())
 	return err
 }
@@ -59,7 +60,7 @@ func (r *MLPredictionRepo) DeleteOlderThan(cutoffMs int64) (int64, error) {
 	if db == nil {
 		return 0, nil
 	}
-	res, err := db.Exec(`DELETE FROM xt_ml_predictions WHERE created_at < ?`, cutoffMs)
+	res, err := db.Exec(`DELETE FROM xt_ml_predictions WHERE created_at < $1`, cutoffMs)
 	if err != nil {
 		return 0, err
 	}
@@ -73,7 +74,7 @@ func (r *MLPredictionRepo) DeleteForModel(modelName string) (int64, error) {
 	if db == nil {
 		return 0, nil
 	}
-	res, err := db.Exec(`DELETE FROM xt_ml_predictions WHERE model_name = ?`, modelName)
+	res, err := db.Exec(`DELETE FROM xt_ml_predictions WHERE model_name = $1`, modelName)
 	if err != nil {
 		return 0, err
 	}

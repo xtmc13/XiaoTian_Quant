@@ -43,7 +43,7 @@ func (r *PositionRepo) Create(p *PositionRecord) error {
 	p.CostBasis = p.Quantity * p.AvgEntryPrice
 	_, err := db.Exec(
 		`INSERT INTO positions (id, user_id, symbol, side, quantity, avg_entry_price, current_price, unrealized_pnl, realized_pnl, cost_basis, exchange, status, opened_at, closed_at, updated_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
 		p.ID, p.UserID, p.Symbol, p.Side, p.Quantity, p.AvgEntryPrice, p.CurrentPrice, p.UnrealizedPnL, p.RealizedPnL, p.CostBasis, p.Exchange, p.Status, p.OpenedAt, p.ClosedAt, p.UpdatedAt,
 	)
 	return err
@@ -52,7 +52,7 @@ func (r *PositionRepo) Create(p *PositionRecord) error {
 const positionColumns = `id, user_id, symbol, side, quantity, avg_entry_price, current_price, unrealized_pnl, realized_pnl, cost_basis, exchange, status, opened_at, closed_at, updated_at`
 
 func (r *PositionRepo) GetByID(id string) (*PositionRecord, error) {
-	row := db.QueryRow(`SELECT `+positionColumns+` FROM positions WHERE id=?`, id)
+	row := db.QueryRow(`SELECT `+positionColumns+` FROM positions WHERE id=$1`, id)
 	var p PositionRecord
 	err := row.Scan(&p.ID, &p.UserID, &p.Symbol, &p.Side, &p.Quantity, &p.AvgEntryPrice, &p.CurrentPrice, &p.UnrealizedPnL, &p.RealizedPnL, &p.CostBasis, &p.Exchange, &p.Status, &p.OpenedAt, &p.ClosedAt, &p.UpdatedAt)
 	if err != nil {
@@ -72,16 +72,17 @@ func (r *PositionRepo) ListPaged(filter map[string]any, limit, offset int) ([]*P
 		"id": true, "user_id": true, "symbol": true, "side": true, "exchange": true, "status": true,
 		"opened_at": true, "closed_at": true, "updated_at": true,
 	}
-	args, where := buildFilter(filter, allowedCols)
+	args, where, next := buildFilter(filter, allowedCols, 1)
 	if where != "" {
 		query += " WHERE " + where
 	}
 	query += " ORDER BY closed_at DESC, updated_at DESC"
 	if limit > 0 {
-		query += " LIMIT ?"
+		query += fmt.Sprintf(" LIMIT $%d", next)
 		args = append(args, limit)
+		next++
 		if offset > 0 {
-			query += " OFFSET ?"
+			query += fmt.Sprintf(" OFFSET $%d", next)
 			args = append(args, offset)
 		}
 	}
@@ -104,13 +105,13 @@ func (r *PositionRepo) ListPaged(filter map[string]any, limit, offset int) ([]*P
 func (r *PositionRepo) Update(p *PositionRecord) error {
 	p.UpdatedAt = time.Now().UnixMilli()
 	_, err := db.Exec(
-		`UPDATE positions SET quantity=?, avg_entry_price=?, current_price=?, unrealized_pnl=?, realized_pnl=?, cost_basis=?, status=?, closed_at=?, updated_at=? WHERE id=?`,
+		`UPDATE positions SET quantity=$1, avg_entry_price=$2, current_price=$3, unrealized_pnl=$4, realized_pnl=$5, cost_basis=$6, status=$7, closed_at=$8, updated_at=$9 WHERE id=$10`,
 		p.Quantity, p.AvgEntryPrice, p.CurrentPrice, p.UnrealizedPnL, p.RealizedPnL, p.CostBasis, p.Status, p.ClosedAt, p.UpdatedAt, p.ID,
 	)
 	return err
 }
 
 func (r *PositionRepo) Delete(id string) error {
-	_, err := db.Exec("DELETE FROM positions WHERE id=?", id)
+	_, err := db.Exec("DELETE FROM positions WHERE id=$1", id)
 	return err
 }

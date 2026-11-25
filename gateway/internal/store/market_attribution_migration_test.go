@@ -1,7 +1,6 @@
 package store
 
 import (
-	"path/filepath"
 	"testing"
 )
 
@@ -9,12 +8,7 @@ import (
 // provider_id，ai_bot_instances/grid_bots 增加 origin_listing_id 与索引，
 // 存量行默认值，repo 读写 roundtrip，幂等重跑。
 func TestMarketAttributionMigration(t *testing.T) {
-	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "gateway.db"))
-	t.Setenv("SECRET_KEY", "test-secret-key-market-attribution")
-	if err := InitDB(); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
-	defer CloseDB()
+	SetupTestDB(t)
 	if err := RunSQLMigrations(); err != nil {
 		t.Fatalf("run sql migrations: %v", err)
 	}
@@ -25,13 +19,13 @@ func TestMarketAttributionMigration(t *testing.T) {
 		{"grid_bots", "origin_listing_id"},
 	} {
 		var n int
-		if err := db.QueryRow(`SELECT COUNT(1) FROM pragma_table_info(?) WHERE name=?`, tc.table, tc.col).Scan(&n); err != nil || n != 1 {
+		if err := db.QueryRow(`SELECT COUNT(1) FROM information_schema.columns WHERE table_name=$1 AND column_name=$2`, tc.table, tc.col).Scan(&n); err != nil || n != 1 {
 			t.Fatalf("%s missing %s column: n=%d err=%v", tc.table, tc.col, n, err)
 		}
 	}
 	for _, idx := range []string{"idx_aibot_inst_origin", "idx_grid_bots_origin"} {
 		var name string
-		if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='index' AND name=?`, idx).Scan(&name); err != nil {
+		if err := db.QueryRow(`SELECT indexname FROM pg_indexes WHERE indexname=$1`, idx).Scan(&name); err != nil {
 			t.Fatalf("index %s missing: %v", idx, err)
 		}
 	}

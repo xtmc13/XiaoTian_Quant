@@ -90,9 +90,9 @@ func (r *DCARepo) Create(b *DCABotRecord) error {
 		b.Exchange = "paper"
 	}
 	_, err := db.Exec(`INSERT INTO dca_bots (`+dcaBotColumns+`)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)`,
 		b.ID, b.UserID, b.Name, b.Symbol, b.Exchange, b.QuoteAmount, b.IntervalMinutes,
-		b.MaxOrders, b.PeriodBudget, b.TakeProfitPct, b.StopLossPct, b.TrailingEnabled,
+		b.MaxOrders, b.PeriodBudget, b.TakeProfitPct, b.StopLossPct, boolToInt(b.TrailingEnabled),
 		b.Status, b.FilledOrders, b.TotalInvested, b.BaseQty, b.AvgPrice, b.RealizedPnL,
 		b.LastBuyAt, b.HighestPrice, b.CreatedAt, b.UpdatedAt, b.StartedAt, b.StoppedAt,
 	)
@@ -106,7 +106,7 @@ func (r *DCARepo) GetByID(id string) (*DCABotRecord, error) {
 	if db == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
-	row := db.QueryRow(`SELECT `+dcaBotColumns+` FROM dca_bots WHERE id=?`, id)
+	row := db.QueryRow(`SELECT `+dcaBotColumns+` FROM dca_bots WHERE id=$1`, id)
 	return scanDCABot(row)
 }
 
@@ -121,13 +121,13 @@ func (r *DCARepo) List(filter map[string]any, limit int) ([]*DCABotRecord, error
 	allowedCols := map[string]bool{
 		"id": true, "user_id": true, "status": true, "symbol": true, "exchange": true,
 	}
-	args, where := buildFilter(filter, allowedCols)
+	args, where, next := buildFilter(filter, allowedCols, 1)
 	if where != "" {
 		query += " WHERE " + where
 	}
 	query += " ORDER BY updated_at DESC"
 	if limit > 0 {
-		query += " LIMIT ?"
+		query += fmt.Sprintf(" LIMIT $%d", next)
 		args = append(args, limit)
 	}
 	rows, err := db.Query(query, args...)
@@ -155,13 +155,13 @@ func (r *DCARepo) Update(b *DCABotRecord) error {
 		return fmt.Errorf("database not initialized")
 	}
 	b.UpdatedAt = time.Now().UnixMilli()
-	_, err := db.Exec(`UPDATE dca_bots SET user_id=?, name=?, symbol=?, exchange=?,
-		quote_amount=?, interval_minutes=?, max_orders=?, period_budget=?, take_profit_pct=?,
-		stop_loss_pct=?, trailing_enabled=?, status=?, filled_orders=?, total_invested=?,
-		base_qty=?, avg_price=?, realized_pnl=?, last_buy_at=?, highest_price=?,
-		created_at=?, updated_at=?, started_at=?, stopped_at=? WHERE id=?`,
+	_, err := db.Exec(`UPDATE dca_bots SET user_id=$1, name=$2, symbol=$3, exchange=$4,
+		quote_amount=$5, interval_minutes=$6, max_orders=$7, period_budget=$8, take_profit_pct=$9,
+		stop_loss_pct=$10, trailing_enabled=$11, status=$12, filled_orders=$13, total_invested=$14,
+		base_qty=$15, avg_price=$16, realized_pnl=$17, last_buy_at=$18, highest_price=$19,
+		created_at=$20, updated_at=$21, started_at=$22, stopped_at=$23 WHERE id=$24`,
 		b.UserID, b.Name, b.Symbol, b.Exchange, b.QuoteAmount, b.IntervalMinutes,
-		b.MaxOrders, b.PeriodBudget, b.TakeProfitPct, b.StopLossPct, b.TrailingEnabled,
+		b.MaxOrders, b.PeriodBudget, b.TakeProfitPct, b.StopLossPct, boolToInt(b.TrailingEnabled),
 		b.Status, b.FilledOrders, b.TotalInvested, b.BaseQty, b.AvgPrice, b.RealizedPnL,
 		b.LastBuyAt, b.HighestPrice, b.CreatedAt, b.UpdatedAt, b.StartedAt, b.StoppedAt, b.ID,
 	)
@@ -176,8 +176,8 @@ func (r *DCARepo) UpdateState(id string, filledOrders int, totalInvested, baseQt
 	if db == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	_, err := db.Exec(`UPDATE dca_bots SET filled_orders=?, total_invested=?, base_qty=?,
-		avg_price=?, realized_pnl=?, last_buy_at=?, highest_price=?, updated_at=? WHERE id=?`,
+	_, err := db.Exec(`UPDATE dca_bots SET filled_orders=$1, total_invested=$2, base_qty=$3,
+		avg_price=$4, realized_pnl=$5, last_buy_at=$6, highest_price=$7, updated_at=$8 WHERE id=$9`,
 		filledOrders, totalInvested, baseQty, avgPrice, realizedPnL, lastBuyAt, highestPrice,
 		time.Now().UnixMilli(), id,
 	)
@@ -193,17 +193,20 @@ func (r *DCARepo) UpdateStatus(id string, status string) error {
 		return fmt.Errorf("database not initialized")
 	}
 	now := time.Now().UnixMilli()
-	query := `UPDATE dca_bots SET status=?, updated_at=?`
+	query := `UPDATE dca_bots SET status=$1, updated_at=$2`
 	args := []any{status, now}
+	next := 3
 	switch status {
 	case "running":
-		query += `, started_at=?`
+		query += fmt.Sprintf(`, started_at=$%d`, next)
 		args = append(args, now)
+		next++
 	case "stopped", "finished":
-		query += `, stopped_at=?`
+		query += fmt.Sprintf(`, stopped_at=$%d`, next)
 		args = append(args, now)
+		next++
 	}
-	query += ` WHERE id=?`
+	query += fmt.Sprintf(` WHERE id=$%d`, next)
 	args = append(args, id)
 	_, err := db.Exec(query, args...)
 	return err
@@ -216,7 +219,7 @@ func (r *DCARepo) Delete(id string) error {
 	if db == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	_, err := db.Exec("DELETE FROM dca_bots WHERE id=?", id)
+	_, err := db.Exec("DELETE FROM dca_bots WHERE id=$1", id)
 	return err
 }
 
@@ -227,7 +230,7 @@ func (r *DCARepo) DeleteForUser(id string, userID int64) error {
 	if db == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	res, err := db.Exec("DELETE FROM dca_bots WHERE id=? AND user_id=?", id, userID)
+	res, err := db.Exec("DELETE FROM dca_bots WHERE id=$1 AND user_id=$2", id, userID)
 	if err != nil {
 		return err
 	}
@@ -246,7 +249,7 @@ func (r *DCARepo) InsertOrder(botID, side string, price, qty, quoteQty float64, 
 	}
 	_, err := db.Exec(`INSERT INTO dca_bot_orders
 		(bot_id, side, price, quantity, quote_qty, reason, ts)
-		VALUES (?,?,?,?,?,?,?)`,
+		VALUES ($1,$2,$3,$4,$5,$6,$7)`,
 		botID, side, price, qty, quoteQty, reason, ts,
 	)
 	return err
@@ -260,10 +263,10 @@ func (r *DCARepo) GetOrders(botID string, limit int) ([]*DCAOrderRecord, error) 
 		return nil, fmt.Errorf("database not initialized")
 	}
 	query := `SELECT id, bot_id, side, price, quantity, quote_qty, reason, ts
-		FROM dca_bot_orders WHERE bot_id=? ORDER BY ts DESC, id DESC`
+		FROM dca_bot_orders WHERE bot_id=$1 ORDER BY ts DESC, id DESC`
 	args := []any{botID}
 	if limit > 0 {
-		query += " LIMIT ?"
+		query += " LIMIT $2"
 		args = append(args, limit)
 	}
 	rows, err := db.Query(query, args...)
@@ -289,9 +292,10 @@ func scanDCABot(scanner interface {
 	Scan(dest ...any) error
 }) (*DCABotRecord, error) {
 	var b DCABotRecord
+	var trailing int
 	err := scanner.Scan(
 		&b.ID, &b.UserID, &b.Name, &b.Symbol, &b.Exchange, &b.QuoteAmount, &b.IntervalMinutes,
-		&b.MaxOrders, &b.PeriodBudget, &b.TakeProfitPct, &b.StopLossPct, &b.TrailingEnabled,
+		&b.MaxOrders, &b.PeriodBudget, &b.TakeProfitPct, &b.StopLossPct, &trailing,
 		&b.Status, &b.FilledOrders, &b.TotalInvested, &b.BaseQty, &b.AvgPrice, &b.RealizedPnL,
 		&b.LastBuyAt, &b.HighestPrice, &b.CreatedAt, &b.UpdatedAt, &b.StartedAt, &b.StoppedAt,
 	)
@@ -301,5 +305,6 @@ func scanDCABot(scanner interface {
 	if err != nil {
 		return nil, err
 	}
+	b.TrailingEnabled = trailing != 0
 	return &b, nil
 }

@@ -10,4 +10,4 @@
 --
 -- 本迁移只加列。写入路径（OMS 捕获 ACK 的 orderId）与接口签名修复随代码落地。
 
-ALTER TABLE xt_orders ADD COLUMN exchange_order_id TEXT DEFAULT ''
+ALTER TABLE xt_orders ADD COLUMN IF NOT EXISTS exchange_order_id TEXT DEFAULT ''

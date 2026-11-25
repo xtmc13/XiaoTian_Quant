@@ -193,7 +193,7 @@ func latestCopyPnLNote(t *testing.T, providerID, followerID int64) string {
 	t.Helper()
 	var note string
 	if err := store.GetDB().QueryRow(
-		`SELECT note FROM xt_social_copy_pnl WHERE provider_id=? AND follower_user_id=? ORDER BY created_at DESC LIMIT 1`,
+		`SELECT note FROM xt_social_copy_pnl WHERE provider_id=$1 AND follower_user_id=$2 ORDER BY created_at DESC LIMIT 1`,
 		providerID, followerID).Scan(&note); err != nil {
 		t.Fatalf("read copy pnl note: %v", err)
 	}
@@ -362,7 +362,7 @@ func TestAttributionLossOffsetsPending(t *testing.T) {
 	tomorrow := time.Now().Add(24 * time.Hour).Format("2006-01-02")
 	tomorrowStart, _ := time.ParseInLocation("2006-01-02", tomorrow, time.Local)
 	if _, err := store.GetDB().Exec(
-		`UPDATE xt_social_copy_pnl SET created_at=? WHERE provider_id=? AND follower_user_id=? AND pnl<0`,
+		`UPDATE xt_social_copy_pnl SET created_at=$1 WHERE provider_id=$2 AND follower_user_id=$3 AND pnl<0`,
 		tomorrowStart.Add(time.Hour).UnixMilli(), p.ID, 100); err != nil {
 		t.Fatalf("shift loss row: %v", err)
 	}

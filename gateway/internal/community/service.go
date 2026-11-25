@@ -92,7 +92,7 @@ func (s *Service) SaveOverfitRisk(strategyID int, result *OverfitResult) error {
 	now := time.Now().Unix()
 	_, err := db.Exec(`
 		INSERT INTO strategy_overfit (strategy_id, score, risk_level, in_sample_return, out_sample_return, return_ratio, stability_score, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		ON CONFLICT(strategy_id) DO UPDATE SET
 			score = excluded.score,
 			risk_level = excluded.risk_level,
@@ -116,7 +116,7 @@ func (s *Service) GetOverfitRisk(strategyID int) (*OverfitResult, error) {
 	var result OverfitResult
 	err := db.QueryRow(`
 		SELECT score, risk_level, in_sample_return, out_sample_return, return_ratio, stability_score
-		FROM strategy_overfit WHERE strategy_id = ?`, strategyID,
+		FROM strategy_overfit WHERE strategy_id = $1`, strategyID,
 	).Scan(&result.Score, &result.RiskLevel, &result.InSampleReturn, &result.OutSampleReturn, &result.ReturnRatio, &result.StabilityScore)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -151,7 +151,7 @@ func (s *Service) ReviewIndicator(indicatorID int, reviewerID int, approve bool,
 
 	// Verify indicator exists and is pending
 	var currentStatus string
-	err := db.QueryRow(`SELECT review_status FROM indicator_codes WHERE id = ?`, indicatorID).Scan(&currentStatus)
+	err := db.QueryRow(`SELECT review_status FROM indicator_codes WHERE id = $1`, indicatorID).Scan(&currentStatus)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("indicator not found")
 	}
@@ -170,7 +170,7 @@ func (s *Service) ReviewIndicator(indicatorID int, reviewerID int, approve bool,
 	}
 
 	_, err = db.Exec(
-		`UPDATE indicator_codes SET review_status = ?, review_reason = ?, reviewed_at = ?, reviewer_id = ? WHERE id = ?`,
+		`UPDATE indicator_codes SET review_status = $1, review_reason = $2, reviewed_at = $3, reviewer_id = $4 WHERE id = $5`,
 		status, reason, now, reviewerID, indicatorID,
 	)
 	if err != nil {
@@ -205,7 +205,7 @@ func (s *Service) GetPendingReviews(page, pageSize int) ([]MarketIndicator, int,
 	rows, err := db.Query(
 		`SELECT id, name, description, pricing_type, price, purchase_count, avg_rating, rating_count, view_count, user_id, created_at
 		 FROM indicator_codes WHERE publish_to_community = 1 AND review_status = 'pending'
-		 ORDER BY created_at ASC LIMIT ? OFFSET ?`,
+		 ORDER BY created_at ASC LIMIT $1 OFFSET $2`,
 		pageSize, offset,
 	)
 	if err != nil {
@@ -270,7 +270,7 @@ func (s *Service) RecordRevenue(indicatorID, buyerID, sellerID int, price float6
 
 	_, err := db.Exec(
 		`INSERT INTO indicator_revenue (indicator_id, buyer_id, seller_id, price, author_share, platform_share, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		indicatorID, buyerID, sellerID, price, authorShare, platformShare, time.Now().Unix(),
 	)
 	return err
@@ -286,7 +286,7 @@ func (s *Service) GetAuthorRevenue(authorID int) (totalSales int, totalRevenue f
 	var sales int
 	var revenue float64
 	err = db.QueryRow(
-		`SELECT COUNT(*), COALESCE(SUM(author_share), 0) FROM indicator_revenue WHERE seller_id = ?`,
+		`SELECT COUNT(*), COALESCE(SUM(author_share), 0) FROM indicator_revenue WHERE seller_id = $1`,
 		authorID,
 	).Scan(&sales, &revenue)
 	return sales, revenue, err
@@ -301,7 +301,7 @@ func (s *Service) GetAuthorRevenueDetails(authorID int) ([]IndicatorRevenue, err
 
 	rows, err := db.Query(
 		`SELECT indicator_id, COUNT(*) as sales, COALESCE(SUM(author_share), 0) as revenue
-		 FROM indicator_revenue WHERE seller_id = ? GROUP BY indicator_id ORDER BY revenue DESC`,
+		 FROM indicator_revenue WHERE seller_id = $1 GROUP BY indicator_id ORDER BY revenue DESC`,
 		authorID,
 	)
 	if err != nil {
@@ -411,7 +411,7 @@ func (s *Service) PublishIndicator(userID, indicatorID int, pricingType string, 
 		return fmt.Errorf("database not available")
 	}
 	_, err := db.Exec(
-		`UPDATE indicator_codes SET publish_to_community = 1, pricing_type = ?, price = ?, review_status = 'pending', updated_at = ? WHERE id = ? AND user_id = ?`,
+		`UPDATE indicator_codes SET publish_to_community = 1, pricing_type = $1, price = $2, review_status = 'pending', updated_at = $3 WHERE id = $4 AND user_id = $5`,
 		pricingType, price, time.Now().Unix(), indicatorID, userID,
 	)
 	return err
@@ -435,7 +435,7 @@ func (s *Service) GetMarketIndicators(userID int, page, pageSize int, keyword, p
 	wheres := []string{"publish_to_community = 1", "(review_status = 'approved' OR review_status IS NULL OR review_status = '')"}
 	args := []any{}
 	if keyword != "" {
-		wheres = append(wheres, "(name LIKE ? OR description LIKE ?)")
+		wheres = append(wheres, fmt.Sprintf("(name LIKE $%d OR description LIKE $%d)", len(args)+1, len(args)+2))
 		args = append(args, "%"+keyword+"%", "%"+keyword+"%")
 	}
 	if pricingType == "free" {
@@ -470,10 +470,11 @@ func (s *Service) GetMarketIndicators(userID int, page, pageSize int, keyword, p
 		orderSQL = "(avg_rating * rating_count + purchase_count) DESC"
 	}
 
+	limitN, offsetN := len(args)+1, len(args)+2
 	querySQL := fmt.Sprintf(
 		`SELECT id, name, description, pricing_type, price, purchase_count, avg_rating, rating_count, view_count, user_id, created_at
-		 FROM indicator_codes WHERE %s ORDER BY %s LIMIT ? OFFSET ?`,
-		whereSQL, orderSQL,
+		 FROM indicator_codes WHERE %s ORDER BY %s LIMIT $%d OFFSET $%d`,
+		whereSQL, orderSQL, limitN, offsetN,
 	)
 	args = append(args, pageSize, offset)
 
@@ -526,7 +527,7 @@ func (s *Service) PurchaseIndicator(buyerID, indicatorID int) (bool, string, err
 	var price float64
 	var pricingType string
 	err := db.QueryRow(
-		`SELECT user_id, price, pricing_type FROM indicator_codes WHERE id = ? AND publish_to_community = 1`,
+		`SELECT user_id, price, pricing_type FROM indicator_codes WHERE id = $1 AND publish_to_community = 1`,
 		indicatorID,
 	).Scan(&sellerID, &price, &pricingType)
 	if err == sql.ErrNoRows {
@@ -542,7 +543,7 @@ func (s *Service) PurchaseIndicator(buyerID, indicatorID int) (bool, string, err
 
 	// Check already purchased
 	var existing int
-	err = db.QueryRow(`SELECT 1 FROM indicator_purchases WHERE indicator_id = ? AND buyer_id = ?`, indicatorID, buyerID).Scan(&existing)
+	err = db.QueryRow(`SELECT 1 FROM indicator_purchases WHERE indicator_id = $1 AND buyer_id = $2`, indicatorID, buyerID).Scan(&existing)
 	if err == nil {
 		return false, "already_purchased", nil
 	}
@@ -551,7 +552,7 @@ func (s *Service) PurchaseIndicator(buyerID, indicatorID int) (bool, string, err
 	var code, name, description string
 	var isEncrypted int
 	err = db.QueryRow(
-		`SELECT code, name, description, is_encrypted FROM indicator_codes WHERE id = ?`, indicatorID,
+		`SELECT code, name, description, is_encrypted FROM indicator_codes WHERE id = $1`, indicatorID,
 	).Scan(&code, &name, &description, &isEncrypted)
 	if err != nil {
 		return false, "indicator_not_found", nil
@@ -559,15 +560,15 @@ func (s *Service) PurchaseIndicator(buyerID, indicatorID int) (bool, string, err
 
 	now := time.Now().Unix()
 	db.Exec(
-		`INSERT INTO indicator_codes (user_id, name, description, code, is_encrypted, source_indicator_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO indicator_codes (user_id, name, description, code, is_encrypted, source_indicator_id, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		buyerID, name, description, code, isEncrypted, indicatorID, now, now,
 	)
 	db.Exec(
-		`INSERT INTO indicator_purchases (indicator_id, buyer_id, seller_id, price, created_at) VALUES (?, ?, ?, ?, ?)`,
+		`INSERT INTO indicator_purchases (indicator_id, buyer_id, seller_id, price, created_at) VALUES ($1, $2, $3, $4, $5)`,
 		indicatorID, buyerID, sellerID, price, now,
 	)
 	db.Exec(
-		`UPDATE indicator_codes SET purchase_count = COALESCE(purchase_count, 0) + 1 WHERE id = ?`, indicatorID,
+		`UPDATE indicator_codes SET purchase_count = COALESCE(purchase_count, 0) + 1 WHERE id = $1`, indicatorID,
 	)
 
 	return true, "success", nil
@@ -582,9 +583,9 @@ func (s *Service) AddComment(userID, indicatorID int, rating int, content string
 
 	// Must be purchased (or own)
 	var owned int
-	err := db.QueryRow(`SELECT 1 FROM indicator_codes WHERE id = ? AND user_id = ?`, indicatorID, userID).Scan(&owned)
+	err := db.QueryRow(`SELECT 1 FROM indicator_codes WHERE id = $1 AND user_id = $2`, indicatorID, userID).Scan(&owned)
 	if err != nil {
-		err = db.QueryRow(`SELECT 1 FROM indicator_purchases WHERE indicator_id = ? AND buyer_id = ?`, indicatorID, userID).Scan(&owned)
+		err = db.QueryRow(`SELECT 1 FROM indicator_purchases WHERE indicator_id = $1 AND buyer_id = $2`, indicatorID, userID).Scan(&owned)
 		if err != nil {
 			return false, "not_purchased", nil
 		}
@@ -592,7 +593,7 @@ func (s *Service) AddComment(userID, indicatorID int, rating int, content string
 
 	// One comment per user per indicator
 	var existing int
-	err = db.QueryRow(`SELECT 1 FROM indicator_comments WHERE indicator_id = ? AND user_id = ? AND parent_id = 0`, indicatorID, userID).Scan(&existing)
+	err = db.QueryRow(`SELECT 1 FROM indicator_comments WHERE indicator_id = $1 AND user_id = $2 AND parent_id = 0`, indicatorID, userID).Scan(&existing)
 	if err == nil {
 		return false, "already_commented", nil
 	}
@@ -605,7 +606,7 @@ func (s *Service) AddComment(userID, indicatorID int, rating int, content string
 	now := time.Now().Unix()
 
 	_, err = db.Exec(
-		`INSERT INTO indicator_comments (indicator_id, user_id, rating, content, parent_id, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?)`,
+		`INSERT INTO indicator_comments (indicator_id, user_id, rating, content, parent_id, created_at, updated_at) VALUES ($1, $2, $3, $4, 0, $5, $6)`,
 		indicatorID, userID, rating, content, now, now,
 	)
 	if err != nil {
@@ -615,9 +616,9 @@ func (s *Service) AddComment(userID, indicatorID int, rating int, content string
 	// Update avg_rating on indicator_codes
 	db.Exec(`
 		UPDATE indicator_codes SET
-			rating_count = (SELECT COUNT(*) FROM indicator_comments WHERE indicator_id = ? AND parent_id = 0 AND is_deleted = 0),
-			avg_rating = COALESCE((SELECT AVG(rating) FROM indicator_comments WHERE indicator_id = ? AND parent_id = 0 AND is_deleted = 0), 0)
-		WHERE id = ?`,
+			rating_count = (SELECT COUNT(*) FROM indicator_comments WHERE indicator_id = $1 AND parent_id = 0 AND is_deleted = 0),
+			avg_rating = COALESCE((SELECT AVG(rating) FROM indicator_comments WHERE indicator_id = $2 AND parent_id = 0 AND is_deleted = 0), 0)
+		WHERE id = $3`,
 		indicatorID, indicatorID, indicatorID,
 	)
 
@@ -639,14 +640,14 @@ func (s *Service) GetComments(indicatorID int, page, pageSize int) ([]Comment, i
 	offset := (page - 1) * pageSize
 
 	var total int
-	db.QueryRow(`SELECT COUNT(*) FROM indicator_comments WHERE indicator_id = ? AND parent_id = 0 AND is_deleted = 0`, indicatorID).Scan(&total)
+	db.QueryRow(`SELECT COUNT(*) FROM indicator_comments WHERE indicator_id = $1 AND parent_id = 0 AND is_deleted = 0`, indicatorID).Scan(&total)
 
 	rows, err := db.Query(`
 		SELECT c.id, c.rating, c.content, c.created_at, u.id as uid, u.nickname, u.username
 		FROM indicator_comments c
 		LEFT JOIN xt_users u ON c.user_id = u.id
-		WHERE c.indicator_id = ? AND c.parent_id = 0 AND c.is_deleted = 0
-		ORDER BY c.created_at DESC LIMIT ? OFFSET ?`,
+		WHERE c.indicator_id = $1 AND c.parent_id = 0 AND c.is_deleted = 0
+		ORDER BY c.created_at DESC LIMIT $2 OFFSET $3`,
 		indicatorID, pageSize, offset,
 	)
 	if err != nil {
@@ -689,16 +690,16 @@ func (s *Service) getPurchasedIDs(userID int, indicatorIDs []int) map[int]bool {
 	if db == nil {
 		return result
 	}
-	// SQLite doesn't support unlimited IN clauses; chunk if needed
+	// IN 子句占位符按序编号：buyer_id=$1，其余 indicator_id 从 $2 起。
 	placeholders := make([]string, len(indicatorIDs))
 	args := make([]any, 0, len(indicatorIDs)+1)
 	args = append(args, userID)
 	for i, id := range indicatorIDs {
-		placeholders[i] = "?"
+		placeholders[i] = fmt.Sprintf("$%d", i+2)
 		args = append(args, id)
 	}
 	rows, err := db.Query(
-		fmt.Sprintf("SELECT indicator_id FROM indicator_purchases WHERE buyer_id = ? AND indicator_id IN (%s)", strings.Join(placeholders, ",")),
+		fmt.Sprintf("SELECT indicator_id FROM indicator_purchases WHERE buyer_id = $1 AND indicator_id IN (%s)", strings.Join(placeholders, ",")),
 		args...,
 	)
 	if err != nil {
@@ -722,7 +723,7 @@ func (s *Service) resolveAuthorNames(db *sql.DB, authorIDs []int) map[int]string
 	placeholders := make([]string, len(authorIDs))
 	args := make([]any, len(authorIDs))
 	for i, id := range authorIDs {
-		placeholders[i] = "?"
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
 		args[i] = id
 	}
 	rows, err := db.Query(

@@ -85,7 +85,7 @@ func (r *AIGateDecisionRepo) Create(rec *AIGateDecisionRecord) error {
 	_, err := db.Exec(
 		`INSERT INTO xt_ai_gate_decisions
 			(`+aiGateDecisionColumns+`)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)`,
 		rec.ID, rec.UserID, rec.Source, rec.Symbol, rec.Side, rec.OrderType, rec.MarketType, rec.PositionSide,
 		rec.Quantity, rec.RefPrice, rec.Notional, rec.Decision, boolToInt(rec.Allowed), rec.Confidence,
 		reasonsJSON, rec.Provider, rec.Model, rec.LatencyMs, boolToInt(rec.FailOpen), rec.DegradeReason,
@@ -100,7 +100,7 @@ func (r *AIGateDecisionRepo) MarkOutcome(id, orderID string, executed bool) erro
 		return fmt.Errorf("db not initialized")
 	}
 	_, err := db.Exec(
-		`UPDATE xt_ai_gate_decisions SET order_id = ?, executed = ?, updated_at = ? WHERE id = ?`,
+		`UPDATE xt_ai_gate_decisions SET order_id = $1, executed = $2, updated_at = $3 WHERE id = $4`,
 		orderID, boolToInt(executed), time.Now().UnixMilli(), id,
 	)
 	return err
@@ -111,7 +111,7 @@ func (r *AIGateDecisionRepo) GetByID(id string) (*AIGateDecisionRecord, error) {
 	if db == nil {
 		return nil, fmt.Errorf("db not initialized")
 	}
-	row := db.QueryRow(`SELECT `+aiGateDecisionColumns+` FROM xt_ai_gate_decisions WHERE id = ?`, id)
+	row := db.QueryRow(`SELECT `+aiGateDecisionColumns+` FROM xt_ai_gate_decisions WHERE id = $1`, id)
 	return r.scan(row)
 }
 
@@ -130,28 +130,34 @@ type AIGateDecisionFilter struct {
 func (f AIGateDecisionFilter) where() (string, []any) {
 	clause := " WHERE 1=1"
 	var args []any
+	next := 1
 	if f.UserID > 0 {
-		clause += " AND (user_id = ? OR user_id = 0)"
+		clause += fmt.Sprintf(" AND (user_id = $%d OR user_id = 0)", next)
 		args = append(args, f.UserID)
+		next++
 	}
 	if f.Decision != "" {
-		clause += " AND decision = ?"
+		clause += fmt.Sprintf(" AND decision = $%d", next)
 		args = append(args, f.Decision)
+		next++
 	}
 	if f.Symbol != "" {
-		clause += " AND symbol = ?"
+		clause += fmt.Sprintf(" AND symbol = $%d", next)
 		args = append(args, f.Symbol)
+		next++
 	}
 	if f.Source != "" {
-		clause += " AND source = ?"
+		clause += fmt.Sprintf(" AND source = $%d", next)
 		args = append(args, f.Source)
+		next++
 	}
 	if f.FailOpen != nil {
-		clause += " AND fail_open = ?"
+		clause += fmt.Sprintf(" AND fail_open = $%d", next)
 		args = append(args, boolToInt(*f.FailOpen))
+		next++
 	}
 	if f.SinceMs > 0 {
-		clause += " AND created_at >= ?"
+		clause += fmt.Sprintf(" AND created_at >= $%d", next)
 		args = append(args, f.SinceMs)
 	}
 	return clause, args
@@ -169,8 +175,9 @@ func (r *AIGateDecisionRepo) List(f AIGateDecisionFilter) ([]*AIGateDecisionReco
 		f.Limit = 500
 	}
 	where, args := f.where()
+	limitN, offsetN := len(args)+1, len(args)+2
 	query := `SELECT ` + aiGateDecisionColumns + ` FROM xt_ai_gate_decisions` + where +
-		` ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
+		fmt.Sprintf(` ORDER BY created_at DESC, id DESC LIMIT $%d OFFSET $%d`, limitN, offsetN)
 	args = append(args, f.Limit, f.Offset)
 
 	rows, err := db.Query(query, args...)
@@ -265,7 +272,7 @@ func CountOrdersByClientOIDPrefix(prefix string, sinceMs int64) (total, filled, 
 		return 0, 0, 0, fmt.Errorf("db not initialized")
 	}
 	rows, err := db.Query(
-		`SELECT status, COUNT(1) FROM xt_orders WHERE client_oid LIKE ? AND created_at >= ? GROUP BY status`,
+		`SELECT status, COUNT(1) FROM xt_orders WHERE client_oid LIKE $1 AND created_at >= $2 GROUP BY status`,
 		prefix+"%", sinceMs,
 	)
 	if err != nil {

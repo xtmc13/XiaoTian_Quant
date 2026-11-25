@@ -45,7 +45,7 @@ func (r *PortfolioBacktestRepo) Create(rec *PortfolioBacktestRecord) error {
 			(id, user_id, name, timeframe, rebalance, start_time, end_time, initial_capital,
 			 final_equity, total_return_pct, max_drawdown_pct, sharpe_ratio, sortino_ratio,
 			 calmar_ratio, win_rate, profit_factor, total_trades, legs_json, result_json, duration_ms, created_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
 		rec.ID, rec.UserID, rec.Name, rec.Timeframe, rec.Rebalance, rec.StartTime, rec.EndTime,
 		rec.InitialCapital, rec.FinalEquity, rec.TotalReturnPct, rec.MaxDrawdownPct, rec.SharpeRatio,
 		rec.SortinoRatio, rec.CalmarRatio, rec.WinRate, rec.ProfitFactor, rec.TotalTrades,
@@ -77,7 +77,7 @@ func (r *PortfolioBacktestRepo) ListByUser(userID int64, limit int) ([]*Portfoli
 		limit = 50
 	}
 	rows, err := db.Query(
-		`SELECT `+portfolioBTColumns+` FROM xt_portfolio_backtests WHERE user_id = ? ORDER BY created_at DESC LIMIT ?`,
+		`SELECT `+portfolioBTColumns+` FROM xt_portfolio_backtests WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2`,
 		userID, limit)
 	if err != nil {
 		return nil, err
@@ -96,12 +96,12 @@ func (r *PortfolioBacktestRepo) ListByUser(userID int64, limit int) ([]*Portfoli
 
 // GetByID 取单条（属主校验由 handler 做）。
 func (r *PortfolioBacktestRepo) GetByID(id string) (*PortfolioBacktestRecord, error) {
-	row := db.QueryRow(`SELECT `+portfolioBTColumns+` FROM xt_portfolio_backtests WHERE id = ?`, id)
+	row := db.QueryRow(`SELECT `+portfolioBTColumns+` FROM xt_portfolio_backtests WHERE id = $1`, id)
 	return r.scan(row)
 }
 
 // DeleteByID 删除单条。
 func (r *PortfolioBacktestRepo) DeleteByID(id string) error {
-	_, err := db.Exec(`DELETE FROM xt_portfolio_backtests WHERE id = ?`, id)
+	_, err := db.Exec(`DELETE FROM xt_portfolio_backtests WHERE id = $1`, id)
 	return err
 }

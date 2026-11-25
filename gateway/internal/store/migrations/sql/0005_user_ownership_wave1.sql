@@ -9,9 +9,9 @@
 --
 -- 注意: 语句内不要出现分号(字符串/注释里也不行)——迁移按分号切分执行。
 
-ALTER TABLE agent_tokens ADD COLUMN user_id BIGINT NOT NULL DEFAULT 0;
-ALTER TABLE agent_audit_log ADD COLUMN user_id BIGINT NOT NULL DEFAULT 0;
-ALTER TABLE notifications ADD COLUMN user_id BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE agent_tokens ADD COLUMN IF NOT EXISTS user_id BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE agent_audit_log ADD COLUMN IF NOT EXISTS user_id BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS user_id BIGINT NOT NULL DEFAULT 0;
 
 -- ── 回填：存量行归到最早创建的 admin ──
 UPDATE agent_tokens SET user_id = COALESCE((SELECT MIN(id) FROM xt_users WHERE role='admin'), 0) WHERE user_id = 0;

@@ -10,9 +10,9 @@
 --
 -- 注意: 语句内不要出现分号(字符串/注释里也不行)——迁移按分号切分执行。
 
-ALTER TABLE xt_market_listings ADD COLUMN object_kind TEXT NOT NULL DEFAULT 'ai_bot';
+ALTER TABLE xt_market_listings ADD COLUMN IF NOT EXISTS object_kind TEXT NOT NULL DEFAULT 'ai_bot';
 
-ALTER TABLE xt_market_listings ADD COLUMN object_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE xt_market_listings ADD COLUMN IF NOT EXISTS object_id TEXT NOT NULL DEFAULT '';
 
 UPDATE xt_market_listings SET object_id = bot_instance_id WHERE object_kind = 'ai_bot' AND object_id = '';
 

@@ -37,7 +37,7 @@ EOF
   sudo apt-get update -qq
   sudo apt-get install -y -qq \
     build-essential pkg-config libssl-dev \
-    sqlite3 redis-tools git curl wget
+    postgresql-client redis-tools git curl wget
 
   # ── 2. 安装 Go ──
   if check_cmd go; then
@@ -109,11 +109,10 @@ EOF
     -o bin/gateway cmd/server/main.go
   log_info "后端构建完成 → gateway/bin/gateway"
 
-  # ── 10. 初始化数据库 ──
-  log_step "初始化数据库..."
-  mkdir -p data
-  ./bin/gateway -init-db 2>/dev/null || true
-  log_info "数据库初始化完成"
+  # ── 10. 数据库 ──
+  # PostgreSQL 由网关启动时自动执行迁移台账（InitDB）；
+  # 需先在本机准备好 PG 实例并通过 DATABASE_URL / POSTGRES_* 指向目标库。
+  log_info "数据库：启动网关时按 DATABASE_URL 自动迁移 PostgreSQL（无需独立 init-db）"
 
   # ── 11. 创建一键启动脚本 ──
   log_step "创建启动脚本..."

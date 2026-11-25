@@ -17,14 +17,16 @@ func TestMain(m *testing.M) {
 		fmt.Println("skipping data integration tests: set RUN_DATA_TESTS=1 to run")
 		os.Exit(0)
 	}
-	_ = os.Setenv("DB_PATH", "./data/test_data.db")
+	if !store.TestDatabaseConfigured() {
+		fmt.Println("skipping data tests: postgres test DB not configured")
+		os.Exit(0)
+	}
+	_ = os.Setenv("SECRET_KEY", "test-secret-key-not-for-production-use-only")
 	if err := store.InitDB(); err != nil {
 		panic(err)
 	}
 	code := m.Run()
-	_ = os.Remove("./data/test_data.db")
-	_ = os.Remove("./data/test_data.db-shm")
-	_ = os.Remove("./data/test_data.db-wal")
+	store.CloseDB()
 	os.Exit(code)
 }
 

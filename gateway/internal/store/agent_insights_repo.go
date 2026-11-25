@@ -46,16 +46,16 @@ func (r *AgentChatRepo) GetInsightsTotals(userID, since int64) (AgentUsageTotal,
 		COALESCE(SUM(m.llm_ms),0), COALESCE(SUM(CASE WHEN m.completion_tokens>0 THEN 1 ELSE 0 END),0)
 		FROM xt_agent_messages m
 		JOIN xt_agent_conversations c ON c.id=m.conversation_id
-		WHERE c.user_id=? AND m.role='assistant' AND m.created_at>=?`, userID, since).
+		WHERE c.user_id=$1 AND m.role='assistant' AND m.created_at>=$2`, userID, since).
 		Scan(&t.PromptTokens, &t.CompletionTokens, &t.LLMMs, &t.Rounds)
 	if err != nil {
 		return t, 0, err
 	}
 	var activeDays int
-	err = db.QueryRow(`SELECT COUNT(DISTINCT date(m.created_at,'unixepoch','localtime'))
+	err = db.QueryRow(`SELECT COUNT(DISTINCT to_char(to_timestamp(m.created_at) AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD'))
 		FROM xt_agent_messages m
 		JOIN xt_agent_conversations c ON c.id=m.conversation_id
-		WHERE c.user_id=? AND m.role='assistant' AND m.created_at>=?`, userID, since).Scan(&activeDays)
+		WHERE c.user_id=$1 AND m.role='assistant' AND m.created_at>=$2`, userID, since).Scan(&activeDays)
 	return t, activeDays, err
 }
 
@@ -68,12 +68,12 @@ func (r *AgentChatRepo) GetInsightsByDay(userID, since int64) ([]AgentInsightsDa
 		return nil, sql.ErrConnDone
 	}
 	out := make([]AgentInsightsDay, 0, 8)
-	rows, err := db.Query(`SELECT date(m.created_at,'unixepoch','localtime') d,
+	rows, err := db.Query(`SELECT to_char(to_timestamp(m.created_at) AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD') d,
 		COALESCE(SUM(m.prompt_tokens),0), COALESCE(SUM(m.completion_tokens),0),
 		COALESCE(SUM(CASE WHEN m.completion_tokens>0 THEN 1 ELSE 0 END),0)
 		FROM xt_agent_messages m
 		JOIN xt_agent_conversations c ON c.id=m.conversation_id
-		WHERE c.user_id=? AND m.role='assistant' AND m.created_at>=?
+		WHERE c.user_id=$1 AND m.role='assistant' AND m.created_at>=$2
 		GROUP BY d ORDER BY d ASC`, userID, since)
 	if err != nil {
 		return out, err
@@ -101,7 +101,7 @@ func (r *AgentChatRepo) GetInsightsByModel(userID, since int64) ([]AgentUsageMod
 	rows, err := db.Query(`SELECT c.model, COALESCE(SUM(m.prompt_tokens),0), COALESCE(SUM(m.completion_tokens),0)
 		FROM xt_agent_messages m
 		JOIN xt_agent_conversations c ON c.id=m.conversation_id
-		WHERE c.user_id=? AND m.role='assistant' AND m.created_at>=? AND c.model<>''
+		WHERE c.user_id=$1 AND m.role='assistant' AND m.created_at>=$2 AND c.model<>''
 		GROUP BY c.model ORDER BY SUM(m.prompt_tokens)+SUM(m.completion_tokens) DESC`, userID, since)
 	if err != nil {
 		return out, err
@@ -132,7 +132,7 @@ func (r *AgentChatRepo) GetTopTools(userID, since int64, limit int) ([]AgentTool
 	out := make([]AgentToolCount, 0, limit)
 	rows, err := db.Query(`SELECT m.tool_calls FROM xt_agent_messages m
 		JOIN xt_agent_conversations c ON c.id=m.conversation_id
-		WHERE c.user_id=? AND m.role='assistant' AND m.created_at>=? AND m.tool_calls<>''`, userID, since)
+		WHERE c.user_id=$1 AND m.role='assistant' AND m.created_at>=$2 AND m.tool_calls<>''`, userID, since)
 	if err != nil {
 		return out, err
 	}
@@ -183,10 +183,10 @@ func (r *AgentChatRepo) GetLearningAdded(userID, since int64) (memories, skills 
 	if db == nil {
 		return 0, 0, sql.ErrConnDone
 	}
-	if err = db.QueryRow(`SELECT COUNT(*) FROM xt_agent_memories WHERE user_id=? AND created_at>=?`, userID, since).Scan(&memories); err != nil {
+	if err = db.QueryRow(`SELECT COUNT(*) FROM xt_agent_memories WHERE user_id=$1 AND created_at>=$2`, userID, since).Scan(&memories); err != nil {
 		return 0, 0, err
 	}
-	err = db.QueryRow(`SELECT COUNT(*) FROM xt_agent_skills WHERE user_id=? AND created_at>=?`, userID, since).Scan(&skills)
+	err = db.QueryRow(`SELECT COUNT(*) FROM xt_agent_skills WHERE user_id=$1 AND created_at>=$2`, userID, since).Scan(&skills)
 	return memories, skills, err
 }
 
@@ -223,21 +223,21 @@ func (r *AgentChatRepo) GetJourneyItems(userID int64, limit int) ([]AgentJourney
 
 	// 记忆：title=kind，detail=content（≤80 字）
 	if err := scan(`SELECT created_at, kind, content FROM xt_agent_memories
-		WHERE user_id=? ORDER BY created_at DESC LIMIT ?`, func(ts int64, kind, content string) {
+		WHERE user_id=$1 ORDER BY created_at DESC LIMIT $2`, func(ts int64, kind, content string) {
 		items = append(items, AgentJourneyItem{Ts: ts, Kind: "memory", Title: kind, Detail: clipRunes(content, 80)})
 	}); err != nil {
 		return items, err
 	}
 	// 技能：title=name，detail=description
 	if err := scan(`SELECT created_at, name, description FROM xt_agent_skills
-		WHERE user_id=? ORDER BY created_at DESC LIMIT ?`, func(ts int64, name, desc string) {
+		WHERE user_id=$1 ORDER BY created_at DESC LIMIT $2`, func(ts int64, name, desc string) {
 		items = append(items, AgentJourneyItem{Ts: ts, Kind: "skill", Title: name, Detail: desc})
 	}); err != nil {
 		return items, err
 	}
 	// 会话：title=title，detail=""
 	if err := scan(`SELECT created_at, title, '' FROM xt_agent_conversations
-		WHERE user_id=? ORDER BY created_at DESC LIMIT ?`, func(ts int64, title, _ string) {
+		WHERE user_id=$1 ORDER BY created_at DESC LIMIT $2`, func(ts int64, title, _ string) {
 		items = append(items, AgentJourneyItem{Ts: ts, Kind: "conversation", Title: title, Detail: ""})
 	}); err != nil {
 		return items, err

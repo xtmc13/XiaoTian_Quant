@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -108,11 +109,11 @@ func (r *ReconcileRepo) CreateDiff(d *ReconcileDiff) (int64, bool, error) {
 
 	var existingID int64
 	err := db.QueryRow(`SELECT id FROM reconcile_diffs
-		WHERE exchange=? AND symbol=? AND diff_type=? AND asset=? AND status='open'`,
+		WHERE exchange=$1 AND symbol=$2 AND diff_type=$3 AND asset=$4 AND status='open'`,
 		d.Exchange, d.Symbol, d.DiffType, d.Asset).Scan(&existingID)
 	if err == nil {
-		_, uerr := db.Exec(`UPDATE reconcile_diffs SET local_qty=?, exchange_qty=?, local_entry_price=?,
-			exchange_entry_price=?, amount=?, detail=?, created_at=? WHERE id=?`,
+		_, uerr := db.Exec(`UPDATE reconcile_diffs SET local_qty=$1, exchange_qty=$2, local_entry_price=$3,
+			exchange_entry_price=$4, amount=$5, detail=$6, created_at=$7 WHERE id=$8`,
 			d.LocalQty, d.ExchangeQty, d.LocalEntryPrice, d.ExchangeEntryPx,
 			d.Amount, d.Detail, time.Now().UnixMilli(), existingID)
 		return existingID, false, uerr
@@ -124,15 +125,15 @@ func (r *ReconcileRepo) CreateDiff(d *ReconcileDiff) (int64, bool, error) {
 	if d.CreatedAt == 0 {
 		d.CreatedAt = time.Now().UnixMilli()
 	}
-	res, err := db.Exec(`INSERT INTO reconcile_diffs
+	var id int64
+	err = db.QueryRow(`INSERT INTO reconcile_diffs
 		(user_id, exchange, symbol, diff_type, local_qty, exchange_qty, local_entry_price, exchange_entry_price, asset, amount, detail, status, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,'open',?)`,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'open',$12) RETURNING id`,
 		d.UserID, d.Exchange, d.Symbol, d.DiffType, d.LocalQty, d.ExchangeQty,
-		d.LocalEntryPrice, d.ExchangeEntryPx, d.Asset, d.Amount, d.Detail, d.CreatedAt)
+		d.LocalEntryPrice, d.ExchangeEntryPx, d.Asset, d.Amount, d.Detail, d.CreatedAt).Scan(&id)
 	if err != nil {
 		return 0, false, err
 	}
-	id, _ := res.LastInsertId()
 	return id, true, nil
 }
 
@@ -140,8 +141,8 @@ func (r *ReconcileRepo) CreateDiff(d *ReconcileDiff) (int64, bool, error) {
 func (r *ReconcileRepo) ResolveDiff(id int64, resolution, resolvedBy string) (*ReconcileDiff, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	res, err := db.Exec(`UPDATE reconcile_diffs SET status='resolved', resolution=?, resolved_by=?, resolved_at=?
-		WHERE id=? AND status='open'`, resolution, resolvedBy, time.Now().UnixMilli(), id)
+	res, err := db.Exec(`UPDATE reconcile_diffs SET status='resolved', resolution=$1, resolved_by=$2, resolved_at=$3
+		WHERE id=$4 AND status='open'`, resolution, resolvedBy, time.Now().UnixMilli(), id)
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +153,7 @@ func (r *ReconcileRepo) ResolveDiff(id int64, resolution, resolvedBy string) (*R
 }
 
 func (r *ReconcileRepo) getDiff(id int64) (*ReconcileDiff, error) {
-	return scanReconcileDiff(db.QueryRow(`SELECT `+reconcileDiffCols+` FROM reconcile_diffs WHERE id=?`, id))
+	return scanReconcileDiff(db.QueryRow(`SELECT `+reconcileDiffCols+` FROM reconcile_diffs WHERE id=$1`, id))
 }
 
 // GetDiff 按 id 查差异。
@@ -164,28 +165,34 @@ func (r *ReconcileRepo) GetDiff(id int64) (*ReconcileDiff, error) {
 func (r *ReconcileRepo) ListDiffs(userID int64, status, diffType, exchange string, limit, offset int) ([]*ReconcileDiff, error) {
 	query := `SELECT ` + reconcileDiffCols + ` FROM reconcile_diffs WHERE 1=1`
 	var args []any
+	next := 1
 	if userID > 0 {
-		query += ` AND (user_id=? OR user_id=0)`
+		query += fmt.Sprintf(` AND (user_id=$%d OR user_id=0)`, next)
 		args = append(args, userID)
+		next++
 	}
 	if status != "" {
-		query += ` AND status=?`
+		query += fmt.Sprintf(` AND status=$%d`, next)
 		args = append(args, status)
+		next++
 	}
 	if diffType != "" {
-		query += ` AND diff_type=?`
+		query += fmt.Sprintf(` AND diff_type=$%d`, next)
 		args = append(args, diffType)
+		next++
 	}
 	if exchange != "" {
-		query += ` AND exchange=?`
+		query += fmt.Sprintf(` AND exchange=$%d`, next)
 		args = append(args, exchange)
+		next++
 	}
 	query += ` ORDER BY created_at DESC`
 	if limit > 0 {
-		query += ` LIMIT ?`
+		query += fmt.Sprintf(` LIMIT $%d::bigint`, next)
 		args = append(args, limit)
+		next++
 		if offset > 0 {
-			query += ` OFFSET ?`
+			query += fmt.Sprintf(` OFFSET $%d::bigint`, next)
 			args = append(args, offset)
 		}
 	}
@@ -233,11 +240,12 @@ func (r *ReconcileRepo) CreateDeviation(d *ReconcileDeviation) (int64, bool, err
 	if d.CreatedAt == 0 {
 		d.CreatedAt = time.Now().UnixMilli()
 	}
-	res, err := db.Exec(`INSERT INTO reconcile_deviations
+	var id int64
+	err := db.QueryRow(`INSERT INTO reconcile_deviations
 		(order_id, user_id, symbol, exchange, kind, expected_price, avg_price, slippage_pct, detail, status, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,'open',?)`,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'open',$10) RETURNING id`,
 		d.OrderID, d.UserID, d.Symbol, d.Exchange, d.Kind, d.ExpectedPrice, d.AvgPrice,
-		d.SlippagePct, d.Detail, d.CreatedAt)
+		d.SlippagePct, d.Detail, d.CreatedAt).Scan(&id)
 	if err != nil {
 		// 唯一键冲突 → 已告警过，直接忽略（不报错）。
 		if isUniqueConflict(err) {
@@ -245,7 +253,6 @@ func (r *ReconcileRepo) CreateDeviation(d *ReconcileDeviation) (int64, bool, err
 		}
 		return 0, false, err
 	}
-	id, _ := res.LastInsertId()
 	return id, true, nil
 }
 
@@ -253,48 +260,54 @@ func (r *ReconcileRepo) CreateDeviation(d *ReconcileDeviation) (int64, bool, err
 func (r *ReconcileRepo) ResolveDeviation(id int64, resolvedBy string) (*ReconcileDeviation, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	res, err := db.Exec(`UPDATE reconcile_deviations SET status='resolved', resolved_by=?, resolved_at=?
-		WHERE id=? AND status='open'`, resolvedBy, time.Now().UnixMilli(), id)
+	res, err := db.Exec(`UPDATE reconcile_deviations SET status='resolved', resolved_by=$1, resolved_at=$2
+		WHERE id=$3 AND status='open'`, resolvedBy, time.Now().UnixMilli(), id)
 	if err != nil {
 		return nil, err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return nil, errReconcileNoRows
 	}
-	return scanReconcileDeviation(db.QueryRow(`SELECT `+reconcileDevCols+` FROM reconcile_deviations WHERE id=?`, id))
+	return scanReconcileDeviation(db.QueryRow(`SELECT `+reconcileDevCols+` FROM reconcile_deviations WHERE id=$1`, id))
 }
 
 // GetDeviation 按 id 查偏差。
 func (r *ReconcileRepo) GetDeviation(id int64) (*ReconcileDeviation, error) {
-	return scanReconcileDeviation(db.QueryRow(`SELECT `+reconcileDevCols+` FROM reconcile_deviations WHERE id=?`, id))
+	return scanReconcileDeviation(db.QueryRow(`SELECT `+reconcileDevCols+` FROM reconcile_deviations WHERE id=$1`, id))
 }
 
 // ListDeviations 列偏差：kind/status/exchange 过滤，userID>0 时只取该用户（+无属主）。
 func (r *ReconcileRepo) ListDeviations(userID int64, kind, status, exchange string, limit, offset int) ([]*ReconcileDeviation, error) {
 	query := `SELECT ` + reconcileDevCols + ` FROM reconcile_deviations WHERE 1=1`
 	var args []any
+	next := 1
 	if userID > 0 {
-		query += ` AND (user_id=? OR user_id=0)`
+		query += fmt.Sprintf(` AND (user_id=$%d OR user_id=0)`, next)
 		args = append(args, userID)
+		next++
 	}
 	if kind != "" {
-		query += ` AND kind=?`
+		query += fmt.Sprintf(` AND kind=$%d`, next)
 		args = append(args, kind)
+		next++
 	}
 	if status != "" {
-		query += ` AND status=?`
+		query += fmt.Sprintf(` AND status=$%d`, next)
 		args = append(args, status)
+		next++
 	}
 	if exchange != "" {
-		query += ` AND exchange=?`
+		query += fmt.Sprintf(` AND exchange=$%d`, next)
 		args = append(args, exchange)
+		next++
 	}
 	query += ` ORDER BY created_at DESC`
 	if limit > 0 {
-		query += ` LIMIT ?`
+		query += fmt.Sprintf(` LIMIT $%d::bigint`, next)
 		args = append(args, limit)
+		next++
 		if offset > 0 {
-			query += ` OFFSET ?`
+			query += fmt.Sprintf(` OFFSET $%d::bigint`, next)
 			args = append(args, offset)
 		}
 	}
@@ -322,9 +335,10 @@ func (r *ReconcileRepo) InsertFundingMirror(rec *ReconcileFundingRecord) (bool, 
 	if rec.CreatedAt == 0 {
 		rec.CreatedAt = time.Now().UnixMilli()
 	}
-	res, err := db.Exec(`INSERT OR IGNORE INTO reconcile_funding
+	res, err := db.Exec(`INSERT INTO reconcile_funding
 		(exchange, symbol, income_type, asset, amount, income_time, extra, notified, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?)`,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		ON CONFLICT DO NOTHING`,
 		rec.Exchange, rec.Symbol, rec.IncomeType, rec.Asset, rec.Amount, rec.IncomeTime, rec.Extra, 0, rec.CreatedAt)
 	if err != nil {
 		return false, err
@@ -335,7 +349,7 @@ func (r *ReconcileRepo) InsertFundingMirror(rec *ReconcileFundingRecord) (bool, 
 
 // MarkFundingNotified 标记镜像行已通知。
 func (r *ReconcileRepo) MarkFundingNotified(id int64) error {
-	_, err := db.Exec(`UPDATE reconcile_funding SET notified=1 WHERE id=?`, id)
+	_, err := db.Exec(`UPDATE reconcile_funding SET notified=1 WHERE id=$1`, id)
 	return err
 }
 
@@ -343,13 +357,15 @@ func (r *ReconcileRepo) MarkFundingNotified(id int64) error {
 func (r *ReconcileRepo) ListFundingMirror(exchange string, limit int) ([]*ReconcileFundingRecord, error) {
 	query := `SELECT id, exchange, symbol, income_type, asset, amount, income_time, extra, notified, created_at FROM reconcile_funding`
 	var args []any
+	next := 1
 	if exchange != "" {
-		query += ` WHERE exchange=?`
+		query += fmt.Sprintf(` WHERE exchange=$%d`, next)
 		args = append(args, exchange)
+		next++
 	}
 	query += ` ORDER BY income_time DESC`
 	if limit > 0 {
-		query += ` LIMIT ?`
+		query += fmt.Sprintf(` LIMIT $%d::bigint`, next)
 		args = append(args, limit)
 	}
 	rows, err := db.Query(query, args...)
@@ -395,15 +411,15 @@ func (r *ReconcileRepo) InsertReportedPnLCheck(rec *ReportedPnLCheckRecord) (int
 	if rec.CheckedAt == 0 {
 		rec.CheckedAt = time.Now().UnixMilli()
 	}
-	res, err := db.Exec(`INSERT INTO xt_reported_pnl_checks
+	var id int64
+	err := db.QueryRow(`INSERT INTO xt_reported_pnl_checks
 		(user_id, credential_id, exchange, symbol, window_start, window_end, local_pnl, reported_pnl, diff, diff_pct, status, detail, checked_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
 		rec.UserID, rec.CredentialID, rec.Exchange, rec.Symbol, rec.WindowStart, rec.WindowEnd,
-		rec.LocalPNL, rec.ReportedPNL, rec.Diff, rec.DiffPct, rec.Status, rec.Detail, rec.CheckedAt)
+		rec.LocalPNL, rec.ReportedPNL, rec.Diff, rec.DiffPct, rec.Status, rec.Detail, rec.CheckedAt).Scan(&id)
 	if err != nil {
 		return 0, err
 	}
-	id, _ := res.LastInsertId()
 	return id, nil
 }
 
@@ -424,28 +440,34 @@ func scanReportedPnLCheck(row interface{ Scan(...any) error }) (*ReportedPnLChec
 func (r *ReconcileRepo) ListReportedPnLChecks(userID int64, exchange, status string, sinceMs int64, limit, offset int) ([]*ReportedPnLCheckRecord, error) {
 	query := `SELECT ` + reportedPnLCheckCols + ` FROM xt_reported_pnl_checks WHERE 1=1`
 	var args []any
+	next := 1
 	if userID > 0 {
-		query += ` AND (user_id=? OR user_id=0)`
+		query += fmt.Sprintf(` AND (user_id=$%d OR user_id=0)`, next)
 		args = append(args, userID)
+		next++
 	}
 	if exchange != "" {
-		query += ` AND exchange=?`
+		query += fmt.Sprintf(` AND exchange=$%d`, next)
 		args = append(args, exchange)
+		next++
 	}
 	if status != "" {
-		query += ` AND status=?`
+		query += fmt.Sprintf(` AND status=$%d`, next)
 		args = append(args, status)
+		next++
 	}
 	if sinceMs > 0 {
-		query += ` AND checked_at>=?`
+		query += fmt.Sprintf(` AND checked_at>=$%d`, next)
 		args = append(args, sinceMs)
+		next++
 	}
 	query += ` ORDER BY checked_at DESC`
 	if limit > 0 {
-		query += ` LIMIT ?`
+		query += fmt.Sprintf(` LIMIT $%d::bigint`, next)
 		args = append(args, limit)
+		next++
 		if offset > 0 {
-			query += ` OFFSET ?`
+			query += fmt.Sprintf(` OFFSET $%d::bigint`, next)
 			args = append(args, offset)
 		}
 	}
@@ -470,7 +492,7 @@ func (r *ReconcileRepo) ListReportedPnLChecks(userID int64, exchange, status str
 // GetSetting 读配置值（不存在返回空串）。
 func (r *ReconcileRepo) GetSetting(key string) string {
 	var v string
-	if err := db.QueryRow(`SELECT value FROM reconcile_settings WHERE key=?`, key).Scan(&v); err != nil {
+	if err := db.QueryRow(`SELECT value FROM reconcile_settings WHERE key=$1`, key).Scan(&v); err != nil {
 		return ""
 	}
 	return v
@@ -478,7 +500,7 @@ func (r *ReconcileRepo) GetSetting(key string) string {
 
 // SetSetting 写配置值（upsert）。
 func (r *ReconcileRepo) SetSetting(key, value string) error {
-	_, err := db.Exec(`INSERT INTO reconcile_settings (key, value, updated_at) VALUES (?,?,?)
+	_, err := db.Exec(`INSERT INTO reconcile_settings (key, value, updated_at) VALUES ($1,$2,$3)
 		ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
 		key, value, time.Now().UnixMilli())
 	return err
@@ -489,7 +511,7 @@ func (r *ReconcileRepo) SetSetting(key, value string) error {
 // LogAudit 写一条自动修正审计日志。
 func (r *ReconcileRepo) LogAudit(action, exchange, symbol string, userID int64, detail string) error {
 	_, err := db.Exec(`INSERT INTO reconcile_audit (action, exchange, symbol, user_id, detail, created_at)
-		VALUES (?,?,?,?,?,?)`, action, exchange, symbol, userID, detail, time.Now().UnixMilli())
+		VALUES ($1,$2,$3,$4,$5,$6)`, action, exchange, symbol, userID, detail, time.Now().UnixMilli())
 	return err
 }
 
@@ -499,7 +521,7 @@ func (r *ReconcileRepo) ListAudit(limit int) ([]*ReconcileAuditRecord, error) {
 		limit = 50
 	}
 	rows, err := db.Query(`SELECT id, action, exchange, symbol, user_id, detail, created_at
-		FROM reconcile_audit ORDER BY created_at DESC LIMIT ?`, limit)
+		FROM reconcile_audit ORDER BY created_at DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
 	}

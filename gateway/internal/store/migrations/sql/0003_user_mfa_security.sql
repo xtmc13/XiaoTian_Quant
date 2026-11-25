@@ -12,8 +12,8 @@
 --   - last_login_ip:  最近登录 IP，新 IP 且未开 MFA 时发通知提醒（风险登录）。
 -- token_version 列已存在于 xt_users（schema V1 内联 DDL），本迁移不重复添加。
 
-ALTER TABLE xt_users ADD COLUMN totp_secret TEXT DEFAULT '';
-ALTER TABLE xt_users ADD COLUMN totp_enabled BIGINT DEFAULT 0;
-ALTER TABLE xt_users ADD COLUMN mfa_backup_codes TEXT DEFAULT '';
-ALTER TABLE xt_users ADD COLUMN must_change_password BIGINT DEFAULT 0;
-ALTER TABLE xt_users ADD COLUMN last_login_ip TEXT DEFAULT '';
+ALTER TABLE xt_users ADD COLUMN IF NOT EXISTS totp_secret TEXT DEFAULT '';
+ALTER TABLE xt_users ADD COLUMN IF NOT EXISTS totp_enabled BIGINT DEFAULT 0;
+ALTER TABLE xt_users ADD COLUMN IF NOT EXISTS mfa_backup_codes TEXT DEFAULT '';
+ALTER TABLE xt_users ADD COLUMN IF NOT EXISTS must_change_password BIGINT DEFAULT 0;
+ALTER TABLE xt_users ADD COLUMN IF NOT EXISTS last_login_ip TEXT DEFAULT '';

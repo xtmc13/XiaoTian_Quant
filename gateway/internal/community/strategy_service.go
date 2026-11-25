@@ -66,43 +66,43 @@ func ensureStrategyTables() error {
 	}
 
 	db.Exec(`CREATE TABLE IF NOT EXISTS strategy_marketplace (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
 		name TEXT NOT NULL,
 		description TEXT DEFAULT '',
 		code TEXT NOT NULL,
 		symbol TEXT DEFAULT 'BTCUSDT',
 		interval TEXT DEFAULT '1h',
-		author_id INTEGER NOT NULL,
+		author_id BIGINT NOT NULL,
 		author_name TEXT DEFAULT '',
-		total_return REAL DEFAULT 0,
-		sharpe_ratio REAL DEFAULT 0,
-		max_drawdown REAL DEFAULT 0,
-		win_rate REAL DEFAULT 0,
-		total_trades INTEGER DEFAULT 0,
-		profit_factor REAL DEFAULT 0,
-		avg_rating REAL DEFAULT 0,
-		rating_count INTEGER DEFAULT 0,
-		comment_count INTEGER DEFAULT 0,
-		download_count INTEGER DEFAULT 0,
-		view_count INTEGER DEFAULT 0,
-		created_at INTEGER NOT NULL,
-		updated_at INTEGER NOT NULL
+		total_return DOUBLE PRECISION DEFAULT 0,
+		sharpe_ratio DOUBLE PRECISION DEFAULT 0,
+		max_drawdown DOUBLE PRECISION DEFAULT 0,
+		win_rate DOUBLE PRECISION DEFAULT 0,
+		total_trades BIGINT DEFAULT 0,
+		profit_factor DOUBLE PRECISION DEFAULT 0,
+		avg_rating DOUBLE PRECISION DEFAULT 0,
+		rating_count BIGINT DEFAULT 0,
+		comment_count BIGINT DEFAULT 0,
+		download_count BIGINT DEFAULT 0,
+		view_count BIGINT DEFAULT 0,
+		created_at BIGINT NOT NULL,
+		updated_at BIGINT NOT NULL
 	)`)
 
 	db.Exec(`CREATE TABLE IF NOT EXISTS strategy_comments (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		strategy_id INTEGER NOT NULL,
-		user_id INTEGER NOT NULL,
+		id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+		strategy_id BIGINT NOT NULL,
+		user_id BIGINT NOT NULL,
 		user_name TEXT DEFAULT '',
 		content TEXT NOT NULL,
-		created_at INTEGER NOT NULL
+		created_at BIGINT NOT NULL
 	)`)
 
 	db.Exec(`CREATE TABLE IF NOT EXISTS strategy_ratings (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		strategy_id INTEGER NOT NULL,
-		user_id INTEGER NOT NULL,
-		rating INTEGER NOT NULL,
+		id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+		strategy_id BIGINT NOT NULL,
+		user_id BIGINT NOT NULL,
+		rating BIGINT NOT NULL,
 		UNIQUE(strategy_id, user_id)
 	)`)
 
@@ -130,19 +130,20 @@ func (s *Service) PublishStrategy(userID int, name, description, code, symbol, i
 		profitFactor = bt.ProfitFactor
 	}
 
-	result, err := db.Exec(
+	var id int64
+	err := db.QueryRow(
 		`INSERT INTO strategy_marketplace (name, description, code, symbol, interval, author_id, author_name,
 		 total_return, sharpe_ratio, max_drawdown, win_rate, total_trades, profit_factor,
 		 created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING id`,
 		name, description, code, symbol, interval, userID, authorName,
 		totalReturn, sharpe, maxDD, winRate, totalTrades, profitFactor,
 		now, now,
-	)
+	).Scan(&id)
 	if err != nil {
 		return 0, err
 	}
-	return result.LastInsertId()
+	return id, nil
 }
 
 // BacktestSummary is embedded in a strategy publication.
@@ -175,7 +176,7 @@ func (s *Service) GetMarketStrategies(userID int, page, pageSize int, keyword, s
 	args := []any{}
 
 	if keyword != "" {
-		wheres = append(wheres, "(name LIKE ? OR description LIKE ?)")
+		wheres = append(wheres, fmt.Sprintf("(name LIKE $%d OR description LIKE $%d)", len(args)+1, len(args)+2))
 		args = append(args, "%"+keyword+"%", "%"+keyword+"%")
 	}
 
@@ -201,13 +202,14 @@ func (s *Service) GetMarketStrategies(userID int, page, pageSize int, keyword, s
 		orderSQL = "ORDER BY created_at DESC"
 	}
 
+	limitN, offsetN := len(args)+1, len(args)+2
 	querySQL := fmt.Sprintf(
 		`SELECT id, name, description, code, symbol, interval,
 		 author_id, author_name,
 		 total_return, sharpe_ratio, max_drawdown, win_rate, total_trades, profit_factor,
 		 avg_rating, rating_count, comment_count, download_count, view_count,
 		 created_at, updated_at
-		 FROM strategy_marketplace WHERE %s %s LIMIT ? OFFSET ?`, whereSQL, orderSQL)
+		 FROM strategy_marketplace WHERE %s %s LIMIT $%d OFFSET $%d`, whereSQL, orderSQL, limitN, offsetN)
 
 	args = append(args, pageSize, offset)
 	rows, err := db.Query(querySQL, args...)
@@ -250,7 +252,7 @@ func (s *Service) GetStrategyDetail(strategyID int) (*StrategyItem, []StrategyCo
 		 total_return, sharpe_ratio, max_drawdown, win_rate, total_trades, profit_factor,
 		 avg_rating, rating_count, comment_count, download_count, view_count,
 		 created_at, updated_at
-		 FROM strategy_marketplace WHERE id = ?`, strategyID,
+		 FROM strategy_marketplace WHERE id = $1`, strategyID,
 	).Scan(
 		&si.ID, &si.Name, &si.Description, &si.Code, &si.Symbol, &si.Interval,
 		&si.AuthorID, &si.AuthorName,
@@ -267,7 +269,7 @@ func (s *Service) GetStrategyDetail(strategyID int) (*StrategyItem, []StrategyCo
 	si.IsOwn = false
 
 	// Increment view count
-	db.Exec(`UPDATE strategy_marketplace SET view_count = view_count + 1 WHERE id = ?`, strategyID)
+	db.Exec(`UPDATE strategy_marketplace SET view_count = view_count + 1 WHERE id = $1`, strategyID)
 
 	// Load comments
 	comments, _ := s.GetStrategyComments(strategyID)
@@ -284,18 +286,18 @@ func (s *Service) AddStrategyComment(strategyID, userID int, userName, content s
 	ensureStrategyTables()
 
 	now := time.Now().Unix()
-	result, err := db.Exec(
+	var id int64
+	err := db.QueryRow(
 		`INSERT INTO strategy_comments (strategy_id, user_id, user_name, content, created_at)
-		 VALUES (?, ?, ?, ?, ?)`,
+		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
 		strategyID, userID, userName, content, now,
-	)
+	).Scan(&id)
 	if err != nil {
 		return nil, err
 	}
 
-	db.Exec(`UPDATE strategy_marketplace SET comment_count = comment_count + 1 WHERE id = ?`, strategyID)
+	db.Exec(`UPDATE strategy_marketplace SET comment_count = comment_count + 1 WHERE id = $1`, strategyID)
 
-	id, _ := result.LastInsertId()
 	return &StrategyComment{
 		ID:         int(id),
 		StrategyID: strategyID,
@@ -315,7 +317,7 @@ func (s *Service) GetStrategyComments(strategyID int) ([]StrategyComment, error)
 
 	rows, err := db.Query(
 		`SELECT id, strategy_id, user_id, user_name, content, created_at
-		 FROM strategy_comments WHERE strategy_id = ? ORDER BY created_at ASC`,
+		 FROM strategy_comments WHERE strategy_id = $1 ORDER BY created_at ASC`,
 		strategyID,
 	)
 	if err != nil {
@@ -352,8 +354,8 @@ func (s *Service) RateStrategy(strategyID, userID, rating int) error {
 
 	// Upsert rating
 	db.Exec(
-		`INSERT INTO strategy_ratings (strategy_id, user_id, rating) VALUES (?, ?, ?)
-		 ON CONFLICT(strategy_id, user_id) DO UPDATE SET rating = ?`,
+		`INSERT INTO strategy_ratings (strategy_id, user_id, rating) VALUES ($1, $2, $3)
+		 ON CONFLICT(strategy_id, user_id) DO UPDATE SET rating = $4`,
 		strategyID, userID, rating, rating,
 	)
 
@@ -361,12 +363,12 @@ func (s *Service) RateStrategy(strategyID, userID, rating int) error {
 	var avgRating float64
 	var count int
 	db.QueryRow(
-		`SELECT COALESCE(AVG(rating), 0), COUNT(*) FROM strategy_ratings WHERE strategy_id = ?`,
+		`SELECT COALESCE(AVG(rating), 0), COUNT(*) FROM strategy_ratings WHERE strategy_id = $1`,
 		strategyID,
 	).Scan(&avgRating, &count)
 
 	db.Exec(
-		`UPDATE strategy_marketplace SET avg_rating = ?, rating_count = ?, updated_at = ? WHERE id = ?`,
+		`UPDATE strategy_marketplace SET avg_rating = $1, rating_count = $2, updated_at = $3 WHERE id = $4`,
 		avgRating, count, time.Now().Unix(), strategyID,
 	)
 
@@ -418,7 +420,7 @@ func (s *Service) GetTrendingStrategies(limit int) ([]StrategyItem, error) {
 		 created_at, updated_at
 		 FROM strategy_marketplace
 		 ORDER BY (download_count + comment_count + rating_count) DESC, updated_at DESC
-		 LIMIT ?`, limit)
+		 LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
 	}

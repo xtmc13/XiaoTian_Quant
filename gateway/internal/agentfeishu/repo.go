@@ -53,7 +53,7 @@ func (r *Repo) CreatePairCode(userID int64) (string, error) {
 		return "", err
 	}
 	// 作废旧码
-	if _, err := db.Exec(`UPDATE xt_agent_feishu_pair_codes SET used_at = ? WHERE user_id = ? AND used_at = 0`, time.Now().Unix(), userID); err != nil {
+	if _, err := db.Exec(`UPDATE xt_agent_feishu_pair_codes SET used_at = $1 WHERE user_id = $2 AND used_at = 0`, time.Now().Unix(), userID); err != nil {
 		return "", err
 	}
 	n, err := rand.Int(rand.Reader, big.NewInt(900000))
@@ -62,7 +62,7 @@ func (r *Repo) CreatePairCode(userID int64) (string, error) {
 	}
 	code := fmt.Sprintf("%06d", n.Int64()+100000)
 	now := time.Now().Unix()
-	_, err = db.Exec(`INSERT INTO xt_agent_feishu_pair_codes (code, user_id, created_at, expires_at, used_at) VALUES (?,?,?,?,0)`,
+	_, err = db.Exec(`INSERT INTO xt_agent_feishu_pair_codes (code, user_id, created_at, expires_at, used_at) VALUES ($1,$2,$3,$4,0)`,
 		code, userID, now, now+int64(PairCodeTTL.Seconds()))
 	return code, err
 }
@@ -75,7 +75,7 @@ func (r *Repo) ConsumePairCode(code, openID, chatID string) (*Link, error) {
 	}
 	var userID int64
 	var expiresAt, usedAt int64
-	err = db.QueryRow(`SELECT user_id, expires_at, used_at FROM xt_agent_feishu_pair_codes WHERE code = ?`, code).
+	err = db.QueryRow(`SELECT user_id, expires_at, used_at FROM xt_agent_feishu_pair_codes WHERE code = $1`, code).
 		Scan(&userID, &expiresAt, &usedAt)
 	if err == sql.ErrNoRows {
 		return nil, ErrCodeInvalid
@@ -92,14 +92,15 @@ func (r *Repo) ConsumePairCode(code, openID, chatID string) (*Link, error) {
 		return nil, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`UPDATE xt_agent_feishu_pair_codes SET used_at = ? WHERE code = ?`, now, code); err != nil {
+	if _, err := tx.Exec(`UPDATE xt_agent_feishu_pair_codes SET used_at = $1 WHERE code = $2`, now, code); err != nil {
 		return nil, err
 	}
 	// open_id 若绑过别人，先解绑
-	if _, err := tx.Exec(`DELETE FROM xt_agent_feishu_links WHERE open_id = ?`, openID); err != nil {
+	if _, err := tx.Exec(`DELETE FROM xt_agent_feishu_links WHERE open_id = $1`, openID); err != nil {
 		return nil, err
 	}
-	if _, err := tx.Exec(`INSERT OR REPLACE INTO xt_agent_feishu_links (user_id, open_id, chat_id, created_at) VALUES (?,?,?,?)`,
+	if _, err := tx.Exec(`INSERT INTO xt_agent_feishu_links (user_id, open_id, chat_id, created_at) VALUES ($1,$2,$3,$4)
+		ON CONFLICT(user_id) DO UPDATE SET open_id=excluded.open_id, chat_id=excluded.chat_id, created_at=excluded.created_at`,
 		userID, openID, chatID, now); err != nil {
 		return nil, err
 	}
@@ -116,7 +117,7 @@ func (r *Repo) GetByUserID(userID int64) (*Link, error) {
 		return nil, err
 	}
 	var l Link
-	err = db.QueryRow(`SELECT user_id, open_id, chat_id, created_at, conversation_id, model FROM xt_agent_feishu_links WHERE user_id = ?`, userID).
+	err = db.QueryRow(`SELECT user_id, open_id, chat_id, created_at, conversation_id, model FROM xt_agent_feishu_links WHERE user_id = $1`, userID).
 		Scan(&l.UserID, &l.OpenID, &l.ChatID, &l.CreatedAt, &l.ConversationID, &l.Model)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotLinked
@@ -134,7 +135,7 @@ func (r *Repo) GetByOpenID(openID string) (*Link, error) {
 		return nil, err
 	}
 	var l Link
-	err = db.QueryRow(`SELECT user_id, open_id, chat_id, created_at, conversation_id, model FROM xt_agent_feishu_links WHERE open_id = ?`, openID).
+	err = db.QueryRow(`SELECT user_id, open_id, chat_id, created_at, conversation_id, model FROM xt_agent_feishu_links WHERE open_id = $1`, openID).
 		Scan(&l.UserID, &l.OpenID, &l.ChatID, &l.CreatedAt, &l.ConversationID, &l.Model)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotLinked
@@ -151,7 +152,7 @@ func (r *Repo) SetChatID(openID, chatID string) error {
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec(`UPDATE xt_agent_feishu_links SET chat_id = ? WHERE open_id = ?`, chatID, openID)
+	_, err = db.Exec(`UPDATE xt_agent_feishu_links SET chat_id = $1 WHERE open_id = $2`, chatID, openID)
 	return err
 }
 
@@ -161,7 +162,7 @@ func (r *Repo) SetConversationID(openID, conversationID string) error {
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec(`UPDATE xt_agent_feishu_links SET conversation_id = ? WHERE open_id = ?`, conversationID, openID)
+	_, err = db.Exec(`UPDATE xt_agent_feishu_links SET conversation_id = $1 WHERE open_id = $2`, conversationID, openID)
 	return err
 }
 
@@ -171,7 +172,7 @@ func (r *Repo) SetModel(openID, model string) error {
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec(`UPDATE xt_agent_feishu_links SET model = ? WHERE open_id = ?`, model, openID)
+	_, err = db.Exec(`UPDATE xt_agent_feishu_links SET model = $1 WHERE open_id = $2`, model, openID)
 	return err
 }
 
@@ -181,6 +182,6 @@ func (r *Repo) Unlink(userID int64) error {
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec(`DELETE FROM xt_agent_feishu_links WHERE user_id = ?`, userID)
+	_, err = db.Exec(`DELETE FROM xt_agent_feishu_links WHERE user_id = $1`, userID)
 	return err
 }

@@ -2,7 +2,6 @@ package order
 
 import (
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -10,20 +9,17 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
-// 重启恢复路径需要真实 DB（xt_orders 扫描）：临时 sqlite，绝不触碰 ./runtime。
+// 重启恢复路径需要真实 DB（xt_orders 扫描）：连接测试 PostgreSQL（无配置则整包跳过）。
 func TestMain(m *testing.M) {
-	dir, err := os.MkdirTemp("", "order_test")
-	if err != nil {
-		panic(err)
+	if !store.TestDatabaseConfigured() {
+		os.Exit(0)
 	}
-	_ = os.Setenv("DB_PATH", filepath.Join(dir, "gateway.db"))
 	_ = os.Setenv("SECRET_KEY", "test-secret-key-not-for-production-use-only")
 	if err := store.InitDB(); err != nil {
 		panic(err)
 	}
 	code := m.Run()
 	store.CloseDB()
-	_ = os.RemoveAll(dir)
 	os.Exit(code)
 }
 

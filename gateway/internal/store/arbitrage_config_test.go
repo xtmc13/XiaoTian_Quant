@@ -54,19 +54,33 @@ func TestClearFakeSeedPerformance(t *testing.T) {
 	defer cleanup()
 	// 造一条带编造业绩的内置 catalog 行 + 一条非内置行（不应被动）。
 	now := time.Now().Unix()
-	_, err := db.Exec(`INSERT OR REPLACE INTO ai_bot_catalog
+	_, err := db.Exec(`INSERT INTO ai_bot_catalog
 		(id, name, description, strategy_type, market_type, risk_level, fee_model, fee_percent, monthly_fee,
 		 performance_json, config_json, is_builtin, is_active, created_at, updated_at)
 		VALUES ('test-fake-perf', 'T', 't', 'optimus', 'spot', 'low', 'free', 0, 0,
-		 '{"avg_monthly_profit":99.9}', '{}', 1, 1, ?, ?)`, now, now)
+		 '{"avg_monthly_profit":99.9}', '{}', 1, 1, $1, $2)
+		ON CONFLICT(id) DO UPDATE SET
+			name=excluded.name, description=excluded.description, strategy_type=excluded.strategy_type,
+			market_type=excluded.market_type, risk_level=excluded.risk_level, fee_model=excluded.fee_model,
+			fee_percent=excluded.fee_percent, monthly_fee=excluded.monthly_fee,
+			performance_json=excluded.performance_json, config_json=excluded.config_json,
+			is_builtin=excluded.is_builtin, is_active=excluded.is_active,
+			created_at=excluded.created_at, updated_at=excluded.updated_at`, now, now)
 	if err != nil {
 		t.Fatalf("seed row: %v", err)
 	}
-	_, err = db.Exec(`INSERT OR REPLACE INTO ai_bot_catalog
+	_, err = db.Exec(`INSERT INTO ai_bot_catalog
 		(id, name, description, strategy_type, market_type, risk_level, fee_model, fee_percent, monthly_fee,
 		 performance_json, config_json, is_builtin, is_active, created_at, updated_at)
 		VALUES ('test-user-perf', 'U', 't', 'optimus', 'spot', 'low', 'free', 0, 0,
-		 '{"avg_monthly_profit":1.2}', '{}', 0, 1, ?, ?)`, now, now)
+		 '{"avg_monthly_profit":1.2}', '{}', 0, 1, $1, $2)
+		ON CONFLICT(id) DO UPDATE SET
+			name=excluded.name, description=excluded.description, strategy_type=excluded.strategy_type,
+			market_type=excluded.market_type, risk_level=excluded.risk_level, fee_model=excluded.fee_model,
+			fee_percent=excluded.fee_percent, monthly_fee=excluded.monthly_fee,
+			performance_json=excluded.performance_json, config_json=excluded.config_json,
+			is_builtin=excluded.is_builtin, is_active=excluded.is_active,
+			created_at=excluded.created_at, updated_at=excluded.updated_at`, now, now)
 	if err != nil {
 		t.Fatalf("seed user row: %v", err)
 	}
@@ -79,7 +93,7 @@ func TestClearFakeSeedPerformance(t *testing.T) {
 	var builtinPerf, userPerf *string
 	assertQuery := func(id string) *string {
 		var v *string
-		if err := db.QueryRow("SELECT performance_json FROM ai_bot_catalog WHERE id=?", id).Scan(&v); err != nil {
+		if err := db.QueryRow("SELECT performance_json FROM ai_bot_catalog WHERE id=$1", id).Scan(&v); err != nil {
 			t.Fatalf("query %s: %v", id, err)
 		}
 		return v

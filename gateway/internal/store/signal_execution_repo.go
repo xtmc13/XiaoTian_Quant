@@ -81,15 +81,22 @@ const sigExecCols = `id, signal_id, source_id, symbol, direction, margin_mode, p
 
 func scanSignalExecution(row interface{ Scan(...any) error }) (*SignalExecution, error) {
 	var e SignalExecution
+	var tp1F, tp2F, tp3F, slTr, trailAct, candleSL int
 	err := row.Scan(&e.ID, &e.SignalID, &e.SourceID, &e.Symbol, &e.Direction, &e.MarginMode, &e.PositionSide, &e.PositionID, &e.Status, &e.EntryOrderID, &e.EntryPrice, &e.EntryQty, &e.EntryTime,
-		&e.TP1Price, &e.TP1Qty, &e.TP1Time, &e.TP1Filled, &e.TP2Price, &e.TP2Qty, &e.TP2Time, &e.TP2Filled,
-		&e.TP3Price, &e.TP3Qty, &e.TP3Time, &e.TP3Filled, &e.SLPrice, &e.SLTriggered, &e.SLTime,
-		&e.MoveSLAfter, &e.MoveSLTo, &e.TrailingActive, &e.TrailingPct, &e.TrailingPeak,
-		&e.CandleCloseSL, &e.CandleCloseInterval,
+		&e.TP1Price, &e.TP1Qty, &e.TP1Time, &tp1F, &e.TP2Price, &e.TP2Qty, &e.TP2Time, &tp2F,
+		&e.TP3Price, &e.TP3Qty, &e.TP3Time, &tp3F, &e.SLPrice, &slTr, &e.SLTime,
+		&e.MoveSLAfter, &e.MoveSLTo, &trailAct, &e.TrailingPct, &e.TrailingPeak,
+		&candleSL, &e.CandleCloseInterval,
 		&e.CurrentTP, &e.CurrentSL, &e.RemainingQty, &e.RealizedPnL, &e.CloseReason, &e.ClosedAt, &e.CreatedAt, &e.UserID)
 	if err != nil {
 		return nil, err
 	}
+	e.TP1Filled = tp1F != 0
+	e.TP2Filled = tp2F != 0
+	e.TP3Filled = tp3F != 0
+	e.SLTriggered = slTr != 0
+	e.TrailingActive = trailAct != 0
+	e.CandleCloseSL = candleSL != 0
 	return &e, nil
 }
 
@@ -102,19 +109,19 @@ func (r *SignalExecutionRepo) Create(e *SignalExecution) error {
 	}
 	_, err := db.Exec(
 		`INSERT INTO xt_signal_executions (`+sigExecCols+`)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43)`,
 		e.ID, e.SignalID, e.SourceID, e.Symbol, e.Direction, e.MarginMode, e.PositionSide, e.PositionID, e.Status, e.EntryOrderID, e.EntryPrice, e.EntryQty, e.EntryTime,
-		e.TP1Price, e.TP1Qty, e.TP1Time, e.TP1Filled, e.TP2Price, e.TP2Qty, e.TP2Time, e.TP2Filled,
-		e.TP3Price, e.TP3Qty, e.TP3Time, e.TP3Filled, e.SLPrice, e.SLTriggered, e.SLTime,
-		e.MoveSLAfter, e.MoveSLTo, e.TrailingActive, e.TrailingPct, e.TrailingPeak,
-		e.CandleCloseSL, e.CandleCloseInterval,
+		e.TP1Price, e.TP1Qty, e.TP1Time, boolToInt(e.TP1Filled), e.TP2Price, e.TP2Qty, e.TP2Time, boolToInt(e.TP2Filled),
+		e.TP3Price, e.TP3Qty, e.TP3Time, boolToInt(e.TP3Filled), e.SLPrice, boolToInt(e.SLTriggered), e.SLTime,
+		e.MoveSLAfter, e.MoveSLTo, boolToInt(e.TrailingActive), e.TrailingPct, e.TrailingPeak,
+		boolToInt(e.CandleCloseSL), e.CandleCloseInterval,
 		e.CurrentTP, e.CurrentSL, e.RemainingQty, e.RealizedPnL, e.CloseReason, e.ClosedAt, e.CreatedAt, e.UserID,
 	)
 	return err
 }
 
 func (r *SignalExecutionRepo) GetByID(id string) (*SignalExecution, error) {
-	return scanSignalExecution(db.QueryRow(`SELECT `+sigExecCols+` FROM xt_signal_executions WHERE id=?`, id))
+	return scanSignalExecution(db.QueryRow(`SELECT `+sigExecCols+` FROM xt_signal_executions WHERE id=$1`, id))
 }
 
 func (r *SignalExecutionRepo) List(filter map[string]any, limit int) ([]*SignalExecution, error) {
@@ -124,13 +131,13 @@ func (r *SignalExecutionRepo) List(filter map[string]any, limit int) ([]*SignalE
 		"margin_mode": true, "position_side": true, "position_id": true, "status": true,
 		"close_reason": true, "created_at": true, "closed_at": true, "user_id": true,
 	}
-	args, where := buildFilter(filter, allowedCols)
+	args, where, next := buildFilter(filter, allowedCols, 1)
 	if where != "" {
 		query += " WHERE " + where
 	}
 	query += " ORDER BY created_at DESC"
 	if limit > 0 {
-		query += " LIMIT ?"
+		query += fmt.Sprintf(" LIMIT $%d", next)
 		args = append(args, limit)
 	}
 	rows, err := db.Query(query, args...)
@@ -169,10 +176,10 @@ func (r *SignalExecutionRepo) ListActive() ([]*SignalExecution, error) {
 
 // ListSince 返回 created_at >= sinceMs 的执行记录（时间升序，供统计聚合）。
 func (r *SignalExecutionRepo) ListSince(sinceMs int64, limit int) ([]*SignalExecution, error) {
-	query := `SELECT ` + sigExecCols + ` FROM xt_signal_executions WHERE created_at>=? ORDER BY created_at ASC`
+	query := `SELECT ` + sigExecCols + ` FROM xt_signal_executions WHERE created_at>=$1 ORDER BY created_at ASC`
 	args := []any{sinceMs}
 	if limit > 0 {
-		query += " LIMIT ?"
+		query += " LIMIT $2"
 		args = append(args, limit)
 	}
 	rows, err := db.Query(query, args...)
@@ -197,10 +204,10 @@ func (r *SignalExecutionRepo) ListSinceByUser(userID int, sinceMs int64, limit i
 	if userID <= 0 {
 		return r.ListSince(sinceMs, limit)
 	}
-	query := `SELECT ` + sigExecCols + ` FROM xt_signal_executions WHERE user_id=? AND created_at>=? ORDER BY created_at ASC`
+	query := `SELECT ` + sigExecCols + ` FROM xt_signal_executions WHERE user_id=$1 AND created_at>=$2 ORDER BY created_at ASC`
 	args := []any{userID, sinceMs}
 	if limit > 0 {
-		query += " LIMIT ?"
+		query += " LIMIT $3"
 		args = append(args, limit)
 	}
 	rows, err := db.Query(query, args...)
@@ -222,24 +229,24 @@ func (r *SignalExecutionRepo) ListSinceByUser(userID int, sinceMs int64, limit i
 // Update 全量回填执行记录（状态机每步推进后调用）。
 func (r *SignalExecutionRepo) Update(e *SignalExecution) error {
 	_, err := db.Exec(
-		`UPDATE xt_signal_executions SET status=?, entry_order_id=?, entry_price=?, entry_qty=?, entry_time=?,
-		 tp1_price=?, tp1_qty=?, tp1_time=?, tp1_filled=?, tp2_price=?, tp2_qty=?, tp2_time=?, tp2_filled=?,
-		 tp3_price=?, tp3_qty=?, tp3_time=?, tp3_filled=?, sl_price=?, sl_triggered=?, sl_time=?,
-		 move_sl_after=?, move_sl_to=?, trailing_active=?, trailing_pct=?, trailing_peak=?,
-		 candle_close_sl=?, candle_close_interval=?,
-		 current_tp=?, current_sl=?, remaining_qty=?, realized_pnl=?, close_reason=?, closed_at=?
-		 WHERE id=?`,
+		`UPDATE xt_signal_executions SET status=$1, entry_order_id=$2, entry_price=$3, entry_qty=$4, entry_time=$5,
+		 tp1_price=$6, tp1_qty=$7, tp1_time=$8, tp1_filled=$9, tp2_price=$10, tp2_qty=$11, tp2_time=$12, tp2_filled=$13,
+		 tp3_price=$14, tp3_qty=$15, tp3_time=$16, tp3_filled=$17, sl_price=$18, sl_triggered=$19, sl_time=$20,
+		 move_sl_after=$21, move_sl_to=$22, trailing_active=$23, trailing_pct=$24, trailing_peak=$25,
+		 candle_close_sl=$26, candle_close_interval=$27,
+		 current_tp=$28, current_sl=$29, remaining_qty=$30, realized_pnl=$31, close_reason=$32, closed_at=$33
+		 WHERE id=$34`,
 		e.Status, e.EntryOrderID, e.EntryPrice, e.EntryQty, e.EntryTime,
-		e.TP1Price, e.TP1Qty, e.TP1Time, e.TP1Filled, e.TP2Price, e.TP2Qty, e.TP2Time, e.TP2Filled,
-		e.TP3Price, e.TP3Qty, e.TP3Time, e.TP3Filled, e.SLPrice, e.SLTriggered, e.SLTime,
-		e.MoveSLAfter, e.MoveSLTo, e.TrailingActive, e.TrailingPct, e.TrailingPeak,
-		e.CandleCloseSL, e.CandleCloseInterval,
+		e.TP1Price, e.TP1Qty, e.TP1Time, boolToInt(e.TP1Filled), e.TP2Price, e.TP2Qty, e.TP2Time, boolToInt(e.TP2Filled),
+		e.TP3Price, e.TP3Qty, e.TP3Time, boolToInt(e.TP3Filled), e.SLPrice, boolToInt(e.SLTriggered), e.SLTime,
+		e.MoveSLAfter, e.MoveSLTo, boolToInt(e.TrailingActive), e.TrailingPct, e.TrailingPeak,
+		boolToInt(e.CandleCloseSL), e.CandleCloseInterval,
 		e.CurrentTP, e.CurrentSL, e.RemainingQty, e.RealizedPnL, e.CloseReason, e.ClosedAt, e.ID,
 	)
 	return err
 }
 
 func (r *SignalExecutionRepo) Delete(id string) error {
-	_, err := db.Exec("DELETE FROM xt_signal_executions WHERE id=?", id)
+	_, err := db.Exec("DELETE FROM xt_signal_executions WHERE id=$1", id)
 	return err
 }

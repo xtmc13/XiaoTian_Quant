@@ -2,25 +2,19 @@ package marketplace
 
 import (
 	"math"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
-// setupTestDB 每个用例独立临时 sqlite（对齐 store 包迁移测试模式）。
+// setupTestDB 每个用例连接测试 PostgreSQL（对齐 store 包迁移测试模式）。
 func setupTestDB(t *testing.T) {
 	t.Helper()
-	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "gateway.db"))
-	t.Setenv("SECRET_KEY", "test-secret-key-for-marketplace")
-	if err := store.InitDB(); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
+	store.SetupTestDB(t)
 	if err := store.RunSQLMigrations(); err != nil {
 		t.Fatalf("run sql migrations: %v", err)
 	}
-	t.Cleanup(store.CloseDB)
 }
 
 // seedInstance 写入一个作者持有的 AI 机器人实例（考核数据源）。

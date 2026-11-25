@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"sync"
 	"time"
 )
@@ -54,16 +55,16 @@ func (r *SignalRepo) Create(s *SignalRecord) error {
 	if s.CreatedAt == 0 {
 		s.CreatedAt = time.Now().UnixMilli()
 	}
-	res, err := db.Exec(
+	var id int64
+	err := db.QueryRow(
 		`INSERT INTO xt_signals (symbol, direction, strength, strategy, reason, entry_price, stop_loss, take_profit, position_size, status, executed_order_id, created_at, source_id, margin_mode, tp1, tp2, tp3, tp1_pct, tp2_pct, tp3_pct, realized_pnl, closed_at, user_id)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23) RETURNING id`,
 		s.Symbol, s.Direction, s.Strength, s.Strategy, s.Reason, s.EntryPrice, s.StopLoss, s.TakeProfit, s.PositionSize, s.Status, s.ExecutedOrderID, s.CreatedAt,
 		s.SourceID, s.MarginMode, s.TP1, s.TP2, s.TP3, s.TP1Pct, s.TP2Pct, s.TP3Pct, s.RealizedPnL, s.ClosedAt, s.UserID,
-	)
+	).Scan(&id)
 	if err != nil {
 		return err
 	}
-	id, _ := res.LastInsertId()
 	s.ID = int(id)
 	return nil
 }
@@ -79,7 +80,7 @@ func scanSignal(row interface{ Scan(...any) error }) (*SignalRecord, error) {
 }
 
 func (r *SignalRepo) GetByID(id string) (*SignalRecord, error) {
-	return scanSignal(db.QueryRow(`SELECT `+signalCols+` FROM xt_signals WHERE id=?`, id))
+	return scanSignal(db.QueryRow(`SELECT `+signalCols+` FROM xt_signals WHERE id=$1`, id))
 }
 
 func (r *SignalRepo) List(filter map[string]any, limit int) ([]*SignalRecord, error) {
@@ -89,13 +90,13 @@ func (r *SignalRepo) List(filter map[string]any, limit int) ([]*SignalRecord, er
 		"status": true, "executed_order_id": true, "created_at": true, "source_id": true,
 		"user_id": true,
 	}
-	args, where := buildFilter(filter, allowedCols)
+	args, where, next := buildFilter(filter, allowedCols, 1)
 	if where != "" {
 		query += " WHERE " + where
 	}
 	query += " ORDER BY created_at DESC"
 	if limit > 0 {
-		query += " LIMIT ?"
+		query += fmt.Sprintf(" LIMIT $%d", next)
 		args = append(args, limit)
 	}
 	rows, err := db.Query(query, args...)
@@ -116,10 +117,10 @@ func (r *SignalRepo) List(filter map[string]any, limit int) ([]*SignalRecord, er
 
 // ListSince 返回 created_at >= sinceMs 的信号（时间升序，供统计曲线聚合）。
 func (r *SignalRepo) ListSince(sinceMs int64, limit int) ([]*SignalRecord, error) {
-	query := `SELECT ` + signalCols + ` FROM xt_signals WHERE created_at>=? ORDER BY created_at ASC`
+	query := `SELECT ` + signalCols + ` FROM xt_signals WHERE created_at>=$1 ORDER BY created_at ASC`
 	args := []any{sinceMs}
 	if limit > 0 {
-		query += " LIMIT ?"
+		query += " LIMIT $2"
 		args = append(args, limit)
 	}
 	rows, err := db.Query(query, args...)
@@ -144,10 +145,10 @@ func (r *SignalRepo) ListSinceByUser(userID int, sinceMs int64, limit int) ([]*S
 	if userID <= 0 {
 		return r.ListSince(sinceMs, limit)
 	}
-	query := `SELECT ` + signalCols + ` FROM xt_signals WHERE user_id=? AND created_at>=? ORDER BY created_at ASC`
+	query := `SELECT ` + signalCols + ` FROM xt_signals WHERE user_id=$1 AND created_at>=$2 ORDER BY created_at ASC`
 	args := []any{userID, sinceMs}
 	if limit > 0 {
-		query += " LIMIT ?"
+		query += " LIMIT $3"
 		args = append(args, limit)
 	}
 	rows, err := db.Query(query, args...)
@@ -170,9 +171,9 @@ func (r *SignalRepo) ListSinceByUser(userID int, sinceMs int64, limit int) ([]*S
 func (r *SignalRepo) CountByStatusSince(status string, sinceMs int64) int {
 	var n int
 	if status == "" {
-		_ = db.QueryRow(`SELECT COUNT(1) FROM xt_signals WHERE created_at>=?`, sinceMs).Scan(&n)
+		_ = db.QueryRow(`SELECT COUNT(1) FROM xt_signals WHERE created_at>=$1`, sinceMs).Scan(&n)
 	} else {
-		_ = db.QueryRow(`SELECT COUNT(1) FROM xt_signals WHERE status=? AND created_at>=?`, status, sinceMs).Scan(&n)
+		_ = db.QueryRow(`SELECT COUNT(1) FROM xt_signals WHERE status=$1 AND created_at>=$2`, status, sinceMs).Scan(&n)
 	}
 	return n
 }
@@ -181,22 +182,22 @@ func (r *SignalRepo) CountByStatusSince(status string, sinceMs int64) int {
 func (r *SignalRepo) CountBySourceSince(sourceID string, sinceMs int64) int {
 	var n int
 	if sourceID == "" {
-		_ = db.QueryRow(`SELECT COUNT(1) FROM xt_signals WHERE created_at>=?`, sinceMs).Scan(&n)
+		_ = db.QueryRow(`SELECT COUNT(1) FROM xt_signals WHERE created_at>=$1`, sinceMs).Scan(&n)
 	} else {
-		_ = db.QueryRow(`SELECT COUNT(1) FROM xt_signals WHERE source_id=? AND created_at>=?`, sourceID, sinceMs).Scan(&n)
+		_ = db.QueryRow(`SELECT COUNT(1) FROM xt_signals WHERE source_id=$1 AND created_at>=$2`, sourceID, sinceMs).Scan(&n)
 	}
 	return n
 }
 
 func (r *SignalRepo) Update(s *SignalRecord) error {
 	_, err := db.Exec(
-		`UPDATE xt_signals SET status=?, executed_order_id=?, realized_pnl=?, closed_at=? WHERE id=?`,
+		`UPDATE xt_signals SET status=$1, executed_order_id=$2, realized_pnl=$3, closed_at=$4 WHERE id=$5`,
 		s.Status, s.ExecutedOrderID, s.RealizedPnL, s.ClosedAt, s.ID,
 	)
 	return err
 }
 
 func (r *SignalRepo) Delete(id string) error {
-	_, err := db.Exec("DELETE FROM xt_signals WHERE id=?", id)
+	_, err := db.Exec("DELETE FROM xt_signals WHERE id=$1", id)
 	return err
 }

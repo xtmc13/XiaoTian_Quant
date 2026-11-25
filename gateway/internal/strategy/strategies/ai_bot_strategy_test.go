@@ -1,7 +1,6 @@
 package strategies
 
 import (
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -9,19 +8,14 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
-// setupAIBotStrategyDB 初始化临时 sqlite，并返回清理函数。
+// setupAIBotStrategyDB 初始化测试 PostgreSQL，并返回清理函数。
 func setupAIBotStrategyDB(t *testing.T) {
 	t.Helper()
-	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "gateway.db"))
-	t.Setenv("SECRET_KEY", "test-secret-key-ai-bot-strategy")
-	if err := store.InitDB(); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
+	store.SetupTestDB(t)
 	// DefaultAISignalRepo 的 sync.Once 只在首个库上Ensure过，换库后需显式建表。
 	if err := store.EnsureAISignalsSchema(); err != nil {
 		t.Fatalf("ensure ai_signals schema: %v", err)
 	}
-	t.Cleanup(store.CloseDB)
 }
 
 func insertSignal(t *testing.T, userID int64, symbol, signal string, confidence float64, createdAt int64) *store.AISignalRecord {

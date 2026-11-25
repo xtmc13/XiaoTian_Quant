@@ -67,7 +67,7 @@ func loadCustomIndicatorCode(codeID int64) (string, error) {
 	}
 	var code string
 	var encrypted int
-	err := db.QueryRow(`SELECT code, is_encrypted FROM indicator_codes WHERE id = ?`, codeID).Scan(&code, &encrypted)
+	err := db.QueryRow(`SELECT code, is_encrypted FROM indicator_codes WHERE id = $1`, codeID).Scan(&code, &encrypted)
 	if err != nil {
 		return "", err
 	}

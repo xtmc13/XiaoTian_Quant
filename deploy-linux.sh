@@ -8,7 +8,7 @@ set -e
 
 PROJECT_DIR="/opt/xiaotian-quant"
 GITHUB_REPO="https://github.com/xtmc13/XiaoTian_Quant.git"
-GO_VERSION="1.22"
+GO_VERSION="1.26"
 NODE_VERSION="20"
 
 echo "========================================="
@@ -18,7 +18,7 @@ echo "========================================="
 # 0. 系统更新和基础依赖
 echo "[1/8] 安装系统依赖..."
 apt-get update -qq
-apt-get install -y -qq git curl wget sqlite3 nginx build-essential
+apt-get install -y -qq git curl wget postgresql postgresql-contrib nginx build-essential openssl
 
 # 1. 安装 Go (如果未安装)
 echo "[2/8] 检查 Go 环境..."
@@ -68,17 +68,32 @@ go mod tidy
 go build -o xiaotian-gateway ./cmd/server/
 chmod +x xiaotian-gateway
 
-# 6. 初始化数据库
-echo "[7/8] 初始化数据库..."
-mkdir -p "$PROJECT_DIR/data"
-if [ ! -f "$PROJECT_DIR/data/xiaotian.db" ]; then
-    sqlite3 "$PROJECT_DIR/data/xiaotian.db" "VACUUM;"
-fi
+# 6. 初始化 PostgreSQL
+echo "[7/8] 初始化 PostgreSQL..."
+systemctl enable --now postgresql
 
-# 运行数据库迁移 (如果有)
-if [ -f "$PROJECT_DIR/gateway/migrate" ]; then
-    cd "$PROJECT_DIR/gateway" && ./migrate up 2>/dev/null || true
+DB_USER="xtquant"
+DB_NAME="xtquant"
+DB_PASSWORD="${DB_PASSWORD:-$(openssl rand -hex 16)}"
+
+# 幂等创建角色与数据库（已存在则跳过）
+sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='${DB_USER}'" | grep -q 1 || \
+    sudo -u postgres psql -c "CREATE ROLE ${DB_USER} LOGIN PASSWORD '${DB_PASSWORD}';"
+sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'" | grep -q 1 || \
+    sudo -u postgres psql -c "CREATE DATABASE ${DB_NAME} OWNER ${DB_USER};"
+
+# 落 .env（已存在则不覆盖，保留生产既有密钥与配置）
+ENV_FILE="$PROJECT_DIR/.env"
+if [ ! -f "$ENV_FILE" ]; then
+    cat > "$ENV_FILE" <<EOF
+SECRET_KEY=$(openssl rand -hex 32)
+DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@127.0.0.1:5432/${DB_NAME}?sslmode=disable
+PORT=8080
+EOF
 fi
+chmod 600 "$ENV_FILE"
+
+# 启动网关时自动执行数据库迁移（代码内 InitDB 跑迁移台账），无需独立 migrate 二进制。
 
 # 7. 配置 Nginx 反向代理
 echo "[8/8] 配置 Nginx..."
@@ -122,15 +137,14 @@ nginx -t && systemctl restart nginx
 cat > /etc/systemd/system/xiaotian-gateway.service << 'SERVICE_EOF'
 [Unit]
 Description=XiaoTian Quant Gateway
-After=network.target
+After=network.target postgresql.service
+Wants=postgresql.service
 
 [Service]
 Type=simple
 User=root
 WorkingDirectory=/opt/xiaotian-quant/gateway
-Environment="DATABASE_URL=/opt/xiaotian-quant/data/xiaotian.db"
-Environment="JWT_SECRET=xiaotian-secret-key-change-in-production"
-Environment="PORT=8080"
+EnvironmentFile=/opt/xiaotian-quant/.env
 ExecStart=/opt/xiaotian-quant/gateway/xiaotian-gateway
 Restart=always
 RestartSec=5

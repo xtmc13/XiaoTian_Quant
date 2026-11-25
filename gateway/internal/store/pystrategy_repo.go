@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"database/sql"
 	"sync"
 	"time"
@@ -110,7 +111,7 @@ func (r *PyStrategyRepo) Create(rec *PyStrategyRecord) error {
 		paper = 1
 	}
 	_, err := db.Exec(`INSERT INTO xt_pystrategies (`+pyStrategyColumns+`)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
 		rec.ID, rec.UserID, rec.Name, rec.Symbol, rec.Interval, rec.Direction,
 		rec.ParamsJSON, rec.Code, rec.Version, rec.Status, rec.Error, paper,
 		rec.BotID, rec.Market, rec.Leverage, rec.MarginMode, rec.CreatedAt, rec.UpdatedAt)
@@ -119,7 +120,7 @@ func (r *PyStrategyRepo) Create(rec *PyStrategyRecord) error {
 
 // GetByID 按 id 取策略；不存在返回 (nil, nil)。
 func (r *PyStrategyRepo) GetByID(id string) (*PyStrategyRecord, error) {
-	row := db.QueryRow(`SELECT `+pyStrategyColumns+` FROM xt_pystrategies WHERE id = ?`, id)
+	row := db.QueryRow(`SELECT `+pyStrategyColumns+` FROM xt_pystrategies WHERE id = $1`, id)
 	return scanPyStrategy(row)
 }
 
@@ -127,13 +128,13 @@ func (r *PyStrategyRepo) GetByID(id string) (*PyStrategyRecord, error) {
 func (r *PyStrategyRepo) List(filter map[string]any, limit int) ([]*PyStrategyRecord, error) {
 	query := `SELECT ` + pyStrategyColumns + ` FROM xt_pystrategies`
 	allowedCols := map[string]bool{"user_id": true, "status": true, "symbol": true}
-	args, where := buildFilter(filter, allowedCols)
+	args, where, next := buildFilter(filter, allowedCols, 1)
 	if where != "" {
 		query += " WHERE " + where
 	}
 	query += " ORDER BY updated_at DESC"
 	if limit > 0 {
-		query += " LIMIT ?"
+		query += fmt.Sprintf(" LIMIT $%d", next)
 		args = append(args, limit)
 	}
 	rows, err := db.Query(query, args...)
@@ -171,9 +172,9 @@ func (r *PyStrategyRepo) Update(rec *PyStrategyRecord) error {
 		rec.MarginMode = PyStratMarginCross
 	}
 	_, err := db.Exec(`UPDATE xt_pystrategies SET
-		name=?, symbol=?, interval=?, direction=?, params_json=?, code=?,
-		version=?, status=?, error=?, paper=?, bot_id=?, market=?, leverage=?,
-		margin_mode=?, updated_at=? WHERE id=?`,
+		name=$1, symbol=$2, interval=$3, direction=$4, params_json=$5, code=$6,
+		version=$7, status=$8, error=$9, paper=$10, bot_id=$11, market=$12, leverage=$13,
+		margin_mode=$14, updated_at=$15 WHERE id=$16`,
 		rec.Name, rec.Symbol, rec.Interval, rec.Direction, rec.ParamsJSON, rec.Code,
 		rec.Version, rec.Status, rec.Error, paper, rec.BotID, rec.Market, rec.Leverage,
 		rec.MarginMode, rec.UpdatedAt, rec.ID)
@@ -184,7 +185,7 @@ func (r *PyStrategyRepo) Update(rec *PyStrategyRecord) error {
 func (r *PyStrategyRepo) UpdateStatus(id, status, errMsg string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	_, err := db.Exec(`UPDATE xt_pystrategies SET status=?, error=?, updated_at=? WHERE id=?`,
+	_, err := db.Exec(`UPDATE xt_pystrategies SET status=$1, error=$2, updated_at=$3 WHERE id=$4`,
 		status, errMsg, time.Now().UnixMilli(), id)
 	return err
 }
@@ -193,6 +194,6 @@ func (r *PyStrategyRepo) UpdateStatus(id, status, errMsg string) error {
 func (r *PyStrategyRepo) Delete(id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	_, err := db.Exec(`DELETE FROM xt_pystrategies WHERE id = ?`, id)
+	_, err := db.Exec(`DELETE FROM xt_pystrategies WHERE id = $1`, id)
 	return err
 }

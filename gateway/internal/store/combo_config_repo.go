@@ -51,7 +51,7 @@ func (r *ComboConfigRepo) Create(rec *ComboConfigRecord) error {
 	}
 	_, err := db.Exec(`INSERT INTO xt_combo_configs (
 		id, user_id, name, symbol, members, aggregation_mode, status, created_at, updated_at
-	) VALUES (?,?,?,?,?,?,?,?,?)`,
+	) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
 		rec.ID, rec.UserID, rec.Name, rec.Symbol, rec.MembersJSON, rec.AggregationMode,
 		rec.Status, rec.CreatedAt, rec.UpdatedAt,
 	)
@@ -60,7 +60,7 @@ func (r *ComboConfigRepo) Create(rec *ComboConfigRecord) error {
 
 // GetByID returns a combo config by ID (nil, nil when missing).
 func (r *ComboConfigRepo) GetByID(id string) (*ComboConfigRecord, error) {
-	row := db.QueryRow(`SELECT `+comboConfigCols+` FROM xt_combo_configs WHERE id=?`, id)
+	row := db.QueryRow(`SELECT `+comboConfigCols+` FROM xt_combo_configs WHERE id=$1`, id)
 	return scanComboConfig(row)
 }
 
@@ -86,8 +86,8 @@ func (r *ComboConfigRepo) List() ([]*ComboConfigRecord, error) {
 func (r *ComboConfigRepo) Update(rec *ComboConfigRecord) error {
 	rec.UpdatedAt = time.Now().UnixMilli()
 	_, err := db.Exec(`UPDATE xt_combo_configs SET
-		user_id=?, name=?, symbol=?, members=?, aggregation_mode=?, status=?, updated_at=?
-		WHERE id=?`,
+		user_id=$1, name=$2, symbol=$3, members=$4, aggregation_mode=$5, status=$6, updated_at=$7
+		WHERE id=$8`,
 		rec.UserID, rec.Name, rec.Symbol, rec.MembersJSON, rec.AggregationMode,
 		rec.Status, rec.UpdatedAt, rec.ID,
 	)
@@ -96,7 +96,7 @@ func (r *ComboConfigRepo) Update(rec *ComboConfigRecord) error {
 
 // Delete removes a combo config.
 func (r *ComboConfigRepo) Delete(id string) error {
-	_, err := db.Exec("DELETE FROM xt_combo_configs WHERE id=?", id)
+	_, err := db.Exec("DELETE FROM xt_combo_configs WHERE id=$1", id)
 	return err
 }
 

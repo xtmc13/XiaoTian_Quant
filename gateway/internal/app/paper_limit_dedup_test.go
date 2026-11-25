@@ -1,8 +1,6 @@
 package app
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/xiaotian-quant/gateway/internal/config"
@@ -16,19 +14,7 @@ import (
 // 修复前：OMS 采用撮合镜像 ID 导致原 ID 的 PENDING 孤儿单残留（OMS/DB 各两条），
 // 且镜像以 exchange=MATCHING 回写展示 store。
 func TestPaperLimitOrderNotDuplicated(t *testing.T) {
-	dir, err := os.MkdirTemp("", "app_dedup_test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		store.CloseDB()
-		_ = os.RemoveAll(dir)
-	})
-	t.Setenv("DB_PATH", filepath.Join(dir, "gateway.db"))
-	t.Setenv("SECRET_KEY", "test-secret-key-not-for-production-use-only")
-	if err := store.InitDB(); err != nil {
-		t.Fatalf("InitDB: %v", err)
-	}
+	store.SetupTestDB(t)
 
 	ctx := Get()
 	ctx.Shutdown()

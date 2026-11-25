@@ -62,7 +62,7 @@ func (r *Repo) Create(j *Job) error {
 	}
 	_, err = db.Exec(`INSERT INTO xt_agent_cron_jobs
 		(id, user_id, name, prompt, schedule, timezone, channel, enabled, next_run_at, last_run_at, last_status, last_result, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
 		j.ID, j.UserID, j.Name, j.Prompt, j.Schedule, j.Timezone, j.Channel, boolInt(j.Enabled), j.NextRunAt,
 		j.LastRunAt, j.LastStatus, j.LastResult, j.CreatedAt, j.UpdatedAt)
 	return err
@@ -88,7 +88,7 @@ func (r *Repo) ListByUser(userID int64) ([]*Job, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.Query(`SELECT `+jobCols+` FROM xt_agent_cron_jobs WHERE user_id = ? ORDER BY updated_at DESC`, userID)
+	rows, err := db.Query(`SELECT `+jobCols+` FROM xt_agent_cron_jobs WHERE user_id = $1 ORDER BY updated_at DESC`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +110,7 @@ func (r *Repo) Get(id string, userID int64) (*Job, error) {
 	if err != nil {
 		return nil, err
 	}
-	return scanJob(db.QueryRow(`SELECT `+jobCols+` FROM xt_agent_cron_jobs WHERE id = ? AND user_id = ?`, id, userID))
+	return scanJob(db.QueryRow(`SELECT `+jobCols+` FROM xt_agent_cron_jobs WHERE id = $1 AND user_id = $2`, id, userID))
 }
 
 // SetEnabled 启停；禁用时 last_* 不动。
@@ -119,7 +119,7 @@ func (r *Repo) SetEnabled(id string, userID int64, enabled bool) error {
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec(`UPDATE xt_agent_cron_jobs SET enabled = ?, updated_at = ? WHERE id = ? AND user_id = ?`,
+	_, err = db.Exec(`UPDATE xt_agent_cron_jobs SET enabled = $1, updated_at = $2 WHERE id = $3 AND user_id = $4`,
 		boolInt(enabled), time.Now().Unix(), id, userID)
 	return err
 }
@@ -130,7 +130,7 @@ func (r *Repo) Delete(id string, userID int64) error {
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec(`DELETE FROM xt_agent_cron_jobs WHERE id = ? AND user_id = ?`, id, userID)
+	_, err = db.Exec(`DELETE FROM xt_agent_cron_jobs WHERE id = $1 AND user_id = $2`, id, userID)
 	return err
 }
 
@@ -140,7 +140,7 @@ func (r *Repo) UpdateSchedule(id string, userID int64, schedule, timezone string
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec(`UPDATE xt_agent_cron_jobs SET schedule = ?, timezone = ?, next_run_at = ?, updated_at = ? WHERE id = ? AND user_id = ?`,
+	_, err = db.Exec(`UPDATE xt_agent_cron_jobs SET schedule = $1, timezone = $2, next_run_at = $3, updated_at = $4 WHERE id = $5 AND user_id = $6`,
 		schedule, timezone, nextRunAt, time.Now().Unix(), id, userID)
 	return err
 }
@@ -151,7 +151,7 @@ func (r *Repo) DueJobs(now int64, limit int) ([]*Job, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.Query(`SELECT `+jobCols+` FROM xt_agent_cron_jobs WHERE enabled = 1 AND next_run_at <= ? ORDER BY next_run_at ASC LIMIT ?`, now, limit)
+	rows, err := db.Query(`SELECT `+jobCols+` FROM xt_agent_cron_jobs WHERE enabled = 1 AND next_run_at <= $1 ORDER BY next_run_at ASC LIMIT $2`, now, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +173,7 @@ func (r *Repo) MarkRun(id string, status, result string, lastRunAt, nextRunAt in
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec(`UPDATE xt_agent_cron_jobs SET last_run_at = ?, last_status = ?, last_result = ?, next_run_at = ?, updated_at = ? WHERE id = ?`,
+	_, err = db.Exec(`UPDATE xt_agent_cron_jobs SET last_run_at = $1, last_status = $2, last_result = $3, next_run_at = $4, updated_at = $5 WHERE id = $6`,
 		lastRunAt, status, result, nextRunAt, time.Now().Unix(), id)
 	return err
 }

@@ -96,7 +96,7 @@ func TestRegisterInvalidReferralCode(t *testing.T) {
 	referrerID := billingSeedUser(t, "ref_reg_inact")
 	rc, err := store.NewReferralRepo().EnsureCode(int64(referrerID), 10)
 	assertTrue(t, err == nil, "inactive referrer code")
-	_, err = store.GetDB().Exec(`UPDATE xt_referral_codes SET active=0 WHERE user_id=?`, referrerID)
+	_, err = store.GetDB().Exec(`UPDATE xt_referral_codes SET active=0 WHERE user_id=$1`, referrerID)
 	assertTrue(t, err == nil, "deactivate code")
 	email3 := "ref_reg_inact_new@test.local"
 	seedRegisterCode(t, email3, "654321")
@@ -117,7 +117,7 @@ func TestReferralSelfGuard(t *testing.T) {
 	t.Setenv("STRIPE_SECRET_KEY", "sk_test_refself")
 	t.Setenv("STRIPE_WEBHOOK_SECRET", "whsec_refself")
 	selfUser := billingSeedUser(t, "ref_self_order")
-	_, err = store.GetDB().Exec(`UPDATE xt_users SET referred_by=? WHERE id=?`, selfUser, selfUser)
+	_, err = store.GetDB().Exec(`UPDATE xt_users SET referred_by=$1 WHERE id=$2`, selfUser, selfUser)
 	assertTrue(t, err == nil, "force self referred_by")
 	repo := store.NewBillingRepo()
 	o := &store.BillingOrder{ID: "bill_ref_self1", UserID: int64(selfUser), PlanID: "monthly", Chain: "stripe",

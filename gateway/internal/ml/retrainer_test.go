@@ -1,7 +1,6 @@
 package ml_test
 
 import (
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -11,18 +10,13 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
-// setupMLTestDB 初始化临时 SQLite（含全部迁移），返回重训仓库。
+// setupMLTestDB 初始化测试 PostgreSQL（含全部迁移），返回重训仓库。
 func setupMLTestDB(t *testing.T) *store.MLRetrainRepo {
 	t.Helper()
-	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "ml_test.db"))
-	t.Setenv("SECRET_KEY", "ml-test-secret")
-	if err := store.InitDB(); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
+	store.SetupTestDB(t)
 	if err := store.RunSQLMigrations(); err != nil {
 		t.Fatalf("run sql migrations: %v", err)
 	}
-	t.Cleanup(func() { store.CloseDB() })
 	return store.NewMLRetrainRepo()
 }
 

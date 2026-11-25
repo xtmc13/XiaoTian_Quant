@@ -1,9 +1,7 @@
 package service
 
 import (
-	"fmt"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -11,12 +9,8 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	testDir, err := os.MkdirTemp("", "xiaotian-service-tests-*")
-	if err != nil {
-		panic(err)
-	}
-	if err := os.Setenv("DB_PATH", filepath.Join(testDir, "gateway.db")); err != nil {
-		panic(err)
+	if !store.TestDatabaseConfigured() {
+		os.Exit(0)
 	}
 	_ = os.Setenv("SECRET_KEY", "test-secret-key-for-unit-tests")
 	if err := store.InitDB(); err != nil {
@@ -24,12 +18,6 @@ func TestMain(m *testing.M) {
 	}
 	code := m.Run()
 	store.CloseDB()
-	if err := os.RemoveAll(testDir); err != nil {
-		fmt.Fprintf(os.Stderr, "remove service test directory: %v\n", err)
-		if code == 0 {
-			code = 1
-		}
-	}
 	os.Exit(code)
 }
 

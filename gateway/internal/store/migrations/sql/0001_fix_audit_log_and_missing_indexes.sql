@@ -6,10 +6,10 @@
 -- 四列, 导致后台审计日志写入/查询在运行期静默失败。
 -- 两种用途共用一表: 补齐 admin 侧缺失的四列, 双方的写入/查询各自成立。
 
-ALTER TABLE agent_audit_log ADD COLUMN actor TEXT NOT NULL DEFAULT '';
-ALTER TABLE agent_audit_log ADD COLUMN action TEXT NOT NULL DEFAULT '';
-ALTER TABLE agent_audit_log ADD COLUMN detail TEXT NOT NULL DEFAULT '';
-ALTER TABLE agent_audit_log ADD COLUMN created_at BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE agent_audit_log ADD COLUMN IF NOT EXISTS actor TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_audit_log ADD COLUMN IF NOT EXISTS action TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_audit_log ADD COLUMN IF NOT EXISTS detail TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_audit_log ADD COLUMN IF NOT EXISTS created_at BIGINT NOT NULL DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS idx_audit_actor ON agent_audit_log(actor);
 CREATE INDEX IF NOT EXISTS idx_audit_created ON agent_audit_log(created_at);

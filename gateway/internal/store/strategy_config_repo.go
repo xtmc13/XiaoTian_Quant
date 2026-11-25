@@ -67,7 +67,7 @@ func (r *StrategyConfigRepo) Create(item *StrategyConfigRecord) error {
 		id, user_id, name, category, strategy_type, symbol, coin, direction, leverage,
 		market_type, margin_mode, timeframe, execution_mode, initial_capital, current_equity,
 		total_pnl, total_pnl_percent, status, config_json, notification_config, created_at, updated_at
-	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
 		item.ID, item.UserID, item.Name, item.Category, item.StrategyType, item.Symbol, item.Coin,
 		item.Direction, item.Leverage, item.MarketType, item.MarginMode, item.Timeframe,
 		item.ExecutionMode, item.InitialCapital, item.CurrentEquity, item.TotalPnL,
@@ -82,7 +82,7 @@ func (r *StrategyConfigRepo) GetByID(id string) (*StrategyConfigRecord, error) {
 	row := db.QueryRow(`SELECT id, user_id, name, category, strategy_type, symbol, coin, direction, leverage,
 		market_type, margin_mode, timeframe, execution_mode, initial_capital, current_equity,
 		total_pnl, total_pnl_percent, status, config_json, notification_config, created_at, updated_at
-		FROM strategy_configs WHERE id=?`, id)
+		FROM strategy_configs WHERE id=$1`, id)
 	return scanStrategyConfig(row)
 }
 
@@ -96,13 +96,13 @@ func (r *StrategyConfigRepo) List(filter map[string]any, limit int) ([]*Strategy
 		"id": true, "user_id": true, "category": true, "status": true,
 		"symbol": true, "strategy_type": true, "market_type": true,
 	}
-	args, where := buildFilter(filter, allowedCols)
+	args, where, next := buildFilter(filter, allowedCols, 1)
 	if where != "" {
 		query += " WHERE " + where
 	}
 	query += " ORDER BY updated_at DESC"
 	if limit > 0 {
-		query += " LIMIT ?"
+		query += fmt.Sprintf(" LIMIT $%d", next)
 		args = append(args, limit)
 	}
 	rows, err := db.Query(query, args...)
@@ -126,10 +126,10 @@ func (r *StrategyConfigRepo) List(filter map[string]any, limit int) ([]*Strategy
 func (r *StrategyConfigRepo) Update(item *StrategyConfigRecord) error {
 	item.UpdatedAt = time.Now().UnixMilli()
 	_, err := db.Exec(`UPDATE strategy_configs SET
-		user_id=?, name=?, category=?, strategy_type=?, symbol=?, coin=?, direction=?, leverage=?,
-		market_type=?, margin_mode=?, timeframe=?, execution_mode=?, initial_capital=?, current_equity=?,
-		total_pnl=?, total_pnl_percent=?, status=?, config_json=?, notification_config=?, updated_at=?
-		WHERE id=?`,
+		user_id=$1, name=$2, category=$3, strategy_type=$4, symbol=$5, coin=$6, direction=$7, leverage=$8,
+		market_type=$9, margin_mode=$10, timeframe=$11, execution_mode=$12, initial_capital=$13, current_equity=$14,
+		total_pnl=$15, total_pnl_percent=$16, status=$17, config_json=$18, notification_config=$19, updated_at=$20
+		WHERE id=$21`,
 		item.UserID, item.Name, item.Category, item.StrategyType, item.Symbol, item.Coin,
 		item.Direction, item.Leverage, item.MarketType, item.MarginMode, item.Timeframe,
 		item.ExecutionMode, item.InitialCapital, item.CurrentEquity, item.TotalPnL,
@@ -141,7 +141,7 @@ func (r *StrategyConfigRepo) Update(item *StrategyConfigRecord) error {
 
 // Delete removes a strategy config.
 func (r *StrategyConfigRepo) Delete(id string) error {
-	_, err := db.Exec("DELETE FROM strategy_configs WHERE id=?", id)
+	_, err := db.Exec("DELETE FROM strategy_configs WHERE id=$1", id)
 	return err
 }
 
@@ -154,11 +154,18 @@ func (r *StrategyConfigRepo) UpsertAll(items []*StrategyConfigRecord) error {
 	if err != nil {
 		return err
 	}
-	stmt, err := tx.Prepare(`INSERT OR REPLACE INTO strategy_configs (
+	stmt, err := tx.Prepare(`INSERT INTO strategy_configs (
 		id, user_id, name, category, strategy_type, symbol, coin, direction, leverage,
 		market_type, margin_mode, timeframe, execution_mode, initial_capital, current_equity,
 		total_pnl, total_pnl_percent, status, config_json, notification_config, created_at, updated_at
-	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+	) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+	ON CONFLICT(id) DO UPDATE SET
+		user_id=excluded.user_id, name=excluded.name, category=excluded.category, strategy_type=excluded.strategy_type,
+		symbol=excluded.symbol, coin=excluded.coin, direction=excluded.direction, leverage=excluded.leverage,
+		market_type=excluded.market_type, margin_mode=excluded.margin_mode, timeframe=excluded.timeframe,
+		execution_mode=excluded.execution_mode, initial_capital=excluded.initial_capital, current_equity=excluded.current_equity,
+		total_pnl=excluded.total_pnl, total_pnl_percent=excluded.total_pnl_percent, status=excluded.status,
+		config_json=excluded.config_json, notification_config=excluded.notification_config, created_at=excluded.created_at, updated_at=excluded.updated_at`)
 	if err != nil {
 		tx.Rollback()
 		return err

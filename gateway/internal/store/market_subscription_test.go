@@ -1,7 +1,6 @@
 package store
 
 import (
-	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -11,23 +10,18 @@ import (
 // listing_id/expires_at 列与索引，存量行默认空串/0（status 列建表已有，不重复加），
 // 幂等重跑。
 func TestListingSubscriptionsMigration(t *testing.T) {
-	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "gateway.db"))
-	t.Setenv("SECRET_KEY", "test-secret-key-listing-subscriptions")
-	if err := InitDB(); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
-	defer CloseDB()
+	SetupTestDB(t)
 	if err := RunSQLMigrations(); err != nil {
 		t.Fatalf("run sql migrations: %v", err)
 	}
 	for _, col := range []string{"listing_id", "expires_at", "status"} {
 		var n int
-		if err := db.QueryRow(`SELECT COUNT(1) FROM pragma_table_info('ai_bot_subscriptions') WHERE name=?`, col).Scan(&n); err != nil || n != 1 {
+		if err := db.QueryRow(`SELECT COUNT(1) FROM information_schema.columns WHERE table_name='ai_bot_subscriptions' AND column_name=$1`, col).Scan(&n); err != nil || n != 1 {
 			t.Fatalf("ai_bot_subscriptions missing %s column: n=%d err=%v", col, n, err)
 		}
 	}
 	var idx string
-	if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='index' AND name='idx_aibot_sub_listing'`).Scan(&idx); err != nil {
+	if err := db.QueryRow(`SELECT indexname FROM pg_indexes WHERE indexname='idx_aibot_sub_listing'`).Scan(&idx); err != nil {
 		t.Fatalf("index idx_aibot_sub_listing missing: %v", err)
 	}
 
@@ -101,7 +95,7 @@ func TestMarketSubscriptionRepo(t *testing.T) {
 
 	// 列表：只含 listing 维度行（不含实例直连旧订阅）。
 	if _, err := db.Exec(`INSERT INTO ai_bot_subscriptions (user_id, bot_instance_id, fee_type, status, created_at)
-		VALUES (42, 'aibot-direct', 'profit_share', 'active', ?)`, now); err != nil {
+		VALUES (42, 'aibot-direct', 'profit_share', 'active', $1)`, now); err != nil {
 		t.Fatalf("insert direct subscription: %v", err)
 	}
 	list := ListMarketSubscriptionsByUser(42)

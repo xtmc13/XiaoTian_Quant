@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -62,18 +63,19 @@ func (r *MLTrainingRunRepo) Record(run *MLTrainingRun) (int64, error) {
 	if run.CreatedAt == 0 {
 		run.CreatedAt = time.Now().UnixMilli()
 	}
-	res, err := db.Exec(`INSERT INTO xt_ml_training_runs
+	var id int64
+	err := db.QueryRow(`INSERT INTO xt_ml_training_runs
 		(job_id, model_name, trigger_src, trainer, status, error, symbol, interval,
 		 bars_loaded, train_samples, test_samples, feature_count, metrics_json, model_version,
 		 duration_ms, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
 		run.JobID, run.ModelName, run.TriggerSrc, run.Trainer, run.Status, run.Error,
 		run.Symbol, run.Interval, run.BarsLoaded, run.TrainSamples, run.TestSamples,
-		run.FeatureCount, run.MetricsJSON, run.ModelVersion, run.DurationMs, run.CreatedAt)
+		run.FeatureCount, run.MetricsJSON, run.ModelVersion, run.DurationMs, run.CreatedAt).Scan(&id)
 	if err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
+	return id, nil
 }
 
 // List 取训练运行历史（新的在前）。modelName 非空按模型过滤。
@@ -91,21 +93,24 @@ func (r *MLTrainingRunRepo) List(userID int64, modelName string, limit int) ([]*
 	q := `SELECT ` + mlTrainingRunCols + ` FROM xt_ml_training_runs t`
 	var args []any
 	where := ""
+	next := 1
 	if userID > 0 {
-		where += ` (t.job_id=0 OR t.job_id IN (SELECT id FROM xt_ml_retrain_jobs WHERE user_id=? OR user_id=0))`
+		where += fmt.Sprintf(` (t.job_id=0 OR t.job_id IN (SELECT id FROM xt_ml_retrain_jobs WHERE user_id=$%d OR user_id=0))`, next)
 		args = append(args, userID)
+		next++
 	}
 	if modelName != "" {
 		if where != "" {
 			where += " AND"
 		}
-		where += ` t.model_name=?`
+		where += fmt.Sprintf(` t.model_name=$%d`, next)
 		args = append(args, modelName)
+		next++
 	}
 	if where != "" {
 		q += ` WHERE` + where
 	}
-	q += ` ORDER BY t.id DESC LIMIT ?`
+	q += fmt.Sprintf(` ORDER BY t.id DESC LIMIT $%d::bigint`, next)
 	args = append(args, limit)
 	rows, err := db.Query(q, args...)
 	if err != nil {
@@ -133,7 +138,7 @@ func (r *MLTrainingRunRepo) Latest(modelName string) (*MLTrainingRun, error) {
 	q := `SELECT ` + mlTrainingRunCols + ` FROM xt_ml_training_runs`
 	var args []any
 	if modelName != "" {
-		q += ` WHERE model_name=?`
+		q += ` WHERE model_name=$1`
 		args = append(args, modelName)
 	}
 	q += ` ORDER BY id DESC LIMIT 1`

@@ -1,7 +1,6 @@
 package store
 
 import (
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -9,24 +8,19 @@ import (
 // TestSignalUserOwnershipMigration 冒烟验证 0057 迁移：xt_signals /
 // xt_signal_executions 增加 user_id 列与索引，历史行默认 0，幂等重跑。
 func TestSignalUserOwnershipMigration(t *testing.T) {
-	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "gateway.db"))
-	t.Setenv("SECRET_KEY", "test-secret-key-signal-ownership")
-	if err := InitDB(); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
-	defer CloseDB()
+	SetupTestDB(t)
 	if err := RunSQLMigrations(); err != nil {
 		t.Fatalf("run sql migrations: %v", err)
 	}
 	for _, tbl := range []string{"xt_signals", "xt_signal_executions"} {
 		var n int
-		if err := db.QueryRow(`SELECT COUNT(1) FROM pragma_table_info(?) WHERE name='user_id'`, tbl).Scan(&n); err != nil || n != 1 {
+		if err := db.QueryRow(`SELECT COUNT(1) FROM information_schema.columns WHERE table_name=$1 AND column_name='user_id'`, tbl).Scan(&n); err != nil || n != 1 {
 			t.Fatalf("table %s missing user_id column: n=%d err=%v", tbl, n, err)
 		}
 	}
 	for _, idx := range []string{"idx_signals_user", "idx_sigexec_user"} {
 		var name string
-		if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='index' AND name=?`, idx).Scan(&name); err != nil {
+		if err := db.QueryRow(`SELECT indexname FROM pg_indexes WHERE indexname=$1`, idx).Scan(&name); err != nil {
 			t.Fatalf("index %s missing: %v", idx, err)
 		}
 	}
@@ -45,12 +39,7 @@ func TestSignalUserOwnershipMigration(t *testing.T) {
 
 // TestSignalRepoUserIsolation 验证 user_id 列的写入回填与按用户读取隔离。
 func TestSignalRepoUserIsolation(t *testing.T) {
-	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "gateway.db"))
-	t.Setenv("SECRET_KEY", "test-secret-key-signal-repo-isolation")
-	if err := InitDB(); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
-	defer CloseDB()
+	SetupTestDB(t)
 
 	now := time.Now().UnixMilli()
 	sigRepo := NewSignalRepo()

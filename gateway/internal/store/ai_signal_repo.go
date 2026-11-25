@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -35,16 +36,16 @@ func EnsureAISignalsSchema() error {
 	}
 	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS xt_ai_signals (
 		id TEXT PRIMARY KEY,
-		user_id INTEGER NOT NULL DEFAULT 0,
+		user_id BIGINT NOT NULL DEFAULT 0,
 		symbol TEXT NOT NULL,
 		signal TEXT NOT NULL DEFAULT 'neutral',
-		confidence REAL NOT NULL DEFAULT 0,
+		confidence DOUBLE PRECISION NOT NULL DEFAULT 0,
 		reason TEXT NOT NULL DEFAULT '',
 		filters TEXT NOT NULL DEFAULT '[]',
 		market_condition TEXT NOT NULL DEFAULT '',
 		mode TEXT NOT NULL DEFAULT 'fast',
 		provider TEXT NOT NULL DEFAULT '',
-		created_at INTEGER NOT NULL DEFAULT 0
+		created_at BIGINT NOT NULL DEFAULT 0
 	)`)
 	if err != nil {
 		return err
@@ -124,7 +125,7 @@ func (r *AISignalRepo) Insert(rec *AISignalRecord) error {
 		rec.CreatedAt = time.Now().Unix()
 	}
 	filtersJSON, _ := json.Marshal(rec.Filters)
-	_, err := db.Exec(`INSERT INTO xt_ai_signals (`+aiSignalColumns+`) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+	_, err := db.Exec(`INSERT INTO xt_ai_signals (`+aiSignalColumns+`) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
 		rec.ID, rec.UserID, rec.Symbol, rec.Signal, rec.Confidence, rec.Reason,
 		string(filtersJSON), rec.MarketCondition, rec.Mode, rec.Provider, rec.CreatedAt)
 	return err
@@ -142,17 +143,20 @@ func (r *AISignalRepo) ListByUser(userID int64, symbol string, since int64, limi
 	if limit <= 0 {
 		limit = 200
 	}
-	query := `SELECT ` + aiSignalColumns + ` FROM xt_ai_signals WHERE user_id=?`
+	query := `SELECT ` + aiSignalColumns + ` FROM xt_ai_signals WHERE user_id=$1`
 	args := []any{userID}
+	next := 2
 	if symbol != "" {
-		query += ` AND symbol=?`
+		query += fmt.Sprintf(` AND symbol=$%d`, next)
 		args = append(args, symbol)
+		next++
 	}
 	if since > 0 {
-		query += ` AND created_at>=?`
+		query += fmt.Sprintf(` AND created_at>=$%d`, next)
 		args = append(args, since)
+		next++
 	}
-	query += ` ORDER BY created_at DESC LIMIT ?`
+	query += fmt.Sprintf(` ORDER BY created_at DESC LIMIT $%d`, next)
 	args = append(args, limit)
 
 	rows, err := db.Query(query, args...)
@@ -180,7 +184,7 @@ func (r *AISignalRepo) LatestByUserSymbol(userID int64, symbol string) (*AISigna
 		return nil, sql.ErrConnDone
 	}
 	row := db.QueryRow(`SELECT `+aiSignalColumns+` FROM xt_ai_signals
-		WHERE user_id=? AND symbol=? ORDER BY created_at DESC LIMIT 1`, userID, symbol)
+		WHERE user_id=$1 AND symbol=$2 ORDER BY created_at DESC LIMIT 1`, userID, symbol)
 	return scanAISignal(row)
 }
 
@@ -192,10 +196,10 @@ func (r *AISignalRepo) CountByUserSince(userID int64, symbol string, since int64
 	if db == nil {
 		return 0, sql.ErrConnDone
 	}
-	query := `SELECT COUNT(*) FROM xt_ai_signals WHERE user_id=? AND created_at>=?`
+	query := `SELECT COUNT(*) FROM xt_ai_signals WHERE user_id=$1 AND created_at>=$2`
 	args := []any{userID, since}
 	if symbol != "" {
-		query += ` AND symbol=?`
+		query += ` AND symbol=$3`
 		args = append(args, symbol)
 	}
 	var n int
@@ -212,10 +216,10 @@ func EnsureAIRobotConfigSchema() error {
 		return nil
 	}
 	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS xt_ai_robot_configs (
-		user_id INTEGER PRIMARY KEY,
+		user_id BIGINT PRIMARY KEY,
 		config_json TEXT NOT NULL DEFAULT '{}',
-		created_at INTEGER NOT NULL DEFAULT 0,
-		updated_at INTEGER NOT NULL DEFAULT 0
+		created_at BIGINT NOT NULL DEFAULT 0,
+		updated_at BIGINT NOT NULL DEFAULT 0
 	)`)
 	return err
 }
@@ -257,7 +261,7 @@ func (r *AIRobotConfigRepo) Get(userID int64) (map[string]any, error) {
 		return nil, sql.ErrConnDone
 	}
 	var raw string
-	err := db.QueryRow(`SELECT config_json FROM xt_ai_robot_configs WHERE user_id=?`, userID).Scan(&raw)
+	err := db.QueryRow(`SELECT config_json FROM xt_ai_robot_configs WHERE user_id=$1`, userID).Scan(&raw)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -285,7 +289,7 @@ func (r *AIRobotConfigRepo) Save(userID int64, cfg map[string]any) error {
 	}
 	now := time.Now().Unix()
 	_, err = db.Exec(`INSERT INTO xt_ai_robot_configs (user_id, config_json, created_at, updated_at)
-		VALUES (?,?,?,?)
+		VALUES ($1,$2,$3,$4)
 		ON CONFLICT(user_id) DO UPDATE SET config_json=excluded.config_json, updated_at=excluded.updated_at`,
 		userID, string(raw), now, now)
 	return err

@@ -53,7 +53,7 @@ func seedInsightsData(t *testing.T, repo *AgentChatRepo) (now, since int64) {
 	// 记忆/技能：窗口内外各一条（user 5），他人一条记忆
 	longContent := strings.Repeat("记", 100)
 	stmt := `INSERT INTO xt_agent_memories (id, user_id, scope, kind, content, source_conversation_id, importance, origin, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?)`
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`
 	for _, row := range []struct{ id, content string; uid, ts int64 }{
 		{"mem_i1", longContent, 5, recent},
 		{"mem_i2", "旧记忆", 5, old},
@@ -64,7 +64,7 @@ func seedInsightsData(t *testing.T, repo *AgentChatRepo) (now, since int64) {
 		}
 	}
 	skillStmt := `INSERT INTO xt_agent_skills (id, user_id, name, description, body, usage_count, source, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?)`
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`
 	for _, row := range []struct {
 		id, name string
 		uid, ts  int64

@@ -1,23 +1,17 @@
 package store
 
 import (
-	"path/filepath"
 	"testing"
 )
 
 // TestAnalysisJobMigrationAndRepo 冒烟验证 0025 迁移：表创建、Create/Finish/GetByID/List 与幂等重跑。
 func TestAnalysisJobMigrationAndRepo(t *testing.T) {
-	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "gateway.db"))
-	t.Setenv("SECRET_KEY", "test-secret-key-for-analysis-jobs")
-	if err := InitDB(); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
-	defer CloseDB()
+	SetupTestDB(t)
 	if err := RunSQLMigrations(); err != nil {
 		t.Fatalf("run sql migrations: %v", err)
 	}
 	var name string
-	if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='xt_analysis_jobs'`).Scan(&name); err != nil {
+	if err := db.QueryRow(`SELECT table_name FROM information_schema.tables WHERE table_name='xt_analysis_jobs'`).Scan(&name); err != nil {
 		t.Fatalf("table xt_analysis_jobs missing: %v", err)
 	}
 

@@ -59,7 +59,7 @@ func (r *Repo) Upsert(s *Skill) error {
 	s.CreatedAt, s.UpdatedAt = now, now
 	_, err = db.Exec(`INSERT INTO xt_agent_skills
 		(id, user_id, name, description, body, usage_count, source, profile_id, created_at, updated_at)
-		VALUES (?,?,?,?,?,0,?,?,?,?)
+		VALUES ($1,$2,$3,$4,$5,0,$6,$7,$8,$9)
 		ON CONFLICT(user_id, name) DO UPDATE SET
 		description = excluded.description, body = excluded.body,
 		source = excluded.source, updated_at = excluded.updated_at`,
@@ -93,7 +93,7 @@ func (r *Repo) ListByUser(userID int64, limit int) ([]*Skill, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 100
 	}
-	rows, err := db.Query(`SELECT `+skillCols+` FROM xt_agent_skills WHERE user_id = ? AND profile_id IN (0, ?) ORDER BY usage_count DESC, updated_at DESC LIMIT ?`, userID, r.activeProfile(userID), limit)
+	rows, err := db.Query(`SELECT `+skillCols+` FROM xt_agent_skills WHERE user_id = $1 AND profile_id IN (0, $2) ORDER BY usage_count DESC, updated_at DESC LIMIT $3`, userID, r.activeProfile(userID), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +115,7 @@ func (r *Repo) GetByName(userID int64, name string) (*Skill, error) {
 	if err != nil {
 		return nil, err
 	}
-	return scanSkill(db.QueryRow(`SELECT `+skillCols+` FROM xt_agent_skills WHERE user_id = ? AND name = ? AND profile_id IN (0, ?)`, userID, name, r.activeProfile(userID)))
+	return scanSkill(db.QueryRow(`SELECT `+skillCols+` FROM xt_agent_skills WHERE user_id = $1 AND name = $2 AND profile_id IN (0, $3)`, userID, name, r.activeProfile(userID)))
 }
 
 // TouchUsage 调用计数 +1。
@@ -124,7 +124,7 @@ func (r *Repo) TouchUsage(id string, userID int64) error {
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec(`UPDATE xt_agent_skills SET usage_count = usage_count + 1, updated_at = ? WHERE id = ? AND user_id = ?`,
+	_, err = db.Exec(`UPDATE xt_agent_skills SET usage_count = usage_count + 1, updated_at = $1 WHERE id = $2 AND user_id = $3`,
 		time.Now().Unix(), id, userID)
 	return err
 }
@@ -135,6 +135,6 @@ func (r *Repo) Delete(id string, userID int64) error {
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec(`DELETE FROM xt_agent_skills WHERE id = ? AND user_id = ?`, id, userID)
+	_, err = db.Exec(`DELETE FROM xt_agent_skills WHERE id = $1 AND user_id = $2`, id, userID)
 	return err
 }

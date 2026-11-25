@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -16,15 +15,10 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
-// setupFSTestDB 初始化临时 SQLite（含 0051 迁移）。
+// setupFSTestDB 初始化测试 PostgreSQL（含迁移基线）。
 func setupFSTestDB(t *testing.T) {
 	t.Helper()
-	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "gateway.db"))
-	t.Setenv("SECRET_KEY", "test-secret-key-agent-fs")
-	if err := store.InitDB(); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
-	t.Cleanup(store.CloseDB)
+	store.SetupTestDB(t)
 }
 
 // fakeFeishuServer 模拟飞书开放平台：tenant_access_token 签发 + im/v1/messages 回发记录。

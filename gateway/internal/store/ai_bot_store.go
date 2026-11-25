@@ -30,7 +30,7 @@ func GetAIBotCatalogByID(id string) map[string]any {
 		SELECT id, name, description, strategy_type, market_type, risk_level,
 		       fee_model, fee_percent, monthly_fee, performance_json, config_json,
 		       is_builtin, is_active, created_at, updated_at
-		FROM ai_bot_catalog WHERE id=?`, id)
+		FROM ai_bot_catalog WHERE id=$1`, id)
 	return scanAIBotCatalogRow(row)
 }
 
@@ -46,7 +46,7 @@ func GetAIBotInstances(userID int) []map[string]any {
 			       unrealized_pnl, realized_pnl, total_return_pct, max_drawdown_pct,
 			       sharpe_ratio, win_rate, total_trades, initial_balance, error_message,
 			       origin_listing_id, created_at, updated_at, started_at, stopped_at
-			FROM ai_bot_instances WHERE user_id=? ORDER BY updated_at DESC
+			FROM ai_bot_instances WHERE user_id=$1 ORDER BY updated_at DESC
 		`, userID)
 	} else {
 		rows, err = db.Query(`
@@ -72,7 +72,7 @@ func GetAIBotInstanceByID(id string, userID int) map[string]any {
 		       unrealized_pnl, realized_pnl, total_return_pct, max_drawdown_pct,
 		       sharpe_ratio, win_rate, total_trades, initial_balance, error_message,
 		       origin_listing_id, created_at, updated_at, started_at, stopped_at
-		FROM ai_bot_instances WHERE id=? AND user_id=?`, id, userID)
+		FROM ai_bot_instances WHERE id=$1 AND user_id=$2`, id, userID)
 	return scanAIBotInstanceRow(row)
 }
 
@@ -83,7 +83,7 @@ func GetAIBotInstanceOwner(id string) (int, bool) {
 		return 0, false
 	}
 	var userID int
-	err := db.QueryRow(`SELECT user_id FROM ai_bot_instances WHERE id=?`, id).Scan(&userID)
+	err := db.QueryRow(`SELECT user_id FROM ai_bot_instances WHERE id=$1`, id).Scan(&userID)
 	if err != nil {
 		return 0, false
 	}
@@ -102,7 +102,7 @@ func FindAIBotInstanceByOrigin(userID int, listingID string) map[string]any {
 		       unrealized_pnl, realized_pnl, total_return_pct, max_drawdown_pct,
 		       sharpe_ratio, win_rate, total_trades, initial_balance, error_message,
 		       origin_listing_id, created_at, updated_at, started_at, stopped_at
-		FROM ai_bot_instances WHERE user_id=? AND origin_listing_id=?
+		FROM ai_bot_instances WHERE user_id=$1 AND origin_listing_id=$2
 		ORDER BY created_at DESC LIMIT 1`, userID, listingID)
 	return scanAIBotInstanceRow(row)
 }
@@ -120,13 +120,22 @@ func SaveAIBotInstance(item map[string]any) {
 		configJSON = s
 	}
 	_, err := db.Exec(`
-		INSERT OR REPLACE INTO ai_bot_instances
+		INSERT INTO ai_bot_instances
 		(id, user_id, catalog_id, name, strategy_type, symbol, market_type,
 		 status, execution_mode, config_json, exchange_id,
 		 unrealized_pnl, realized_pnl, total_return_pct, max_drawdown_pct,
 		 sharpe_ratio, win_rate, total_trades, initial_balance, error_message,
 		 origin_listing_id, created_at, updated_at, started_at, stopped_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+		ON CONFLICT(id) DO UPDATE SET
+			user_id=excluded.user_id, catalog_id=excluded.catalog_id, name=excluded.name,
+			strategy_type=excluded.strategy_type, symbol=excluded.symbol, market_type=excluded.market_type,
+			status=excluded.status, execution_mode=excluded.execution_mode, config_json=excluded.config_json,
+			exchange_id=excluded.exchange_id, unrealized_pnl=excluded.unrealized_pnl, realized_pnl=excluded.realized_pnl,
+			total_return_pct=excluded.total_return_pct, max_drawdown_pct=excluded.max_drawdown_pct, sharpe_ratio=excluded.sharpe_ratio,
+			win_rate=excluded.win_rate, total_trades=excluded.total_trades, initial_balance=excluded.initial_balance,
+			error_message=excluded.error_message, origin_listing_id=excluded.origin_listing_id, created_at=excluded.created_at,
+			updated_at=excluded.updated_at, started_at=excluded.started_at, stopped_at=excluded.stopped_at
 	`, id, getInt(item, "user_id", 0), getString(item, "catalog_id", ""),
 		getString(item, "name", ""), getString(item, "strategy_type", ""),
 		getString(item, "symbol", ""), getString(item, "market_type", "spot"),
@@ -144,8 +153,8 @@ func SaveAIBotInstance(item map[string]any) {
 }
 
 func DeleteAIBotInstance(id string, userID int) {
-	db.Exec("DELETE FROM ai_bot_instances WHERE id=? AND user_id=?", id, userID)
-	db.Exec("DELETE FROM ai_bot_snapshots WHERE bot_instance_id=?", id)
+	db.Exec("DELETE FROM ai_bot_instances WHERE id=$1 AND user_id=$2", id, userID)
+	db.Exec("DELETE FROM ai_bot_snapshots WHERE bot_instance_id=$1", id)
 }
 
 // ── Snapshots ──
@@ -154,7 +163,7 @@ func SaveAIBotSnapshot(botInstanceID string, equity, unrealized, realized, total
 	_, err := db.Exec(`
 		INSERT INTO ai_bot_snapshots
 		(bot_instance_id, total_equity, unrealized_pnl, realized_pnl, total_return_pct, timestamp)
-		VALUES (?, ?, ?, ?, ?, ?)
+		VALUES ($1, $2, $3, $4, $5, $6)
 	`, botInstanceID, equity, unrealized, realized, totalReturn, time.Now().Unix())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[AIBotStore] snapshot error: %v\n", err)
@@ -168,7 +177,7 @@ func GetAIBotSnapshots(botInstanceID string, limit int) []map[string]any {
 	rows, err := db.Query(`
 		SELECT id, bot_instance_id, total_equity, unrealized_pnl, realized_pnl,
 		       total_return_pct, timestamp
-		FROM ai_bot_snapshots WHERE bot_instance_id=? ORDER BY timestamp DESC LIMIT ?
+		FROM ai_bot_snapshots WHERE bot_instance_id=$1 ORDER BY timestamp DESC LIMIT $2
 	`, botInstanceID, limit)
 	if err != nil {
 		return nil
@@ -194,26 +203,26 @@ func GetAIBotSnapshots(botInstanceID string, limit int) []map[string]any {
 }
 
 func DeleteAIBotSnapshots(botInstanceID string) {
-	db.Exec("DELETE FROM ai_bot_snapshots WHERE bot_instance_id=?", botInstanceID)
+	db.Exec("DELETE FROM ai_bot_snapshots WHERE bot_instance_id=$1", botInstanceID)
 }
 
 // ── Trades ──
 
 func SaveAIBotTrade(item map[string]any) int {
-	res, err := db.Exec(`
+	var id int64
+	err := db.QueryRow(`
 		INSERT INTO ai_bot_trades
 		(bot_instance_id, symbol, side, entry_price, exit_price, quantity, pnl, pnl_pct, tp_price, sl_price, close_reason, opened_at, closed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id
 	`, getString(item, "bot_instance_id", ""), getString(item, "symbol", ""), getString(item, "side", ""),
 		getFloat(item, "entry_price", 0), getFloat(item, "exit_price", 0), getFloat(item, "quantity", 0),
 		getFloat(item, "pnl", 0), getFloat(item, "pnl_pct", 0), getFloat(item, "tp_price", 0),
 		getFloat(item, "sl_price", 0), getString(item, "close_reason", ""),
-		getInt64(item, "opened_at", 0), getInt64(item, "closed_at", 0))
+		getInt64(item, "opened_at", 0), getInt64(item, "closed_at", 0)).Scan(&id)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[AIBotStore] trade save error: %v\n", err)
 		return 0
 	}
-	id, _ := res.LastInsertId()
 	return int(id)
 }
 
@@ -224,7 +233,7 @@ func GetAIBotTrades(botInstanceID string, limit int) []map[string]any {
 	rows, err := db.Query(`
 		SELECT id, bot_instance_id, symbol, side, entry_price, exit_price, quantity,
 		       pnl, pnl_pct, tp_price, sl_price, close_reason, opened_at, closed_at
-		FROM ai_bot_trades WHERE bot_instance_id=? ORDER BY closed_at DESC, opened_at DESC LIMIT ?
+		FROM ai_bot_trades WHERE bot_instance_id=$1 ORDER BY closed_at DESC, opened_at DESC LIMIT $2
 	`, botInstanceID, limit)
 	if err != nil {
 		return nil
@@ -253,9 +262,9 @@ func GetAIBotTrades(botInstanceID string, limit int) []map[string]any {
 func UpdateAIBotInstanceMetrics(id string, unrealized, realized, totalReturn, maxDrawdown, sharpe, winRate float64, totalTrades int) {
 	db.Exec(`
 		UPDATE ai_bot_instances
-		SET unrealized_pnl=?, realized_pnl=?, total_return_pct=?, max_drawdown_pct=?,
-		    sharpe_ratio=?, win_rate=?, total_trades=?, updated_at=?
-		WHERE id=?
+		SET unrealized_pnl=$1, realized_pnl=$2, total_return_pct=$3, max_drawdown_pct=$4,
+		    sharpe_ratio=$5, win_rate=$6, total_trades=$7, updated_at=$8
+		WHERE id=$9
 	`, unrealized, realized, totalReturn, maxDrawdown, sharpe, winRate, totalTrades, time.Now().Unix(), id)
 }
 
@@ -265,7 +274,7 @@ func GetAIBotSubscriptions(userID int) []map[string]any {
 	rows, err := db.Query(`
 		SELECT id, user_id, bot_instance_id, fee_type, fee_percent, monthly_fee,
 		       next_billing_at, status, created_at
-		FROM ai_bot_subscriptions WHERE user_id=? ORDER BY created_at DESC
+		FROM ai_bot_subscriptions WHERE user_id=$1 ORDER BY created_at DESC
 	`, userID)
 	if err != nil {
 		return nil
@@ -295,7 +304,7 @@ func GetAIBotSubscriptionByInstance(userID int, botInstanceID string) map[string
 	row := db.QueryRow(`
 		SELECT id, user_id, bot_instance_id, fee_type, fee_percent, monthly_fee,
 		       next_billing_at, status, created_at
-		FROM ai_bot_subscriptions WHERE user_id=? AND bot_instance_id=? LIMIT 1
+		FROM ai_bot_subscriptions WHERE user_id=$1 AND bot_instance_id=$2 LIMIT 1
 	`, userID, botInstanceID)
 	var id int
 	var uid int
@@ -314,24 +323,24 @@ func GetAIBotSubscriptionByInstance(userID int, botInstanceID string) map[string
 }
 
 func CreateAIBotSubscription(userID int, body map[string]any) int {
-	res, err := db.Exec(`
+	var id int64
+	err := db.QueryRow(`
 		INSERT INTO ai_bot_subscriptions
 		(user_id, bot_instance_id, fee_type, fee_percent, monthly_fee, next_billing_at, status, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id
 	`, userID, getString(body, "bot_instance_id", ""),
 		getString(body, "fee_type", "profit_share"),
 		getFloat(body, "fee_percent", 0), getFloat(body, "monthly_fee", 0),
-		time.Now().AddDate(0, 1, 0).Unix(), "active", time.Now().Unix())
+		time.Now().AddDate(0, 1, 0).Unix(), "active", time.Now().Unix()).Scan(&id)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[AIBotStore] subscription error: %v\n", err)
 		return 0
 	}
-	id, _ := res.LastInsertId()
 	return int(id)
 }
 
 func CancelAIBotSubscription(id int, userID int) {
-	db.Exec("UPDATE ai_bot_subscriptions SET status='cancelled' WHERE id=? AND user_id=?", id, userID)
+	db.Exec("UPDATE ai_bot_subscriptions SET status='cancelled' WHERE id=$1 AND user_id=$2", id, userID)
 }
 
 // ── Seed data ──
@@ -344,7 +353,7 @@ func clearFakeSeedPerformance() {
 	if db == nil {
 		return
 	}
-	res, err := db.Exec(`UPDATE ai_bot_catalog SET performance_json = NULL, updated_at = ?
+	res, err := db.Exec(`UPDATE ai_bot_catalog SET performance_json = NULL, updated_at = $1
 		WHERE is_builtin = 1 AND performance_json IS NOT NULL AND performance_json != '' AND performance_json != 'null'`,
 		time.Now().Unix())
 	if err != nil {
@@ -452,7 +461,7 @@ func SeedAIBotCatalog() {
 			(id, name, description, strategy_type, market_type, risk_level,
 			 fee_model, fee_percent, monthly_fee, performance_json, config_json,
 			 is_builtin, is_active, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		`, bot["id"], bot["name"], bot["description"], bot["strategy_type"], bot["market_type"], bot["risk_level"],
 			bot["fee_model"], bot["fee_percent"], bot["monthly_fee"], bot["performance_json"], bot["config_json"],
 			1, 1, now, now)
@@ -493,7 +502,7 @@ func SeedAIBotSignalProviders() {
 			(id, name, description, strategy_type, market_type, risk_level,
 			 fee_model, fee_percent, monthly_fee, performance_json, config_json,
 			 is_builtin, is_active, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		`, p["id"], p["name"], p["description"], "signal_provider", "spot", p["risk_level"],
 			feeModel, feePercent, p["monthly_fee"], p["performance_json"], p["config_json"],
 			1, 1, now, now)

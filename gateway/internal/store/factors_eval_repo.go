@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -36,17 +37,16 @@ func (r *FactorEvaluationRepo) Create(rec *FactorEvaluationRecord) error {
 	if rec.CreatedAt == 0 {
 		rec.CreatedAt = time.Now().UnixMilli()
 	}
-	res, err := db.Exec(
+	err := db.QueryRow(
 		`INSERT INTO factors_evaluations
 			(user_id, kind, factor_name, factor_version, category, symbol, tf, forward_bars, params_json, samples, result_json, created_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
 		rec.UserID, rec.Kind, rec.FactorName, rec.FactorVersion, rec.Category, rec.Symbol, rec.TF,
 		rec.ForwardBars, rec.ParamsJSON, rec.Samples, rec.ResultJSON, rec.CreatedAt,
-	)
+	).Scan(&rec.ID)
 	if err != nil {
 		return err
 	}
-	rec.ID, _ = res.LastInsertId()
 	return nil
 }
 
@@ -72,13 +72,15 @@ func (r *FactorEvaluationRepo) ListByUser(userID int64, factorName string, limit
 	if limit <= 0 {
 		limit = 100
 	}
-	query := `SELECT ` + factorEvalColumns + ` FROM factors_evaluations WHERE user_id = ?`
+	query := `SELECT ` + factorEvalColumns + ` FROM factors_evaluations WHERE user_id = $1`
 	args := []any{userID}
+	next := 2
 	if factorName != "" {
-		query += ` AND factor_name = ?`
+		query += fmt.Sprintf(` AND factor_name = $%d`, next)
 		args = append(args, factorName)
+		next++
 	}
-	query += ` ORDER BY created_at DESC LIMIT ?`
+	query += fmt.Sprintf(` ORDER BY created_at DESC LIMIT $%d::bigint`, next)
 	args = append(args, limit)
 	rows, err := db.Query(query, args...)
 	if err != nil {
@@ -98,7 +100,7 @@ func (r *FactorEvaluationRepo) ListByUser(userID int64, factorName string, limit
 
 // GetByID 取单条（属主校验由 handler 做）。
 func (r *FactorEvaluationRepo) GetByID(id int64) (*FactorEvaluationRecord, error) {
-	row := db.QueryRow(`SELECT `+factorEvalColumns+` FROM factors_evaluations WHERE id = ?`, id)
+	row := db.QueryRow(`SELECT `+factorEvalColumns+` FROM factors_evaluations WHERE id = $1`, id)
 	return r.scan(row)
 }
 

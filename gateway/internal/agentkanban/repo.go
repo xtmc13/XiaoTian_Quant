@@ -73,7 +73,7 @@ func (r *Repo) Create(c *Card) error {
 	c.CreatedAt, c.UpdatedAt = now, now
 	_, err = db.Exec(`INSERT INTO xt_agent_kanban_cards
 		(id, user_id, title, description, "column", assignee, created_by, comment, profile_id, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
 		c.ID, c.UserID, c.Title, c.Description, c.Column, c.Assignee, c.CreatedBy, c.Comment, c.ProfileID, c.CreatedAt, c.UpdatedAt)
 	return err
 }
@@ -96,10 +96,10 @@ func (r *Repo) ListByUser(userID int64, column string) ([]*Card, error) {
 	if err != nil {
 		return nil, err
 	}
-	q := `SELECT ` + cardCols + ` FROM xt_agent_kanban_cards WHERE user_id = ? AND profile_id IN (0, ?)`
+	q := `SELECT ` + cardCols + ` FROM xt_agent_kanban_cards WHERE user_id = $1 AND profile_id IN (0, $2)`
 	args := []any{userID, agentprofiles.NewRepo().ActiveProfileID(userID)}
 	if column != "" {
-		q += ` AND "column" = ?`
+		q += ` AND "column" = $3`
 		args = append(args, column)
 	}
 	q += ` ORDER BY CASE "column" WHEN 'todo' THEN 0 WHEN 'doing' THEN 1 ELSE 2 END ASC, updated_at DESC`
@@ -125,7 +125,7 @@ func (r *Repo) GetByID(id string, userID int64) (*Card, error) {
 	if err != nil {
 		return nil, err
 	}
-	c, err := scanCard(db.QueryRow(`SELECT `+cardCols+` FROM xt_agent_kanban_cards WHERE id = ? AND user_id = ?`, id, userID))
+	c, err := scanCard(db.QueryRow(`SELECT `+cardCols+` FROM xt_agent_kanban_cards WHERE id = $1 AND user_id = $2`, id, userID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -146,8 +146,8 @@ func (r *Repo) Update(c *Card) error {
 	}
 	c.UpdatedAt = time.Now().Unix()
 	res, err := db.Exec(`UPDATE xt_agent_kanban_cards
-		SET title = ?, description = ?, "column" = ?, assignee = ?, comment = ?, updated_at = ?
-		WHERE id = ? AND user_id = ?`,
+		SET title = $1, description = $2, "column" = $3, assignee = $4, comment = $5, updated_at = $6
+		WHERE id = $7 AND user_id = $8`,
 		c.Title, c.Description, c.Column, c.Assignee, c.Comment, c.UpdatedAt, c.ID, c.UserID)
 	if err != nil {
 		return err
@@ -165,7 +165,7 @@ func (r *Repo) Delete(id string, userID int64) error {
 	if err != nil {
 		return err
 	}
-	res, err := db.Exec(`DELETE FROM xt_agent_kanban_cards WHERE id = ? AND user_id = ?`, id, userID)
+	res, err := db.Exec(`DELETE FROM xt_agent_kanban_cards WHERE id = $1 AND user_id = $2`, id, userID)
 	if err != nil {
 		return err
 	}

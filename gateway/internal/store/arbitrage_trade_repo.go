@@ -52,7 +52,7 @@ func (r *ArbitrageTradeRepo) Create(t *ArbitrageTradeRecord) error {
 	}
 	_, err := db.Exec(
 		`INSERT INTO arbitrage_trades (id, user_id, symbol, buy_exchange, sell_exchange, buy_price, sell_price, quantity, buy_order_id, sell_order_id, buy_filled_qty, buy_avg_price, buy_fee, sell_filled_qty, sell_avg_price, sell_fee, gross_profit, net_profit, fees, status, opened_at, closed_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
 		t.ID, t.UserID, t.Symbol, t.BuyExchange, t.SellExchange, t.BuyPrice, t.SellPrice, t.Quantity,
 		t.BuyOrderID, t.SellOrderID, t.BuyFilledQty, t.BuyAvgPrice, t.BuyFee, t.SellFilledQty, t.SellAvgPrice, t.SellFee,
 		t.GrossProfit, t.NetProfit, t.Fees, t.Status, t.OpenedAt, t.ClosedAt,
@@ -68,7 +68,7 @@ func (r *ArbitrageTradeRepo) GetByID(id string) (*ArbitrageTradeRecord, error) {
 	if db == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
-	row := db.QueryRow(`SELECT `+arbitrageTradeColumns+` FROM arbitrage_trades WHERE id=?`, id)
+	row := db.QueryRow(`SELECT `+arbitrageTradeColumns+` FROM arbitrage_trades WHERE id=$1`, id)
 	var t ArbitrageTradeRecord
 	err := row.Scan(&t.ID, &t.UserID, &t.Symbol, &t.BuyExchange, &t.SellExchange, &t.BuyPrice, &t.SellPrice, &t.Quantity, &t.BuyOrderID, &t.SellOrderID, &t.BuyFilledQty, &t.BuyAvgPrice, &t.BuyFee, &t.SellFilledQty, &t.SellAvgPrice, &t.SellFee, &t.GrossProfit, &t.NetProfit, &t.Fees, &t.Status, &t.OpenedAt, &t.ClosedAt)
 	if err != nil {
@@ -84,7 +84,7 @@ func (r *ArbitrageTradeRepo) Update(t *ArbitrageTradeRecord) error {
 		return fmt.Errorf("database not initialized")
 	}
 	_, err := db.Exec(
-		`UPDATE arbitrage_trades SET symbol=?, buy_exchange=?, sell_exchange=?, buy_price=?, sell_price=?, quantity=?, buy_order_id=?, sell_order_id=?, buy_filled_qty=?, buy_avg_price=?, buy_fee=?, sell_filled_qty=?, sell_avg_price=?, sell_fee=?, gross_profit=?, net_profit=?, fees=?, status=?, opened_at=?, closed_at=? WHERE id=?`,
+		`UPDATE arbitrage_trades SET symbol=$1, buy_exchange=$2, sell_exchange=$3, buy_price=$4, sell_price=$5, quantity=$6, buy_order_id=$7, sell_order_id=$8, buy_filled_qty=$9, buy_avg_price=$10, buy_fee=$11, sell_filled_qty=$12, sell_avg_price=$13, sell_fee=$14, gross_profit=$15, net_profit=$16, fees=$17, status=$18, opened_at=$19, closed_at=$20 WHERE id=$21`,
 		t.Symbol, t.BuyExchange, t.SellExchange, t.BuyPrice, t.SellPrice, t.Quantity,
 		t.BuyOrderID, t.SellOrderID, t.BuyFilledQty, t.BuyAvgPrice, t.BuyFee, t.SellFilledQty, t.SellAvgPrice, t.SellFee,
 		t.GrossProfit, t.NetProfit, t.Fees, t.Status, t.OpenedAt, t.ClosedAt, t.ID,
@@ -98,7 +98,7 @@ func (r *ArbitrageTradeRepo) Delete(id string) error {
 	if db == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	_, err := db.Exec("DELETE FROM arbitrage_trades WHERE id=?", id)
+	_, err := db.Exec("DELETE FROM arbitrage_trades WHERE id=$1", id)
 	return err
 }
 
@@ -126,7 +126,7 @@ func (r *ArbitrageTradeRepo) ListHistory(limit int) ([]*ArbitrageTradeRecord, er
 	query := `SELECT ` + arbitrageTradeColumns + ` FROM arbitrage_trades WHERE status IN ('completed','failed','dry_run') ORDER BY opened_at DESC`
 	var args []any
 	if limit > 0 {
-		query += " LIMIT ?"
+		query += " LIMIT $1"
 		args = append(args, limit)
 	}
 	rows, err := db.Query(query, args...)

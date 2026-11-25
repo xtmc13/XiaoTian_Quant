@@ -38,7 +38,7 @@ func (r *TradeRepo) Create(t *TradeRecord) error {
 	}
 	_, err := db.Exec(
 		`INSERT INTO trades (id, user_id, order_id, symbol, side, price, quantity, fee, fee_currency, exchange, exec_phase, created_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
 		t.ID, t.UserID, t.OrderID, t.Symbol, t.Side, t.Price, t.Quantity, t.Fee, t.FeeCurrency, t.Exchange, t.ExecPhase, t.CreatedAt,
 	)
 	return err
@@ -47,7 +47,7 @@ func (r *TradeRepo) Create(t *TradeRecord) error {
 // Exists 判断指定 id 的成交是否已存在（成交恢复按交易所 trade id 去重用）。
 func (r *TradeRepo) Exists(id string) bool {
 	var n int
-	_ = db.QueryRow(`SELECT COUNT(1) FROM trades WHERE id=?`, id).Scan(&n)
+	_ = db.QueryRow(`SELECT COUNT(1) FROM trades WHERE id=$1`, id).Scan(&n)
 	return n > 0
 }
 
@@ -55,12 +55,12 @@ func (r *TradeRepo) Exists(id string) bool {
 // 过滤用：窗口内有成交的大幅波动视为真实波动保留）。
 func (r *TradeRepo) CountBetween(startMs, endMs int64) int {
 	var n int
-	_ = db.QueryRow(`SELECT COUNT(1) FROM trades WHERE created_at > ? AND created_at <= ?`, startMs, endMs).Scan(&n)
+	_ = db.QueryRow(`SELECT COUNT(1) FROM trades WHERE created_at > $1 AND created_at <= $2`, startMs, endMs).Scan(&n)
 	return n
 }
 
 func (r *TradeRepo) GetByID(id string) (*TradeRecord, error) {
-	row := db.QueryRow(`SELECT id, user_id, order_id, symbol, side, price, quantity, fee, fee_currency, exchange, COALESCE(exec_phase,''), created_at FROM trades WHERE id=?`, id)
+	row := db.QueryRow(`SELECT id, user_id, order_id, symbol, side, price, quantity, fee, fee_currency, exchange, COALESCE(exec_phase,''), created_at FROM trades WHERE id=$1`, id)
 	var t TradeRecord
 	err := row.Scan(&t.ID, &t.UserID, &t.OrderID, &t.Symbol, &t.Side, &t.Price, &t.Quantity, &t.Fee, &t.FeeCurrency, &t.Exchange, &t.ExecPhase, &t.CreatedAt)
 	if err != nil {
@@ -74,13 +74,13 @@ func (r *TradeRepo) List(filter map[string]any, limit int) ([]*TradeRecord, erro
 	allowedCols := map[string]bool{
 		"id": true, "user_id": true, "order_id": true, "symbol": true, "side": true, "exchange": true, "created_at": true,
 	}
-	args, where := buildFilter(filter, allowedCols)
+	args, where, next := buildFilter(filter, allowedCols, 1)
 	if where != "" {
 		query += " WHERE " + where
 	}
 	query += " ORDER BY created_at DESC"
 	if limit > 0 {
-		query += " LIMIT ?"
+		query += fmt.Sprintf(" LIMIT $%d", next)
 		args = append(args, limit)
 	}
 	rows, err := db.Query(query, args...)
@@ -102,14 +102,14 @@ func (r *TradeRepo) List(filter map[string]any, limit int) ([]*TradeRecord, erro
 
 func (r *TradeRepo) Update(t *TradeRecord) error {
 	_, err := db.Exec(
-		`UPDATE trades SET fee=?, fee_currency=? WHERE id=?`,
+		`UPDATE trades SET fee=$1, fee_currency=$2 WHERE id=$3`,
 		t.Fee, t.FeeCurrency, t.ID,
 	)
 	return err
 }
 
 func (r *TradeRepo) Delete(id string) error {
-	_, err := db.Exec("DELETE FROM trades WHERE id=?", id)
+	_, err := db.Exec("DELETE FROM trades WHERE id=$1", id)
 	return err
 }
 
@@ -120,18 +120,21 @@ func (r *TradeRepo) ListAscBefore(exchange, symbol string, endMs int64, limit in
 	if limit <= 0 {
 		limit = 20000
 	}
-	query := `SELECT id, user_id, order_id, symbol, side, price, quantity, fee, fee_currency, exchange, COALESCE(exec_phase,''), created_at FROM trades WHERE created_at<=?`
+	query := `SELECT id, user_id, order_id, symbol, side, price, quantity, fee, fee_currency, exchange, COALESCE(exec_phase,''), created_at FROM trades WHERE created_at<=$1`
 	var args []any
 	args = append(args, endMs)
+	next := 2
 	if exchange != "" {
-		query += ` AND exchange=?`
+		query += fmt.Sprintf(" AND exchange=$%d", next)
 		args = append(args, exchange)
+		next++
 	}
 	if symbol != "" {
-		query += ` AND symbol=?`
+		query += fmt.Sprintf(" AND symbol=$%d", next)
 		args = append(args, symbol)
+		next++
 	}
-	query += ` ORDER BY created_at ASC LIMIT ?`
+	query += fmt.Sprintf(" ORDER BY created_at ASC LIMIT $%d", next)
 	args = append(args, limit)
 
 	rows, err := db.Query(query, args...)

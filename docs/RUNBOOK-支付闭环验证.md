@@ -32,7 +32,7 @@ bash scripts/verify-payments.sh
 | 项 | 值 |
 |---|---|
 | Gateway 默认端口 | `8080`（`PORT` 或 config `server.port` 覆盖） |
-| 数据库 | `./runtime/gateway.db`（`DB_PATH` 覆盖，WAL 模式，可直接 `sqlite3` 只读查询） |
+| 数据库 | PostgreSQL（连接串见 `DATABASE_URL`；用 `psql "$DATABASE_URL"` 查询） |
 | 订单表 | `billing_orders`（`status`/`fail_reason`/`confirmed_at`/`tx_hash`） |
 | 积分/会员 | `xt_users` 表（`credits`、`plan`、`vip_expires_at`） |
 | Stripe webhook 路由 | `POST /api/billing/stripe/webhook`（公开，验签替代登录） |
@@ -101,16 +101,16 @@ cd gateway && go run ./cmd/server
 4. 观测点（支付完成后 1–2 秒内）：
    - **stripe CLI**：`checkout.session.completed` 事件显示 `200`；
    - **HTTP**：gateway 对该事件返回 `{"received":true}`；
-   - **数据库**：`sqlite3 runtime/gateway.db "select id,plan_id,status,confirmed_at from billing_orders where chain='stripe' order by created_at desc limit 1"`
+   - **数据库**：`psql "$DATABASE_URL" -c "select id,plan_id,status,confirmed_at from billing_orders where chain='stripe' order by created_at desc limit 1"`
      → `status` 由 `pending` 变为 `paid`，`confirmed_at` 有值；
-     `sqlite3 runtime/gateway.db "select credits,plan,vip_expires_at from xt_users where id=<uid>"`
+     `psql "$DATABASE_URL" -c "select credits,plan,vip_expires_at from xt_users where id=<uid>"`
      → `credits` 增加套餐积分（monthly=500），`vip_expires_at` 延长；
    - **UI**：Web `/billing` 页会员状态变为已开通。
 5. 幂等验证：`stripe events list --limit 3` 找该事件 ID 后
    `stripe events resend <evt_id>`；再查 `xt_users.credits` **不重复增加**，
    订单仍 `paid`。
 - 回滚（本地验证数据清理）：
-  `sqlite3 runtime/gateway.db "update billing_orders set status='pending', confirmed_at=0 where id='<order_id>'; update xt_users set credits=credits-<n>, vip_expires_at=0 where id=<uid>;"`
+  `psql "$DATABASE_URL" -c "update billing_orders set status='pending', confirmed_at=0 where id='<order_id>'; update xt_users set credits=credits-<n>, vip_expires_at=0 where id=<uid>;"`
   （或整行删除测试订单。）
 
 ### S4. 支付失败状态机 —— 【需密钥】

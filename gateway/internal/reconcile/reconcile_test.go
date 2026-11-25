@@ -2,23 +2,16 @@ package reconcile
 
 import (
 	"fmt"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
-// setupTestDB 初始化临时 SQLite（含全部迁移）。
+// setupTestDB 初始化测试 PostgreSQL（含全部迁移）。
 func setupTestDB(t *testing.T) *store.ReconcileRepo {
 	t.Helper()
-	dir := t.TempDir()
-	t.Setenv("DB_PATH", filepath.Join(dir, "reconcile_test.db"))
-	t.Setenv("SECRET_KEY", "reconcile-test-secret")
-	if err := store.InitDB(); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
-	t.Cleanup(func() { store.CloseDB() })
+	store.SetupTestDB(t)
 	return store.NewReconcileRepo()
 }
 

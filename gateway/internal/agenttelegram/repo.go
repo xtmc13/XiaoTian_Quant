@@ -55,7 +55,7 @@ func (r *Repo) CreatePairCode(userID int64) (string, error) {
 		return "", err
 	}
 	// 作废旧码
-	if _, err := db.Exec(`UPDATE xt_agent_telegram_pair_codes SET used_at = ? WHERE user_id = ? AND used_at = 0`, time.Now().Unix(), userID); err != nil {
+	if _, err := db.Exec(`UPDATE xt_agent_telegram_pair_codes SET used_at = $1 WHERE user_id = $2 AND used_at = 0`, time.Now().Unix(), userID); err != nil {
 		return "", err
 	}
 	n, err := rand.Int(rand.Reader, big.NewInt(900000))
@@ -64,7 +64,7 @@ func (r *Repo) CreatePairCode(userID int64) (string, error) {
 	}
 	code := fmt.Sprintf("%06d", n.Int64()+100000)
 	now := time.Now().Unix()
-	_, err = db.Exec(`INSERT INTO xt_agent_telegram_pair_codes (code, user_id, created_at, expires_at, used_at) VALUES (?,?,?,?,0)`,
+	_, err = db.Exec(`INSERT INTO xt_agent_telegram_pair_codes (code, user_id, created_at, expires_at, used_at) VALUES ($1,$2,$3,$4,0)`,
 		code, userID, now, now+int64(PairCodeTTL.Seconds()))
 	return code, err
 }
@@ -77,7 +77,7 @@ func (r *Repo) ConsumePairCode(code string, chatID int64, username string) (*Lin
 	}
 	var userID int64
 	var expiresAt, usedAt int64
-	err = db.QueryRow(`SELECT user_id, expires_at, used_at FROM xt_agent_telegram_pair_codes WHERE code = ?`, code).
+	err = db.QueryRow(`SELECT user_id, expires_at, used_at FROM xt_agent_telegram_pair_codes WHERE code = $1`, code).
 		Scan(&userID, &expiresAt, &usedAt)
 	if err == sql.ErrNoRows {
 		return nil, ErrCodeInvalid
@@ -94,14 +94,15 @@ func (r *Repo) ConsumePairCode(code string, chatID int64, username string) (*Lin
 		return nil, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`UPDATE xt_agent_telegram_pair_codes SET used_at = ? WHERE code = ?`, now, code); err != nil {
+	if _, err := tx.Exec(`UPDATE xt_agent_telegram_pair_codes SET used_at = $1 WHERE code = $2`, now, code); err != nil {
 		return nil, err
 	}
 	// chat_id 若绑过别人，先解绑
-	if _, err := tx.Exec(`DELETE FROM xt_agent_telegram_links WHERE telegram_chat_id = ?`, chatID); err != nil {
+	if _, err := tx.Exec(`DELETE FROM xt_agent_telegram_links WHERE telegram_chat_id = $1`, chatID); err != nil {
 		return nil, err
 	}
-	if _, err := tx.Exec(`INSERT OR REPLACE INTO xt_agent_telegram_links (user_id, telegram_chat_id, telegram_username, created_at) VALUES (?,?,?,?)`,
+	if _, err := tx.Exec(`INSERT INTO xt_agent_telegram_links (user_id, telegram_chat_id, telegram_username, created_at) VALUES ($1,$2,$3,$4)
+		ON CONFLICT(user_id) DO UPDATE SET telegram_chat_id=excluded.telegram_chat_id, telegram_username=excluded.telegram_username, created_at=excluded.created_at`,
 		userID, chatID, username, now); err != nil {
 		return nil, err
 	}
@@ -120,7 +121,7 @@ func (r *Repo) GetByUserID(userID int64) (*Link, error) {
 		return nil, err
 	}
 	var l Link
-	err = db.QueryRow(`SELECT user_id, telegram_chat_id, telegram_username, created_at, conversation_id, model FROM xt_agent_telegram_links WHERE user_id = ?`, userID).
+	err = db.QueryRow(`SELECT user_id, telegram_chat_id, telegram_username, created_at, conversation_id, model FROM xt_agent_telegram_links WHERE user_id = $1`, userID).
 		Scan(&l.UserID, &l.TelegramChatID, &l.TelegramUsername, &l.CreatedAt, &l.ConversationID, &l.Model)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotLinked
@@ -138,7 +139,7 @@ func (r *Repo) GetByChatID(chatID int64) (*Link, error) {
 		return nil, err
 	}
 	var l Link
-	err = db.QueryRow(`SELECT user_id, telegram_chat_id, telegram_username, created_at, conversation_id, model FROM xt_agent_telegram_links WHERE telegram_chat_id = ?`, chatID).
+	err = db.QueryRow(`SELECT user_id, telegram_chat_id, telegram_username, created_at, conversation_id, model FROM xt_agent_telegram_links WHERE telegram_chat_id = $1`, chatID).
 		Scan(&l.UserID, &l.TelegramChatID, &l.TelegramUsername, &l.CreatedAt, &l.ConversationID, &l.Model)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotLinked
@@ -155,7 +156,7 @@ func (r *Repo) SetConversationID(chatID int64, conversationID string) error {
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec(`UPDATE xt_agent_telegram_links SET conversation_id = ? WHERE telegram_chat_id = ?`, conversationID, chatID)
+	_, err = db.Exec(`UPDATE xt_agent_telegram_links SET conversation_id = $1 WHERE telegram_chat_id = $2`, conversationID, chatID)
 	return err
 }
 
@@ -165,7 +166,7 @@ func (r *Repo) SetModel(chatID int64, model string) error {
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec(`UPDATE xt_agent_telegram_links SET model = ? WHERE telegram_chat_id = ?`, model, chatID)
+	_, err = db.Exec(`UPDATE xt_agent_telegram_links SET model = $1 WHERE telegram_chat_id = $2`, model, chatID)
 	return err
 }
 
@@ -181,7 +182,7 @@ func (r *Repo) CreateHandoffCode(userID int64, conversationID string) (string, e
 		return "", err
 	}
 	// 作废旧码
-	if _, err := db.Exec(`UPDATE xt_agent_handoff_codes SET used_at = ? WHERE user_id = ? AND used_at = 0`, time.Now().Unix(), userID); err != nil {
+	if _, err := db.Exec(`UPDATE xt_agent_handoff_codes SET used_at = $1 WHERE user_id = $2 AND used_at = 0`, time.Now().Unix(), userID); err != nil {
 		return "", err
 	}
 	n, err := rand.Int(rand.Reader, big.NewInt(900000))
@@ -190,7 +191,7 @@ func (r *Repo) CreateHandoffCode(userID int64, conversationID string) (string, e
 	}
 	code := fmt.Sprintf("%06d", n.Int64()+100000)
 	now := time.Now().Unix()
-	_, err = db.Exec(`INSERT INTO xt_agent_handoff_codes (code, user_id, conversation_id, created_at, expires_at, used_at) VALUES (?,?,?,?,?,0)`,
+	_, err = db.Exec(`INSERT INTO xt_agent_handoff_codes (code, user_id, conversation_id, created_at, expires_at, used_at) VALUES ($1,$2,$3,$4,$5,0)`,
 		code, userID, conversationID, now, now+int64(HandoffCodeTTL.Seconds()))
 	return code, err
 }
@@ -205,7 +206,7 @@ func (r *Repo) ConsumeHandoffCode(code string, chatID int64) (string, error) {
 	var userID int64
 	var conversationID string
 	var expiresAt, usedAt int64
-	err = db.QueryRow(`SELECT user_id, conversation_id, expires_at, used_at FROM xt_agent_handoff_codes WHERE code = ?`, code).
+	err = db.QueryRow(`SELECT user_id, conversation_id, expires_at, used_at FROM xt_agent_handoff_codes WHERE code = $1`, code).
 		Scan(&userID, &conversationID, &expiresAt, &usedAt)
 	if err == sql.ErrNoRows {
 		return "", ErrCodeInvalid
@@ -222,10 +223,10 @@ func (r *Repo) ConsumeHandoffCode(code string, chatID int64) (string, error) {
 		return "", err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`UPDATE xt_agent_handoff_codes SET used_at = ? WHERE code = ?`, now, code); err != nil {
+	if _, err := tx.Exec(`UPDATE xt_agent_handoff_codes SET used_at = $1 WHERE code = $2`, now, code); err != nil {
 		return "", err
 	}
-	res, err := tx.Exec(`UPDATE xt_agent_telegram_links SET conversation_id = ? WHERE telegram_chat_id = ? AND user_id = ?`,
+	res, err := tx.Exec(`UPDATE xt_agent_telegram_links SET conversation_id = $1 WHERE telegram_chat_id = $2 AND user_id = $3`,
 		conversationID, chatID, userID)
 	if err != nil {
 		return "", err
@@ -245,6 +246,6 @@ func (r *Repo) Unlink(userID int64) error {
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec(`DELETE FROM xt_agent_telegram_links WHERE user_id = ?`, userID)
+	_, err = db.Exec(`DELETE FROM xt_agent_telegram_links WHERE user_id = $1`, userID)
 	return err
 }

@@ -1,7 +1,6 @@
 package store
 
 import (
-	"path/filepath"
 	"testing"
 )
 
@@ -9,23 +8,18 @@ import (
 // object_kind/object_id 列与索引，存量行默认 ai_bot 且 object_id 回填为
 // bot_instance_id，幂等重跑。
 func TestMarketObjectKindMigration(t *testing.T) {
-	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "gateway.db"))
-	t.Setenv("SECRET_KEY", "test-secret-key-market-object-kind")
-	if err := InitDB(); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
-	defer CloseDB()
+	SetupTestDB(t)
 	if err := RunSQLMigrations(); err != nil {
 		t.Fatalf("run sql migrations: %v", err)
 	}
 	for _, col := range []string{"object_kind", "object_id"} {
 		var n int
-		if err := db.QueryRow(`SELECT COUNT(1) FROM pragma_table_info('xt_market_listings') WHERE name=?`, col).Scan(&n); err != nil || n != 1 {
+		if err := db.QueryRow(`SELECT COUNT(1) FROM information_schema.columns WHERE table_name='xt_market_listings' AND column_name=$1`, col).Scan(&n); err != nil || n != 1 {
 			t.Fatalf("xt_market_listings missing %s column: n=%d err=%v", col, n, err)
 		}
 	}
 	var idx string
-	if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='index' AND name='idx_market_listings_object'`).Scan(&idx); err != nil {
+	if err := db.QueryRow(`SELECT indexname FROM pg_indexes WHERE indexname='idx_market_listings_object'`).Scan(&idx); err != nil {
 		t.Fatalf("index idx_market_listings_object missing: %v", err)
 	}
 

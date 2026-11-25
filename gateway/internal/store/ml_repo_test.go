@@ -1,25 +1,19 @@
 package store
 
 import (
-	"path/filepath"
 	"testing"
 	"time"
 )
 
 // TestMLRetrainMigration 冒烟验证 0019 迁移：表创建、唯一约束、幂等重跑。
 func TestMLRetrainMigration(t *testing.T) {
-	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "gateway.db"))
-	t.Setenv("SECRET_KEY", "test-secret-key-ml-retrain")
-	if err := InitDB(); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
-	defer CloseDB()
+	SetupTestDB(t)
 	if err := RunSQLMigrations(); err != nil {
 		t.Fatalf("run sql migrations: %v", err)
 	}
 	for _, tbl := range []string{"xt_ml_retrain_jobs", "xt_ml_retrain_runs", "xt_ml_predictions", "ml_settings"} {
 		var name string
-		if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, tbl).Scan(&name); err != nil {
+		if err := db.QueryRow(`SELECT table_name FROM information_schema.tables WHERE table_name=$1`, tbl).Scan(&name); err != nil {
 			t.Fatalf("table %s missing: %v", tbl, err)
 		}
 	}
@@ -27,19 +21,19 @@ func TestMLRetrainMigration(t *testing.T) {
 	now := time.Now().UnixMilli()
 	if _, err := db.Exec(`INSERT INTO xt_ml_retrain_jobs
 		(user_id, model_name, feature_set, interval_minutes, last_run_at, last_status, last_error, created_at, active)
-		VALUES (1,'BTCUSDT_1h','',1440,0,'','',?,1)`, now); err != nil {
+		VALUES (1,'BTCUSDT_1h','',1440,0,'','',$1,1)`, now); err != nil {
 		t.Fatalf("insert job: %v", err)
 	}
 
 	// 唯一约束：(model_name, symbol, bar_time, features_hash) 不允许重复。
 	if _, err := db.Exec(`INSERT INTO xt_ml_predictions
 		(job_id, model_name, symbol, bar_time, features_hash, prediction, created_at)
-		VALUES (0,'m1','BTCUSDT',1000,'abc123',0.5,?)`, now); err != nil {
+		VALUES (0,'m1','BTCUSDT',1000,'abc123',0.5,$1)`, now); err != nil {
 		t.Fatalf("insert prediction: %v", err)
 	}
 	if _, err := db.Exec(`INSERT INTO xt_ml_predictions
 		(job_id, model_name, symbol, bar_time, features_hash, prediction, created_at)
-		VALUES (0,'m1','BTCUSDT',1000,'abc123',0.9,?)`, now); err == nil {
+		VALUES (0,'m1','BTCUSDT',1000,'abc123',0.9,$1)`, now); err == nil {
 		t.Fatalf("expected unique violation on (model_name, symbol, bar_time, features_hash)")
 	}
 
@@ -50,12 +44,7 @@ func TestMLRetrainMigration(t *testing.T) {
 
 // TestMLPredictionRepoRetention 预测保留策略：过期删除、新行保留、按模型失效。
 func TestMLPredictionRepoRetention(t *testing.T) {
-	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "gateway.db"))
-	t.Setenv("SECRET_KEY", "test-secret-key-ml-prediction")
-	if err := InitDB(); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
-	defer CloseDB()
+	SetupTestDB(t)
 	if err := RunSQLMigrations(); err != nil {
 		t.Fatalf("run sql migrations: %v", err)
 	}
@@ -82,7 +71,7 @@ func TestMLPredictionRepoRetention(t *testing.T) {
 	old := time.Now().Add(-48 * time.Hour).UnixMilli()
 	if _, err := db.Exec(`INSERT INTO xt_ml_predictions
 		(job_id, model_name, symbol, bar_time, features_hash, prediction, created_at)
-		VALUES (0,'m1','BTCUSDT',2000,'hash_old',0.1,?)`, old); err != nil {
+		VALUES (0,'m1','BTCUSDT',2000,'hash_old',0.1,$1)`, old); err != nil {
 		t.Fatalf("insert old row: %v", err)
 	}
 	cutoff := time.Now().Add(-24 * time.Hour).UnixMilli()
@@ -117,12 +106,7 @@ func TestMLPredictionRepoRetention(t *testing.T) {
 
 // TestMLRetrainRepoRuns 运行记录与连续失败计数。
 func TestMLRetrainRepoRuns(t *testing.T) {
-	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "gateway.db"))
-	t.Setenv("SECRET_KEY", "test-secret-key-ml-runs")
-	if err := InitDB(); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
-	defer CloseDB()
+	SetupTestDB(t)
 	if err := RunSQLMigrations(); err != nil {
 		t.Fatalf("run sql migrations: %v", err)
 	}

@@ -1,24 +1,18 @@
 package store
 
 import (
-	"path/filepath"
 	"testing"
 )
 
 // TestAIGateMigrationAndRepo 冒烟验证 0027 迁移：表创建、Create/MarkOutcome/
 // GetByID/List/Count/Stats 与幂等重跑。
 func TestAIGateMigrationAndRepo(t *testing.T) {
-	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "gateway.db"))
-	t.Setenv("SECRET_KEY", "test-secret-key-for-ai-gate")
-	if err := InitDB(); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
-	defer CloseDB()
+	SetupTestDB(t)
 	if err := RunSQLMigrations(); err != nil {
 		t.Fatalf("run sql migrations: %v", err)
 	}
 	var name string
-	if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='xt_ai_gate_decisions'`).Scan(&name); err != nil {
+	if err := db.QueryRow(`SELECT table_name FROM information_schema.tables WHERE table_name='xt_ai_gate_decisions'`).Scan(&name); err != nil {
 		t.Fatalf("table xt_ai_gate_decisions missing: %v", err)
 	}
 
@@ -107,7 +101,7 @@ func TestAIGateMigrationAndRepo(t *testing.T) {
 
 	// 来源当日订单统计（xt_orders client_oid 前缀）
 	if _, err := db.Exec(`INSERT INTO xt_orders (id, symbol, side, order_type, status, client_oid, created_at, updated_at)
-		VALUES ('o1','BTCUSDT','BUY','MARKET','FILLED','dca:42', strftime('%s','now')*1000, strftime('%s','now')*1000)`); err != nil {
+		VALUES ('o1','BTCUSDT','BUY','MARKET','FILLED','dca:42', EXTRACT(EPOCH FROM now())*1000, EXTRACT(EPOCH FROM now())*1000)`); err != nil {
 		t.Fatalf("seed order: %v", err)
 	}
 	tot, filled, rejected, err := CountOrdersByClientOIDPrefix("dca:42", 0)

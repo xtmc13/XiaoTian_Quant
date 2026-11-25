@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -13,22 +12,18 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
-// 测试用临时 sqlite（参照 handler 包 TestMain）：DB_PATH 指向临时目录，
-// 绝不触碰 ./runtime/gateway.db；结束时关闭连接并删除整个目录。
+// 测试基建：连接测试 PostgreSQL（无配置则整包跳过）；结束时关闭连接。
 
 func TestMain(m *testing.M) {
-	dir, err := os.MkdirTemp("", "grid_test")
-	if err != nil {
-		panic(err)
+	if !store.TestDatabaseConfigured() {
+		os.Exit(0)
 	}
-	_ = os.Setenv("DB_PATH", filepath.Join(dir, "gateway.db"))
 	_ = os.Setenv("SECRET_KEY", "test-secret-key-not-for-production-use-only")
 	if err := store.InitDB(); err != nil {
 		panic(err)
 	}
 	code := m.Run()
 	store.CloseDB()
-	_ = os.RemoveAll(dir)
 	os.Exit(code)
 }
 

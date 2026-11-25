@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -62,7 +63,7 @@ func (r *HyperoptEpochRepo) Create(rec *HyperoptEpochRecord) error {
 	_, err := db.Exec(
 		`INSERT INTO xt_hyperopt_epochs
 			(id, user_id, job_id, strategy_id, trial_id, params, metrics, loss, loss_name, applied, applied_at, created_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
 		rec.ID, rec.UserID, rec.JobID, rec.StrategyID, rec.TrialID, rec.ParamsJSON, rec.MetricsJSON,
 		rec.Loss, rec.LossName, boolToIntConv(rec.Applied), rec.AppliedAt, rec.CreatedAt,
 	)
@@ -71,7 +72,7 @@ func (r *HyperoptEpochRepo) Create(rec *HyperoptEpochRecord) error {
 
 // GetByID returns a single epoch by ID (属主校验由 handler 做)。
 func (r *HyperoptEpochRepo) GetByID(id string) (*HyperoptEpochRecord, error) {
-	row := db.QueryRow(`SELECT `+hyperoptEpochColumns+` FROM xt_hyperopt_epochs WHERE id = ?`, id)
+	row := db.QueryRow(`SELECT `+hyperoptEpochColumns+` FROM xt_hyperopt_epochs WHERE id = $1`, id)
 	return r.scan(row)
 }
 
@@ -85,13 +86,16 @@ func (r *HyperoptEpochRepo) List(f HyperoptEpochFilter) ([]*HyperoptEpochRecord,
 	}
 	query := `SELECT ` + hyperoptEpochColumns + ` FROM xt_hyperopt_epochs WHERE 1=1`
 	var args []any
+	next := 1
 	if f.JobID != "" {
-		query += ` AND job_id = ?`
+		query += fmt.Sprintf(` AND job_id = $%d`, next)
 		args = append(args, f.JobID)
+		next++
 	}
 	if f.UserID > 0 {
-		query += ` AND (user_id = ? OR user_id = 0)`
+		query += fmt.Sprintf(` AND (user_id = $%d OR user_id = 0)`, next)
 		args = append(args, f.UserID)
+		next++
 	}
 	query += ` ORDER BY created_at ASC`
 
@@ -123,7 +127,7 @@ func (r *HyperoptEpochRepo) MarkApplied(id string, appliedAt int64) error {
 	if appliedAt == 0 {
 		appliedAt = time.Now().UnixMilli()
 	}
-	_, err := db.Exec(`UPDATE xt_hyperopt_epochs SET applied = 1, applied_at = ? WHERE id = ?`, appliedAt, id)
+	_, err := db.Exec(`UPDATE xt_hyperopt_epochs SET applied = 1, applied_at = $1 WHERE id = $2`, appliedAt, id)
 	return err
 }
 

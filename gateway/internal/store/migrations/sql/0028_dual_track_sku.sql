@@ -24,14 +24,14 @@
 --
 -- 注意: 语句内不要出现分号(字符串/注释里也不行)——迁移按分号切分执行。
 
-ALTER TABLE xt_social_providers ADD COLUMN pricing_model TEXT NOT NULL DEFAULT '';
+ALTER TABLE xt_social_providers ADD COLUMN IF NOT EXISTS pricing_model TEXT NOT NULL DEFAULT '';
 
-ALTER TABLE xt_social_subscriptions ADD COLUMN track TEXT NOT NULL DEFAULT '';
-ALTER TABLE xt_social_subscriptions ADD COLUMN track_expires_at BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE xt_social_subscriptions ADD COLUMN IF NOT EXISTS track TEXT NOT NULL DEFAULT '';
+ALTER TABLE xt_social_subscriptions ADD COLUMN IF NOT EXISTS track_expires_at BIGINT NOT NULL DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS idx_social_subs_track ON xt_social_subscriptions(track, status);
 
-ALTER TABLE billing_orders ADD COLUMN purpose TEXT NOT NULL DEFAULT 'plan';
-ALTER TABLE billing_orders ADD COLUMN ref_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE billing_orders ADD COLUMN IF NOT EXISTS purpose TEXT NOT NULL DEFAULT 'plan';
+ALTER TABLE billing_orders ADD COLUMN IF NOT EXISTS ref_id TEXT NOT NULL DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS idx_billing_orders_purpose ON billing_orders(purpose, ref_id, status);

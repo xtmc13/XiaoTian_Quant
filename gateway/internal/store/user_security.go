@@ -25,7 +25,7 @@ func GetUserSecurityFlags(userID int) (flags UserSecurityFlags, found bool) {
 	if db == nil {
 		return flags, false
 	}
-	row := db.QueryRow(`SELECT token_version, must_change_password, totp_enabled, is_active FROM xt_users WHERE id=?`, userID)
+	row := db.QueryRow(`SELECT token_version, must_change_password, totp_enabled, is_active FROM xt_users WHERE id=$1`, userID)
 	var tv, mcp, totp, active int
 	if err := row.Scan(&tv, &mcp, &totp, &active); err != nil {
 		return flags, false
@@ -43,7 +43,7 @@ func FindUserByID(userID int) map[string]any {
 	if db == nil {
 		return nil
 	}
-	row := db.QueryRow("SELECT id, username, nickname, role FROM xt_users WHERE id=?", userID)
+	row := db.QueryRow("SELECT id, username, nickname, role FROM xt_users WHERE id=$1", userID)
 	var id int
 	var username, nickname, role string
 	if err := row.Scan(&id, &username, &nickname, &role); err != nil {
@@ -60,7 +60,7 @@ func GetUserTokenVersion(userID int) (int, error) {
 		return 0, fmt.Errorf("database not initialized")
 	}
 	var tv int
-	err := db.QueryRow(`SELECT token_version FROM xt_users WHERE id=?`, userID).Scan(&tv)
+	err := db.QueryRow(`SELECT token_version FROM xt_users WHERE id=$1`, userID).Scan(&tv)
 	return tv, err
 }
 
@@ -69,7 +69,7 @@ func RevokeUserTokens(userID int) error {
 	if db == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	_, err := db.Exec(`UPDATE xt_users SET token_version=token_version+1 WHERE id=?`, userID)
+	_, err := db.Exec(`UPDATE xt_users SET token_version=token_version+1 WHERE id=$1`, userID)
 	return err
 }
 
@@ -82,7 +82,7 @@ func SetMustChangePassword(userID int, must bool) error {
 	if must {
 		v = 1
 	}
-	_, err := db.Exec(`UPDATE xt_users SET must_change_password=? WHERE id=?`, v, userID)
+	_, err := db.Exec(`UPDATE xt_users SET must_change_password=$1 WHERE id=$2`, v, userID)
 	return err
 }
 
@@ -93,7 +93,7 @@ func GetUserTOTP(userID int) (secret string, enabled bool, found bool) {
 	if db == nil {
 		return "", false, false
 	}
-	row := db.QueryRow(`SELECT totp_secret, totp_enabled FROM xt_users WHERE id=?`, userID)
+	row := db.QueryRow(`SELECT totp_secret, totp_enabled FROM xt_users WHERE id=$1`, userID)
 	var enc int
 	if err := row.Scan(&secret, &enc); err != nil {
 		return "", false, false
@@ -106,7 +106,7 @@ func SetUserTOTPSecret(userID int, secret string) error {
 	if db == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	_, err := db.Exec(`UPDATE xt_users SET totp_secret=?, totp_enabled=0 WHERE id=?`, secret, userID)
+	_, err := db.Exec(`UPDATE xt_users SET totp_secret=$1, totp_enabled=0 WHERE id=$2`, secret, userID)
 	return err
 }
 
@@ -119,7 +119,7 @@ func EnableUserTOTP(userID int, backupCodes []string) error {
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec(`UPDATE xt_users SET totp_enabled=1, mfa_backup_codes=? WHERE id=?`,
+	_, err = db.Exec(`UPDATE xt_users SET totp_enabled=1, mfa_backup_codes=$1 WHERE id=$2`,
 		encryptBackupCodes(string(raw)), userID)
 	return err
 }
@@ -129,7 +129,7 @@ func DisableUserTOTP(userID int) error {
 	if db == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	_, err := db.Exec(`UPDATE xt_users SET totp_enabled=0, totp_secret='', mfa_backup_codes='' WHERE id=?`, userID)
+	_, err := db.Exec(`UPDATE xt_users SET totp_enabled=0, totp_secret='', mfa_backup_codes='' WHERE id=$1`, userID)
 	return err
 }
 
@@ -140,7 +140,7 @@ func ConsumeBackupCode(userID int, code string) bool {
 		return false
 	}
 	var stored string
-	if err := db.QueryRow(`SELECT mfa_backup_codes FROM xt_users WHERE id=?`, userID).Scan(&stored); err != nil {
+	if err := db.QueryRow(`SELECT mfa_backup_codes FROM xt_users WHERE id=$1`, userID).Scan(&stored); err != nil {
 		return false
 	}
 	var codes []string
@@ -160,7 +160,7 @@ func ConsumeBackupCode(userID int, code string) bool {
 		return false
 	}
 	raw, _ := json.Marshal(kept)
-	db.Exec(`UPDATE xt_users SET mfa_backup_codes=? WHERE id=?`, encryptBackupCodes(string(raw)), userID)
+	db.Exec(`UPDATE xt_users SET mfa_backup_codes=$1 WHERE id=$2`, encryptBackupCodes(string(raw)), userID)
 	return true
 }
 
@@ -189,9 +189,9 @@ func UpdateLastLoginIP(userID int, ip string) (prev string) {
 	if db == nil {
 		return ""
 	}
-	row := db.QueryRow(`SELECT last_login_ip FROM xt_users WHERE id=?`, userID)
+	row := db.QueryRow(`SELECT last_login_ip FROM xt_users WHERE id=$1`, userID)
 	_ = row.Scan(&prev)
-	db.Exec(`UPDATE xt_users SET last_login_ip=? WHERE id=?`, ip, userID)
+	db.Exec(`UPDATE xt_users SET last_login_ip=$1 WHERE id=$2`, ip, userID)
 	return prev
 }
 

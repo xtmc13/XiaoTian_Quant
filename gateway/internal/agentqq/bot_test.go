@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -17,15 +16,10 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
-// setupQQTestDB 初始化临时 SQLite（含 0053 迁移）。
+// setupQQTestDB 初始化测试 PostgreSQL（含迁移基线）。
 func setupQQTestDB(t *testing.T) {
 	t.Helper()
-	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "gateway.db"))
-	t.Setenv("SECRET_KEY", "test-secret-key-agent-qq")
-	if err := store.InitDB(); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
-	t.Cleanup(store.CloseDB)
+	store.SetupTestDB(t)
 }
 
 // qqSent 一条 REST 回发记录。

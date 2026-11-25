@@ -8,21 +8,16 @@ import (
 
 func setupProfilesTestDB(t *testing.T) {
 	t.Helper()
-	t.Setenv("DB_PATH", t.TempDir()+"/gateway.db")
-	t.Setenv("SECRET_KEY", "test-secret-key-agent-profiles")
-	if err := store.InitDB(); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
-	t.Cleanup(store.CloseDB)
+	store.SetupTestDB(t)
 }
 
 func createUser(t *testing.T, username, role string) int64 {
 	t.Helper()
-	res, err := store.GetDB().Exec(`INSERT INTO xt_users (username, password_hash, role) VALUES (?,?,?)`, username, "x", role)
+	var id int64
+	err := store.GetDB().QueryRow(`INSERT INTO xt_users (username, password_hash, role) VALUES ($1,$2,$3) RETURNING id`, username, "x", role).Scan(&id)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	id, _ := res.LastInsertId()
 	return id
 }
 

@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -26,15 +25,10 @@ const (
 // testQRImg 假 base64 PNG。
 var testQRImg = base64.StdEncoding.EncodeToString([]byte("fake-png-bytes"))
 
-// setupWXTestDB 初始化临时 SQLite（含 0055 迁移）。
+// setupWXTestDB 初始化测试 PostgreSQL（含迁移基线）。
 func setupWXTestDB(t *testing.T) {
 	t.Helper()
-	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "gateway.db"))
-	t.Setenv("SECRET_KEY", "test-secret-key-agent-weixin")
-	if err := store.InitDB(); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
-	t.Cleanup(store.CloseDB)
+	store.SetupTestDB(t)
 }
 
 // inbound 一条排队待投递的入站消息。

@@ -576,7 +576,7 @@ func PortfolioCalendar(c *gin.Context) {
 			`SELECT date(created_at/1000, 'unixepoch') as trade_date,
 			        SUM(CASE WHEN side='SELL' THEN price*quantity ELSE -price*quantity END) as pnl
 			 FROM trades
-			 WHERE created_at BETWEEN ? AND ?
+			 WHERE created_at BETWEEN $1 AND $2
 			 GROUP BY trade_date
 			 ORDER BY trade_date`,
 			monthStart.UnixMilli(), monthEnd.UnixMilli(),

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"sync"
 	"time"
 )
@@ -28,14 +29,14 @@ func (r *RiskEventRepo) Create(e *RiskEventRecord) error {
 	if e.Context == "" {
 		e.Context = "{}"
 	}
-	res, err := db.Exec(
-		`INSERT INTO risk_events (level, check_name, message, symbol, context_json, timestamp) VALUES (?,?,?,?,?,?)`,
+	var id int64
+	err := db.QueryRow(
+		`INSERT INTO risk_events (level, check_name, message, symbol, context_json, timestamp) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
 		e.Level, e.CheckName, e.Message, e.Symbol, e.Context, e.Timestamp,
-	)
+	).Scan(&id)
 	if err != nil {
 		return err
 	}
-	id, _ := res.LastInsertId()
 	e.ID = int(id)
 	return nil
 }
@@ -45,13 +46,13 @@ func (r *RiskEventRepo) List(filter map[string]any, limit int) ([]*RiskEventReco
 	allowedCols := map[string]bool{
 		"id": true, "level": true, "check_name": true, "symbol": true, "timestamp": true,
 	}
-	args, where := buildFilter(filter, allowedCols)
+	args, where, next := buildFilter(filter, allowedCols, 1)
 	if where != "" {
 		query += " WHERE " + where
 	}
 	query += " ORDER BY timestamp DESC"
 	if limit > 0 {
-		query += " LIMIT ?"
+		query += fmt.Sprintf(" LIMIT $%d", next)
 		args = append(args, limit)
 	}
 	rows, err := db.Query(query, args...)
@@ -71,7 +72,7 @@ func (r *RiskEventRepo) List(filter map[string]any, limit int) ([]*RiskEventReco
 }
 
 func (r *RiskEventRepo) GetByID(id string) (*RiskEventRecord, error) {
-	row := db.QueryRow(`SELECT id, level, check_name, message, symbol, context_json, timestamp FROM risk_events WHERE id=?`, id)
+	row := db.QueryRow(`SELECT id, level, check_name, message, symbol, context_json, timestamp FROM risk_events WHERE id=$1`, id)
 	var e RiskEventRecord
 	err := row.Scan(&e.ID, &e.Level, &e.CheckName, &e.Message, &e.Symbol, &e.Context, &e.Timestamp)
 	if err != nil {
@@ -82,6 +83,6 @@ func (r *RiskEventRepo) GetByID(id string) (*RiskEventRecord, error) {
 
 func (r *RiskEventRepo) Update(e *RiskEventRecord) error { return nil }
 func (r *RiskEventRepo) Delete(id string) error {
-	_, err := db.Exec("DELETE FROM risk_events WHERE id=?", id)
+	_, err := db.Exec("DELETE FROM risk_events WHERE id=$1", id)
 	return err
 }

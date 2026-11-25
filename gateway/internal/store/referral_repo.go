@@ -75,12 +75,12 @@ func scanReferralCode(row interface{ Scan(...any) error }) (*ReferralCode, error
 
 // GetCodeByUser 按用户查推荐码；未创建返回 (nil, sql.ErrNoRows)。
 func (r *ReferralRepo) GetCodeByUser(userID int64) (*ReferralCode, error) {
-	return scanReferralCode(db.QueryRow(`SELECT `+referralCodeCols+` FROM xt_referral_codes WHERE user_id=?`, userID))
+	return scanReferralCode(db.QueryRow(`SELECT `+referralCodeCols+` FROM xt_referral_codes WHERE user_id=$1`, userID))
 }
 
 // GetCodeByCode 按码字符串查（注册校验用）；不存在返回 (nil, sql.ErrNoRows)。
 func (r *ReferralRepo) GetCodeByCode(code string) (*ReferralCode, error) {
-	return scanReferralCode(db.QueryRow(`SELECT `+referralCodeCols+` FROM xt_referral_codes WHERE code=?`, code))
+	return scanReferralCode(db.QueryRow(`SELECT `+referralCodeCols+` FROM xt_referral_codes WHERE code=$1`, code))
 }
 
 // referralCodeCharset 推荐码随机字符集（大写字母+数字，去掉易混淆的 0/O/I/1）。
@@ -111,7 +111,7 @@ func (r *ReferralRepo) EnsureCode(userID int64, pct int) (*ReferralCode, error) 
 	for i := 0; i < 10; i++ {
 		code := generateReferralCode()
 		_, err := db.Exec(
-			`INSERT INTO xt_referral_codes (user_id, code, commission_pct, active, created_at) VALUES (?,?,?,1,?)`,
+			`INSERT INTO xt_referral_codes (user_id, code, commission_pct, active, created_at) VALUES ($1,$2,$3,1,$4)`,
 			userID, code, pct, now)
 		if err == nil {
 			return r.GetCodeByUser(userID)
@@ -128,7 +128,7 @@ func (r *ReferralRepo) EnsureCode(userID int64, pct int) (*ReferralCode, error) 
 func (r *ReferralRepo) SetCommission(userID int64, pct int) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	res, err := db.Exec(`UPDATE xt_referral_codes SET commission_pct=? WHERE user_id=?`, pct, userID)
+	res, err := db.Exec(`UPDATE xt_referral_codes SET commission_pct=$1 WHERE user_id=$2`, pct, userID)
 	if err != nil {
 		return err
 	}
@@ -158,8 +158,9 @@ func (r *ReferralRepo) CreditEarningTx(e *ReferralEarning) (bool, error) {
 		e.Status = "credited"
 	}
 	res, err := tx.Exec(
-		`INSERT OR IGNORE INTO xt_referral_earnings (referrer_user_id, referred_user_id, order_id, order_amount, credits, status, created_at)
-		 VALUES (?,?,?,?,?,?,?)`,
+		`INSERT INTO xt_referral_earnings (referrer_user_id, referred_user_id, order_id, order_amount, credits, status, created_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7)
+		 ON CONFLICT DO NOTHING`,
 		e.ReferrerUserID, e.ReferredUserID, e.OrderID, e.OrderAmount, e.Credits, e.Status, e.CreatedAt)
 	if err != nil {
 		return false, err
@@ -171,7 +172,7 @@ func (r *ReferralRepo) CreditEarningTx(e *ReferralEarning) (bool, error) {
 	if n == 0 {
 		return false, nil // 该订单已入账（幂等）
 	}
-	if _, err := tx.Exec(`UPDATE xt_users SET credits = credits + ? WHERE id=?`, e.Credits, e.ReferrerUserID); err != nil {
+	if _, err := tx.Exec(`UPDATE xt_users SET credits = credits + $1 WHERE id=$2`, e.Credits, e.ReferrerUserID); err != nil {
 		return false, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -183,11 +184,11 @@ func (r *ReferralRepo) CreditEarningTx(e *ReferralEarning) (bool, error) {
 // ReferralStats 汇总：直接推荐人数（referred_by=me）+ 已入账积分合计。
 func (r *ReferralRepo) ReferralStats(userID int64) (*ReferralStats, error) {
 	var s ReferralStats
-	if err := db.QueryRow(`SELECT COUNT(*) FROM xt_users WHERE referred_by=?`, userID).Scan(&s.ReferralCount); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM xt_users WHERE referred_by=$1`, userID).Scan(&s.ReferralCount); err != nil {
 		return nil, err
 	}
 	if err := db.QueryRow(
-		`SELECT COALESCE(SUM(credits),0) FROM xt_referral_earnings WHERE referrer_user_id=? AND status='credited'`, userID,
+		`SELECT COALESCE(SUM(credits),0) FROM xt_referral_earnings WHERE referrer_user_id=$1 AND status='credited'`, userID,
 	).Scan(&s.TotalCredits); err != nil {
 		return nil, err
 	}
@@ -203,7 +204,7 @@ func (r *ReferralRepo) ListEarnings(userID int64, limit int) ([]*ReferralEarning
 		`SELECT e.id, e.referrer_user_id, e.referred_user_id, e.order_id, e.order_amount, e.credits, e.status, e.created_at,
 			COALESCE(u.username,'')
 		 FROM xt_referral_earnings e LEFT JOIN xt_users u ON u.id = e.referred_user_id
-		 WHERE e.referrer_user_id=? ORDER BY e.created_at DESC, e.id DESC LIMIT ?`, userID, limit)
+		 WHERE e.referrer_user_id=$1 ORDER BY e.created_at DESC, e.id DESC LIMIT $2`, userID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -257,7 +258,7 @@ func SetReferredBy(userID int, referrerID int64) error {
 	if int64(userID) == referrerID {
 		return ErrReferralSelf
 	}
-	res, err := db.Exec(`UPDATE xt_users SET referred_by=? WHERE id=? AND referred_by IS NULL`, referrerID, userID)
+	res, err := db.Exec(`UPDATE xt_users SET referred_by=$1 WHERE id=$2 AND referred_by IS NULL`, referrerID, userID)
 	if err != nil {
 		return err
 	}
@@ -270,7 +271,7 @@ func SetReferredBy(userID int, referrerID int64) error {
 // GetReferredBy 查询用户的推荐人；无推荐人返回 (0, false)。
 func GetReferredBy(userID int64) (int64, bool) {
 	var v sql.NullInt64
-	if err := db.QueryRow(`SELECT referred_by FROM xt_users WHERE id=?`, userID).Scan(&v); err != nil || !v.Valid {
+	if err := db.QueryRow(`SELECT referred_by FROM xt_users WHERE id=$1`, userID).Scan(&v); err != nil || !v.Valid {
 		return 0, false
 	}
 	return v.Int64, true

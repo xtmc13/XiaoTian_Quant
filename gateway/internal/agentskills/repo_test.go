@@ -1,7 +1,6 @@
 package agentskills
 
 import (
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -12,12 +11,7 @@ import (
 
 func setupSkillsTestDB(t *testing.T) {
 	t.Helper()
-	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "gateway.db"))
-	t.Setenv("SECRET_KEY", "test-secret-key-agent-skills")
-	if err := store.InitDB(); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
-	t.Cleanup(store.CloseDB)
+	store.SetupTestDB(t)
 }
 
 func TestRepo_UpsertAndGet(t *testing.T) {

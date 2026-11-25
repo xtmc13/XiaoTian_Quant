@@ -50,7 +50,7 @@ func (r *TriangularTradeRepo) Create(t *TriangularTradeRecord) error {
 	}
 	_, err := db.Exec(
 		`INSERT INTO triangular_trades (id, user_id, exchange, cycle_json, legs_json, start_asset, start_qty, end_qty, gross_profit, net_profit, total_fees, status, opened_at, closed_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
 		t.ID, t.UserID, t.Exchange, t.CycleJSON, t.LegsJSON, t.StartAsset, t.StartQty, t.EndQty,
 		t.GrossProfit, t.NetProfit, t.TotalFees, t.Status, t.OpenedAt, t.ClosedAt,
 	)
@@ -65,7 +65,7 @@ func (r *TriangularTradeRepo) GetByID(id string) (*TriangularTradeRecord, error)
 	if db == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
-	row := db.QueryRow(`SELECT `+triangularTradeColumns+` FROM triangular_trades WHERE id=?`, id)
+	row := db.QueryRow(`SELECT `+triangularTradeColumns+` FROM triangular_trades WHERE id=$1`, id)
 	var t TriangularTradeRecord
 	err := row.Scan(&t.ID, &t.UserID, &t.Exchange, &t.CycleJSON, &t.LegsJSON, &t.StartAsset, &t.StartQty, &t.EndQty, &t.GrossProfit, &t.NetProfit, &t.TotalFees, &t.Status, &t.OpenedAt, &t.ClosedAt)
 	if err != nil {
@@ -81,7 +81,7 @@ func (r *TriangularTradeRepo) Update(t *TriangularTradeRecord) error {
 		return fmt.Errorf("database not initialized")
 	}
 	_, err := db.Exec(
-		`UPDATE triangular_trades SET exchange=?, cycle_json=?, legs_json=?, start_asset=?, start_qty=?, end_qty=?, gross_profit=?, net_profit=?, total_fees=?, status=?, opened_at=?, closed_at=? WHERE id=?`,
+		`UPDATE triangular_trades SET exchange=$1, cycle_json=$2, legs_json=$3, start_asset=$4, start_qty=$5, end_qty=$6, gross_profit=$7, net_profit=$8, total_fees=$9, status=$10, opened_at=$11, closed_at=$12 WHERE id=$13`,
 		t.Exchange, t.CycleJSON, t.LegsJSON, t.StartAsset, t.StartQty, t.EndQty,
 		t.GrossProfit, t.NetProfit, t.TotalFees, t.Status, t.OpenedAt, t.ClosedAt, t.ID,
 	)
@@ -94,7 +94,7 @@ func (r *TriangularTradeRepo) Delete(id string) error {
 	if db == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	_, err := db.Exec("DELETE FROM triangular_trades WHERE id=?", id)
+	_, err := db.Exec("DELETE FROM triangular_trades WHERE id=$1", id)
 	return err
 }
 
@@ -122,7 +122,7 @@ func (r *TriangularTradeRepo) ListHistory(limit int) ([]*TriangularTradeRecord, 
 	query := `SELECT ` + triangularTradeColumns + ` FROM triangular_trades WHERE status IN ('completed','failed','dry_run') ORDER BY opened_at DESC`
 	var args []any
 	if limit > 0 {
-		query += " LIMIT ?"
+		query += " LIMIT $1"
 		args = append(args, limit)
 	}
 	rows, err := db.Query(query, args...)

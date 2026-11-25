@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -20,15 +19,10 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
-// setupDTTestDB 初始化临时 SQLite（含 0052 迁移）。
+// setupDTTestDB 初始化测试 PostgreSQL（含迁移基线）。
 func setupDTTestDB(t *testing.T) {
 	t.Helper()
-	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "gateway.db"))
-	t.Setenv("SECRET_KEY", "test-secret-key-agent-dt")
-	if err := store.InitDB(); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
-	t.Cleanup(store.CloseDB)
+	store.SetupTestDB(t)
 }
 
 // fakeSessionWebhook 模拟钉钉 sessionWebhook 回发端点，记录收到的文本。

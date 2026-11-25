@@ -41,7 +41,7 @@
 
 ### 后端 (gateway/)
 - **框架**: Gin v1.10 (Go)
-- **数据库**: SQLite (modernc.org/sqlite, 纯 Go 实现)
+- **数据库**: PostgreSQL 18 (pgx/v5 驱动)
 - **缓存**: Redis 7 (可选)
 - **认证**: JWT (golang-jwt/jwt/v5)
 - **WebSocket**: gorilla/websocket

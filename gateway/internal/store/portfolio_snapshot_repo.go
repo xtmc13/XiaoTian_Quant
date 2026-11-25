@@ -18,14 +18,14 @@ func (r *PortfolioSnapshotRepo) Save(totalEquity, availableBalance, marginUsed, 
 	now := time.Now().UnixMilli()
 	_, err := db.Exec(
 		`INSERT INTO xt_portfolio_snapshots (total_equity, available_balance, margin_used, drawdown, net_exposure, positions_json, balances_json, timestamp)
-		 VALUES (?,?,?,?,?,?,?,?)`,
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
 		totalEquity, availableBalance, marginUsed, drawdown, netExposure, string(posJSON), string(balJSON), now,
 	)
 	return err
 }
 
 func (r *PortfolioSnapshotRepo) GetRecent(limit int) ([]map[string]any, error) {
-	rows, err := db.Query(`SELECT total_equity, available_balance, margin_used, drawdown, net_exposure, timestamp FROM xt_portfolio_snapshots ORDER BY timestamp DESC LIMIT ?`, limit)
+	rows, err := db.Query(`SELECT total_equity, available_balance, margin_used, drawdown, net_exposure, timestamp FROM xt_portfolio_snapshots ORDER BY timestamp DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
 	}

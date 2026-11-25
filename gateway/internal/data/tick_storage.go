@@ -37,13 +37,13 @@ func (ts *TickStorage) db() *sql.DB {
 
 func (ts *TickStorage) ensureTables(db *sql.DB) {
 	db.Exec(`CREATE TABLE IF NOT EXISTS ticks (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
 		symbol TEXT NOT NULL,
-		bid REAL NOT NULL,
-		ask REAL NOT NULL,
-		last REAL NOT NULL,
-		volume REAL NOT NULL,
-		timestamp INTEGER NOT NULL,
+		bid DOUBLE PRECISION NOT NULL,
+		ask DOUBLE PRECISION NOT NULL,
+		last DOUBLE PRECISION NOT NULL,
+		volume DOUBLE PRECISION NOT NULL,
+		timestamp BIGINT NOT NULL,
 		UNIQUE(symbol, timestamp)
 	)`)
 
@@ -63,8 +63,9 @@ func (ts *TickStorage) SaveTicks(symbol string, ticks []model.Tick) (int, error)
 	saved := 0
 	for _, tick := range ticks {
 		_, err := db.Exec(
-			`INSERT OR REPLACE INTO ticks (symbol, bid, ask, last, volume, timestamp)
-			 VALUES (?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO ticks (symbol, bid, ask, last, volume, timestamp)
+			 VALUES ($1, $2, $3, $4, $5, $6)
+			 ON CONFLICT(symbol, timestamp) DO UPDATE SET bid=excluded.bid, ask=excluded.ask, last=excluded.last, volume=excluded.volume`,
 			symbol, tick.Bid, tick.Ask, tick.Last, tick.Volume, tick.Timestamp,
 		)
 		if err != nil {
@@ -86,16 +87,19 @@ func (ts *TickStorage) LoadTicks(symbol string, start, end int64) ([]model.Tick,
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
 
-	query := "SELECT symbol, bid, ask, last, volume, timestamp FROM ticks WHERE symbol = ?"
+	query := "SELECT symbol, bid, ask, last, volume, timestamp FROM ticks WHERE symbol = $1"
 	args := []any{symbol}
+	next := 2
 
 	if start > 0 {
-		query += " AND timestamp >= ?"
+		query += fmt.Sprintf(" AND timestamp >= $%d", next)
 		args = append(args, start)
+		next++
 	}
 	if end > 0 {
-		query += " AND timestamp <= ?"
+		query += fmt.Sprintf(" AND timestamp <= $%d", next)
 		args = append(args, end)
+		next++
 	}
 	query += " ORDER BY timestamp ASC"
 
@@ -124,7 +128,7 @@ func (ts *TickStorage) GetTickCount(symbol string) int {
 	}
 
 	var count int
-	query := "SELECT COUNT(*) FROM ticks WHERE symbol = ?"
+	query := "SELECT COUNT(*) FROM ticks WHERE symbol = $1"
 	db.QueryRow(query, symbol).Scan(&count)
 	return count
 }
@@ -139,7 +143,7 @@ func (ts *TickStorage) DeleteOldTicks(symbol string, before int64) (int, error) 
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 
-	result, err := db.Exec("DELETE FROM ticks WHERE symbol = ? AND timestamp < ?", symbol, before)
+	result, err := db.Exec("DELETE FROM ticks WHERE symbol = $1 AND timestamp < $2", symbol, before)
 	if err != nil {
 		return 0, err
 	}
@@ -166,8 +170,8 @@ func (ts *TickStorage) GetTickInfo(symbol string) TickDataInfo {
 
 	var count int
 	var earliest, latest int64
-	db.QueryRow("SELECT COUNT(*) FROM ticks WHERE symbol = ?", symbol).Scan(&count)
-	db.QueryRow("SELECT MIN(timestamp), MAX(timestamp) FROM ticks WHERE symbol = ?", symbol).Scan(&earliest, &latest)
+	db.QueryRow("SELECT COUNT(*) FROM ticks WHERE symbol = $1", symbol).Scan(&count)
+	db.QueryRow("SELECT MIN(timestamp), MAX(timestamp) FROM ticks WHERE symbol = $1", symbol).Scan(&earliest, &latest)
 
 	return TickDataInfo{
 		Symbol:       symbol,

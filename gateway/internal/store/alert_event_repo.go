@@ -40,6 +40,11 @@ const alertEventColumns = `id, fingerprint, alertname, status, severity, summary
 	labels_json, annotations_json, starts_at, ends_at, notified_firing, notified_resolved,
 	first_seen, last_seen, created_at, updated_at`
 
+// 不含自增主键的插入列：INSERT 省略 id 列，由 PG identity 分配。
+const alertEventInsertColumns = `fingerprint, alertname, status, severity, summary, description,
+	labels_json, annotations_json, starts_at, ends_at, notified_firing, notified_resolved,
+	first_seen, last_seen, created_at, updated_at`
+
 func scanAlertEvent(s rowScanner) (*AlertEventRecord, error) {
 	var rec AlertEventRecord
 	var nf, nr int
@@ -60,7 +65,7 @@ func scanAlertEvent(s rowScanner) (*AlertEventRecord, error) {
 
 // GetByFingerprint 按 fingerprint 取事件；不存在返回 (nil, nil)。
 func (r *AlertEventRepo) GetByFingerprint(fp string) (*AlertEventRecord, error) {
-	row := db.QueryRow(`SELECT `+alertEventColumns+` FROM xt_alert_events WHERE fingerprint = ?`, fp)
+	row := db.QueryRow(`SELECT `+alertEventColumns+` FROM xt_alert_events WHERE fingerprint = $1`, fp)
 	return scanAlertEvent(row)
 }
 
@@ -80,8 +85,8 @@ func (r *AlertEventRepo) Upsert(rec *AlertEventRecord) error {
 	if rec.NotifiedResolved {
 		nr = 1
 	}
-	_, err := db.Exec(`INSERT INTO xt_alert_events (`+alertEventColumns+`)
-		VALUES (NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+	_, err := db.Exec(`INSERT INTO xt_alert_events (`+alertEventInsertColumns+`)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
 		ON CONFLICT(fingerprint) DO UPDATE SET
 			alertname=excluded.alertname, status=excluded.status, severity=excluded.severity,
 			summary=excluded.summary, description=excluded.description,
@@ -112,7 +117,7 @@ func (r *AlertEventRepo) listWhere(where string, limit int) ([]*AlertEventRecord
 		limit = 100
 	}
 	rows, err := db.Query(`SELECT `+alertEventColumns+` FROM xt_alert_events `+where+`
-		ORDER BY last_seen DESC LIMIT ?`, limit)
+		ORDER BY last_seen DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
 	}

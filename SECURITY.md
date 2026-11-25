@@ -54,7 +54,7 @@ We take security seriously. If you discover a security vulnerability, please rep
 | JWT Authentication | ✅ | HS256, 24h expiry, refresh tokens |
 | Rate Limiting | ✅ | Token bucket per-IP, stricter on auth endpoints |
 | CORS | ✅ | Configurable allowed origins |
-| SQL Injection | ✅ | SQLite prepared statements via modernc.org/sqlite |
+| SQL Injection | ✅ | PostgreSQL prepared statements via pgx/v5（参数化查询） |
 | XSS | ✅ | React auto-escaping, CSP headers |
 | SSL/TLS | ✅ | Nginx reverse proxy with TLS termination |
 | pprof Access | ✅ | Restricted to localhost in production |

@@ -252,16 +252,16 @@ func (m *MarketService) ApplyProviderWithPricing(userID int64, name, description
 		return nil, err
 	}
 	now := time.Now().UnixMilli()
-	res, err := db.Exec(
+	var id int64
+	err = db.QueryRow(
 		`INSERT INTO xt_social_providers
 			(user_id, name, description, monthly_fee, profit_share_pct, fee_mode, pricing_model, apply_status, is_public, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, $9, $10) RETURNING id`,
 		userID, name, description, monthlyFee, nullableFloat(pct), DeriveFeeMode(monthlyFee, pct), pricingModel, ApplyPending, now, now,
-	)
+	).Scan(&id)
 	if err != nil {
 		return nil, err
 	}
-	id, _ := res.LastInsertId()
 	return m.GetProvider(id)
 }
 
@@ -277,7 +277,7 @@ func (m *MarketService) GetProvider(id int64) (*ProviderApply, error) {
 	row := db.QueryRow(
 		`SELECT id, user_id, name, description, monthly_fee, profit_share_pct, fee_mode, pricing_model,
 			apply_status, apply_note, approved_at, is_public, created_at, updated_at
-		 FROM xt_social_providers WHERE id = ?`, id)
+		 FROM xt_social_providers WHERE id = $1`, id)
 	if err := row.Scan(&p.ID, &p.UserID, &p.Name, &p.Description, &p.MonthlyFee, &pct, &p.FeeMode, &p.PricingModel,
 		&p.ApplyStatus, &p.ApplyNote, &approvedAt, &p.IsPublic, &p.CreatedAt, &p.UpdatedAt); err != nil {
 		return nil, err
@@ -299,7 +299,7 @@ func (m *MarketService) LatestProviderByUser(userID int64) (*ProviderApply, erro
 		return nil, err
 	}
 	var id int64
-	row := db.QueryRow(`SELECT id FROM xt_social_providers WHERE user_id = ? ORDER BY created_at DESC LIMIT 1`, userID)
+	row := db.QueryRow(`SELECT id FROM xt_social_providers WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1`, userID)
 	if err := row.Scan(&id); err != nil {
 		return nil, err
 	}
@@ -312,7 +312,7 @@ func (m *MarketService) ListApprovedProviders() ([]*ProviderApply, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.Query(`SELECT id FROM xt_social_providers WHERE apply_status = ? ORDER BY approved_at ASC`, ApplyApproved)
+	rows, err := db.Query(`SELECT id FROM xt_social_providers WHERE apply_status = $1 ORDER BY approved_at ASC`, ApplyApproved)
 	if err != nil {
 		return nil, err
 	}
@@ -342,7 +342,7 @@ func (m *MarketService) ListProvidersByStatus(status string) ([]*ProviderApply, 
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.Query(`SELECT id FROM xt_social_providers WHERE apply_status = ? ORDER BY created_at DESC LIMIT 200`, status)
+	rows, err := db.Query(`SELECT id FROM xt_social_providers WHERE apply_status = $1 ORDER BY created_at DESC LIMIT 200`, status)
 	if err != nil {
 		return nil, err
 	}
@@ -374,8 +374,8 @@ func (m *MarketService) ApproveProvider(id int64) (*ProviderApply, error) {
 	}
 	now := time.Now().UnixMilli()
 	res, err := db.Exec(
-		`UPDATE xt_social_providers SET apply_status = ?, apply_note = '', approved_at = ?, is_public = 1, updated_at = ?
-		 WHERE id = ? AND apply_status = ?`,
+		`UPDATE xt_social_providers SET apply_status = $1, apply_note = '', approved_at = $2, is_public = 1, updated_at = $3
+		 WHERE id = $4 AND apply_status = $5`,
 		ApplyApproved, now, now, id, ApplyPending)
 	if err != nil {
 		return nil, err
@@ -398,8 +398,8 @@ func (m *MarketService) RejectProvider(id int64, note string) (*ProviderApply, e
 	}
 	now := time.Now().UnixMilli()
 	res, err := db.Exec(
-		`UPDATE xt_social_providers SET apply_status = ?, apply_note = ?, updated_at = ?
-		 WHERE id = ? AND apply_status = ?`,
+		`UPDATE xt_social_providers SET apply_status = $1, apply_note = $2, updated_at = $3
+		 WHERE id = $4 AND apply_status = $5`,
 		ApplyRejected, note, now, id, ApplyPending)
 	if err != nil {
 		return nil, err
@@ -422,8 +422,8 @@ func (m *MarketService) UpsertSubscription(providerID, followerUserID int64, fee
 	}
 	now := time.Now().UnixMilli()
 	res, err := db.Exec(
-		`UPDATE xt_social_subscriptions SET status = ?, cancelled_at = NULL, fee_mode = ?
-		 WHERE provider_id = ? AND follower_user_id = ? AND status = ?`,
+		`UPDATE xt_social_subscriptions SET status = $1, cancelled_at = NULL, fee_mode = $2
+		 WHERE provider_id = $3 AND follower_user_id = $4 AND status = $5`,
 		SubStatusActive, feeMode, providerID, followerUserID, SubStatusCancelled)
 	if err != nil {
 		return err
@@ -433,7 +433,7 @@ func (m *MarketService) UpsertSubscription(providerID, followerUserID int64, fee
 	}
 	var active int
 	if err := db.QueryRow(
-		`SELECT COUNT(*) FROM xt_social_subscriptions WHERE provider_id = ? AND follower_user_id = ? AND status = ?`,
+		`SELECT COUNT(*) FROM xt_social_subscriptions WHERE provider_id = $1 AND follower_user_id = $2 AND status = $3`,
 		providerID, followerUserID, SubStatusActive).Scan(&active); err != nil {
 		return err
 	}
@@ -442,7 +442,7 @@ func (m *MarketService) UpsertSubscription(providerID, followerUserID int64, fee
 	}
 	_, err = db.Exec(
 		`INSERT INTO xt_social_subscriptions (provider_id, follower_user_id, fee_mode, status, created_at)
-		 VALUES (?, ?, ?, ?, ?)`,
+		 VALUES ($1, $2, $3, $4, $5)`,
 		providerID, followerUserID, feeMode, SubStatusActive, now)
 	return err
 }
@@ -454,8 +454,8 @@ func (m *MarketService) CancelSubscription(providerID, followerUserID int64) err
 		return err
 	}
 	_, err = db.Exec(
-		`UPDATE xt_social_subscriptions SET status = ?, cancelled_at = ?
-		 WHERE provider_id = ? AND follower_user_id = ? AND status = ?`,
+		`UPDATE xt_social_subscriptions SET status = $1, cancelled_at = $2
+		 WHERE provider_id = $3 AND follower_user_id = $4 AND status = $5`,
 		SubStatusCancelled, time.Now().UnixMilli(), providerID, followerUserID, SubStatusActive)
 	return err
 }
@@ -473,7 +473,7 @@ func (m *MarketService) GetSubscription(providerID, followerUserID int64) (*Subs
 		`SELECT id, provider_id, follower_user_id, fee_mode, track, track_expires_at, status, created_at,
 			COALESCE(cancelled_at, 0)
 		 FROM xt_social_subscriptions
-		 WHERE provider_id = ? AND follower_user_id = ? AND status = ?
+		 WHERE provider_id = $1 AND follower_user_id = $2 AND status = $3
 		 ORDER BY id DESC LIMIT 1`, providerID, followerUserID, SubStatusActive)
 	var s Subscription
 	if err := row.Scan(&s.ID, &s.ProviderID, &s.FollowerUserID, &s.FeeMode, &s.Track, &s.TrackExpiresAt,
@@ -510,8 +510,8 @@ func (m *MarketService) UpsertSubscriptionTrack(providerID, followerUserID int64
 	now := time.Now().UnixMilli()
 	feeMode := feeModeForTrack(track)
 	res, err := db.Exec(
-		`UPDATE xt_social_subscriptions SET status = ?, cancelled_at = NULL, fee_mode = ?, track = ?, track_expires_at = ?
-		 WHERE provider_id = ? AND follower_user_id = ? AND status = ?`,
+		`UPDATE xt_social_subscriptions SET status = $1, cancelled_at = NULL, fee_mode = $2, track = $3, track_expires_at = $4
+		 WHERE provider_id = $5 AND follower_user_id = $6 AND status = $7`,
 		SubStatusActive, feeMode, track, expiresAtMs, providerID, followerUserID, SubStatusCancelled)
 	if err != nil {
 		return err
@@ -521,14 +521,14 @@ func (m *MarketService) UpsertSubscriptionTrack(providerID, followerUserID int64
 	}
 	if _, err := m.GetSubscription(providerID, followerUserID); err == nil {
 		_, err = db.Exec(
-			`UPDATE xt_social_subscriptions SET fee_mode = ?, track = ?, track_expires_at = ?
-			 WHERE provider_id = ? AND follower_user_id = ? AND status = ?`,
+			`UPDATE xt_social_subscriptions SET fee_mode = $1, track = $2, track_expires_at = $3
+			 WHERE provider_id = $4 AND follower_user_id = $5 AND status = $6`,
 			feeMode, track, expiresAtMs, providerID, followerUserID, SubStatusActive)
 		return err
 	}
 	_, err = db.Exec(
 		`INSERT INTO xt_social_subscriptions (provider_id, follower_user_id, fee_mode, track, track_expires_at, status, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		providerID, followerUserID, feeMode, track, expiresAtMs, SubStatusActive, now)
 	return err
 }
@@ -547,8 +547,8 @@ func (m *MarketService) ListActiveShareSubscriptions() ([]*ShareSubscription, er
 			COALESCE(s.cancelled_at, 0), p.user_id, p.profit_share_pct
 		 FROM xt_social_subscriptions s
 		 JOIN xt_social_providers p ON p.id = s.provider_id
-		 WHERE s.status = ? AND p.apply_status = ?
-			AND (s.track = ? OR (s.track = '' AND s.fee_mode IN (?, ?)))
+		 WHERE s.status = $1 AND p.apply_status = $2
+			AND (s.track = $3 OR (s.track = '' AND s.fee_mode IN ($4, $5)))
 			AND p.profit_share_pct IS NOT NULL AND p.profit_share_pct > 0`,
 		SubStatusActive, ApplyApproved, TrackProfitShare, FeeModeProfitShare, FeeModeHybrid)
 	if err != nil {
@@ -576,7 +576,7 @@ func (m *MarketService) RecordCopyPnL(providerID, followerUserID int64, pnl floa
 	}
 	_, err = db.Exec(
 		`INSERT INTO xt_social_copy_pnl (provider_id, follower_user_id, pnl, note, created_at)
-		 VALUES (?, ?, ?, ?, ?)`,
+		 VALUES ($1, $2, $3, $4, $5)`,
 		providerID, followerUserID, pnl, note, time.Now().UnixMilli())
 	return err
 }
@@ -592,7 +592,7 @@ func (m *MarketService) SumCopyPnL(providerID, followerUserID, dayStart, dayEnd 
 	var cnt int64
 	if err := db.QueryRow(
 		`SELECT COUNT(*), SUM(pnl) FROM xt_social_copy_pnl
-		 WHERE provider_id = ? AND follower_user_id = ? AND created_at >= ? AND created_at < ?`,
+		 WHERE provider_id = $1 AND follower_user_id = $2 AND created_at >= $3 AND created_at < $4`,
 		providerID, followerUserID, dayStart, dayEnd).Scan(&cnt, &sum); err != nil {
 		return 0, 0, err
 	}
@@ -612,7 +612,7 @@ func (m *MarketService) InsertSnapshot(s *ProfitSnapshot) error {
 	_, err = db.Exec(
 		`INSERT INTO xt_social_profit_snapshots
 			(id, provider_id, follower_user_id, window_date, copied_pnl, share_pct, share_amount, status, locked_until, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		 ON CONFLICT(provider_id, follower_user_id, window_date) DO NOTHING`,
 		s.ID, s.ProviderID, s.FollowerUserID, s.WindowDate, s.CopiedPnl, s.SharePct, s.ShareAmount,
 		s.Status, s.LockedUntil, s.CreatedAt)
@@ -629,7 +629,7 @@ func (m *MarketService) PendingSnapshots(providerID, followerUserID int64) ([]*P
 	rows, err := db.Query(
 		`SELECT id, provider_id, follower_user_id, window_date, copied_pnl, share_pct, share_amount, status, locked_until, created_at
 		 FROM xt_social_profit_snapshots
-		 WHERE provider_id = ? AND follower_user_id = ? AND status = ?
+		 WHERE provider_id = $1 AND follower_user_id = $2 AND status = $3
 		 ORDER BY window_date ASC, created_at ASC`,
 		providerID, followerUserID, SnapStatusPending)
 	if err != nil {
@@ -645,7 +645,7 @@ func (m *MarketService) VoidSnapshot(id string) error {
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec(`UPDATE xt_social_profit_snapshots SET status = ? WHERE id = ? AND status = ?`,
+	_, err = db.Exec(`UPDATE xt_social_profit_snapshots SET status = $1 WHERE id = $2 AND status = $3`,
 		SnapStatusVoid, id, SnapStatusPending)
 	return err
 }
@@ -657,7 +657,7 @@ func (m *MarketService) AgePendingToLocked(nowMilli int64) (int64, error) {
 		return 0, err
 	}
 	res, err := db.Exec(
-		`UPDATE xt_social_profit_snapshots SET status = ? WHERE status = ? AND locked_until <= ?`,
+		`UPDATE xt_social_profit_snapshots SET status = $1 WHERE status = $2 AND locked_until <= $3`,
 		SnapStatusLocked, SnapStatusPending, nowMilli)
 	if err != nil {
 		return 0, err
@@ -673,7 +673,7 @@ func (m *MarketService) AgeLockedToPayable(payableNotBefore int64) (int64, error
 		return 0, err
 	}
 	res, err := db.Exec(
-		`UPDATE xt_social_profit_snapshots SET status = ? WHERE status = ? AND locked_until <= ?`,
+		`UPDATE xt_social_profit_snapshots SET status = $1 WHERE status = $2 AND locked_until <= $3`,
 		SnapStatusPayable, SnapStatusLocked, payableNotBefore)
 	if err != nil {
 		return 0, err
@@ -735,23 +735,23 @@ func (m *MarketService) Earnings(userID int64) (*EarningsSummary, error) {
 		return nil
 	}
 	if err := scan(`SELECT SUM(share_amount) FROM xt_social_profit_snapshots
-		WHERE provider_id IN `+in+` AND window_date = ? AND status != ?`, &s.Today, today, SnapStatusVoid); err != nil {
+		WHERE provider_id IN `+in+` AND window_date = $1 AND status != $2`, &s.Today, today, SnapStatusVoid); err != nil {
 		return nil, err
 	}
 	if err := scan(`SELECT SUM(share_amount) FROM xt_social_profit_snapshots
-		WHERE provider_id IN `+in+` AND status != ?`, &s.Total, SnapStatusVoid); err != nil {
+		WHERE provider_id IN `+in+` AND status != $1`, &s.Total, SnapStatusVoid); err != nil {
 		return nil, err
 	}
 	if err := scan(`SELECT SUM(share_amount) FROM xt_social_profit_snapshots
-		WHERE provider_id IN `+in+` AND status = ?`, &s.Payable, SnapStatusPayable); err != nil {
+		WHERE provider_id IN `+in+` AND status = $1`, &s.Payable, SnapStatusPayable); err != nil {
 		return nil, err
 	}
 	if err := scan(`SELECT SUM(amount) FROM xt_social_withdrawals
-		WHERE provider_user_id = ? AND status = ?`, &s.Withdrawn, userID, WithdrawStatusPaid); err != nil {
+		WHERE provider_user_id = $1 AND status = $2`, &s.Withdrawn, userID, WithdrawStatusPaid); err != nil {
 		return nil, err
 	}
 	if err := scan(`SELECT SUM(amount) FROM xt_social_withdrawals
-		WHERE provider_user_id = ? AND status = ?`, &s.PendingWithdrawals, userID, WithdrawStatusPending); err != nil {
+		WHERE provider_user_id = $1 AND status = $2`, &s.PendingWithdrawals, userID, WithdrawStatusPending); err != nil {
 		return nil, err
 	}
 	s.Available = s.Payable - s.Withdrawn - s.PendingWithdrawals
@@ -766,7 +766,7 @@ func (m *MarketService) providerIDsByUser(userID int64) ([]int64, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.Query(`SELECT id FROM xt_social_providers WHERE user_id = ?`, userID)
+	rows, err := db.Query(`SELECT id FROM xt_social_providers WHERE user_id = $1`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -799,7 +799,7 @@ func (m *MarketService) CreateWithdrawal(userID int64, amount float64, chain, ad
 	}
 	_, err = db.Exec(
 		`INSERT INTO xt_social_withdrawals (id, provider_user_id, amount, chain, address, tx_hash, status, admin_note, created_at)
-		 VALUES (?, ?, ?, ?, ?, '', ?, '', ?)`,
+		 VALUES ($1, $2, $3, $4, $5, '', $6, '', $7)`,
 		w.ID, w.ProviderUserID, w.Amount, w.Chain, w.Address, w.Status, w.CreatedAt)
 	if err != nil {
 		return nil, err
@@ -826,7 +826,7 @@ func (m *MarketService) ListWithdrawalsByUser(userID int64) ([]*Withdrawal, erro
 		return nil, err
 	}
 	rows, err := db.Query(`SELECT `+withdrawalCols+` FROM xt_social_withdrawals
-		WHERE provider_user_id = ? ORDER BY created_at DESC LIMIT 100`, userID)
+		WHERE provider_user_id = $1 ORDER BY created_at DESC LIMIT 100`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -851,7 +851,7 @@ func (m *MarketService) ListWithdrawals(status string) ([]*Withdrawal, error) {
 	var rows *sql.Rows
 	if status != "" {
 		rows, err = db.Query(`SELECT `+withdrawalCols+` FROM xt_social_withdrawals
-			WHERE status = ? ORDER BY created_at DESC LIMIT 500`, status)
+			WHERE status = $1 ORDER BY created_at DESC LIMIT 500`, status)
 	} else {
 		rows, err = db.Query(`SELECT ` + withdrawalCols + ` FROM xt_social_withdrawals
 			ORDER BY created_at DESC LIMIT 500`)
@@ -877,7 +877,7 @@ func (m *MarketService) GetWithdrawal(id string) (*Withdrawal, error) {
 	if err != nil {
 		return nil, err
 	}
-	row := db.QueryRow(`SELECT `+withdrawalCols+` FROM xt_social_withdrawals WHERE id = ?`, id)
+	row := db.QueryRow(`SELECT `+withdrawalCols+` FROM xt_social_withdrawals WHERE id = $1`, id)
 	return scanWithdrawal(row)
 }
 
@@ -888,8 +888,8 @@ func (m *MarketService) MarkWithdrawalPaid(id, txHash string) (bool, error) {
 		return false, err
 	}
 	res, err := db.Exec(
-		`UPDATE xt_social_withdrawals SET status = ?, tx_hash = ?, processed_at = ?
-		 WHERE id = ? AND status = ?`,
+		`UPDATE xt_social_withdrawals SET status = $1, tx_hash = $2, processed_at = $3
+		 WHERE id = $4 AND status = $5`,
 		WithdrawStatusPaid, txHash, time.Now().UnixMilli(), id, WithdrawStatusPending)
 	if err != nil {
 		return false, err
@@ -905,8 +905,8 @@ func (m *MarketService) MarkWithdrawalRejected(id, note string) (bool, error) {
 		return false, err
 	}
 	res, err := db.Exec(
-		`UPDATE xt_social_withdrawals SET status = ?, admin_note = ?, processed_at = ?
-		 WHERE id = ? AND status = ?`,
+		`UPDATE xt_social_withdrawals SET status = $1, admin_note = $2, processed_at = $3
+		 WHERE id = $4 AND status = $5`,
 		WithdrawStatusRejected, note, time.Now().UnixMilli(), id, WithdrawStatusPending)
 	if err != nil {
 		return false, err
@@ -926,7 +926,7 @@ func (m *MarketService) ListSnapshotsByProvider(providerID int64, limit int) ([]
 	}
 	rows, err := db.Query(
 		`SELECT id, provider_id, follower_user_id, window_date, copied_pnl, share_pct, share_amount, status, locked_until, created_at
-		 FROM xt_social_profit_snapshots WHERE provider_id = ? ORDER BY window_date DESC LIMIT ?`,
+		 FROM xt_social_profit_snapshots WHERE provider_id = $1 ORDER BY window_date DESC LIMIT $2`,
 		providerID, limit)
 	if err != nil {
 		return nil, err

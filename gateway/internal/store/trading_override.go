@@ -12,7 +12,7 @@ func GetTradingLiveOverride() string {
 		return ""
 	}
 	var v string
-	if err := db.QueryRow(`SELECT value FROM pairlist_settings WHERE key=?`, tradingLiveOverrideKey).Scan(&v); err != nil {
+	if err := db.QueryRow(`SELECT value FROM pairlist_settings WHERE key=$1`, tradingLiveOverrideKey).Scan(&v); err != nil {
 		return ""
 	}
 	return v
@@ -24,7 +24,7 @@ func SaveTradingLiveOverride(value string) error {
 	if db == nil {
 		return nil
 	}
-	_, err := db.Exec(`INSERT INTO pairlist_settings (key, value, updated_at) VALUES (?,?,?)
+	_, err := db.Exec(`INSERT INTO pairlist_settings (key, value, updated_at) VALUES ($1,$2,$3)
 		ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
 		tradingLiveOverrideKey, value, time.Now().UnixMilli())
 	return err

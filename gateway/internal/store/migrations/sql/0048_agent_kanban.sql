@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS xt_agent_kanban_cards (
     user_id BIGINT NOT NULL,
     title TEXT NOT NULL,
     description TEXT DEFAULT '',
-    column TEXT NOT NULL DEFAULT 'todo' CHECK (column IN ('todo', 'doing', 'done')),
+    "column" TEXT NOT NULL DEFAULT 'todo' CHECK ("column" IN ('todo', 'doing', 'done')),
     assignee TEXT DEFAULT '',             -- user | agent（空 = 未指派）
     created_by TEXT DEFAULT 'user',       -- user（面板手动）| agent（助手工具创建）
     comment TEXT DEFAULT '',              -- 完成时的总结备注

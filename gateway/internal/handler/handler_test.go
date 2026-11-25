@@ -17,13 +17,14 @@ import (
 
 func TestMain(m *testing.M) {
 	gin.SetMode(gin.TestMode)
-	// 临时 sqlite（同 runner_test 的模式）：DB 文件放系统临时目录，
-	// 绝不触碰 ./runtime/gateway.db；结束后关闭连接并删除整个目录。
+	// 数据库走测试 PostgreSQL（无配置则整包跳过）；配置/保险库文件放系统临时目录。
+	if !store.TestDatabaseConfigured() {
+		os.Exit(0)
+	}
 	dir, err := os.MkdirTemp("", "handler_test")
 	if err != nil {
 		panic(err)
 	}
-	_ = os.Setenv("DB_PATH", filepath.Join(dir, "gateway.db"))
 	_ = os.Setenv("CONFIG_PATH", filepath.Join(dir, "test_handler_config.yaml"))
 	_ = os.Setenv("SECRET_KEY", "test-secret-key-not-for-production-use-only")
 	// 保险库隔离到临时目录：默认相对路径会在包目录下生成 runtime/credentials_vault.json

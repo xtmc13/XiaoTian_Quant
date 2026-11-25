@@ -49,7 +49,7 @@ func (r *AIReviewReportRepo) Create(rec *AIReviewReportRecord) error {
 			(id, user_id, scope_type, scope_id, period_start, period_end,
 			 trades_count, total_pnl, win_rate, max_drawdown,
 			 report_text, model, status, error, created_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
 		rec.ID, rec.UserID, rec.ScopeType, rec.ScopeID, rec.PeriodStart, rec.PeriodEnd,
 		rec.TradesCount, rec.TotalPnL, rec.WinRate, rec.MaxDrawdown,
 		rec.ReportText, rec.Model, rec.Status, rec.Error, rec.CreatedAt,
@@ -80,7 +80,7 @@ func (r *AIReviewReportRepo) GetByID(id string) (*AIReviewReportRecord, error) {
 	if db == nil {
 		return nil, sql.ErrConnDone
 	}
-	row := db.QueryRow(`SELECT `+aiReviewReportColumns+` FROM xt_ai_review_reports WHERE id = ?`, id)
+	row := db.QueryRow(`SELECT `+aiReviewReportColumns+` FROM xt_ai_review_reports WHERE id = $1`, id)
 	return r.scan(row)
 }
 
@@ -94,17 +94,20 @@ func (r *AIReviewReportRepo) ListByUser(userID int64, scopeType, scopeID string,
 	if limit <= 0 {
 		limit = 50
 	}
-	query := `SELECT ` + aiReviewReportColumns + ` FROM xt_ai_review_reports WHERE user_id = ?`
+	query := `SELECT ` + aiReviewReportColumns + ` FROM xt_ai_review_reports WHERE user_id = $1`
 	args := []any{userID}
+	next := 2
 	if scopeType != "" {
-		query += ` AND scope_type = ?`
+		query += fmt.Sprintf(` AND scope_type = $%d`, next)
 		args = append(args, scopeType)
+		next++
 	}
 	if scopeID != "" {
-		query += ` AND scope_id = ?`
+		query += fmt.Sprintf(` AND scope_id = $%d`, next)
 		args = append(args, scopeID)
+		next++
 	}
-	query += ` ORDER BY created_at DESC LIMIT ?`
+	query += fmt.Sprintf(` ORDER BY created_at DESC LIMIT $%d::bigint`, next)
 	args = append(args, limit)
 
 	rows, err := db.Query(query, args...)
@@ -172,7 +175,7 @@ func LoadScopeTrades(scopeType, scopeID string, userID, startMs, endMs int64) (t
 
 func loadStrategyScopeTrades(scopeID string, userID, startMs, endMs int64) ([]ScopeTrade, error) {
 	var symbol string
-	err := db.QueryRow(`SELECT symbol FROM strategy_configs WHERE id = ?`, scopeID).Scan(&symbol)
+	err := db.QueryRow(`SELECT symbol FROM strategy_configs WHERE id = $1`, scopeID).Scan(&symbol)
 	if err != nil {
 		return nil, fmt.Errorf("strategy %s 不存在", scopeID)
 	}
@@ -181,8 +184,8 @@ func loadStrategyScopeTrades(scopeID string, userID, startMs, endMs int64) ([]Sc
 	}
 	rows, err := db.Query(
 		`SELECT id, symbol, side, price, quantity, fee, created_at FROM trades
-		 WHERE user_id = ? AND symbol = ? AND created_at >= ? AND created_at <= ?
-		 ORDER BY created_at ASC LIMIT ?`,
+		 WHERE user_id = $1 AND symbol = $2 AND created_at >= $3 AND created_at <= $4
+		 ORDER BY created_at ASC LIMIT $5`,
 		userID, symbol, startMs, endMs, scopeTradeLoadLimit)
 	if err != nil {
 		return nil, err
@@ -196,9 +199,9 @@ func loadBotScopeTrades(scopeID string, userID, startMs, endMs int64) ([]ScopeTr
 	rows, err := db.Query(
 		`SELECT t.id, t.symbol, t.side, t.price, t.quantity, t.fee, t.created_at
 		 FROM trades t JOIN xt_orders o ON t.order_id = o.id
-		 WHERE t.user_id = ? AND t.created_at >= ? AND t.created_at <= ?
-		   AND o.client_oid IN (?, ?, ?)
-		 ORDER BY t.created_at ASC LIMIT ?`,
+		 WHERE t.user_id = $1 AND t.created_at >= $2 AND t.created_at <= $3
+		   AND o.client_oid IN ($4, $5, $6)
+		 ORDER BY t.created_at ASC LIMIT $7`,
 		userID, startMs, endMs,
 		"dca:"+scopeID, "grid:"+scopeID, "lmartin:"+scopeID,
 		scopeTradeLoadLimit)
@@ -214,8 +217,8 @@ func loadAIBotScopeTrades(scopeID string, startMs, endMs int64) ([]ScopeTrade, e
 	rows, err := db.Query(
 		`SELECT id, symbol, side, exit_price, quantity, pnl, close_reason, closed_at
 		 FROM ai_bot_trades
-		 WHERE bot_instance_id = ? AND closed_at > 0 AND closed_at >= ? AND closed_at <= ?
-		 ORDER BY closed_at ASC LIMIT ?`,
+		 WHERE bot_instance_id = $1 AND closed_at > 0 AND closed_at >= $2 AND closed_at <= $3
+		 ORDER BY closed_at ASC LIMIT $4`,
 		scopeID, startMs, endMs, scopeTradeLoadLimit)
 	if err != nil {
 		return nil, err
@@ -248,6 +251,6 @@ func scanScopeTradeRows(rows *sql.Rows) ([]ScopeTrade, error) {
 
 func isAIBotInstance(scopeID string) bool {
 	var n int
-	_ = db.QueryRow(`SELECT COUNT(1) FROM ai_bot_instances WHERE id = ?`, scopeID).Scan(&n)
+	_ = db.QueryRow(`SELECT COUNT(1) FROM ai_bot_instances WHERE id = $1`, scopeID).Scan(&n)
 	return n > 0
 }

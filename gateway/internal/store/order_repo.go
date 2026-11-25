@@ -45,6 +45,22 @@ type OrderRepo struct {
 
 func NewOrderRepo() *OrderRepo { return &OrderRepo{} }
 
+// scanOrder 统一扫描一行订单：created_at/updated_at 为 double precision 先收 float64，
+// close_position 为 BIGINT 布尔列先收 int 再转 bool。
+func scanOrder(s rowScanner, o *OrderRecord) error {
+	var createdF, updatedF float64
+	var closePos int
+	if err := s.Scan(&o.ID, &o.Symbol, &o.Side, &o.OrderType, &o.Price, &o.StopPrice, &o.Quantity, &o.Filled, &o.Status, &o.Exchange,
+		&o.UserID, &o.ClientOID, &o.ExchangeOrderID, &o.AvgFillPrice, &createdF, &updatedF,
+		&o.MarketType, &o.PositionSide, &o.Leverage, &o.MarginMode, &o.TPPrice, &o.SLPrice, &closePos); err != nil {
+		return err
+	}
+	o.CreatedAt = int64(createdF)
+	o.UpdatedAt = int64(updatedF)
+	o.ClosePosition = closePos != 0
+	return nil
+}
+
 func (r *OrderRepo) Create(o *OrderRecord) error {
 	if o.ID == "" {
 		o.ID = fmt.Sprintf("ord-%d", time.Now().UnixMilli())
@@ -63,28 +79,20 @@ func (r *OrderRepo) Create(o *OrderRecord) error {
 	}
 	_, err := db.Exec(
 		`INSERT INTO xt_orders (id, symbol, side, order_type, price, stop_price, quantity, filled, status, exchange, user_id, client_oid, exchange_order_id, avg_fill_price, created_at, updated_at, market_type, position_side, leverage, margin_mode, tp_price, sl_price, close_position)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
 		o.ID, o.Symbol, o.Side, o.OrderType, o.Price, o.StopPrice, o.Quantity, o.Filled, o.Status, o.Exchange,
 		o.UserID, o.ClientOID, o.ExchangeOrderID, o.AvgFillPrice, o.CreatedAt, o.UpdatedAt,
-		o.MarketType, o.PositionSide, o.Leverage, o.MarginMode, o.TPPrice, o.SLPrice, o.ClosePosition,
+		o.MarketType, o.PositionSide, o.Leverage, o.MarginMode, o.TPPrice, o.SLPrice, boolToInt(o.ClosePosition),
 	)
 	return err
 }
 
 func (r *OrderRepo) GetByID(id string) (*OrderRecord, error) {
-	row := db.QueryRow(`SELECT id, symbol, side, order_type, price, stop_price, quantity, filled, status, exchange, user_id, client_oid, exchange_order_id, avg_fill_price, created_at, updated_at, market_type, position_side, leverage, margin_mode, tp_price, sl_price, close_position FROM xt_orders WHERE id=?`, id)
+	row := db.QueryRow(`SELECT id, symbol, side, order_type, price, stop_price, quantity, filled, status, exchange, user_id, client_oid, exchange_order_id, avg_fill_price, created_at, updated_at, market_type, position_side, leverage, margin_mode, tp_price, sl_price, close_position FROM xt_orders WHERE id=$1`, id)
 	var o OrderRecord
-	// xt_orders.created_at/updated_at 为历史 REAL 列，驱动可能返回 float64，
-	// 大时间戳会以科学计数法走字符串解析而失败——先收 float64 再显式转换。
-	var createdF, updatedF float64
-	err := row.Scan(&o.ID, &o.Symbol, &o.Side, &o.OrderType, &o.Price, &o.StopPrice, &o.Quantity, &o.Filled, &o.Status, &o.Exchange,
-		&o.UserID, &o.ClientOID, &o.ExchangeOrderID, &o.AvgFillPrice, &createdF, &updatedF,
-		&o.MarketType, &o.PositionSide, &o.Leverage, &o.MarginMode, &o.TPPrice, &o.SLPrice, &o.ClosePosition)
-	if err != nil {
+	if err := scanOrder(row, &o); err != nil {
 		return nil, err
 	}
-	o.CreatedAt = int64(createdF)
-	o.UpdatedAt = int64(updatedF)
 	return &o, nil
 }
 
@@ -95,13 +103,13 @@ func (r *OrderRepo) List(filter map[string]any, limit int) ([]*OrderRecord, erro
 		"exchange": true, "user_id": true, "client_oid": true, "exchange_order_id": true, "market_type": true,
 		"position_side": true, "created_at": true, "updated_at": true,
 	}
-	args, where := buildFilter(filter, allowedCols)
+	args, where, next := buildFilter(filter, allowedCols, 1)
 	if where != "" {
 		query += " WHERE " + where
 	}
 	query += " ORDER BY created_at DESC"
 	if limit > 0 {
-		query += " LIMIT ?"
+		query += fmt.Sprintf(" LIMIT $%d", next)
 		args = append(args, limit)
 	}
 	rows, err := db.Query(query, args...)
@@ -112,16 +120,9 @@ func (r *OrderRepo) List(filter map[string]any, limit int) ([]*OrderRecord, erro
 	var result []*OrderRecord
 	for rows.Next() {
 		var o OrderRecord
-		// xt_orders.created_at/updated_at 为历史 REAL 列，驱动可能返回 float64，
-		// 大时间戳会以科学计数法走字符串解析而失败——先收 float64 再显式转换。
-		var createdF, updatedF float64
-		if err := rows.Scan(&o.ID, &o.Symbol, &o.Side, &o.OrderType, &o.Price, &o.StopPrice, &o.Quantity, &o.Filled, &o.Status, &o.Exchange,
-			&o.UserID, &o.ClientOID, &o.ExchangeOrderID, &o.AvgFillPrice, &createdF, &updatedF,
-			&o.MarketType, &o.PositionSide, &o.Leverage, &o.MarginMode, &o.TPPrice, &o.SLPrice, &o.ClosePosition); err != nil {
+		if err := scanOrder(rows, &o); err != nil {
 			return nil, err
 		}
-		o.CreatedAt = int64(createdF)
-		o.UpdatedAt = int64(updatedF)
 		result = append(result, &o)
 	}
 	return result, nil
@@ -139,14 +140,9 @@ func (r *OrderRepo) ListActive() ([]*OrderRecord, error) {
 	var result []*OrderRecord
 	for rows.Next() {
 		var o OrderRecord
-		var createdF, updatedF float64
-		if err := rows.Scan(&o.ID, &o.Symbol, &o.Side, &o.OrderType, &o.Price, &o.StopPrice, &o.Quantity, &o.Filled, &o.Status, &o.Exchange,
-			&o.UserID, &o.ClientOID, &o.ExchangeOrderID, &o.AvgFillPrice, &createdF, &updatedF,
-			&o.MarketType, &o.PositionSide, &o.Leverage, &o.MarginMode, &o.TPPrice, &o.SLPrice, &o.ClosePosition); err != nil {
+		if err := scanOrder(rows, &o); err != nil {
 			return nil, err
 		}
-		o.CreatedAt = int64(createdF)
-		o.UpdatedAt = int64(updatedF)
 		result = append(result, &o)
 	}
 	return result, nil
@@ -157,7 +153,7 @@ func (r *OrderRepo) ListActive() ([]*OrderRecord, error) {
 // ltm 重启恢复扫描用：父单前缀 "ltm-"，市价补单前缀 "ltm-mkt:<parentID>"。
 func (r *OrderRepo) ListActiveByClientOIDPrefix(prefix string) ([]*OrderRecord, error) {
 	rows, err := db.Query(`SELECT id, symbol, side, order_type, price, stop_price, quantity, filled, status, exchange, user_id, client_oid, exchange_order_id, avg_fill_price, created_at, updated_at, market_type, position_side, leverage, margin_mode, tp_price, sl_price, close_position
-		FROM xt_orders WHERE client_oid LIKE ? AND status IN ('NEW','PENDING','PARTIALLY_FILLED') ORDER BY created_at ASC`, prefix+"%")
+		FROM xt_orders WHERE client_oid LIKE $1 AND status IN ('NEW','PENDING','PARTIALLY_FILLED') ORDER BY created_at ASC`, prefix+"%")
 	if err != nil {
 		return nil, err
 	}
@@ -165,16 +161,9 @@ func (r *OrderRepo) ListActiveByClientOIDPrefix(prefix string) ([]*OrderRecord, 
 	var result []*OrderRecord
 	for rows.Next() {
 		var o OrderRecord
-		// xt_orders.created_at/updated_at 为历史 REAL 列，驱动可能返回 float64，
-		// 大时间戳会以科学计数法走字符串解析而失败——先收 float64 再显式转换。
-		var createdF, updatedF float64
-		if err := rows.Scan(&o.ID, &o.Symbol, &o.Side, &o.OrderType, &o.Price, &o.StopPrice, &o.Quantity, &o.Filled, &o.Status, &o.Exchange,
-			&o.UserID, &o.ClientOID, &o.ExchangeOrderID, &o.AvgFillPrice, &createdF, &updatedF,
-			&o.MarketType, &o.PositionSide, &o.Leverage, &o.MarginMode, &o.TPPrice, &o.SLPrice, &o.ClosePosition); err != nil {
+		if err := scanOrder(rows, &o); err != nil {
 			return nil, err
 		}
-		o.CreatedAt = int64(createdF)
-		o.UpdatedAt = int64(updatedF)
 		result = append(result, &o)
 	}
 	return result, nil
@@ -183,9 +172,9 @@ func (r *OrderRepo) ListActiveByClientOIDPrefix(prefix string) ([]*OrderRecord, 
 func (r *OrderRepo) Update(o *OrderRecord) error {
 	o.UpdatedAt = time.Now().UnixMilli()
 	_, err := db.Exec(
-		`UPDATE xt_orders SET symbol=?, side=?, order_type=?, price=?, stop_price=?, quantity=?, filled=?, status=?, exchange=?, user_id=?, client_oid=?, exchange_order_id=?, avg_fill_price=?, market_type=?, position_side=?, leverage=?, margin_mode=?, tp_price=?, sl_price=?, close_position=? WHERE id=?`,
+		`UPDATE xt_orders SET symbol=$1, side=$2, order_type=$3, price=$4, stop_price=$5, quantity=$6, filled=$7, status=$8, exchange=$9, user_id=$10, client_oid=$11, exchange_order_id=$12, avg_fill_price=$13, market_type=$14, position_side=$15, leverage=$16, margin_mode=$17, tp_price=$18, sl_price=$19, close_position=$20 WHERE id=$21`,
 		o.Symbol, o.Side, o.OrderType, o.Price, o.StopPrice, o.Quantity, o.Filled, o.Status, o.Exchange, o.UserID,
-		o.ClientOID, o.ExchangeOrderID, o.AvgFillPrice, o.MarketType, o.PositionSide, o.Leverage, o.MarginMode, o.TPPrice, o.SLPrice, o.ClosePosition, o.ID,
+		o.ClientOID, o.ExchangeOrderID, o.AvgFillPrice, o.MarketType, o.PositionSide, o.Leverage, o.MarginMode, o.TPPrice, o.SLPrice, boolToInt(o.ClosePosition), o.ID,
 	)
 	return err
 }
@@ -209,7 +198,7 @@ func (r *OrderRepo) Upsert(o *OrderRecord) error {
 	}
 	_, err := db.Exec(
 		`INSERT INTO xt_orders (id, symbol, side, order_type, price, stop_price, quantity, filled, status, exchange, user_id, client_oid, exchange_order_id, avg_fill_price, created_at, updated_at, market_type, position_side, leverage, margin_mode, tp_price, sl_price, close_position)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
 		 ON CONFLICT(id) DO UPDATE SET symbol=excluded.symbol, side=excluded.side, order_type=excluded.order_type,
 		 price=excluded.price, stop_price=excluded.stop_price, quantity=excluded.quantity, filled=excluded.filled,
 		 status=excluded.status, exchange=excluded.exchange, user_id=excluded.user_id, client_oid=excluded.client_oid,
@@ -218,13 +207,13 @@ func (r *OrderRepo) Upsert(o *OrderRecord) error {
 		 tp_price=excluded.tp_price, sl_price=excluded.sl_price, close_position=excluded.close_position`,
 		o.ID, o.Symbol, o.Side, o.OrderType, o.Price, o.StopPrice, o.Quantity, o.Filled, o.Status, o.Exchange,
 		o.UserID, o.ClientOID, o.ExchangeOrderID, o.AvgFillPrice, o.CreatedAt, o.UpdatedAt,
-		o.MarketType, o.PositionSide, o.Leverage, o.MarginMode, o.TPPrice, o.SLPrice, o.ClosePosition,
+		o.MarketType, o.PositionSide, o.Leverage, o.MarginMode, o.TPPrice, o.SLPrice, boolToInt(o.ClosePosition),
 	)
 	return err
 }
 
 func (r *OrderRepo) Delete(id string) error {
-	_, err := db.Exec("DELETE FROM xt_orders WHERE id=?", id)
+	_, err := db.Exec("DELETE FROM xt_orders WHERE id=$1", id)
 	return err
 }
 
@@ -234,7 +223,7 @@ func (r *OrderRepo) ListRecent(sinceMs int64, limit int) ([]*OrderRecord, error)
 		limit = 500
 	}
 	rows, err := db.Query(`SELECT id, symbol, side, order_type, price, stop_price, quantity, filled, status, exchange, user_id, client_oid, exchange_order_id, avg_fill_price, created_at, updated_at, market_type, position_side, leverage, margin_mode, tp_price, sl_price, close_position
-		FROM xt_orders WHERE updated_at >= ? ORDER BY updated_at DESC LIMIT ?`, sinceMs, limit)
+		FROM xt_orders WHERE updated_at >= $1 ORDER BY updated_at DESC LIMIT $2`, sinceMs, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -242,16 +231,9 @@ func (r *OrderRepo) ListRecent(sinceMs int64, limit int) ([]*OrderRecord, error)
 	var result []*OrderRecord
 	for rows.Next() {
 		var o OrderRecord
-		// xt_orders.created_at/updated_at 为历史 REAL 列，驱动可能返回 float64，
-		// 大时间戳会以科学计数法走字符串解析而失败——先收 float64 再显式转换。
-		var createdF, updatedF float64
-		if err := rows.Scan(&o.ID, &o.Symbol, &o.Side, &o.OrderType, &o.Price, &o.StopPrice, &o.Quantity, &o.Filled, &o.Status, &o.Exchange,
-			&o.UserID, &o.ClientOID, &o.ExchangeOrderID, &o.AvgFillPrice, &createdF, &updatedF,
-			&o.MarketType, &o.PositionSide, &o.Leverage, &o.MarginMode, &o.TPPrice, &o.SLPrice, &o.ClosePosition); err != nil {
+		if err := scanOrder(rows, &o); err != nil {
 			return nil, err
 		}
-		o.CreatedAt = int64(createdF)
-		o.UpdatedAt = int64(updatedF)
 		result = append(result, &o)
 	}
 	return result, nil
@@ -261,13 +243,15 @@ func (r *OrderRepo) ListRecent(sinceMs int64, limit int) ([]*OrderRecord, error)
 // 成交记录页按策略过滤用（sig:<策略id>:% 打标归属）。
 func (r *OrderRepo) ListFilledByClientOIDPrefix(prefix, symbol string, limit int) ([]*OrderRecord, error) {
 	q := `SELECT id, symbol, side, order_type, price, stop_price, quantity, filled, status, exchange, user_id, client_oid, exchange_order_id, avg_fill_price, created_at, updated_at, market_type, position_side, leverage, margin_mode, tp_price, sl_price, close_position
-		FROM xt_orders WHERE client_oid LIKE ? AND status='FILLED' AND filled>0 AND avg_fill_price>0`
+		FROM xt_orders WHERE client_oid LIKE $1 AND status='FILLED' AND filled>0 AND avg_fill_price>0`
 	args := []any{prefix + "%"}
+	next := 2
 	if symbol != "" {
-		q += " AND UPPER(symbol)=UPPER(?)"
+		q += fmt.Sprintf(" AND UPPER(symbol)=UPPER($%d)", next)
 		args = append(args, symbol)
+		next++
 	}
-	q += " ORDER BY updated_at DESC LIMIT ?"
+	q += fmt.Sprintf(" ORDER BY updated_at DESC LIMIT $%d", next)
 	args = append(args, limit)
 	rows, err := db.Query(q, args...)
 	if err != nil {
@@ -277,14 +261,9 @@ func (r *OrderRepo) ListFilledByClientOIDPrefix(prefix, symbol string, limit int
 	var result []*OrderRecord
 	for rows.Next() {
 		var o OrderRecord
-		var createdF, updatedF float64
-		if err := rows.Scan(&o.ID, &o.Symbol, &o.Side, &o.OrderType, &o.Price, &o.StopPrice, &o.Quantity, &o.Filled, &o.Status, &o.Exchange,
-			&o.UserID, &o.ClientOID, &o.ExchangeOrderID, &o.AvgFillPrice, &createdF, &updatedF,
-			&o.MarketType, &o.PositionSide, &o.Leverage, &o.MarginMode, &o.TPPrice, &o.SLPrice, &o.ClosePosition); err != nil {
+		if err := scanOrder(rows, &o); err != nil {
 			return nil, err
 		}
-		o.CreatedAt = int64(createdF)
-		o.UpdatedAt = int64(updatedF)
 		result = append(result, &o)
 	}
 	return result, nil
@@ -308,7 +287,7 @@ func NetFilledByStrategy(strategyID, symbol string) (netQty, entryVWAP float64, 
 	prefix := "sig:" + strategyID + ":%"
 	rows, err := db.Query(
 		`SELECT side, COALESCE(SUM(filled),0), COALESCE(SUM(filled*avg_fill_price),0)
-		 FROM xt_orders WHERE client_oid LIKE ? AND UPPER(symbol)=UPPER(?)
+		 FROM xt_orders WHERE client_oid LIKE $1 AND UPPER(symbol)=UPPER($2)
 		 AND status='FILLED' AND filled>0 AND avg_fill_price>0 GROUP BY side`,
 		prefix, symbol)
 	if err != nil {
@@ -358,9 +337,9 @@ func FilledOrdersByStrategy(strategyID, symbol string) ([]OrderFill, error) {
 	prefix := "sig:" + strategyID + ":%"
 	rows, err := db.Query(
 		`SELECT side, filled, avg_fill_price, COALESCE(client_oid,'') FROM xt_orders
-		 WHERE client_oid LIKE ? AND UPPER(symbol)=UPPER(?)
+		 WHERE client_oid LIKE $1 AND UPPER(symbol)=UPPER($2)
 		 AND status='FILLED' AND filled>0 AND avg_fill_price>0
-		 ORDER BY updated_at ASC, created_at ASC, rowid ASC`,
+		 ORDER BY updated_at ASC, created_at ASC, id ASC`,
 		prefix, symbol)
 	if err != nil {
 		return nil, err
@@ -388,8 +367,8 @@ func FilledOrdersByStrategy(strategyID, symbol string) ([]OrderFill, error) {
 func StrategyPaperPnL(strategyID, symbol string, markPrice, feeRate float64, allowShort bool) (netQty, avgCost, realized, unrealized, totalPnl float64, ok bool) {
 	prefix := "sig:" + strategyID + ":%"
 	rows, err := db.Query(`SELECT side, filled, avg_fill_price FROM xt_orders
-		WHERE client_oid LIKE ? AND UPPER(symbol)=UPPER(?) AND status='FILLED' AND filled>0 AND avg_fill_price>0
-		ORDER BY updated_at ASC, created_at ASC, rowid ASC`, prefix, symbol)
+		WHERE client_oid LIKE $1 AND UPPER(symbol)=UPPER($2) AND status='FILLED' AND filled>0 AND avg_fill_price>0
+		ORDER BY updated_at ASC, created_at ASC, id ASC`, prefix, symbol)
 	if err != nil {
 		return 0, 0, 0, 0, 0, false
 	}

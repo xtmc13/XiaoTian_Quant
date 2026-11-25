@@ -45,7 +45,7 @@ func (r *StrategyTemplateRepo) Create(item *StrategyTemplateRecord) error {
 	}
 	_, err := db.Exec(`INSERT INTO strategy_templates (
 		id, user_id, name, category, strategy_type, description, default_config_json, created_at, updated_at
-	) VALUES (?,?,?,?,?,?,?,?,?)`,
+	) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
 		item.ID, item.UserID, item.Name, item.Category, item.StrategyType, item.Description,
 		item.DefaultConfigJSON, item.CreatedAt, item.UpdatedAt,
 	)
@@ -55,7 +55,7 @@ func (r *StrategyTemplateRepo) Create(item *StrategyTemplateRecord) error {
 // GetByID returns a template by ID.
 func (r *StrategyTemplateRepo) GetByID(id string) (*StrategyTemplateRecord, error) {
 	row := db.QueryRow(`SELECT id, user_id, name, category, strategy_type, description,
-		default_config_json, created_at, updated_at FROM strategy_templates WHERE id=?`, id)
+		default_config_json, created_at, updated_at FROM strategy_templates WHERE id=$1`, id)
 	return scanStrategyTemplate(row)
 }
 
@@ -64,15 +64,15 @@ func (r *StrategyTemplateRepo) GetByID(id string) (*StrategyTemplateRecord, erro
 func (r *StrategyTemplateRepo) List(userID int64, category string, limit int) ([]*StrategyTemplateRecord, error) {
 	query := `SELECT id, user_id, name, category, strategy_type, description,
 		default_config_json, created_at, updated_at FROM strategy_templates
-		WHERE (user_id=? OR user_id=0)`
+		WHERE (user_id=$1 OR user_id=0)`
 	args := []any{userID}
 	if category != "" {
-		query += " AND category=?"
+		query += fmt.Sprintf(" AND category=$%d", len(args)+1)
 		args = append(args, category)
 	}
 	query += " ORDER BY user_id DESC, updated_at DESC"
 	if limit > 0 {
-		query += " LIMIT ?"
+		query += fmt.Sprintf(" LIMIT $%d", len(args)+1)
 		args = append(args, limit)
 	}
 	rows, err := db.Query(query, args...)
@@ -94,7 +94,7 @@ func (r *StrategyTemplateRepo) List(userID int64, category string, limit int) ([
 
 // Delete removes a template if it belongs to the user.
 func (r *StrategyTemplateRepo) Delete(id string, userID int64) (bool, error) {
-	res, err := db.Exec("DELETE FROM strategy_templates WHERE id=? AND user_id=?", id, userID)
+	res, err := db.Exec("DELETE FROM strategy_templates WHERE id=$1 AND user_id=$2", id, userID)
 	if err != nil {
 		return false, err
 	}

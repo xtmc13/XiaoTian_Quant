@@ -8,10 +8,6 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
-func init() {
-	store.InitDB()
-}
-
 func TestDefaultPipelineConfig(t *testing.T) {
 	cfg := DefaultPipelineConfig()
 	if cfg.Symbol != "BTCUSDT" {
@@ -32,9 +28,10 @@ func TestDefaultPipelineConfig(t *testing.T) {
 }
 
 func TestTrainingPipeline_loadBars(t *testing.T) {
+	store.SetupTestDB(t)
 	client := NewClient("")
-	store := data.NewStorage()
-	downloader := data.NewDownloader(store)
+	ds := data.NewStorage()
+	downloader := data.NewDownloader(ds)
 	pipeline := NewTrainingPipeline(client, downloader)
 
 	// Create test data
@@ -42,7 +39,7 @@ func TestTrainingPipeline_loadBars(t *testing.T) {
 		{Symbol: "BTCUSDT", Interval: "1h", Time: time.Now().Add(-24 * time.Hour).UnixMilli(), Open: 100, High: 101, Low: 99, Close: 100, Volume: 1000},
 		{Symbol: "BTCUSDT", Interval: "1h", Time: time.Now().Add(-23 * time.Hour).UnixMilli(), Open: 100, High: 101, Low: 99, Close: 101, Volume: 1000},
 	}
-	store.SaveOHLCV(bars)
+	ds.SaveOHLCV(bars)
 
 	cfg := PipelineConfig{
 		Symbol:       "BTCUSDT",

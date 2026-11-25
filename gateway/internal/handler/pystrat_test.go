@@ -25,13 +25,13 @@ func pyStratAdminToken(t *testing.T) string {
 	}
 	const uid = 31337
 	if _, err := db.Exec(
-		`INSERT OR IGNORE INTO xt_users (id, username, password_hash, nickname, email, role, token_version) VALUES (?, ?, ?, ?, ?, 'admin', 1)`,
+		`INSERT INTO xt_users (id, username, password_hash, nickname, email, role, token_version) VALUES ($1, $2, $3, $4, $5, 'admin', 1) ON CONFLICT(id) DO NOTHING`,
 		uid, "pystratadmin", store.HashPassword("pystrat-pass-123"), "PyStrat Admin", "pystrat-admin@test.local",
 	); err != nil {
 		t.Fatalf("ensure admin user: %v", err)
 	}
 	if _, err := db.Exec(
-		`UPDATE xt_users SET must_change_password=0, token_version=1, is_active=1, totp_enabled=0, role='admin' WHERE id=?`, uid,
+		`UPDATE xt_users SET must_change_password=0, token_version=1, is_active=1, totp_enabled=0, role='admin' WHERE id=$1`, uid,
 	); err != nil {
 		t.Fatalf("reset admin flags: %v", err)
 	}

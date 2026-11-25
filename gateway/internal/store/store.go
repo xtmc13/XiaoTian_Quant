@@ -922,7 +922,7 @@ func VerifyJWT(tokenStr string) (jwt.MapClaims, error) {
 }
 
 func FindUserByUsername(username string) map[string]any {
-	row := db.QueryRow("SELECT id, username, password_hash, nickname, email, role, token_version, email_verified, is_active, totp_enabled, must_change_password, last_login_ip, created_at FROM xt_users WHERE username=? AND is_active=1", username)
+	row := db.QueryRow("SELECT id, username, password_hash, nickname, email, role, token_version, email_verified, is_active, totp_enabled, must_change_password, last_login_ip, created_at FROM xt_users WHERE username=$1 AND is_active=1", username)
 	var id, tokenVer, emailVerified, isActive, totpEnabled, mustChange int
 	var uname, pwHash, nickname, email, role, lastLoginIP, createdAt string
 	if err := row.Scan(&id, &uname, &pwHash, &nickname, &email, &role, &tokenVer, &emailVerified, &isActive, &totpEnabled, &mustChange, &lastLoginIP, &createdAt); err != nil {
@@ -939,14 +939,14 @@ func FindUserByUsername(username string) map[string]any {
 
 func CreateUser(username, password, nickname, email, role string) (int, error) {
 	pwHash := HashPassword(password)
-	res, err := db.Exec(
-		"INSERT INTO xt_users (username, password_hash, nickname, email, role) VALUES (?, ?, ?, ?, ?)",
+	var id int64
+	err := db.QueryRow(
+		"INSERT INTO xt_users (username, password_hash, nickname, email, role) VALUES ($1, $2, $3, $4, $5) RETURNING id",
 		username, pwHash, nickname, email, role,
-	)
+	).Scan(&id)
 	if err != nil {
 		return 0, err
 	}
-	id, _ := res.LastInsertId()
 	return int(id), nil
 }
 
@@ -976,12 +976,12 @@ func ListAllUsers() []map[string]any {
 func SaveVerificationCode(email, code, codeType, ip string, ttlSeconds int) error {
 	now := time.Now().Unix()
 	// Invalidate all unused codes of same type for this email
-	db.Exec(`UPDATE xt_verification_codes SET used_at=? WHERE email=? AND code_type=? AND used_at=0`,
+	db.Exec(`UPDATE xt_verification_codes SET used_at=$1 WHERE email=$2 AND code_type=$3 AND used_at=0`,
 		now, email, codeType)
 	// Insert new code
 	expiresAt := now + int64(ttlSeconds)
 	_, err := db.Exec(
-		`INSERT INTO xt_verification_codes (email, code, code_type, expires_at, ip_address, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO xt_verification_codes (email, code, code_type, expires_at, ip_address, created_at) VALUES ($1, $2, $3, $4, $5, $6)`,
 		email, code, codeType, expiresAt, ip, now,
 	)
 	return err
@@ -995,7 +995,7 @@ func VerifyCode(email, code, codeType string) (bool, string) {
 	var attempts int
 
 	row := db.QueryRow(
-		`SELECT id, code, expires_at, used_at, attempts FROM xt_verification_codes WHERE email=? AND code_type=? AND used_at=0 ORDER BY created_at DESC LIMIT 1`,
+		`SELECT id, code, expires_at, used_at, attempts FROM xt_verification_codes WHERE email=$1 AND code_type=$2 AND used_at=0 ORDER BY created_at DESC LIMIT 1`,
 		email, codeType,
 	)
 	if err := row.Scan(&id, &storedCode, &expiresAt, &usedAt, &attempts); err != nil {
@@ -1004,18 +1004,18 @@ func VerifyCode(email, code, codeType string) (bool, string) {
 
 	// Check expiry
 	if time.Now().Unix() > expiresAt {
-		db.Exec(`UPDATE xt_verification_codes SET used_at=? WHERE id=?`, time.Now().Unix(), id)
+		db.Exec(`UPDATE xt_verification_codes SET used_at=$1 WHERE id=$2`, time.Now().Unix(), id)
 		return false, "verification code has expired"
 	}
 
 	// Check attempts limit (max 5)
 	if attempts >= 5 {
-		db.Exec(`UPDATE xt_verification_codes SET used_at=? WHERE id=?`, time.Now().Unix(), id)
+		db.Exec(`UPDATE xt_verification_codes SET used_at=$1 WHERE id=$2`, time.Now().Unix(), id)
 		return false, "too many attempts, please send a new code"
 	}
 
 	// Increment attempts
-	db.Exec(`UPDATE xt_verification_codes SET attempts=attempts+1 WHERE id=?`, id)
+	db.Exec(`UPDATE xt_verification_codes SET attempts=attempts+1 WHERE id=$1`, id)
 
 	// Check code match
 	if storedCode != code {
@@ -1023,7 +1023,7 @@ func VerifyCode(email, code, codeType string) (bool, string) {
 	}
 
 	// Mark as used
-	db.Exec(`UPDATE xt_verification_codes SET used_at=? WHERE id=?`, time.Now().Unix(), id)
+	db.Exec(`UPDATE xt_verification_codes SET used_at=$1 WHERE id=$2`, time.Now().Unix(), id)
 	return true, "ok"
 }
 
@@ -1031,7 +1031,7 @@ func VerifyCode(email, code, codeType string) (bool, string) {
 func CanSendCode(email, codeType string) (bool, int) {
 	var created_at int64
 	row := db.QueryRow(
-		`SELECT created_at FROM xt_verification_codes WHERE email=? AND code_type=? ORDER BY created_at DESC LIMIT 1`,
+		`SELECT created_at FROM xt_verification_codes WHERE email=$1 AND code_type=$2 ORDER BY created_at DESC LIMIT 1`,
 		email, codeType,
 	)
 	if err := row.Scan(&created_at); err != nil {
@@ -1046,13 +1046,13 @@ func CanSendCode(email, codeType string) (bool, int) {
 
 // SetEmailVerified marks a user's email as verified.
 func SetEmailVerified(userID int) error {
-	_, err := db.Exec(`UPDATE xt_users SET email_verified=1 WHERE id=?`, userID)
+	_, err := db.Exec(`UPDATE xt_users SET email_verified=1 WHERE id=$1`, userID)
 	return err
 }
 
 // FindUserByEmail finds a user by email address.
 func FindUserByEmail(email string) map[string]any {
-	row := db.QueryRow("SELECT id, username, password_hash, nickname, role, token_version, email_verified FROM xt_users WHERE email=? AND is_active=1", email)
+	row := db.QueryRow("SELECT id, username, password_hash, nickname, role, token_version, email_verified FROM xt_users WHERE email=$1 AND is_active=1", email)
 	var id, tokenVer, emailVerified int
 	var uname, pwHash, nickname, role string
 	if err := row.Scan(&id, &uname, &pwHash, &nickname, &role, &tokenVer, &emailVerified); err != nil {
@@ -1067,7 +1067,7 @@ func FindUserByEmail(email string) map[string]any {
 
 // UpdateUserPassword updates a user's password hash.
 func UpdateUserPassword(userID int, passwordHash string) error {
-	_, err := db.Exec(`UPDATE xt_users SET password_hash=?, token_version=token_version+1 WHERE id=?`, passwordHash, userID)
+	_, err := db.Exec(`UPDATE xt_users SET password_hash=$1, token_version=token_version+1 WHERE id=$2`, passwordHash, userID)
 	return err
 }
 
@@ -1077,15 +1077,15 @@ func UpdateUserProfile(username, field, value string) error {
 	var err error
 	switch field {
 	case "nickname":
-		_, err = db.Exec(`UPDATE xt_users SET nickname=? WHERE username=?`, value, username)
+		_, err = db.Exec(`UPDATE xt_users SET nickname=$1 WHERE username=$2`, value, username)
 	case "email":
-		_, err = db.Exec(`UPDATE xt_users SET email=? WHERE username=?`, value, username)
+		_, err = db.Exec(`UPDATE xt_users SET email=$1 WHERE username=$2`, value, username)
 	case "email_verified":
-		_, err = db.Exec(`UPDATE xt_users SET email_verified=? WHERE username=?`, value, username)
+		_, err = db.Exec(`UPDATE xt_users SET email_verified=$1 WHERE username=$2`, value, username)
 	case "role":
-		_, err = db.Exec(`UPDATE xt_users SET role=? WHERE username=?`, value, username)
+		_, err = db.Exec(`UPDATE xt_users SET role=$1 WHERE username=$2`, value, username)
 	case "is_active":
-		_, err = db.Exec(`UPDATE xt_users SET is_active=? WHERE username=?`, value, username)
+		_, err = db.Exec(`UPDATE xt_users SET is_active=$1 WHERE username=$2`, value, username)
 	default:
 		return fmt.Errorf("invalid profile field: %s", field)
 	}
@@ -1100,19 +1100,19 @@ func AdminUpdateUser(userID int, updates map[string]any) error {
 		switch field {
 		case "nickname":
 			if strVal, ok := value.(string); ok && strVal != "" {
-				_, err = db.Exec(`UPDATE xt_users SET nickname=? WHERE id=?`, strVal, userID)
+				_, err = db.Exec(`UPDATE xt_users SET nickname=$1 WHERE id=$2`, strVal, userID)
 			}
 		case "email":
 			if strVal, ok := value.(string); ok && strVal != "" {
-				_, err = db.Exec(`UPDATE xt_users SET email=? WHERE id=?`, strVal, userID)
+				_, err = db.Exec(`UPDATE xt_users SET email=$1 WHERE id=$2`, strVal, userID)
 			}
 		case "role":
 			if strVal, ok := value.(string); ok && strVal != "" {
-				_, err = db.Exec(`UPDATE xt_users SET role=? WHERE id=?`, strVal, userID)
+				_, err = db.Exec(`UPDATE xt_users SET role=$1 WHERE id=$2`, strVal, userID)
 			}
 		case "is_active":
 			if intVal, ok := value.(float64); ok {
-				_, err = db.Exec(`UPDATE xt_users SET is_active=? WHERE id=?`, int(intVal), userID)
+				_, err = db.Exec(`UPDATE xt_users SET is_active=$1 WHERE id=$2`, int(intVal), userID)
 			}
 		default:
 			err = fmt.Errorf("invalid admin update field: %s", field)
@@ -1283,7 +1283,7 @@ func GetOrderOwnerID(id string) (int64, bool) {
 		return 0, false
 	}
 	var userID int64
-	err := db.QueryRow(`SELECT user_id FROM xt_orders WHERE id=?`, id).Scan(&userID)
+	err := db.QueryRow(`SELECT user_id FROM xt_orders WHERE id=$1`, id).Scan(&userID)
 	if err != nil {
 		return 0, false
 	}
@@ -1304,7 +1304,7 @@ func CancelOrderForUser(id string, userID uint64) error {
 	}
 	// 内存未命中时回源 DB 并带上 user 条件
 	if db != nil {
-		res, err := db.Exec("UPDATE xt_orders SET status='CANCELLED', updated_at=? WHERE id=? AND user_id=?",
+		res, err := db.Exec("UPDATE xt_orders SET status='CANCELLED', updated_at=$1 WHERE id=$2 AND user_id=$3",
 			time.Now().UnixMilli(), id, userID)
 		if err != nil {
 			return err
@@ -1387,7 +1387,7 @@ func UpdateOrderFill(id string, filled, avgPrice float64, status string) {
 		o.UpdatedAt = time.Now().UnixMilli()
 	}
 	if db != nil {
-		db.Exec(`UPDATE xt_orders SET filled=?, avg_fill_price=?, status=?, updated_at=? WHERE id=?`,
+		db.Exec(`UPDATE xt_orders SET filled=$1, avg_fill_price=$2, status=$3, updated_at=$4 WHERE id=$5`,
 			filled, avgPrice, status, time.Now().UnixMilli(), id)
 	}
 }
@@ -1409,13 +1409,13 @@ func CancelOrder(id string) error {
 	if !ok {
 		// Try DB as fallback
 		if db != nil {
-			row := db.QueryRow("SELECT status FROM xt_orders WHERE id=?", id)
+			row := db.QueryRow("SELECT status FROM xt_orders WHERE id=$1", id)
 			var status string
 			if err := row.Scan(&status); err == nil {
 				if status == "CANCELLED" || status == "FILLED" {
 					return fmt.Errorf("already %s", status)
 				}
-				_, err := db.Exec("UPDATE xt_orders SET status='CANCELLED', updated_at=? WHERE id=?", time.Now().UnixMilli(), id)
+				_, err := db.Exec("UPDATE xt_orders SET status='CANCELLED', updated_at=$1 WHERE id=$2", time.Now().UnixMilli(), id)
 				return err
 			}
 		}
@@ -1647,11 +1647,13 @@ func GetAgentAuditLog(limit int, userID int64) []map[string]any {
 	}
 	query := `SELECT id, token_id, name, endpoint, method, params_summary, status_code, ip, user_agent, timestamp FROM agent_audit_log`
 	args := []any{}
+	next := 1
 	if userID > 0 {
-		query += ` WHERE user_id = ?`
+		query += fmt.Sprintf(" WHERE user_id = $%d", next)
 		args = append(args, userID)
+		next++
 	}
-	query += ` ORDER BY timestamp DESC LIMIT ?`
+	query += fmt.Sprintf(" ORDER BY timestamp DESC LIMIT $%d", next)
 	args = append(args, limit)
 	rows, err := db.Query(query, args...)
 	if err != nil {

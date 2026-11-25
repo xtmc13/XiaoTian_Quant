@@ -73,7 +73,7 @@ groups:
           runbook: "1) 确认是否存在 K 线/回测大数据集驻留内存；2) debug 模式下 /debug/pprof/heap 取堆快照定位泄漏；3) 必要时 docker compose restart gateway 并排查诱因。"
 
       # 数据卷磁盘可用空间低于 10%（持续 10 分钟）。
-      # gateway_disk_*_bytes 由 /metrics 抓取时对 DB_PATH 目录 statfs 采样。
+      # gateway_disk_*_bytes 由 /metrics 抓取时对 DATA_DIR 目录 statfs 采样。
       - alert: GatewayDiskLow
         expr: gateway_disk_avail_bytes / gateway_disk_total_bytes < 0.1
         for: 10m

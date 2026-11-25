@@ -72,14 +72,15 @@ func (r *MLRetrainRepo) CreateJob(userID int64, modelName, featureSet string, in
 	if intervalMinutes <= 0 {
 		intervalMinutes = 1440
 	}
-	res, err := db.Exec(`INSERT INTO xt_ml_retrain_jobs
+	var id int64
+	err := db.QueryRow(`INSERT INTO xt_ml_retrain_jobs
 		(user_id, model_name, feature_set, interval_minutes, created_at, active)
-		VALUES (?,?,?,?,?,1)`,
-		userID, modelName, featureSet, intervalMinutes, time.Now().UnixMilli())
+		VALUES ($1,$2,$3,$4,$5,1) RETURNING id`,
+		userID, modelName, featureSet, intervalMinutes, time.Now().UnixMilli()).Scan(&id)
 	if err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
+	return id, nil
 }
 
 // GetJob 按 id 取任务。
@@ -89,7 +90,7 @@ func (r *MLRetrainRepo) GetJob(id int64) (*MLRetrainJob, error) {
 	if db == nil {
 		return nil, errors.New("store not initialized")
 	}
-	return scanMLRetrainJob(db.QueryRow(`SELECT `+mlRetrainJobCols+` FROM xt_ml_retrain_jobs WHERE id=?`, id))
+	return scanMLRetrainJob(db.QueryRow(`SELECT `+mlRetrainJobCols+` FROM xt_ml_retrain_jobs WHERE id=$1`, id))
 }
 
 // UpdateJob 应用补丁（先读整行再整行写回，字段少、调用低频）。
@@ -99,7 +100,7 @@ func (r *MLRetrainRepo) UpdateJob(id int64, patch MLRetrainJobPatch) (*MLRetrain
 	if db == nil {
 		return nil, errors.New("store not initialized")
 	}
-	j, err := scanMLRetrainJob(db.QueryRow(`SELECT `+mlRetrainJobCols+` FROM xt_ml_retrain_jobs WHERE id=?`, id))
+	j, err := scanMLRetrainJob(db.QueryRow(`SELECT `+mlRetrainJobCols+` FROM xt_ml_retrain_jobs WHERE id=$1`, id))
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +120,7 @@ func (r *MLRetrainRepo) UpdateJob(id int64, patch MLRetrainJobPatch) (*MLRetrain
 	if j.Active {
 		active = 1
 	}
-	_, err = db.Exec(`UPDATE xt_ml_retrain_jobs SET model_name=?, feature_set=?, interval_minutes=?, active=? WHERE id=?`,
+	_, err = db.Exec(`UPDATE xt_ml_retrain_jobs SET model_name=$1, feature_set=$2, interval_minutes=$3, active=$4 WHERE id=$5`,
 		j.ModelName, j.FeatureSet, j.IntervalMinutes, active, id)
 	if err != nil {
 		return nil, err
@@ -138,7 +139,7 @@ func (r *MLRetrainRepo) ListJobs(userID int64, activeOnly bool) ([]*MLRetrainJob
 	q := `SELECT ` + mlRetrainJobCols + ` FROM xt_ml_retrain_jobs`
 	var args []any
 	if userID > 0 {
-		q += ` WHERE (user_id=? OR user_id=0)`
+		q += ` WHERE (user_id=$1 OR user_id=0)`
 		args = append(args, userID)
 	}
 	if activeOnly {
@@ -177,7 +178,7 @@ func (r *MLRetrainRepo) SetJobActive(id int64, active bool) error {
 	if active {
 		v = 1
 	}
-	_, err := db.Exec(`UPDATE xt_ml_retrain_jobs SET active=? WHERE id=?`, v, id)
+	_, err := db.Exec(`UPDATE xt_ml_retrain_jobs SET active=$1 WHERE id=$2`, v, id)
 	return err
 }
 
@@ -189,13 +190,13 @@ func (r *MLRetrainRepo) RecordRun(jobID int64, status, errMsg string, durationMs
 		return 0, errors.New("store not initialized")
 	}
 	now := time.Now().UnixMilli()
-	res, err := db.Exec(`INSERT INTO xt_ml_retrain_runs (job_id, status, error, duration_ms, created_at)
-		VALUES (?,?,?,?,?)`, jobID, status, errMsg, durationMs, now)
+	var runID int64
+	err := db.QueryRow(`INSERT INTO xt_ml_retrain_runs (job_id, status, error, duration_ms, created_at)
+		VALUES ($1,$2,$3,$4,$5) RETURNING id`, jobID, status, errMsg, durationMs, now).Scan(&runID)
 	if err != nil {
 		return 0, err
 	}
-	runID, _ := res.LastInsertId()
-	if _, err := db.Exec(`UPDATE xt_ml_retrain_jobs SET last_run_at=?, last_status=?, last_error=? WHERE id=?`,
+	if _, err := db.Exec(`UPDATE xt_ml_retrain_jobs SET last_run_at=$1, last_status=$2, last_error=$3 WHERE id=$4`,
 		now, status, errMsg, jobID); err != nil {
 		return runID, err
 	}
@@ -213,7 +214,7 @@ func (r *MLRetrainRepo) ListRuns(jobID int64, limit int) ([]*MLRetrainRun, error
 		limit = 100
 	}
 	rows, err := db.Query(`SELECT id, job_id, status, error, duration_ms, created_at
-		FROM xt_ml_retrain_runs WHERE job_id=? ORDER BY id DESC LIMIT ?`, jobID, limit)
+		FROM xt_ml_retrain_runs WHERE job_id=$1 ORDER BY id DESC LIMIT $2`, jobID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -241,7 +242,7 @@ func (r *MLRetrainRepo) ConsecutiveFailures(jobID int64, limit int) (int, error)
 		limit = 3
 	}
 	rows, err := db.Query(`SELECT status FROM xt_ml_retrain_runs
-		WHERE job_id=? ORDER BY id DESC LIMIT ?`, jobID, limit)
+		WHERE job_id=$1 ORDER BY id DESC LIMIT $2`, jobID, limit)
 	if err != nil {
 		return 0, err
 	}
@@ -268,7 +269,7 @@ func (r *MLRetrainRepo) GetSetting(key string) string {
 		return ""
 	}
 	var v string
-	if err := db.QueryRow(`SELECT value FROM ml_settings WHERE key=?`, key).Scan(&v); err != nil {
+	if err := db.QueryRow(`SELECT value FROM ml_settings WHERE key=$1`, key).Scan(&v); err != nil {
 		return ""
 	}
 	return v
@@ -281,7 +282,7 @@ func (r *MLRetrainRepo) SetSetting(key, value string) error {
 	if db == nil {
 		return errors.New("store not initialized")
 	}
-	_, err := db.Exec(`INSERT INTO ml_settings (key, value, updated_at) VALUES (?,?,?)
+	_, err := db.Exec(`INSERT INTO ml_settings (key, value, updated_at) VALUES ($1,$2,$3)
 		ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
 		key, value, time.Now().UnixMilli())
 	return err

@@ -2,7 +2,6 @@ package agenttelegram
 
 import (
 	"errors"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -11,12 +10,7 @@ import (
 
 func setupTGTestDB(t *testing.T) {
 	t.Helper()
-	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "gateway.db"))
-	t.Setenv("SECRET_KEY", "test-secret-key-agent-tg")
-	if err := store.InitDB(); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
-	t.Cleanup(store.CloseDB)
+	store.SetupTestDB(t)
 }
 
 func TestPairCodeLifecycle(t *testing.T) {

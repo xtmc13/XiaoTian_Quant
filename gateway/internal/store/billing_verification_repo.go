@@ -43,7 +43,7 @@ func (r *BillingRepo) UpsertVerification(v *BillingVerification) error {
 	}
 	_, err := db.Exec(`INSERT INTO billing_verification
 		(order_id, chain, tx_hash, found, valid, confirmed, confirmations, required_confirmations, block_number, received_micro, expected_micro, fail_reason, checked_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 		ON CONFLICT(order_id) DO UPDATE SET
 			chain=excluded.chain, tx_hash=excluded.tx_hash, found=excluded.found, valid=excluded.valid,
 			confirmed=excluded.confirmed, confirmations=excluded.confirmations,
@@ -58,7 +58,7 @@ func (r *BillingRepo) UpsertVerification(v *BillingVerification) error {
 // GetVerification 读订单最近一次核验快照（不存在返回 nil, nil）。
 func (r *BillingRepo) GetVerification(orderID string) (*BillingVerification, error) {
 	row := db.QueryRow(`SELECT order_id, chain, tx_hash, found, valid, confirmed, confirmations, required_confirmations, block_number, received_micro, expected_micro, fail_reason, checked_at
-		FROM billing_verification WHERE order_id=?`, orderID)
+		FROM billing_verification WHERE order_id=$1`, orderID)
 	var v BillingVerification
 	var found, valid, confirmed int
 	if err := row.Scan(&v.OrderID, &v.Chain, &v.TxHash, &found, &valid, &confirmed,

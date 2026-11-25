@@ -284,7 +284,7 @@ A: 检查日志，确保 Go/Node/Python 已正确安装。或尝试 Docker 方�
 A: `git pull && make build && make restart`
 
 ### Q: 如何备份数据？
-A: 备份 `gateway/gateway.db` 和 `sandbox/ml_server/models/`
+A: 用 `pg_dump` 备份 PostgreSQL（见 docs/DEPLOYMENT.md 第 8 节），并备份 `sandbox/ml_server/models/`
 
 ### Q: 生产环境推荐？
 A: Docker + Nginx + SSL + systemd

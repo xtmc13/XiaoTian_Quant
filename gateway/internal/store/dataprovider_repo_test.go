@@ -1,24 +1,18 @@
 package store
 
 import (
-	"path/filepath"
 	"testing"
 )
 
 // TestDataProviderCacheMigrationAndRepo 冒烟验证 0031 迁移：表创建、
 // Upsert/Get/DeleteExpired 与冲突覆盖。
 func TestDataProviderCacheMigrationAndRepo(t *testing.T) {
-	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "gateway.db"))
-	t.Setenv("SECRET_KEY", "test-secret-key-for-dataprovider-cache")
-	if err := InitDB(); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
-	defer CloseDB()
+	SetupTestDB(t)
 	if err := RunSQLMigrations(); err != nil {
 		t.Fatalf("run sql migrations: %v", err)
 	}
 	var name string
-	if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='xt_dataprovider_cache'`).Scan(&name); err != nil {
+	if err := db.QueryRow(`SELECT table_name FROM information_schema.tables WHERE table_name='xt_dataprovider_cache'`).Scan(&name); err != nil {
 		t.Fatalf("table xt_dataprovider_cache missing: %v", err)
 	}
 

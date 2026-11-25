@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,16 +17,13 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/strategy"
 )
 
-// 测试基建：临时 sqlite（同 handler 包 TestMain 模式），
-// 绝不触碰 ./runtime/gateway.db；strategy config 的 JSON 持久化
-// 会写到包内 ./runtime，测试结束一并清理。
+// 测试基建：连接测试 PostgreSQL（无配置则整包跳过）；strategy config 的
+// JSON 持久化写到包内 ./runtime，测试结束一并清理。
 
 func TestMain(m *testing.M) {
-	dir, err := os.MkdirTemp("", "agent_test")
-	if err != nil {
-		panic(err)
+	if !store.TestDatabaseConfigured() {
+		os.Exit(0)
 	}
-	_ = os.Setenv("DB_PATH", filepath.Join(dir, "gateway.db"))
 	_ = os.Setenv("SECRET_KEY", "test-secret-key-not-for-production-use-only")
 	if err := store.InitDB(); err != nil {
 		panic(err)
@@ -37,7 +33,6 @@ func TestMain(m *testing.M) {
 
 	code := m.Run()
 	store.CloseDB()
-	_ = os.RemoveAll(dir)
 	_ = os.RemoveAll("./runtime")
 	os.Exit(code)
 }

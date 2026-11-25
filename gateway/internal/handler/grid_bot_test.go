@@ -131,13 +131,13 @@ func gridToken(t *testing.T, uid int) string {
 	}
 	username := fmt.Sprintf("gridtester%d", uid)
 	if _, err := db.Exec(
-		`INSERT OR IGNORE INTO xt_users (id, username, password_hash, nickname, email, role, token_version) VALUES (?, ?, ?, ?, ?, ?, 1)`,
+		`INSERT INTO xt_users (id, username, password_hash, nickname, email, role, token_version) VALUES ($1, $2, $3, $4, $5, $6, 1) ON CONFLICT(id) DO NOTHING`,
 		uid, username, store.HashPassword("grid-pass-123"), "Grid Tester", fmt.Sprintf("grid%d@test.local", uid), "user",
 	); err != nil {
 		t.Fatalf("ensure grid test user: %v", err)
 	}
 	if _, err := db.Exec(
-		`UPDATE xt_users SET must_change_password=0, token_version=1, is_active=1, totp_enabled=0 WHERE id=?`, uid,
+		`UPDATE xt_users SET must_change_password=0, token_version=1, is_active=1, totp_enabled=0 WHERE id=$1`, uid,
 	); err != nil {
 		t.Fatalf("reset grid test user flags: %v", err)
 	}

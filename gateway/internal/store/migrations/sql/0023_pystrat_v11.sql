@@ -10,8 +10,8 @@
 --
 -- 注意: 语句内不要出现分号(字符串/注释里也不行)——迁移按分号切分执行。
 
-ALTER TABLE xt_pystrategies ADD COLUMN market TEXT NOT NULL DEFAULT 'spot';
+ALTER TABLE xt_pystrategies ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'spot';
 
-ALTER TABLE xt_pystrategies ADD COLUMN leverage BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE xt_pystrategies ADD COLUMN IF NOT EXISTS leverage BIGINT NOT NULL DEFAULT 1;
 
-ALTER TABLE xt_pystrategies ADD COLUMN margin_mode TEXT NOT NULL DEFAULT 'cross';
+ALTER TABLE xt_pystrategies ADD COLUMN IF NOT EXISTS margin_mode TEXT NOT NULL DEFAULT 'cross';

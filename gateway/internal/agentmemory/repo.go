@@ -1,7 +1,9 @@
 package agentmemory
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -40,9 +42,11 @@ func (r *Repo) db() (*sql.DB, error) {
 	return db, nil
 }
 
-// NewID 生成记忆 id。
+// NewID 生成记忆 id（纳秒时间戳 + 随机后缀，避免同纳秒撞主键）。
 func NewID() string {
-	return fmt.Sprintf("mem_%d", time.Now().UnixNano())
+	b := make([]byte, 4)
+	_, _ = rand.Read(b)
+	return fmt.Sprintf("mem_%d_%s", time.Now().UnixNano(), hex.EncodeToString(b))
 }
 
 var validKinds = map[string]bool{"fact": true, "preference": true, "observation": true, "market_note": true}
@@ -75,7 +79,7 @@ func (r *Repo) Create(m *Memory) error {
 	m.CreatedAt, m.UpdatedAt = now, now
 	_, err = db.Exec(`INSERT INTO xt_agent_memories
 		(id, user_id, scope, kind, content, source_conversation_id, importance, origin, profile_id, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
 		m.ID, m.UserID, m.Scope, m.Kind, m.Content, m.SourceConversationID, m.Importance, m.Origin, m.ProfileID, m.CreatedAt, m.UpdatedAt)
 	return err
 }
@@ -106,13 +110,15 @@ func (r *Repo) ListByUser(userID int64, kind string, limit int) ([]*Memory, erro
 	if limit <= 0 || limit > 200 {
 		limit = 100
 	}
-	q := `SELECT ` + memCols + ` FROM xt_agent_memories WHERE user_id = ? AND profile_id IN (0, ?)`
+	q := `SELECT ` + memCols + ` FROM xt_agent_memories WHERE user_id = $1 AND profile_id IN (0, $2)`
 	args := []any{userID, r.activeProfile(userID)}
+	next := 3
 	if kind != "" {
-		q += ` AND kind = ?`
+		q += fmt.Sprintf(" AND kind = $%d", next)
 		args = append(args, kind)
+		next++
 	}
-	q += ` ORDER BY importance DESC, updated_at DESC LIMIT ?`
+	q += fmt.Sprintf(" ORDER BY importance DESC, updated_at DESC LIMIT $%d", next)
 	args = append(args, limit)
 	rows, err := db.Query(q, args...)
 	if err != nil {
@@ -140,13 +146,15 @@ func (r *Repo) Search(userID int64, query string, limit int) ([]*Memory, error) 
 		limit = 10
 	}
 	words := strings.Fields(query)
-	q := `SELECT ` + memCols + ` FROM xt_agent_memories WHERE user_id = ? AND profile_id IN (0, ?)`
+	q := `SELECT ` + memCols + ` FROM xt_agent_memories WHERE user_id = $1 AND profile_id IN (0, $2)`
 	args := []any{userID, r.activeProfile(userID)}
+	next := 3
 	for _, w := range words {
-		q += ` AND content LIKE ?`
+		q += fmt.Sprintf(" AND content LIKE $%d", next)
 		args = append(args, "%"+w+"%")
+		next++
 	}
-	q += ` ORDER BY importance DESC, updated_at DESC LIMIT ?`
+	q += fmt.Sprintf(" ORDER BY importance DESC, updated_at DESC LIMIT $%d", next)
 	args = append(args, limit)
 	rows, err := db.Query(q, args...)
 	if err != nil {
@@ -203,7 +211,7 @@ func (r *Repo) CountByOrigin(userID int64, origin string) (int, error) {
 		return 0, err
 	}
 	var n int
-	err = db.QueryRow(`SELECT COUNT(*) FROM xt_agent_memories WHERE user_id = ? AND origin = ?`, userID, origin).Scan(&n)
+	err = db.QueryRow(`SELECT COUNT(*) FROM xt_agent_memories WHERE user_id = $1 AND origin = $2`, userID, origin).Scan(&n)
 	return n, err
 }
 
@@ -214,7 +222,7 @@ func (r *Repo) ExistsContent(userID int64, content string) (bool, error) {
 		return false, err
 	}
 	var n int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM xt_agent_memories WHERE user_id = ? AND content = ?`, userID, content).Scan(&n); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM xt_agent_memories WHERE user_id = $1 AND content = $2`, userID, content).Scan(&n); err != nil {
 		return false, err
 	}
 	return n > 0, nil
@@ -226,6 +234,6 @@ func (r *Repo) Delete(id string, userID int64) error {
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec(`DELETE FROM xt_agent_memories WHERE id = ? AND user_id = ?`, id, userID)
+	_, err = db.Exec(`DELETE FROM xt_agent_memories WHERE id = $1 AND user_id = $2`, id, userID)
 	return err
 }

@@ -90,7 +90,7 @@ func (r *SignalSourceRepo) EnsureDefaultSource() string {
 	now := time.Now().UnixMilli()
 	_, _ = db.Exec(
 		`INSERT INTO xt_signal_sources (id, name, type, owner_user_id, enabled, fee_model, fee_percent, monthly_fee, tp_sl_json, created_at, updated_at)
-		 VALUES ('default', '默认Webhook', 'webhook', 0, 1, 'free', 0, 0, '{"tp1_pct":40,"tp2_pct":30,"tp3_pct":30,"sl_pct":3}', ?, ?)`,
+		 VALUES ('default', '默认Webhook', 'webhook', 0, 1, 'free', 0, 0, '{"tp1_pct":40,"tp2_pct":30,"tp3_pct":30,"sl_pct":3}', $1, $2)`,
 		now, now,
 	)
 	return "default"
@@ -107,8 +107,8 @@ func (r *SignalSourceRepo) Create(s *SignalSource) error {
 	s.UpdatedAt = now
 	_, err := db.Exec(
 		`INSERT INTO xt_signal_sources (id, name, type, owner_user_id, enabled, fee_model, fee_percent, monthly_fee, tp_sl_json, created_at, updated_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-		s.ID, s.Name, s.Type, s.OwnerUserID, s.Enabled, s.FeeModel, s.FeePercent, s.MonthlyFee, s.TPSLJSON, s.CreatedAt, s.UpdatedAt,
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+		s.ID, s.Name, s.Type, s.OwnerUserID, boolToInt(s.Enabled), s.FeeModel, s.FeePercent, s.MonthlyFee, s.TPSLJSON, s.CreatedAt, s.UpdatedAt,
 	)
 	return err
 }
@@ -117,7 +117,7 @@ func (r *SignalSourceRepo) GetByID(id string) (*SignalSource, error) {
 	var s SignalSource
 	var enabled int
 	err := db.QueryRow(
-		`SELECT id, name, type, owner_user_id, enabled, fee_model, fee_percent, monthly_fee, tp_sl_json, created_at, updated_at FROM xt_signal_sources WHERE id=?`, id,
+		`SELECT id, name, type, owner_user_id, enabled, fee_model, fee_percent, monthly_fee, tp_sl_json, created_at, updated_at FROM xt_signal_sources WHERE id=$1`, id,
 	).Scan(&s.ID, &s.Name, &s.Type, &s.OwnerUserID, &enabled, &s.FeeModel, &s.FeePercent, &s.MonthlyFee, &s.TPSLJSON, &s.CreatedAt, &s.UpdatedAt)
 	if err != nil {
 		return nil, err
@@ -153,14 +153,14 @@ func (r *SignalSourceRepo) List(enabledOnly bool) ([]*SignalSource, error) {
 func (r *SignalSourceRepo) Update(s *SignalSource) error {
 	s.UpdatedAt = time.Now().UnixMilli()
 	_, err := db.Exec(
-		`UPDATE xt_signal_sources SET name=?, type=?, enabled=?, fee_model=?, fee_percent=?, monthly_fee=?, tp_sl_json=?, updated_at=? WHERE id=?`,
-		s.Name, s.Type, s.Enabled, s.FeeModel, s.FeePercent, s.MonthlyFee, s.TPSLJSON, s.UpdatedAt, s.ID,
+		`UPDATE xt_signal_sources SET name=$1, type=$2, enabled=$3, fee_model=$4, fee_percent=$5, monthly_fee=$6, tp_sl_json=$7, updated_at=$8 WHERE id=$9`,
+		s.Name, s.Type, boolToInt(s.Enabled), s.FeeModel, s.FeePercent, s.MonthlyFee, s.TPSLJSON, s.UpdatedAt, s.ID,
 	)
 	return err
 }
 
 func (r *SignalSourceRepo) Delete(id string) error {
-	_, err := db.Exec("DELETE FROM xt_signal_sources WHERE id=?", id)
+	_, err := db.Exec("DELETE FROM xt_signal_sources WHERE id=$1", id)
 	return err
 }
 
@@ -173,15 +173,15 @@ func (r *SignalSourceRepo) CreateSubscription(s *SignalSourceSubscription) error
 	if s.Status == "" {
 		s.Status = "active"
 	}
-	res, err := db.Exec(
+	var id int64
+	err := db.QueryRow(
 		`INSERT INTO xt_signal_source_subscriptions (source_id, user_id, fee_model, fee_percent, monthly_fee, next_billing_at, pending_share, settled_share, status, created_at)
-		 VALUES (?,?,?,?,?,?,0,0,?,?)`,
+		 VALUES ($1,$2,$3,$4,$5,$6,0,0,$7,$8) RETURNING id`,
 		s.SourceID, s.UserID, s.FeeModel, s.FeePercent, s.MonthlyFee, s.NextBillingAt, s.Status, s.CreatedAt,
-	)
+	).Scan(&id)
 	if err != nil {
 		return err
 	}
-	id, _ := res.LastInsertId()
 	s.ID = int(id)
 	return nil
 }
@@ -191,7 +191,7 @@ func (r *SignalSourceRepo) GetSubscription(sourceID string, userID int) (*Signal
 	var s SignalSourceSubscription
 	err := db.QueryRow(
 		`SELECT id, source_id, user_id, fee_model, fee_percent, monthly_fee, next_billing_at, pending_share, settled_share, status, created_at
-		 FROM xt_signal_source_subscriptions WHERE source_id=? AND user_id=? AND status='active' ORDER BY id DESC LIMIT 1`,
+		 FROM xt_signal_source_subscriptions WHERE source_id=$1 AND user_id=$2 AND status='active' ORDER BY id DESC LIMIT 1`,
 		sourceID, userID,
 	).Scan(&s.ID, &s.SourceID, &s.UserID, &s.FeeModel, &s.FeePercent, &s.MonthlyFee, &s.NextBillingAt, &s.PendingShare, &s.SettledShare, &s.Status, &s.CreatedAt)
 	if err != nil {
@@ -204,7 +204,7 @@ func (r *SignalSourceRepo) GetSubscription(sourceID string, userID int) (*Signal
 func (r *SignalSourceRepo) ListSubscriptionsBySource(sourceID string) ([]*SignalSourceSubscription, error) {
 	rows, err := db.Query(
 		`SELECT id, source_id, user_id, fee_model, fee_percent, monthly_fee, next_billing_at, pending_share, settled_share, status, created_at
-		 FROM xt_signal_source_subscriptions WHERE source_id=? ORDER BY id DESC`, sourceID,
+		 FROM xt_signal_source_subscriptions WHERE source_id=$1 ORDER BY id DESC`, sourceID,
 	)
 	if err != nil {
 		return nil, err
@@ -224,7 +224,7 @@ func (r *SignalSourceRepo) ListSubscriptionsBySource(sourceID string) ([]*Signal
 // UpdateSubscription 回填订阅（分成累计/结算、到期时间、状态）。
 func (r *SignalSourceRepo) UpdateSubscription(s *SignalSourceSubscription) error {
 	_, err := db.Exec(
-		`UPDATE xt_signal_source_subscriptions SET next_billing_at=?, pending_share=?, settled_share=?, status=? WHERE id=?`,
+		`UPDATE xt_signal_source_subscriptions SET next_billing_at=$1, pending_share=$2, settled_share=$3, status=$4 WHERE id=$5`,
 		s.NextBillingAt, s.PendingShare, s.SettledShare, s.Status, s.ID,
 	)
 	return err
@@ -234,7 +234,7 @@ func (r *SignalSourceRepo) UpdateSubscription(s *SignalSourceSubscription) error
 // 时的级联语义；账单流水保留作审计）。返回受影响行数。
 func (r *SignalSourceRepo) CancelActiveSubscriptions(sourceID string) (int64, error) {
 	res, err := db.Exec(
-		`UPDATE xt_signal_source_subscriptions SET status='cancelled' WHERE source_id=? AND status='active'`, sourceID,
+		`UPDATE xt_signal_source_subscriptions SET status='cancelled' WHERE source_id=$1 AND status='active'`, sourceID,
 	)
 	if err != nil {
 		return 0, err
@@ -247,8 +247,8 @@ func (r *SignalSourceRepo) CancelActiveSubscriptions(sourceID string) (int64, er
 // （信号执行平仓落库时调用）。
 func (r *SignalSourceRepo) AddPendingShare(sourceID string, profit float64) error {
 	_, err := db.Exec(
-		`UPDATE xt_signal_source_subscriptions SET pending_share = pending_share + ?
-		 WHERE source_id=? AND status='active' AND fee_model='profit_share' AND pending_share + ? >= 0`,
+		`UPDATE xt_signal_source_subscriptions SET pending_share = pending_share + $1
+		 WHERE source_id=$2 AND status='active' AND fee_model='profit_share' AND pending_share + $3 >= 0`,
 		profit, sourceID, profit,
 	)
 	return err
@@ -263,15 +263,15 @@ func (r *SignalSourceRepo) CreateBill(b *SignalSourceBill) error {
 	if b.Status == "" {
 		b.Status = "pending"
 	}
-	res, err := db.Exec(
+	var id int64
+	err := db.QueryRow(
 		`INSERT INTO xt_signal_source_bills (source_id, user_id, subscription_id, bill_type, amount, status, created_at, settled_at)
-		 VALUES (?,?,?,?,?,?,?,?)`,
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
 		b.SourceID, b.UserID, b.SubscriptionID, b.BillType, b.Amount, b.Status, b.CreatedAt, b.SettledAt,
-	)
+	).Scan(&id)
 	if err != nil {
 		return err
 	}
-	id, _ := res.LastInsertId()
 	b.ID = int(id)
 	return nil
 }
@@ -279,13 +279,15 @@ func (r *SignalSourceRepo) CreateBill(b *SignalSourceBill) error {
 func (r *SignalSourceRepo) ListBills(sourceID string, limit int) ([]*SignalSourceBill, error) {
 	query := `SELECT id, source_id, user_id, subscription_id, bill_type, amount, status, created_at, settled_at FROM xt_signal_source_bills`
 	args := []any{}
+	next := 1
 	if sourceID != "" {
-		query += ` WHERE source_id=?`
+		query += fmt.Sprintf(` WHERE source_id=$%d`, next)
 		args = append(args, sourceID)
+		next++
 	}
 	query += ` ORDER BY id DESC`
 	if limit > 0 {
-		query += ` LIMIT ?`
+		query += fmt.Sprintf(` LIMIT $%d::bigint`, next)
 		args = append(args, limit)
 	}
 	rows, err := db.Query(query, args...)
@@ -315,7 +317,7 @@ func DeductUserCredits(userID int, amount float64) bool {
 	if credits <= 0 {
 		return false
 	}
-	res, err := db.Exec(`UPDATE xt_users SET credits = credits - ? WHERE id=? AND credits >= ?`, credits, userID, credits)
+	res, err := db.Exec(`UPDATE xt_users SET credits = credits - $1 WHERE id=$2 AND credits >= $3`, credits, userID, credits)
 	if err != nil {
 		return false
 	}

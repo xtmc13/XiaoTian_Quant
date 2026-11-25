@@ -9,8 +9,8 @@ import (
 //
 // 13 个 QuantDinger 对标的系统预设：8 个 CTA 单策略 + 4 个组合策略 + 1 个现货策略。
 // user_id=0 表示系统模板，对全部用户可见（StrategyTemplateRepo.List 改为
-// user_id=? OR user_id=0）；用户模板删除条件 user_id=? 天然保护系统模板
-// 不被普通用户删除。ID 固定（tpl-cta-* / tpl-combo-* / tpl-spot-*），INSERT OR IGNORE
+// user_id=$1 OR user_id=0）；用户模板删除条件 user_id=$1 天然保护系统模板
+// 不被普通用户删除。ID 固定（tpl-cta-* / tpl-combo-* / tpl-spot-*），ON CONFLICT DO NOTHING
 // 幂等，重启/重复初始化不会重复插入，也不覆盖用户已改过名的同 ID 记录。
 
 // SystemTemplates 返回 13 个系统预设模板的完整定义。
@@ -182,7 +182,7 @@ func SystemTemplates() []StrategyTemplateRecord {
 	}
 }
 
-// EnsureSystemTemplates 幂等注册系统预设模板（INSERT OR IGNORE，固定 ID）。
+// EnsureSystemTemplates 幂等注册系统预设模板（ON CONFLICT DO NOTHING，固定 ID）。
 // 在 InitDB 的模板迁移后调用；已存在的同 ID 记录（含用户改名版）不覆盖。
 func EnsureSystemTemplates() error {
 	if db == nil {
@@ -190,9 +190,10 @@ func EnsureSystemTemplates() error {
 	}
 	now := time.Now().UnixMilli()
 	for _, tpl := range SystemTemplates() {
-		_, err := db.Exec(`INSERT OR IGNORE INTO strategy_templates
+		_, err := db.Exec(`INSERT INTO strategy_templates
 			(id, user_id, name, category, strategy_type, description, default_config_json, created_at, updated_at)
-			VALUES (?,?,?,?,?,?,?,?,?)`,
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+			ON CONFLICT(id) DO NOTHING`,
 			tpl.ID, tpl.UserID, tpl.Name, tpl.Category, tpl.StrategyType, tpl.Description,
 			tpl.DefaultConfigJSON, now, now,
 		)

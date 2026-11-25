@@ -65,7 +65,7 @@ func TestHandoffCodeExpiry(t *testing.T) {
 	code, _ := repo.CreateHandoffCode(1, "conv-1")
 	// 手动把过期时间拨到过去
 	db := store.GetDB()
-	_, err := db.Exec(`UPDATE xt_agent_handoff_codes SET expires_at = ? WHERE code = ?`, time.Now().Unix()-10, code)
+	_, err := db.Exec(`UPDATE xt_agent_handoff_codes SET expires_at = $1 WHERE code = $2`, time.Now().Unix()-10, code)
 	if err != nil {
 		t.Fatal(err)
 	}

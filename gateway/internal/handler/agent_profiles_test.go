@@ -156,11 +156,11 @@ func TestAgentProfilesLifecycle(t *testing.T) {
 func TestAgentProfilesAdmin(t *testing.T) {
 	// admin_all 仅管理员可见，且管理员可删任意用户的非默认档案
 	mkUser := func(username, role string) int {
-		res, err := store.GetDB().Exec(`INSERT INTO xt_users (username, password_hash, role) VALUES (?,?,?)`, username, "x", role)
+		var id int64
+		err := store.GetDB().QueryRow(`INSERT INTO xt_users (username, password_hash, role) VALUES ($1,$2,$3) RETURNING id`, username, "x", role).Scan(&id)
 		if err != nil {
 			t.Fatalf("insert user: %v", err)
 		}
-		id, _ := res.LastInsertId()
 		return int(id)
 	}
 	uidUser := mkUser("prof_rest_user", "user")
@@ -318,11 +318,11 @@ func TestAgentPluginsManifestRoleFilter(t *testing.T) {
 // token 属主角色过滤：X-Agent-Token 路径按属主查库取角色（RBAC 门控输入）。
 func TestAgentRequestRoleTokenOwner(t *testing.T) {
 	mkUser := func(username, role string) int64 {
-		res, err := store.GetDB().Exec(`INSERT INTO xt_users (username, password_hash, role) VALUES (?,?,?)`, username, "x", role)
+		var id int64
+		err := store.GetDB().QueryRow(`INSERT INTO xt_users (username, password_hash, role) VALUES ($1,$2,$3) RETURNING id`, username, "x", role).Scan(&id)
 		if err != nil {
 			t.Fatalf("insert user: %v", err)
 		}
-		id, _ := res.LastInsertId()
 		return id
 	}
 	adminID := mkUser("rbac_token_admin", "admin")

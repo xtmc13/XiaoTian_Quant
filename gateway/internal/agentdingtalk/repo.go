@@ -52,7 +52,7 @@ func (r *Repo) CreatePairCode(userID int64) (string, error) {
 		return "", err
 	}
 	// 作废旧码
-	if _, err := db.Exec(`UPDATE xt_agent_dingtalk_pair_codes SET used_at = ? WHERE user_id = ? AND used_at = 0`, time.Now().Unix(), userID); err != nil {
+	if _, err := db.Exec(`UPDATE xt_agent_dingtalk_pair_codes SET used_at = $1 WHERE user_id = $2 AND used_at = 0`, time.Now().Unix(), userID); err != nil {
 		return "", err
 	}
 	n, err := rand.Int(rand.Reader, big.NewInt(900000))
@@ -61,7 +61,7 @@ func (r *Repo) CreatePairCode(userID int64) (string, error) {
 	}
 	code := fmt.Sprintf("%06d", n.Int64()+100000)
 	now := time.Now().Unix()
-	_, err = db.Exec(`INSERT INTO xt_agent_dingtalk_pair_codes (code, user_id, created_at, expires_at, used_at) VALUES (?,?,?,?,0)`,
+	_, err = db.Exec(`INSERT INTO xt_agent_dingtalk_pair_codes (code, user_id, created_at, expires_at, used_at) VALUES ($1,$2,$3,$4,0)`,
 		code, userID, now, now+int64(PairCodeTTL.Seconds()))
 	return code, err
 }
@@ -74,7 +74,7 @@ func (r *Repo) ConsumePairCode(code, staffID string) (*Link, error) {
 	}
 	var userID int64
 	var expiresAt, usedAt int64
-	err = db.QueryRow(`SELECT user_id, expires_at, used_at FROM xt_agent_dingtalk_pair_codes WHERE code = ?`, code).
+	err = db.QueryRow(`SELECT user_id, expires_at, used_at FROM xt_agent_dingtalk_pair_codes WHERE code = $1`, code).
 		Scan(&userID, &expiresAt, &usedAt)
 	if err == sql.ErrNoRows {
 		return nil, ErrCodeInvalid
@@ -91,14 +91,15 @@ func (r *Repo) ConsumePairCode(code, staffID string) (*Link, error) {
 		return nil, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`UPDATE xt_agent_dingtalk_pair_codes SET used_at = ? WHERE code = ?`, now, code); err != nil {
+	if _, err := tx.Exec(`UPDATE xt_agent_dingtalk_pair_codes SET used_at = $1 WHERE code = $2`, now, code); err != nil {
 		return nil, err
 	}
 	// staff_id 若绑过别人，先解绑
-	if _, err := tx.Exec(`DELETE FROM xt_agent_dingtalk_links WHERE staff_id = ?`, staffID); err != nil {
+	if _, err := tx.Exec(`DELETE FROM xt_agent_dingtalk_links WHERE staff_id = $1`, staffID); err != nil {
 		return nil, err
 	}
-	if _, err := tx.Exec(`INSERT OR REPLACE INTO xt_agent_dingtalk_links (user_id, staff_id, created_at) VALUES (?,?,?)`,
+	if _, err := tx.Exec(`INSERT INTO xt_agent_dingtalk_links (user_id, staff_id, created_at) VALUES ($1,$2,$3)
+		ON CONFLICT(user_id) DO UPDATE SET staff_id=excluded.staff_id, created_at=excluded.created_at`,
 		userID, staffID, now); err != nil {
 		return nil, err
 	}
@@ -115,7 +116,7 @@ func (r *Repo) GetByUserID(userID int64) (*Link, error) {
 		return nil, err
 	}
 	var l Link
-	err = db.QueryRow(`SELECT user_id, staff_id, created_at, conversation_id, model FROM xt_agent_dingtalk_links WHERE user_id = ?`, userID).
+	err = db.QueryRow(`SELECT user_id, staff_id, created_at, conversation_id, model FROM xt_agent_dingtalk_links WHERE user_id = $1`, userID).
 		Scan(&l.UserID, &l.StaffID, &l.CreatedAt, &l.ConversationID, &l.Model)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotLinked
@@ -133,7 +134,7 @@ func (r *Repo) GetByStaffID(staffID string) (*Link, error) {
 		return nil, err
 	}
 	var l Link
-	err = db.QueryRow(`SELECT user_id, staff_id, created_at, conversation_id, model FROM xt_agent_dingtalk_links WHERE staff_id = ?`, staffID).
+	err = db.QueryRow(`SELECT user_id, staff_id, created_at, conversation_id, model FROM xt_agent_dingtalk_links WHERE staff_id = $1`, staffID).
 		Scan(&l.UserID, &l.StaffID, &l.CreatedAt, &l.ConversationID, &l.Model)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotLinked
@@ -150,7 +151,7 @@ func (r *Repo) SetConversationID(staffID, conversationID string) error {
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec(`UPDATE xt_agent_dingtalk_links SET conversation_id = ? WHERE staff_id = ?`, conversationID, staffID)
+	_, err = db.Exec(`UPDATE xt_agent_dingtalk_links SET conversation_id = $1 WHERE staff_id = $2`, conversationID, staffID)
 	return err
 }
 
@@ -160,7 +161,7 @@ func (r *Repo) SetModel(staffID, model string) error {
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec(`UPDATE xt_agent_dingtalk_links SET model = ? WHERE staff_id = ?`, model, staffID)
+	_, err = db.Exec(`UPDATE xt_agent_dingtalk_links SET model = $1 WHERE staff_id = $2`, model, staffID)
 	return err
 }
 
@@ -170,6 +171,6 @@ func (r *Repo) Unlink(userID int64) error {
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec(`DELETE FROM xt_agent_dingtalk_links WHERE user_id = ?`, userID)
+	_, err = db.Exec(`DELETE FROM xt_agent_dingtalk_links WHERE user_id = $1`, userID)
 	return err
 }

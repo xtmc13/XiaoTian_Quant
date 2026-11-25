@@ -131,7 +131,7 @@ Grafana 自动加载 `ops/grafana/dashboards/xiaotian-overview.json`
   对账差异（`reconcile_diffs_total{type,exchange}`，差异落库处）、
   成交量（`fills_total{side}`，下单成交处）。
 - 磁盘用量（`gateway_disk_total_bytes` / `gateway_disk_avail_bytes{path}`）
-  在每次抓取时对 `DB_PATH` 所在文件系统 statfs 采样。
+  在每次抓取时对 `DATA_DIR` 所在文件系统 statfs 采样。
 
 ## 告警规则
 

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"database/sql"
 	"sync"
 	"time"
@@ -69,7 +70,7 @@ func (r *IndicatorAlertRepo) Create(rec *IndicatorAlertRecord) error {
 		active = 1
 	}
 	_, err := db.Exec(`INSERT INTO xt_indicator_alerts (`+indicatorAlertColumns+`)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
 		rec.ID, rec.UserID, rec.Name, rec.Symbol, rec.Interval, rec.ConditionExpr,
 		rec.Message, rec.CooldownMinutes, rec.LastTriggeredAt, rec.LastValue,
 		active, rec.CreatedAt, rec.UpdatedAt)
@@ -78,7 +79,7 @@ func (r *IndicatorAlertRepo) Create(rec *IndicatorAlertRecord) error {
 
 // GetByID 按 id 取任务；不存在返回 (nil, nil)。
 func (r *IndicatorAlertRepo) GetByID(id string) (*IndicatorAlertRecord, error) {
-	row := db.QueryRow(`SELECT `+indicatorAlertColumns+` FROM xt_indicator_alerts WHERE id = ?`, id)
+	row := db.QueryRow(`SELECT `+indicatorAlertColumns+` FROM xt_indicator_alerts WHERE id = $1`, id)
 	return scanIndicatorAlert(row)
 }
 
@@ -86,13 +87,13 @@ func (r *IndicatorAlertRepo) GetByID(id string) (*IndicatorAlertRecord, error) {
 func (r *IndicatorAlertRepo) List(filter map[string]any, limit int) ([]*IndicatorAlertRecord, error) {
 	query := `SELECT ` + indicatorAlertColumns + ` FROM xt_indicator_alerts`
 	allowedCols := map[string]bool{"user_id": true, "symbol": true, "interval": true, "active": true}
-	args, where := buildFilter(filter, allowedCols)
+	args, where, next := buildFilter(filter, allowedCols, 1)
 	if where != "" {
 		query += " WHERE " + where
 	}
 	query += " ORDER BY updated_at DESC"
 	if limit > 0 {
-		query += " LIMIT ?"
+		query += fmt.Sprintf(" LIMIT $%d", next)
 		args = append(args, limit)
 	}
 	rows, err := db.Query(query, args...)
@@ -126,8 +127,8 @@ func (r *IndicatorAlertRepo) Update(rec *IndicatorAlertRecord) error {
 		active = 1
 	}
 	_, err := db.Exec(`UPDATE xt_indicator_alerts SET
-		name=?, symbol=?, interval=?, condition_expr=?, message=?, cooldown_minutes=?,
-		active=?, updated_at=? WHERE id=?`,
+		name=$1, symbol=$2, interval=$3, condition_expr=$4, message=$5, cooldown_minutes=$6,
+		active=$7, updated_at=$8 WHERE id=$9`,
 		rec.Name, rec.Symbol, rec.Interval, rec.ConditionExpr, rec.Message,
 		rec.CooldownMinutes, active, rec.UpdatedAt, rec.ID)
 	return err
@@ -141,7 +142,7 @@ func (r *IndicatorAlertRepo) SetActive(id string, active bool) error {
 	if active {
 		v = 1
 	}
-	_, err := db.Exec(`UPDATE xt_indicator_alerts SET active=?, updated_at=? WHERE id=?`,
+	_, err := db.Exec(`UPDATE xt_indicator_alerts SET active=$1, updated_at=$2 WHERE id=$3`,
 		v, time.Now().UnixMilli(), id)
 	return err
 }
@@ -150,7 +151,7 @@ func (r *IndicatorAlertRepo) SetActive(id string, active bool) error {
 func (r *IndicatorAlertRepo) MarkTriggered(id string, value float64, atMs int64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	_, err := db.Exec(`UPDATE xt_indicator_alerts SET last_triggered_at=?, last_value=?, updated_at=? WHERE id=?`,
+	_, err := db.Exec(`UPDATE xt_indicator_alerts SET last_triggered_at=$1, last_value=$2, updated_at=$3 WHERE id=$4`,
 		atMs, value, atMs, id)
 	return err
 }
@@ -159,6 +160,6 @@ func (r *IndicatorAlertRepo) MarkTriggered(id string, value float64, atMs int64)
 func (r *IndicatorAlertRepo) Delete(id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	_, err := db.Exec(`DELETE FROM xt_indicator_alerts WHERE id = ?`, id)
+	_, err := db.Exec(`DELETE FROM xt_indicator_alerts WHERE id = $1`, id)
 	return err
 }

@@ -14,16 +14,18 @@ import (
 	"github.com/xiaotian-quant/gateway/internal/store"
 )
 
-// TestMain 为 cmd/server 包测试准备隔离的临时 sqlite（沿用 internal/handler
-// 测试设施的模式）：绝不触碰 ./runtime/gateway.db。setupRoutes 依赖
+// TestMain 为 cmd/server 包测试准备隔离的临时目录（配置/凭证沙箱文件），
+// 数据库走测试 PostgreSQL（无配置则整包跳过）。setupRoutes 依赖
 // store.GetAIBotCatalog / social.MarketService 等需要 DB 句柄的调用。
 func TestMain(m *testing.M) {
 	gin.SetMode(gin.TestMode)
+	if !store.TestDatabaseConfigured() {
+		os.Exit(0)
+	}
 	dir, err := os.MkdirTemp("", "server_route_test")
 	if err != nil {
 		panic(err)
 	}
-	_ = os.Setenv("DB_PATH", filepath.Join(dir, "gateway.db"))
 	_ = os.Setenv("CONFIG_PATH", filepath.Join(dir, "test_server_config.yaml"))
 	_ = os.Setenv("SECRET_KEY", "test-secret-key-not-for-production-use-only")
 	store.VaultFilePath = filepath.Join(dir, "credentials_vault.json")

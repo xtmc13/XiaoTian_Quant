@@ -44,7 +44,7 @@ func GetRecentTrades(limit int) []map[string]any {
 	if db == nil {
 		return nil
 	}
-	rows, err := db.Query("SELECT symbol, side, price, quantity, time FROM trades ORDER BY time DESC LIMIT ?", limit)
+	rows, err := db.Query("SELECT symbol, side, price, quantity, time FROM trades ORDER BY time DESC LIMIT $1", limit)
 	if err != nil {
 		return nil
 	}
@@ -92,7 +92,7 @@ func GetRecentRiskEvents(limit int) []map[string]any {
 	if db == nil {
 		return nil
 	}
-	rows, err := db.Query("SELECT level, message, timestamp FROM risk_events ORDER BY timestamp DESC LIMIT ?", limit)
+	rows, err := db.Query("SELECT level, message, timestamp FROM risk_events ORDER BY timestamp DESC LIMIT $1", limit)
 	if err != nil {
 		return nil
 	}
@@ -121,7 +121,7 @@ func AddAuditLog(actor, action, detail string) {
 	// 否则新库上整条 INSERT 静默失败（旧版只写 4 列，审计实际没落库）。
 	now := time.Now().Unix()
 	if _, err := db.Exec(
-		`INSERT INTO agent_audit_log (actor, action, detail, created_at, endpoint, method, timestamp) VALUES (?, ?, ?, ?, ?, 'AUDIT', ?)`,
+		`INSERT INTO agent_audit_log (actor, action, detail, created_at, endpoint, method, timestamp) VALUES ($1, $2, $3, $4, $5, 'AUDIT', $6)`,
 		actor, action, detail, now, "audit:"+action, now,
 	); err == nil {
 		return
@@ -129,7 +129,7 @@ func AddAuditLog(actor, action, detail string) {
 	// 兼容未跑 0001 迁移的旧库（无 actor/action/detail 列）：降级到原 4 列试试，
 	// 仍失败则放弃（审计绝不能阻塞交易路径）。
 	_, _ = db.Exec(
-		`INSERT INTO agent_audit_log (actor, action, detail, created_at) VALUES (?, ?, ?, ?)`,
+		`INSERT INTO agent_audit_log (actor, action, detail, created_at) VALUES ($1, $2, $3, $4)`,
 		actor, action, detail, now,
 	)
 }
@@ -140,7 +140,7 @@ func GetAuditLog(limit, offset int) []map[string]any {
 		return nil
 	}
 	rows, err := db.Query(
-		`SELECT id, actor, action, detail, created_at FROM agent_audit_log ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+		`SELECT id, actor, action, detail, created_at FROM agent_audit_log ORDER BY created_at DESC LIMIT $1 OFFSET $2`,
 		limit, offset,
 	)
 	if err != nil {
@@ -182,6 +182,6 @@ func SetUserActive(userID string, active bool) error {
 	if active {
 		isActive = 1
 	}
-	_, err := db.Exec("UPDATE xt_users SET is_active = ? WHERE id = ?", isActive, userID)
+	_, err := db.Exec("UPDATE xt_users SET is_active = $1 WHERE id = $2", isActive, userID)
 	return err
 }

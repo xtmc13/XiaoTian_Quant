@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"sync"
 	"time"
 )
@@ -35,7 +36,7 @@ func (r *BacktestRepo) Create(b *BacktestRecord) error {
 	}
 	_, err := db.Exec(
 		`INSERT INTO xt_backtests (id, user_id, name, strategy, symbol, start_time, end_time, duration_ms, status, report_json, created_at, completed_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
 		b.ID, b.UserID, b.Name, b.Strategy, b.Symbol, b.StartTime, b.EndTime, b.DurationMs, b.Status, b.ReportJSON, b.CreatedAt, b.CompletedAt,
 	)
 	return err
@@ -44,7 +45,7 @@ func (r *BacktestRepo) Create(b *BacktestRecord) error {
 const backtestColumns = `id, user_id, name, strategy, symbol, start_time, end_time, duration_ms, status, report_json, created_at, completed_at`
 
 func (r *BacktestRepo) GetByID(id string) (*BacktestRecord, error) {
-	row := db.QueryRow(`SELECT `+backtestColumns+` FROM xt_backtests WHERE id=?`, id)
+	row := db.QueryRow(`SELECT `+backtestColumns+` FROM xt_backtests WHERE id=$1`, id)
 	var b BacktestRecord
 	err := row.Scan(&b.ID, &b.UserID, &b.Name, &b.Strategy, &b.Symbol, &b.StartTime, &b.EndTime, &b.DurationMs, &b.Status, &b.ReportJSON, &b.CreatedAt, &b.CompletedAt)
 	if err != nil {
@@ -59,13 +60,13 @@ func (r *BacktestRepo) List(filter map[string]any, limit int) ([]*BacktestRecord
 		"id": true, "user_id": true, "name": true, "strategy": true, "symbol": true, "status": true,
 		"created_at": true, "completed_at": true,
 	}
-	args, where := buildFilter(filter, allowedCols)
+	args, where, next := buildFilter(filter, allowedCols, 1)
 	if where != "" {
 		query += " WHERE " + where
 	}
 	query += " ORDER BY created_at DESC"
 	if limit > 0 {
-		query += " LIMIT ?"
+		query += fmt.Sprintf(" LIMIT $%d", next)
 		args = append(args, limit)
 	}
 	rows, err := db.Query(query, args...)
@@ -86,13 +87,13 @@ func (r *BacktestRepo) List(filter map[string]any, limit int) ([]*BacktestRecord
 
 func (r *BacktestRepo) Update(b *BacktestRecord) error {
 	_, err := db.Exec(
-		`UPDATE xt_backtests SET status=?, report_json=?, duration_ms=?, completed_at=? WHERE id=?`,
+		`UPDATE xt_backtests SET status=$1, report_json=$2, duration_ms=$3, completed_at=$4 WHERE id=$5`,
 		b.Status, b.ReportJSON, b.DurationMs, b.CompletedAt, b.ID,
 	)
 	return err
 }
 
 func (r *BacktestRepo) Delete(id string) error {
-	_, err := db.Exec("DELETE FROM xt_backtests WHERE id=?", id)
+	_, err := db.Exec("DELETE FROM xt_backtests WHERE id=$1", id)
 	return err
 }

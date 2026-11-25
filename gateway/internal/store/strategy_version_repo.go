@@ -38,7 +38,7 @@ func (r *StrategyVersionRepo) Create(rec *StrategyVersionRecord) error {
 	}
 	var maxVersion int
 	if err := db.QueryRow(
-		`SELECT COALESCE(MAX(version), 0) FROM xt_strategy_versions WHERE strategy_id = ?`,
+		`SELECT COALESCE(MAX(version), 0) FROM xt_strategy_versions WHERE strategy_id = $1`,
 		rec.StrategyID,
 	).Scan(&maxVersion); err != nil {
 		return err
@@ -46,7 +46,7 @@ func (r *StrategyVersionRepo) Create(rec *StrategyVersionRecord) error {
 	rec.Version = maxVersion + 1
 	_, err := db.Exec(
 		`INSERT INTO xt_strategy_versions (id, user_id, strategy_id, version, payload, note, created_at)
-		 VALUES (?,?,?,?,?,?,?)`,
+		 VALUES ($1,$2,$3,$4,$5,$6,$7)`,
 		rec.ID, rec.UserID, rec.StrategyID, rec.Version, rec.Payload, rec.Note, rec.CreatedAt,
 	)
 	return err
@@ -66,7 +66,7 @@ func (r *StrategyVersionRepo) scan(s rowScanner) (*StrategyVersionRecord, error)
 // ListByStrategy 返回该策略的全部版本，version 倒序（最新在前）。
 func (r *StrategyVersionRepo) ListByStrategy(strategyID string) ([]*StrategyVersionRecord, error) {
 	rows, err := db.Query(
-		`SELECT `+strategyVersionColumns+` FROM xt_strategy_versions WHERE strategy_id = ? ORDER BY version DESC`,
+		`SELECT `+strategyVersionColumns+` FROM xt_strategy_versions WHERE strategy_id = $1 ORDER BY version DESC`,
 		strategyID,
 	)
 	if err != nil {
@@ -87,7 +87,7 @@ func (r *StrategyVersionRepo) ListByStrategy(strategyID string) ([]*StrategyVers
 // Get 取该策略的指定版本号；不存在返回 (nil, nil)。
 func (r *StrategyVersionRepo) Get(strategyID string, version int) (*StrategyVersionRecord, error) {
 	row := db.QueryRow(
-		`SELECT `+strategyVersionColumns+` FROM xt_strategy_versions WHERE strategy_id = ? AND version = ?`,
+		`SELECT `+strategyVersionColumns+` FROM xt_strategy_versions WHERE strategy_id = $1 AND version = $2`,
 		strategyID, version,
 	)
 	rec, err := r.scan(row)
@@ -100,7 +100,7 @@ func (r *StrategyVersionRepo) Get(strategyID string, version int) (*StrategyVers
 // GetLatest 取该策略最新版本；一条都没有返回 (nil, nil)。
 func (r *StrategyVersionRepo) GetLatest(strategyID string) (*StrategyVersionRecord, error) {
 	row := db.QueryRow(
-		`SELECT `+strategyVersionColumns+` FROM xt_strategy_versions WHERE strategy_id = ? ORDER BY version DESC LIMIT 1`,
+		`SELECT `+strategyVersionColumns+` FROM xt_strategy_versions WHERE strategy_id = $1 ORDER BY version DESC LIMIT 1`,
 		strategyID,
 	)
 	rec, err := r.scan(row)
@@ -113,7 +113,7 @@ func (r *StrategyVersionRepo) GetLatest(strategyID string) (*StrategyVersionReco
 // FindByID 按版本记录 id 取单条（属主/归属校验由 handler 做）。
 func (r *StrategyVersionRepo) FindByID(id string) (*StrategyVersionRecord, error) {
 	row := db.QueryRow(
-		`SELECT `+strategyVersionColumns+` FROM xt_strategy_versions WHERE id = ?`, id,
+		`SELECT `+strategyVersionColumns+` FROM xt_strategy_versions WHERE id = $1`, id,
 	)
 	rec, err := r.scan(row)
 	if err == sql.ErrNoRows {

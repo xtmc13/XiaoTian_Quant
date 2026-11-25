@@ -85,6 +85,11 @@ const layeredMartinGroupColumns = `id, bot_id, group_index, quote_amount, multip
 	max_layers, budget_cap, layer, total_invested, base_qty, avg_price, entry_price,
 	highest_price, pending_layer, status, created_at, updated_at`
 
+// 不含自增主键的插入列：INSERT 时省略 id 列，由 PG identity 分配（显式插 NULL 不会触发默认值）。
+const layeredMartinGroupInsertColumns = `bot_id, group_index, quote_amount, multiplier,
+	max_layers, budget_cap, layer, total_invested, base_qty, avg_price, entry_price,
+	highest_price, pending_layer, status, created_at, updated_at`
+
 // Create inserts a new layered martingale bot (groups are inserted separately).
 func (r *LayeredMartinRepo) Create(b *LayeredMartinBotRecord) error {
 	r.mu.Lock()
@@ -109,9 +114,9 @@ func (r *LayeredMartinRepo) Create(b *LayeredMartinBotRecord) error {
 		b.Exchange = "paper"
 	}
 	_, err := db.Exec(`INSERT INTO layered_martin_bots (`+layeredMartinBotColumns+`)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
 		b.ID, b.UserID, b.Name, b.Symbol, b.Exchange, b.PriceDeviationPct,
-		b.TakeProfitPct, b.StopLossPct, b.TrailingEnabled, b.Status, b.RealizedPnL,
+		b.TakeProfitPct, b.StopLossPct, boolToInt(b.TrailingEnabled), b.Status, b.RealizedPnL,
 		b.TotalTrades, b.CreatedAt, b.UpdatedAt, b.StartedAt, b.StoppedAt,
 	)
 	return err
@@ -124,7 +129,7 @@ func (r *LayeredMartinRepo) GetByID(id string) (*LayeredMartinBotRecord, error) 
 	if db == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
-	row := db.QueryRow(`SELECT `+layeredMartinBotColumns+` FROM layered_martin_bots WHERE id=?`, id)
+	row := db.QueryRow(`SELECT `+layeredMartinBotColumns+` FROM layered_martin_bots WHERE id=$1`, id)
 	return scanLayeredMartinBot(row)
 }
 
@@ -139,13 +144,13 @@ func (r *LayeredMartinRepo) List(filter map[string]any, limit int) ([]*LayeredMa
 	allowedCols := map[string]bool{
 		"id": true, "user_id": true, "status": true, "symbol": true, "exchange": true,
 	}
-	args, where := buildFilter(filter, allowedCols)
+	args, where, next := buildFilter(filter, allowedCols, 1)
 	if where != "" {
 		query += " WHERE " + where
 	}
 	query += " ORDER BY updated_at DESC"
 	if limit > 0 {
-		query += " LIMIT ?"
+		query += fmt.Sprintf(" LIMIT $%d", next)
 		args = append(args, limit)
 	}
 	rows, err := db.Query(query, args...)
@@ -173,12 +178,12 @@ func (r *LayeredMartinRepo) Update(b *LayeredMartinBotRecord) error {
 		return fmt.Errorf("database not initialized")
 	}
 	b.UpdatedAt = time.Now().UnixMilli()
-	_, err := db.Exec(`UPDATE layered_martin_bots SET user_id=?, name=?, symbol=?, exchange=?,
-		price_deviation_pct=?, take_profit_pct=?, stop_loss_pct=?, trailing_enabled=?,
-		status=?, realized_pnl=?, total_trades=?, created_at=?, updated_at=?,
-		started_at=?, stopped_at=? WHERE id=?`,
+	_, err := db.Exec(`UPDATE layered_martin_bots SET user_id=$1, name=$2, symbol=$3, exchange=$4,
+		price_deviation_pct=$5, take_profit_pct=$6, stop_loss_pct=$7, trailing_enabled=$8,
+		status=$9, realized_pnl=$10, total_trades=$11, created_at=$12, updated_at=$13,
+		started_at=$14, stopped_at=$15 WHERE id=$16`,
 		b.UserID, b.Name, b.Symbol, b.Exchange, b.PriceDeviationPct,
-		b.TakeProfitPct, b.StopLossPct, b.TrailingEnabled, b.Status, b.RealizedPnL,
+		b.TakeProfitPct, b.StopLossPct, boolToInt(b.TrailingEnabled), b.Status, b.RealizedPnL,
 		b.TotalTrades, b.CreatedAt, b.UpdatedAt, b.StartedAt, b.StoppedAt, b.ID,
 	)
 	return err
@@ -191,8 +196,8 @@ func (r *LayeredMartinRepo) UpdateState(id string, realizedPnL float64, totalTra
 	if db == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	_, err := db.Exec(`UPDATE layered_martin_bots SET realized_pnl=?, total_trades=?,
-		updated_at=? WHERE id=?`,
+	_, err := db.Exec(`UPDATE layered_martin_bots SET realized_pnl=$1, total_trades=$2,
+		updated_at=$3 WHERE id=$4`,
 		realizedPnL, totalTrades, time.Now().UnixMilli(), id,
 	)
 	return err
@@ -207,17 +212,20 @@ func (r *LayeredMartinRepo) UpdateStatus(id string, status string) error {
 		return fmt.Errorf("database not initialized")
 	}
 	now := time.Now().UnixMilli()
-	query := `UPDATE layered_martin_bots SET status=?, updated_at=?`
+	query := `UPDATE layered_martin_bots SET status=$1, updated_at=$2`
 	args := []any{status, now}
+	next := 3
 	switch status {
 	case "running":
-		query += `, started_at=?`
+		query += fmt.Sprintf(`, started_at=$%d`, next)
 		args = append(args, now)
+		next++
 	case "stopped", "finished":
-		query += `, stopped_at=?`
+		query += fmt.Sprintf(`, stopped_at=$%d`, next)
 		args = append(args, now)
+		next++
 	}
-	query += ` WHERE id=?`
+	query += fmt.Sprintf(` WHERE id=$%d`, next)
 	args = append(args, id)
 	_, err := db.Exec(query, args...)
 	return err
@@ -230,7 +238,7 @@ func (r *LayeredMartinRepo) Delete(id string) error {
 	if db == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	_, err := db.Exec("DELETE FROM layered_martin_bots WHERE id=?", id)
+	_, err := db.Exec("DELETE FROM layered_martin_bots WHERE id=$1", id)
 	return err
 }
 
@@ -241,7 +249,7 @@ func (r *LayeredMartinRepo) DeleteForUser(id string, userID int64) error {
 	if db == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	res, err := db.Exec("DELETE FROM layered_martin_bots WHERE id=? AND user_id=?", id, userID)
+	res, err := db.Exec("DELETE FROM layered_martin_bots WHERE id=$1 AND user_id=$2", id, userID)
 	if err != nil {
 		return err
 	}
@@ -258,7 +266,7 @@ func (r *LayeredMartinRepo) ReplaceGroups(botID string, groups []*LayeredMartinG
 	if db == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	if _, err := db.Exec("DELETE FROM layered_martin_groups WHERE bot_id=?", botID); err != nil {
+	if _, err := db.Exec("DELETE FROM layered_martin_groups WHERE bot_id=$1", botID); err != nil {
 		return err
 	}
 	now := time.Now().UnixMilli()
@@ -278,19 +286,14 @@ func (r *LayeredMartinRepo) ReplaceGroups(botID string, groups []*LayeredMartinG
 		g.UpdatedAt = now
 		g.BotID = botID
 		g.GroupIndex = i
-		// 全量替换：组主键由 SQLite 重新分配（显式 0 不会触发自增，须写 NULL），
-		// 避免携带旧 ID 撞 UNIQUE。
-		res, err := db.Exec(`INSERT INTO layered_martin_groups (`+layeredMartinGroupColumns+`)
-			VALUES (NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		// 全量替换：省略自增主键列，由 PG identity 重新分配，避免携带旧 ID 撞 UNIQUE。
+		if err := db.QueryRow(`INSERT INTO layered_martin_groups (`+layeredMartinGroupInsertColumns+`)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
 			botID, i, g.QuoteAmount, g.Multiplier, g.MaxLayers, g.BudgetCap,
 			g.Layer, g.TotalInvested, g.BaseQty, g.AvgPrice, g.EntryPrice,
 			g.HighestPrice, g.PendingLayer, g.Status, g.CreatedAt, g.UpdatedAt,
-		)
-		if err != nil {
+		).Scan(&g.ID); err != nil {
 			return err
-		}
-		if id, err := res.LastInsertId(); err == nil {
-			g.ID = id
 		}
 	}
 	return nil
@@ -304,7 +307,7 @@ func (r *LayeredMartinRepo) GetGroups(botID string) ([]*LayeredMartinGroupRecord
 		return nil, fmt.Errorf("database not initialized")
 	}
 	rows, err := db.Query(`SELECT `+layeredMartinGroupColumns+` FROM layered_martin_groups
-		WHERE bot_id=? ORDER BY group_index ASC`, botID)
+		WHERE bot_id=$1 ORDER BY group_index ASC`, botID)
 	if err != nil {
 		return nil, err
 	}
@@ -329,9 +332,9 @@ func (r *LayeredMartinRepo) UpdateGroup(g *LayeredMartinGroupRecord) error {
 		return fmt.Errorf("database not initialized")
 	}
 	g.UpdatedAt = time.Now().UnixMilli()
-	_, err := db.Exec(`UPDATE layered_martin_groups SET layer=?, total_invested=?, base_qty=?,
-		avg_price=?, entry_price=?, highest_price=?, pending_layer=?, status=?, updated_at=?
-		WHERE id=?`,
+	_, err := db.Exec(`UPDATE layered_martin_groups SET layer=$1, total_invested=$2, base_qty=$3,
+		avg_price=$4, entry_price=$5, highest_price=$6, pending_layer=$7, status=$8, updated_at=$9
+		WHERE id=$10`,
 		g.Layer, g.TotalInvested, g.BaseQty, g.AvgPrice, g.EntryPrice,
 		g.HighestPrice, g.PendingLayer, g.Status, g.UpdatedAt, g.ID,
 	)
@@ -347,7 +350,7 @@ func (r *LayeredMartinRepo) InsertOrder(botID string, groupIndex int, side strin
 	}
 	_, err := db.Exec(`INSERT INTO layered_martin_orders
 		(bot_id, group_index, side, layer, price, quantity, quote_qty, reason, ts)
-		VALUES (?,?,?,?,?,?,?,?,?)`,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
 		botID, groupIndex, side, layer, price, qty, quoteQty, reason, ts,
 	)
 	return err
@@ -361,10 +364,10 @@ func (r *LayeredMartinRepo) GetOrders(botID string, limit int) ([]*LayeredMartin
 		return nil, fmt.Errorf("database not initialized")
 	}
 	query := `SELECT id, bot_id, group_index, side, layer, price, quantity, quote_qty, reason, ts
-		FROM layered_martin_orders WHERE bot_id=? ORDER BY ts DESC, id DESC`
+		FROM layered_martin_orders WHERE bot_id=$1 ORDER BY ts DESC, id DESC`
 	args := []any{botID}
 	if limit > 0 {
-		query += " LIMIT ?"
+		query += " LIMIT $2"
 		args = append(args, limit)
 	}
 	rows, err := db.Query(query, args...)
@@ -390,9 +393,10 @@ func scanLayeredMartinBot(scanner interface {
 	Scan(dest ...any) error
 }) (*LayeredMartinBotRecord, error) {
 	var b LayeredMartinBotRecord
+	var trailing int
 	err := scanner.Scan(
 		&b.ID, &b.UserID, &b.Name, &b.Symbol, &b.Exchange, &b.PriceDeviationPct,
-		&b.TakeProfitPct, &b.StopLossPct, &b.TrailingEnabled, &b.Status, &b.RealizedPnL,
+		&b.TakeProfitPct, &b.StopLossPct, &trailing, &b.Status, &b.RealizedPnL,
 		&b.TotalTrades, &b.CreatedAt, &b.UpdatedAt, &b.StartedAt, &b.StoppedAt,
 	)
 	if err == sql.ErrNoRows {
@@ -401,6 +405,7 @@ func scanLayeredMartinBot(scanner interface {
 	if err != nil {
 		return nil, err
 	}
+	b.TrailingEnabled = trailing != 0
 	return &b, nil
 }
 

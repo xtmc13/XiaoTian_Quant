@@ -376,7 +376,7 @@ func (s *Store) SaveSignal(sig Signal) error {
 	}
 	_, err := db.Exec(
 		`INSERT INTO social_signals (id, provider_id, symbol, direction, price, stop_loss, take_profit, size, confidence, strategy, reason, timestamp, expires_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		 ON CONFLICT(id) DO UPDATE SET price=excluded.price, confidence=excluded.confidence`,
 		sig.ID, sig.ProviderID, sig.Symbol, sig.Direction, sig.Price, sig.StopLoss, sig.TakeProfit,
 		sig.Size, sig.Confidence, sig.Strategy, sig.Reason, sig.Timestamp, sig.ExpiresAt,
@@ -392,7 +392,7 @@ func (s *Store) SaveCopyTrade(followerID int, signal Signal, executed bool, reas
 	}
 	_, err := db.Exec(
 		`INSERT INTO copy_trades (follower_id, signal_id, provider_id, symbol, direction, executed, reason, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		followerID, signal.ID, signal.ProviderID, signal.Symbol, signal.Direction, executed, reason, time.Now().Unix(),
 	)
 	return err

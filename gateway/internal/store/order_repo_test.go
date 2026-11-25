@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// OrderRepo.GetByID 对 xt_orders.created_at/updated_at（历史 REAL 列）的扫描
+// OrderRepo.GetByID 对 xt_orders.created_at/updated_at（double precision 列）的扫描
 // 必须与 List 同口径：先收 float64 再显式转 int64。回归：单查大毫秒时间戳
 // 不再报 "unsupported Scan" 或错值（科学计数法字符串解析失败）。
 func TestOrderRepoGetByIDRealTimestampColumns(t *testing.T) {
@@ -34,13 +34,13 @@ func TestOrderRepoGetByIDRealTimestampColumns(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	// 确认列确为 REAL 亲和（REAL 列里 int64 以浮点存储，驱动读出 float64）。
+	// 确认列确为 double precision（PG 下浮点时间戳列，驱动读出 float64）。
 	var colType string
-	if err := db.QueryRow(`SELECT type FROM pragma_table_info('xt_orders') WHERE name='created_at'`).Scan(&colType); err != nil {
-		t.Fatalf("pragma: %v", err)
+	if err := db.QueryRow(`SELECT data_type FROM information_schema.columns WHERE table_name='xt_orders' AND column_name='created_at'`).Scan(&colType); err != nil {
+		t.Fatalf("column: %v", err)
 	}
-	if colType != "REAL" {
-		t.Fatalf("created_at should be REAL affinity, got %q", colType)
+	if colType != "double precision" {
+		t.Fatalf("created_at should be double precision, got %q", colType)
 	}
 
 	got, err := repo.GetByID("ord-real-ts-1")
@@ -71,7 +71,7 @@ func TestOrderRepoGetByIDRealTimestampColumns(t *testing.T) {
 	// 直写 SQL 的浮点时间戳（老库真实形态）也必须能读。
 	if _, err := db.Exec(
 		`INSERT INTO xt_orders (id, symbol, side, order_type, price, quantity, status, exchange, created_at, updated_at)
-		 VALUES ('ord-real-ts-2','ETHUSDT','SELL','MARKET',3000.0,1.0,'FILLED','paper',?,?)`,
+		 VALUES ('ord-real-ts-2','ETHUSDT','SELL','MARKET',3000.0,1.0,'FILLED','paper',$1,$2)`,
 		float64(nowMs-7200_000)+0.5, float64(nowMs)+0.5,
 	); err != nil {
 		t.Fatalf("raw insert float ts: %v", err)

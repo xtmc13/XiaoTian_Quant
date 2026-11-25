@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"database/sql"
 	"sync"
 	"time"
@@ -54,7 +55,7 @@ func (r *LadderOrderRepo) Upsert(rec *LadderOrderRecord) error {
 	}
 	rec.UpdatedAt = now
 	_, err := db.Exec(`INSERT INTO xt_ladder_orders (`+ladderOrderColumns+`)
-		VALUES (?,?,?,?,?,?,?,?,?,?)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 		ON CONFLICT(id) DO UPDATE SET status=excluded.status, spec_json=excluded.spec_json,
 			state_json=excluded.state_json, updated_at=excluded.updated_at`,
 		rec.ID, rec.UserID, rec.Symbol, rec.Side, rec.Exchange,
@@ -64,7 +65,7 @@ func (r *LadderOrderRepo) Upsert(rec *LadderOrderRecord) error {
 
 // GetByID 按 id 取阶梯单；不存在返回 (nil, nil)。
 func (r *LadderOrderRepo) GetByID(id string) (*LadderOrderRecord, error) {
-	row := db.QueryRow(`SELECT `+ladderOrderColumns+` FROM xt_ladder_orders WHERE id = ?`, id)
+	row := db.QueryRow(`SELECT `+ladderOrderColumns+` FROM xt_ladder_orders WHERE id = $1`, id)
 	return scanLadderOrder(row)
 }
 
@@ -72,13 +73,13 @@ func (r *LadderOrderRepo) GetByID(id string) (*LadderOrderRecord, error) {
 func (r *LadderOrderRepo) List(filter map[string]any, limit int) ([]*LadderOrderRecord, error) {
 	query := `SELECT ` + ladderOrderColumns + ` FROM xt_ladder_orders`
 	allowedCols := map[string]bool{"user_id": true, "symbol": true, "status": true}
-	args, where := buildFilter(filter, allowedCols)
+	args, where, next := buildFilter(filter, allowedCols, 1)
 	if where != "" {
 		query += " WHERE " + where
 	}
 	query += " ORDER BY updated_at DESC"
 	if limit > 0 {
-		query += " LIMIT ?"
+		query += fmt.Sprintf(" LIMIT $%d", next)
 		args = append(args, limit)
 	}
 	rows, err := db.Query(query, args...)

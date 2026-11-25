@@ -31,21 +31,21 @@ func (r *AuditRepo) Log(record *AuditRecord) error {
 	if record.Method == "" {
 		record.Method = "POST"
 	}
-	res, err := db.Exec(
+	var id int64
+	err := db.QueryRow(
 		`INSERT INTO agent_audit_log (token_id, name, endpoint, method, params_summary, status_code, ip, user_agent, timestamp)
-		 VALUES (?,?,?,?,?,?,?,?,?)`,
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
 		record.TokenID, record.Name, record.Endpoint, record.Method, record.ParamsSummary, record.StatusCode, record.IP, record.UserAgent, record.Timestamp,
-	)
+	).Scan(&id)
 	if err != nil {
 		return err
 	}
-	id, _ := res.LastInsertId()
 	record.ID = int(id)
 	return nil
 }
 
 func (r *AuditRepo) GetRecent(limit int) ([]*AuditRecord, error) {
-	rows, err := db.Query(`SELECT id, token_id, name, endpoint, method, params_summary, status_code, ip, user_agent, timestamp FROM agent_audit_log ORDER BY timestamp DESC LIMIT ?`, limit)
+	rows, err := db.Query(`SELECT id, token_id, name, endpoint, method, params_summary, status_code, ip, user_agent, timestamp FROM agent_audit_log ORDER BY timestamp DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +62,7 @@ func (r *AuditRepo) GetRecent(limit int) ([]*AuditRecord, error) {
 }
 
 func (r *AuditRepo) GetByTokenID(tokenID int, limit int) ([]*AuditRecord, error) {
-	rows, err := db.Query(`SELECT id, token_id, name, endpoint, method, params_summary, status_code, ip, user_agent, timestamp FROM agent_audit_log WHERE token_id=? ORDER BY timestamp DESC LIMIT ?`, tokenID, limit)
+	rows, err := db.Query(`SELECT id, token_id, name, endpoint, method, params_summary, status_code, ip, user_agent, timestamp FROM agent_audit_log WHERE token_id=$1 ORDER BY timestamp DESC LIMIT $2`, tokenID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -79,7 +79,7 @@ func (r *AuditRepo) GetByTokenID(tokenID int, limit int) ([]*AuditRecord, error)
 }
 
 func (r *AuditRepo) GetByID(id string) (*AuditRecord, error) {
-	row := db.QueryRow(`SELECT id, token_id, name, endpoint, method, params_summary, status_code, ip, user_agent, timestamp FROM agent_audit_log WHERE id=?`, id)
+	row := db.QueryRow(`SELECT id, token_id, name, endpoint, method, params_summary, status_code, ip, user_agent, timestamp FROM agent_audit_log WHERE id=$1`, id)
 	var a AuditRecord
 	err := row.Scan(&a.ID, &a.TokenID, &a.Name, &a.Endpoint, &a.Method, &a.ParamsSummary, &a.StatusCode, &a.IP, &a.UserAgent, &a.Timestamp)
 	if err != nil {
@@ -93,6 +93,6 @@ func (r *AuditRepo) List(filter map[string]any, limit int) ([]*AuditRecord, erro
 }
 func (r *AuditRepo) Update(a *AuditRecord) error { return nil }
 func (r *AuditRepo) Delete(id string) error {
-	_, err := db.Exec("DELETE FROM agent_audit_log WHERE id=?", id)
+	_, err := db.Exec("DELETE FROM agent_audit_log WHERE id=$1", id)
 	return err
 }

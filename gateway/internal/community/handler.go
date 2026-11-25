@@ -112,7 +112,7 @@ func PurchaseIndicator(c *gin.Context) {
 		var sellerID int
 		db := store.GetDB()
 		if db != nil {
-			db.QueryRow(`SELECT price, user_id FROM indicator_codes WHERE id = ?`, indicatorID).Scan(&price, &sellerID)
+			db.QueryRow(`SELECT price, user_id FROM indicator_codes WHERE id = $1`, indicatorID).Scan(&price, &sellerID)
 			if price > 0 {
 				svc.RecordRevenue(indicatorID, uid, sellerID, price, DefaultRevenueShareConfig())
 			}

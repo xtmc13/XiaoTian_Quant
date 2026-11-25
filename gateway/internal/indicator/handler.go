@@ -114,7 +114,7 @@ func SaveIndicator(c *gin.Context) {
 	if req.ID > 0 {
 		// Update existing
 		res, err := db.Exec(
-			`UPDATE indicator_codes SET name = ?, description = ?, code = ?, params_json = ?, strategy_json = ?, updated_at = ? WHERE id = ? AND user_id = ?`,
+			`UPDATE indicator_codes SET name = $1, description = $2, code = $3, params_json = $4, strategy_json = $5, updated_at = $6 WHERE id = $7 AND user_id = $8`,
 			req.Name, req.Description, req.Code, string(paramsJSON), string(strategyJSON), now, req.ID, uid,
 		)
 		if err != nil {
@@ -130,16 +130,16 @@ func SaveIndicator(c *gin.Context) {
 		indicatorID = req.ID
 	} else {
 		// Insert new
-		res, err := db.Exec(
-			`INSERT INTO indicator_codes (user_id, name, description, code, params_json, strategy_json, is_encrypted, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+		var lastID int64
+		err := db.QueryRow(
+			`INSERT INTO indicator_codes (user_id, name, description, code, params_json, strategy_json, is_encrypted, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8) RETURNING id`,
 			uid, req.Name, req.Description, req.Code, string(paramsJSON), string(strategyJSON), now, now,
-		)
+		).Scan(&lastID)
 		if err != nil {
 			log.Printf("insert indicator failed: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"code": 0, "msg": err.Error(), "data": nil})
 			return
 		}
-		lastID, _ := res.LastInsertId()
 		indicatorID = int(lastID)
 	}
 
@@ -170,7 +170,7 @@ func ListIndicators(c *gin.Context) {
 		`SELECT id, user_id, name, description, code, params_json, strategy_json, is_encrypted,
 			pricing_type, price, purchase_count, avg_rating, rating_count, view_count, review_status,
 			created_at, updated_at
-		 FROM indicator_codes WHERE user_id = ? ORDER BY updated_at DESC`,
+		 FROM indicator_codes WHERE user_id = $1 ORDER BY updated_at DESC`,
 		uid,
 	)
 	if err != nil {
@@ -294,7 +294,7 @@ func DeleteIndicator(c *gin.Context) {
 	}
 
 	res, err := db.Exec(
-		`DELETE FROM indicator_codes WHERE id = ? AND user_id = ?`,
+		`DELETE FROM indicator_codes WHERE id = $1 AND user_id = $2`,
 		id, uid,
 	)
 	if err != nil {
@@ -348,7 +348,7 @@ func GetIndicator(c *gin.Context) {
 		`SELECT id, user_id, name, description, code, params_json, strategy_json, is_encrypted,
 			pricing_type, price, purchase_count, avg_rating, rating_count, view_count, review_status,
 			created_at, updated_at
-		 FROM indicator_codes WHERE id = ? AND user_id = ?`,
+		 FROM indicator_codes WHERE id = $1 AND user_id = $2`,
 		id, uid,
 	).Scan(
 		&ind.ID, &ind.UserID, &ind.Name, &desc, &ind.Code,
@@ -521,7 +521,7 @@ func PublishIndicator(c *gin.Context) {
 
 	// Get indicator name/description for translation
 	var name, description string
-	err := db.QueryRow(`SELECT name, description FROM indicator_codes WHERE id = ? AND user_id = ?`, req.ID, uid).Scan(&name, &description)
+	err := db.QueryRow(`SELECT name, description FROM indicator_codes WHERE id = $1 AND user_id = $2`, req.ID, uid).Scan(&name, &description)
 	if err == sql.ErrNoRows {
 		c.JSON(http.StatusForbidden, gin.H{"code": 0, "msg": "indicator not found or not owned"})
 		return
@@ -543,7 +543,7 @@ func PublishIndicator(c *gin.Context) {
 	now := time.Now().Unix()
 
 	_, err = db.Exec(
-		`UPDATE indicator_codes SET publish_to_community = 1, pricing_type = ?, price = ?, review_status = 'pending', source_language = ?, name_i18n = ?, description_i18n = ?, updated_at = ? WHERE id = ? AND user_id = ?`,
+		`UPDATE indicator_codes SET publish_to_community = 1, pricing_type = $1, price = $2, review_status = 'pending', source_language = $3, name_i18n = $4, description_i18n = $5, updated_at = $6 WHERE id = $7 AND user_id = $8`,
 		req.PricingType, req.Price, srcLang, string(nameI18nJSON), string(descI18nJSON), now, req.ID, uid,
 	)
 	if err != nil {
@@ -577,7 +577,7 @@ func InternalCallIndicator(c *gin.Context) {
 
 	var code string
 	err := db.QueryRow(
-		`SELECT code FROM indicator_codes WHERE id = ? AND (publish_to_community = 1 OR user_id = 0)`,
+		`SELECT code FROM indicator_codes WHERE id = $1 AND (publish_to_community = 1 OR user_id = 0)`,
 		req.IndicatorRef,
 	).Scan(&code)
 	if err == sql.ErrNoRows {
@@ -627,7 +627,7 @@ func GetIndicators(c *gin.Context) {
 		`SELECT id, user_id, name, description, code, params_json, strategy_json, is_encrypted,
 			pricing_type, price, purchase_count, avg_rating, rating_count, view_count, review_status,
 			created_at, updated_at
-		 FROM indicator_codes WHERE user_id = ? ORDER BY updated_at DESC`,
+		 FROM indicator_codes WHERE user_id = $1 ORDER BY updated_at DESC`,
 		uid,
 	)
 	if err != nil {
@@ -723,7 +723,7 @@ func GetWatchlist(c *gin.Context) {
 			i.view_count, i.review_status, i.created_at, i.updated_at
 		 FROM indicator_codes i
 		 JOIN user_watchlist w ON i.id = w.indicator_id
-		 WHERE w.user_id = ? ORDER BY w.created_at DESC`,
+		 WHERE w.user_id = $1 ORDER BY w.created_at DESC`,
 		uid,
 	)
 	if err != nil {
@@ -844,7 +844,8 @@ func AddWatchlist(c *gin.Context) {
 	}
 
 	_, err := db.Exec(
-		`INSERT OR IGNORE INTO user_watchlist (user_id, indicator_id, created_at) VALUES (?, ?, ?)`,
+		`INSERT INTO user_watchlist (user_id, indicator_id, created_at) VALUES ($1, $2, $3)
+		 ON CONFLICT DO NOTHING`,
 		uid, req.IndicatorID, time.Now().Unix(),
 	)
 	if err != nil {

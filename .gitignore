@@ -31,6 +31,9 @@ config/config.yaml
 .env.*
 !config/config.example.yaml
 
+# Local portable PostgreSQL instance (binaries + data, not committed)
+/.pgsql/
+
 # Data & logs
 /data/
 /runtime/

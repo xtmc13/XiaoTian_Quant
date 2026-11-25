@@ -55,22 +55,19 @@ const DefaultProfileName = "默认"
 // ensureDefault 惰性初始化：用户首次读取时创建默认档案（is_default=1）并置为激活。
 func (r *Repo) ensureDefault(db *sql.DB, userID int64) error {
 	var n int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM xt_agent_profiles WHERE user_id = ? AND is_default = 1`, userID).Scan(&n); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM xt_agent_profiles WHERE user_id = $1 AND is_default = 1`, userID).Scan(&n); err != nil {
 		return err
 	}
 	if n > 0 {
 		return nil
 	}
-	res, err := db.Exec(`INSERT INTO xt_agent_profiles (user_id, name, is_default, created_at) VALUES (?,?,1,?)`,
-		userID, DefaultProfileName, time.Now().Unix())
+	var id int64
+	err := db.QueryRow(`INSERT INTO xt_agent_profiles (user_id, name, is_default, created_at) VALUES ($1,$2,1,$3) RETURNING id`,
+		userID, DefaultProfileName, time.Now().Unix()).Scan(&id)
 	if err != nil {
 		return err
 	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		return err
-	}
-	_, err = db.Exec(`INSERT INTO xt_agent_profile_state (user_id, active_profile_id) VALUES (?,?)
+	_, err = db.Exec(`INSERT INTO xt_agent_profile_state (user_id, active_profile_id) VALUES ($1,$2)
 		ON CONFLICT(user_id) DO NOTHING`, userID, id)
 	return err
 }
@@ -78,7 +75,7 @@ func (r *Repo) ensureDefault(db *sql.DB, userID int64) error {
 // defaultProfileID 取用户默认档案 id（调用前需 ensureDefault）。
 func defaultProfileID(db *sql.DB, userID int64) (int64, error) {
 	var id int64
-	err := db.QueryRow(`SELECT id FROM xt_agent_profiles WHERE user_id = ? AND is_default = 1 ORDER BY id LIMIT 1`, userID).Scan(&id)
+	err := db.QueryRow(`SELECT id FROM xt_agent_profiles WHERE user_id = $1 AND is_default = 1 ORDER BY id LIMIT 1`, userID).Scan(&id)
 	return id, err
 }
 
@@ -97,7 +94,7 @@ func (r *Repo) ActiveProfileID(userID int64) int64 {
 		return 0
 	}
 	var active int64
-	if err := db.QueryRow(`SELECT active_profile_id FROM xt_agent_profile_state WHERE user_id = ?`, userID).Scan(&active); err != nil {
+	if err := db.QueryRow(`SELECT active_profile_id FROM xt_agent_profile_state WHERE user_id = $1`, userID).Scan(&active); err != nil {
 		return defID
 	}
 	if active <= 0 {
@@ -105,7 +102,7 @@ func (r *Repo) ActiveProfileID(userID int64) int64 {
 	}
 	// 激活状态可能指向已删除的档案：校验存在性，失效则回落默认。
 	var n int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM xt_agent_profiles WHERE id = ? AND user_id = ?`, active, userID).Scan(&n); err != nil || n == 0 {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM xt_agent_profiles WHERE id = $1 AND user_id = $2`, active, userID).Scan(&n); err != nil || n == 0 {
 		_ = r.setActive(db, userID, defID)
 		return defID
 	}
@@ -113,7 +110,7 @@ func (r *Repo) ActiveProfileID(userID int64) int64 {
 }
 
 func (r *Repo) setActive(db *sql.DB, userID, profileID int64) error {
-	_, err := db.Exec(`INSERT INTO xt_agent_profile_state (user_id, active_profile_id) VALUES (?,?)
+	_, err := db.Exec(`INSERT INTO xt_agent_profile_state (user_id, active_profile_id) VALUES ($1,$2)
 		ON CONFLICT(user_id) DO UPDATE SET active_profile_id = excluded.active_profile_id`, userID, profileID)
 	return err
 }
@@ -135,7 +132,7 @@ func (r *Repo) ListByUser(userID int64) ([]Profile, int64, error) {
 }
 
 func (r *Repo) listByUserNoEnsure(db *sql.DB, userID int64) ([]Profile, error) {
-	rows, err := db.Query(`SELECT id, user_id, name, is_default, created_at FROM xt_agent_profiles WHERE user_id = ? ORDER BY id`, userID)
+	rows, err := db.Query(`SELECT id, user_id, name, is_default, created_at FROM xt_agent_profiles WHERE user_id = $1 ORDER BY id`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -165,12 +162,13 @@ func (r *Repo) Create(userID int64, name string) (int64, error) {
 	if err := r.ensureDefault(db, userID); err != nil {
 		return 0, err
 	}
-	res, err := db.Exec(`INSERT INTO xt_agent_profiles (user_id, name, is_default, created_at) VALUES (?,?,0,?)`,
-		userID, name, time.Now().Unix())
+	var id int64
+	err = db.QueryRow(`INSERT INTO xt_agent_profiles (user_id, name, is_default, created_at) VALUES ($1,$2,0,$3) RETURNING id`,
+		userID, name, time.Now().Unix()).Scan(&id)
 	if err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
+	return id, nil
 }
 
 // Activate 激活自己的某个档案（仅档案属主可操作；管理员切换也走自己的档案）。
@@ -180,7 +178,7 @@ func (r *Repo) Activate(userID, profileID int64) error {
 		return err
 	}
 	var n int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM xt_agent_profiles WHERE id = ? AND user_id = ?`, profileID, userID).Scan(&n); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM xt_agent_profiles WHERE id = $1 AND user_id = $2`, profileID, userID).Scan(&n); err != nil {
 		return err
 	}
 	if n == 0 {
@@ -198,7 +196,7 @@ func (r *Repo) Delete(requesterUserID, profileID int64, asAdmin bool) error {
 	}
 	var ownerID int64
 	var def int
-	err = db.QueryRow(`SELECT user_id, is_default FROM xt_agent_profiles WHERE id = ?`, profileID).Scan(&ownerID, &def)
+	err = db.QueryRow(`SELECT user_id, is_default FROM xt_agent_profiles WHERE id = $1`, profileID).Scan(&ownerID, &def)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -211,12 +209,12 @@ func (r *Repo) Delete(requesterUserID, profileID int64, asAdmin bool) error {
 	if def == 1 {
 		return ErrDefaultProfile
 	}
-	if _, err := db.Exec(`DELETE FROM xt_agent_profiles WHERE id = ?`, profileID); err != nil {
+	if _, err := db.Exec(`DELETE FROM xt_agent_profiles WHERE id = $1`, profileID); err != nil {
 		return err
 	}
 	// 删除的是属主当前激活档案：激活状态回落默认档案。
 	var active int64
-	if err := db.QueryRow(`SELECT active_profile_id FROM xt_agent_profile_state WHERE user_id = ?`, ownerID).Scan(&active); err == nil && active == profileID {
+	if err := db.QueryRow(`SELECT active_profile_id FROM xt_agent_profile_state WHERE user_id = $1`, ownerID).Scan(&active); err == nil && active == profileID {
 		defID, derr := defaultProfileID(db, ownerID)
 		if derr != nil {
 			return derr

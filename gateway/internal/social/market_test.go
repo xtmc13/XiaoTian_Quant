@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -23,7 +22,6 @@ import (
 // 临时 SQLite + 全量迁移（含 0017），真实 JWT（AdminRequired 走完整鉴权链）。
 
 var marketTestOnce sync.Once
-var marketTestDir string
 
 type marketTestEnv struct {
 	router *gin.Engine
@@ -51,12 +49,6 @@ func setupMarketEnv(t *testing.T) *marketTestEnv {
 	t.Helper()
 	marketTestOnce.Do(func() {
 		gin.SetMode(gin.TestMode)
-		var err error
-		marketTestDir, err = os.MkdirTemp("", "social-market-tests-*")
-		if err != nil {
-			t.Fatalf("create market test directory: %v", err)
-		}
-		t.Setenv("DB_PATH", filepath.Join(marketTestDir, "gateway.db"))
 		t.Setenv("SECRET_KEY", "test-secret-key-social-market")
 		if err := store.InitDB(); err != nil {
 			t.Fatalf("init db: %v", err)
@@ -87,16 +79,11 @@ func setupMarketEnv(t *testing.T) *marketTestEnv {
 }
 
 func TestMain(m *testing.M) {
+	if !store.TestDatabaseConfigured() {
+		os.Exit(0)
+	}
 	code := m.Run()
 	store.CloseDB()
-	if marketTestDir != "" {
-		if err := os.RemoveAll(marketTestDir); err != nil {
-			fmt.Fprintf(os.Stderr, "remove social test directory: %v\n", err)
-			if code == 0 {
-				code = 1
-			}
-		}
-	}
 	os.Exit(code)
 }
 
@@ -402,7 +389,7 @@ func TestSettlement_NegativePnlOffsetsOnlyPending(t *testing.T) {
 	tomorrowStart, _ := time.ParseInLocation("2006-01-02", tomorrow, time.Local)
 	db := store.GetDB()
 	_, err = db.Exec(`INSERT INTO xt_social_copy_pnl (provider_id, follower_user_id, pnl, note, created_at)
-		VALUES (?, ?, -50, 'drawdown', ?)`, providerDBID, follower, tomorrowStart.Add(time.Hour).UnixMilli())
+		VALUES ($1, $2, -50, 'drawdown', $3)`, providerDBID, follower, tomorrowStart.Add(time.Hour).UnixMilli())
 	require.NoError(t, err)
 	require.NoError(t, engine.SettleWindow(tomorrow))
 
@@ -417,7 +404,7 @@ func TestSettlement_NegativePnlOffsetsOnlyPending(t *testing.T) {
 
 	// 再次亏损：无 pending 可冲，不报错也不产生快照
 	_, err = db.Exec(`INSERT INTO xt_social_copy_pnl (provider_id, follower_user_id, pnl, note, created_at)
-		VALUES (?, ?, -10, 'drawdown2', ?)`, providerDBID, follower, tomorrowStart.Add(2*time.Hour).UnixMilli())
+		VALUES ($1, $2, -10, 'drawdown2', $3)`, providerDBID, follower, tomorrowStart.Add(2*time.Hour).UnixMilli())
 	require.NoError(t, err)
 	require.NoError(t, engine.SettleWindow(tomorrow))
 	snaps, err = env.market.ListSnapshotsByProvider(providerDBID, 10)
@@ -437,7 +424,7 @@ func TestSettlement_LockedSnapshotsNotOffset(t *testing.T) {
 
 	// 直接把快照置为 locked（模拟已过 T+3）
 	db := store.GetDB()
-	_, err = db.Exec(`UPDATE xt_social_profit_snapshots SET status = ? WHERE id = ?`, SnapStatusLocked, snaps[0].ID)
+	_, err = db.Exec(`UPDATE xt_social_profit_snapshots SET status = $1 WHERE id = $2`, SnapStatusLocked, snaps[0].ID)
 	require.NoError(t, err)
 
 	// 回撤冲抵不得影响 locked 快照（locked 后不追溯）
@@ -489,7 +476,7 @@ func setupPayable(t *testing.T, env *marketTestEnv, providerDBID int64, follower
 	require.NoError(t, settle.SettleWindow(todayStr()))
 	db := store.GetDB()
 	past := time.Now().Add(-96 * time.Hour).UnixMilli()
-	_, err := db.Exec(`UPDATE xt_social_profit_snapshots SET status = ?, locked_until = ? WHERE provider_id = ?`,
+	_, err := db.Exec(`UPDATE xt_social_profit_snapshots SET status = $1, locked_until = $2 WHERE provider_id = $3`,
 		SnapStatusPayable, past, providerDBID)
 	require.NoError(t, err)
 }
@@ -638,7 +625,7 @@ func TestSettlement_RunDueBackfill(t *testing.T) {
 	dayStart, _ := time.ParseInLocation("2006-01-02", yesterday, time.Local)
 	at := dayStart.Add(time.Hour).UnixMilli()
 	_, err = db.Exec(`INSERT INTO xt_social_copy_pnl (provider_id, follower_user_id, pnl, note, created_at)
-		VALUES (?, ?, 400, 'hist', ?)`, p.ID, env.followerID, at)
+		VALUES ($1, $2, 400, 'hist', $3)`, p.ID, env.followerID, at)
 	require.NoError(t, err)
 
 	require.NoError(t, engine.RunDue(time.Now()))

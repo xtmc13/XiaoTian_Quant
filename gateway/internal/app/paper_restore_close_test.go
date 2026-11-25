@@ -1,8 +1,6 @@
 package app
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -26,19 +24,7 @@ import (
 // 资产，而 PortfolioManager 内存镜像只有 USDT 初始余额）。
 func setupPaperCloseTest(t *testing.T, snap paper.AccountSnapshot) *Context {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "app_restore_close_test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		store.CloseDB()
-		_ = os.RemoveAll(dir)
-	})
-	t.Setenv("DB_PATH", filepath.Join(dir, "gateway.db"))
-	t.Setenv("SECRET_KEY", "test-secret-key-not-for-production-use-only")
-	if err := store.InitDB(); err != nil {
-		t.Fatalf("InitDB: %v", err)
-	}
+	store.SetupTestDB(t)
 
 	ctx := Get()
 	ctx.Shutdown()

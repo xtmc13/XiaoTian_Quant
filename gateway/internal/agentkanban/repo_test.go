@@ -13,12 +13,7 @@ import (
 
 func setupKanbanTestDB(t *testing.T) {
 	t.Helper()
-	t.Setenv("DB_PATH", t.TempDir()+"/gateway.db")
-	t.Setenv("SECRET_KEY", "test-secret-key-agent-kanban")
-	if err := store.InitDB(); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
-	t.Cleanup(store.CloseDB)
+	store.SetupTestDB(t)
 }
 
 func TestRepo_CRUDAndOrdering(t *testing.T) {

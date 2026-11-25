@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -58,7 +59,7 @@ func (r *ExchangeHealthRepo) Insert(rec *ExchangeHealthRecord) error {
 		configured = 1
 	}
 	_, err := db.Exec(`INSERT INTO xt_exchange_health_checks (`+exchangeHealthColumns+`)
-		VALUES (?,?,?,?,?,?,?,?)`,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
 		rec.ID, rec.Exchange, rec.JobID, rec.Overall,
 		configured, rec.DurationMs, rec.ResultJSON, rec.CreatedAt)
 	return err
@@ -98,11 +99,13 @@ func (r *ExchangeHealthRepo) History(exchange string, limit int) ([]*ExchangeHea
 	}
 	query := `SELECT ` + exchangeHealthColumns + ` FROM xt_exchange_health_checks`
 	args := []any{}
+	next := 1
 	if exchange != "" {
-		query += ` WHERE exchange = ?`
+		query += fmt.Sprintf(` WHERE exchange = $%d`, next)
 		args = append(args, exchange)
+		next++
 	}
-	query += ` ORDER BY created_at DESC LIMIT ?`
+	query += fmt.Sprintf(` ORDER BY created_at DESC LIMIT $%d::bigint`, next)
 	args = append(args, limit)
 	rows, err := db.Query(query, args...)
 	if err != nil {

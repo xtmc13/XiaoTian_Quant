@@ -41,28 +41,28 @@ func (s *Storage) ensureTables() {
 	}
 
 	db.Exec(`CREATE TABLE IF NOT EXISTS ohlcv_data (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
 		symbol TEXT NOT NULL,
 		interval TEXT NOT NULL,
-		time INTEGER NOT NULL,
-		open REAL NOT NULL,
-		high REAL NOT NULL,
-		low REAL NOT NULL,
-		close REAL NOT NULL,
-		volume REAL NOT NULL,
+		time BIGINT NOT NULL,
+		open DOUBLE PRECISION NOT NULL,
+		high DOUBLE PRECISION NOT NULL,
+		low DOUBLE PRECISION NOT NULL,
+		close DOUBLE PRECISION NOT NULL,
+		volume DOUBLE PRECISION NOT NULL,
 		UNIQUE(symbol, interval, time)
 	)`)
 
 	db.Exec(`CREATE INDEX IF NOT EXISTS idx_ohlcv_symbol_interval_time ON ohlcv_data(symbol, interval, time)`)
 
 	db.Exec(`CREATE TABLE IF NOT EXISTS ohlcv_download_log (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
 		symbol TEXT NOT NULL,
 		interval TEXT NOT NULL,
-		bars_count INTEGER NOT NULL,
-		start_time INTEGER NOT NULL,
-		end_time INTEGER NOT NULL,
-		downloaded_at INTEGER NOT NULL
+		bars_count BIGINT NOT NULL,
+		start_time BIGINT NOT NULL,
+		end_time BIGINT NOT NULL,
+		downloaded_at BIGINT NOT NULL
 	)`)
 }
 
@@ -79,8 +79,9 @@ func (s *Storage) SaveOHLCV(bars []OHLCV) (int, error) {
 	saved := 0
 	for _, bar := range bars {
 		_, err := db.Exec(
-			`INSERT OR REPLACE INTO ohlcv_data (symbol, interval, time, open, high, low, close, volume)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO ohlcv_data (symbol, interval, time, open, high, low, close, volume)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			 ON CONFLICT(symbol, interval, time) DO UPDATE SET open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close, volume=excluded.volume`,
 			bar.Symbol, bar.Interval, bar.Time, bar.Open, bar.High, bar.Low, bar.Close, bar.Volume,
 		)
 		if err != nil {
@@ -102,16 +103,19 @@ func (s *Storage) LoadOHLCV(symbol, interval string, fromMs, toMs int64) []OHLCV
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	query := "SELECT symbol, interval, time, open, high, low, close, volume FROM ohlcv_data WHERE symbol = ? AND interval = ?"
+	query := "SELECT symbol, interval, time, open, high, low, close, volume FROM ohlcv_data WHERE symbol = $1 AND interval = $2"
 	args := []any{symbol, interval}
+	next := 3
 
 	if fromMs > 0 {
-		query += " AND time >= ?"
+		query += fmt.Sprintf(" AND time >= $%d", next)
 		args = append(args, fromMs)
+		next++
 	}
 	if toMs > 0 {
-		query += " AND time <= ?"
+		query += fmt.Sprintf(" AND time <= $%d", next)
 		args = append(args, toMs)
+		next++
 	}
 	query += " ORDER BY time ASC"
 
@@ -138,7 +142,7 @@ func (s *Storage) CountOHLCV(symbol, interval string) int {
 	}
 
 	var count int
-	query := "SELECT COUNT(*) FROM ohlcv_data WHERE symbol = ? AND interval = ?"
+	query := "SELECT COUNT(*) FROM ohlcv_data WHERE symbol = $1 AND interval = $2"
 	db.QueryRow(query, symbol, interval).Scan(&count)
 	return count
 }
@@ -187,7 +191,7 @@ func (s *Storage) Prune(beforeMs int64) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	result, err := db.Exec("DELETE FROM ohlcv_data WHERE time < ?", beforeMs)
+	result, err := db.Exec("DELETE FROM ohlcv_data WHERE time < $1", beforeMs)
 	if err != nil {
 		return 0, err
 	}
@@ -203,7 +207,7 @@ func (s *Storage) LogDownload(symbol, interval string, count int, startMs, endMs
 	}
 	db.Exec(
 		`INSERT INTO ohlcv_download_log (symbol, interval, bars_count, start_time, end_time, downloaded_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
 		symbol, interval, count, startMs, endMs, time.Now().Unix(),
 	)
 }
@@ -217,7 +221,7 @@ func (s *Storage) GetDownloadLog(symbol, interval string) []DownloadLogEntry {
 
 	rows, err := db.Query(
 		`SELECT symbol, interval, bars_count, start_time, end_time, downloaded_at
-		 FROM ohlcv_download_log WHERE symbol = ? AND interval = ? ORDER BY downloaded_at DESC`,
+		 FROM ohlcv_download_log WHERE symbol = $1 AND interval = $2 ORDER BY downloaded_at DESC`,
 		symbol, interval,
 	)
 	if err != nil {
@@ -295,7 +299,7 @@ func (s *Storage) GetDataRange(symbol, interval string) (minTime, maxTime int64,
 	}
 
 	row := db.QueryRow(
-		`SELECT MIN(time), MAX(time), COUNT(*) FROM ohlcv_data WHERE symbol = ? AND interval = ?`,
+		`SELECT MIN(time), MAX(time), COUNT(*) FROM ohlcv_data WHERE symbol = $1 AND interval = $2`,
 		symbol, interval,
 	)
 	row.Scan(&minTime, &maxTime, &count)
@@ -329,7 +333,7 @@ func (s *Storage) GetAvailableIntervals(symbol string) []string {
 		return nil
 	}
 
-	rows, err := db.Query("SELECT DISTINCT interval FROM ohlcv_data WHERE symbol = ? ORDER BY interval", symbol)
+	rows, err := db.Query("SELECT DISTINCT interval FROM ohlcv_data WHERE symbol = $1 ORDER BY interval", symbol)
 	if err != nil {
 		return nil
 	}

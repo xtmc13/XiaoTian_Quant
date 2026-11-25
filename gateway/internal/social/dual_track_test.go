@@ -197,7 +197,7 @@ func TestDualTrack_SubscriptionTrackFlow(t *testing.T) {
 	assert.NotZero(t, resp["track_expires_at"])
 
 	// 强制到期 → 允许切分成轨
-	_, err = store.GetDB().Exec(`UPDATE xt_social_subscriptions SET track_expires_at=? WHERE id=?`,
+	_, err = store.GetDB().Exec(`UPDATE xt_social_subscriptions SET track_expires_at=$1 WHERE id=$2`,
 		time.Now().UnixMilli()-1000, cur.ID)
 	require.NoError(t, err)
 	w, resp = doJSON(t, env.router, "POST", fmt.Sprintf("/api/social/providers/%d/switch_track", prov.ID), followerTok,
@@ -228,7 +228,7 @@ func TestDualTrack_SubscriptionTrackFlow(t *testing.T) {
 	// 到期续费场景：把到期时间推回过去，再订同轨 → 新订单而不是 already
 	cur2, err := env.market.GetSubscription(prov.ID, int64(follower))
 	require.NoError(t, err)
-	_, err = store.GetDB().Exec(`UPDATE xt_social_subscriptions SET track_expires_at=? WHERE id=?`,
+	_, err = store.GetDB().Exec(`UPDATE xt_social_subscriptions SET track_expires_at=$1 WHERE id=$2`,
 		time.Now().UnixMilli()-1000, cur2.ID)
 	require.NoError(t, err)
 	w, resp = doJSON(t, env.router, "POST", fmt.Sprintf("/api/social/providers/%d/subscribe", prov.ID), followerTok,

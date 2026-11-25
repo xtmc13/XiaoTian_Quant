@@ -1,7 +1,6 @@
 package store
 
 import (
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -9,12 +8,7 @@ import (
 
 func setupAgentChatTestDB(t *testing.T) {
 	t.Helper()
-	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "gateway.db"))
-	t.Setenv("SECRET_KEY", "test-secret-key-agent-chat-repo")
-	if err := InitDB(); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
-	t.Cleanup(CloseDB)
+	SetupTestDB(t)
 }
 
 func TestAgentChatRepoConversationCRUD(t *testing.T) {
@@ -213,7 +207,7 @@ func TestAgentChatSchemaIdempotent(t *testing.T) {
 	}
 	for _, table := range []string{"xt_agent_conversations", "xt_agent_messages"} {
 		var name string
-		if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&name); err != nil {
+		if err := db.QueryRow(`SELECT table_name FROM information_schema.tables WHERE table_name=$1`, table).Scan(&name); err != nil {
 			t.Fatalf("table %s missing: %v", table, err)
 		}
 	}

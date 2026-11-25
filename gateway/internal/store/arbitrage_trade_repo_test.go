@@ -22,7 +22,7 @@ func TestBuildFilterIgnoresUnknownColumns(t *testing.T) {
 		"id OR '1'='1' --":             "injected",
 		"symbol; DROP TABLE trades; --": "injected",
 	}
-	args, where := buildFilter(filter, allowed)
+	args, where, _ := buildFilter(filter, allowed, 1)
 
 	if where == "" {
 		t.Fatal("expected non-empty WHERE clause")

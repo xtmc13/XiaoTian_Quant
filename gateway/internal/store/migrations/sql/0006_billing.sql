@@ -37,6 +37,6 @@ CREATE INDEX IF NOT EXISTS idx_billing_orders_status ON billing_orders(status);
 CREATE INDEX IF NOT EXISTS idx_billing_orders_tx ON billing_orders(tx_hash);
 
 -- ── 用户套餐/积分（发放目标列）──
-ALTER TABLE xt_users ADD COLUMN plan TEXT DEFAULT '';
-ALTER TABLE xt_users ADD COLUMN vip_expires_at BIGINT DEFAULT 0;
-ALTER TABLE xt_users ADD COLUMN credits BIGINT DEFAULT 0;
+ALTER TABLE xt_users ADD COLUMN IF NOT EXISTS plan TEXT DEFAULT '';
+ALTER TABLE xt_users ADD COLUMN IF NOT EXISTS vip_expires_at BIGINT DEFAULT 0;
+ALTER TABLE xt_users ADD COLUMN IF NOT EXISTS credits BIGINT DEFAULT 0;

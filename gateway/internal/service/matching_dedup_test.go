@@ -63,7 +63,7 @@ func TestCancelOrderToleratesUnknownEngineOrder(t *testing.T) {
 		t.Fatalf("重启后撤销引擎外订单不得报错: %v", err)
 	}
 	var status string
-	row := store.GetDB().QueryRow(`SELECT status FROM xt_orders WHERE id=?`, recID)
+	row := store.GetDB().QueryRow(`SELECT status FROM xt_orders WHERE id=$1`, recID)
 	if err := row.Scan(&status); err != nil || status != "CANCELLED" {
 		t.Fatalf("DB 订单应置 CANCELLED: status=%q err=%v", status, err)
 	}

@@ -84,7 +84,7 @@ func (r *BillingRepo) Create(o *BillingOrder) error {
 	}
 	_, err := db.Exec(
 		`INSERT INTO billing_orders (id, user_id, plan_id, purpose, ref_id, chain, address, amount_usdt, tx_hash, status, fail_reason, attempts, created_at, updated_at, confirmed_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
 		o.ID, o.UserID, o.PlanID, o.Purpose, o.RefID, o.Chain, o.Address, o.AmountMicro, o.TxHash, o.Status,
 		o.FailReason, o.Attempts, o.CreatedAt, o.UpdatedAt, o.ConfirmedAt,
 	)
@@ -93,30 +93,30 @@ func (r *BillingRepo) Create(o *BillingOrder) error {
 
 // GetByID 按订单号查询。
 func (r *BillingRepo) GetByID(id string) (*BillingOrder, error) {
-	return scanBillingOrder(db.QueryRow(`SELECT `+billingOrderCols+` FROM billing_orders WHERE id=?`, id))
+	return scanBillingOrder(db.QueryRow(`SELECT `+billingOrderCols+` FROM billing_orders WHERE id=$1`, id))
 }
 
 // FindByTxHash 查 tx_hash 占用：同一哈希不能服务多个订单（幂等/防重放）。
 func (r *BillingRepo) FindByTxHash(hash string) (*BillingOrder, error) {
-	return scanBillingOrder(db.QueryRow(`SELECT `+billingOrderCols+` FROM billing_orders WHERE tx_hash=?`, hash))
+	return scanBillingOrder(db.QueryRow(`SELECT `+billingOrderCols+` FROM billing_orders WHERE tx_hash=$1`, hash))
 }
 
 // FindPendingByRef 查当前用户指定用途/引用的未完结订单（pending/confirming，
 // 新→旧取最新），供订阅下单幂等重放：返回既有待支付订单而不是重复下单。
 func (r *BillingRepo) FindPendingByRef(userID int64, purpose, refID string) (*BillingOrder, error) {
 	return scanBillingOrder(db.QueryRow(`SELECT `+billingOrderCols+` FROM billing_orders
-		WHERE user_id=? AND purpose=? AND ref_id=? AND status IN ('pending','confirming')
+		WHERE user_id=$1 AND purpose=$2 AND ref_id=$3 AND status IN ('pending','confirming')
 		ORDER BY created_at DESC LIMIT 1`, userID, purpose, refID))
 }
 
 // ListByUser 返回指定用户订单（新→旧）。
 func (r *BillingRepo) ListByUser(userID int64, limit int) ([]*BillingOrder, error) {
-	return r.list(`SELECT `+billingOrderCols+` FROM billing_orders WHERE user_id=? ORDER BY created_at DESC LIMIT ?`, userID, limit)
+	return r.list(`SELECT `+billingOrderCols+` FROM billing_orders WHERE user_id=$1 ORDER BY created_at DESC LIMIT $2`, userID, limit)
 }
 
 // ListAll 返回全部订单（admin 用）。
 func (r *BillingRepo) ListAll(limit int) ([]*BillingOrder, error) {
-	return r.list(`SELECT `+billingOrderCols+` FROM billing_orders ORDER BY created_at DESC LIMIT ?`, limit)
+	return r.list(`SELECT `+billingOrderCols+` FROM billing_orders ORDER BY created_at DESC LIMIT $1`, limit)
 }
 
 func (r *BillingRepo) list(query string, args ...any) ([]*BillingOrder, error) {
@@ -140,15 +140,15 @@ func (r *BillingRepo) list(query string, args ...any) ([]*BillingOrder, error) {
 // 以及 failed 但仍带哈希、尝试次数未达上限的可重试订单。
 func (r *BillingRepo) ListVerifyCandidates(limit, maxAttempts int) ([]*BillingOrder, error) {
 	return r.list(`SELECT `+billingOrderCols+` FROM billing_orders
-		WHERE (status IN ('pending','confirming') OR (status='failed' AND tx_hash != '' AND attempts < ?))
+		WHERE (status IN ('pending','confirming') OR (status='failed' AND tx_hash != '' AND attempts < $1))
 		  AND chain != 'stripe' AND tx_hash != ''
-		ORDER BY updated_at ASC LIMIT ?`, maxAttempts, limit)
+		ORDER BY updated_at ASC LIMIT $2`, maxAttempts, limit)
 }
 
 // ExpireStalePending 将创建超过 ttlSec 仍未提交 tx_hash 的 pending 订单置为 expired。
 func (r *BillingRepo) ExpireStalePending(cutoff int64) (int64, error) {
-	res, err := db.Exec(`UPDATE billing_orders SET status='expired', updated_at=?
-		WHERE status='pending' AND tx_hash='' AND created_at < ?`, time.Now().Unix(), cutoff)
+	res, err := db.Exec(`UPDATE billing_orders SET status='expired', updated_at=$1
+		WHERE status='pending' AND tx_hash='' AND created_at < $2`, time.Now().Unix(), cutoff)
 	if err != nil {
 		return 0, err
 	}
@@ -160,8 +160,8 @@ func (r *BillingRepo) ExpireStalePending(cutoff int64) (int64, error) {
 func (r *BillingRepo) SubmitTxHash(id, hash string) (*BillingOrder, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	res, err := db.Exec(`UPDATE billing_orders SET tx_hash=?, status='pending', fail_reason='', attempts=0, updated_at=?
-		WHERE id=? AND status IN ('pending','failed')`, hash, time.Now().Unix(), id)
+	res, err := db.Exec(`UPDATE billing_orders SET tx_hash=$1, status='pending', fail_reason='', attempts=0, updated_at=$2
+		WHERE id=$3 AND status IN ('pending','failed')`, hash, time.Now().Unix(), id)
 	if err != nil {
 		return nil, err
 	}
@@ -173,14 +173,14 @@ func (r *BillingRepo) SubmitTxHash(id, hash string) (*BillingOrder, error) {
 
 // MarkConfirming 交易已上链但确认数不足。
 func (r *BillingRepo) MarkConfirming(id string) error {
-	_, err := db.Exec(`UPDATE billing_orders SET status='confirming', fail_reason='', updated_at=? WHERE id=? AND status IN ('pending','confirming','failed')`,
+	_, err := db.Exec(`UPDATE billing_orders SET status='confirming', fail_reason='', updated_at=$1 WHERE id=$2 AND status IN ('pending','confirming','failed')`,
 		time.Now().Unix(), id)
 	return err
 }
 
 // IncAttempts 核验尝试 +1（网络错误/暂未上链时累加，避免无限轮询）。
 func (r *BillingRepo) IncAttempts(id string) (int, error) {
-	_, err := db.Exec(`UPDATE billing_orders SET attempts=attempts+1, updated_at=? WHERE id=?`, time.Now().Unix(), id)
+	_, err := db.Exec(`UPDATE billing_orders SET attempts=attempts+1, updated_at=$1 WHERE id=$2`, time.Now().Unix(), id)
 	if err != nil {
 		return 0, err
 	}
@@ -193,14 +193,14 @@ func (r *BillingRepo) IncAttempts(id string) (int, error) {
 
 // MarkExpired 订单超时过期（只覆盖未支付状态，paid 不受影响）。
 func (r *BillingRepo) MarkExpired(id string) error {
-	_, err := db.Exec(`UPDATE billing_orders SET status='expired', updated_at=? WHERE id=? AND status IN ('pending','confirming')`,
+	_, err := db.Exec(`UPDATE billing_orders SET status='expired', updated_at=$1 WHERE id=$2 AND status IN ('pending','confirming')`,
 		time.Now().Unix(), id)
 	return err
 }
 
 // MarkFailed 核验不通过（地址/金额不符、密钥未配置、重试耗尽等）。
 func (r *BillingRepo) MarkFailed(id, reason string) error {
-	_, err := db.Exec(`UPDATE billing_orders SET status='failed', fail_reason=?, updated_at=? WHERE id=? AND status != 'paid'`,
+	_, err := db.Exec(`UPDATE billing_orders SET status='failed', fail_reason=$1, updated_at=$2 WHERE id=$3 AND status != 'paid'`,
 		reason, time.Now().Unix(), id)
 	return err
 }
@@ -219,8 +219,8 @@ func (r *BillingRepo) GrantPlanTx(orderID string, userID int64, planID string, c
 	defer tx.Rollback()
 
 	// 条件更新：只从非 paid 状态流转，已 paid 直接判定为重复发放。
-	res, err := tx.Exec(`UPDATE billing_orders SET status='paid', fail_reason='', confirmed_at=?, updated_at=?
-		WHERE id=? AND status != 'paid'`, now, now, orderID)
+	res, err := tx.Exec(`UPDATE billing_orders SET status='paid', fail_reason='', confirmed_at=$1, updated_at=$2
+		WHERE id=$3 AND status != 'paid'`, now, now, orderID)
 	if err != nil {
 		return false, err
 	}
@@ -233,19 +233,19 @@ func (r *BillingRepo) GrantPlanTx(orderID string, userID int64, planID string, c
 	}
 
 	if credits > 0 {
-		if _, err := tx.Exec(`UPDATE xt_users SET credits = credits + ? WHERE id=?`, credits, userID); err != nil {
+		if _, err := tx.Exec(`UPDATE xt_users SET credits = credits + $1 WHERE id=$2`, credits, userID); err != nil {
 			return false, err
 		}
 	}
 	if planID != "" {
 		if periodDays < 0 {
-			if _, err := tx.Exec(`UPDATE xt_users SET plan=?, vip_expires_at=-1 WHERE id=?`, planID, userID); err != nil {
+			if _, err := tx.Exec(`UPDATE xt_users SET plan=$1, vip_expires_at=-1 WHERE id=$2`, planID, userID); err != nil {
 				return false, err
 			}
 		} else {
 			// 有效期顺延：现有有效期在未来则叠加，否则从当前时间起算。
-			if _, err := tx.Exec(`UPDATE xt_users SET plan=?,
-				vip_expires_at = MAX(COALESCE(vip_expires_at,0), ?) + ? WHERE id=?`,
+			if _, err := tx.Exec(`UPDATE xt_users SET plan=$1,
+				vip_expires_at = GREATEST(COALESCE(vip_expires_at,0), $2) + $3 WHERE id=$4`,
 				planID, now, periodDays*86400, userID); err != nil {
 				return false, err
 			}
@@ -272,8 +272,8 @@ func (r *BillingRepo) GrantMarketSubscriptionTx(orderID string, userID, provider
 	}
 	defer tx.Rollback()
 
-	res, err := tx.Exec(`UPDATE billing_orders SET status='paid', fail_reason='', confirmed_at=?, updated_at=?
-		WHERE id=? AND status != 'paid'`, now, now, orderID)
+	res, err := tx.Exec(`UPDATE billing_orders SET status='paid', fail_reason='', confirmed_at=$1, updated_at=$2
+		WHERE id=$3 AND status != 'paid'`, now, now, orderID)
 	if err != nil {
 		return false, err
 	}
@@ -290,8 +290,8 @@ func (r *BillingRepo) GrantMarketSubscriptionTx(orderID string, userID, provider
 	// 已有 active 行：切到订阅轨并顺延（MAX 处理到期后续费/未到期续费两种）。
 	res, err = tx.Exec(
 		`UPDATE xt_social_subscriptions SET fee_mode='monthly', track='subscription',
-			track_expires_at = MAX(track_expires_at, ?) + ?
-		 WHERE provider_id=? AND follower_user_id=? AND status='active'`,
+			track_expires_at = GREATEST(track_expires_at, $1) + $2
+		 WHERE provider_id=$3 AND follower_user_id=$4 AND status='active'`,
 		nowMs, periodMs, providerID, userID)
 	if err != nil {
 		return false, err
@@ -300,8 +300,8 @@ func (r *BillingRepo) GrantMarketSubscriptionTx(orderID string, userID, provider
 		// cancelled 行复活：从当前时间起算。
 		res, err = tx.Exec(
 			`UPDATE xt_social_subscriptions SET status='active', cancelled_at=NULL, fee_mode='monthly',
-				track='subscription', track_expires_at=?
-			 WHERE provider_id=? AND follower_user_id=? AND status='cancelled'`,
+				track='subscription', track_expires_at=$1
+			 WHERE provider_id=$2 AND follower_user_id=$3 AND status='cancelled'`,
 			nowMs+periodMs, providerID, userID)
 		if err != nil {
 			return false, err
@@ -309,7 +309,7 @@ func (r *BillingRepo) GrantMarketSubscriptionTx(orderID string, userID, provider
 		if n, _ := res.RowsAffected(); n == 0 {
 			if _, err = tx.Exec(
 				`INSERT INTO xt_social_subscriptions (provider_id, follower_user_id, fee_mode, track, track_expires_at, status, created_at)
-				 VALUES (?, ?, 'monthly', 'subscription', ?, 'active', ?)`,
+				 VALUES ($1, $2, 'monthly', 'subscription', $3, 'active', $4)`,
 				providerID, userID, nowMs+periodMs, nowMs); err != nil {
 				return false, err
 			}
@@ -337,8 +337,8 @@ func (r *BillingRepo) GrantListingSubscriptionTx(orderID string, userID, subscri
 	}
 	defer tx.Rollback()
 
-	res, err := tx.Exec(`UPDATE billing_orders SET status='paid', fail_reason='', confirmed_at=?, updated_at=?
-		WHERE id=? AND status != 'paid'`, now, now, orderID)
+	res, err := tx.Exec(`UPDATE billing_orders SET status='paid', fail_reason='', confirmed_at=$1, updated_at=$2
+		WHERE id=$3 AND status != 'paid'`, now, now, orderID)
 	if err != nil {
 		return false, err
 	}
@@ -353,16 +353,16 @@ func (r *BillingRepo) GrantListingSubscriptionTx(orderID string, userID, subscri
 	periodSec := periodDays * 86400
 	// 已有 active 行：顺延（MAX 处理到期后续费/未到期续费两种）。
 	res, err = tx.Exec(`UPDATE ai_bot_subscriptions SET status='active',
-		expires_at = MAX(expires_at, ?) + ?
-		WHERE id=? AND user_id=? AND status='active'`,
+		expires_at = GREATEST(expires_at, $1) + $2
+		WHERE id=$3 AND user_id=$4 AND status='active'`,
 		now, periodSec, subscriptionID, userID)
 	if err != nil {
 		return false, err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		// 待支付/已过期/已取消行激活：从当前时间起算。
-		res, err = tx.Exec(`UPDATE ai_bot_subscriptions SET status='active', expires_at=?
-			WHERE id=? AND user_id=? AND status IN ('pending_payment','expired','cancelled')`,
+		res, err = tx.Exec(`UPDATE ai_bot_subscriptions SET status='active', expires_at=$1
+			WHERE id=$2 AND user_id=$3 AND status IN ('pending_payment','expired','cancelled')`,
 			now+periodSec, subscriptionID, userID)
 		if err != nil {
 			return false, err
@@ -380,7 +380,7 @@ func (r *BillingRepo) GrantListingSubscriptionTx(orderID string, userID, subscri
 // GetSubscription 读取用户当前套餐/积分。
 func (r *BillingRepo) GetSubscription(userID int64) (*BillingSubscription, error) {
 	var s BillingSubscription
-	err := db.QueryRow(`SELECT COALESCE(plan,''), COALESCE(vip_expires_at,0), COALESCE(credits,0) FROM xt_users WHERE id=?`, userID).
+	err := db.QueryRow(`SELECT COALESCE(plan,''), COALESCE(vip_expires_at,0), COALESCE(credits,0) FROM xt_users WHERE id=$1`, userID).
 		Scan(&s.Plan, &s.VipExpiresAt, &s.Credits)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

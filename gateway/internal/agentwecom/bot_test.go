@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -34,15 +33,10 @@ func testAESKey() (envKey string, key []byte) {
 	return strings.TrimSuffix(full, "="), key
 }
 
-// setupWCTestDB 初始化临时 SQLite（含 0054 迁移）。
+// setupWCTestDB 初始化测试 PostgreSQL（含迁移基线）。
 func setupWCTestDB(t *testing.T) {
 	t.Helper()
-	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "gateway.db"))
-	t.Setenv("SECRET_KEY", "test-secret-key-agent-wecom")
-	if err := store.InitDB(); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
-	t.Cleanup(store.CloseDB)
+	store.SetupTestDB(t)
 }
 
 // setWCCredentials 注入测试凭据。

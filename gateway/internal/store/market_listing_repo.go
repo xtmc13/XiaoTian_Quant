@@ -89,7 +89,7 @@ func (r *MarketListingRepo) Create(rec *MarketListingRecord) error {
 		rec.UpdatedAt = rec.CreatedAt
 	}
 	_, err := db.Exec(`INSERT INTO xt_market_listings (`+marketListingColumns+`)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)`,
 		rec.ID, rec.AuthorUserID, rec.BotInstanceID, rec.ObjectKind, rec.ObjectID, rec.Kind, rec.Name, rec.Description,
 		rec.FeeModel, rec.FeePercent, rec.MonthlyFee, rec.Status, rec.RejectReason,
 		rec.ProbationStartedAt, rec.RuleMinDays, rec.RuleMinTrades, rec.RuleMaxDrawdownPct,
@@ -104,11 +104,11 @@ func (r *MarketListingRepo) Update(rec *MarketListingRecord) error {
 	}
 	rec.UpdatedAt = time.Now().Unix()
 	_, err := db.Exec(`UPDATE xt_market_listings SET
-		author_user_id=?, bot_instance_id=?, object_kind=?, object_id=?, kind=?, name=?, description=?,
-		fee_model=?, fee_percent=?, monthly_fee=?, status=?, reject_reason=?,
-		probation_started_at=?, rule_min_days=?, rule_min_trades=?, rule_max_drawdown_pct=?,
-		reviewed_by=?, reviewed_at=?, listed_at=?, delist_reason=?, provider_id=?, created_at=?, updated_at=?
-		WHERE id=?`,
+		author_user_id=$1, bot_instance_id=$2, object_kind=$3, object_id=$4, kind=$5, name=$6, description=$7,
+		fee_model=$8, fee_percent=$9, monthly_fee=$10, status=$11, reject_reason=$12,
+		probation_started_at=$13, rule_min_days=$14, rule_min_trades=$15, rule_max_drawdown_pct=$16,
+		reviewed_by=$17, reviewed_at=$18, listed_at=$19, delist_reason=$20, provider_id=$21, created_at=$22, updated_at=$23
+		WHERE id=$24`,
 		rec.AuthorUserID, rec.BotInstanceID, rec.ObjectKind, rec.ObjectID, rec.Kind, rec.Name, rec.Description,
 		rec.FeeModel, rec.FeePercent, rec.MonthlyFee, rec.Status, rec.RejectReason,
 		rec.ProbationStartedAt, rec.RuleMinDays, rec.RuleMinTrades, rec.RuleMaxDrawdownPct,
@@ -121,7 +121,7 @@ func (r *MarketListingRepo) GetByID(id string) *MarketListingRecord {
 	if db == nil {
 		return nil
 	}
-	rec, err := scanMarketListing(db.QueryRow(`SELECT `+marketListingColumns+` FROM xt_market_listings WHERE id=?`, id))
+	rec, err := scanMarketListing(db.QueryRow(`SELECT `+marketListingColumns+` FROM xt_market_listings WHERE id=$1`, id))
 	if err != nil {
 		return nil
 	}
@@ -129,11 +129,11 @@ func (r *MarketListingRepo) GetByID(id string) *MarketListingRecord {
 }
 
 func (r *MarketListingRepo) ListByAuthor(authorUserID int64) []*MarketListingRecord {
-	return r.listWhere(`WHERE author_user_id=? ORDER BY updated_at DESC`, authorUserID)
+	return r.listWhere(`WHERE author_user_id=$1 ORDER BY updated_at DESC`, authorUserID)
 }
 
 func (r *MarketListingRepo) ListByStatus(status string) []*MarketListingRecord {
-	return r.listWhere(`WHERE status=? ORDER BY updated_at DESC`, status)
+	return r.listWhere(`WHERE status=$1 ORDER BY updated_at DESC`, status)
 }
 
 // ListListed 公开市场列表（listed），sort: return|drawdown|followers（默认 updated）。
@@ -157,7 +157,7 @@ func (r *MarketListingRepo) ListListed(sort string, asc bool, limit, offset int)
 	if offset < 0 {
 		offset = 0
 	}
-	return r.listWhere(fmt.Sprintf(`WHERE status='listed' ORDER BY %s %s, updated_at DESC LIMIT ? OFFSET ?`, col, dir), limit, offset)
+	return r.listWhere(fmt.Sprintf(`WHERE status='listed' ORDER BY %s %s, updated_at DESC LIMIT $1 OFFSET $2`, col, dir), limit, offset)
 }
 
 func (r *MarketListingRepo) CountListed() int {
@@ -205,7 +205,7 @@ func (r *MarketListingRepo) UpsertStats(s *MarketListingStatsRecord) error {
 		(listing_id, date, total_return_pct, annualized_return_pct, max_drawdown_pct,
 		 win_rate, profit_factor, sharpe_ratio, total_trades, monthly_return_pct,
 		 followers, running_days, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 		ON CONFLICT(listing_id, date) DO UPDATE SET
 			total_return_pct=excluded.total_return_pct,
 			annualized_return_pct=excluded.annualized_return_pct,
@@ -244,7 +244,7 @@ func (r *MarketListingRepo) LatestStats(listingID string) *MarketListingStatsRec
 		return nil
 	}
 	s, err := scanMarketStats(db.QueryRow(`SELECT `+marketStatsColumns+`
-		FROM xt_market_listing_stats WHERE listing_id=? ORDER BY date DESC LIMIT 1`, listingID))
+		FROM xt_market_listing_stats WHERE listing_id=$1 ORDER BY date DESC LIMIT 1`, listingID))
 	if err != nil {
 		return nil
 	}
@@ -260,7 +260,7 @@ func (r *MarketListingRepo) StatsSeries(listingID string, limit int) []*MarketLi
 		limit = 90
 	}
 	rows, err := db.Query(`SELECT `+marketStatsColumns+`
-		FROM xt_market_listing_stats WHERE listing_id=? ORDER BY date ASC LIMIT ?`, listingID, limit)
+		FROM xt_market_listing_stats WHERE listing_id=$1 ORDER BY date ASC LIMIT $2`, listingID, limit)
 	if err != nil {
 		return nil
 	}
@@ -285,7 +285,7 @@ func (r *MarketListingRepo) CountActiveFollowers(listingID string) int {
 	var n int
 	err := db.QueryRow(`SELECT COUNT(*) FROM ai_bot_subscriptions s
 		JOIN ai_bot_instances i ON s.bot_instance_id = i.id
-		WHERE i.catalog_id = ? AND s.status = 'active'`, listingID).Scan(&n)
+		WHERE i.catalog_id = $1 AND s.status = 'active'`, listingID).Scan(&n)
 	if err != nil {
 		return 0
 	}
@@ -300,7 +300,7 @@ func GetMarketSetting(key string) string {
 		return ""
 	}
 	var v string
-	if err := db.QueryRow(`SELECT value FROM xt_market_settings WHERE key=?`, key).Scan(&v); err != nil {
+	if err := db.QueryRow(`SELECT value FROM xt_market_settings WHERE key=$1`, key).Scan(&v); err != nil {
 		return ""
 	}
 	return v
@@ -311,7 +311,7 @@ func SetMarketSetting(key, value string) error {
 	if db == nil {
 		return fmt.Errorf("db not initialized")
 	}
-	_, err := db.Exec(`INSERT INTO xt_market_settings (key, value, updated_at) VALUES (?,?,?)
+	_, err := db.Exec(`INSERT INTO xt_market_settings (key, value, updated_at) VALUES ($1,$2,$3)
 		ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
 		key, value, time.Now().Unix())
 	return err
@@ -324,7 +324,7 @@ func SaveAIBotSnapshotAt(botInstanceID string, equity, unrealized, realized, tot
 	_, err := db.Exec(`
 		INSERT INTO ai_bot_snapshots
 		(bot_instance_id, total_equity, unrealized_pnl, realized_pnl, total_return_pct, timestamp)
-		VALUES (?, ?, ?, ?, ?, ?)
+		VALUES ($1, $2, $3, $4, $5, $6)
 	`, botInstanceID, equity, unrealized, realized, totalReturn, ts)
 	if err != nil {
 		fmt.Printf("[AIBotStore] snapshot-at error: %v\n", err)
@@ -335,7 +335,7 @@ func SaveAIBotSnapshotAt(botInstanceID string, equity, unrealized, realized, tot
 func GetAIBotSnapshotsSince(botInstanceID string, since int64) []map[string]any {
 	rows, err := db.Query(`
 		SELECT total_equity, unrealized_pnl, realized_pnl, total_return_pct, timestamp
-		FROM ai_bot_snapshots WHERE bot_instance_id=? AND timestamp>=? ORDER BY timestamp ASC
+		FROM ai_bot_snapshots WHERE bot_instance_id=$1 AND timestamp>=$2 ORDER BY timestamp ASC
 	`, botInstanceID, since)
 	if err != nil {
 		return nil
@@ -361,7 +361,7 @@ func GetAIBotTradesSince(botInstanceID string, since int64) []map[string]any {
 	rows, err := db.Query(`
 		SELECT id, bot_instance_id, symbol, side, entry_price, exit_price, quantity,
 		       pnl, pnl_pct, close_reason, opened_at, closed_at
-		FROM ai_bot_trades WHERE bot_instance_id=? AND closed_at>=? ORDER BY closed_at ASC
+		FROM ai_bot_trades WHERE bot_instance_id=$1 AND closed_at>=$2 ORDER BY closed_at ASC
 	`, botInstanceID, since)
 	if err != nil {
 		return nil
@@ -401,15 +401,15 @@ func (r *MarketListingRepo) ListBotTradesPage(botInstanceID string, limit, offse
 		offset = 0
 	}
 	var total int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM ai_bot_trades WHERE bot_instance_id=? AND closed_at>0`,
+	if err := db.QueryRow(`SELECT COUNT(*) FROM ai_bot_trades WHERE bot_instance_id=$1 AND closed_at>0`,
 		botInstanceID).Scan(&total); err != nil {
 		return out, 0
 	}
 	rows, err := db.Query(`
 		SELECT id, bot_instance_id, symbol, side, entry_price, exit_price, quantity,
 		       pnl, pnl_pct, close_reason, opened_at, closed_at
-		FROM ai_bot_trades WHERE bot_instance_id=? AND closed_at>0
-		ORDER BY closed_at DESC, id DESC LIMIT ? OFFSET ?
+		FROM ai_bot_trades WHERE bot_instance_id=$1 AND closed_at>0
+		ORDER BY closed_at DESC, id DESC LIMIT $2 OFFSET $3
 	`, botInstanceID, limit, offset)
 	if err != nil {
 		return out, 0
@@ -452,7 +452,7 @@ func UpsertMarketCatalogEntry(rec *MarketListingRecord, strategyType, marketType
 		(id, name, description, strategy_type, market_type, risk_level,
 		 fee_model, fee_percent, monthly_fee, performance_json, config_json,
 		 is_builtin, is_active, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,'','{}',0,1,?,?)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'','{}',0,1,$10,$11)
 		ON CONFLICT(id) DO UPDATE SET
 			name=excluded.name, description=excluded.description,
 			strategy_type=excluded.strategy_type, market_type=excluded.market_type,
@@ -468,5 +468,5 @@ func DeactivateMarketCatalogEntry(id string) {
 	if db == nil {
 		return
 	}
-	db.Exec(`UPDATE ai_bot_catalog SET is_active=0, updated_at=? WHERE id=?`, time.Now().Unix(), id)
+	db.Exec(`UPDATE ai_bot_catalog SET is_active=0, updated_at=$1 WHERE id=$2`, time.Now().Unix(), id)
 }

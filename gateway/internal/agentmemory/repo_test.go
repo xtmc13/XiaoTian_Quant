@@ -1,7 +1,6 @@
 package agentmemory
 
 import (
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -11,12 +10,7 @@ import (
 
 func setupMemoryTestDB(t *testing.T) {
 	t.Helper()
-	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "gateway.db"))
-	t.Setenv("SECRET_KEY", "test-secret-key-agent-memory")
-	if err := store.InitDB(); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
-	t.Cleanup(store.CloseDB)
+	store.SetupTestDB(t)
 }
 
 func TestRepo_CreateAndList(t *testing.T) {

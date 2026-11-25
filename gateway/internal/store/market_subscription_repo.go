@@ -52,15 +52,12 @@ func CreateMarketSubscription(rec *MarketSubscriptionRecord) (int, error) {
 	if rec.CreatedAt == 0 {
 		rec.CreatedAt = time.Now().Unix()
 	}
-	res, err := db.Exec(`INSERT INTO ai_bot_subscriptions
+	var id int64
+	err := db.QueryRow(`INSERT INTO ai_bot_subscriptions
 		(user_id, bot_instance_id, listing_id, fee_type, fee_percent, monthly_fee, next_billing_at, status, expires_at, created_at)
-		VALUES (?,?,?,?,?,?,0,?,?,?)`,
+		VALUES ($1,$2,$3,$4,$5,$6,0,$7,$8,$9) RETURNING id`,
 		rec.UserID, rec.BotInstanceID, rec.ListingID, rec.FeeType, rec.FeePercent, rec.MonthlyFee,
-		rec.Status, rec.ExpiresAt, rec.CreatedAt)
-	if err != nil {
-		return 0, err
-	}
-	id, err := res.LastInsertId()
+		rec.Status, rec.ExpiresAt, rec.CreatedAt).Scan(&id)
 	if err != nil {
 		return 0, err
 	}
@@ -74,7 +71,7 @@ func GetMarketSubscriptionByID(id int) *MarketSubscriptionRecord {
 		return nil
 	}
 	rec, err := scanMarketSubscription(db.QueryRow(`SELECT `+marketSubscriptionCols+`
-		FROM ai_bot_subscriptions WHERE id=?`, id))
+		FROM ai_bot_subscriptions WHERE id=$1`, id))
 	if err != nil {
 		return nil
 	}
@@ -89,7 +86,7 @@ func FindMarketSubscription(userID int, listingID string) *MarketSubscriptionRec
 	}
 	rec, err := scanMarketSubscription(db.QueryRow(`SELECT `+marketSubscriptionCols+`
 		FROM ai_bot_subscriptions
-		WHERE user_id=? AND listing_id=? AND status IN (?, ?)
+		WHERE user_id=$1 AND listing_id=$2 AND status IN ($3, $4)
 		ORDER BY created_at DESC LIMIT 1`,
 		userID, listingID, MarketSubActive, MarketSubPendingPayment))
 	if err != nil {
@@ -105,7 +102,7 @@ func ListMarketSubscriptionsByUser(userID int) []*MarketSubscriptionRecord {
 		return out
 	}
 	rows, err := db.Query(`SELECT `+marketSubscriptionCols+`
-		FROM ai_bot_subscriptions WHERE user_id=? AND listing_id != '' ORDER BY created_at DESC`, userID)
+		FROM ai_bot_subscriptions WHERE user_id=$1 AND listing_id != '' ORDER BY created_at DESC`, userID)
 	if err != nil {
 		return out
 	}
@@ -126,8 +123,8 @@ func ExpireMarketSubscriptions(now int64) (int64, error) {
 	if db == nil {
 		return 0, fmt.Errorf("db not initialized")
 	}
-	res, err := db.Exec(`UPDATE ai_bot_subscriptions SET status=?
-		WHERE listing_id != '' AND status=? AND expires_at > 0 AND expires_at <= ?`,
+	res, err := db.Exec(`UPDATE ai_bot_subscriptions SET status=$1
+		WHERE listing_id != '' AND status=$2 AND expires_at > 0 AND expires_at <= $3`,
 		MarketSubExpired, MarketSubActive, now)
 	if err != nil {
 		return 0, err

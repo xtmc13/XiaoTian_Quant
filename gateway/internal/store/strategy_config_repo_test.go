@@ -1,19 +1,12 @@
 package store
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 )
 
 func setupTestDB(t *testing.T) func() {
 	t.Helper()
-	dir := t.TempDir()
-	_ = os.Setenv("DB_PATH", filepath.Join(dir, "test.db"))
-	_ = os.Setenv("SECRET_KEY", "test-secret-key-for-unit-tests")
-	if err := InitDB(); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
+	SetupTestDB(t)
 	return func() {
 		CloseDB()
 	}

@@ -35,7 +35,7 @@ func (r *DataProviderRepo) UpsertDataProviderCache(source, cacheKey, payload str
 		fetchedAt = time.Now().UnixMilli()
 	}
 	_, err := db.Exec(`INSERT INTO xt_dataprovider_cache (source, cache_key, payload, fetched_at, expires_at)
-		VALUES (?,?,?,?,?)
+		VALUES ($1,$2,$3,$4,$5)
 		ON CONFLICT(source, cache_key) DO UPDATE SET payload=excluded.payload,
 			fetched_at=excluded.fetched_at, expires_at=excluded.expires_at`,
 		source, cacheKey, payload, fetchedAt, expiresAt)
@@ -50,7 +50,7 @@ func (r *DataProviderRepo) GetDataProviderCache(source, cacheKey string) (payloa
 		cacheKey = "default"
 	}
 	err = db.QueryRow(`SELECT payload, fetched_at, expires_at FROM xt_dataprovider_cache
-		WHERE source = ? AND cache_key = ?`, source, cacheKey).Scan(&payload, &fetchedAt, &expiresAt)
+		WHERE source = $1 AND cache_key = $2`, source, cacheKey).Scan(&payload, &fetchedAt, &expiresAt)
 	return payload, fetchedAt, expiresAt, err
 }
 
@@ -58,7 +58,7 @@ func (r *DataProviderRepo) GetDataProviderCache(source, cacheKey string) (payloa
 func (r *DataProviderRepo) DeleteExpiredDataProviderCache() (int64, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	res, err := db.Exec(`DELETE FROM xt_dataprovider_cache WHERE expires_at < ?`, time.Now().UnixMilli())
+	res, err := db.Exec(`DELETE FROM xt_dataprovider_cache WHERE expires_at < $1`, time.Now().UnixMilli())
 	if err != nil {
 		return 0, err
 	}

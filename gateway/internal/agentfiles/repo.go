@@ -76,7 +76,7 @@ func (p *Plugin) createCheckpoint(userID int64, rel, abs, conversationID string)
 		return nil, err
 	}
 	if _, err := db.Exec(`INSERT INTO xt_agent_file_checkpoints
-		(id, user_id, path, backup_path, size, conversation_id, created_at) VALUES (?,?,?,?,?,?,?)`,
+		(id, user_id, path, backup_path, size, conversation_id, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
 		cp.ID, cp.UserID, cp.Path, cp.BackupPath, cp.Size, cp.ConversationID, cp.CreatedAt); err != nil {
 		return nil, err
 	}
@@ -86,7 +86,7 @@ func (p *Plugin) createCheckpoint(userID int64, rel, abs, conversationID string)
 
 // prune 每用户仅保留最近 keepCheckpoints 条，旧行删除并移除备份文件（失败静默）。
 func (r *Repo) prune(db *sql.DB, userID int64) {
-	rows, err := db.Query(`SELECT id, backup_path FROM xt_agent_file_checkpoints WHERE user_id = ? ORDER BY created_at DESC, id DESC`, userID)
+	rows, err := db.Query(`SELECT id, backup_path FROM xt_agent_file_checkpoints WHERE user_id = $1 ORDER BY created_at DESC, id DESC`, userID)
 	if err != nil {
 		return
 	}
@@ -104,7 +104,7 @@ func (r *Repo) prune(db *sql.DB, userID int64) {
 		}
 	}
 	for _, s := range stale {
-		_, _ = db.Exec(`DELETE FROM xt_agent_file_checkpoints WHERE id = ?`, s.id)
+		_, _ = db.Exec(`DELETE FROM xt_agent_file_checkpoints WHERE id = $1`, s.id)
 		_ = os.Remove(s.backup)
 	}
 }
@@ -129,7 +129,7 @@ func (r *Repo) ListByUser(userID int64, limit int) ([]*Checkpoint, error) {
 	if limit <= 0 || limit > 200 {
 		limit = keepCheckpoints
 	}
-	rows, err := db.Query(`SELECT `+cpCols+` FROM xt_agent_file_checkpoints WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT ?`, userID, limit)
+	rows, err := db.Query(`SELECT `+cpCols+` FROM xt_agent_file_checkpoints WHERE user_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2`, userID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +155,7 @@ func (p *Plugin) Rollback(userID int64, checkpointID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	cp, err := scanCheckpoint(db.QueryRow(`SELECT `+cpCols+` FROM xt_agent_file_checkpoints WHERE id = ? AND user_id = ?`, checkpointID, userID))
+	cp, err := scanCheckpoint(db.QueryRow(`SELECT `+cpCols+` FROM xt_agent_file_checkpoints WHERE id = $1 AND user_id = $2`, checkpointID, userID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", ErrCheckpointNotFound
 	}

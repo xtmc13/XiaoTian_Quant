@@ -1,19 +1,13 @@
 package store
 
 import (
-	"path/filepath"
 	"testing"
 	"time"
 )
 
 func setupAISignalTestDB(t *testing.T) {
 	t.Helper()
-	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "gateway.db"))
-	t.Setenv("SECRET_KEY", "test-secret-key-ai-signal-repo")
-	if err := InitDB(); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
-	t.Cleanup(CloseDB)
+	SetupTestDB(t)
 }
 
 func TestAISignalRepoInsertAndList(t *testing.T) {
@@ -157,7 +151,7 @@ func TestAISignalSchemaIdempotent(t *testing.T) {
 		}
 	}
 	var name string
-	if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='xt_ai_signals'`).Scan(&name); err != nil {
+	if err := db.QueryRow(`SELECT table_name FROM information_schema.tables WHERE table_name='xt_ai_signals'`).Scan(&name); err != nil {
 		t.Fatalf("table missing: %v", err)
 	}
 }
@@ -221,7 +215,7 @@ func TestAIRobotConfigSchemaIdempotent(t *testing.T) {
 		}
 	}
 	var name string
-	if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='xt_ai_robot_configs'`).Scan(&name); err != nil {
+	if err := db.QueryRow(`SELECT table_name FROM information_schema.tables WHERE table_name='xt_ai_robot_configs'`).Scan(&name); err != nil {
 		t.Fatalf("table missing: %v", err)
 	}
 }
