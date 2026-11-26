@@ -60,6 +60,9 @@ type Context struct {
 	BinanceWS        *exchange.BinanceWSStream
 	MatchingService  *service.MatchingService
 	FundingTracker   *risk.FundingFeeTracker
+	// PortfolioGuard 组合级风控守卫（D3）：按账户聚合敞口/保证金/日盈亏，
+	// 超阈全局刹车只拦新开仓；nil 视为未接线。
+	PortfolioGuard *risk.PortfolioGuard
 
 	// LiveGate 实盘总闸（handler 注入 canPlaceLiveOrder 同口径）：信号单
 	// exchange 非 paper 时下单前必过；nil 视为未接线，真实交易所单拒放。
@@ -159,6 +162,7 @@ func (ctx *Context) Init(cfg *config.Config) error {
 		riskCfg.MaxDrawdownPct = cfg.Risk.MaxDrawdown
 	}
 	ctx.RiskManager = risk.NewManager(riskCfg)
+	ctx.PortfolioGuard = risk.NewPortfolioGuard(risk.DefaultGuardConfig())
 	// 发布为全局单例：HTTP 风控接口（/api/risk/config）与执行链路
 	// 必须读写到同一个实例，否则重启后配置值丢失（此前恒回默认 50%）。
 	risk.SetManager(ctx.RiskManager)
@@ -347,6 +351,20 @@ func (ctx *Context) wireOrderManager() {
 		if err := rejectIfSyntheticPrice(priceSynthetic, req.Exchange); err != nil {
 			ctx.Logger.Warn("实盘单拦截（合成价保护）", "symbol", req.Symbol, "exchange", req.Exchange)
 			return err
+		}
+		// D3 组合级风控：聚合全账户敞口/保证金/日盈亏，超阈全局刹车（只拦新开仓）。
+		if ctx.PortfolioGuard != nil {
+			snap := ctx.buildPortfolioSnapshot(req)
+			isClose := req.ClosePosition || req.ReduceOnly
+			if err := ctx.PortfolioGuard.Check(snap, risk.OrderIntent{
+				Symbol:     req.Symbol,
+				Side:       req.Side,
+				IsClose:    isClose,
+				OrderValue: req.Price * req.Quantity,
+			}); err != nil {
+				ctx.Logger.Warn("组合风控拦截", "symbol", req.Symbol, "exchange", req.Exchange, "reason", err.Error())
+				return err
+			}
 		}
 		return ctx.RiskManager.Check(riskCtx)
 	}
@@ -618,6 +636,13 @@ func (ctx *Context) wireOrderManager() {
 				}
 			}
 
+			// 下单结果不确定（超时/连接中断/5xx/429）时，先按恒定 clientOID 反查交易所：
+			// 订单若已挂上则回填单号/状态，按成功提交处理；查不到再走既有失败路径。
+			if err != nil && adapter.IsUncertainSubmitError(err) {
+				if recovered, ok := ctx.recoverLiveOrderByClientOID(ord, clientOID); ok {
+					return recovered, nil
+				}
+			}
 			return finalizeLiveSubmitResult(ctx.Logger, ord, result, err)
 		}
 
@@ -964,6 +989,54 @@ func finalizeLiveSubmitResult(log *logging.Logger, ord *model.OrderData, result 
 	}
 	log.Warn("Live exchange order rejected: empty result (credentials missing?)", "exchange", ord.Exchange)
 	return nil, fmt.Errorf("live order rejected: exchange %s returned no result (credentials missing)", ord.Exchange)
+}
+
+// recoverLiveOrderByClientOID 下单结果不确定（超时/连接中断/5xx/429）时，按恒定
+// clientOID 反查交易所：订单已存在则回填交易所单号/状态/成交量，按提交成功处理；
+// 查不到、适配器不支持按客户端号查询、或查询本身失败时返回 ok=false，交由上层
+// 走既有失败路径（REJECTED + 解锁余额）。
+func (ctx *Context) recoverLiveOrderByClientOID(ord *model.OrderData, clientOID string) (map[string]any, bool) {
+	if clientOID == "" || ord.Exchange == "" || ord.Exchange == "paper" {
+		return nil, false
+	}
+	querier, ok := buildClientOrderQuerier(ord.Exchange)
+	if !ok {
+		return nil, false
+	}
+	query, err := querier.QueryOrderByClientOID(ord.Symbol, clientOID)
+	if err != nil {
+		ctx.Logger.Warn("recover live order by client oid: query failed",
+			"exchange", ord.Exchange, "symbol", ord.Symbol, "clientOid", clientOID, "error", err.Error())
+		return nil, false
+	}
+	if !query.Found {
+		return nil, false
+	}
+	ctx.Logger.Info("recovered live order already on exchange",
+		"exchange", ord.Exchange, "symbol", ord.Symbol, "clientOid", clientOID,
+		"exchangeOrderId", query.ExchangeOrderID, "status", query.Info.Status)
+	return map[string]any{
+		"order_id":          query.ExchangeOrderID,
+		"exchange_order_id": query.ExchangeOrderID,
+		"status":            query.Info.Status,
+		"filled":            query.Info.FilledQty,
+		"exchange":          ord.Exchange,
+	}, true
+}
+
+// buildClientOrderQuerier 按交易所构造支持按客户端号反查的适配器。
+// 仅接入已实现该查询端点的交易所；OKX/Bybit 待补查询端点后在此登记。
+func buildClientOrderQuerier(exchangeName string) (adapter.ClientOrderQuerier, bool) {
+	switch exchangeName {
+	case "binance":
+		apiKey, secret, _ := adapter.GetCredential("binance")
+		if apiKey == "" || secret == "" {
+			return nil, false
+		}
+		return adapter.NewBinanceAdapter(apiKey, secret, false), true
+	default:
+		return nil, false
+	}
 }
 
 // stringifyOrderID 把交易所 ACK 里的 orderId 转成干净十进制字符串。
@@ -1535,6 +1608,34 @@ func rejectIfSyntheticPrice(isSynthetic bool, exchange string) error {
 // buildRiskContext assembles a complete risk context for an order request.
 // It enriches the request with live market data (bid/ask, volatility, funding
 // rate) so that all risk checks can be evaluated.
+// buildPortfolioSnapshot 汇总组合级快照供 D3 守卫校验；paper 单按 paper 权益/
+// 敞口口径，实盘单按真实持仓口径（与 buildRiskContext 同一分流）。
+func (ctx *Context) buildPortfolioSnapshot(req *order.Request) risk.PortfolioSnapshot {
+	pm := ctx.PortfolioManager
+	if pm == nil {
+		return risk.PortfolioSnapshot{UserID: int64(req.UserID)}
+	}
+	equity := pm.TotalEquity()
+	exposure := pm.NetExposure()
+	posCount := pm.LivePositionCount()
+	if isPaperExchangeName(req.Exchange) {
+		if pe := pm.PaperEquity(); pe > 0 {
+			equity = pe
+			exposure = pm.PaperNetExposureAgainst(pe)
+			posCount = pm.PaperPositionCount()
+		}
+	}
+	return risk.PortfolioSnapshot{
+		UserID:        int64(req.UserID),
+		Equity:        equity,
+		Available:     pm.AvailableBalance(),
+		MarginUsed:    pm.MarginUsed(),
+		ExposurePct:   exposure,
+		DailyPnL:      pm.TotalPnL(),
+		PositionCount: posCount,
+	}
+}
+
 func (ctx *Context) buildRiskContext(req *order.Request) (*risk.Context, bool) {
 	price := req.Price
 	priceSynthetic := false

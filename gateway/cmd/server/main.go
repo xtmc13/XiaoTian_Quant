@@ -367,6 +367,9 @@ func main() {
 		feeder.WSSubscribe = func(symbol, interval, market string) {
 			appCtx.BinanceWS.EnsureKline(symbol, interval, market)
 		}
+		feeder.WSUnsubscribe = func(symbol, interval, market string) {
+			appCtx.BinanceWS.ReleaseKline(symbol, interval, market)
+		}
 	}
 	handler.SetKlineFeeder(feeder)
 

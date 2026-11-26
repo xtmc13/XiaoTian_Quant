@@ -86,3 +86,41 @@ func TestStreamURLIncludesKlineSubscriptions(t *testing.T) {
 		t.Fatalf("duplicate kline subscription: %s", url)
 	}
 }
+
+func TestReleaseKlineRemovesSubscription(t *testing.T) {
+	s := NewBinanceWSStream([]string{"btcusdt"}, nil)
+	s.EnsureKline("BTCUSDT", "1m")
+	if !strings.Contains(s.streamURL(), "btcusdt@kline_1m") {
+		t.Fatal("kline missing after EnsureKline")
+	}
+	s.ReleaseKline("BTCUSDT", "1m")
+	if strings.Contains(s.streamURL(), "btcusdt@kline_1m") {
+		t.Fatal("kline still subscribed after ReleaseKline")
+	}
+	s.ReleaseKline("BTCUSDT", "1m") // 幂等：重复释放不 panic
+}
+
+func TestReleaseSymbolRemovesSubscription(t *testing.T) {
+	s := NewBinanceWSStream([]string{"btcusdt"}, nil)
+	s.EnsureSymbol("ethusdt")
+
+	has := func(sym string) bool {
+		for _, e := range s.symbols {
+			if e == sym {
+				return true
+			}
+		}
+		return false
+	}
+	if !has("ethusdt") {
+		t.Fatal("ethusdt missing after EnsureSymbol")
+	}
+	s.ReleaseSymbol("ethusdt")
+	if has("ethusdt") {
+		t.Fatal("ethusdt still subscribed after ReleaseSymbol")
+	}
+	// 初始列表不受影响。
+	if !has("btcusdt") {
+		t.Fatal("initial btcusdt subscription was removed")
+	}
+}

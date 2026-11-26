@@ -657,6 +657,94 @@ func (s *BinanceWSStream) EnsureKline(symbol, interval string, marketType ...str
 	}
 }
 
+// ReleaseKline 撤销 symbol+interval 的收盘 K 线订阅（策略/网格停止、最后一个
+// 消费者释放时调用）。从订阅表删除，断线重连后不再带上；连接中发 UNSUBSCRIBE
+// 帧。与 EnsureKline 成对，避免订阅集合只增不减导致流越积越多。
+func (s *BinanceWSStream) ReleaseKline(symbol, interval string, marketType ...string) {
+	sym := strings.ToLower(strings.TrimSpace(symbol))
+	iv := strings.ToLower(strings.TrimSpace(interval))
+	if sym == "" || iv == "" {
+		return
+	}
+	market := wsMarketType(marketType)
+	key := market + "|" + sym + "|" + iv
+
+	s.klineMu.Lock()
+	if !s.klineSubs[key] {
+		s.klineMu.Unlock()
+		return
+	}
+	delete(s.klineSubs, key)
+	delete(s.klineLast, key)
+	s.klineMu.Unlock()
+
+	s.mu.RLock()
+	conn := s.conn
+	if market == "swap" {
+		conn = s.futuresConn
+	}
+	s.mu.RUnlock()
+	if conn == nil {
+		return
+	}
+
+	stream := fmt.Sprintf("%s@kline_%s", sym, iv)
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := conn.WriteJSON(map[string]any{
+		"method": "UNSUBSCRIBE",
+		"params": []string{stream},
+		"id":     time.Now().UnixMilli(),
+	}); err != nil {
+		log.Printf("[binance_ws] kline unsubscribe %s failed: %v（订阅表已移除，重连后生效）", stream, err)
+	}
+}
+
+// ReleaseSymbol 撤销某交易对的 tick/ticker/markPrice 订阅（与 EnsureSymbol 成对）。
+// 从订阅表删除；连接中发 UNSUBSCRIBE 帧。若该 symbol 仍被其他消费者 Ensure 过，
+// 由调用方按引用计数保证最后一个释放才调用本方法。
+func (s *BinanceWSStream) ReleaseSymbol(symbol string, marketType ...string) {
+	sym := strings.ToLower(strings.TrimSpace(symbol))
+	if sym == "" {
+		return
+	}
+	market := wsMarketType(marketType)
+
+	s.mu.Lock()
+	syms := &s.symbols
+	if market == "swap" {
+		syms = &s.futuresSymbols
+	}
+	kept := (*syms)[:0]
+	found := false
+	for _, existing := range *syms {
+		if existing == sym {
+			found = true
+			continue
+		}
+		kept = append(kept, existing)
+	}
+	*syms = kept
+	conn := s.conn
+	if market == "swap" {
+		conn = s.futuresConn
+	}
+	s.mu.Unlock()
+
+	if !found || conn == nil {
+		return
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := conn.WriteJSON(map[string]any{
+		"method": "UNSUBSCRIBE",
+		"params": symbolStreams(sym),
+		"id":     time.Now().UnixMilli(),
+	}); err != nil {
+		log.Printf("[binance_ws] symbol unsubscribe %s failed: %v（订阅表已移除，重连后生效）", sym, err)
+	}
+}
+
 // GetPrice returns the last known price for a symbol.
 // 原始读取：可能是任意时刻的残留值（WS 断连后缓存永冻结，未订阅的 symbol
 // 恒为 0）。对新鲜度敏感的消费方（运行面板现价等）应使用 GetPriceFresh。

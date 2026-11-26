@@ -39,6 +39,8 @@ type BinanceAdapter struct {
 	secretKey  string
 	testnet    bool
 	httpClient *http.Client
+	throttle   *Throttler
+	retry      RetryPolicy
 	mu         sync.RWMutex
 
 	// WebSocket
@@ -66,6 +68,8 @@ func NewBinanceAdapter(apiKey, secret string, testnet bool) *BinanceAdapter {
 		secretKey:  secret,
 		testnet:    testnet,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
+		throttle:   NewThrottler(20 * time.Millisecond),
+		retry:      DefaultRetryPolicy(),
 		streamHub:  exchange.NewStreamHub(),
 		orders:     make(map[string]map[string]any),
 		positions:  make(map[string]map[string]any),
@@ -227,57 +231,82 @@ func (b *BinanceAdapter) TransferAsset(fromWallet, toWallet, asset string, amoun
 
 // ── REST ──
 
-func (b *BinanceAdapter) request(method, path string, params url.Values, signed bool) (map[string]any, error) {
-	if signed && b.apiKey != "" {
-		params.Set("timestamp", fmt.Sprintf("%d", time.Now().UnixMilli()))
-		params.Set("recvWindow", "5000")
-		params.Set("signature", b.sign(params))
-	}
+// callExchange 限流后执行请求；429/5xx 与传输层不确定错误按退避策略重建请求重试。
+// build 闭包每次调用都重新构造 *http.Request（含刷新 timestamp/signature），
+// 保证重试时表单 body 可重读。
+func (b *BinanceAdapter) callExchange(label, method, path string, build func() (*http.Request, error)) (map[string]any, error) {
+	for attempt := 0; attempt <= b.retry.MaxRetries; attempt++ {
+		req, err := build()
+		if err != nil {
+			return nil, err
+		}
+		b.throttle.Wait()
+		resp, err := b.httpClient.Do(req)
+		if err != nil {
+			if !b.retry.ShouldRetry(err) || attempt == b.retry.MaxRetries {
+				return nil, err
+			}
+			time.Sleep(b.retry.Delay(attempt))
+			continue
+		}
+		respBody, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
 
-	var reqURL string
-	var body io.Reader
-
-	if method == "GET" || method == "DELETE" {
-		u, _ := url.Parse(b.baseURL() + path)
-		u.RawQuery = params.Encode()
-		reqURL = u.String()
-	} else {
-		reqURL = b.baseURL() + path
-		body = strings.NewReader(params.Encode())
-	}
-
-	req, err := http.NewRequest(method, reqURL, body)
-	if err != nil {
-		return nil, err
-	}
-
-	if method != "GET" && method != "DELETE" {
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	}
-	if b.apiKey != "" {
-		req.Header.Set("X-MBX-APIKEY", b.apiKey)
-	}
-
-	resp, err := b.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	respBody, _ := io.ReadAll(resp.Body)
-	var result map[string]any
-	json.Unmarshal(respBody, &result)
-	// 币安 4xx/业务错误体为 {"code":-N,"msg":"..."}——必须作为错误返回，
-	// 否则调用方把错误响应当成功解析，产生 id=<nil> 的"假成交"（status=NEW）。
-	if resp.StatusCode >= 400 || negativeCode(result) {
+		var result map[string]any
+		_ = json.Unmarshal(respBody, &result)
+		retryable := resp.StatusCode == 429 || resp.StatusCode >= 500
+		if resp.StatusCode < 400 && !negativeCode(result) {
+			return result, nil
+		}
 		code, _ := result["code"].(float64)
 		msg, _ := result["msg"].(string)
 		if msg == "" {
 			msg = strings.TrimSpace(string(respBody))
 		}
-		return result, fmt.Errorf("binance %s %s: HTTP %d code=%d %s", method, path, resp.StatusCode, int(code), msg)
+		if retryable && attempt < b.retry.MaxRetries {
+			time.Sleep(b.retry.Delay(attempt))
+			continue
+		}
+		return result, fmt.Errorf("%s %s %s: HTTP %d code=%d %s", label, method, path, resp.StatusCode, int(code), msg)
 	}
-	return result, nil
+	return nil, fmt.Errorf("%s %s %s: exhausted retries", label, method, path)
+}
+
+func (b *BinanceAdapter) request(method, path string, params url.Values, signed bool) (map[string]any, error) {
+	return b.callExchange("binance", method, path, func() (*http.Request, error) {
+		p := url.Values{}
+		for k, v := range params {
+			p[k] = v
+		}
+		if signed && b.apiKey != "" {
+			p.Set("timestamp", fmt.Sprintf("%d", time.Now().UnixMilli()))
+			p.Set("recvWindow", "5000")
+			p.Set("signature", b.sign(p))
+		}
+
+		var reqURL string
+		var body io.Reader
+		if method == "GET" || method == "DELETE" {
+			u, _ := url.Parse(b.baseURL() + path)
+			u.RawQuery = p.Encode()
+			reqURL = u.String()
+		} else {
+			reqURL = b.baseURL() + path
+			body = strings.NewReader(p.Encode())
+		}
+
+		req, err := http.NewRequest(method, reqURL, body)
+		if err != nil {
+			return nil, err
+		}
+		if method != "GET" && method != "DELETE" {
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
+		if b.apiKey != "" {
+			req.Header.Set("X-MBX-APIKEY", b.apiKey)
+		}
+		return req, nil
+	})
 }
 
 // ── Market Data REST ──
@@ -478,52 +507,55 @@ func (b *BinanceAdapter) GetPositions() ([]map[string]any, error) {
 // ── Futures REST ──
 
 func (b *BinanceAdapter) futuresRequest(method, path string, params url.Values) (map[string]any, error) {
-	params.Set("timestamp", fmt.Sprintf("%d", time.Now().UnixMilli()))
-	params.Set("recvWindow", "5000")
-	params.Set("signature", b.sign(params))
+	return b.callExchange("binance-futures", method, path, func() (*http.Request, error) {
+		p := url.Values{}
+		for k, v := range params {
+			p[k] = v
+		}
+		p.Set("timestamp", fmt.Sprintf("%d", time.Now().UnixMilli()))
+		p.Set("recvWindow", "5000")
+		p.Set("signature", b.sign(p))
 
-	var reqURL string
-	var body io.Reader
+		var reqURL string
+		var body io.Reader
+		if method == "GET" || method == "DELETE" {
+			u, _ := url.Parse(b.fapiBaseURL() + path)
+			u.RawQuery = p.Encode()
+			reqURL = u.String()
+		} else {
+			reqURL = b.fapiBaseURL() + path
+			body = strings.NewReader(p.Encode())
+		}
 
-	if method == "GET" || method == "DELETE" {
-		u, _ := url.Parse(b.fapiBaseURL() + path)
-		u.RawQuery = params.Encode()
-		reqURL = u.String()
-	} else {
-		reqURL = b.fapiBaseURL() + path
-		body = strings.NewReader(params.Encode())
-	}
+		req, err := http.NewRequest(method, reqURL, body)
+		if err != nil {
+			return nil, err
+		}
+		if method != "GET" && method != "DELETE" {
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
+		req.Header.Set("X-MBX-APIKEY", b.apiKey)
+		return req, nil
+	})
+}
 
-	req, err := http.NewRequest(method, reqURL, body)
+// CheckClockOffset 请求合约服务器时间，返回本地时钟偏移（ms，正=本地偏慢）与
+// 是否超阈值。网络失败不阻断启动，仅返回 err 供调用方告警。
+func (b *BinanceAdapter) CheckClockOffset(thresholdMs int64) (int64, bool, error) {
+	u, _ := url.Parse(b.fapiBaseURL() + "/fapi/v1/time")
+	b.throttle.Wait()
+	resp, err := b.httpClient.Get(u.String())
 	if err != nil {
-		return nil, err
-	}
-
-	if method != "GET" && method != "DELETE" {
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	}
-	req.Header.Set("X-MBX-APIKEY", b.apiKey)
-
-	resp, err := b.httpClient.Do(req)
-	if err != nil {
-		return nil, err
+		return 0, false, err
 	}
 	defer resp.Body.Close()
-
-	respBody, _ := io.ReadAll(resp.Body)
-	var result map[string]any
-	json.Unmarshal(respBody, &result)
-	// 币安 4xx/业务错误体为 {"code":-N,"msg":"..."}——必须作为错误返回，
-	// 否则调用方把错误响应当成功解析，产生 id=<nil> 的"假成交"（status=NEW）。
-	if resp.StatusCode >= 400 || negativeCode(result) {
-		code, _ := result["code"].(float64)
-		msg, _ := result["msg"].(string)
-		if msg == "" {
-			msg = strings.TrimSpace(string(respBody))
-		}
-		return result, fmt.Errorf("binance %s %s: HTTP %d code=%d %s", method, path, resp.StatusCode, int(code), msg)
+	body, _ := io.ReadAll(resp.Body)
+	serverMs, err := ParseServerTimeMs(body)
+	if err != nil {
+		return 0, false, err
 	}
-	return result, nil
+	off, exceeded := CheckClockSkew(serverMs, time.Now().UnixMilli(), thresholdMs)
+	return off, exceeded, nil
 }
 
 // negativeCode 报告币安业务错误码（负数即错误）。

@@ -233,6 +233,46 @@ func TestKlineFeederReleaseStopsFeed(t *testing.T) {
 	}
 }
 
+func TestKlineFeederReleaseInvokesWSUnsubscribe(t *testing.T) {
+	fake := newFakeBinanceKlines(1700000000000)
+	defer fake.close()
+
+	bus := event.NewEventBus(1000, 2)
+	defer bus.Close()
+
+	feeder := NewKlineFeeder(bus)
+	feeder.BaseURL = fake.srv.URL + "/api/v3"
+	feeder.Interval = 30 * time.Millisecond
+
+	var unsubMu sync.Mutex
+	var unsubs []string
+	feeder.WSUnsubscribe = func(symbol, interval, market string) {
+		unsubMu.Lock()
+		unsubs = append(unsubs, symbol+"|"+interval+"|"+market)
+		unsubMu.Unlock()
+	}
+
+	feeder.EnsureSymbol("BTCUSDT", "15m")
+	feeder.EnsureSymbol("BTCUSDT", "15m") // refs=2
+	feeder.ReleaseSymbol("BTCUSDT", "15m") // refs=1：仍有消费者，不退订
+
+	unsubMu.Lock()
+	n := len(unsubs)
+	unsubMu.Unlock()
+	if n != 0 {
+		t.Fatalf("unsubscribe fired while refs>0: %v", unsubs)
+	}
+
+	feeder.ReleaseSymbol("BTCUSDT", "15m") // refs=0：拆除 WS 订阅
+	time.Sleep(50 * time.Millisecond)
+	unsubMu.Lock()
+	n = len(unsubs)
+	unsubMu.Unlock()
+	if n != 1 {
+		t.Fatalf("unsubscribe count = %d, want 1 (%v)", n, unsubs)
+	}
+}
+
 func TestKlineFeederMarketRouting(t *testing.T) {
 	tests := []struct {
 		name       string

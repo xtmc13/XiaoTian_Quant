@@ -48,6 +48,10 @@ type KlineFeeder struct {
 	// WebSocket kline stream. When set, bars normally arrive on candle close in
 	// milliseconds; the REST loop below becomes the fallback/gap filler.
 	WSSubscribe func(symbol, interval, market string)
+	// WSUnsubscribe mirrors WSSubscribe: invoked when the last consumer releases
+	// a symbol+interval so the exchange WS kline stream is torn down instead of
+	// leaking. Nil = no teardown (stream kept until process exit).
+	WSUnsubscribe func(symbol, interval, market string)
 
 	httpClient *http.Client
 
@@ -225,6 +229,11 @@ func (f *KlineFeeder) ReleaseSymbol(symbol, interval string, marketType ...strin
 	f.mu.Unlock()
 
 	<-e.done
+
+	// 最后一个消费者释放：拆除对应的交易所 WS kline 订阅，避免流只增不减。
+	if f.WSUnsubscribe != nil {
+		f.WSUnsubscribe(symbol, interval, feedMarketType(marketType))
+	}
 }
 
 // Stop releases every active feed. Safe to call multiple times.
